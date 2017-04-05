@@ -3,7 +3,7 @@ using System.Collections.Generic;
 
 namespace LELEngine
 {
-    public class GameObject
+    public sealed class GameObject
     {
         public Scene scene;
         public List<Behaviour> components = new List<Behaviour>();

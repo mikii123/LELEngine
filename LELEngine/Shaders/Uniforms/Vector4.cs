@@ -3,7 +3,7 @@ using System;
 
 namespace LELEngine.Shaders.Uniforms
 {
-    class Vector4 : Uniform
+    sealed class Vector4 : Uniform
     {
         public OpenTK.Vector4 Vector;
 

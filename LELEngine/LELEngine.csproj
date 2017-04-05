@@ -72,7 +72,6 @@
     <Compile Include="Mono\GameObject.cs" />
     <Compile Include="Input.cs" />
     <Compile Include="InternalStorage.cs" />
-    <Compile Include="Light.cs" />
     <Compile Include="Lighting.cs" />
     <Compile Include="Shaders\Material.cs" />
     <Compile Include="Shaders\Uniforms\Matrix4.cs" />

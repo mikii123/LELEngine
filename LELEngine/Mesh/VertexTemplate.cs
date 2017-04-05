@@ -3,7 +3,7 @@ using OpenTK.Graphics;
 
 namespace LELEngine
 {
-    class VertexTemplate
+    sealed class VertexTemplate
     {
         public const int Size = (3 + 4 + 2 + 3 + 3 + 3) * 4; // size of struct in bytes
 

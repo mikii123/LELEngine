@@ -5,7 +5,7 @@ using OpenTK.Graphics.OpenGL;
 
 namespace LELEngine
 {
-    public static class Lighting
+    public sealed class Lighting
     {
         public static LightProperties Directional = new LightProperties("LDirectional.dirColor", "LDirectional.dirStrength", "LDirectional.dirDirection");
         public static LightProperties Ambient = new LightProperties("LAmbient.ambColor", "LAmbient.ambStrength");

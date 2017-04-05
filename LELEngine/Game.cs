@@ -6,7 +6,7 @@ using System.IO;
 namespace LELEngine
 {
     using OpenTK;
-    public class Game
+    public sealed class Game
     {
         public static MonoBahaviour MainWindow;
 

@@ -3,7 +3,7 @@ using LELEngine.Shaders;
 using OpenTK.Graphics.OpenGL4;
 
 //DO NOT CALL base IN ANY OVERRIDEN FUNCTIONS
-public class MeshRenderer : Behaviour
+public sealed class MeshRenderer : Behaviour
 {
     private VertexBuffer<Vertex> vertexBuffer;
     private VertexArray<Vertex> vertexArray;

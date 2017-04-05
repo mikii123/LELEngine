@@ -3,7 +3,7 @@ using LELEngine.Shaders;
 using OpenTK;
 
 // Do NOT call "base" in any overridden functions
-public class Transform : Behaviour
+public sealed class Transform : Behaviour
 {
     #region Positions
     private Vector3 _position;

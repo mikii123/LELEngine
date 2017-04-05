@@ -4,7 +4,7 @@ using LELEngine.Shaders;
 
 namespace LELEngine
 {
-    static class InternalStorage
+    public sealed class InternalStorage
     {
         public static Dictionary<string, ShaderProgram> Shaders = new Dictionary<string, ShaderProgram>();
         public static Dictionary<string, Material> Materials = new Dictionary<string, Material>();

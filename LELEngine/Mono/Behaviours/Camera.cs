@@ -4,7 +4,7 @@ using LELEngine;
 using LELEngine.Shaders;
 
 //DO NOT CALL base IN ANY OVERRIDEN FUNCTIONS
-public class Camera : Behaviour
+public sealed class Camera : Behaviour
 {
     public static Camera main;
 

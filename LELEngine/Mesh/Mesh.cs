@@ -5,7 +5,7 @@ using FbxSharp;
 
 namespace LELEngine
 {
-    public class Mesh
+    public sealed class Mesh
     {
         public List<OpenTK.Vector2> UVs = new List<OpenTK.Vector2>();
         public List<OpenTK.Vector3> Positions = new List<OpenTK.Vector3>();

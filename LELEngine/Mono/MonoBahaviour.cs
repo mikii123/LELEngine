@@ -8,7 +8,7 @@ namespace LELEngine
     ///<summary>
     ///Handles scripts logic and behaviours
     ///</summary>
-    public class MonoBahaviour : Window
+    public sealed class MonoBahaviour : Window
     {
         public static Scene ActiveScene;
         private static bool loaded;
@@ -68,6 +68,8 @@ namespace LELEngine
         {
             base.OnUpdateFrame(e);
 
+            Input.BeginFrame();
+
             if(ToInit.Count > 0)
             {
                 List<Behaviour> init = new List<Behaviour>(ToInit);
@@ -94,14 +96,7 @@ namespace LELEngine
                 ob.LateUpdate();
             }
 
-            foreach(var pr in Input.Pressed)
-            {
-                pr.frame++;
-            }
-            foreach(var upr in Input.UnPressed)
-            {
-                upr.frame++;
-            }
+            Input.EndFrame();
         }
 
         protected override void OnRenderFrame(FrameEventArgs e)

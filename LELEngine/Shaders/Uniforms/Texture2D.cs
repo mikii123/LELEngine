@@ -7,7 +7,7 @@ using System;
 
 namespace LELEngine.Shaders.Uniforms
 {
-    class Texture2D : Uniform
+    sealed class Texture2D : Uniform
     {
         public int Index = 0;
         public int Handle;

@@ -1,6 +1,6 @@
 ﻿using LELEngine;
 
-public class DirectionalLight : Behaviour
+public sealed class DirectionalLight : Behaviour
 {
     public static DirectionalLight This;
 

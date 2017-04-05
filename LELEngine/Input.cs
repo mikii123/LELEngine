@@ -7,8 +7,13 @@ using OpenTK.Input;
 
 namespace LELEngine
 {
-    public static class Input
+    public sealed class Input
     {
+        public enum StandardInputAxis
+        {
+            MouseX,
+            MouseY
+        }
         public class KeyController
         {
             public Key key;
@@ -20,14 +25,75 @@ namespace LELEngine
                 frame = 0;
             }
         }
-        static KeyboardState State;
+        
         public static List<KeyController> Pressed = new List<KeyController>();
         public static List<KeyController> UnPressed = new List<KeyController>();
 
+        static MouseState mouseState = Mouse.GetState();
+        static KeyboardState keyboardState = Keyboard.GetState();
+        static MouseState lastMouseState = Mouse.GetState();
+        static KeyboardState lastKeyboardState = Keyboard.GetState();
+
+        public static void EndFrame()
+        {
+            foreach (var pr in Pressed)
+            {
+                pr.frame++;
+            }
+            foreach (var upr in UnPressed)
+            {
+                upr.frame++;
+            }
+
+            lastMouseState = Mouse.GetState();
+            lastKeyboardState = Keyboard.GetState();
+        }
+        public static void BeginFrame()
+        {
+            mouseState = Mouse.GetState();
+            keyboardState = Keyboard.GetState();
+
+            mousePosition = new OpenTK.Vector2(mouseState.X, mouseState.Y);
+        }
+
+        static OpenTK.Vector2 _mousePosition;
+        public static OpenTK.Vector2 mousePosition
+        {
+            get
+            {
+                return _mousePosition;
+            }
+            private set
+            {
+                _mousePosition = value;
+            }
+        }
+
+        public static float GetStandardAxis(StandardInputAxis axis, float sensitivity = 0.1f)
+        {
+            float ret = 0;
+
+            switch(axis)
+            {
+                case StandardInputAxis.MouseX:
+                    ret = (float)(lastMouseState.X - mouseState.X) * sensitivity;
+                    break;
+                case StandardInputAxis.MouseY:
+                    ret = (float)(lastMouseState.Y - mouseState.Y) * sensitivity;
+                    break;
+            }
+
+            return ret;
+        }
+
+        public static bool GetMouseButton(MouseButton button)
+        {
+            return mouseState.IsButtonDown(button);
+        }
+
         public static bool GetKey(Key code)
         {
-            State = Keyboard.GetState();
-            return State.IsKeyDown(code);
+            return keyboardState.IsKeyDown(code);
         }
 
         public static bool GetKeyUp(Key code)
