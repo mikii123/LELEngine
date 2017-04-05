@@ -8,7 +8,7 @@ namespace LELEngine
     ///<summary>
     ///Handles scripts logic and behaviours
     ///</summary>
-    class MonoBahaviour : Window
+    public class MonoBahaviour : Window
     {
         public static Scene ActiveScene;
         private static bool loaded;
@@ -22,10 +22,14 @@ namespace LELEngine
         private static List<Behaviour> Behaviours = new List<Behaviour>();
         public static List<Behaviour> ToInit = new List<Behaviour>();
 
+        public MonoBahaviour(int width, int height, string title)
+            :base(width, height, title)
+        { }
+
         public void LoadDefaultScene()
         {
             Console.WriteLine("Loading default scene...");
-            ActiveScene = new Scene("tri1", "tri2", "FramerateCounter");
+            ActiveScene = new Scene("tri1", "tri2", "tri3", "tri4", "FramerateCounter");
         }
 
         public void InitBehaviour(Behaviour behaviour)
@@ -41,8 +45,8 @@ namespace LELEngine
         protected override void OnLoad(EventArgs e)
         {
             base.OnLoad(e);
-            KeyDown += MonoBahaviour_KeyDown;
-            KeyUp += MonoBahaviour_KeyUp;
+            KeyDown += Input.Input_KeyDown;
+            KeyUp += Input.Input_KeyUp;
 
             List<Behaviour> init = new List<Behaviour>(ToInit);
             foreach (var ob in init)
@@ -58,24 +62,6 @@ namespace LELEngine
             Behaviours.AddRange(init);
 
             loaded = true;
-        }
-
-        private void MonoBahaviour_KeyUp(object sender, OpenTK.Input.KeyboardKeyEventArgs e)
-        {
-            if(!Input.UnPressed.Exists(item => item.key == e.Key))
-            {
-                Input.UnPressed.Add(new Input.KeyController(e.Key));
-            }
-            Input.Pressed.RemoveAll(item => item.key == e.Key);
-        }
-
-        private void MonoBahaviour_KeyDown(object sender, OpenTK.Input.KeyboardKeyEventArgs e)
-        {
-            if (!Input.Pressed.Exists(item => item.key == e.Key))
-            {
-                Input.Pressed.Add(new Input.KeyController(e.Key));
-            }
-            Input.UnPressed.RemoveAll(item => item.key == e.Key);
         }
 
         protected override void OnUpdateFrame(FrameEventArgs e)
@@ -120,6 +106,10 @@ namespace LELEngine
 
         protected override void OnRenderFrame(FrameEventArgs e)
         {
+            // Start stopwatch to measure render time
+            renderStopwatch.Reset();
+            renderStopwatch.Start();
+
             // clear the screen
             GL.ClearColor(0, 0, 0, 255);
             GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
@@ -149,10 +139,10 @@ namespace LELEngine
                 GL.BindVertexArray(0);
                 GL.BindBuffer(BufferTarget.ElementArrayBuffer, 0);
                 GL.BindBuffer(BufferTarget.ArrayBuffer, 0);
+                GL.BindTexture(TextureTarget.Texture2D, 0);
                 GL.UseProgram(0);
             }
             
-
             base.OnRenderFrame(e);
         }
     }

@@ -8,7 +8,7 @@ using System.Threading.Tasks;
 
 namespace LELEngine.Shaders
 {
-    sealed class Shader
+    public sealed class Shader
     {
         private readonly int handle;
 

@@ -10,10 +10,12 @@ using System.Threading.Tasks;
 
 namespace LELEngine
 {
-    class Window : GameWindow
+    public class Window : GameWindow
     {
-        public Window()
-            :base(1920, 1080, new GraphicsMode(32, 24, 0, 4), "LELEngine",
+        internal System.Diagnostics.Stopwatch renderStopwatch = new System.Diagnostics.Stopwatch();
+
+        public Window(int width, int height, string title)
+            :base(width, height, new GraphicsMode(32, 24, 0, 4), title,
             GameWindowFlags.FixedWindow, DisplayDevice.Default,
             4, 0, GraphicsContextFlags.ForwardCompatible)
         {
@@ -32,8 +34,8 @@ namespace LELEngine
 
         protected override void OnUpdateFrame(FrameEventArgs e)
         {
-            Time.deltaTime = e.Time;
-            Time.time += e.Time;
+            Time.deltaTimeD = e.Time;
+            Time.timeD += e.Time;
             if(Input.GetKeyDown(OpenTK.Input.Key.F12))
             {
                 if(WindowState == WindowState.Normal)
@@ -56,6 +58,10 @@ namespace LELEngine
 
             // swap backbuffer
             SwapBuffers();
+
+            // Stop the stopwatch and assign the value to Time.renderDeltaTime
+            renderStopwatch.Stop();
+            Time.renderDeltaTimeD = renderStopwatch.ElapsedMilliseconds;
         }
     }
 }

@@ -6,39 +6,63 @@ using System.Threading.Tasks;
 
 namespace LELEngine
 {
-    struct Time
+    public struct Time
     {
-        public static double deltaTime;
-        public static double fixedDeltaTime;
-        public static double time;
-        public static double lastFrame;
+        public static double frameRateD
+        {
+            get
+            {
+                return 1d / deltaTimeD;
+            }
+        }
+        public static float frameRate
+        {
+            get
+            {
+                return (float)frameRateD;
+            }
+        }
 
-        public static float deltaTimeF
+        public static double deltaTimeD;
+        public static double fixedDeltaTimeD;
+        public static double timeD;
+        public static double lastFrameD;
+
+        public static float deltaTime
         {
             get
             {
-                return (float)(deltaTime);
+                return (float)(deltaTimeD);
             }
         }
-        public static float fixedDeltaTimeF
+        public static float fixedDeltaTime
         {
             get
             {
-                return (float)(fixedDeltaTime);
+                return (float)(fixedDeltaTimeD);
             }
         }
-        public static float timeF
+        public static float time
         {
             get
             {
-                return (float)(time);
+                return (float)(timeD);
             }
         }
-        public static float lastFrameF
+        public static float lastFrame
         {
             get
             {
-                return (float)(lastFrame);
+                return (float)(lastFrameD);
+            }
+        }
+
+        public static double renderDeltaTimeD;
+        public static float renderDeltaTime
+        {
+            get
+            {
+                return (float)renderDeltaTimeD;
             }
         }
     }

@@ -7,7 +7,7 @@ using OpenTK;
 
 namespace LELEngine
 {
-    class QuaternionHelper
+    public class QuaternionHelper
     {
         public const float DegToRad = 0.00872665f;
         public const float DegToRad2 = DegToRad * 2;
@@ -16,7 +16,7 @@ namespace LELEngine
         /// <summary>
         /// Creates rotation from y, z and x (in that order)
         /// </summary>
-        public static Quaternion EulerGimbal(float x, float y, float z)
+        public static Quaternion Euler(float x, float y, float z)
         {
             // Heading = Yaw
             // Attitude = Pitch
@@ -45,7 +45,7 @@ namespace LELEngine
             return q;
         }
 
-        public static Quaternion EulerGimbal(Vector3 vector3)
+        public static Quaternion Euler(Vector3 vector3)
         {
             // Heading = Yaw
             // Attitude = Pitch

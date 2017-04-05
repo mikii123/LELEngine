@@ -7,7 +7,7 @@ using System.Threading.Tasks;
 
 namespace LELEngine.Shaders.Uniforms
 {
-    class Uniform
+    public class Uniform
     {
         public string Name;
         public virtual void Set(ShaderProgram program)

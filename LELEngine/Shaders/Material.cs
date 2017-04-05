@@ -6,7 +6,7 @@ using LELEngine.Shaders.Uniforms;
 
 namespace LELEngine.Shaders
 {
-    class Material
+    public class Material
     {
         public string Shader = "Standard.shader";
         public List<Uniforms.Uniform> Uniforms = new List<Uniforms.Uniform>();

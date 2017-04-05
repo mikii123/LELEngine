@@ -7,7 +7,7 @@ using System.Threading.Tasks;
 
 namespace LELEngine
 {
-    class Scene
+    public class Scene
     {
         public List<GameObject> SceneGameObjects = new List<GameObject>();
 

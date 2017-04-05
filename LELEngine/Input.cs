@@ -7,7 +7,7 @@ using OpenTK.Input;
 
 namespace LELEngine
 {
-    static class Input
+    public static class Input
     {
         public class KeyController
         {
@@ -56,6 +56,24 @@ namespace LELEngine
             }
             else
                 return false;
+        }
+
+        public static void Input_KeyUp(object sender, KeyboardKeyEventArgs e)
+        {
+            if (!UnPressed.Exists(item => item.key == e.Key))
+            {
+                UnPressed.Add(new KeyController(e.Key));
+            }
+            Pressed.RemoveAll(item => item.key == e.Key);
+        }
+
+        public static void Input_KeyDown(object sender, KeyboardKeyEventArgs e)
+        {
+            if (!Pressed.Exists(item => item.key == e.Key))
+            {
+                Pressed.Add(new KeyController(e.Key));
+            }
+            UnPressed.RemoveAll(item => item.key == e.Key);
         }
     }
 }

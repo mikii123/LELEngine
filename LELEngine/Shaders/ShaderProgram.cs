@@ -5,7 +5,7 @@ using System.IO;
 
 namespace LELEngine.Shaders
 {
-    sealed class ShaderProgram
+    public sealed class ShaderProgram
     {
         private readonly int handle;
 

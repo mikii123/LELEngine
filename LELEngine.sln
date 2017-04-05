@@ -1,9 +1,11 @@
 ﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio 14
-VisualStudioVersion = 14.0.25420.1
+VisualStudioVersion = 14.0.24720.0
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LELEngine", "LELEngine\LELEngine.csproj", "{DFDE3FF3-7D62-4742-8B36-DC2FAAC0830F}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TestGame", "TestGame\TestGame.csproj", "{4E46F462-7453-4675-A4E8-7D82E154363C}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -17,6 +19,10 @@ Global
 		{DFDE3FF3-7D62-4742-8B36-DC2FAAC0830F}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{DFDE3FF3-7D62-4742-8B36-DC2FAAC0830F}.Release|Any CPU.Build.0 = Release|Any CPU
 		{DFDE3FF3-7D62-4742-8B36-DC2FAAC0830F}.Release|Any CPU.Deploy.0 = Release|Any CPU
+		{4E46F462-7453-4675-A4E8-7D82E154363C}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{4E46F462-7453-4675-A4E8-7D82E154363C}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{4E46F462-7453-4675-A4E8-7D82E154363C}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{4E46F462-7453-4675-A4E8-7D82E154363C}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
