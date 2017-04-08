@@ -23,6 +23,19 @@ C:\Users\mbystrzynski\Desktop\LELEngine\LELEngine\bin\Debug\OpenTK.xml
 C:\Users\mbystrzynski\Desktop\LELEngine\LELEngine\obj\Debug\LELEngine.csprojResolveAssemblyReference.cache
 C:\Users\mbystrzynski\Desktop\LELEngine\LELEngine\obj\Debug\LELEngine.Properties.Resources.resources
 C:\Users\mbystrzynski\Desktop\LELEngine\LELEngine\obj\Debug\LELEngine.csproj.GenerateResource.Cache
+C:\Users\mbystrzynski\Desktop\LELEngine-master\LELEngine\bin\Debug\LELEngine.dll.config
+C:\Users\mbystrzynski\Desktop\LELEngine-master\LELEngine\bin\Debug\LELEngine.dll
+C:\Users\mbystrzynski\Desktop\LELEngine-master\LELEngine\bin\Debug\LELEngine.pdb
+C:\Users\mbystrzynski\Desktop\LELEngine-master\LELEngine\bin\Debug\FbxSharp.dll
+C:\Users\mbystrzynski\Desktop\LELEngine-master\LELEngine\bin\Debug\Newtonsoft.Json.dll
+C:\Users\mbystrzynski\Desktop\LELEngine-master\LELEngine\bin\Debug\OpenTK.dll
+C:\Users\mbystrzynski\Desktop\LELEngine-master\LELEngine\bin\Debug\Newtonsoft.Json.xml
+C:\Users\mbystrzynski\Desktop\LELEngine-master\LELEngine\bin\Debug\OpenTK.xml
+C:\Users\mbystrzynski\Desktop\LELEngine-master\LELEngine\obj\Debug\LELEngine.csprojResolveAssemblyReference.cache
+C:\Users\mbystrzynski\Desktop\LELEngine-master\LELEngine\obj\Debug\LELEngine.Properties.Resources.resources
+C:\Users\mbystrzynski\Desktop\LELEngine-master\LELEngine\obj\Debug\LELEngine.csproj.GenerateResource.Cache
+C:\Users\mbystrzynski\Desktop\LELEngine-master\LELEngine\obj\Debug\LELEngine.dll
+C:\Users\mbystrzynski\Desktop\LELEngine-master\LELEngine\obj\Debug\LELEngine.pdb
 C:\Users\Mikołaj\Documents\Visual Studio 2015\Projects\LELEngine\LELEngine\bin\Debug\LELEngine.dll.config
 C:\Users\Mikołaj\Documents\Visual Studio 2015\Projects\LELEngine\LELEngine\bin\Debug\LELEngine.dll
 C:\Users\Mikołaj\Documents\Visual Studio 2015\Projects\LELEngine\LELEngine\bin\Debug\LELEngine.pdb
@@ -31,6 +44,7 @@ C:\Users\Mikołaj\Documents\Visual Studio 2015\Projects\LELEngine\LELEngine\bin\
 C:\Users\Mikołaj\Documents\Visual Studio 2015\Projects\LELEngine\LELEngine\bin\Debug\OpenTK.dll
 C:\Users\Mikołaj\Documents\Visual Studio 2015\Projects\LELEngine\LELEngine\bin\Debug\Newtonsoft.Json.xml
 C:\Users\Mikołaj\Documents\Visual Studio 2015\Projects\LELEngine\LELEngine\bin\Debug\OpenTK.xml
+C:\Users\Mikołaj\Documents\Visual Studio 2015\Projects\LELEngine\LELEngine\obj\Debug\LELEngine.csprojResolveAssemblyReference.cache
 C:\Users\Mikołaj\Documents\Visual Studio 2015\Projects\LELEngine\LELEngine\obj\Debug\LELEngine.Properties.Resources.resources
 C:\Users\Mikołaj\Documents\Visual Studio 2015\Projects\LELEngine\LELEngine\obj\Debug\LELEngine.csproj.GenerateResource.Cache
 C:\Users\Mikołaj\Documents\Visual Studio 2015\Projects\LELEngine\LELEngine\obj\Debug\LELEngine.dll

@@ -154,4 +154,10 @@ public sealed class Transform : Behaviour
         Vector3 dir = (pos - position).Normalized() * 100;
         rotation = QuaternionHelper.LookRotation(dir, Vector3.UnitY);
     }
+
+    public void LookAt(Vector3 pos, Vector3 up)
+    {
+        Vector3 dir = (pos - position).Normalized() * 100;
+        rotation = QuaternionHelper.LookRotation(dir, up);
+    }
 }

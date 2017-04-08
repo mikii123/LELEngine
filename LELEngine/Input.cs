@@ -52,8 +52,6 @@ namespace LELEngine
         {
             mouseState = Mouse.GetState();
             keyboardState = Keyboard.GetState();
-
-            mousePosition = new OpenTK.Vector2(mouseState.X, mouseState.Y);
         }
 
         static OpenTK.Vector2 _mousePosition;
@@ -66,6 +64,19 @@ namespace LELEngine
             private set
             {
                 _mousePosition = value;
+            }
+        }
+
+        static OpenTK.Vector2 _relativeMousePosition;
+        public static OpenTK.Vector2 relativeMousePosition
+        {
+            get
+            {
+                return _relativeMousePosition;
+            }
+            private set
+            {
+                _relativeMousePosition = value;
             }
         }
 
@@ -140,6 +151,12 @@ namespace LELEngine
                 Pressed.Add(new KeyController(e.Key));
             }
             UnPressed.RemoveAll(item => item.key == e.Key);
+        }
+
+        public static void Input_MouseMove(object sender, MouseMoveEventArgs e)
+        {
+            relativeMousePosition = new OpenTK.Vector2((float)e.X / (float)Game.MainWindow.Width, (float)e.Y / (float)Game.MainWindow.Height);
+            mousePosition = new OpenTK.Vector2(e.X, e.Y);
         }
     }
 }

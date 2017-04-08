@@ -1,3 +1,14 @@
+C:\Users\mbystrzynski\Desktop\LELEngine-master\TestGame\bin\Debug\TestGame.exe.config
+C:\Users\mbystrzynski\Desktop\LELEngine-master\TestGame\obj\Debug\TestGame.exe
+C:\Users\mbystrzynski\Desktop\LELEngine-master\TestGame\obj\Debug\TestGame.pdb
+C:\Users\mbystrzynski\Desktop\LELEngine-master\TestGame\bin\Debug\TestGame.exe
+C:\Users\mbystrzynski\Desktop\LELEngine-master\TestGame\bin\Debug\TestGame.pdb
+C:\Users\mbystrzynski\Desktop\LELEngine-master\TestGame\bin\Debug\LELEngine.dll
+C:\Users\mbystrzynski\Desktop\LELEngine-master\TestGame\bin\Debug\OpenTK.dll
+C:\Users\mbystrzynski\Desktop\LELEngine-master\TestGame\bin\Debug\FbxSharp.dll
+C:\Users\mbystrzynski\Desktop\LELEngine-master\TestGame\bin\Debug\LELEngine.pdb
+C:\Users\mbystrzynski\Desktop\LELEngine-master\TestGame\bin\Debug\OpenTK.xml
+C:\Users\mbystrzynski\Desktop\LELEngine-master\TestGame\obj\Debug\TestGame.csprojResolveAssemblyReference.cache
 C:\Users\Mikołaj\Documents\Visual Studio 2015\Projects\LELEngine\TestGame\bin\Debug\TestGame.exe.config
 C:\Users\Mikołaj\Documents\Visual Studio 2015\Projects\LELEngine\TestGame\bin\Debug\TestGame.exe
 C:\Users\Mikołaj\Documents\Visual Studio 2015\Projects\LELEngine\TestGame\bin\Debug\TestGame.pdb

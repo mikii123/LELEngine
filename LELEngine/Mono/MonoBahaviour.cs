@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using OpenTK;
 using OpenTK.Graphics.OpenGL4;
+using OpenTK.Input;
 
 namespace LELEngine
 {
@@ -22,6 +23,8 @@ namespace LELEngine
         private static List<Behaviour> Behaviours = new List<Behaviour>();
         public static List<Behaviour> ToInit = new List<Behaviour>();
 
+        private float fixedTime = 0;
+
         public MonoBahaviour(int width, int height, string title)
             :base(width, height, title)
         { }
@@ -29,7 +32,7 @@ namespace LELEngine
         public void LoadDefaultScene()
         {
             Console.WriteLine("Loading default scene...");
-            ActiveScene = new Scene("tri1", "tri2", "tri3", "tri4", "FramerateCounter");
+            ActiveScene = new Scene("floor", "FramerateCounter");
         }
 
         public void InitBehaviour(Behaviour behaviour)
@@ -45,8 +48,10 @@ namespace LELEngine
         protected override void OnLoad(EventArgs e)
         {
             base.OnLoad(e);
+            Time.fixedDeltaTimeD = 0.02f;
             KeyDown += Input.Input_KeyDown;
             KeyUp += Input.Input_KeyUp;
+            MouseMove += Input.Input_MouseMove;
 
             List<Behaviour> init = new List<Behaviour>(ToInit);
             foreach (var ob in init)
@@ -68,6 +73,7 @@ namespace LELEngine
         {
             base.OnUpdateFrame(e);
 
+            fixedTime += Time.deltaTime;
             Input.BeginFrame();
 
             if(ToInit.Count > 0)
@@ -84,6 +90,15 @@ namespace LELEngine
                     ToInit.Remove(ob);
                 }
                 Behaviours.AddRange(init);
+            }
+
+            if (fixedTime >= 0.02f)
+            {
+                foreach (var ob in Behaviours)
+                {
+                    ob.FixedUpdate();
+                }
+                fixedTime = 0;
             }
 
             foreach (var ob in Behaviours)

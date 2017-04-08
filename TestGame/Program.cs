@@ -12,7 +12,7 @@ class Program
     {
         Console.WriteLine("LELEngine\nCopyright LELDev Studio\nInitializing...");
 
-        Game.CreateWindow(2560, 1440, "LELEngine");
+        Game.CreateWindow(800, 600, "LELEngine");
         
         //Load Default Scene
         Game.MainWindow.LoadDefaultScene();
@@ -37,12 +37,12 @@ class Program
         lightRig.transform.position = Vector3.Zero;
         lightRig.transform.rotation = QuaternionHelper.Euler(10, 40, 0);
 
-        CameraRig.AddComponent<Rotator>();
+        CameraRig.AddComponent<CameraController>();
         Camera c = cam.AddComponent<Camera>();
         cam.transform.SetParent(CameraRig.transform);
         CameraRig.transform.position = Vector3.Zero;
-        CameraRig.transform.rotation = Quaternion.Identity;
-        cam.transform.localPosition = new Vector3(0, 0, -5f);
+        CameraRig.transform.rotation = QuaternionHelper.Euler(0, 180, 0);
+        cam.transform.localPosition = new Vector3(0, 4, -15f);
         cam.transform.localRotation = Quaternion.Identity;
         c.FoV = 70;
         c.farClip = 1000f;
@@ -57,7 +57,7 @@ class Program
 
         foreach (var ob in MonoBahaviour.ActiveScene.SceneGameObjects)
         {
-            if (ob.name == "tri1")
+            if (ob.name == "floor")
             {
                 MeshRenderer mr = ob.AddComponent<MeshRenderer>();
                 mr.materialPath = "Cube.material";
@@ -66,20 +66,29 @@ class Program
                 mr.transform.scale = Vector3.One * 500;
                 mr.transform.position = new Vector3(0, -10, 10f);
             }
-            if (ob.name == "tri2")
-            {
-                MeshRenderer mr = ob.AddComponent<MeshRenderer>();
-                mr.materialPath = "AXE.material";
-                mr.meshPath = "axe.obj";
-                mr.transform.position = new Vector3(0, 0, 0);
-                mr.transform.rotation = QuaternionHelper.Euler(0, -90, 0);
-                mr.transform.scale = Vector3.One;
-            }
             if (ob.name == "FramerateCounter")
             {
                 FrameRateCounter mr = ob.AddComponent<FrameRateCounter>();
             }
         }
+
+        // Create ShipGraphics
+        GameObject shipGraphics = MonoBahaviour.ActiveScene.CreateGameObject("ShipGraphics");
+        shipGraphics.transform.rotation = Quaternion.Identity;
+
+        //Create ShipController
+        GameObject shipController = MonoBahaviour.ActiveScene.CreateGameObject("ShipController");
+        shipController.transform.rotation = Quaternion.Identity;
+
+        shipGraphics.transform.SetParent(shipController.transform);
+        shipGraphics.transform.localPosition = Vector3.Zero;
+        shipGraphics.transform.localRotation = QuaternionHelper.Euler(-90, 180, 0);
+
+        MeshRenderer shipGraphicsMR = shipGraphics.AddComponent<MeshRenderer>();
+        shipGraphicsMR.materialPath = "AXE.material";
+        shipGraphicsMR.meshPath = "bigShip.obj";
+
+        PlayerShipControl shipControllerPSC = shipController.AddComponent<PlayerShipControl>();
 
         Game.MainWindow.Run();
     }
