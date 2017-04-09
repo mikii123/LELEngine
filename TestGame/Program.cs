@@ -75,6 +75,7 @@ class Program
         // Create ShipGraphics
         GameObject shipGraphics = MonoBahaviour.ActiveScene.CreateGameObject("ShipGraphics");
         shipGraphics.transform.rotation = Quaternion.Identity;
+        shipGraphics.transform.scale = Vector3.One * 5;
 
         //Create ShipController
         GameObject shipController = MonoBahaviour.ActiveScene.CreateGameObject("ShipController");
@@ -85,8 +86,8 @@ class Program
         shipGraphics.transform.localRotation = QuaternionHelper.Euler(-90, 180, 0);
 
         MeshRenderer shipGraphicsMR = shipGraphics.AddComponent<MeshRenderer>();
-        shipGraphicsMR.materialPath = "AXE.material";
-        shipGraphicsMR.meshPath = "bigShip.obj";
+        shipGraphicsMR.materialPath = "Axe.material";
+        shipGraphicsMR.meshPath = "axe.obj";
 
         PlayerShipControl shipControllerPSC = shipController.AddComponent<PlayerShipControl>();
 

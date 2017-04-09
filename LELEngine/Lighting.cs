@@ -10,16 +10,20 @@ namespace LELEngine
         public static LightProperties Directional = new LightProperties("LDirectional.dirColor", "LDirectional.dirStrength", "LDirectional.dirDirection");
         public static LightProperties Ambient = new LightProperties("LAmbient.ambColor", "LAmbient.ambStrength");
         public static LightProperties Specular = new LightProperties("LSpecular.viewPos");
+
         public class LightProperties
         {
             public string ColorName;
             public string StrengthName;
             public string ShineName;
             public string DirName;
+            public string PosName;
             public Color4 Color;
+            public Vector3 Color3;
             public float Strength;
             public float Shine;
             public Vector3 Direction;
+            public Vector3 Position;
 
             public LightProperties(string viewPos)
             {
@@ -43,6 +47,17 @@ namespace LELEngine
         }
         public static void SetUniforms(ShaderProgram program)
         {
+            int pos = program.GetUniformLocation("lightPosition");
+            GL.Uniform3(pos, DirectionalLight.This.transform.forward);
+
+            int view = program.GetUniformLocation("CamPosition");
+            GL.Uniform3(view, Camera.main.transform.position);
+
+            int color = program.GetUniformLocation("lightColor");
+            GL.Uniform4(color, Color4.AntiqueWhite);
+
+
+
             int ambcol = program.GetUniformLocation(Ambient.ColorName);
             int ambsth = program.GetUniformLocation(Ambient.StrengthName);
 
@@ -64,6 +79,9 @@ namespace LELEngine
             GL.Uniform1(specsth, Specular.Strength);
             GL.Uniform1(specshi, Specular.Shine);
             GL.Uniform3(specpos, Camera.main.transform.position);
+            
+
+
 
             //Console.WriteLine(GL.GetError().ToString());
         }

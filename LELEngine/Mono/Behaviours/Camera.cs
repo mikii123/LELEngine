@@ -2,6 +2,7 @@
 using OpenTK;
 using LELEngine;
 using LELEngine.Shaders;
+using OpenTK.Graphics.OpenGL;
 
 //DO NOT CALL base IN ANY OVERRIDEN FUNCTIONS
 public sealed class Camera : Behaviour
