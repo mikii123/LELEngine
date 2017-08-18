@@ -14,7 +14,6 @@ C:\Users\Mikołaj\Documents\Visual Studio 2015\Projects\LELEngine\TestGame\bin\D
 C:\Users\Mikołaj\Documents\Visual Studio 2015\Projects\LELEngine\TestGame\bin\Debug\TestGame.pdb
 C:\Users\Mikołaj\Documents\Visual Studio 2015\Projects\LELEngine\TestGame\bin\Debug\LELEngine.dll
 C:\Users\Mikołaj\Documents\Visual Studio 2015\Projects\LELEngine\TestGame\bin\Debug\OpenTK.dll
-C:\Users\Mikołaj\Documents\Visual Studio 2015\Projects\LELEngine\TestGame\bin\Debug\FbxSharp.dll
 C:\Users\Mikołaj\Documents\Visual Studio 2015\Projects\LELEngine\TestGame\bin\Debug\LELEngine.pdb
 C:\Users\Mikołaj\Documents\Visual Studio 2015\Projects\LELEngine\TestGame\bin\Debug\OpenTK.xml
 C:\Users\Mikołaj\Documents\Visual Studio 2015\Projects\LELEngine\TestGame\obj\Debug\TestGame.csprojResolveAssemblyReference.cache

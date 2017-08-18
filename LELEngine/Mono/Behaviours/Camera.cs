@@ -1,8 +1,6 @@
-﻿using System;
-using OpenTK;
+﻿using OpenTK;
 using LELEngine;
 using LELEngine.Shaders;
-using OpenTK.Graphics.OpenGL;
 
 //DO NOT CALL base IN ANY OVERRIDEN FUNCTIONS
 public sealed class Camera : Behaviour
@@ -38,14 +36,14 @@ public sealed class Camera : Behaviour
 
     public void SetProjectionUniform(ShaderProgram shader)
     {
-        projectionMatrix.Matrix = Matrix4.CreatePerspectiveFieldOfView(FoV * QuaternionHelper.DegToRad2, Aspect, nearClip, farClip);
+        projectionMatrix.Matrix = Matrix4.CreatePerspectiveFieldOfView(FoV * QuaternionHelper.Deg2Rad2, Aspect, nearClip, farClip);
         projectionMatrix.Set(shader);
     }
 
     public void SetUniforms(ShaderProgram shader)
     {
         Aspect = (float)Game.MainWindow.Width / (float)Game.MainWindow.Height;
-        projectionMatrix.Matrix = Matrix4.CreatePerspectiveFieldOfView(FoV * QuaternionHelper.DegToRad2, Aspect, nearClip, farClip);
+        projectionMatrix.Matrix = Matrix4.CreatePerspectiveFieldOfView(FoV * QuaternionHelper.Deg2Rad2, Aspect, nearClip, farClip);
         viewMatrix.Matrix = Matrix4.LookAt(transform.position, transform.position + transform.forward, transform.up);
 
         projectionMatrix.Set(shader);
@@ -59,7 +57,7 @@ public sealed class Camera : Behaviour
     {
         main = this;
         projectionMatrix = new LELEngine.Shaders.Uniforms.Matrix4("projectionMatrix");
-        projectionMatrix.Matrix = Matrix4.CreatePerspectiveFieldOfView(FoV * QuaternionHelper.DegToRad2, Aspect, nearClip, farClip);
+        projectionMatrix.Matrix = Matrix4.CreatePerspectiveFieldOfView(FoV * QuaternionHelper.Deg2Rad2, Aspect, nearClip, farClip);
         viewMatrix = new LELEngine.Shaders.Uniforms.Matrix4("viewMatrix");
         viewMatrix.Matrix = Matrix4.CreateFromQuaternion(transform.rotation) * Matrix4.CreateTranslation(transform.position) * Matrix4.CreateScale(transform.scale);
     }

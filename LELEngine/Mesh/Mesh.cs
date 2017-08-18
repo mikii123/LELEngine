@@ -1,20 +1,22 @@
-﻿using System;
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using OpenTK;
-using FbxSharp;
 
 namespace LELEngine
 {
     public sealed class Mesh
     {
-        public List<OpenTK.Vector2> UVs = new List<OpenTK.Vector2>();
-        public List<OpenTK.Vector3> Positions = new List<OpenTK.Vector3>();
-        public List<OpenTK.Vector3> Normals = new List<OpenTK.Vector3>();
+        public List<Vector2> UVs = new List<Vector2>();
+        public List<Vector3> Positions = new List<Vector3>();
+        public List<Vector3> Normals = new List<Vector3>();
         private List<VertexTemplate> Templates = new List<VertexTemplate>();
         public List<Vertex> Verticies = new List<Vertex>();
         public List<int> indicies = new List<int>();
         private int index = -1;
 
+        /// <summary>
+        /// Obj Deserializer
+        /// </summary>
+        /// <param name="name">File name (with *.obj)</param>
         public Mesh(string name)
         {
             if (name.Split('.')[1] == "obj")
@@ -34,13 +36,13 @@ namespace LELEngine
                         switch (words[0].Trim())
                         {
                             case "v":
-                                Positions.Add(new OpenTK.Vector3(float.Parse(words[1].Trim().Replace('.', ',')), float.Parse(words[2].Trim().Replace('.', ',')), float.Parse(words[3].Trim().Replace('.', ','))));
+                                Positions.Add(new Vector3(float.Parse(words[1].Trim().Replace('.', ',')), float.Parse(words[2].Trim().Replace('.', ',')), float.Parse(words[3].Trim().Replace('.', ','))));
                                 break;
                             case "vt":
-                                UVs.Add(new OpenTK.Vector2(float.Parse(words[1].Replace('.', ',')), float.Parse(words[2].Replace('.', ','))));
+                                UVs.Add(new Vector2(float.Parse(words[1].Replace('.', ',')), float.Parse(words[2].Replace('.', ','))));
                                 break;
                             case "vn":
-                                Normals.Add(new OpenTK.Vector3(float.Parse(words[1].Replace('.', ',')), float.Parse(words[2].Replace('.', ',')), float.Parse(words[3].Replace('.', ','))));
+                                Normals.Add(new Vector3(float.Parse(words[1].Replace('.', ',')), float.Parse(words[2].Replace('.', ',')), float.Parse(words[3].Replace('.', ','))));
                                 break;
                             case "f":
                                 string[] v1 = words[1].Trim().Split('/');
@@ -75,20 +77,20 @@ namespace LELEngine
                                 temp3.normal = Normals[nr3];
                                 Templates.Add(temp3);
 
-                                OpenTK.Vector3 edge1 = temp2.position - temp1.position;
-                                OpenTK.Vector3 edge2 = temp3.position - temp1.position;
-                                OpenTK.Vector2 deltaUV1 = temp2.texcoord - temp1.texcoord;
-                                OpenTK.Vector2 deltaUV2 = temp3.texcoord - temp1.texcoord;
+                                Vector3 edge1 = temp2.position - temp1.position;
+                                Vector3 edge2 = temp3.position - temp1.position;
+                                Vector2 deltaUV1 = temp2.texcoord - temp1.texcoord;
+                                Vector2 deltaUV2 = temp3.texcoord - temp1.texcoord;
 
                                 float f = 1.0f / (deltaUV1.X * deltaUV2.Y - deltaUV2.X * deltaUV1.Y);
 
-                                OpenTK.Vector3 tangent1 = OpenTK.Vector3.Zero;
+                                Vector3 tangent1 = Vector3.Zero;
                                 tangent1.X = f * (deltaUV2.Y * edge1.X - deltaUV1.Y * edge2.X);
                                 tangent1.Y = f * (deltaUV2.Y * edge1.Y - deltaUV1.Y * edge2.Y);
                                 tangent1.Z = f * (deltaUV2.Y * edge1.Z - deltaUV1.Y * edge2.Z);
                                 tangent1 = tangent1.Normalized();
 
-                                OpenTK.Vector3 bitangent1 = OpenTK.Vector3.Zero;
+                                Vector3 bitangent1 = Vector3.Zero;
                                 bitangent1.X = f * (-deltaUV2.X * edge1.X + deltaUV1.X * edge2.X);
                                 bitangent1.Y = f * (-deltaUV2.X * edge1.Y + deltaUV1.X * edge2.Y);
                                 bitangent1.Z = f * (-deltaUV2.X * edge1.Z + deltaUV1.X * edge2.Z);
@@ -114,8 +116,7 @@ namespace LELEngine
             }
             else if (name.Split('.')[1] == "fbx")
             {
-                FbxSharp.Importer im = new Importer();
-                FbxObject fbx = im.Import(System.IO.Directory.GetCurrentDirectory() + "/Meshes/" + name);                
+                // To be done
             }
 
             foreach(var te in Templates)

@@ -107,7 +107,6 @@ public sealed class Transform : Behaviour
     public Transform parent;
 
     private LELEngine.Shaders.Uniforms.Matrix4 modelMatrix = new LELEngine.Shaders.Uniforms.Matrix4("modelMatrix");
-    private Matrix4 prevMatrix = Matrix4.Identity;
 
     public Vector3 forward
     {
@@ -138,10 +137,7 @@ public sealed class Transform : Behaviour
 
     public override void LateUpdate()
     {
-        Matrix4 tmp = Matrix4.CreateScale(scale) * Matrix4.CreateFromQuaternion(rotation) * Matrix4.CreateTranslation(position);
-
-        modelMatrix.Matrix = tmp;
-        prevMatrix = modelMatrix.Matrix;
+        modelMatrix.Matrix = Matrix4.CreateScale(scale) * Matrix4.CreateFromQuaternion(rotation) * Matrix4.CreateTranslation(position);
     }
 
     public void SetParent(Transform _transform)

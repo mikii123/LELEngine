@@ -16,8 +16,7 @@ namespace LELEngine.Shaders
         private readonly int stride;
         private readonly int offset;
 
-        public VertexAttribute(string name, int size, VertexAttribPointerType type,
-            int stride, int offset, bool normalize = false)
+        public VertexAttribute(string name, int size, VertexAttribPointerType type, int stride, int offset, bool normalize = false)
         {
             this.name = name;
             this.size = size;

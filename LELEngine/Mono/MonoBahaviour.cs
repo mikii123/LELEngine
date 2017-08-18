@@ -2,7 +2,6 @@
 using System.Collections.Generic;
 using OpenTK;
 using OpenTK.Graphics.OpenGL4;
-using OpenTK.Input;
 
 namespace LELEngine
 {
@@ -145,7 +144,7 @@ namespace LELEngine
                     }
                 }
 
-                // reset state for potential further draw calls (optional, but good practice)
+                // reset state for potential further draw calls
                 GL.BindVertexArray(0);
                 GL.BindBuffer(BufferTarget.ElementArrayBuffer, 0);
                 GL.BindBuffer(BufferTarget.ArrayBuffer, 0);

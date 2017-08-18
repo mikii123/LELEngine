@@ -1,7 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.IO;
-using OpenTK;
 using LELEngine.Shaders.Uniforms;
 
 namespace LELEngine.Shaders
@@ -9,7 +8,7 @@ namespace LELEngine.Shaders
     public sealed class Material
     {
         public string Shader = "Standard.shader";
-        public List<Uniforms.Uniform> Uniforms = new List<Uniforms.Uniform>();
+        public List<Uniform> Uniforms = new List<Uniform>();
         private int index = 0;
 
         public Material(string path)
@@ -29,13 +28,13 @@ namespace LELEngine.Shaders
                             switch (line)
                             {
                                 case "mat4":
-                                    Uniforms.Add(new Uniforms.Matrix4(sr.ReadLine().Trim()));
+                                    Uniforms.Add(new Matrix4(sr.ReadLine().Trim()));
                                     Console.WriteLine("Added uniform to material " + path + " shader: " + Shader);
                                     break;
                                 case "vec4":
                                     string Name = sr.ReadLine().Trim();
                                     string[] words = sr.ReadLine().Split(' ');
-                                    Uniforms.Add(new Uniforms.Vector4(Name, new OpenTK.Vector4(float.Parse(words[0].Trim().Replace('.', ',')), float.Parse(words[1].Trim().Replace('.', ',')), float.Parse(words[2].Trim().Replace('.', ',')), float.Parse(words[3].Trim().Replace('.', ',')))));
+                                    Uniforms.Add(new Vector4(Name, new OpenTK.Vector4(float.Parse(words[0].Trim().Replace('.', ',')), float.Parse(words[1].Trim().Replace('.', ',')), float.Parse(words[2].Trim().Replace('.', ',')), float.Parse(words[3].Trim().Replace('.', ',')))));
                                     break;
                                 case "vec3":
    

@@ -1,8 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 using OpenTK;
 
 namespace LELEngine
@@ -27,7 +25,7 @@ namespace LELEngine
             {
                 // Singularity at north pole
                 pitchYawRoll.Y = 2f * (float)Math.Atan2(q.X, q.W);  // Yaw
-                pitchYawRoll.X = (float)Math.PI * 0.5f;                         // Pitch
+                pitchYawRoll.X = (float)Math.PI * 0.5f;             // Pitch
                 pitchYawRoll.Z = 0f;                                // Roll
                 return pitchYawRoll;
             }
@@ -35,7 +33,7 @@ namespace LELEngine
             {
                 // Singularity at south pole
                 pitchYawRoll.Y = -2f * (float)Math.Atan2(q.X, q.W); // Yaw
-                pitchYawRoll.X = (float)-Math.PI * 0.5f;                        // Pitch
+                pitchYawRoll.X = (float)-Math.PI * 0.5f;            // Pitch
                 pitchYawRoll.Z = 0f;                                // Roll
                 return pitchYawRoll;
             }

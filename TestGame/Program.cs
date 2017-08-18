@@ -1,8 +1,4 @@
 ﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 using LELEngine;
 using OpenTK;
 
@@ -14,29 +10,31 @@ class Program
 
         Game.CreateWindow(800, 600, "LELEngine");
         
-        //Load Default Scene
+        // Load Default Scene
         Game.MainWindow.LoadDefaultScene();
 
-        //Setup scene for debug
-
+        // Setup scene for debug
         GameObject cam = MonoBahaviour.ActiveScene.CreateGameObject("MainCamera");
         GameObject CameraRig = MonoBahaviour.ActiveScene.CreateGameObject("CameraRig");
         GameObject lightRig = MonoBahaviour.ActiveScene.CreateGameObject("LightRig");
         GameObject light = MonoBahaviour.ActiveScene.CreateGameObject("LDirectional");
 
+        // Setup light
         light.transform.SetParent(lightRig.transform);
         light.transform.localRotation = Quaternion.Identity;
         light.transform.localPosition = new Vector3(0, 0, -200);
         light.transform.scale = Vector3.One * 10;
         light.AddComponent<DirectionalLight>();
 
+        lightRig.transform.position = Vector3.Zero;
+        lightRig.transform.rotation = QuaternionHelper.Euler(10, 40, 0);
+
+        // Setup sun sphere
         MeshRenderer m = light.AddComponent<MeshRenderer>();
         m.materialPath = "Sun.material";
         m.meshPath = "sphere.obj";
 
-        lightRig.transform.position = Vector3.Zero;
-        lightRig.transform.rotation = QuaternionHelper.Euler(10, 40, 0);
-
+        // Setup camera
         CameraRig.AddComponent<CameraController>();
         Camera c = cam.AddComponent<Camera>();
         cam.transform.SetParent(CameraRig.transform);

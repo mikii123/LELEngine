@@ -1,11 +1,7 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-using LELEngine;
+﻿using LELEngine;
 using OpenTK;
 
+// Do NOT call "base" in any overridden functions
 class PlayerShipControl : Behaviour
 {
     public static PlayerShipControl This;

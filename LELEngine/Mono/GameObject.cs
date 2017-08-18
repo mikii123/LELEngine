@@ -23,13 +23,11 @@ namespace LELEngine
         }
 
         public T GetComponent<T>()
-            where T : Behaviour, new()
+            where T : Behaviour
         {
-            T dummy = Activator.CreateInstance<T>();
-
             foreach (var ob in components)
             {
-                if (ob.GetType() == dummy.GetType())
+                if (ob.GetType() == typeof(T))
                 {
                     return ob as T;
                 }
@@ -38,7 +36,7 @@ namespace LELEngine
         }
 
         public T AddComponent<T>()
-            where T : Behaviour, new()
+            where T : Behaviour
         {
             T component = Activator.CreateInstance<T>();
 

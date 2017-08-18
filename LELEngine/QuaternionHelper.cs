@@ -1,16 +1,12 @@
 ﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 using OpenTK;
 
 namespace LELEngine
 {
     public class QuaternionHelper
     {
-        public const float DegToRad = 0.00872665f;
-        public const float DegToRad2 = DegToRad * 2;
+        public const float Deg2Rad = 0.00872665f;
+        public const float Deg2Rad2 = Deg2Rad * 2;
         public const float Rad2Deg = (float)(360 / (Math.PI * 2));
 
         /// <summary>
@@ -22,9 +18,9 @@ namespace LELEngine
             // Attitude = Pitch
             // Bank = Roll
 
-            x *= DegToRad;
-            y *= DegToRad;
-            z *= DegToRad;
+            x *= Deg2Rad;
+            y *= Deg2Rad;
+            z *= Deg2Rad;
 
             // Assuming the angles are in radians.
             float c1 = (float)Math.Cos(y);
@@ -55,9 +51,9 @@ namespace LELEngine
             float y = vector3.Y;
             float z = vector3.Z;
 
-            x *= DegToRad;
-            y *= DegToRad;
-            z *= DegToRad;
+            x *= Deg2Rad;
+            y *= Deg2Rad;
+            z *= Deg2Rad;
 
             // Assuming the angles are in radians.
             float c1 = (float)Math.Cos(y);
