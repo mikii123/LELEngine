@@ -6,13 +6,19 @@ namespace LELEngine.Shaders
 {
     public sealed class Shader
     {
-        private readonly int handle;
+		public int Handle
+		{
+			get
+			{
+				return handle;
+			}
+		}
 
-        public int Handle { get { return this.handle; } }
+		private readonly int handle;
 
         public Shader(string path)
         {
-            using (StreamReader sr = new StreamReader(System.IO.Directory.GetCurrentDirectory() + path))
+            using (StreamReader sr = new StreamReader(Directory.GetCurrentDirectory() + path))
             {
                 string code = "";
                 string tag = sr.ReadLine();

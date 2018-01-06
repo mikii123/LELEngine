@@ -1,23 +1,11 @@
-﻿using OpenTK;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
+﻿using System.Collections.Generic;
 
 namespace LELEngine
 {
     public class Behaviour
     {
-        public GameObject gameObject;
-        public Transform transform
-        {
-            get
-            {
-                return gameObject.transform;
-            }
-        }
-        public Shaders.ShaderProgram UsingShader = null;
+		public Transform transform { get { return gameObject.transform; } }
+		public GameObject gameObject { get; internal set; }
 
         public T GetComponent<T>()
             where T : Behaviour, new()
@@ -45,22 +33,7 @@ namespace LELEngine
         {
             return gameObject.scene.CreateGameObject(Name, Components);
         }
-
-        internal bool Batched = false;
-        internal bool Batch(Matrix4 prev, Matrix4 curr)
-        {
-            if (prev == curr)
-            {
-                Batched = true;
-                return true;
-            }
-            else
-            {
-                Batched = false;
-                return false;
-            }
-        }
-
+		
         // Executable methods
         public virtual void Awake() {}
         public virtual void Start() {}
@@ -77,6 +50,7 @@ namespace LELEngine
         /// Override at your own risk.
         /// Called in sync with MeshRenderer component.
         /// </summary>
-        public virtual void OnRender() {}
+        public virtual void Render() {}
+		public virtual void PostRender() {}
     }
 }

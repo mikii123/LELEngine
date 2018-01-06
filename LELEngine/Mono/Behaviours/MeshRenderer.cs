@@ -2,64 +2,91 @@
 using LELEngine.Shaders;
 using OpenTK.Graphics.OpenGL4;
 
-//DO NOT CALL base IN ANY OVERRIDEN FUNCTIONS
 public sealed class MeshRenderer : Behaviour
 {
-    private VertexBuffer<Vertex> vertexBuffer;
-    private VertexArray<Vertex> vertexArray;
-    public Material material;
-    public Mesh Mesh;
-    public string materialPath;
-    public string meshPath;
-    private ShaderProgram Shader;
+	public ShaderProgram UsingShader { get; private set; }
+    public Material Material { get; private set; }
+    public Mesh Mesh { get; private set; }
+    public string MaterialPath { get; private set; }
+    public string MeshPath { get; private set; }
+	
+	private VertexBuffer<Vertex> vertexBuffer;
+	private VertexArray<Vertex> vertexArray;
+
+	private bool verticiesBuffered;
+
+	public void SetMaterial(string path)
+	{
+		MaterialPath = path;
+
+		// Get the material
+		Material = InternalStorage.GetOrCreateMaterial(MaterialPath);
+
+		SetShader();
+	}
+
+	public void SetMesh(string path)
+	{
+		MeshPath = path;
+
+		// Get the mesh
+		Mesh = InternalStorage.GetOrCreateMesh(MeshPath);
+	}
+
+	public void SetShader(string materialPath)
+	{
+		SetMaterial(materialPath);
+	}
+
+	public void SetShader()
+	{
+		// Get the shader
+		UsingShader = InternalStorage.GetOrCreateShader(Material.Shader);
+	}
+
+	public void BufferVerticies()
+	{
+		vertexBuffer = new VertexBuffer<Vertex>(Vertex.Size);
+
+		foreach (var vert in Mesh.Verticies)
+		{
+			vertexBuffer.AddVertex(vert);
+		}
+
+		// create vertex array to specify vertex layout
+		// TODO: Make this generic, and shader uniforms dependent
+		this.vertexArray = new VertexArray<Vertex>(
+			this.vertexBuffer, UsingShader,
+			new VertexAttribute("vPosition", 3, VertexAttribPointerType.Float, Vertex.Size, 0),
+			new VertexAttribute("vColor", 4, VertexAttribPointerType.Float, Vertex.Size, 3 * 4),
+			new VertexAttribute("vTexCoord", 2, VertexAttribPointerType.Float, Vertex.Size, (3 * 4) + (4 * 4)),
+			new VertexAttribute("vNormal", 3, VertexAttribPointerType.Float, Vertex.Size, (3 * 4) + (4 * 4) + (2 * 4)),
+			new VertexAttribute("vTangent", 3, VertexAttribPointerType.Float, Vertex.Size, (3 * 4) + (4 * 4) + (2 * 4) + (3 * 4)),
+			new VertexAttribute("vBitangent", 3, VertexAttribPointerType.Float, Vertex.Size, (3 * 4) + (4 * 4) + (2 * 4) + (3 * 4) + (3 * 4))
+		);
+
+		verticiesBuffered = true;
+	}
 
     public override void Awake()
-    {            
-        // Get the mesh
-        Mesh = InternalStorage.GetOrCreateMesh(meshPath);
-
-        vertexBuffer = new VertexBuffer<Vertex>(Vertex.Size);
-
-        foreach (var vert in Mesh.Verticies)
-        {
-            vertexBuffer.AddVertex(vert);
-        }
-        
-        // Set indicies to be used in the vertex buffer
-        //vertexBuffer.SetIndices(Mesh.indicies.ToArray());
-
-        // load material
-        material = InternalStorage.GetOrCreateMaterial(materialPath);
-
-        // load shader
-        Shader = InternalStorage.GetOrCreateShader(material.Shader);
-
-        // IMPORTANT: Set the shader to be used in the main loop
-        UsingShader = Shader;
-
-        // create vertex array to specify vertex layout
-        this.vertexArray = new VertexArray<Vertex>(
-            this.vertexBuffer, Shader,
-            new VertexAttribute("vPosition", 3, VertexAttribPointerType.Float, Vertex.Size, 0),
-            new VertexAttribute("vColor", 4, VertexAttribPointerType.Float, Vertex.Size, 3 * 4),
-            new VertexAttribute("vTexCoord", 2, VertexAttribPointerType.Float, Vertex.Size, (3 * 4) + (4 * 4)),
-            new VertexAttribute("vNormal", 3, VertexAttribPointerType.Float, Vertex.Size, (3 * 4) + (4 * 4) + (2 * 4)),
-            new VertexAttribute("vTangent", 3, VertexAttribPointerType.Float, Vertex.Size, (3 * 4) + (4 * 4) + (2 * 4) + (3 * 4)),
-            new VertexAttribute("vBitangent", 3, VertexAttribPointerType.Float, Vertex.Size, (3 * 4) + (4 * 4) + (2 * 4) + (3 * 4) + (3 * 4))
-            );
+    {
+		if (!verticiesBuffered)
+		{
+			BufferVerticies();
+		}
     }
 
-    public override void OnRender()
+    public override void Render()
     {
         // set transformation uniforms
-        transform.SetModelMatrix(Shader);
-        Camera.main.SetUniforms(Shader);
+        transform.SetModelMatrix(UsingShader);
+        Camera.main.SetUniforms(UsingShader);
 
         // set uniforms for lights
-        Lighting.SetUniforms(Shader);
+        Lighting.SetUniforms(UsingShader);
 
         // set uniforms in material
-        material.SetUniforms(Shader);
+        Material.SetUniforms(UsingShader);
 
         // bind vertex buffer and array objects
         this.vertexArray.Bind();

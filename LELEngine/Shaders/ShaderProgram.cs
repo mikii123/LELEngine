@@ -27,67 +27,9 @@ namespace LELEngine.Shaders
         }
 
         public ShaderProgram(string path)
-        {
-            List<Shader> shaders = new List<Shader>();
+		{
+			List<Shader> shaders = LoadShaderFromFile(path);
 
-            using (StreamReader sr = new StreamReader(Directory.GetCurrentDirectory() + "/Shaders/" + path))
-            {
-                ShaderType type = ShaderType.VertexShader;
-                string code = "";
-                string line = "";
-                while (!sr.EndOfStream)
-                {
-                    line = sr.ReadLine();
-                    switch (line)
-                    {
-                        case "/////Vertex":
-                            type = ShaderType.VertexShader;
-                            shaders.Add(new Shader(code, type));
-                            CheckCode(code, path);
-                            line = "";
-                            code = "";
-                            break;
-                        case "/////Fragment":
-                            type = ShaderType.FragmentShader;
-                            shaders.Add(new Shader(code, type));
-                            CheckCode(code, path);
-                            line = "";
-                            code = "";
-                            break;
-                        case "/////Geometry":
-                            type = ShaderType.GeometryShader;
-                            shaders.Add(new Shader(code, type));
-                            CheckCode(code, path);
-                            line = "";
-                            code = "";
-                            break;
-                        case "/////Compute":
-                            type = ShaderType.ComputeShader;
-                            shaders.Add(new Shader(code, type));
-                            CheckCode(code, path);
-                            line = "";
-                            code = "";
-                            break;
-                        case "/////TessControl":
-                            type = ShaderType.TessControlShader;
-                            shaders.Add(new Shader(code, type));
-                            CheckCode(code, path);
-                            line = "";
-                            code = "";
-                            break;
-                        case "/////TessEvaluation":
-                            type = ShaderType.TessEvaluationShader;
-                            shaders.Add(new Shader(code, type));
-                            CheckCode(code, path);
-                            line = "";
-                            code = "";
-                            break;
-                        default:
-                            code += line + "\n";
-                            break;
-                    }
-                }
-            }
             // create program object
             this.handle = GL.CreateProgram();
 
@@ -128,5 +70,71 @@ namespace LELEngine.Shaders
             // get the location of a uniform variable
             return GL.GetUniformLocation(this.handle, name);
         }
+
+		private List<Shader> LoadShaderFromFile(string path)
+		{
+			List<Shader> shaders = new List<Shader>();
+
+			using (StreamReader sr = new StreamReader(Directory.GetCurrentDirectory() + "/Shaders/" + path))
+			{
+				ShaderType type;
+				string code = "";
+				string line = "";
+				while (!sr.EndOfStream)
+				{
+					line = sr.ReadLine();
+					switch (line)
+					{
+						case "/////Vertex":
+							type = ShaderType.VertexShader;
+							shaders.Add(new Shader(code, type));
+							CheckCode(code, path);
+							line = "";
+							code = "";
+							break;
+						case "/////Fragment":
+							type = ShaderType.FragmentShader;
+							shaders.Add(new Shader(code, type));
+							CheckCode(code, path);
+							line = "";
+							code = "";
+							break;
+						case "/////Geometry":
+							type = ShaderType.GeometryShader;
+							shaders.Add(new Shader(code, type));
+							CheckCode(code, path);
+							line = "";
+							code = "";
+							break;
+						case "/////Compute":
+							type = ShaderType.ComputeShader;
+							shaders.Add(new Shader(code, type));
+							CheckCode(code, path);
+							line = "";
+							code = "";
+							break;
+						case "/////TessControl":
+							type = ShaderType.TessControlShader;
+							shaders.Add(new Shader(code, type));
+							CheckCode(code, path);
+							line = "";
+							code = "";
+							break;
+						case "/////TessEvaluation":
+							type = ShaderType.TessEvaluationShader;
+							shaders.Add(new Shader(code, type));
+							CheckCode(code, path);
+							line = "";
+							code = "";
+							break;
+						default:
+							code += line + "\n";
+							break;
+					}
+				}
+			}
+
+			return shaders;
+		}
     }
 }

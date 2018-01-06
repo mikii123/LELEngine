@@ -7,8 +7,8 @@ namespace LELEngine.Shaders
 {
     public sealed class Material
     {
-        public string Shader = "Standard.shader";
-        public List<Uniform> Uniforms = new List<Uniform>();
+		public string Shader { get; private set; }
+		public List<Uniform> Uniforms = new List<Uniform>();
         private int index = 0;
 
         public Material(string path)
@@ -34,13 +34,23 @@ namespace LELEngine.Shaders
                                 case "vec4":
                                     string Name = sr.ReadLine().Trim();
                                     string[] words = sr.ReadLine().Split(' ');
-                                    Uniforms.Add(new Vector4(Name, new OpenTK.Vector4(float.Parse(words[0].Trim().Replace('.', ',')), float.Parse(words[1].Trim().Replace('.', ',')), float.Parse(words[2].Trim().Replace('.', ',')), float.Parse(words[3].Trim().Replace('.', ',')))));
+                                    Uniforms.Add
+										(
+											new Vector4
+											(
+												Name,
+												new OpenTK.Vector4(float.Parse(words[0].Trim().Replace('.', ',')),
+												float.Parse(words[1].Trim().Replace('.', ',')),
+												float.Parse(words[2].Trim().Replace('.', ',')),
+												float.Parse(words[3].Trim().Replace('.', ','))
+											)
+										));
                                     break;
                                 case "vec3":
-   
+									// TODO
                                     break;
                                 case "float":
-
+									// TODO
                                     break;
                                 case "sampler2D":
                                     string name = sr.ReadLine().Trim();

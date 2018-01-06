@@ -6,16 +6,59 @@ namespace LELEngine
 {
     public sealed class InternalStorage
     {
-        public static Dictionary<string, ShaderProgram> Shaders = new Dictionary<string, ShaderProgram>();
-        public static Dictionary<string, Material> Materials = new Dictionary<string, Material>();
-        public static Dictionary<string, Mesh> Meshes = new Dictionary<string, Mesh>();
+		/// <summary>
+		/// Contains all of the loaded shaders
+		/// </summary>
+		public static Dictionary<string, ShaderProgram> Shaders
+		{
+			get
+			{
+				return shaders;
+			}
+			private set
+			{
+				shaders = value;
+			}
+		}
+		/// <summary>
+		/// Contains all of the loaded materials
+		/// </summary>
+        public static Dictionary<string, Material> Materials
+		{
+			get
+			{
+				return materials;
+			}
+			private set
+			{
+				materials = value;
+			}
+		}
+		/// <summary>
+		/// Contains all of the loaded meshes
+		/// </summary>
+		public static Dictionary<string, Mesh> Meshes
+		{
+			get
+			{
+				return meshes;
+			}
+			private set
+			{
+				meshes = value;
+			}
+		}
 
-        /// <summary>
-        /// Gets the shader specified by name. Returns null if it doesn't exist
-        /// </summary>
-        /// <param name="name">Name of the shader (with .*)</param>
-        /// <returns></returns>
-        public static ShaderProgram GetShader(string name)
+		private static Dictionary<string, ShaderProgram> shaders = new Dictionary<string, ShaderProgram>();
+		private static Dictionary<string, Material> materials = new Dictionary<string, Material>();
+		private static Dictionary<string, Mesh> meshes = new Dictionary<string, Mesh>();
+
+		/// <summary>
+		/// Gets the shader specified by name. Returns null if it doesn't exist
+		/// </summary>
+		/// <param name="name">Name of the shader (with .*)</param>
+		/// <returns></returns>
+		public static ShaderProgram GetShader(string name)
         {
             ShaderProgram sp = null;
             Shaders.TryGetValue(name, out sp);

@@ -5,31 +5,62 @@ namespace LELEngine
 {
     public sealed class GameObject
     {
-        public Scene scene;
-        public List<Behaviour> components = new List<Behaviour>();
-        public Transform transform;
-        public string name;
+		public string Name
+		{
+			get
+			{
+				return name;
+			}
+			set
+			{
+				name = value;
+			}
+		}
 
-        public GameObject(string Name, Scene scene)
+		public Transform transform
+		{
+			get
+			{
+				return _transform;
+			}
+			internal set
+			{
+				_transform = value;
+			}
+		}
+
+		public Scene scene
+		{
+			get
+			{
+				return _scene;
+			}
+			set
+			{
+				_scene = value;
+			}
+		}
+
+        private List<Behaviour> components = new List<Behaviour>();
+        private Transform _transform;
+		private Scene _scene;
+		private string name;
+
+		public GameObject(string Name, Scene scene)
         {
-            name = Name;
+            this.Name = Name;
             this.scene = scene;
-            transform = AddTransform();
-            foreach (var ob in components)
-            {
-                ob.gameObject = this;
-            }
-            Game.MainWindow.InitBehaviour(components);
+			AddTransform();
         }
 
-        public T GetComponent<T>()
+		public T GetComponent<T>()
             where T : Behaviour
         {
-            foreach (var ob in components)
+            foreach (var behaviour in components)
             {
-                if (ob.GetType() == typeof(T))
+                if (behaviour is T)
                 {
-                    return ob as T;
+                    return behaviour as T;
                 }
             }
             return null;
@@ -45,18 +76,24 @@ namespace LELEngine
         }
 
         public Behaviour AddComponent(string component)
-        {
-            Behaviour beh = Activator.CreateInstance(Type.GetType(component)) as Behaviour;
-            LinkComponent(beh);
-            return beh;
+		{
+			Type type = Type.GetType(component);
+			if (type == null)
+			{
+				return null;
+			}
+
+			Behaviour behaviour = Activator.CreateInstance(type) as Behaviour;
+            LinkComponent(behaviour);
+            return behaviour;
         }
 
         public Transform AddTransform()
         {
             Transform component = new Transform();
 
-            components.Add(component);
-            component.gameObject = this;
+			LinkComponent(component);
+			transform = component;
             return component;
         }
 
@@ -64,7 +101,7 @@ namespace LELEngine
         {
             components.Add(component);
             component.gameObject = this;
-            Game.MainWindow.InitBehaviour(component);
+            Game.Mono.InitBehaviour(component);
             return component;
         }
     }

@@ -14,6 +14,7 @@ namespace LELEngine
             MouseX,
             MouseY
         }
+
         public class KeyController
         {
             public Key key;
@@ -48,13 +49,14 @@ namespace LELEngine
             lastMouseState = Mouse.GetState();
             lastKeyboardState = Keyboard.GetState();
         }
+
         public static void BeginFrame()
         {
             mouseState = Mouse.GetState();
             keyboardState = Keyboard.GetState();
         }
 
-        static OpenTK.Vector2 _mousePosition;
+        private static OpenTK.Vector2 _mousePosition;
         public static OpenTK.Vector2 mousePosition
         {
             get
@@ -67,7 +69,7 @@ namespace LELEngine
             }
         }
 
-        static OpenTK.Vector2 _relativeMousePosition;
+        private static OpenTK.Vector2 _relativeMousePosition;
         public static OpenTK.Vector2 relativeMousePosition
         {
             get
@@ -109,30 +111,42 @@ namespace LELEngine
 
         public static bool GetKeyUp(Key code)
         {
-            if (UnPressed.Exists(item => item.key == code))
-            {
-                KeyController kc = UnPressed.Find(item => item.key == code);
-                if (kc.frame == 0)
-                    return true;
-                else
-                    return false;
-            }
-            else
-                return false;
+			if (UnPressed.Exists(item => item.key == code))
+			{
+				KeyController kc = UnPressed.Find(item => item.key == code);
+				if (kc.frame == 0)
+				{
+					return true;
+				}
+				else
+				{
+					return false;
+				}
+			}
+			else
+			{
+				return false;
+			}
         }
 
         public static bool GetKeyDown(Key code)
         {
-            if (Pressed.Exists(item => item.key == code))
-            {
-                KeyController kc = Pressed.Find(item => item.key == code);
-                if (kc.frame == 0)
-                    return true;
-                else
-                    return false;
-            }
-            else
-                return false;
+			if (Pressed.Exists(item => item.key == code))
+			{
+				KeyController kc = Pressed.Find(item => item.key == code);
+				if (kc.frame == 0)
+				{
+					return true;
+				}
+				else
+				{
+					return false;
+				}
+			}
+			else
+			{
+				return false;
+			}
         }
 
         public static void Input_KeyUp(object sender, KeyboardKeyEventArgs e)
@@ -155,7 +169,7 @@ namespace LELEngine
 
         public static void Input_MouseMove(object sender, MouseMoveEventArgs e)
         {
-            relativeMousePosition = new OpenTK.Vector2((float)e.X / (float)Game.MainWindow.Width, (float)e.Y / (float)Game.MainWindow.Height);
+            relativeMousePosition = new OpenTK.Vector2((float)e.X / (float)Game.Mono.Width, (float)e.Y / (float)Game.Mono.Height);
             mousePosition = new OpenTK.Vector2(e.X, e.Y);
         }
     }

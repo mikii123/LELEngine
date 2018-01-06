@@ -1,23 +1,21 @@
-﻿using System;
-using LELEngine;
+﻿using LELEngine;
 using OpenTK;
+using OpenTK.Graphics;
 
 class Program
 {
     static void Main(string[] args)
     {
-        Console.WriteLine("LELEngine\nCopyright LELDev Studio\nInitializing...");
-
         Game.CreateWindow(800, 600, "LELEngine");
         
         // Load Default Scene
-        Game.MainWindow.LoadDefaultScene();
+        Game.Mono.LoadDefaultScene();
 
         // Setup scene for debug
-        GameObject cam = MonoBahaviour.ActiveScene.CreateGameObject("MainCamera");
-        GameObject CameraRig = MonoBahaviour.ActiveScene.CreateGameObject("CameraRig");
-        GameObject lightRig = MonoBahaviour.ActiveScene.CreateGameObject("LightRig");
-        GameObject light = MonoBahaviour.ActiveScene.CreateGameObject("LDirectional");
+        GameObject cam = Game.Mono.ActiveScene.CreateGameObject("MainCamera");
+        GameObject CameraRig = Game.Mono.ActiveScene.CreateGameObject("CameraRig");
+        GameObject lightRig = Game.Mono.ActiveScene.CreateGameObject("LightRig");
+        GameObject light = Game.Mono.ActiveScene.CreateGameObject("LDirectional");
 
         // Setup light
         light.transform.SetParent(lightRig.transform);
@@ -31,8 +29,8 @@ class Program
 
         // Setup sun sphere
         MeshRenderer m = light.AddComponent<MeshRenderer>();
-        m.materialPath = "Sun.material";
-        m.meshPath = "sphere.obj";
+        m.SetMaterial("Sun.material");
+        m.SetMesh("sphere.obj");
 
         // Setup camera
         CameraRig.AddComponent<CameraController>();
@@ -43,40 +41,41 @@ class Program
         cam.transform.localPosition = new Vector3(0, 4, -15f);
         cam.transform.localRotation = Quaternion.Identity;
         c.FoV = 70;
-        c.farClip = 1000f;
-        c.nearClip = 0.1f;
+        c.FarClip = 1000f;
+        c.NearClip = 0.1f;
 
-        Lighting.Ambient.Color = OpenTK.Graphics.Color4.LightGreen;
+		// Setup lighting
+        Lighting.Ambient.Color = Color4.LightGreen;
         Lighting.Ambient.Strength = 0.3f;
-        Lighting.Directional.Color = OpenTK.Graphics.Color4.AntiqueWhite;
+        Lighting.Directional.Color = Color4.AntiqueWhite;
         Lighting.Directional.Strength = 1f;
         Lighting.Specular.Strength = 1f;
         Lighting.Specular.Shine = 32f;
 
-        foreach (var ob in MonoBahaviour.ActiveScene.SceneGameObjects)
+        foreach (var go in Game.Mono.ActiveScene.SceneGameObjects)
         {
-            if (ob.name == "floor")
+            if (go.Name == "floor")
             {
-                MeshRenderer mr = ob.AddComponent<MeshRenderer>();
-                mr.materialPath = "Cube.material";
-                mr.meshPath = "quad.obj";
+                MeshRenderer mr = go.AddComponent<MeshRenderer>();
+                mr.SetMaterial("Cube.material");
+                mr.SetMesh("quad.obj");
                 mr.transform.rotation = QuaternionHelper.Euler(0, 0, 90);
                 mr.transform.scale = Vector3.One * 500;
                 mr.transform.position = new Vector3(0, -10, 10f);
             }
-            if (ob.name == "FramerateCounter")
+            if (go.Name == "FramerateCounter")
             {
-                FrameRateCounter mr = ob.AddComponent<FrameRateCounter>();
+                FrameRateCounter mr = go.AddComponent<FrameRateCounter>();
             }
         }
 
         // Create ShipGraphics
-        GameObject shipGraphics = MonoBahaviour.ActiveScene.CreateGameObject("ShipGraphics");
+        GameObject shipGraphics = Game.Mono.ActiveScene.CreateGameObject("ShipGraphics");
         shipGraphics.transform.rotation = Quaternion.Identity;
         shipGraphics.transform.scale = Vector3.One;
 
         //Create ShipController
-        GameObject shipController = MonoBahaviour.ActiveScene.CreateGameObject("ShipController");
+        GameObject shipController = Game.Mono.ActiveScene.CreateGameObject("ShipController");
         shipController.transform.rotation = Quaternion.Identity;
 
         shipGraphics.transform.SetParent(shipController.transform);
@@ -84,11 +83,12 @@ class Program
         shipGraphics.transform.localRotation = QuaternionHelper.Euler(-90, 180, 0);
 
         MeshRenderer shipGraphicsMR = shipGraphics.AddComponent<MeshRenderer>();
-        shipGraphicsMR.materialPath = "Axe.material";
-        shipGraphicsMR.meshPath = "bigShip.obj";
+        shipGraphicsMR.SetMaterial("Axe.material");
+        shipGraphicsMR.SetMesh("bigShip.obj");
 
         PlayerShipControl shipControllerPSC = shipController.AddComponent<PlayerShipControl>();
-
-        Game.MainWindow.Run();
-    }
+		
+        Game.Mono.Run();
+		// Main function is frozen until game window closes
+	}
 }

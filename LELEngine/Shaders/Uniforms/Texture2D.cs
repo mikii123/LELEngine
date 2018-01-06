@@ -1,22 +1,30 @@
 ﻿using OpenTK.Graphics.OpenGL;
-using OpenTK;
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.IO;
-using System;
 
 namespace LELEngine.Shaders.Uniforms
 {
     sealed class Texture2D : Uniform
     {
         public int Index = 0;
-        public int Handle;
+
+		public int Handle
+		{
+			get
+			{
+				return handle;
+			}
+		}
+
+		private readonly int handle;
+
         public Texture2D(string name, string source, int index)
         {
             Index = index;
             Name = name;
             Bitmap bmp = new Bitmap(Directory.GetCurrentDirectory() + "/Textures/" + source);
-            Handle = loadImage(bmp);
+            handle = loadImage(bmp);
             bmp.Dispose();
         }
 
