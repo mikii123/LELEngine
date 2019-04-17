@@ -1,79 +1,101 @@
-﻿using OpenTK.Graphics.OpenGL4;
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
+using OpenTK.Graphics.OpenGL4;
 
 namespace LELEngine.Shaders
 {
-    public sealed class ShaderProgram
-    {
-        private readonly int handle;
+	public sealed class ShaderProgram
+	{
+		#region PrivateFields
 
-        public ShaderProgram(params Shader[] shaders)
-        {
-            // create program object
-            this.handle = GL.CreateProgram();
+		private readonly int handle;
 
-            // assign all shaders
-            foreach (var shader in shaders)
-                GL.AttachShader(this.handle, shader.Handle);
+		#endregion
 
-            // link program (effectively compiles it)
-            GL.LinkProgram(this.handle);
+		#region Constructors
 
-            // detach shaders
-            foreach (var shader in shaders)
-                GL.DetachShader(this.handle, shader.Handle);
-        }
+		public ShaderProgram(params Shader[] shaders)
+		{
+			// create program object
+			handle = GL.CreateProgram();
 
-        public ShaderProgram(string path)
+			// assign all shaders
+			foreach (Shader shader in shaders)
+			{
+				GL.AttachShader(handle, shader.Handle);
+			}
+
+			// link program (effectively compiles it)
+			GL.LinkProgram(handle);
+
+			// detach shaders
+			foreach (Shader shader in shaders)
+			{
+				GL.DetachShader(handle, shader.Handle);
+			}
+		}
+
+		public ShaderProgram(string path)
 		{
 			List<Shader> shaders = LoadShaderFromFile(path);
 
-            // create program object
-            this.handle = GL.CreateProgram();
+			// create program object
+			handle = GL.CreateProgram();
 
-            // assign all shaders
-            foreach (var shader in shaders)
-                GL.AttachShader(this.handle, shader.Handle);
+			// assign all shaders
+			foreach (Shader shader in shaders)
+			{
+				GL.AttachShader(handle, shader.Handle);
+			}
 
-            // link program (effectively compiles it)
-            GL.LinkProgram(this.handle);
+			// link program (effectively compiles it)
+			GL.LinkProgram(handle);
 
-            // detach shaders
-            foreach (var shader in shaders)
-                GL.DetachShader(this.handle, shader.Handle);
-        }
+			// detach shaders
+			foreach (Shader shader in shaders)
+			{
+				GL.DetachShader(handle, shader.Handle);
+			}
+		}
 
-        private void CheckCode(string code, string path)
-        {
-            if(code.Length < 10)
-            {
-                Console.WriteLine("Warning: Shader " + path + " is shorter than 10 characters!");
-            }
-        }
+		#endregion
 
-        public void Use()
-        {
-            // activate this program to be used
-            GL.UseProgram(this.handle);
-        }
+		#region PublicMethods
 
-        public int GetAttributeLocation(string name)
-        {
-            // get the location of a vertex attribute
-            return GL.GetAttribLocation(this.handle, name);
-        }
+		public void Use()
+		{
+			// activate this program to be used
+			GL.UseProgram(handle);
+		}
 
-        public int GetUniformLocation(string name)
-        {
-            // get the location of a uniform variable
-            return GL.GetUniformLocation(this.handle, name);
-        }
+		public int GetAttributeLocation(string name)
+		{
+			// get the location of a vertex attribute
+			return GL.GetAttribLocation(handle, name);
+		}
+
+		public int GetUniformLocation(string name)
+		{
+			// get the location of a uniform variable
+			return GL.GetUniformLocation(handle, name);
+		}
+
+		#endregion
+
+		#region PrivateMethods
+
+		private void CheckCode(string code, string path)
+		{
+			if (code.Length < 10)
+			{
+				Console.WriteLine("Warning: Shader " + path + " is shorter than 10 characters!");
+			}
+		}
 
 		private List<Shader> LoadShaderFromFile(string path)
 		{
-			List<Shader> shaders = new List<Shader>();
+			var shaders = new List<Shader>();
 
 			using (StreamReader sr = new StreamReader(Directory.GetCurrentDirectory() + "/Shaders/" + path))
 			{
@@ -136,5 +158,7 @@ namespace LELEngine.Shaders
 
 			return shaders;
 		}
-    }
+
+		#endregion
+	}
 }

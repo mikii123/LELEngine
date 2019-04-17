@@ -1,18 +1,18 @@
-﻿using OpenTK;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-
-namespace LELEngine.Shaders.Uniforms
+﻿namespace LELEngine.Shaders.Uniforms
 {
-    public class Uniform
-    {
-        public string Name;
-        public virtual void Set(ShaderProgram program)
-        {
+	public class Uniform
+	{
+		#region PublicFields
 
-        }
-    }
+		public string Name;
+
+		#endregion
+
+		#region PublicMethods
+
+		public virtual void Set(ShaderProgram program)
+		{ }
+
+		#endregion
+	}
 }

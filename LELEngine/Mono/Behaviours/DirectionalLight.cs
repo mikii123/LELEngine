@@ -2,10 +2,18 @@
 
 public sealed class DirectionalLight : Behaviour
 {
-    public static DirectionalLight This;
+	#region PublicFields
 
-    public override void Awake()
-    {
-        This = this;
-    }
+	public static DirectionalLight This;
+
+	#endregion
+
+	#region UnityMethods
+
+	public override void Awake()
+	{
+		This = this;
+	}
+
+	#endregion
 }

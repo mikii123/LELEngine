@@ -1,23 +1,37 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Reflection;
+using LELCS;
+using LELEngine.Shaders;
 using OpenTK;
 using OpenTK.Graphics.OpenGL4;
 
 namespace LELEngine
 {
-    ///<summary>
-    ///Handles scripts logic and behaviours
-    ///</summary>
-    public sealed class MonoBehaviour : Window
-    {
+	/// <summary>
+	///     Handles scripts logic and behaviours
+	/// </summary>
+	public sealed class MonoBehaviour : Window
+	{
+		#region PublicFields
+
 		public Scene ActiveScene { get; private set; }
-        public bool Loaded { get; private set; }
+		public bool Loaded { get; private set; }
 		public RenderQueue RenderQueue { get; private set; }
+		public ECSManager ECSManager { get; private set; }
+
+		#endregion
+
+		#region PrivateFields
 
 		private List<Behaviour> toInit = new List<Behaviour>();
 		private List<Behaviour> behaviours = new List<Behaviour>();
 		private List<MeshRenderer> meshRenderers = new List<MeshRenderer>();
-		private float fixedTime = 0;
+		private float fixedTime;
+
+		#endregion
+
+		#region Constructors
 
 		public MonoBehaviour(int width, int height, string title)
 			: base(width, height, title)
@@ -25,10 +39,70 @@ namespace LELEngine
 			RenderQueue = RenderQueue.PerShader;
 		}
 
-        public void LoadDefaultScene()
-        {
-            Console.WriteLine("Loading default scene...");
-            ActiveScene = new Scene("floor", "FramerateCounter");
+		#endregion
+
+		#region UnityMethods
+
+		private void Awake()
+		{
+			foreach (Behaviour ob in toInit)
+			{
+				ob.Awake();
+			}
+		}
+
+		private void Start()
+		{
+			foreach (Behaviour ob in toInit)
+			{
+				ob.Start();
+			}
+		}
+
+		private void Update()
+		{
+			ECSManager?.Execute();
+
+			foreach (Behaviour ob in behaviours)
+			{
+				ob.Update();
+			}
+		}
+
+		private void LateUpdate()
+		{
+			foreach (Behaviour ob in behaviours)
+			{
+				ob.LateUpdate();
+			}
+		}
+
+		private void FixedUpdate()
+		{
+			if (fixedTime >= 0.02f)
+			{
+				foreach (Behaviour ob in behaviours)
+				{
+					ob.FixedUpdate();
+				}
+
+				fixedTime = 0;
+			}
+		}
+
+		#endregion
+
+		#region PublicMethods
+
+		public void InitializeECSScope(Assembly assembly)
+		{
+			ECSManager = new ECSManager(assembly);
+		}
+
+		public void LoadDefaultScene()
+		{
+			Console.WriteLine("Loading default scene...");
+			ActiveScene = new Scene(new[] { "Floor" });
 
 			ResetDrawState();
 		}
@@ -48,86 +122,89 @@ namespace LELEngine
 		}
 
 		public void InitBehaviour(Behaviour behaviour)
-        {
+		{
 			if (behaviour is MeshRenderer)
 			{
 				meshRenderers.Add((MeshRenderer)behaviour);
 			}
 
-            toInit.Add(behaviour);
-        }
+			toInit.Add(behaviour);
+		}
 
-        public void InitBehaviour(ICollection<Behaviour> behaviours)
-        {
-			foreach (var behaviour in behaviours)
+		public void InitBehaviour(ICollection<Behaviour> behaviours)
+		{
+			foreach (Behaviour behaviour in behaviours)
 			{
 				InitBehaviour(behaviour);
 			}
-        }
+		}
 
-        protected override void OnLoad(EventArgs e)
-        {
-            base.OnLoad(e);
+		#endregion
 
-            Time.fixedDeltaTimeD = 0.02f;
-            KeyDown += Input.Input_KeyDown;
-            KeyUp += Input.Input_KeyUp;
-            MouseMove += Input.Input_MouseMove;
-			
-            foreach (var ob in toInit)
-            {
-                ob.Awake();
-            }
-            foreach (var ob in toInit)
-            {
-                ob.Start();
-            }
-            behaviours.AddRange(toInit);
+		#region ProtectedMethods
+
+		protected override void OnLoad(EventArgs e)
+		{
+			base.OnLoad(e);
+
+			Time.fixedDeltaTimeD = 0.02f;
+			KeyDown += Input.Input_KeyDown;
+			KeyUp += Input.Input_KeyUp;
+			MouseMove += Input.Input_MouseMove;
+
+			foreach (Behaviour ob in toInit)
+			{
+				ob.Awake();
+			}
+			foreach (Behaviour ob in toInit)
+			{
+				ob.Start();
+			}
+
+			behaviours.AddRange(toInit);
 			toInit.Clear();
 
-            Loaded = true;
-        }
+			Loaded = true;
+		}
 
-        protected override void OnUpdateFrame(FrameEventArgs e)
-        {
-            base.OnUpdateFrame(e);
+		protected override void OnUpdateFrame(FrameEventArgs e)
+		{
+			base.OnUpdateFrame(e);
 
-            fixedTime += Time.deltaTime;
-            Input.BeginFrame();
+			fixedTime += Time.deltaTime;
+			Input.BeginFrame();
 
-            if(toInit.Count > 0)
-            {
-                Awake();
+			if (toInit.Count > 0)
+			{
+				Awake();
 				Start();
-                behaviours.AddRange(toInit);
+				behaviours.AddRange(toInit);
 				toInit.Clear();
-            }
+			}
 
-            FixedUpdate();
+			FixedUpdate();
+			Update();
+			LateUpdate();
 
-            Update();
+			Input.EndFrame();
+		}
 
-            LateUpdate();
+		protected override void OnRenderFrame(FrameEventArgs e)
+		{
+			// Start stopwatch to measure render time
+			renderStopwatch.Reset();
+			renderStopwatch.Start();
 
-            Input.EndFrame();
-        }
+			// clear the screen
+			GL.ClearColor(0, 0, 0, 255);
+			GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
 
-        protected override void OnRenderFrame(FrameEventArgs e)
-        {
-            // Start stopwatch to measure render time
-            renderStopwatch.Reset();
-            renderStopwatch.Start();
-
-            // clear the screen
-            GL.ClearColor(0, 0, 0, 255);
-            GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
-
-            // Enable depth test
-            GL.Enable(EnableCap.DepthTest);
-            GL.Enable(EnableCap.CullFace);
+			// Enable depth test
+			GL.Enable(EnableCap.DepthTest);
+			GL.Enable(EnableCap.CullFace);
 			// Cull Back
 			GL.CullFace(CullFaceMode.Back);
-            
+
 			Render();
 
 			PostRender();
@@ -135,49 +212,9 @@ namespace LELEngine
 			base.OnRenderFrame(e);
 		}
 
-		private void Awake()
-		{
-			foreach (var ob in toInit)
-			{
-				ob.Awake();
-			}
-		}
+		#endregion
 
-		private void Start()
-		{
-			foreach (var ob in toInit)
-			{
-				ob.Start();
-			}
-		}
-
-		private void Update()
-		{
-			foreach (var ob in behaviours)
-			{
-				ob.Update();
-			}
-		}
-
-		private void LateUpdate()
-		{
-			foreach (var ob in behaviours)
-			{
-				ob.LateUpdate();
-			}
-		}
-
-		private void FixedUpdate()
-		{
-			if (fixedTime >= 0.02f)
-			{
-				foreach (var ob in behaviours)
-				{
-					ob.FixedUpdate();
-				}
-				fixedTime = 0;
-			}
-		}
+		#region PrivateMethods
 
 		private void Render()
 		{
@@ -202,7 +239,7 @@ namespace LELEngine
 				default:
 				{
 					PerShaderRenderQueue();
-					
+
 					break;
 				}
 			}
@@ -210,7 +247,7 @@ namespace LELEngine
 
 		private void PostRender()
 		{
-			foreach (var ob in behaviours)
+			foreach (Behaviour ob in behaviours)
 			{
 				ob.PostRender();
 				ResetDrawState();
@@ -219,7 +256,7 @@ namespace LELEngine
 
 		private void PerObjectRenderQueue()
 		{
-			foreach (var obj in meshRenderers)
+			foreach (MeshRenderer obj in meshRenderers)
 			{
 				obj.UsingShader.Use();
 				obj.Render();
@@ -233,12 +270,12 @@ namespace LELEngine
 		private void PerShaderRenderQueue()
 		{
 			// Internal storage contains only used shaders
-			foreach (var shader in InternalStorage.Shaders)
+			foreach (KeyValuePair<string, ShaderProgram> shader in InternalStorage.Shaders)
 			{
 				// Activate the shader program
 				shader.Value.Use();
 
-				foreach (var renderer in meshRenderers)
+				foreach (MeshRenderer renderer in meshRenderers)
 				{
 					if (renderer.UsingShader == shader.Value)
 					{
@@ -251,12 +288,14 @@ namespace LELEngine
 				ResetDrawState();
 			}
 
-			foreach (var ob in behaviours)
+			foreach (Behaviour ob in behaviours)
 			{
 				ob.PostRender();
 			}
 		}
-    }
+
+		#endregion
+	}
 
 	public enum RenderQueue
 	{

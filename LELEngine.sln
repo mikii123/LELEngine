@@ -1,11 +1,16 @@
 ﻿
 Microsoft Visual Studio Solution File, Format Version 12.00
-# Visual Studio 14
-VisualStudioVersion = 14.0.24720.0
+# Visual Studio 15
+VisualStudioVersion = 15.0.28010.2046
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LELEngine", "LELEngine\LELEngine.csproj", "{DFDE3FF3-7D62-4742-8B36-DC2FAAC0830F}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TestGame", "TestGame\TestGame.csproj", "{4E46F462-7453-4675-A4E8-7D82E154363C}"
+	ProjectSection(ProjectDependencies) = postProject
+		{0F3A9425-67FF-4DF9-929C-55E97377A029} = {0F3A9425-67FF-4DF9-929C-55E97377A029}
+	EndProjectSection
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LELCS", "LELCS\LELCS.csproj", "{0F3A9425-67FF-4DF9-929C-55E97377A029}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -23,8 +28,15 @@ Global
 		{4E46F462-7453-4675-A4E8-7D82E154363C}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{4E46F462-7453-4675-A4E8-7D82E154363C}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{4E46F462-7453-4675-A4E8-7D82E154363C}.Release|Any CPU.Build.0 = Release|Any CPU
+		{0F3A9425-67FF-4DF9-929C-55E97377A029}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{0F3A9425-67FF-4DF9-929C-55E97377A029}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{0F3A9425-67FF-4DF9-929C-55E97377A029}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{0F3A9425-67FF-4DF9-929C-55E97377A029}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(ExtensibilityGlobals) = postSolution
+		SolutionGuid = {BAC6B2D3-42DB-4C86-968D-7198A8B5EA3A}
 	EndGlobalSection
 EndGlobal

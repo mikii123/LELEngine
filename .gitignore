@@ -100,3 +100,4 @@ $RECYCLE.BIN/
 ModApi/obj
 ModApi/.vs
 Assets/SpaceBuilderGenesis/CosmosResources
+*Debug*

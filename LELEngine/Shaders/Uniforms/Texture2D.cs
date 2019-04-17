@@ -1,57 +1,82 @@
-﻿using OpenTK.Graphics.OpenGL;
-using System.Drawing;
+﻿using System.Drawing;
 using System.Drawing.Imaging;
 using System.IO;
+using OpenTK.Graphics.OpenGL;
+using PixelFormat = System.Drawing.Imaging.PixelFormat;
 
 namespace LELEngine.Shaders.Uniforms
 {
-    sealed class Texture2D : Uniform
-    {
-        public int Index = 0;
+	internal sealed class Texture2D : Uniform
+	{
+		#region PublicFields
 
-		public int Handle
+		public int Handle { get; }
+		public int Index;
+
+		#endregion
+
+		#region PrivateFields
+
+		private int textureID;
+
+		#endregion
+
+		#region Constructors
+
+		public Texture2D(string name, string source, int index)
 		{
-			get
-			{
-				return handle;
-			}
+			Index = index;
+			Name = name;
+			Bitmap bmp = new Bitmap(Directory.GetCurrentDirectory() + "/Textures/" + source);
+			Handle = LoadImage(bmp);
+			bmp.Dispose();
 		}
 
-		private readonly int handle;
+		public Texture2D()
+		{ }
 
-        public Texture2D(string name, string source, int index)
-        {
-            Index = index;
-            Name = name;
-            Bitmap bmp = new Bitmap(Directory.GetCurrentDirectory() + "/Textures/" + source);
-            handle = loadImage(bmp);
-            bmp.Dispose();
-        }
+		#endregion
 
-        public Texture2D() { }
+		#region PublicMethods
 
-        int loadImage(Bitmap image)
-        {
-            int texID = GL.GenTexture();
+		public override void Set(ShaderProgram program)
+		{
+			GL.ActiveTexture(TextureUnit.Texture0 + Index);
+			GL.BindTexture(TextureTarget.Texture2D, Handle);
+			GL.Uniform1(program.GetUniformLocation(Name), Index);
+		}
 
-            GL.BindTexture(TextureTarget.Texture2D, texID);
-            BitmapData data = image.LockBits(new Rectangle(0, 0, image.Width, image.Height),
-                ImageLockMode.ReadOnly, System.Drawing.Imaging.PixelFormat.Format32bppArgb);
+		#endregion
 
-            GL.TexImage2D(TextureTarget.Texture2D, 0, PixelInternalFormat.Rgba, data.Width, data.Height, 0,
-                OpenTK.Graphics.OpenGL.PixelFormat.Bgra, PixelType.UnsignedByte, data.Scan0);
+		#region PrivateMethods
 
-            image.UnlockBits(data);
-            GL.GenerateMipmap(GenerateMipmapTarget.Texture2D);
+		private int LoadImage(Bitmap image)
+		{
+			int texID = GL.GenTexture();
 
-            return texID;
-        }
+			GL.BindTexture(TextureTarget.Texture2D, texID);
+			BitmapData data = image.LockBits(
+				new Rectangle(0, 0, image.Width, image.Height),
+				ImageLockMode.ReadOnly,
+				PixelFormat.Format32bppArgb);
 
-        public override void Set(ShaderProgram program)
-        {
-            GL.ActiveTexture(TextureUnit.Texture0 + Index);
-            GL.BindTexture(TextureTarget.Texture2D, Handle);
-            GL.Uniform1(program.GetUniformLocation(Name), Index);
-        }
-    }
+			GL.TexImage2D(
+				TextureTarget.Texture2D,
+				0,
+				PixelInternalFormat.Rgba,
+				data.Width,
+				data.Height,
+				0,
+				OpenTK.Graphics.OpenGL.PixelFormat.Bgra,
+				PixelType.UnsignedByte,
+				data.Scan0);
+
+			image.UnlockBits(data);
+			GL.GenerateMipmap(GenerateMipmapTarget.Texture2D);
+
+			return texID;
+		}
+
+		#endregion
+	}
 }

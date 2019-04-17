@@ -2,23 +2,35 @@
 
 namespace LELEngine.Shaders.Uniforms
 {
-    sealed class Vector4 : Uniform
-    {
-        public OpenTK.Vector4 Vector;
+	internal sealed class Vector4 : Uniform
+	{
+		#region PublicFields
 
-        public Vector4(string name, OpenTK.Vector4 vector)
-        {
-            Name = name;
-            Vector = vector;
-        }
+		public OpenTK.Vector4 Vector;
 
-        public override void Set(ShaderProgram program)
-        {
-            // get uniform location
-            var handle = program.GetUniformLocation(Name);
+		#endregion
 
-            // set uniform value
-            GL.Uniform4(handle, ref this.Vector);
-        }
-    }
+		#region Constructors
+
+		public Vector4(string name, OpenTK.Vector4 vector)
+		{
+			Name = name;
+			Vector = vector;
+		}
+
+		#endregion
+
+		#region PublicMethods
+
+		public override void Set(ShaderProgram program)
+		{
+			// get uniform location
+			int handle = program.GetUniformLocation(Name);
+
+			// set uniform value
+			GL.Uniform4(handle, ref Vector);
+		}
+
+		#endregion
+	}
 }

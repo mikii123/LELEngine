@@ -9,3 +9,18 @@ C:\Users\mbystrzynski\Desktop\LELEngine-master\TestGame\bin\Debug\FbxSharp.dll
 C:\Users\mbystrzynski\Desktop\LELEngine-master\TestGame\bin\Debug\LELEngine.pdb
 C:\Users\mbystrzynski\Desktop\LELEngine-master\TestGame\bin\Debug\OpenTK.xml
 C:\Users\mbystrzynski\Desktop\LELEngine-master\TestGame\obj\Debug\TestGame.csprojResolveAssemblyReference.cache
+C:\Users\Mikołaj\Documents\Visual Studio 2015\Projects\LELEngine\TestGame\bin\Debug\TestGame.exe.config
+C:\Users\Mikołaj\Documents\Visual Studio 2015\Projects\LELEngine\TestGame\bin\Debug\TestGame.exe
+C:\Users\Mikołaj\Documents\Visual Studio 2015\Projects\LELEngine\TestGame\bin\Debug\TestGame.pdb
+C:\Users\Mikołaj\Documents\Visual Studio 2015\Projects\LELEngine\TestGame\bin\Debug\LELCS.dll
+C:\Users\Mikołaj\Documents\Visual Studio 2015\Projects\LELEngine\TestGame\bin\Debug\LELEngine.dll
+C:\Users\Mikołaj\Documents\Visual Studio 2015\Projects\LELEngine\TestGame\bin\Debug\OpenTK.dll
+C:\Users\Mikołaj\Documents\Visual Studio 2015\Projects\LELEngine\TestGame\bin\Debug\LELCS.pdb
+C:\Users\Mikołaj\Documents\Visual Studio 2015\Projects\LELEngine\TestGame\bin\Debug\LELEngine.pdb
+C:\Users\Mikołaj\Documents\Visual Studio 2015\Projects\LELEngine\TestGame\bin\Debug\LELEngine.dll.config
+C:\Users\Mikołaj\Documents\Visual Studio 2015\Projects\LELEngine\TestGame\bin\Debug\OpenTK.xml
+C:\Users\Mikołaj\Documents\Visual Studio 2015\Projects\LELEngine\TestGame\obj\Debug\TestGame.csprojAssemblyReference.cache
+C:\Users\Mikołaj\Documents\Visual Studio 2015\Projects\LELEngine\TestGame\obj\Debug\TestGame.csproj.CoreCompileInputs.cache
+C:\Users\Mikołaj\Documents\Visual Studio 2015\Projects\LELEngine\TestGame\obj\Debug\TestGame.csproj.CopyComplete
+C:\Users\Mikołaj\Documents\Visual Studio 2015\Projects\LELEngine\TestGame\obj\Debug\TestGame.exe
+C:\Users\Mikołaj\Documents\Visual Studio 2015\Projects\LELEngine\TestGame\obj\Debug\TestGame.pdb

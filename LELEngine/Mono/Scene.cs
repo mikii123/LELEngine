@@ -1,58 +1,62 @@
-﻿using System;
-using System.Reflection;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
+﻿using System.Collections.Generic;
 
 namespace LELEngine
 {
-    public sealed class Scene
-    {
-        public List<GameObject> SceneGameObjects = new List<GameObject>();
+	public sealed class Scene
+	{
+		#region PublicFields
 
-        public Scene()
-        {
+		public List<GameObject> SceneGameObjects = new List<GameObject>();
 
-        }
+		#endregion
 
-        public Scene(string path)
-        {
+		#region Constructors
 
-        }
+		public Scene()
+		{ }
 
-        public Scene(params string[] gameObjects)
-        {
-            foreach(var ob in gameObjects)
-            {
-                CreateGameObject(ob);
-            }
-        }
+		public Scene(string path)
+		{ }
 
-        public Scene(ICollection<string> components, params string[] gameObjects)
-        {
-            foreach (var ob in gameObjects)
-            {
-                CreateGameObject(ob, components);
-            }
-        }
+		public Scene(params string[] gameObjects)
+		{
+			foreach (string ob in gameObjects)
+			{
+				CreateGameObject(ob);
+			}
+		}
 
-        public GameObject CreateGameObject(string Name)
-        {
-            GameObject result = new GameObject(Name, this);
-            SceneGameObjects.Add(result);
-            return result;
-        }
+		public Scene(ICollection<string> components, params string[] gameObjects)
+		{
+			foreach (string ob in gameObjects)
+			{
+				CreateGameObject(ob, components);
+			}
+		}
 
-        public GameObject CreateGameObject(string Name, ICollection<string> components)
-        {
-            GameObject result = new GameObject(Name, this);
-            SceneGameObjects.Add(result);
-            foreach (var ob in components)
-            {
-                result.AddComponent(ob);
-            }
-            return result;
-        }
-    }
+		#endregion
+
+		#region PublicMethods
+
+		public GameObject CreateGameObject(string Name)
+		{
+			GameObject result = new GameObject(Name, this);
+			SceneGameObjects.Add(result);
+			return result;
+		}
+
+		public GameObject CreateGameObject(string Name, ICollection<string> components)
+		{
+			GameObject result = new GameObject(Name, this);
+			SceneGameObjects.Add(result);
+			foreach (string ob in components)
+			{
+				result.AddComponent(ob);
+			}
+
+			return result;
+		}
+
+		#endregion
+	}
 }
