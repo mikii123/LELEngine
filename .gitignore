@@ -104,3 +104,6 @@ Assets/SpaceBuilderGenesis/CosmosResources
 *Debug*
 */bin/*
 */obj/*
+
+# Exceptions — assets are in TestGame/Assets/, not in bin/
+!TestGame/Assets/

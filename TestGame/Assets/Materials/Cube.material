@@ -1,0 +1,13 @@
+Standard.shader
+uniform 
+	sampler2D
+		DiffuseMap
+			opentksquare.png
+uniform 
+	sampler2D 
+		SpecularMap
+			container2_spec.png
+uniform
+	sampler2D 
+		NormalMap
+			normalMapTest.gif

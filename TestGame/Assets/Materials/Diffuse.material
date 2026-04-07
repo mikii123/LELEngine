@@ -1,0 +1,13 @@
+Standard.shader
+uniform 
+	sampler2D
+		DiffuseMap
+			Axe_diff.png
+uniform 
+	sampler2D 
+		SpecularMap
+			Axe_spec.png
+uniform
+	sampler2D 
+		NormalMap
+			Axe_normal.png

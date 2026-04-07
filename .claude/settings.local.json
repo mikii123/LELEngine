@@ -1,7 +1,12 @@
 {
   "permissions": {
     "allow": [
-      "Bash(dotnet build:*)"
+      "Bash(dotnet build:*)",
+      "Bash(find 'C:/Unity Projects/LELEngine' -name *.obj -o -name *.material -o -name *.png -o -name *.jpg)",
+      "Bash(cp -r \"C:/Unity Projects/LELEngine/TestGame/bin/Release/net8.0/Meshes/.\" \"C:/Unity Projects/LELEngine/TestGame/Assets/Meshes/\")",
+      "Bash(cp -r \"C:/Unity Projects/LELEngine/TestGame/bin/Release/net8.0/Textures/.\" \"C:/Unity Projects/LELEngine/TestGame/Assets/Textures/\")",
+      "Bash(cp -r \"C:/Unity Projects/LELEngine/TestGame/bin/Release/net8.0/Shaders/.\" \"C:/Unity Projects/LELEngine/TestGame/Assets/Shaders/\")",
+      "Bash(cp -r \"C:/Unity Projects/LELEngine/TestGame/bin/Release/net8.0/Materials/.\" \"C:/Unity Projects/LELEngine/TestGame/Assets/Materials/\")"
     ]
   }
 }

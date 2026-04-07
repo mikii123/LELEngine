@@ -1,0 +1,13 @@
+StandardSpecAlpha.shader
+uniform 
+	sampler2D
+		DiffuseMap
+			MRARDiff.png
+uniform 
+	sampler2D 
+		SpecularMap
+			MRARSpec.png
+uniform
+	sampler2D 
+		NormalMap
+			MRARNorm.png

@@ -1,0 +1,17 @@
+StandardPBR.shader
+uniform
+	sampler2D
+		AlbedoMap
+			Axe_diff.png
+uniform
+	sampler2D
+		NormalMap
+			Axe_normal.png
+uniform
+	sampler2D
+		MetalRoughMap
+			Axe_spec.png
+uniform
+	vec4
+		lightColor
+			255 255 255 255
