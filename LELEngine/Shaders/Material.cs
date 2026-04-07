@@ -2,7 +2,7 @@
 using System.Collections.Generic;
 using System.IO;
 using LELEngine.Shaders.Uniforms;
-using Vector4 = OpenTK.Vector4;
+using Vector4 = OpenTK.Mathematics.Vector4;
 
 namespace LELEngine.Shaders
 {

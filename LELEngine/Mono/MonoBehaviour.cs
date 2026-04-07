@@ -3,8 +3,9 @@ using System.Collections.Generic;
 using System.Reflection;
 using LELCS;
 using LELEngine.Shaders;
-using OpenTK;
 using OpenTK.Graphics.OpenGL4;
+using OpenTK.Mathematics;
+using OpenTK.Windowing.Common;
 
 namespace LELEngine
 {
@@ -143,9 +144,9 @@ namespace LELEngine
 
 		#region ProtectedMethods
 
-		protected override void OnLoad(EventArgs e)
+		protected override void OnLoad()
 		{
-			base.OnLoad(e);
+			base.OnLoad();
 
 			Time.fixedDeltaTimeD = 0.02f;
 			KeyDown += Input.Input_KeyDown;
@@ -170,6 +171,7 @@ namespace LELEngine
 		protected override void OnUpdateFrame(FrameEventArgs e)
 		{
 			base.OnUpdateFrame(e);
+			if (!IsFocused) return;
 
 			fixedTime += Time.deltaTime;
 			Input.BeginFrame();
@@ -196,7 +198,7 @@ namespace LELEngine
 			renderStopwatch.Start();
 
 			// clear the screen
-			GL.ClearColor(0, 0, 0, 255);
+			GL.ClearColor(0, 0, 0, 1);
 			GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
 
 			// Enable depth test

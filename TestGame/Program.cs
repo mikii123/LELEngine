@@ -2,8 +2,7 @@
 using LELCS;
 using LELCS.Model;
 using LELEngine;
-using OpenTK;
-using OpenTK.Graphics;
+using OpenTK.Mathematics;
 
 namespace TestGame
 {

@@ -1,6 +1,6 @@
 ﻿using System.Collections.Generic;
 using System.IO;
-using OpenTK;
+using OpenTK.Mathematics;
 
 namespace LELEngine
 {

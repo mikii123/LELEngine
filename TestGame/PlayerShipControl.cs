@@ -1,5 +1,5 @@
 ﻿using LELEngine;
-using OpenTK;
+using OpenTK.Mathematics;
 
 // Do NOT call "base" in any overridden functions
 class PlayerShipControl : Behaviour

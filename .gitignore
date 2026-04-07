@@ -6,6 +6,7 @@
 /Assets/[Ii]gnore*
 /.vs/*
 .vs/*
+/bin/
 /Assets/AssetStoreTools*
 
 # FMOD
@@ -101,3 +102,5 @@ ModApi/obj
 ModApi/.vs
 Assets/SpaceBuilderGenesis/CosmosResources
 *Debug*
+*/bin/*
+*/obj/*

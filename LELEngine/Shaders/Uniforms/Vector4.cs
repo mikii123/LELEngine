@@ -1,4 +1,5 @@
-﻿using OpenTK.Graphics.OpenGL;
+using OpenTK.Graphics.OpenGL4;
+using OpenTK.Mathematics;
 
 namespace LELEngine.Shaders.Uniforms
 {
@@ -6,13 +7,13 @@ namespace LELEngine.Shaders.Uniforms
 	{
 		#region PublicFields
 
-		public OpenTK.Vector4 Vector;
+		public OpenTK.Mathematics.Vector4 Vector;
 
 		#endregion
 
 		#region Constructors
 
-		public Vector4(string name, OpenTK.Vector4 vector)
+		public Vector4(string name, OpenTK.Mathematics.Vector4 vector)
 		{
 			Name = name;
 			Vector = vector;
@@ -24,10 +25,7 @@ namespace LELEngine.Shaders.Uniforms
 
 		public override void Set(ShaderProgram program)
 		{
-			// get uniform location
 			int handle = program.GetUniformLocation(Name);
-
-			// set uniform value
 			GL.Uniform4(handle, ref Vector);
 		}
 

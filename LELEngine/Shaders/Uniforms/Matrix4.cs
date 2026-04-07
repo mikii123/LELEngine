@@ -6,7 +6,7 @@ namespace LELEngine.Shaders.Uniforms
 	{
 		#region PublicFields
 
-		public OpenTK.Matrix4 Matrix;
+		public OpenTK.Mathematics.Matrix4 Matrix;
 
 		#endregion
 

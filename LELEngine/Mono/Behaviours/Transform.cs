@@ -1,6 +1,6 @@
 ﻿using LELEngine;
 using LELEngine.Shaders;
-using OpenTK;
+using OpenTK.Mathematics;
 using Matrix4 = LELEngine.Shaders.Uniforms.Matrix4;
 
 // Do NOT call "base" in any overridden functions
@@ -28,7 +28,7 @@ public sealed class Transform : Behaviour
 
 	public override void LateUpdate()
 	{
-		modelMatrix.Matrix = OpenTK.Matrix4.CreateScale(scale) * OpenTK.Matrix4.CreateFromQuaternion(rotation) * OpenTK.Matrix4.CreateTranslation(position);
+		modelMatrix.Matrix = OpenTK.Mathematics.Matrix4.CreateScale(scale) * OpenTK.Mathematics.Matrix4.CreateFromQuaternion(rotation) * OpenTK.Mathematics.Matrix4.CreateTranslation(position);
 	}
 
 	#endregion

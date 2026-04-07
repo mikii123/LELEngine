@@ -1,10 +1,6 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 using LELEngine;
-using OpenTK;
+using OpenTK.Mathematics;
+using OpenTK.Windowing.GraphicsLibraryFramework;
 
 // Do NOT call "base" in any overridden functions
 class Rotator : Behaviour
@@ -19,27 +15,27 @@ class Rotator : Behaviour
     public override void Update()
     {
         float time = Time.deltaTime * 50;
-        if(Input.GetKey(OpenTK.Input.Key.Left))
+        if(Input.GetKey(Keys.Left))
         {
             angle.Y -= time;
         }
-        if(Input.GetKey(OpenTK.Input.Key.Right))
+        if(Input.GetKey(Keys.Right))
         {
             angle.Y += time;
         }
-        if (Input.GetKey(OpenTK.Input.Key.Up))
+        if (Input.GetKey(Keys.Up))
         {
             angle.X += time;
         }
-        if (Input.GetKey(OpenTK.Input.Key.Down))
+        if (Input.GetKey(Keys.Down))
         {
             angle.X -= time;
         }
-        if (Input.GetKey(OpenTK.Input.Key.Z))
+        if (Input.GetKey(Keys.Z))
         {
             angle.Z -= time;
         }
-        if (Input.GetKey(OpenTK.Input.Key.X))
+        if (Input.GetKey(Keys.X))
         {
             angle.Z += time;
         }

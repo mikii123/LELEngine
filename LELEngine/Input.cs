@@ -1,6 +1,7 @@
-﻿using System.Collections.Generic;
-using OpenTK;
-using OpenTK.Input;
+using System.Collections.Generic;
+using OpenTK.Mathematics;
+using OpenTK.Windowing.Common;
+using OpenTK.Windowing.GraphicsLibraryFramework;
 
 namespace LELEngine
 {
@@ -12,23 +13,15 @@ namespace LELEngine
 		public static List<KeyController> UnPressed = new List<KeyController>();
 
 		public static Vector2 mousePosition { get; private set; }
-
 		public static Vector2 relativeMousePosition { get; private set; }
+
+		private static Vector2 lastMousePosition;
 
 		public enum StandardInputAxis
 		{
 			MouseX,
 			MouseY
 		}
-
-		#endregion
-
-		#region PrivateFields
-
-		private static MouseState mouseState = Mouse.GetState();
-		private static KeyboardState keyboardState = Keyboard.GetState();
-		private static MouseState lastMouseState = Mouse.GetState();
-		private static KeyboardState lastKeyboardState = Keyboard.GetState();
 
 		#endregion
 
@@ -45,76 +38,58 @@ namespace LELEngine
 				upr.frame++;
 			}
 
-			lastMouseState = Mouse.GetState();
-			lastKeyboardState = Keyboard.GetState();
+			lastMousePosition = mousePosition;
 		}
 
 		public static void BeginFrame()
 		{
-			mouseState = Mouse.GetState();
-			keyboardState = Keyboard.GetState();
+			// State captured via events; nothing to poll here
 		}
 
 		public static float GetStandardAxis(StandardInputAxis axis, float sensitivity = 0.1f)
 		{
-			float ret = 0;
-
 			switch (axis)
 			{
 				case StandardInputAxis.MouseX:
-					ret = (lastMouseState.X - mouseState.X) * sensitivity;
-					break;
+					return (lastMousePosition.X - mousePosition.X) * sensitivity;
 				case StandardInputAxis.MouseY:
-					ret = (lastMouseState.Y - mouseState.Y) * sensitivity;
-					break;
+					return (lastMousePosition.Y - mousePosition.Y) * sensitivity;
+				default:
+					return 0f;
 			}
-
-			return ret;
 		}
 
 		public static bool GetMouseButton(MouseButton button)
 		{
-			return mouseState.IsButtonDown(button);
+			return Game.Mono.IsMouseButtonDown(button);
 		}
 
-		public static bool GetKey(Key code)
+		public static bool GetKey(Keys code)
 		{
-			return keyboardState.IsKeyDown(code);
+			return Game.Mono.IsKeyDown(code);
 		}
 
-		public static bool GetKeyUp(Key code)
+		public static bool GetKeyUp(Keys code)
 		{
 			if (UnPressed.Exists(item => item.key == code))
 			{
 				KeyController kc = UnPressed.Find(item => item.key == code);
-				if (kc.frame == 0)
-				{
-					return true;
-				}
-
-				return false;
+				return kc.frame == 0;
 			}
-
 			return false;
 		}
 
-		public static bool GetKeyDown(Key code)
+		public static bool GetKeyDown(Keys code)
 		{
 			if (Pressed.Exists(item => item.key == code))
 			{
 				KeyController kc = Pressed.Find(item => item.key == code);
-				if (kc.frame == 0)
-				{
-					return true;
-				}
-
-				return false;
+				return kc.frame == 0;
 			}
-
 			return false;
 		}
 
-		public static void Input_KeyUp(object sender, KeyboardKeyEventArgs e)
+		public static void Input_KeyUp(KeyboardKeyEventArgs e)
 		{
 			if (!UnPressed.Exists(item => item.key == e.Key))
 			{
@@ -123,7 +98,7 @@ namespace LELEngine
 			Pressed.RemoveAll(item => item.key == e.Key);
 		}
 
-		public static void Input_KeyDown(object sender, KeyboardKeyEventArgs e)
+		public static void Input_KeyDown(KeyboardKeyEventArgs e)
 		{
 			if (!Pressed.Exists(item => item.key == e.Key))
 			{
@@ -132,9 +107,9 @@ namespace LELEngine
 			UnPressed.RemoveAll(item => item.key == e.Key);
 		}
 
-		public static void Input_MouseMove(object sender, MouseMoveEventArgs e)
+		public static void Input_MouseMove(MouseMoveEventArgs e)
 		{
-			relativeMousePosition = new Vector2(e.X / (float)Game.Mono.Width, e.Y / (float)Game.Mono.Height);
+			relativeMousePosition = new Vector2(e.X / (float)Game.Mono.ClientSize.X, e.Y / (float)Game.Mono.ClientSize.Y);
 			mousePosition = new Vector2(e.X, e.Y);
 		}
 
@@ -146,14 +121,14 @@ namespace LELEngine
 		{
 			#region PublicFields
 
-			public Key key;
+			public Keys key;
 			public int frame;
 
 			#endregion
 
 			#region Constructors
 
-			public KeyController(Key k)
+			public KeyController(Keys k)
 			{
 				key = k;
 				frame = 0;
