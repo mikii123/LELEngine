@@ -14,6 +14,10 @@ public sealed class Transform : Behaviour
 
 	public Vector3 right => (rotation * Vector3.UnitX).Normalized();
 
+	/// <summary>Local-to-world matrix (row-vector convention, as used with OpenTK: v * M).</summary>
+	public OpenTK.Mathematics.Matrix4 LocalToWorld =>
+		OpenTK.Mathematics.Matrix4.CreateScale(scale) * OpenTK.Mathematics.Matrix4.CreateFromQuaternion(rotation) * OpenTK.Mathematics.Matrix4.CreateTranslation(position);
+
 	public Transform parent;
 
 	#endregion

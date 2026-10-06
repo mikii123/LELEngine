@@ -88,19 +88,16 @@ void main()
 
 	// Indirect: voxel cone tracing replaces most of the flat ambient term.
 	vec3 ambient = LAmbient.ambColor.rgb * LAmbient.ambStrength * albedo;
-	vec3 indirect = vec3(0.0);
-	float occlusion = 1.0;
-	if (giEnabled != 0)
-	{
-		vec4 diffuseGI = TraceDiffuseCones(fPosition, N);
-		indirect += diffuseGI.rgb * albedo * giDiffuseStrength;
-		occlusion = clamp(1.0 - diffuseGI.a * giOcclusionStrength, 0.0, 1.0);
+	vec3 indirectDiffuse;
+	float occlusion;
+	vec3 indirectSpecular;
+	GetIndirectLighting(fPosition, N, V, roughness, indirectDiffuse, occlusion, indirectSpecular);
 
-		vec3 specularGI = TraceSpecularCone(fPosition, N, V, roughness);
-		indirect += specularGI * LSpecular.specStrength * giSpecularStrength;
-	}
-
-	vec3 color = ambient * occlusion + indirect + (diffuse + specular) * shadow + Emissive.rgb * Emissive.a;
+	vec3 color = ambient * occlusion
+		+ indirectDiffuse * albedo
+		+ indirectSpecular * LSpecular.specStrength
+		+ (diffuse + specular) * shadow
+		+ Emissive.rgb * Emissive.a;
 	FragColor = vec4(color, Color.a);
 }
 

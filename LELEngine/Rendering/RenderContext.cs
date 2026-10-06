@@ -37,8 +37,11 @@ namespace LELEngine.Rendering
 		public ShaderProgram DepthOnlyProgram;
 		public FullscreenQuad Fullscreen;
 
-		/// <summary>Set by the depth prepass so the opaque pass can switch to EQUAL depth testing.</summary>
+		/// <summary>Set by the geometry prepass so the opaque pass can switch to EQUAL depth testing.</summary>
 		public bool DepthPrepassDone;
+
+		/// <summary>World normal (xyz) + roughness (w) per pixel from the geometry prepass; null when it did not run.</summary>
+		public RenderTexture NormalRoughness;
 
 		#endregion
 	}

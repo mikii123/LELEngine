@@ -25,6 +25,10 @@ namespace LELEngine
 		/// <summary>Texture unit reserved for the voxel radiance volume.</summary>
 		public const int VoxelTextureUnit = 14;
 
+		/// <summary>Texture units reserved for the screen-space GI resolve buffers.</summary>
+		public const int IndirectDiffuseTextureUnit = 13;
+		public const int IndirectSpecularTextureUnit = 12;
+
 		/// <summary>World -> light clip space. Written by the shadow pass every frame.</summary>
 		public static Matrix4 LightSpaceMatrix = Matrix4.Identity;
 
@@ -87,6 +91,16 @@ namespace LELEngine
 			program.SetFloat("giOcclusionStrength", GI.OcclusionStrength);
 			program.SetFloat("giConeMaxDistance", GI.ConeMaxDistance);
 			program.SetTexture("VoxelRadiance", TextureTarget.Texture3D, GI.VoxelTexture, VoxelTextureUnit);
+
+			bool resolve = GI.ResolveActive && GI.ResolvedDiffuse != 0;
+			program.SetInt("giResolveMode", resolve ? 1 : 0);
+			if (resolve)
+			{
+				program.SetVector2("giResolveSize", new Vector2(GI.ResolveWidth, GI.ResolveHeight));
+				program.SetVector2("giScreenSize", new Vector2(GI.ScreenWidth, GI.ScreenHeight));
+				program.SetTexture("IndirectDiffuse", TextureTarget.Texture2D, GI.ResolvedDiffuse, IndirectDiffuseTextureUnit);
+				program.SetTexture("IndirectSpecular", TextureTarget.Texture2D, GI.ResolvedSpecular, IndirectSpecularTextureUnit);
+			}
 		}
 
 		public static void SetShadowUniforms(ShaderProgram program, bool receiveShadows)
@@ -212,7 +226,28 @@ namespace LELEngine
 		/// <summary>Maximum cone length in world units. 0 uses the grid size.</summary>
 		public float ConeMaxDistance;
 
-		// ---- Runtime data written by VoxelGIPass ----
+		/// <summary>
+		///     Trace cones once per reduced-resolution pixel (GIResolvePass) instead of per material fragment.
+		///     Requires the geometry prepass. Roughly 1 / ResolveScale^2 fewer cone traces.
+		/// </summary>
+		public bool ScreenSpaceResolve = true;
+
+		/// <summary>Resolution of the GI resolve relative to the screen (0.5 = half width and height).</summary>
+		public float ResolveScale = 0.5f;
+
+		/// <summary>Re-voxelize dynamic (non-static) objects every N frames. 1 = every frame.</summary>
+		public int DynamicUpdateInterval = 1;
+
+		/// <summary>Resolution of the shadow map covering the whole voxel volume, used while voxelizing.</summary>
+		public int GridShadowMapSize = 1024;
+
+		/// <summary>
+		///     Set when the static voxel cache must be rebuilt. Light, grid and resolution changes set it
+		///     automatically; call <see cref="InvalidateStatic" /> after moving or re-materialing a static renderer.
+		/// </summary>
+		public bool StaticDirty = true;
+
+		// ---- Runtime data written by VoxelGIPass / GIResolvePass ----
 
 		/// <summary>GL handle of the 3D radiance texture, 0 when unavailable.</summary>
 		public int VoxelTexture;
@@ -220,11 +255,24 @@ namespace LELEngine
 		/// <summary>World-space minimum corner of the volume for the current frame.</summary>
 		public Vector3 GridMin;
 
+		public bool ResolveActive;
+		public int ResolvedDiffuse;
+		public int ResolvedSpecular;
+		public int ResolveWidth;
+		public int ResolveHeight;
+		public int ScreenWidth;
+		public int ScreenHeight;
+
 		#endregion
 
 		#region PublicMethods
 
 		public float VoxelSize => GridSize / Resolution;
+
+		public void InvalidateStatic()
+		{
+			StaticDirty = true;
+		}
 
 		#endregion
 	}

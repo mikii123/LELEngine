@@ -109,17 +109,18 @@ void main()
 	vec4 specular = LSpecular.specStrength * spec * LDirectional.dirColor * texSpec;
 
 	//Indirect
-	vec3 indirect = vec3(0.0);
-	float occlusion = 1.0;
-	if (giEnabled != 0)
-	{
-		vec4 diffuseGI = TraceDiffuseCones(fPosition, worldNormal);
-		indirect = diffuseGI.rgb * texColor.rgb * giDiffuseStrength;
-		occlusion = clamp(1.0 - diffuseGI.a * giOcclusionStrength, 0.0, 1.0);
-	}
+	vec3 indirectDiffuse;
+	float occlusion;
+	vec3 indirectSpecular;
+	vec3 worldView = normalize(LSpecular.viewPos - fPosition);
+	GetIndirectLighting(fPosition, worldNormal, worldView, 0.6, indirectDiffuse, occlusion, indirectSpecular);
 
 	//Output
-	FragColor = vec4(ambient.rgb * occlusion + indirect + (diffuse.rgb + specular.rgb) * shadow, texColor.a);
+	vec3 color = ambient.rgb * occlusion
+		+ indirectDiffuse * texColor.rgb
+		+ indirectSpecular * LSpecular.specStrength * texSpec.rgb
+		+ (diffuse.rgb + specular.rgb) * shadow;
+	FragColor = vec4(color, texColor.a);
 }
 
 /////Fragment

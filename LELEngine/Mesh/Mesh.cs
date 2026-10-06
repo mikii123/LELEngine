@@ -14,6 +14,11 @@ namespace LELEngine
 		public List<Vertex> Verticies = new List<Vertex>();
 		public List<int> indicies = new List<int>();
 
+		/// <summary>Local-space axis-aligned bounds of all vertices.</summary>
+		public Vector3 BoundsMin { get; private set; }
+
+		public Vector3 BoundsMax { get; private set; }
+
 		#endregion
 
 		#region PrivateFields
@@ -135,6 +140,33 @@ namespace LELEngine
 			{
 				Verticies.Add(new Vertex(te.position, te.normal, te.texcoord, te.tangent, te.bitangent));
 			}
+
+			ComputeBounds();
+		}
+
+		#endregion
+
+		#region PrivateMethods
+
+		private void ComputeBounds()
+		{
+			if (Verticies.Count == 0)
+			{
+				BoundsMin = Vector3.Zero;
+				BoundsMax = Vector3.Zero;
+				return;
+			}
+
+			Vector3 min = Verticies[0].position;
+			Vector3 max = min;
+			foreach (Vertex vertex in Verticies)
+			{
+				min = Vector3.ComponentMin(min, vertex.position);
+				max = Vector3.ComponentMax(max, vertex.position);
+			}
+
+			BoundsMin = min;
+			BoundsMax = max;
 		}
 
 		#endregion

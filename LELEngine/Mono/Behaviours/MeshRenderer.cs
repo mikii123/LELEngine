@@ -51,6 +51,12 @@ public sealed class MeshRenderer : Behaviour
 	/// <summary>Samples indirect light from the GI volume.</summary>
 	public bool ReceiveGI = true;
 
+	/// <summary>
+	///     Transform, mesh and material do not change at runtime. Static renderers are voxelized once into a
+	///     cached volume instead of every frame. Call Lighting.GI.InvalidateStatic() after changing one.
+	/// </summary>
+	public bool IsStatic;
+
 	#endregion
 
 	#region PrivateFields

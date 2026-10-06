@@ -24,6 +24,14 @@ namespace TestGame.Scenes
 			public bool VoxelView;
 			public bool Emitters = true;
 			public bool Stats;
+
+			/// <summary>Half-resolution screen-space cone tracing (GIResolvePass) instead of per-fragment.</summary>
+			public bool Resolve = true;
+
+			/// <summary>Mark room and props static so they are voxelized once.</summary>
+			public bool StaticCache = true;
+
+			public int VoxelResolution = 128;
 		}
 
 		#endregion
@@ -37,6 +45,7 @@ namespace TestGame.Scenes
 
 		public static void Load(Scene scene, Options options)
 		{
+			markStatic = options.StaticCache;
 			BuildRoom(scene);
 			BuildProps(scene);
 			BuildLight(scene);
@@ -66,17 +75,26 @@ namespace TestGame.Scenes
 
 			// Voxel volume tightly around the room: 26 m / 128 = ~0.2 m voxels.
 			Lighting.GI.Enabled = options.GI;
-			Lighting.GI.Resolution = 128;
+			Lighting.GI.Resolution = options.VoxelResolution;
 			Lighting.GI.GridSize = 26f;
 			Lighting.GI.Center = new Vector3(0f, 3.5f, 0f);
 			Lighting.GI.FollowCamera = false;
 			Lighting.GI.DiffuseStrength = 1.0f;
 			Lighting.GI.SpecularStrength = 1.0f;
 			Lighting.GI.OcclusionStrength = 1.0f;
+			Lighting.GI.ScreenSpaceResolve = options.Resolve;
+			Lighting.GI.ResolveScale = 0.5f;
+			Lighting.GI.DynamicUpdateInterval = 1;
 
 			Game.Mono.Renderer.Settings.ClearColor = new Color4(0.45f, 0.6f, 0.85f, 1f);
 			Game.Mono.Renderer.Settings.Exposure = 1.0f;
 		}
+
+		#endregion
+
+		#region PrivateFields
+
+		private static bool markStatic = true;
 
 		#endregion
 
@@ -117,6 +135,7 @@ namespace TestGame.Scenes
 			MeshRenderer sphereRenderer = sphere.AddComponent<MeshRenderer>();
 			sphereRenderer.SetMaterial("LitYellow.material");
 			sphereRenderer.SetMesh("sphere.obj");
+			sphereRenderer.IsStatic = markStatic;
 
 			// Pillars under the ceiling edge; long thin shadows are a good test for bias settings.
 			for (int i = -1; i <= 1; i++)
@@ -221,6 +240,7 @@ namespace TestGame.Scenes
 			MeshRenderer renderer = go.AddComponent<MeshRenderer>();
 			renderer.SetMaterial(material);
 			renderer.SetMesh("cube.obj");
+			renderer.IsStatic = markStatic;
 			return go;
 		}
 

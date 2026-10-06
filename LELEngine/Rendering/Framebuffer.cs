@@ -23,6 +23,7 @@ namespace LELEngine.Rendering
 		#region PrivateFields
 
 		private readonly List<RenderTexture> colorAttachments = new List<RenderTexture>();
+		private bool ownsDepth = true;
 
 		#endregion
 
@@ -76,6 +77,26 @@ namespace LELEngine.Rendering
 		}
 
 		/// <summary>
+		///     Uses a depth texture owned by another framebuffer (e.g. the scene depth) so passes can
+		///     render extra attachments against the same depth. The texture must match this size.
+		/// </summary>
+		public void AttachSharedDepth(RenderTexture depth)
+		{
+			if (ownsDepth)
+			{
+				DepthAttachment?.Delete();
+			}
+
+			DepthAttachment = depth;
+			ownsDepth = false;
+
+			GL.BindFramebuffer(FramebufferTarget.Framebuffer, Handle);
+			GL.FramebufferTexture2D(FramebufferTarget.Framebuffer, FramebufferAttachment.DepthAttachment, TextureTarget.Texture2D, depth.Handle, 0);
+			UpdateDrawBuffers();
+			GL.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
+		}
+
+		/// <summary>
 		///     Throws if the framebuffer is not complete. Call after adding attachments.
 		/// </summary>
 		public void Validate()
@@ -106,7 +127,10 @@ namespace LELEngine.Rendering
 			{
 				texture.Resize(width, height);
 			}
-			DepthAttachment?.Resize(width, height);
+			if (ownsDepth)
+			{
+				DepthAttachment?.Resize(width, height);
+			}
 		}
 
 		/// <summary>
@@ -145,7 +169,10 @@ namespace LELEngine.Rendering
 				texture.Delete();
 			}
 			colorAttachments.Clear();
-			DepthAttachment?.Delete();
+			if (ownsDepth)
+			{
+				DepthAttachment?.Delete();
+			}
 			DepthAttachment = null;
 
 			GL.DeleteFramebuffer(Handle);

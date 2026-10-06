@@ -15,6 +15,7 @@ namespace LELEngine.Rendering
 		#region PublicFields
 
 		public RenderSettings Settings { get; } = new RenderSettings();
+		public GpuProfiler Profiler { get; } = new GpuProfiler();
 		public Framebuffer SceneTarget { get; private set; }
 		public RenderTexture SceneColor => SceneTarget.ColorAttachments[0];
 		public RenderTexture SceneDepth => SceneTarget.DepthAttachment;
@@ -61,7 +62,8 @@ namespace LELEngine.Rendering
 		{
 			AddPass(new ShadowPass());
 			AddPass(new VoxelGIPass());
-			AddPass(new DepthPrepass());
+			AddPass(new GeometryPrepass());
+			AddPass(new GIResolvePass());
 			AddPass(new OpaquePass());
 			AddPass(new PostRenderCallbackPass());
 			AddPass(new VoxelDebugPass());
@@ -177,9 +179,13 @@ namespace LELEngine.Rendering
 					continue;
 				}
 
+				Profiler.Begin(pass.Name);
 				pass.Execute(context);
 				GLState.Reset();
+				Profiler.End();
 			}
+
+			Profiler.EndFrame();
 		}
 
 		public void Dispose()
@@ -193,6 +199,7 @@ namespace LELEngine.Rendering
 			SceneTarget?.Delete();
 			DepthOnlyProgram?.Delete();
 			Fullscreen?.Delete();
+			Profiler.Dispose();
 		}
 
 		#endregion
