@@ -7,16 +7,19 @@
 // Requires Engine/Sampling.glsl. Uniforms are set by RadianceCachePass.SetUniforms; rcNearDistance is 0
 // when the cache is unavailable, in which case callers trace the whole distance field.
 
-#define RC_RESOLUTION 8                 // octahedral texels per probe
-#define RC_TILE (RC_RESOLUTION + 2)     // plus a one texel border so bilinear filtering is seamless
-
 uniform sampler2D RadianceCacheAtlas;   // rgb radiance, a = hit distance + 1 (0 = probe without valid data)
 uniform vec3 rcGridMin;
 uniform float rcProbeSpacing;
 uniform int rcProbesPerAxis;
 uniform int rcProbesPerRow;             // probe tiles per atlas row
+uniform int rcProbeResolution;          // stored octahedral texels per probe; a tile adds a one texel border
 uniform vec2 rcAtlasSize;               // texels
 uniform float rcNearDistance;           // rays trace the distance field this far, then read the cache
+
+int RadianceCacheTileSize()
+{
+	return rcProbeResolution + 2;
+}
 
 int RadianceCacheProbeIndex(ivec3 coord)
 {
@@ -31,7 +34,7 @@ ivec3 RadianceCacheProbeCoord(int probeIndex)
 
 ivec2 RadianceCacheTileOrigin(int probeIndex)
 {
-	return ivec2(probeIndex % rcProbesPerRow, probeIndex / rcProbesPerRow) * RC_TILE;
+	return ivec2(probeIndex % rcProbesPerRow, probeIndex / rcProbesPerRow) * RadianceCacheTileSize();
 }
 
 vec3 RadianceCacheProbePosition(ivec3 coord)
@@ -43,7 +46,7 @@ vec3 RadianceCacheProbePosition(ivec3 coord)
 vec4 RadianceCacheProbeSample(ivec3 coord, vec3 direction)
 {
 	vec2 oct = DirectionToOctahedral(direction);
-	vec2 texel = vec2(RadianceCacheTileOrigin(RadianceCacheProbeIndex(coord))) + 1.0 + oct * float(RC_RESOLUTION);
+	vec2 texel = vec2(RadianceCacheTileOrigin(RadianceCacheProbeIndex(coord))) + 1.0 + oct * float(rcProbeResolution);
 	return texture(RadianceCacheAtlas, texel / rcAtlasSize);
 }
 

@@ -373,14 +373,29 @@ namespace LELEngine
 		/// <summary>Probes per axis over the GI grid; probe spacing is GridSize / (n - 1).</summary>
 		public int RadianceCacheProbesPerAxis = 17;
 
+		/// <summary>Stored octahedral map resolution per probe: 8 or 16 (Lumen stores 16).</summary>
+		public int RadianceCacheProbeResolution = 16;
+
+		/// <summary>
+		///     Rays per axis traced per probe update, a multiple of 16 and of the stored resolution (Lumen traces
+		///     32x32). The rays are averaged into the stored texels, so 16 -> 8 gives 4 rays per texel per update.
+		/// </summary>
+		public int RadianceCacheTraceResolution = 32;
+
 		/// <summary>
 		///     Probes inside the static scene bounds re-traced per frame (round robin; all of them when the budget
-		///     allows). Probes outside the scene get an eighth of this on top.
+		///     allows). Probes outside the scene get an eighth of this on top. Cost scales with this times the
+		///     trace resolution squared; for a given ray budget and accumulation time the noise is the same
+		///     however the budget is split, so fewer probes with more rays each is the cheaper option.
 		/// </summary>
-		public int RadianceCacheProbesPerFrame = 1024;
+		public int RadianceCacheProbesPerFrame = 160;
 
-		/// <summary>History weight of a probe's accumulation per update.</summary>
-		public float RadianceCacheHistoryWeight = 0.9f;
+		/// <summary>
+		///     Time constant of a probe's accumulation, in frames: an update blends with weight exp(-dt / this), dt
+		///     being the frames since the probe's previous update. Rarely updated probes therefore converge as fast
+		///     as frequently updated ones. 0 = no accumulation.
+		/// </summary>
+		public float RadianceCacheHistoryFrames = 20f;
 
 		/// <summary>
 		///     Screen probe and radiosity rays trace the distance field this far (world units) and read the

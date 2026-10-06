@@ -17,7 +17,8 @@ namespace TestGame
 		///            [bounce=0|1] [trace=voxel|sdf] [voxres=64|128|256] [sdfres=64|128|256]
 		///            Lumen quality: [spacing=N px] [radrays=N] [radblend=0..1] [pblend=0..1] [tblend=0..1]
 		///            [importance=0|1] [pfilter=0|1] [pradius=N probes] [texels=N per meter] [ajitter=0..1] [djitter=0|1]
-		///            [rcache=0|1] [rcradio=0|1] [rcnear=meters] [rcblend=0..1] [rcprobes=N per frame]
+		///            [rcache=0|1] [rcradio=0|1] [rcnear=meters] [rchistory=frames] [rcprobes=N per frame] [rcres=8|16] [rctrace=16|32]
+	///            [dumpafter=seconds]
 		///     Loads the GI test room with the FPS controller.
 		/// </summary>
 		private static void Main(string[] args)
@@ -59,8 +60,11 @@ namespace TestGame
 				RadianceCache = GetBool(args, "rcache", true),
 				RadianceCacheForRadiosity = GetBool(args, "rcradio", true),
 				RadianceCacheNearDistance = GetFloat(args, "rcnear", 2f),
-				RadianceCacheHistoryWeight = GetFloat(args, "rcblend", 0.9f),
-				RadianceCacheProbesPerFrame = GetInt(args, "rcprobes", 1024)
+				RadianceCacheHistoryFrames = GetFloat(args, "rchistory", 20f),
+				RadianceCacheProbesPerFrame = GetInt(args, "rcprobes", 160),
+				RadianceCacheProbeResolution = GetInt(args, "rcres", 16),
+				RadianceCacheTraceResolution = GetInt(args, "rctrace", 32),
+				DumpAfterSeconds = GetFloat(args, "dumpafter", 5f)
 			};
 			GITestScene.Load(Game.Mono.LoadEmptyScene(), options);
 

@@ -42,6 +42,7 @@ namespace TestGame.Scenes
 			public int DumpFrames;
 
 			public string DumpDirectory = "framedump";
+			public float DumpAfterSeconds = 5f;
 
 			/// <summary>Per-frame probe jitter (off for diagnostics).</summary>
 			public bool ProbeJitter = true;
@@ -76,8 +77,10 @@ namespace TestGame.Scenes
 			public bool RadianceCache = true;
 			public bool RadianceCacheForRadiosity = true;
 			public float RadianceCacheNearDistance = 2f;
-			public float RadianceCacheHistoryWeight = 0.9f;
-			public int RadianceCacheProbesPerFrame = 1024;
+			public float RadianceCacheHistoryFrames = 20f;
+			public int RadianceCacheProbesPerFrame = 160;
+			public int RadianceCacheProbeResolution = 16;
+			public int RadianceCacheTraceResolution = 32;
 		}
 
 		#endregion
@@ -151,8 +154,10 @@ namespace TestGame.Scenes
 			Lighting.GI.RadianceCacheEnabled = options.RadianceCache;
 			Lighting.GI.RadianceCacheForRadiosity = options.RadianceCacheForRadiosity;
 			Lighting.GI.RadianceCacheNearDistance = options.RadianceCacheNearDistance;
-			Lighting.GI.RadianceCacheHistoryWeight = options.RadianceCacheHistoryWeight;
+			Lighting.GI.RadianceCacheHistoryFrames = options.RadianceCacheHistoryFrames;
 			Lighting.GI.RadianceCacheProbesPerFrame = options.RadianceCacheProbesPerFrame;
+			Lighting.GI.RadianceCacheProbeResolution = options.RadianceCacheProbeResolution;
+			Lighting.GI.RadianceCacheTraceResolution = options.RadianceCacheTraceResolution;
 			Lighting.GI.SurfaceCacheTexelsPerMeter = options.SurfaceCacheTexelsPerMeter;
 			Lighting.GI.ScreenSpaceResolve = options.Resolve;
 			Lighting.GI.ResolveScale = 0.5f;
@@ -332,6 +337,7 @@ namespace TestGame.Scenes
 			controls.PrintStats = options.Stats;
 			controls.DumpFrames = options.DumpFrames;
 			controls.DumpDirectory = options.DumpDirectory;
+			controls.DumpAfterSeconds = options.DumpAfterSeconds;
 		}
 
 		private static GameObject Box(Scene scene, string name, string material, Vector3 center, Vector3 halfSize)

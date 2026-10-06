@@ -8,15 +8,15 @@ using OpenTK.Mathematics;
 namespace LELEngine.Rendering.Passes
 {
 	/// <summary>
-	///     Lumen world-space radiance cache: a grid of probes over the GI volume, each an 8x8 full-sphere
-	///     octahedral radiance map (with a border for seamless filtering) stored in a 2D atlas. Probes are
-	///     re-traced through the global distance field (hits lit from the surface cache) and accumulated over
-	///     time. Screen probe rays and radiosity rays read it beyond
-	///     <see cref="GlobalIlluminationSettings.RadianceCacheNearDistance" />, which makes the far field
-	///     temporally stable while the near field keeps per-ray detail.
+	///     Lumen world-space radiance cache: a grid of probes over the GI volume, each a full-sphere octahedral
+	///     radiance map (with a border for seamless filtering) stored in a 2D atlas. Probes are traced through the
+	///     global distance field at a higher resolution than stored (Lumen: 32x32 rays into 16x16 texels), the
+	///     rays are averaged into the stored map and accumulated over time. Screen probe rays and radiosity rays
+	///     read the cache beyond <see cref="GlobalIlluminationSettings.RadianceCacheNearDistance" />, which makes
+	///     the far field temporally stable while the near field keeps per-ray detail.
 	///
 	///     Like Lumen, the update budget goes to the probes that matter: probes inside the static scene bounds
-	///     ("interior") are refreshed every frame when the budget allows, the rest only occasionally.
+	///     ("interior") are refreshed round robin from a per-frame budget, the rest get an eighth of it.
 	/// </summary>
 	public sealed class RadianceCachePass : RenderPass
 	{
@@ -32,23 +32,32 @@ namespace LELEngine.Rendering.Passes
 
 		#region PrivateFields
 
-		private const int Resolution = 8;
-		private const int Tile = Resolution + 2;
 		private const int ProbeListBinding = 3;
+		private const int ProbeFramesBinding = 4;
+		private const int TraceGroupSize = 16;
 
-		private ComputeShader update;
+		private ComputeShader trace;
+		private ComputeShader resolve;
+
 		private int atlas;
 		private int atlasWidth;
 		private int atlasHeight;
 		private int probesPerAxis;
+		private int probeResolution;
 		private int probesPerRow;
 		private int probeCount;
+
+		private int traceBuffer;
+		private int traceSlots;
+		private int traceSlotsPerRow;
+		private int traceResolution;
+
 		private int frameIndex;
-		private bool needsFullUpdate = true;
 		private Vector3 gridMin;
 		private float probeSpacing;
 
 		private int probeListBuffer;
+		private int probeFramesBuffer;
 		private int interiorTotal;
 		private int exteriorTotal;
 		private int interiorNext;
@@ -63,8 +72,10 @@ namespace LELEngine.Rendering.Passes
 
 		public override void Initialize(Renderer renderer)
 		{
-			update = new ComputeShader("Engine/RadianceCacheUpdate.shader");
+			trace = new ComputeShader("Engine/RadianceCacheTrace.shader");
+			resolve = new ComputeShader("Engine/RadianceCacheResolve.shader");
 			probeListBuffer = GL.GenBuffer();
+			probeFramesBuffer = GL.GenBuffer();
 		}
 
 		public override void Execute(RenderContext context)
@@ -74,19 +85,24 @@ namespace LELEngine.Rendering.Passes
 			Active = gi.Enabled && gi.Mode == GIMode.Lumen && gi.RadianceCacheEnabled && gi.GlobalSdf != 0 && scene.SurfaceCache != null;
 			if (!Active)
 			{
-				needsFullUpdate = true;
 				return;
 			}
 
 			int perAxis = Math.Max(2, gi.RadianceCacheProbesPerAxis);
-			EnsureAtlas(perAxis);
+			int resolution = gi.RadianceCacheProbeResolution >= 16 ? 16 : 8;
+			int traceRes = Math.Max(TraceGroupSize, gi.RadianceCacheTraceResolution / TraceGroupSize * TraceGroupSize);
+			if (traceRes % resolution != 0)
+			{
+				traceRes = resolution * 2;
+			}
+			EnsureAtlas(perAxis, resolution);
 
 			float spacing = gi.GridSize / (perAxis - 1);
 			if (gi.GridMin != gridMin || spacing != probeSpacing)
 			{
 				gridMin = gi.GridMin;
 				probeSpacing = spacing;
-				needsFullUpdate = true;
+				ClearAtlas();
 				listValid = false;
 			}
 
@@ -100,33 +116,47 @@ namespace LELEngine.Rendering.Passes
 
 			frameIndex++;
 			int budget = Math.Max(1, gi.RadianceCacheProbesPerFrame);
-			int interiorCount = needsFullUpdate ? interiorTotal : Math.Min(budget, interiorTotal);
-			int exteriorCount = needsFullUpdate ? exteriorTotal : Math.Min(Math.Max(1, budget / 8), exteriorTotal);
-			int dispatchCount = interiorCount + exteriorCount;
-			if (dispatchCount == 0)
+			int interiorCount = Math.Min(budget, interiorTotal);
+			int exteriorCount = Math.Min(Math.Max(1, budget / 8), exteriorTotal);
+			int count = interiorCount + exteriorCount;
+			if (count == 0)
 			{
 				return;
 			}
+			EnsureTraceBuffer(count, traceRes);
 
-			ShaderProgram program = update.Program;
-			update.Use();
-			scene.SetUniforms(program);
-			Lighting.SetSdfUniforms(program);
-			SetUniforms(program, 7);
-			program.SetTexture("FinalLighting", TextureTarget.Texture2D, scene.SurfaceCache.FinalLightingCurrent, 2);
-			program.SetVector3("giSkyRadiance", gi.SkyRadiance);
-			program.SetInt("frameIndex", frameIndex);
-			program.SetFloat("historyWeight", needsFullUpdate ? 0f : gi.RadianceCacheHistoryWeight);
-			program.SetInt("interiorStart", needsFullUpdate ? 0 : interiorNext);
-			program.SetInt("interiorCount", interiorCount);
-			program.SetInt("interiorTotal", Math.Max(1, interiorTotal));
-			program.SetInt("exteriorStart", needsFullUpdate ? 0 : exteriorNext);
-			program.SetInt("exteriorTotal", Math.Max(1, exteriorTotal));
-
+			GpuProfiler profiler = context.Renderer.Profiler;
 			GL.BindBufferBase(BufferRangeTarget.ShaderStorageBuffer, ProbeListBinding, probeListBuffer);
-			GL.BindImageTexture(0, atlas, 0, false, 0, TextureAccess.ReadWrite, SizedInternalFormat.Rgba16f);
-			update.Dispatch(dispatchCount);
+			GL.BindBufferBase(BufferRangeTarget.ShaderStorageBuffer, ProbeFramesBinding, probeFramesBuffer);
+
+			// ---- 1. trace: one thread per ray into the scratch tiles
+			profiler.Split("RadianceCache.trace");
+			ShaderProgram traceProgram = trace.Program;
+			trace.Use();
+			scene.SetUniforms(traceProgram);
+			Lighting.SetSdfUniforms(traceProgram);
+			SetUniforms(traceProgram, 7);
+			SetScheduleUniforms(traceProgram, interiorCount);
+			traceProgram.SetTexture("FinalLighting", TextureTarget.Texture2D, scene.SurfaceCache.FinalLightingCurrent, 2);
+			traceProgram.SetVector3("giSkyRadiance", gi.SkyRadiance);
+			traceProgram.SetInt("frameIndex", frameIndex);
+			GL.BindImageTexture(0, traceBuffer, 0, false, 0, TextureAccess.WriteOnly, SizedInternalFormat.Rgba16f);
+			int groupsPerProbe = traceRes / TraceGroupSize * (traceRes / TraceGroupSize);
+			trace.Dispatch(count * groupsPerProbe);
 			ComputeShader.Barrier(MemoryBarrierFlags.ShaderImageAccessBarrierBit | MemoryBarrierFlags.TextureFetchBarrierBit);
+
+			// ---- 2. resolve: downsample into the stored maps and accumulate
+			profiler.Split("RadianceCache.resolve");
+			ShaderProgram resolveProgram = resolve.Program;
+			resolve.Use();
+			SetUniforms(resolveProgram, 7);
+			SetScheduleUniforms(resolveProgram, interiorCount);
+			resolveProgram.SetTexture("TraceBuffer", TextureTarget.Texture2D, traceBuffer, 1);
+			resolveProgram.SetInt("frameIndex", frameIndex);
+			resolveProgram.SetFloat("historyFrames", gi.RadianceCacheHistoryFrames);
+			GL.BindImageTexture(0, atlas, 0, false, 0, TextureAccess.ReadWrite, SizedInternalFormat.Rgba16f);
+			resolve.Dispatch(count);
+			ComputeShader.Barrier(MemoryBarrierFlags.ShaderImageAccessBarrierBit | MemoryBarrierFlags.TextureFetchBarrierBit | MemoryBarrierFlags.ShaderStorageBarrierBit);
 
 			if (interiorTotal > 0)
 			{
@@ -136,7 +166,6 @@ namespace LELEngine.Rendering.Passes
 			{
 				exteriorNext = (exteriorNext + exteriorCount) % exteriorTotal;
 			}
-			needsFullUpdate = false;
 		}
 
 		/// <summary>
@@ -156,22 +185,34 @@ namespace LELEngine.Rendering.Passes
 			program.SetFloat("rcProbeSpacing", probeSpacing);
 			program.SetInt("rcProbesPerAxis", probesPerAxis);
 			program.SetInt("rcProbesPerRow", probesPerRow);
+			program.SetInt("rcProbeResolution", probeResolution);
 			program.SetVector2("rcAtlasSize", new Vector2(atlasWidth, atlasHeight));
 			program.SetFloat("rcNearDistance", Lighting.GI.RadianceCacheNearDistance);
 		}
 
 		public override void Dispose()
 		{
-			update?.Delete();
+			trace?.Delete();
+			resolve?.Delete();
 			if (atlas != 0)
 			{
 				GL.DeleteTexture(atlas);
 				atlas = 0;
 			}
+			if (traceBuffer != 0)
+			{
+				GL.DeleteTexture(traceBuffer);
+				traceBuffer = 0;
+			}
 			if (probeListBuffer != 0)
 			{
 				GL.DeleteBuffer(probeListBuffer);
 				probeListBuffer = 0;
+			}
+			if (probeFramesBuffer != 0)
+			{
+				GL.DeleteBuffer(probeFramesBuffer);
+				probeFramesBuffer = 0;
 			}
 		}
 
@@ -179,9 +220,21 @@ namespace LELEngine.Rendering.Passes
 
 		#region PrivateMethods
 
-		private void EnsureAtlas(int perAxis)
+		private void SetScheduleUniforms(ShaderProgram program, int interiorCount)
 		{
-			if (atlas != 0 && perAxis == probesPerAxis)
+			program.SetInt("rcTraceResolution", traceResolution);
+			program.SetInt("traceSlotsPerRow", traceSlotsPerRow);
+			program.SetInt("sequenceOffset", 0);
+			program.SetInt("interiorStart", interiorNext);
+			program.SetInt("interiorCount", interiorCount);
+			program.SetInt("interiorTotal", Math.Max(1, interiorTotal));
+			program.SetInt("exteriorStart", exteriorNext);
+			program.SetInt("exteriorTotal", Math.Max(1, exteriorTotal));
+		}
+
+		private void EnsureAtlas(int perAxis, int resolution)
+		{
+			if (atlas != 0 && perAxis == probesPerAxis && resolution == probeResolution)
 			{
 				return;
 			}
@@ -192,27 +245,76 @@ namespace LELEngine.Rendering.Passes
 			}
 
 			probesPerAxis = perAxis;
+			probeResolution = resolution;
 			probeCount = perAxis * perAxis * perAxis;
 			probesPerRow = (int)Math.Ceiling(Math.Sqrt(probeCount));
 			int rows = (probeCount + probesPerRow - 1) / probesPerRow;
-			atlasWidth = probesPerRow * Tile;
-			atlasHeight = rows * Tile;
+			int tile = resolution + 2;
+			atlasWidth = probesPerRow * tile;
+			atlasHeight = rows * tile;
 
-			// Zero-initialised: alpha 0 marks "no data" for readers until a probe has been traced (no glClearTexImage in GL 4.3).
-			float[] zeros = new float[atlasWidth * atlasHeight * 4];
 			atlas = GL.GenTexture();
 			GL.BindTexture(TextureTarget.Texture2D, atlas);
-			GL.TexImage2D(TextureTarget.Texture2D, 0, PixelInternalFormat.Rgba16f, atlasWidth, atlasHeight, 0, PixelFormat.Rgba, PixelType.Float, zeros);
+			GL.TexImage2D(TextureTarget.Texture2D, 0, PixelInternalFormat.Rgba16f, atlasWidth, atlasHeight, 0, PixelFormat.Rgba, PixelType.Float, IntPtr.Zero);
 			GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Linear);
 			GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Linear);
 			GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)TextureWrapMode.ClampToEdge);
 			GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)TextureWrapMode.ClampToEdge);
 			GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMaxLevel, 0);
 			GL.BindTexture(TextureTarget.Texture2D, 0);
+			ClearAtlas();
 
-			needsFullUpdate = true;
 			listValid = false;
-			Console.WriteLine($"[RadianceCache] {perAxis}^3 probes, atlas {atlasWidth}x{atlasHeight}");
+			Console.WriteLine($"[RadianceCache] {perAxis}^3 probes at {resolution}x{resolution}, atlas {atlasWidth}x{atlasHeight}");
+		}
+
+		// Alpha 0 marks "no data": consumers trace on until a probe has been resolved (no glClearTexImage in GL 4.3).
+		// Every probe's last-update frame is reset to -1 so the first update after the clear replaces the history.
+		private void ClearAtlas()
+		{
+			float[] zeros = new float[atlasWidth * atlasHeight * 4];
+			GL.BindTexture(TextureTarget.Texture2D, atlas);
+			GL.TexSubImage2D(TextureTarget.Texture2D, 0, 0, 0, atlasWidth, atlasHeight, PixelFormat.Rgba, PixelType.Float, zeros);
+			GL.BindTexture(TextureTarget.Texture2D, 0);
+
+			int[] never = new int[Math.Max(1, probeCount)];
+			for (int i = 0; i < never.Length; i++)
+			{
+				never[i] = -1;
+			}
+			GL.BindBuffer(BufferTarget.ShaderStorageBuffer, probeFramesBuffer);
+			GL.BufferData(BufferTarget.ShaderStorageBuffer, never.Length * sizeof(int), never, BufferUsageHint.DynamicDraw);
+			GL.BindBuffer(BufferTarget.ShaderStorageBuffer, 0);
+
+			interiorNext = 0;
+			exteriorNext = 0;
+		}
+
+		private void EnsureTraceBuffer(int slots, int resolution)
+		{
+			if (traceBuffer != 0 && slots <= traceSlots && resolution == traceResolution)
+			{
+				return;
+			}
+
+			if (traceBuffer != 0)
+			{
+				GL.DeleteTexture(traceBuffer);
+			}
+
+			traceSlots = Math.Max(slots, traceSlots);
+			traceResolution = resolution;
+			traceSlotsPerRow = (int)Math.Ceiling(Math.Sqrt(traceSlots));
+			int rows = (traceSlots + traceSlotsPerRow - 1) / traceSlotsPerRow;
+
+			traceBuffer = GL.GenTexture();
+			GL.BindTexture(TextureTarget.Texture2D, traceBuffer);
+			GL.TexImage2D(TextureTarget.Texture2D, 0, PixelInternalFormat.Rgba16f, traceSlotsPerRow * resolution, rows * resolution, 0, PixelFormat.Rgba, PixelType.Float, IntPtr.Zero);
+			GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
+			GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
+			GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMaxLevel, 0);
+			GL.BindTexture(TextureTarget.Texture2D, 0);
+			Console.WriteLine($"[RadianceCache] trace buffer {traceSlots} probes x {resolution}x{resolution} rays");
 		}
 
 		// Splits the probes into those inside the (padded) static scene bounds and the rest, uploaded as one
@@ -247,7 +349,6 @@ namespace LELEngine.Rendering.Passes
 			listBoundsMin = boundsMin;
 			listBoundsMax = boundsMax;
 			listValid = true;
-			needsFullUpdate = true;
 			Console.WriteLine($"[RadianceCache] {interiorTotal} interior probes, {exteriorTotal} exterior");
 		}
 
