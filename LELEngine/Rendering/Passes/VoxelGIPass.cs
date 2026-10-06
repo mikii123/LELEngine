@@ -10,17 +10,19 @@ namespace LELEngine.Rendering.Passes
 	///     Voxel cone tracing, stage 1: builds the radiance volume sampled by Engine/VoxelConeTracing.glsl.
 	///
 	///     Geometry and lighting are decoupled, in the spirit of Lumen's surface cache:
-	///     1. Geometry voxelization writes surface attributes (albedo + occupancy, normal, emission) into
-	///        3D textures. Static renderers (<see cref="MeshRenderer.IsStatic" />) go into a cache built once;
-	///        dynamic renderers are re-voxelized into a separate set each frame, clearing only the voxel
-	///        regions they occupied last frame.
+	///     1. Geometry voxelization writes surface attributes (albedo + occupancy, normal, emission) and 8^3
+	///        block occupancy flags into 3D textures. Static renderers (<see cref="MeshRenderer.IsStatic" />)
+	///        go into a cache built once; dynamic renderers are re-voxelized into a separate set each frame,
+	///        clearing only the voxel regions they occupied last frame.
 	///     2. Light injection (compute) combines both geometry sets into this frame's radiance:
 	///        albedo * (sun with shadows from a grid-covering shadow map + bounce traced from the previous
 	///        frame's radiance volume) + emission. The feedback yields multi-bounce lighting that converges
 	///        over a few frames. The result is mipmapped (compute) for cone tracing.
+	///        Injection runs only over occupied blocks: a compaction pass lists them in an SSBO that doubles
+	///        as the indirect dispatch arguments. Voxels that became empty are zeroed by region instead.
 	///
 	///     Dynamic shadows, moving lights and emitters therefore affect the GI of static geometry at no
-	///     re-voxelization cost; only the injection and mip passes scale with the volume size.
+	///     re-voxelization cost, and the per-frame cost scales with occupied space rather than volume size.
 	/// </summary>
 	public sealed class VoxelGIPass : RenderPass
 	{
@@ -36,6 +38,8 @@ namespace LELEngine.Rendering.Passes
 
 		#region PrivateFields
 
+		private const int BlockSize = 8;
+
 		private GeometryVolume staticGeometry;
 		private GeometryVolume dynamicGeometry;
 
@@ -44,13 +48,22 @@ namespace LELEngine.Rendering.Passes
 		private int current;
 		private bool previousValid;
 
+		// Dynamic regions each radiance buffer held when it was last written; cleared before reuse.
+		private readonly List<VoxelRegion>[] radianceRegions = { new List<VoxelRegion>(), new List<VoxelRegion>() };
+
+		private int blockList;
+		private int blockResolution;
+
 		private int currentResolution;
 		private int mipLevels;
 		private int framebuffer;
 		private ShaderProgram voxelize;
 		private ComputeShader clearGeometry;
+		private ComputeShader clearRadiance;
+		private ComputeShader compactBlocks;
 		private ComputeShader inject;
 		private ComputeShader mip;
+		private ComputeShader mipBlocks;
 		private Framebuffer gridShadow;
 
 		private readonly List<MeshRenderer> staticRenderers = new List<MeshRenderer>();
@@ -77,11 +90,15 @@ namespace LELEngine.Rendering.Passes
 		{
 			voxelize = new ShaderProgram("Engine/Voxelize.shader");
 			clearGeometry = new ComputeShader("Engine/VoxelClearGeometry.shader");
+			clearRadiance = new ComputeShader("Engine/VoxelClearRadiance.shader");
+			compactBlocks = new ComputeShader("Engine/VoxelCompactBlocks.shader");
 			inject = new ComputeShader("Engine/VoxelInject.shader");
 			mip = new ComputeShader("Engine/VoxelMip.shader");
+			mipBlocks = new ComputeShader("Engine/VoxelMipBlocks.shader");
 
 			// Attachment-less framebuffer: rasterization happens, but all output goes through imageStore.
 			framebuffer = GL.GenFramebuffer();
+			blockList = GL.GenBuffer();
 
 			CreateVolumes(Lighting.GI.Resolution);
 			CreateGridShadow(Lighting.GI.GridShadowMapSize);
@@ -120,10 +137,7 @@ namespace LELEngine.Rendering.Passes
 			if (gi.StaticDirty)
 			{
 				profiler.Split("VoxelGI.static");
-				ClearGeometry(staticGeometry, VoxelRegion.Full(currentResolution));
-				Voxelize(staticGeometry, staticRenderers, gi);
-				gi.StaticDirty = false;
-				RebuiltStaticThisFrame = true;
+				RebuildStaticCache(gi);
 			}
 
 			if (dynamicDue)
@@ -141,9 +155,16 @@ namespace LELEngine.Rendering.Passes
 				profiler.Split("VoxelGI.shadow");
 				RenderGridShadow(context, context.Renderers, lightView, lightProjection);
 
+				profiler.Split("VoxelGI.blocks");
+				CompactOccupiedBlocks();
+
 				profiler.Split("VoxelGI.inject");
 				int target = 1 - current;
+				// Voxels dynamic objects left since this buffer was last written are not revisited; zero them.
+				ClearRadiance(radiance[target], radianceRegions[target]);
 				InjectLighting(target, gi, lightView, lightProjection);
+				radianceRegions[target].Clear();
+				radianceRegions[target].AddRange(previousRegions);
 
 				profiler.Split("VoxelGI.mips");
 				UpdateMips(radiance[target]);
@@ -164,12 +185,20 @@ namespace LELEngine.Rendering.Passes
 				GL.DeleteFramebuffer(framebuffer);
 				framebuffer = 0;
 			}
+			if (blockList != 0)
+			{
+				GL.DeleteBuffer(blockList);
+				blockList = 0;
+			}
 			gridShadow?.Delete();
 			gridShadow = null;
 			voxelize?.Delete();
 			clearGeometry?.Delete();
+			clearRadiance?.Delete();
+			compactBlocks?.Delete();
 			inject?.Delete();
 			mip?.Delete();
+			mipBlocks?.Delete();
 			Lighting.GI.VoxelTexture = 0;
 		}
 
@@ -181,19 +210,29 @@ namespace LELEngine.Rendering.Passes
 
 		private void CreateVolumes(int resolution)
 		{
-			resolution = Math.Max(8, resolution);
-			// Must be a multiple of the injection work group (8).
-			resolution = resolution / 8 * 8;
+			resolution = Math.Max(BlockSize, resolution);
+			// Must be a multiple of the block size.
+			resolution = resolution / BlockSize * BlockSize;
 
 			DeleteVolumes();
 
-			staticGeometry = GeometryVolume.Create(resolution);
-			dynamicGeometry = GeometryVolume.Create(resolution);
+			blockResolution = resolution / BlockSize;
+			staticGeometry = GeometryVolume.Create(resolution, blockResolution);
+			dynamicGeometry = GeometryVolume.Create(resolution, blockResolution);
 			radiance[0] = CreateRadianceTexture(resolution);
 			radiance[1] = CreateRadianceTexture(resolution);
 			current = 0;
 			previousValid = false;
 			mipLevels = 1 + (int)Math.Floor(Math.Log(resolution, 2));
+			currentResolution = resolution;
+
+			// Block list: 16-byte indirect dispatch header followed by one packed uint per occupied block.
+			int blockCapacity = blockResolution * blockResolution * blockResolution;
+			GL.BindBuffer(BufferTarget.ShaderStorageBuffer, blockList);
+			GL.BufferData(BufferTarget.ShaderStorageBuffer, 16 + sizeof(uint) * blockCapacity, IntPtr.Zero, BufferUsageHint.DynamicDraw);
+			uint[] header = { 0u, 1u, 1u, 0u };
+			GL.BufferSubData(BufferTarget.ShaderStorageBuffer, IntPtr.Zero, 16, header);
+			GL.BindBuffer(BufferTarget.ShaderStorageBuffer, 0);
 
 			GL.BindFramebuffer(FramebufferTarget.Framebuffer, framebuffer);
 			GL.FramebufferParameter(FramebufferTarget.Framebuffer, FramebufferDefaultParameter.FramebufferDefaultWidth, resolution);
@@ -205,14 +244,19 @@ namespace LELEngine.Rendering.Passes
 				Console.WriteLine("[VoxelGI] Voxelization framebuffer incomplete: " + status);
 			}
 
-			currentResolution = resolution;
+			// Injection skips empty blocks, so the radiance volumes must start out zero.
+			ClearRadiance(radiance[0], VoxelRegion.Full(resolution));
+			ClearRadiance(radiance[1], VoxelRegion.Full(resolution));
+			radianceRegions[0].Clear();
+			radianceRegions[1].Clear();
+
 			Lighting.GI.Resolution = resolution;
 			Lighting.GI.StaticDirty = true;
 			previousRegions.Clear();
 
 			long voxels = (long)resolution * resolution * resolution;
 			double megabytes = (voxels * 4 * 6 + voxels * 8 * 2 * 8 / 7.0) / (1024.0 * 1024.0);
-			Console.WriteLine($"[VoxelGI] Volume {resolution}^3: geometry 2x(RGBA8+RGBA8+R11G11B10F), radiance 2xRGBA16F {mipLevels} mips, ~{megabytes:0} MB");
+			Console.WriteLine($"[VoxelGI] Volume {resolution}^3: geometry 2x(RGBA8+RGBA8+R11G11B10F), radiance 2xRGBA16F {mipLevels} mips, {blockResolution}^3 blocks, ~{megabytes:0} MB");
 		}
 
 		private void DeleteVolumes()
@@ -362,6 +406,21 @@ namespace LELEngine.Rendering.Passes
 
 		// ---------------------------------------------------------------- geometry volumes
 
+		private void RebuildStaticCache(GlobalIlluminationSettings gi)
+		{
+			ClearGeometry(staticGeometry, VoxelRegion.Full(currentResolution));
+			Voxelize(staticGeometry, staticRenderers, gi);
+
+			// Blocks that no longer hold geometry will not be revisited by injection: start both buffers clean.
+			ClearRadiance(radiance[0], VoxelRegion.Full(currentResolution));
+			ClearRadiance(radiance[1], VoxelRegion.Full(currentResolution));
+			radianceRegions[0].Clear();
+			radianceRegions[1].Clear();
+
+			gi.StaticDirty = false;
+			RebuiltStaticThisFrame = true;
+		}
+
 		private void UpdateDynamicGeometry(GlobalIlluminationSettings gi)
 		{
 			currentRegions.Clear();
@@ -402,10 +461,8 @@ namespace LELEngine.Rendering.Passes
 			}
 
 			clearGeometry.Use();
-			target.BindImages(0, TextureAccess.WriteOnly);
-			clearGeometry.Program.SetInt3("dstOffset", region.MinX, region.MinY, region.MinZ);
-			clearGeometry.Program.SetInt3("dstSize", region.SizeX, region.SizeY, region.SizeZ);
-			clearGeometry.DispatchThreads(region.SizeX, region.SizeY, region.SizeZ, 4, 4, 4);
+			target.BindImages(0, TextureAccess.WriteOnly, true);
+			DispatchRegion(clearGeometry, region);
 			ComputeShader.Barrier(MemoryBarrierFlags.ShaderImageAccessBarrierBit);
 		}
 
@@ -417,14 +474,63 @@ namespace LELEngine.Rendering.Passes
 			}
 
 			clearGeometry.Use();
-			target.BindImages(0, TextureAccess.WriteOnly);
+			target.BindImages(0, TextureAccess.WriteOnly, true);
 			foreach (VoxelRegion region in regions)
 			{
-				clearGeometry.Program.SetInt3("dstOffset", region.MinX, region.MinY, region.MinZ);
-				clearGeometry.Program.SetInt3("dstSize", region.SizeX, region.SizeY, region.SizeZ);
-				clearGeometry.DispatchThreads(region.SizeX, region.SizeY, region.SizeZ, 4, 4, 4);
+				DispatchRegion(clearGeometry, region);
 			}
 			ComputeShader.Barrier(MemoryBarrierFlags.ShaderImageAccessBarrierBit);
+		}
+
+		// Radiance levels 0 and 1 are only rewritten for occupied blocks, so both must be cleared explicitly.
+		private void ClearRadiance(int texture, VoxelRegion region)
+		{
+			if (region.IsEmpty)
+			{
+				return;
+			}
+
+			clearRadiance.Use();
+			for (int level = 0; level <= 1; level++)
+			{
+				GL.BindImageTexture(0, texture, level, true, 0, TextureAccess.WriteOnly, SizedInternalFormat.Rgba16f);
+				DispatchRegion(clearRadiance, region.AtLevel(level, Math.Max(1, currentResolution >> level)));
+			}
+			ComputeShader.Barrier(MemoryBarrierFlags.ShaderImageAccessBarrierBit);
+		}
+
+		private void ClearRadiance(int texture, List<VoxelRegion> regions)
+		{
+			if (regions.Count == 0)
+			{
+				return;
+			}
+
+			if (RegionCoverage(regions) > FullClearCoverage)
+			{
+				ClearRadiance(texture, VoxelRegion.Full(currentResolution));
+				return;
+			}
+
+			clearRadiance.Use();
+			for (int level = 0; level <= 1; level++)
+			{
+				GL.BindImageTexture(0, texture, level, true, 0, TextureAccess.WriteOnly, SizedInternalFormat.Rgba16f);
+				int levelSize = Math.Max(1, currentResolution >> level);
+				foreach (VoxelRegion region in regions)
+				{
+					DispatchRegion(clearRadiance, region.AtLevel(level, levelSize));
+				}
+			}
+			ComputeShader.Barrier(MemoryBarrierFlags.ShaderImageAccessBarrierBit);
+		}
+
+		// Shared by the region clear shaders: dstOffset / dstSize uniforms, 4^3 work groups.
+		private static void DispatchRegion(ComputeShader shader, VoxelRegion region)
+		{
+			shader.Program.SetInt3("dstOffset", region.MinX, region.MinY, region.MinZ);
+			shader.Program.SetInt3("dstSize", region.SizeX, region.SizeY, region.SizeZ);
+			shader.DispatchThreads(region.SizeX, region.SizeY, region.SizeZ, 4, 4, 4);
 		}
 
 		private void Voxelize(GeometryVolume target, IReadOnlyList<MeshRenderer> renderers, GlobalIlluminationSettings gi)
@@ -444,7 +550,7 @@ namespace LELEngine.Rendering.Passes
 			voxelize.SetVector3("voxelGridMin", gi.GridMin);
 			voxelize.SetFloat("voxelGridSize", gi.GridSize);
 			voxelize.SetInt("voxelResolution", currentResolution);
-			target.BindImages(0, TextureAccess.WriteOnly);
+			target.BindImages(0, TextureAccess.WriteOnly, true);
 
 			foreach (MeshRenderer renderer in renderers)
 			{
@@ -452,7 +558,8 @@ namespace LELEngine.Rendering.Passes
 				renderer.RenderWith(voxelize);
 			}
 
-			ComputeShader.Barrier(MemoryBarrierFlags.ShaderImageAccessBarrierBit);
+			// Geometry is read as images (injection) and block flags as textures (compaction).
+			ComputeShader.Barrier(MemoryBarrierFlags.ShaderImageAccessBarrierBit | MemoryBarrierFlags.TextureFetchBarrierBit);
 
 			GL.DepthMask(true);
 			GL.Enable(EnableCap.DepthTest);
@@ -541,6 +648,23 @@ namespace LELEngine.Rendering.Passes
 			GL.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
 		}
 
+		// Lists occupied blocks into the SSBO whose header is the indirect dispatch for injection.
+		private void CompactOccupiedBlocks()
+		{
+			uint zero = 0;
+			GL.BindBuffer(BufferTarget.ShaderStorageBuffer, blockList);
+			GL.BufferSubData(BufferTarget.ShaderStorageBuffer, IntPtr.Zero, sizeof(uint), ref zero);
+			GL.BindBufferBase(BufferRangeTarget.ShaderStorageBuffer, 0, blockList);
+
+			compactBlocks.Use();
+			compactBlocks.Program.SetInt("blockResolution", blockResolution);
+			compactBlocks.Program.SetTexture("StaticBlocks", TextureTarget.Texture3D, staticGeometry.Blocks, 0);
+			compactBlocks.Program.SetTexture("DynamicBlocks", TextureTarget.Texture3D, dynamicGeometry.Blocks, 1);
+			compactBlocks.DispatchThreads(blockResolution, blockResolution, blockResolution, 4, 4, 4);
+
+			ComputeShader.Barrier(MemoryBarrierFlags.ShaderStorageBarrierBit | MemoryBarrierFlags.CommandBarrierBit);
+		}
+
 		private void InjectLighting(int target, GlobalIlluminationSettings gi, Matrix4 lightView, Matrix4 lightProjection)
 		{
 			ShadowSettings shadows = Lighting.Shadows;
@@ -565,20 +689,37 @@ namespace LELEngine.Rendering.Passes
 			program.SetInt("giBounceCones", gi.BounceCones);
 			program.SetTexture("VoxelRadiance", TextureTarget.Texture3D, radiance[current], 0);
 
-			staticGeometry.BindImages(0, TextureAccess.ReadOnly);
-			dynamicGeometry.BindImages(3, TextureAccess.ReadOnly);
+			staticGeometry.BindImages(0, TextureAccess.ReadOnly, false);
+			dynamicGeometry.BindImages(3, TextureAccess.ReadOnly, false);
 			GL.BindImageTexture(6, radiance[target], 0, true, 0, TextureAccess.WriteOnly, SizedInternalFormat.Rgba16f);
 
-			int groups = currentResolution / 8;
-			inject.Dispatch(groups, groups, groups);
+			// One work group per occupied block, count taken from the compaction result.
+			GL.BindBufferBase(BufferRangeTarget.ShaderStorageBuffer, 0, blockList);
+			GL.BindBuffer(BufferTarget.DispatchIndirectBuffer, blockList);
+			GL.DispatchComputeIndirect(IntPtr.Zero);
+			GL.BindBuffer(BufferTarget.DispatchIndirectBuffer, 0);
+
 			ComputeShader.Barrier(MemoryBarrierFlags.ShaderImageAccessBarrierBit);
 		}
 
-		// Box-filters the whole mip chain of a radiance volume (one dispatch + barrier per level).
+		// Box-filters the mip chain of a radiance volume. Level 1, which holds most of the work, is only
+		// computed for occupied blocks (indirect dispatch over the block list); coarser levels run whole.
 		private void UpdateMips(int texture)
 		{
+			if (mipLevels > 1)
+			{
+				mipBlocks.Use();
+				GL.BindImageTexture(0, texture, 0, true, 0, TextureAccess.ReadOnly, SizedInternalFormat.Rgba16f);
+				GL.BindImageTexture(1, texture, 1, true, 0, TextureAccess.WriteOnly, SizedInternalFormat.Rgba16f);
+				GL.BindBufferBase(BufferRangeTarget.ShaderStorageBuffer, 0, blockList);
+				GL.BindBuffer(BufferTarget.DispatchIndirectBuffer, blockList);
+				GL.DispatchComputeIndirect(IntPtr.Zero);
+				GL.BindBuffer(BufferTarget.DispatchIndirectBuffer, 0);
+				ComputeShader.Barrier(MemoryBarrierFlags.ShaderImageAccessBarrierBit);
+			}
+
 			mip.Use();
-			for (int level = 1; level < mipLevels; level++)
+			for (int level = 2; level < mipLevels; level++)
 			{
 				int levelSize = Math.Max(1, currentResolution >> level);
 				GL.BindImageTexture(0, texture, level - 1, true, 0, TextureAccess.ReadOnly, SizedInternalFormat.Rgba16f);
@@ -594,29 +735,37 @@ namespace LELEngine.Rendering.Passes
 
 		#region NestedTypes
 
-		/// <summary>Surface attributes of voxelized geometry: albedo + occupancy, normal, emission.</summary>
+		/// <summary>Surface attributes of voxelized geometry (albedo + occupancy, normal, emission) plus block flags.</summary>
 		private struct GeometryVolume
 		{
 			public int Albedo;
 			public int Normal;
 			public int Emissive;
 
-			public static GeometryVolume Create(int resolution)
+			/// <summary>R8 volume at 1/8 resolution: 1 where the 8^3 block contains any geometry.</summary>
+			public int Blocks;
+
+			public static GeometryVolume Create(int resolution, int blockResolution)
 			{
 				return new GeometryVolume
 				{
 					Albedo = CreateTexture(resolution, PixelInternalFormat.Rgba8, PixelFormat.Rgba, PixelType.UnsignedByte),
 					Normal = CreateTexture(resolution, PixelInternalFormat.Rgba8, PixelFormat.Rgba, PixelType.UnsignedByte),
-					Emissive = CreateTexture(resolution, PixelInternalFormat.R11fG11fB10f, PixelFormat.Rgb, PixelType.Float)
+					Emissive = CreateTexture(resolution, PixelInternalFormat.R11fG11fB10f, PixelFormat.Rgb, PixelType.Float),
+					Blocks = CreateTexture(blockResolution, PixelInternalFormat.R8, PixelFormat.Red, PixelType.UnsignedByte)
 				};
 			}
 
-			/// <summary>Binds albedo, normal and emissive as images at unit, unit + 1, unit + 2.</summary>
-			public void BindImages(int unit, TextureAccess access)
+			/// <summary>Binds albedo, normal, emissive (and optionally the block flags) as images from unit upwards.</summary>
+			public void BindImages(int unit, TextureAccess access, bool includeBlocks)
 			{
 				GL.BindImageTexture(unit, Albedo, 0, true, 0, access, SizedInternalFormat.Rgba8);
 				GL.BindImageTexture(unit + 1, Normal, 0, true, 0, access, SizedInternalFormat.Rgba8);
 				GL.BindImageTexture(unit + 2, Emissive, 0, true, 0, access, SizedInternalFormat.R11fG11fB10f);
+				if (includeBlocks)
+				{
+					GL.BindImageTexture(unit + 3, Blocks, 0, true, 0, access, SizedInternalFormat.R8);
+				}
 			}
 
 			public void Delete()
@@ -624,7 +773,8 @@ namespace LELEngine.Rendering.Passes
 				if (Albedo != 0) GL.DeleteTexture(Albedo);
 				if (Normal != 0) GL.DeleteTexture(Normal);
 				if (Emissive != 0) GL.DeleteTexture(Emissive);
-				Albedo = Normal = Emissive = 0;
+				if (Blocks != 0) GL.DeleteTexture(Blocks);
+				Albedo = Normal = Emissive = Blocks = 0;
 			}
 
 			private static int CreateTexture(int resolution, PixelInternalFormat internalFormat, PixelFormat format, PixelType type)
@@ -632,7 +782,7 @@ namespace LELEngine.Rendering.Passes
 				int texture = GL.GenTexture();
 				GL.BindTexture(TextureTarget.Texture3D, texture);
 				GL.TexImage3D(TextureTarget.Texture3D, 0, internalFormat, resolution, resolution, resolution, 0, format, type, IntPtr.Zero);
-				// Only ever accessed through image load/store; no filtering, no mips.
+				// Accessed through image load/store or texelFetch only; no filtering, no mips.
 				GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
 				GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
 				GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureMaxLevel, 0);
@@ -665,6 +815,15 @@ namespace LELEngine.Rendering.Passes
 			public static VoxelRegion Full(int resolution)
 			{
 				return new VoxelRegion(0, 0, 0, resolution, resolution, resolution);
+			}
+
+			/// <summary>Footprint of this level-0 region at a coarser mip level.</summary>
+			public VoxelRegion AtLevel(int level, int levelSize)
+			{
+				int round = (1 << level) - 1;
+				return new VoxelRegion(
+					Math.Min(MinX >> level, levelSize), Math.Min(MinY >> level, levelSize), Math.Min(MinZ >> level, levelSize),
+					Math.Min((MaxX + round) >> level, levelSize), Math.Min((MaxY + round) >> level, levelSize), Math.Min((MaxZ + round) >> level, levelSize));
 			}
 		}
 

@@ -71,6 +71,7 @@ void main()
 layout(binding = 0, rgba8) uniform writeonly image3D AlbedoOut;            // rgb albedo, a occupancy
 layout(binding = 1, rgba8) uniform writeonly image3D NormalOut;            // xyz normal * 0.5 + 0.5
 layout(binding = 2, r11f_g11f_b10f) uniform writeonly image3D EmissiveOut; // rgb emitted radiance
+layout(binding = 3, r8) uniform writeonly image3D BlocksOut;               // 1 where the 8^3 block has geometry
 
 uniform vec3 voxelGridMin;
 uniform float voxelGridSize;
@@ -101,6 +102,7 @@ void main()
 	imageStore(AlbedoOut, coord, vec4(albedo, 1.0));
 	imageStore(NormalOut, coord, vec4(normalize(fNormal) * 0.5 + 0.5, 1.0));
 	imageStore(EmissiveOut, coord, vec4(voxEmissive.rgb * voxEmissive.a, 0.0));
+	imageStore(BlocksOut, coord >> 3, vec4(1.0));
 }
 
 /////Fragment

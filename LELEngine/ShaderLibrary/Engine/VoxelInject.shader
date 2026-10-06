@@ -9,7 +9,20 @@
 //   radiance = albedo * (direct sun light with shadows + bounce from the previous frame's volume) + emission
 // Feeding the previous frame back gives multi-bounce lighting that converges over a few frames.
 // Dynamic geometry overrides static geometry where both occupy a voxel.
+//
+// Dispatched indirectly over the occupied 8^3 blocks listed by Engine/VoxelCompactBlocks.shader:
+// one work group per block, so empty space is never visited. Blocks that became empty are
+// zeroed separately by VoxelGIPass (Engine/VoxelClearRadiance.shader).
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
+
+layout(std430, binding = 0) readonly buffer BlockList
+{
+	uint numGroupsX;
+	uint numGroupsY;
+	uint numGroupsZ;
+	uint padding;
+	uint blocks[];
+};
 
 layout(binding = 0, rgba8) uniform readonly image3D StaticAlbedo;
 layout(binding = 1, rgba8) uniform readonly image3D StaticNormal;
@@ -33,8 +46,9 @@ uniform int giBounceCones;      // 6 = hemisphere layout, otherwise a single wid
 
 void main()
 {
-	ivec3 coord = ivec3(gl_GlobalInvocationID);
-	if (any(greaterThanEqual(coord, ivec3(voxelResolution)))) return;
+	uint packedBlock = blocks[gl_WorkGroupID.x];
+	ivec3 block = ivec3(int(packedBlock & 0x3FFu), int((packedBlock >> 10) & 0x3FFu), int((packedBlock >> 20) & 0x3FFu));
+	ivec3 coord = block * 8 + ivec3(gl_LocalInvocationID);
 
 	vec4 albedoOcc = imageLoad(DynamicAlbedo, coord);
 	bool dynamic = albedoOcc.a > 0.5;
