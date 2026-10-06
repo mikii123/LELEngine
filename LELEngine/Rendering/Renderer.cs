@@ -60,9 +60,11 @@ namespace LELEngine.Rendering
 		public void AddDefaultPasses()
 		{
 			AddPass(new ShadowPass());
+			AddPass(new VoxelGIPass());
 			AddPass(new DepthPrepass());
 			AddPass(new OpaquePass());
 			AddPass(new PostRenderCallbackPass());
+			AddPass(new VoxelDebugPass());
 			AddPass(new PostProcessPass());
 		}
 

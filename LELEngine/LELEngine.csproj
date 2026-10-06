@@ -19,4 +19,12 @@
     <ProjectReference Include="..\LELCS\LELCS.csproj" />
   </ItemGroup>
 
+  <!-- Engine GLSL library (includes and engine-owned passes). Published to Shaders/Engine/ in the game output. -->
+  <ItemGroup>
+    <Content Include="ShaderLibrary\**\*">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <TargetPath>Shaders\%(RecursiveDir)%(Filename)%(Extension)</TargetPath>
+    </Content>
+  </ItemGroup>
+
 </Project>

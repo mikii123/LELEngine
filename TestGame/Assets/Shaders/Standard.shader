@@ -1,6 +1,6 @@
 //Vertex
 
-#version 330
+#version 430
 invariant gl_Position;
 
 // a transformation to apply to the vertex' position
@@ -39,7 +39,10 @@ void main()
 
 //Fragment
 
-#version 330
+#version 430
+
+#include "Engine/Shadows.glsl"
+#include "Engine/VoxelConeTracing.glsl"
 
 in vec2 fTexCoord;
 in vec3 fPosition;
@@ -76,37 +79,7 @@ uniform sampler2D DiffuseMap;
 uniform sampler2D SpecularMap;
 uniform sampler2D NormalMap;
 
-// Shadows (set by the engine, see Lighting.SetShadowUniforms)
-uniform int shadowsEnabled;
-uniform mat4 lightSpaceMatrix;
-uniform sampler2DShadow ShadowMap;
-uniform float shadowNormalBias;
-uniform float shadowDepthBias;
-
 out vec4 FragColor;
-
-float SampleShadow(vec3 worldPos, vec3 worldNormal, vec3 toLight)
-{
-	if (shadowsEnabled == 0) return 1.0;
-
-	float ndl = clamp(dot(worldNormal, toLight), 0.0, 1.0);
-	vec3 offsetPos = worldPos + worldNormal * shadowNormalBias * (1.5 - ndl);
-	vec4 ls = lightSpaceMatrix * vec4(offsetPos, 1.0);
-	vec3 proj = ls.xyz / ls.w * 0.5 + 0.5;
-	if (proj.z > 1.0) return 1.0;
-	proj.z -= shadowDepthBias;
-
-	vec2 texel = 1.0 / vec2(textureSize(ShadowMap, 0));
-	float sum = 0.0;
-	for (int x = -1; x <= 1; x++)
-	{
-		for (int y = -1; y <= 1; y++)
-		{
-			sum += texture(ShadowMap, vec3(proj.xy + vec2(x, y) * texel, proj.z));
-		}
-	}
-	return sum / 9.0;
-}
 
 void main()
 {
@@ -119,8 +92,9 @@ void main()
 	vec3 toLightWorld = normalize(-LDirectional.dirDirection);
 	vec3 lightDir = fTBN * toLightWorld;
 	vec3 viewDir = fTBN * normalize(LSpecular.viewPos - fPosition);
+	vec3 worldNormal = normalize(fNormal);
 
-	float shadow = SampleShadow(fPosition, normalize(fNormal), toLightWorld);
+	float shadow = SampleShadow(fPosition, worldNormal, toLightWorld);
 
 	//Ambient
 	vec4 ambient = LAmbient.ambStrength * LAmbient.ambColor * texColor;
@@ -134,8 +108,18 @@ void main()
 	float spec = pow(max(dot(norm, halfwayDir), 0.0), LSpecular.specShine);
 	vec4 specular = LSpecular.specStrength * spec * LDirectional.dirColor * texSpec;
 
+	//Indirect
+	vec3 indirect = vec3(0.0);
+	float occlusion = 1.0;
+	if (giEnabled != 0)
+	{
+		vec4 diffuseGI = TraceDiffuseCones(fPosition, worldNormal);
+		indirect = diffuseGI.rgb * texColor.rgb * giDiffuseStrength;
+		occlusion = clamp(1.0 - diffuseGI.a * giOcclusionStrength, 0.0, 1.0);
+	}
+
 	//Output
-	FragColor = ambient + (diffuse + specular) * shadow;
+	FragColor = vec4(ambient.rgb * occlusion + indirect + (diffuse.rgb + specular.rgb) * shadow, texColor.a);
 }
 
 /////Fragment

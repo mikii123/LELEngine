@@ -1,6 +1,6 @@
 //Vertex
 
-#version 330
+#version 430
 invariant gl_Position;
 
 uniform mat4 projectionMatrix;
@@ -30,7 +30,10 @@ void main()
 
 //Fragment
 
-#version 330
+#version 430
+
+#include "Engine/Shadows.glsl"
+#include "Engine/VoxelConeTracing.glsl"
 
 in vec3 fNormal;
 in vec3 fPosition;
@@ -59,39 +62,10 @@ uniform Specular LSpecular;
 
 // Material
 uniform vec4 Color;
-
-// Shadows (set by the engine, see Lighting.SetShadowUniforms)
-uniform int shadowsEnabled;
-uniform mat4 lightSpaceMatrix;
-uniform sampler2DShadow ShadowMap;
-uniform float shadowNormalBias;
-uniform float shadowDepthBias;
+uniform vec4 Emissive;   // rgb color, a intensity (also fed into the GI volume)
+uniform float Roughness; // 0 = unset -> treated as 0.6
 
 out vec4 FragColor;
-
-float SampleShadow(vec3 worldPos, vec3 worldNormal, vec3 toLight)
-{
-	if (shadowsEnabled == 0) return 1.0;
-
-	float ndl = clamp(dot(worldNormal, toLight), 0.0, 1.0);
-	vec3 offsetPos = worldPos + worldNormal * shadowNormalBias * (1.5 - ndl);
-	vec4 ls = lightSpaceMatrix * vec4(offsetPos, 1.0);
-	vec3 proj = ls.xyz / ls.w * 0.5 + 0.5;
-	if (proj.z > 1.0) return 1.0;
-	proj.z -= shadowDepthBias;
-
-	// 3x3 PCF on top of hardware 2x2 comparison filtering.
-	vec2 texel = 1.0 / vec2(textureSize(ShadowMap, 0));
-	float sum = 0.0;
-	for (int x = -1; x <= 1; x++)
-	{
-		for (int y = -1; y <= 1; y++)
-		{
-			sum += texture(ShadowMap, vec3(proj.xy + vec2(x, y) * texel, proj.z));
-		}
-	}
-	return sum / 9.0;
-}
 
 void main()
 {
@@ -104,16 +78,29 @@ void main()
 
 	vec3 albedo = Color.rgb;
 	vec3 lightColor = LDirectional.dirColor.rgb * LDirectional.dirStrength;
+	float roughness = Roughness > 0.0 ? Roughness : 0.6;
 
-	vec3 ambient = LAmbient.ambColor.rgb * LAmbient.ambStrength * albedo;
-
+	// Direct
 	float ndl = max(dot(N, L), 0.0);
 	vec3 diffuse = albedo * lightColor * ndl;
-
 	float spec = pow(max(dot(N, H), 0.0), LSpecular.specShine) * LSpecular.specStrength;
 	vec3 specular = lightColor * spec * ndl;
 
-	vec3 color = ambient + (diffuse + specular) * shadow;
+	// Indirect: voxel cone tracing replaces most of the flat ambient term.
+	vec3 ambient = LAmbient.ambColor.rgb * LAmbient.ambStrength * albedo;
+	vec3 indirect = vec3(0.0);
+	float occlusion = 1.0;
+	if (giEnabled != 0)
+	{
+		vec4 diffuseGI = TraceDiffuseCones(fPosition, N);
+		indirect += diffuseGI.rgb * albedo * giDiffuseStrength;
+		occlusion = clamp(1.0 - diffuseGI.a * giOcclusionStrength, 0.0, 1.0);
+
+		vec3 specularGI = TraceSpecularCone(fPosition, N, V, roughness);
+		indirect += specularGI * LSpecular.specStrength * giSpecularStrength;
+	}
+
+	vec3 color = ambient * occlusion + indirect + (diffuse + specular) * shadow + Emissive.rgb * Emissive.a;
 	FragColor = vec4(color, Color.a);
 }
 

@@ -186,36 +186,88 @@ namespace LELEngine.Shaders
 			}
 		}
 
+		public static string ShadersRoot => Path.Combine(Directory.GetCurrentDirectory(), "Shaders");
+
 		private static List<Shader> LoadShaderFromFile(string path)
 		{
 			var shaders = new List<Shader>();
-			string fullPath = Path.Combine(Directory.GetCurrentDirectory(), "Shaders", path);
+			string fullPath = Path.Combine(ShadersRoot, path);
+			string source = ReadSourceWithIncludes(fullPath, new HashSet<string>(StringComparer.OrdinalIgnoreCase));
 
-			using (StreamReader sr = new StreamReader(fullPath))
+			string code = "";
+			foreach (string line in source.Split('\n'))
 			{
-				string code = "";
-				while (!sr.EndOfStream)
+				ShaderType type;
+				if (Shader.TryParseTag(line.TrimEnd('\r'), out type))
 				{
-					string line = sr.ReadLine();
-					ShaderType type;
-					if (Shader.TryParseTag(line, out type))
+					if (code.Trim().Length < 10)
 					{
-						if (code.Trim().Length < 10)
-						{
-							Console.WriteLine("[Shader] Warning: stage " + type + " in " + path + " is shorter than 10 characters!");
-						}
+						Console.WriteLine("[Shader] Warning: stage " + type + " in " + path + " is shorter than 10 characters!");
+					}
 
-						shaders.Add(new Shader(code, type, path));
-						code = "";
-					}
-					else
-					{
-						code += line + "\n";
-					}
+					shaders.Add(new Shader(code, type, path));
+					code = "";
+				}
+				else
+				{
+					code += line + "\n";
 				}
 			}
 
 			return shaders;
+		}
+
+		/// <summary>
+		///     Reads a GLSL file and expands lines of the form: #include "relative/path.glsl"
+		///     Paths resolve against the Shaders root first, then relative to the including file.
+		///     Each file is included at most once per program.
+		/// </summary>
+		private static string ReadSourceWithIncludes(string fullPath, HashSet<string> visited)
+		{
+			visited.Add(Path.GetFullPath(fullPath));
+			var builder = new System.Text.StringBuilder();
+
+			foreach (string rawLine in File.ReadAllLines(fullPath))
+			{
+				string line = rawLine.Trim();
+				if (!line.StartsWith("#include", StringComparison.Ordinal))
+				{
+					builder.Append(rawLine).Append('\n');
+					continue;
+				}
+
+				int start = line.IndexOf('"');
+				int end = line.LastIndexOf('"');
+				if (start < 0 || end <= start)
+				{
+					Console.WriteLine("[Shader] Malformed include in " + fullPath + ": " + rawLine);
+					continue;
+				}
+
+				string includeName = line.Substring(start + 1, end - start - 1);
+				string includePath = Path.Combine(ShadersRoot, includeName);
+				if (!File.Exists(includePath))
+				{
+					includePath = Path.Combine(Path.GetDirectoryName(fullPath) ?? ShadersRoot, includeName);
+				}
+
+				if (!File.Exists(includePath))
+				{
+					Console.WriteLine("[Shader] Include not found: " + includeName + " (from " + fullPath + ")");
+					continue;
+				}
+
+				if (visited.Contains(Path.GetFullPath(includePath)))
+				{
+					continue;
+				}
+
+				builder.Append("// ---- begin include: ").Append(includeName).Append('\n');
+				builder.Append(ReadSourceWithIncludes(includePath, visited));
+				builder.Append("// ---- end include: ").Append(includeName).Append('\n');
+			}
+
+			return builder.ToString();
 		}
 
 		#endregion

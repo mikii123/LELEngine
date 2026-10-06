@@ -55,12 +55,12 @@ namespace LELEngine.Rendering
 			GL.ColorMask(enabled, enabled, enabled, enabled);
 		}
 
-		public static void SetBlend(bool enabled)
+		public static void SetBlend(bool enabled, bool premultiplied = false)
 		{
 			if (enabled)
 			{
 				GL.Enable(EnableCap.Blend);
-				GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
+				GL.BlendFunc(premultiplied ? BlendingFactor.One : BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
 			}
 			else
 			{

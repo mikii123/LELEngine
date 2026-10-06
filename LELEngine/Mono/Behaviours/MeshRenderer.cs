@@ -45,6 +45,12 @@ public sealed class MeshRenderer : Behaviour
 	public bool CastShadows = true;
 	public bool ReceiveShadows = true;
 
+	/// <summary>Voxelized into the GI volume (emits / bounces light onto others).</summary>
+	public bool ContributesToGI = true;
+
+	/// <summary>Samples indirect light from the GI volume.</summary>
+	public bool ReceiveGI = true;
+
 	#endregion
 
 	#region PrivateFields
@@ -143,17 +149,17 @@ public sealed class MeshRenderer : Behaviour
 
 		transform.SetModelMatrix(UsingShader);
 		Camera.main.SetUniforms(UsingShader);
-		Lighting.SetUniforms(UsingShader, ReceiveShadows);
+		Lighting.SetUniforms(UsingShader, ReceiveShadows, ReceiveGI);
 		Material.SetUniforms();
 
 		DrawGeometry();
 	}
 
 	/// <summary>
-	///     Draws geometry with an externally provided program (depth prepass, shadow map).
-	///     Only the model matrix is set; the caller sets view/projection. The program must be active.
+	///     Draws geometry with an externally provided program (depth prepass, shadow map, voxelization).
+	///     Only the model matrix is set; the caller sets everything else. The program must be active.
 	/// </summary>
-	public void RenderDepth(ShaderProgram program)
+	public void RenderWith(ShaderProgram program)
 	{
 		if (Mesh == null)
 		{
@@ -162,6 +168,14 @@ public sealed class MeshRenderer : Behaviour
 
 		transform.SetModelMatrix(program);
 		DrawGeometry();
+	}
+
+	/// <summary>
+	///     Alias of <see cref="RenderWith" /> kept for depth-only passes.
+	/// </summary>
+	public void RenderDepth(ShaderProgram program)
+	{
+		RenderWith(program);
 	}
 
 	/// <summary>
