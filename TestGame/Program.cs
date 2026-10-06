@@ -12,7 +12,8 @@ namespace TestGame
 		#region PrivateMethods
 
 		/// <summary>
-		///     Usage: TestGame [gi=0|1] [voxels=0|1] [emitters=0|1] [stats=0|1] [resolve=0|1] [static=0|1] [bounce=0|1] [voxres=64|128|256]
+		///     Usage: TestGame [gi=0|1] [voxels=0|1] [emitters=0|1] [stats=0|1] [resolve=0|1] [static=0|1] [bounce=0|1]
+		///            [trace=sdf|voxel] [voxres=64|128|256] [sdfres=64|128|256]
 		///     Loads the GI test room with the FPS controller.
 		/// </summary>
 		private static void Main(string[] args)
@@ -23,12 +24,15 @@ namespace TestGame
 			{
 				GI = GetBool(args, "gi", true),
 				VoxelView = GetBool(args, "voxels", false),
+				SdfView = GetBool(args, "sdfview", false),
 				Emitters = GetBool(args, "emitters", true),
 				Stats = GetBool(args, "stats", false),
 				Resolve = GetBool(args, "resolve", true),
 				StaticCache = GetBool(args, "static", true),
 				Bounce = GetBool(args, "bounce", true),
-				VoxelResolution = GetInt(args, "voxres", 128)
+				SdfTrace = !string.Equals(GetValue(args, "trace"), "voxel", StringComparison.OrdinalIgnoreCase),
+				VoxelResolution = GetInt(args, "voxres", 128),
+				SdfResolution = GetInt(args, "sdfres", 128)
 			};
 			GITestScene.Load(Game.Mono.LoadEmptyScene(), options);
 

@@ -1,3 +1,4 @@
+using System;
 using LELEngine.Rendering;
 using LELEngine.Shaders;
 using OpenTK.Graphics.OpenGL4;
@@ -28,6 +29,9 @@ namespace LELEngine
 		/// <summary>Texture units reserved for the screen-space GI resolve buffers.</summary>
 		public const int IndirectDiffuseTextureUnit = 13;
 		public const int IndirectSpecularTextureUnit = 12;
+
+		/// <summary>Texture unit reserved for the global signed distance field.</summary>
+		public const int GlobalSdfTextureUnit = 11;
 
 		/// <summary>World -> light clip space. Written by the shadow pass every frame.</summary>
 		public static Matrix4 LightSpaceMatrix = Matrix4.Identity;
@@ -92,6 +96,15 @@ namespace LELEngine
 			program.SetFloat("giConeMaxDistance", GI.ConeMaxDistance);
 			program.SetTexture("VoxelRadiance", TextureTarget.Texture3D, GI.VoxelTexture, VoxelTextureUnit);
 
+			program.SetVector3("giSkyRadiance", GI.SkyRadiance);
+			bool sdf = GI.DistanceFieldEnabled && GI.GlobalSdf != 0;
+			program.SetInt("giTraceMode", sdf && GI.TraceMode == GITraceMode.SdfDetail ? 1 : 0);
+			program.SetFloat("giSdfDetailDistance", GI.SdfDetailDistance);
+			if (sdf)
+			{
+				SetSdfUniforms(program);
+			}
+
 			bool resolve = GI.ResolveActive && GI.ResolvedDiffuse != 0;
 			program.SetInt("giResolveMode", resolve ? 1 : 0);
 			if (resolve)
@@ -116,6 +129,19 @@ namespace LELEngine
 			program.SetFloat("shadowNormalBias", Shadows.NormalBias);
 			program.SetFloat("shadowDepthBias", Shadows.DepthBias);
 			program.SetTexture("ShadowMap", TextureTarget.Texture2D, ShadowMap.Handle, ShadowMapTextureUnit);
+		}
+
+		/// <summary>
+		///     Global distance field parameters for Engine/DistanceField.glsl. Shares the GI grid placement.
+		/// </summary>
+		public static void SetSdfUniforms(ShaderProgram program)
+		{
+			program.SetVector3("sdfGridMin", GI.GridMin);
+			program.SetFloat("sdfGridSize", GI.GridSize);
+			program.SetInt("sdfResolution", GI.SdfResolution);
+			program.SetInt("sdfMaxSteps", GI.SdfMaxSteps);
+			program.SetFloat("sdfMaxDistance", GI.SdfBandVoxels * GI.SdfVoxelSize);
+			program.SetTexture("GlobalSdf", TextureTarget.Texture3D, GI.GlobalSdf, GlobalSdfTextureUnit);
 		}
 
 		#endregion
@@ -260,6 +286,31 @@ namespace LELEngine
 		/// </summary>
 		public bool StaticDirty = true;
 
+		// ---- Global distance field (GlobalDistanceFieldPass) ----
+
+		public bool DistanceFieldEnabled = true;
+
+		/// <summary>Texels per axis of the global distance field (shares the GI grid extent).</summary>
+		public int SdfResolution = 128;
+
+		/// <summary>Distances are clamped to this many SDF voxels; also bounds how far dynamic objects reach.</summary>
+		public int SdfBandVoxels = 8;
+
+		/// <summary>Maximum sphere tracing iterations per ray.</summary>
+		public int SdfMaxSteps = 48;
+
+		/// <summary>How cones find geometry: voxel alpha mips, or sphere tracing the global SDF near the origin.</summary>
+		public GITraceMode TraceMode = GITraceMode.SdfDetail;
+
+		/// <summary>Length of the SDF detail trace at the start of every cone (world units).</summary>
+		public float SdfDetailDistance = 1.5f;
+
+		/// <summary>Radiance from outside the scene seen by cones that escape (linear RGB).</summary>
+		public Vector3 SkyRadiance = Vector3.Zero;
+
+		/// <summary>Set when the static part of the global distance field must be recomposed.</summary>
+		public bool SdfStaticDirty = true;
+
 		// ---- Runtime data written by VoxelGIPass / GIResolvePass ----
 
 		/// <summary>GL handle of the 3D radiance texture, 0 when unavailable.</summary>
@@ -267,6 +318,9 @@ namespace LELEngine
 
 		/// <summary>World-space minimum corner of the volume for the current frame.</summary>
 		public Vector3 GridMin;
+
+		/// <summary>GL handle of the global distance field texture, 0 when unavailable.</summary>
+		public int GlobalSdf;
 
 		public bool ResolveActive;
 		public int ResolvedDiffuse;
@@ -281,12 +335,46 @@ namespace LELEngine
 		#region PublicMethods
 
 		public float VoxelSize => GridSize / Resolution;
+		public float SdfVoxelSize => GridSize / SdfResolution;
 
 		public void InvalidateStatic()
 		{
 			StaticDirty = true;
+			SdfStaticDirty = true;
+		}
+
+		/// <summary>
+		///     Positions the GI grid for this frame: around <see cref="Center" />, or around the camera snapped
+		///     to voxels when <see cref="FollowCamera" /> is set. Called by the volume passes.
+		/// </summary>
+		public void UpdateGridPlacement(Vector3 cameraPosition)
+		{
+			Vector3 center = Center;
+			if (FollowCamera)
+			{
+				float voxel = VoxelSize;
+				center = new Vector3(
+					(float)Math.Floor(cameraPosition.X / voxel) * voxel,
+					(float)Math.Floor(cameraPosition.Y / voxel) * voxel,
+					(float)Math.Floor(cameraPosition.Z / voxel) * voxel);
+			}
+
+			GridMin = center - new Vector3(GridSize * 0.5f);
 		}
 
 		#endregion
+	}
+
+	public enum GITraceMode
+	{
+		/// <summary>Occlusion from the voxel alpha mip chain. Cheapest, leaks through thin geometry.</summary>
+		VoxelCones,
+
+		/// <summary>
+		///     The first <see cref="GlobalIlluminationSettings.SdfDetailDistance" /> of each cone is sphere traced
+		///     through the global distance field (radiance read from the voxel volume at the hit), then the
+		///     voxel cone continues. Removes leaks through nearby thin geometry.
+		/// </summary>
+		SdfDetail
 	}
 }

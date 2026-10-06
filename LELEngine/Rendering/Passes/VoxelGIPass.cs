@@ -125,7 +125,7 @@ namespace LELEngine.Rendering.Passes
 				CreateGridShadow(gi.GridShadowMapSize);
 			}
 
-			UpdateGridPlacement(context, gi);
+			gi.UpdateGridPlacement(context.CameraPosition);
 			PartitionRenderers(context.Renderers);
 			DetectGeometryChanges(gi);
 
@@ -301,23 +301,6 @@ namespace LELEngine.Rendering.Passes
 
 		// ---------------------------------------------------------------- per frame bookkeeping
 
-		private static void UpdateGridPlacement(RenderContext context, GlobalIlluminationSettings gi)
-		{
-			Vector3 center = gi.Center;
-			if (gi.FollowCamera)
-			{
-				// Snap to voxel size so the volume does not swim while the camera moves.
-				float voxel = gi.VoxelSize;
-				Vector3 c = context.CameraPosition;
-				center = new Vector3(
-					(float)Math.Floor(c.X / voxel) * voxel,
-					(float)Math.Floor(c.Y / voxel) * voxel,
-					(float)Math.Floor(c.Z / voxel) * voxel);
-			}
-
-			gi.GridMin = center - new Vector3(gi.GridSize * 0.5f);
-		}
-
 		private void PartitionRenderers(IReadOnlyList<MeshRenderer> renderers)
 		{
 			staticRenderers.Clear();
@@ -357,48 +340,12 @@ namespace LELEngine.Rendering.Passes
 			}
 		}
 
-		// Voxel-space bounding box of a renderer (world AABB of its mesh bounds, padded by one voxel).
-		private static bool TryGetVoxelRegion(MeshRenderer renderer, GlobalIlluminationSettings gi, out VoxelRegion region)
-		{
-			Matrix4 localToWorld = renderer.transform.LocalToWorld;
-			Vector3 bmin = renderer.Mesh.BoundsMin;
-			Vector3 bmax = renderer.Mesh.BoundsMax;
-
-			Vector3 worldMin = new Vector3(float.MaxValue);
-			Vector3 worldMax = new Vector3(float.MinValue);
-			for (int i = 0; i < 8; i++)
-			{
-				Vector3 corner = new Vector3(
-					(i & 1) != 0 ? bmax.X : bmin.X,
-					(i & 2) != 0 ? bmax.Y : bmin.Y,
-					(i & 4) != 0 ? bmax.Z : bmin.Z);
-				Vector3 world = Vector3.TransformPosition(corner, localToWorld);
-				worldMin = Vector3.ComponentMin(worldMin, world);
-				worldMax = Vector3.ComponentMax(worldMax, world);
-			}
-
-			float voxel = gi.VoxelSize;
-			Vector3 vmin = (worldMin - gi.GridMin) / voxel;
-			Vector3 vmax = (worldMax - gi.GridMin) / voxel;
-
-			int res = gi.Resolution;
-			int x0 = Math.Clamp((int)Math.Floor(vmin.X) - 1, 0, res);
-			int y0 = Math.Clamp((int)Math.Floor(vmin.Y) - 1, 0, res);
-			int z0 = Math.Clamp((int)Math.Floor(vmin.Z) - 1, 0, res);
-			int x1 = Math.Clamp((int)Math.Ceiling(vmax.X) + 1, 0, res);
-			int y1 = Math.Clamp((int)Math.Ceiling(vmax.Y) + 1, 0, res);
-			int z1 = Math.Clamp((int)Math.Ceiling(vmax.Z) + 1, 0, res);
-
-			region = new VoxelRegion(x0, y0, z0, x1, y1, z1);
-			return !region.IsEmpty;
-		}
-
 		private float RegionCoverage(List<VoxelRegion> regions)
 		{
 			double total = 0;
 			foreach (VoxelRegion region in regions)
 			{
-				total += (double)region.SizeX * region.SizeY * region.SizeZ;
+				total += region.Volume;
 			}
 
 			return (float)(total / ((double)currentResolution * currentResolution * currentResolution));
@@ -427,7 +374,7 @@ namespace LELEngine.Rendering.Passes
 			foreach (MeshRenderer renderer in dynamicRenderers)
 			{
 				VoxelRegion region;
-				if (TryGetVoxelRegion(renderer, gi, out region))
+				if (VoxelRegion.TryFromRenderer(renderer, gi.GridMin, gi.VoxelSize, gi.Resolution, 1, out region))
 				{
 					currentRegions.Add(region);
 				}
@@ -688,6 +635,9 @@ namespace LELEngine.Rendering.Passes
 			program.SetFloat("giBounceStrength", previousValid ? gi.BounceStrength : 0f);
 			program.SetInt("giBounceCones", gi.BounceCones);
 			program.SetTexture("VoxelRadiance", TextureTarget.Texture3D, radiance[current], 0);
+			// The bounce always uses voxel cones (cheap, and the SDF has no radiance of its own); sky light leaks in through openings.
+			program.SetInt("giTraceMode", 0);
+			program.SetVector3("giSkyRadiance", gi.SkyRadiance);
 
 			staticGeometry.BindImages(0, TextureAccess.ReadOnly, false);
 			dynamicGeometry.BindImages(3, TextureAccess.ReadOnly, false);
@@ -788,42 +738,6 @@ namespace LELEngine.Rendering.Passes
 				GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureMaxLevel, 0);
 				GL.BindTexture(TextureTarget.Texture3D, 0);
 				return texture;
-			}
-		}
-
-		/// <summary>Half-open voxel index box [Min, Max).</summary>
-		private readonly struct VoxelRegion
-		{
-			public readonly int MinX, MinY, MinZ;
-			public readonly int MaxX, MaxY, MaxZ;
-
-			public VoxelRegion(int minX, int minY, int minZ, int maxX, int maxY, int maxZ)
-			{
-				MinX = minX;
-				MinY = minY;
-				MinZ = minZ;
-				MaxX = maxX;
-				MaxY = maxY;
-				MaxZ = maxZ;
-			}
-
-			public int SizeX => MaxX - MinX;
-			public int SizeY => MaxY - MinY;
-			public int SizeZ => MaxZ - MinZ;
-			public bool IsEmpty => SizeX <= 0 || SizeY <= 0 || SizeZ <= 0;
-
-			public static VoxelRegion Full(int resolution)
-			{
-				return new VoxelRegion(0, 0, 0, resolution, resolution, resolution);
-			}
-
-			/// <summary>Footprint of this level-0 region at a coarser mip level.</summary>
-			public VoxelRegion AtLevel(int level, int levelSize)
-			{
-				int round = (1 << level) - 1;
-				return new VoxelRegion(
-					Math.Min(MinX >> level, levelSize), Math.Min(MinY >> level, levelSize), Math.Min(MinZ >> level, levelSize),
-					Math.Min((MaxX + round) >> level, levelSize), Math.Min((MaxY + round) >> level, levelSize), Math.Min((MaxZ + round) >> level, levelSize));
 			}
 		}
 

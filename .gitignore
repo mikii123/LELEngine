@@ -112,3 +112,8 @@ Assets/SpaceBuilderGenesis/CosmosResources
 # This is not a Unity project: project and solution files are source.
 !*.csproj
 !*.sln
+
+# "*Debug*" above targets build output; engine sources may carry "Debug" in their names.
+!*Debug*.cs
+!*Debug*.shader
+!*Debug*.glsl

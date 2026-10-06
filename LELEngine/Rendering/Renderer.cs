@@ -61,12 +61,14 @@ namespace LELEngine.Rendering
 		public void AddDefaultPasses()
 		{
 			AddPass(new ShadowPass());
+			AddPass(new GlobalDistanceFieldPass());
 			AddPass(new VoxelGIPass());
 			AddPass(new GeometryPrepass());
 			AddPass(new GIResolvePass());
 			AddPass(new OpaquePass());
 			AddPass(new PostRenderCallbackPass());
 			AddPass(new VoxelDebugPass());
+			AddPass(new SdfDebugPass());
 			AddPass(new PostProcessPass());
 		}
 

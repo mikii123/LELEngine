@@ -4,6 +4,15 @@
 //
 // The volume stores premultiplied radiance (rgb) and occupancy (a); mip levels average both,
 // so front-to-back compositing with (1 - alpha) weights is correct.
+//
+// Two visibility modes (giTraceMode):
+//   0  voxel cones: occlusion from the voxel alpha mips (fast, leaks through thin geometry)
+//   1  SDF detail:  the first giSdfDetailDistance of every cone is sphere-traced through the global
+//                   distance field (exact visibility, no leaks through nearby walls); a hit reads the
+//                   radiance volume at the surface, otherwise the voxel cone continues from there.
+//                   This mirrors Lumen's near detail traces falling back to coarse far-field tracing.
+
+#include "Engine/DistanceField.glsl"
 
 uniform sampler3D VoxelRadiance;
 uniform vec3 voxelGridMin;
@@ -13,6 +22,9 @@ uniform float giDiffuseStrength;
 uniform float giSpecularStrength;
 uniform float giOcclusionStrength;
 uniform float giConeMaxDistance;
+uniform int giTraceMode;
+uniform float giSdfDetailDistance;
+uniform vec3 giSkyRadiance; // radiance arriving from outside the scene (cones that escape)
 
 float VoxelSize()
 {
@@ -24,15 +36,32 @@ float ConeMaxDistance()
 	return giConeMaxDistance > 0.0 ? giConeMaxDistance : voxelGridSize;
 }
 
-// aperture = tan(half angle). Returns premultiplied radiance in rgb and accumulated occlusion in a.
-vec4 TraceCone(vec3 origin, vec3 direction, float aperture, float maxDistance)
+// Radiance of the surface at an SDF hit, read from the voxel volume just outside the wall.
+vec4 SdfHitRadiance(vec3 hit, float aperture, float hitT)
+{
+	float voxelSize = VoxelSize();
+
+	// Offset along the SDF normal so the footprint sits on the lit surface voxels; keep it small,
+	// coarse mips mix in too much empty space and amplify noise once un-premultiplied.
+	vec3 hitNormal = SdfNormal(hit);
+	vec3 samplePos = hit + hitNormal * voxelSize * 0.75;
+	float diameter = max(voxelSize, 2.0 * aperture * hitT);
+	float mip = clamp(log2(diameter / voxelSize), 0.0, 2.0);
+	vec4 s = textureLod(VoxelRadiance, (samplePos - voxelGridMin) / voxelGridSize, mip);
+
+	return vec4(s.rgb / max(s.a, 0.25), 1.0);
+}
+
+// aperture = tan(half angle). Marches from startDistance; returns premultiplied radiance in rgb and
+// accumulated occlusion in a.
+vec4 TraceConeVoxel(vec3 origin, vec3 direction, float aperture, float startDistance, float maxDistance)
 {
 	float voxelSize = VoxelSize();
 	float maxMip = log2(float(voxelResolution));
 
 	vec3 color = vec3(0.0);
 	float alpha = 0.0;
-	float dist = voxelSize;
+	float dist = max(startDistance, voxelSize);
 
 	while (dist < maxDistance && alpha < 0.95)
 	{
@@ -51,7 +80,29 @@ vec4 TraceCone(vec3 origin, vec3 direction, float aperture, float maxDistance)
 		dist += diameter;
 	}
 
+	// Whatever the cone did not hit sees the sky.
+	color += (1.0 - alpha) * giSkyRadiance;
 	return vec4(color, alpha);
+}
+
+// Near field through the distance field, far field through the voxel mips.
+vec4 TraceConeSdfDetail(vec3 origin, vec3 direction, float aperture, float maxDistance)
+{
+	float detail = min(giSdfDetailDistance, maxDistance);
+	float hitT;
+	if (TraceSdf(origin, direction, detail, hitT))
+	{
+		return SdfHitRadiance(origin + direction * hitT, aperture, hitT);
+	}
+
+	return TraceConeVoxel(origin, direction, aperture, detail, maxDistance);
+}
+
+vec4 TraceCone(vec3 origin, vec3 direction, float aperture, float maxDistance)
+{
+	return giTraceMode != 0
+		? TraceConeSdfDetail(origin, direction, aperture, maxDistance)
+		: TraceConeVoxel(origin, direction, aperture, 0.0, maxDistance);
 }
 
 // Six 60-degree cones over the hemisphere. rgb = indirect irradiance (multiply by albedo), a = occlusion.

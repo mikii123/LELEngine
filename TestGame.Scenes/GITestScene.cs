@@ -22,6 +22,7 @@ namespace TestGame.Scenes
 		{
 			public bool GI = true;
 			public bool VoxelView;
+			public bool SdfView;
 			public bool Emitters = true;
 			public bool Stats;
 
@@ -34,7 +35,11 @@ namespace TestGame.Scenes
 			/// <summary>Feed the previous frame's radiance back when lighting voxels (multi-bounce).</summary>
 			public bool Bounce = true;
 
+			/// <summary>Cone visibility from the global distance field instead of voxel alpha.</summary>
+			public bool SdfTrace = true;
+
 			public int VoxelResolution = 128;
+			public int SdfResolution = 128;
 		}
 
 		#endregion
@@ -61,6 +66,10 @@ namespace TestGame.Scenes
 			if (options.VoxelView)
 			{
 				Game.Mono.Renderer.GetPass<LELEngine.Rendering.Passes.VoxelDebugPass>().Enabled = true;
+			}
+			if (options.SdfView)
+			{
+				Game.Mono.Renderer.GetPass<LELEngine.Rendering.Passes.SdfDebugPass>().Enabled = true;
 			}
 
 			// With GI on, the flat ambient only has to cover leaks; the bounce does the rest.
@@ -91,6 +100,15 @@ namespace TestGame.Scenes
 			Lighting.GI.LightingUpdateInterval = 1;
 			Lighting.GI.BounceStrength = options.Bounce ? 1f : 0f;
 			Lighting.GI.BounceCones = 6;
+
+			// Global SDF over the same grid; sky light enters through the open side of the room.
+			Lighting.GI.DistanceFieldEnabled = true;
+			Lighting.GI.SdfResolution = options.SdfResolution;
+			Lighting.GI.SdfBandVoxels = 8;
+			Lighting.GI.SdfMaxSteps = 48;
+			Lighting.GI.TraceMode = options.SdfTrace ? GITraceMode.SdfDetail : GITraceMode.VoxelCones;
+			Lighting.GI.SdfDetailDistance = 1.5f;
+			Lighting.GI.SkyRadiance = new Vector3(0.45f, 0.6f, 0.85f) * 0.2f;
 
 			Game.Mono.Renderer.Settings.ClearColor = new Color4(0.45f, 0.6f, 0.85f, 1f);
 			Game.Mono.Renderer.Settings.Exposure = 1.0f;
