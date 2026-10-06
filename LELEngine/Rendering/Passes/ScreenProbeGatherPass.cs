@@ -8,13 +8,17 @@ namespace LELEngine.Rendering.Passes
 {
 	/// <summary>
 	///     Lumen final gather with screen-space radiance caching:
-	///     1. Trace: a probe every <see cref="GlobalIlluminationSettings.ProbeSpacing" /> pixels, 64 jittered
-	///        hemisphere rays each through the global distance field, hits lit from the surface cache.
+	///     0. Anchors: a probe every <see cref="GlobalIlluminationSettings.ProbeSpacing" /> pixels, plus adaptive
+	///        probes placed hierarchically where the uniform grid cannot be interpolated (thin geometry).
+	///     1. Trace: 64 hemisphere rays per probe through the global distance field (hits lit from the surface
+	///        cache, far field from the radiance cache), importance sampled from last frame's radiance.
 	///     2. Filter: spatial filter across neighbouring probes on the same surface.
 	///     3. SH: each probe is projected to second-order spherical harmonics.
-	///     4. Integrate: per pixel (resolve resolution) interpolation of the four nearest probes with plane and
+	///     4. Integrate: per pixel (resolve resolution) interpolation of the surrounding probes with plane and
 	///        normal tests, cosine convolution for diffuse, reflection lookup for rough specular, and temporal
 	///        accumulation. Publishes the same resolve buffers material shaders already read.
+	///
+	///     Probe textures are atlases: the uniform grid in the top rows, adaptive probes in extra rows below.
 	/// </summary>
 	public sealed class ScreenProbeGatherPass : RenderPass
 	{
@@ -22,13 +26,25 @@ namespace LELEngine.Rendering.Passes
 
 		public override string Name => "ProbeGather";
 
+		/// <summary>Adaptive probes placed in a recent frame (read back every 60 frames for diagnostics).</summary>
+		public int AdaptiveProbeCount { get; private set; }
+
+		/// <summary>True once this frame's probes exist (for debug views running later in the frame).</summary>
+		public bool ProbesReady { get; private set; }
+
 		#endregion
 
 		#region PrivateFields
 
 		private const int ProbeResolution = 8;
+		private const int MaxAdaptivePerTile = 16;
+		private const int AdaptiveTileStride = 1 + 2 * MaxAdaptivePerTile;
+		private const int AdaptiveBufferBinding = 5;
+		private const int PreviousAdaptiveBufferBinding = 6;
 
 		private ShaderProgram anchors;
+		private ComputeShader adaptiveClear;
+		private ComputeShader placement;
 		private ComputeShader importance;
 		private ShaderProgram trace;
 		private ShaderProgram compose;
@@ -36,6 +52,12 @@ namespace LELEngine.Rendering.Passes
 		private ComputeShader sh;
 		private ShaderProgram integrate;
 		private int selectionTexture;
+		private int adaptivePixelTexture;
+
+		// Adaptive probe tile lists, double buffered: this frame's lists are built while last frame's are
+		// searched for temporal history.
+		private readonly int[] adaptiveBuffers = new int[2];
+		private int adaptiveBuffer => adaptiveBuffers[pingPong];
 
 		// Anchors, composed (unfiltered) and filtered radiance are kept for one frame: the next frame
 		// reprojects into them (importance PDF from the filtered map, history from the unfiltered one).
@@ -55,6 +77,9 @@ namespace LELEngine.Rendering.Passes
 
 		private int probesX;
 		private int probesY;
+		private int adaptiveRows;
+		private int adaptiveMax;
+		private int atlasRows;
 		private int outputWidth;
 		private int outputHeight;
 
@@ -62,6 +87,7 @@ namespace LELEngine.Rendering.Passes
 		private Vector3 previousCameraPosition;
 		private Vector3 previousCameraForward;
 		private int frameIndex;
+		private int lastSpacing;
 
 		#endregion
 
@@ -70,12 +96,16 @@ namespace LELEngine.Rendering.Passes
 		public override void Initialize(Renderer renderer)
 		{
 			anchors = new ShaderProgram("Engine/ProbeAnchors.shader");
+			adaptiveClear = new ComputeShader("Engine/ProbeAdaptiveClear.shader");
+			placement = new ComputeShader("Engine/ProbePlacement.shader");
 			importance = new ComputeShader("Engine/ProbeImportance.shader");
 			trace = new ShaderProgram("Engine/ProbeTrace.shader");
 			compose = new ShaderProgram("Engine/ProbeCompose.shader");
 			filter = new ShaderProgram("Engine/ProbeFilter.shader");
 			sh = new ComputeShader("Engine/ProbeSH.shader");
 			integrate = new ShaderProgram("Engine/ProbeIntegrate.shader");
+			adaptiveBuffers[0] = GL.GenBuffer();
+			adaptiveBuffers[1] = GL.GenBuffer();
 		}
 
 		public override void Execute(RenderContext context)
@@ -86,12 +116,14 @@ namespace LELEngine.Rendering.Passes
 			if (!active)
 			{
 				historyValid = false;
+				ProbesReady = false;
 				return;
 			}
 
 			frameIndex++;
 			int spacing = Math.Max(4, gi.ProbeSpacing);
-			EnsureTargets(context.Width, context.Height, spacing, gi.ResolveScale);
+			lastSpacing = spacing;
+			EnsureTargets(context.Width, context.Height, spacing, gi.ResolveScale, gi.ProbeAdaptivePlacement ? gi.ProbeAdaptiveFraction : 0f);
 
 			// Jitter: probe anchor inside its cell and ray direction inside its octahedral texel (R2 sequence).
 			float anchorScale = gi.ProbeJitter ? MathHelper.Clamp(gi.ProbeAnchorJitter, 0f, 1f) : 0f;
@@ -106,12 +138,53 @@ namespace LELEngine.Rendering.Passes
 			GLState.SetDepth(false, false);
 			GLState.SetCull(false);
 
-			// ---- 0. probe anchors (position + normal per probe, read by every later stage)
+			// ---- 0a. uniform probe anchors (position + normal per probe, read by every later stage)
 			profiler.Split("ProbeGather.anchors");
 			anchorTarget.Bind();
 			anchors.Use();
 			SetProbeUniforms(anchors, context, spacing, probeJitter);
 			context.Fullscreen.Draw();
+			Framebuffer.BindDefault(context.Width, context.Height);
+
+			// ---- 0b. adaptive probes: tile lists cleared on the GPU, then placed at spacing / 2 and spacing / 4 steps
+			profiler.Split("ProbeGather.placement");
+			GL.BindBufferBase(BufferRangeTarget.ShaderStorageBuffer, AdaptiveBufferBinding, adaptiveBuffer);
+			GL.BindBufferBase(BufferRangeTarget.ShaderStorageBuffer, PreviousAdaptiveBufferBinding, adaptiveBuffers[1 - pingPong]);
+			adaptiveClear.Use();
+			SetProbeUniforms(adaptiveClear.Program, context, spacing, probeJitter);
+			adaptiveClear.DispatchThreads(probesX * probesY + 1, 1, 1, 64, 1, 1);
+			ComputeShader.Barrier(MemoryBarrierFlags.ShaderStorageBarrierBit);
+			if (adaptiveRows > 0)
+			{
+				GL.MemoryBarrier(MemoryBarrierFlags.FramebufferBarrierBit | MemoryBarrierFlags.ShaderImageAccessBarrierBit);
+				placement.Use();
+				SetProbeUniforms(placement.Program, context, spacing, probeJitter);
+				placement.Program.SetFloat("planeTolerance", gi.ProbePlaneTolerance);
+				placement.Program.SetFloat("minCoverage", gi.ProbeAdaptiveMinCoverage);
+				placement.Program.SetInt("maxAdaptiveProbes", adaptiveMax);
+				GL.BindImageTexture(0, anchorTarget.ColorAttachments[0].Handle, 0, false, 0, TextureAccess.WriteOnly, SizedInternalFormat.Rgba32f);
+				GL.BindImageTexture(1, anchorTarget.ColorAttachments[1].Handle, 0, false, 0, TextureAccess.WriteOnly, SizedInternalFormat.Rgba16f);
+				GL.BindImageTexture(2, adaptivePixelTexture, 0, false, 0, TextureAccess.WriteOnly, SizedInternalFormat.R32ui);
+				for (int factor = spacing / 2; factor >= Math.Max(2, spacing / 4); factor /= 2)
+				{
+					placement.Program.SetInt("placementFactor", factor);
+					placement.DispatchThreads((context.Width + factor - 1) / factor, (context.Height + factor - 1) / factor, 1, 8, 8, 1);
+					ComputeShader.Barrier(MemoryBarrierFlags.ShaderImageAccessBarrierBit | MemoryBarrierFlags.TextureFetchBarrierBit | MemoryBarrierFlags.ShaderStorageBarrierBit);
+				}
+
+				if (frameIndex % 60 == 0)
+				{
+					int[] count = new int[1];
+					GL.BindBuffer(BufferTarget.ShaderStorageBuffer, adaptiveBuffer);
+					GL.GetBufferSubData(BufferTarget.ShaderStorageBuffer, IntPtr.Zero, sizeof(int), count);
+					GL.BindBuffer(BufferTarget.ShaderStorageBuffer, 0);
+					AdaptiveProbeCount = Math.Min(count[0], adaptiveMax);
+				}
+			}
+			else
+			{
+				AdaptiveProbeCount = 0;
+			}
 
 			int previousFiltered = filterTargets[1 - pingPong].ColorAttachments[0].Handle;
 			int previousComposed = composeTargets[1 - pingPong].ColorAttachments[0].Handle;
@@ -130,7 +203,7 @@ namespace LELEngine.Rendering.Passes
 			importance.Program.SetFloat("historyDistanceThreshold", gi.ProbeHistoryDistance);
 			importance.Program.SetInt("frameIndex", frameIndex);
 			GL.BindImageTexture(0, selectionTexture, 0, false, 0, TextureAccess.WriteOnly, SizedInternalFormat.Rgba32ui);
-			importance.DispatchThreads(probesX, probesY, 1, 8, 8, 1);
+			importance.DispatchThreads(probesX, atlasRows, 1, 8, 8, 1);
 			ComputeShader.Barrier(MemoryBarrierFlags.ShaderImageAccessBarrierBit | MemoryBarrierFlags.TextureFetchBarrierBit);
 
 			// ---- 1b. trace: one ray per fragment
@@ -180,6 +253,7 @@ namespace LELEngine.Rendering.Passes
 			filter.Use();
 			SetProbeUniforms(filter, context, spacing, probeJitter);
 			filter.SetTexture("ProbeRadiance", TextureTarget.Texture2D, composeTarget.ColorAttachments[0].Handle, 2);
+			filter.SetTexture("AdaptivePixel", TextureTarget.Texture2D, adaptivePixelTexture, 7);
 			filter.SetFloat("planeTolerance", gi.ProbePlaneTolerance);
 			filter.SetInt("filterRadius", Math.Max(1, gi.ProbeFilterRadius));
 			filter.SetVector2("directionJitter", directionJitter);
@@ -190,7 +264,7 @@ namespace LELEngine.Rendering.Passes
 			}
 			else
 			{
-				// Keep the filtered buffer valid as next frame's importance and history source.
+				// Keep the filtered buffer valid as next frame's importance source.
 				GL.BindFramebuffer(FramebufferTarget.ReadFramebuffer, composeTarget.Handle);
 				GL.BindFramebuffer(FramebufferTarget.DrawFramebuffer, filterTarget.Handle);
 				GL.BlitFramebuffer(0, 0, composeTarget.Width, composeTarget.Height, 0, 0, filterTarget.Width, filterTarget.Height, ClearBufferMask.ColorBufferBit, BlitFramebufferFilter.Nearest);
@@ -204,7 +278,7 @@ namespace LELEngine.Rendering.Passes
 			SetProbeUniforms(sh.Program, context, spacing, probeJitter);
 			sh.Program.SetTexture("ProbeRadiance", TextureTarget.Texture2D, radianceSource, 2);
 			GL.BindImageTexture(0, shTexture, 0, true, 0, TextureAccess.WriteOnly, SizedInternalFormat.Rgba16f);
-			sh.DispatchThreads(probesX, probesY, 1, 8, 8, 1);
+			sh.DispatchThreads(probesX, atlasRows, 1, 8, 8, 1);
 			ComputeShader.Barrier(MemoryBarrierFlags.ShaderImageAccessBarrierBit | MemoryBarrierFlags.TextureFetchBarrierBit);
 
 			// ---- 4. integrate (+ temporal)
@@ -244,8 +318,26 @@ namespace LELEngine.Rendering.Passes
 			previousCameraForward = context.Camera.transform.forward;
 			previousProbeJitter = probeJitter;
 			historyValid = true;
+			ProbesReady = true;
 			outputIndex = 1 - outputIndex;
 			pingPong = 1 - pingPong;
+		}
+
+		/// <summary>
+		///     Uniforms for Engine/ProbeDebug.shader after this frame's gather: the probe layout, this frame's
+		///     anchors (the buffers have already been swapped for the next frame) and the adaptive tile lists.
+		/// </summary>
+		public void SetDebugUniforms(ShaderProgram program, RenderContext context)
+		{
+			int current = 1 - pingPong;
+			program.SetTexture("ProbeAnchorPosition", TextureTarget.Texture2D, anchorTargets[current].ColorAttachments[0].Handle, 5);
+			program.SetInt2("screenSize", context.Width, context.Height);
+			program.SetInt2("probeCount", probesX, probesY);
+			program.SetInt("probeAtlasRows", atlasRows);
+			program.SetInt("probeSpacing", lastSpacing);
+			program.SetInt2("probeJitter", previousProbeJitter.X, previousProbeJitter.Y);
+			GL.BindBufferBase(BufferRangeTarget.ShaderStorageBuffer, AdaptiveBufferBinding, adaptiveBuffers[current]);
+			GL.BindBufferBase(BufferRangeTarget.ShaderStorageBuffer, PreviousAdaptiveBufferBinding, adaptiveBuffers[pingPong]);
 		}
 
 		public override void Resize(int width, int height)
@@ -256,6 +348,8 @@ namespace LELEngine.Rendering.Passes
 		public override void Dispose()
 		{
 			anchors?.Delete();
+			adaptiveClear?.Delete();
+			placement?.Delete();
 			importance?.Delete();
 			trace?.Delete();
 			compose?.Delete();
@@ -267,8 +361,17 @@ namespace LELEngine.Rendering.Passes
 			{
 				GL.DeleteTexture(selectionTexture);
 			}
+			if (adaptivePixelTexture != 0)
+			{
+				GL.DeleteTexture(adaptivePixelTexture);
+			}
 			for (int i = 0; i < 2; i++)
 			{
+				if (adaptiveBuffers[i] != 0)
+				{
+					GL.DeleteBuffer(adaptiveBuffers[i]);
+					adaptiveBuffers[i] = 0;
+				}
 				anchorTargets[i]?.Delete();
 				composeTargets[i]?.Delete();
 				filterTargets[i]?.Delete();
@@ -293,48 +396,56 @@ namespace LELEngine.Rendering.Passes
 			program.SetMatrix4("invViewProjection", Matrix4.Invert(context.ViewProjection));
 			program.SetInt2("screenSize", context.Width, context.Height);
 			program.SetInt2("probeCount", probesX, probesY);
+			program.SetInt("probeAtlasRows", atlasRows);
 			program.SetInt("probeSpacing", spacing);
 			program.SetInt2("probeJitter", probeJitter.X, probeJitter.Y);
 		}
 
-		private void EnsureTargets(int width, int height, int spacing, float resolveScale)
+		private void EnsureTargets(int width, int height, int spacing, float resolveScale, float adaptiveFraction)
 		{
 			int px = (width + spacing - 1) / spacing;
 			int py = (height + spacing - 1) / spacing;
 			int ow = Math.Max(1, (int)Math.Ceiling(width * resolveScale));
 			int oh = Math.Max(1, (int)Math.Ceiling(height * resolveScale));
-			if (px == probesX && py == probesY && ow == outputWidth && oh == outputHeight && traceTarget != null)
+			int wantedAdaptive = (int)(px * py * MathHelper.Clamp(adaptiveFraction, 0f, 4f));
+			int rows = wantedAdaptive > 0 ? (wantedAdaptive + px - 1) / px : 0;
+			if (px == probesX && py == probesY && rows == adaptiveRows && ow == outputWidth && oh == outputHeight && traceTarget != null)
 			{
 				return;
 			}
 
 			probesX = px;
 			probesY = py;
+			adaptiveRows = rows;
+			adaptiveMax = rows * px;
+			atlasRows = py + rows;
 			outputWidth = ow;
 			outputHeight = oh;
 			historyValid = false;
 
+			int rayWidth = px * ProbeResolution;
+			int rayHeight = atlasRows * ProbeResolution;
 			for (int i = 0; i < 2; i++)
 			{
 				anchorTargets[i]?.Delete();
-				anchorTargets[i] = new Framebuffer(px, py);
+				anchorTargets[i] = new Framebuffer(px, atlasRows);
 				anchorTargets[i].AddColorAttachment(RenderTextureFormat.RGBA32F, false);
 				anchorTargets[i].AddColorAttachment(RenderTextureFormat.RGBA16F, false);
 				anchorTargets[i].Validate();
 
 				composeTargets[i]?.Delete();
-				composeTargets[i] = new Framebuffer(px * ProbeResolution, py * ProbeResolution);
+				composeTargets[i] = new Framebuffer(rayWidth, rayHeight);
 				composeTargets[i].AddColorAttachment(RenderTextureFormat.RGBA16F, false);
 				composeTargets[i].Validate();
 
 				filterTargets[i]?.Delete();
-				filterTargets[i] = new Framebuffer(px * ProbeResolution, py * ProbeResolution);
+				filterTargets[i] = new Framebuffer(rayWidth, rayHeight);
 				filterTargets[i].AddColorAttachment(RenderTextureFormat.RGBA16F, false);
 				filterTargets[i].Validate();
 			}
 
 			traceTarget?.Delete();
-			traceTarget = new Framebuffer(px * ProbeResolution, py * ProbeResolution);
+			traceTarget = new Framebuffer(rayWidth, rayHeight);
 			traceTarget.AddColorAttachment(RenderTextureFormat.RGBA16F, false);
 			traceTarget.Validate();
 
@@ -344,11 +455,32 @@ namespace LELEngine.Rendering.Passes
 			}
 			selectionTexture = GL.GenTexture();
 			GL.BindTexture(TextureTarget.Texture2D, selectionTexture);
-			GL.TexImage2D(TextureTarget.Texture2D, 0, PixelInternalFormat.Rgba32ui, px, py, 0, PixelFormat.RgbaInteger, PixelType.UnsignedInt, IntPtr.Zero);
+			GL.TexImage2D(TextureTarget.Texture2D, 0, PixelInternalFormat.Rgba32ui, px, atlasRows, 0, PixelFormat.RgbaInteger, PixelType.UnsignedInt, IntPtr.Zero);
+			GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
+			GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
+			GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMaxLevel, 0);
+
+			if (adaptivePixelTexture != 0)
+			{
+				GL.DeleteTexture(adaptivePixelTexture);
+			}
+			adaptivePixelTexture = GL.GenTexture();
+			GL.BindTexture(TextureTarget.Texture2D, adaptivePixelTexture);
+			GL.TexImage2D(TextureTarget.Texture2D, 0, PixelInternalFormat.R32ui, px, Math.Max(1, rows), 0, PixelFormat.RedInteger, PixelType.UnsignedInt, IntPtr.Zero);
 			GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
 			GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
 			GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMaxLevel, 0);
 			GL.BindTexture(TextureTarget.Texture2D, 0);
+
+			// Tile lists: count + (index, pixel) pairs per uniform cell, see Engine/AdaptiveProbes.glsl. Zeroed so
+			// the very first frame's "previous" lists are empty.
+			uint[] tileZeros = new uint[1 + px * py * AdaptiveTileStride];
+			for (int i = 0; i < 2; i++)
+			{
+				GL.BindBuffer(BufferTarget.ShaderStorageBuffer, adaptiveBuffers[i]);
+				GL.BufferData(BufferTarget.ShaderStorageBuffer, tileZeros.Length * sizeof(uint), tileZeros, BufferUsageHint.DynamicCopy);
+			}
+			GL.BindBuffer(BufferTarget.ShaderStorageBuffer, 0);
 
 			if (shTexture != 0)
 			{
@@ -356,7 +488,7 @@ namespace LELEngine.Rendering.Passes
 			}
 			shTexture = GL.GenTexture();
 			GL.BindTexture(TextureTarget.Texture2DArray, shTexture);
-			GL.TexImage3D(TextureTarget.Texture2DArray, 0, PixelInternalFormat.Rgba16f, px, py, 9, 0, PixelFormat.Rgba, PixelType.Float, IntPtr.Zero);
+			GL.TexImage3D(TextureTarget.Texture2DArray, 0, PixelInternalFormat.Rgba16f, px, atlasRows, 9, 0, PixelFormat.Rgba, PixelType.Float, IntPtr.Zero);
 			GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
 			GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
 			GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMaxLevel, 0);
@@ -371,7 +503,7 @@ namespace LELEngine.Rendering.Passes
 				output[i].Validate();
 			}
 
-			Console.WriteLine($"[ProbeGather] {px}x{py} probes every {spacing} px, {px * ProbeResolution}x{py * ProbeResolution} rays, resolve {ow}x{oh}");
+			Console.WriteLine($"[ProbeGather] {px}x{py} probes every {spacing} px + up to {adaptiveMax} adaptive, {rayWidth}x{rayHeight} rays, resolve {ow}x{oh}");
 		}
 
 		// Low-discrepancy 2D sequence (Roberts' R2).

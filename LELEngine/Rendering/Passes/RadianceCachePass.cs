@@ -272,10 +272,17 @@ namespace LELEngine.Rendering.Passes
 		// Every probe's last-update frame is reset to -1 so the first update after the clear replaces the history.
 		private void ClearAtlas()
 		{
-			float[] zeros = new float[atlasWidth * atlasHeight * 4];
-			GL.BindTexture(TextureTarget.Texture2D, atlas);
-			GL.TexSubImage2D(TextureTarget.Texture2D, 0, 0, 0, atlasWidth, atlasHeight, PixelFormat.Rgba, PixelType.Float, zeros);
-			GL.BindTexture(TextureTarget.Texture2D, 0);
+			if (GLCapabilities.ClearTexture)
+			{
+				GL.ClearTexImage(atlas, 0, PixelFormat.Rgba, PixelType.Float, IntPtr.Zero);
+			}
+			else
+			{
+				float[] zeros = new float[atlasWidth * atlasHeight * 4];
+				GL.BindTexture(TextureTarget.Texture2D, atlas);
+				GL.TexSubImage2D(TextureTarget.Texture2D, 0, 0, 0, atlasWidth, atlasHeight, PixelFormat.Rgba, PixelType.Float, zeros);
+				GL.BindTexture(TextureTarget.Texture2D, 0);
+			}
 
 			int[] never = new int[Math.Max(1, probeCount)];
 			for (int i = 0; i < never.Length; i++)

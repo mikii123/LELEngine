@@ -228,6 +228,15 @@ namespace LELEngine.Rendering.Lumen
 
 		public void ClearLighting()
 		{
+			if (GLCapabilities.ClearTexture)
+			{
+				foreach (int texture in new[] { IndirectLighting, finalLighting[0], finalLighting[1] })
+				{
+					GL.ClearTexImage(texture, 0, PixelFormat.Rgba, PixelType.Float, IntPtr.Zero);
+				}
+				return;
+			}
+
 			var zeros = new float[Size * Size * 4];
 			foreach (int texture in new[] { IndirectLighting, finalLighting[0], finalLighting[1] })
 			{

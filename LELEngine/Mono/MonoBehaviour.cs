@@ -34,7 +34,11 @@ namespace LELEngine
 		#region Constructors
 
 		public MonoBehaviour(int width, int height, string title)
-			: base(width, height, title)
+			: this(width, height, title, PreferredApiVersion)
+		{ }
+
+		public MonoBehaviour(int width, int height, string title, System.Version apiVersion)
+			: base(width, height, title, apiVersion)
 		{
 			RenderQueue = RenderQueue.PerShader;
 

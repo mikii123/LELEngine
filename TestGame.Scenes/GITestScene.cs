@@ -28,6 +28,7 @@ namespace TestGame.Scenes
 			public bool VoxelView;
 			public bool SdfView;
 			public bool SurfaceCacheView;
+			public bool ProbeView;
 			public bool Emitters = true;
 
 			/// <summary>Animate the emitters (orbit, bobbing, pulsing). Off freezes them for stability measurements.</summary>
@@ -66,6 +67,7 @@ namespace TestGame.Scenes
 			public float ProbeAnchorJitter = 0f;
 			public bool ProbeDirectionJitter = true;
 			public int ProbeSpacing = 16;
+			public bool ProbeAdaptivePlacement = true;
 			public int RadiosityRays = 4;
 			public float RadiosityBlend = 0.9f;
 			public float ProbeHistoryWeight = 0.5f;
@@ -116,6 +118,10 @@ namespace TestGame.Scenes
 			{
 				Game.Mono.Renderer.GetPass<LELEngine.Rendering.Passes.SurfaceCacheDebugPass>().Enabled = true;
 			}
+			if (options.ProbeView)
+			{
+				Game.Mono.Renderer.GetPass<LELEngine.Rendering.Passes.ProbeDebugPass>().Enabled = true;
+			}
 
 			// With GI on, the flat ambient only has to cover leaks; the bounce does the rest.
 			Lighting.Ambient.Color = new Color4(0.55f, 0.6f, 0.75f, 1f);
@@ -144,6 +150,7 @@ namespace TestGame.Scenes
 			Lighting.GI.ProbeAnchorJitter = options.ProbeAnchorJitter;
 			Lighting.GI.ProbeDirectionJitter = options.ProbeDirectionJitter;
 			Lighting.GI.ProbeSpacing = options.ProbeSpacing;
+			Lighting.GI.ProbeAdaptivePlacement = options.ProbeAdaptivePlacement;
 			Lighting.GI.RadiosityRays = options.RadiosityRays;
 			Lighting.GI.RadiosityBlend = options.RadiosityBlend;
 			Lighting.GI.ProbeHistoryWeight = options.ProbeHistoryWeight;
@@ -231,6 +238,14 @@ namespace TestGame.Scenes
 			for (int i = -1; i <= 1; i++)
 			{
 				Box(scene, "Pillar" + i, "LitWhite.material", new Vector3(i * 6f, WallHeight * 0.5f, -4f), new Vector3(0.35f, WallHeight * 0.5f, 0.35f));
+			}
+
+			// Thin railing in front of the slab: a few pixels tall on screen, too thin for the uniform probe
+			// grid, so it exercises adaptive probe placement.
+			Box(scene, "RailBar", "LitWhite.material", new Vector3(0f, 1f, -5.5f), new Vector3(3f, 0.03f, 0.03f));
+			for (int i = -1; i <= 1; i++)
+			{
+				Box(scene, "RailPost" + i, "LitWhite.material", new Vector3(i * 3f, 0.5f, -5.5f), new Vector3(0.03f, 0.5f, 0.03f));
 			}
 		}
 

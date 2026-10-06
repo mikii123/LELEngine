@@ -311,6 +311,18 @@ namespace LELEngine
 		/// <summary>Pixels between screen probes.</summary>
 		public int ProbeSpacing = 16;
 
+		/// <summary>
+		///     Adaptive probe placement (Lumen): extra probes where the uniform grid cannot be interpolated (thin
+		///     geometry, silhouettes), placed hierarchically at ProbeSpacing / 2 and / 4 pixel steps.
+		/// </summary>
+		public bool ProbeAdaptivePlacement = true;
+
+		/// <summary>Capacity of adaptive probes as a fraction of the uniform probe count.</summary>
+		public float ProbeAdaptiveFraction = 0.5f;
+
+		/// <summary>A candidate pixel gets an adaptive probe when its interpolation weight from existing probes is below this.</summary>
+		public float ProbeAdaptiveMinCoverage = 0.05f;
+
 		public bool ProbeSpatialFilter = true;
 
 		/// <summary>Per-frame jitter of probe anchors and ray directions (needed for convergence; off = diagnostics).</summary>

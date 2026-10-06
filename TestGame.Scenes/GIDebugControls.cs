@@ -15,7 +15,8 @@ namespace TestGame.Scenes
 	///     F6 voxel resolution 64/128/256, F7 depth prepass on/off, F8 tonemap on/off,
 	///     F9 half-res GI resolve on/off, F10 rebuild static caches, F11 multi-bounce on/off,
 	///     T cone visibility: SDF detail trace / voxel cones only, G GI pipeline: Lumen / voxel cone tracing,
-	///     Y indirect specular, J probe jitter, K probe anchor jitter, [ ] probe history weight, - = pixel history weight.
+	///     R radiance cache, V adaptive probes, Y indirect specular, J probe jitter, K probe anchor jitter,
+	///     [ ] probe history weight, - = pixel history weight.
 	/// </summary>
 	public sealed class GIDebugControls : Behaviour
 	{
@@ -38,7 +39,8 @@ namespace TestGame.Scenes
 			Voxels,
 			DistanceField,
 			SurfaceCache,
-			SurfaceCacheAlbedo
+			SurfaceCacheAlbedo,
+			Probes
 		}
 
 		public DebugView View { get; private set; } = DebugView.Off;
@@ -59,7 +61,7 @@ namespace TestGame.Scenes
 
 		public override void Start()
 		{
-			Console.WriteLine("[Controls] WASD move, Shift sprint, Esc cursor, F fly | F1 GI, F2 debug view (voxels/SDF/surface cache), G GI mode (Lumen/VCT), R radiance cache, Y indirect specular, J probe jitter, K anchor jitter, [ ] probe history weight, - = pixel history weight, F3/F4 mip, F5 shadows, F6 voxel res, F7 depth prepass, F8 tonemap, F9 resolve, F10 cache, F11 bounce, T trace mode");
+			Console.WriteLine("[Controls] WASD move, Shift sprint, Esc cursor, F fly | F1 GI, F2 debug view (voxels/SDF/surface cache/probes), G GI mode (Lumen/VCT), R radiance cache, V adaptive probes, Y indirect specular, J probe jitter, K anchor jitter, [ ] probe history weight, - = pixel history weight, F3/F4 mip, F5 shadows, F6 voxel res, F7 depth prepass, F8 tonemap, F9 resolve, F10 cache, F11 bounce, T trace mode");
 		}
 
 		public override void Update()
@@ -79,6 +81,7 @@ namespace TestGame.Scenes
 			VoxelDebugPass voxelDebug = renderer.GetPass<VoxelDebugPass>();
 			SdfDebugPass sdfDebug = renderer.GetPass<SdfDebugPass>();
 			SurfaceCacheDebugPass cacheDebug = renderer.GetPass<SurfaceCacheDebugPass>();
+			ProbeDebugPass probeDebug = renderer.GetPass<ProbeDebugPass>();
 
 			if (Input.GetKeyDown(Keys.F1))
 			{
@@ -88,7 +91,7 @@ namespace TestGame.Scenes
 
 			if (Input.GetKeyDown(Keys.F2))
 			{
-				View = (DebugView)(((int)View + 1) % 5);
+				View = (DebugView)(((int)View + 1) % 6);
 				if (voxelDebug != null) voxelDebug.Enabled = View == DebugView.Voxels;
 				if (sdfDebug != null) sdfDebug.Enabled = View == DebugView.DistanceField;
 				if (cacheDebug != null)
@@ -96,6 +99,7 @@ namespace TestGame.Scenes
 					cacheDebug.Enabled = View == DebugView.SurfaceCache || View == DebugView.SurfaceCacheAlbedo;
 					cacheDebug.ShowAlbedo = View == DebugView.SurfaceCacheAlbedo;
 				}
+				if (probeDebug != null) probeDebug.Enabled = View == DebugView.Probes;
 				Console.WriteLine("[Debug] view " + View);
 			}
 
@@ -121,6 +125,12 @@ namespace TestGame.Scenes
 			{
 				Lighting.GI.RadianceCacheEnabled = !Lighting.GI.RadianceCacheEnabled;
 				Console.WriteLine("[GI] radiance cache " + (Lighting.GI.RadianceCacheEnabled ? "on" : "off"));
+			}
+
+			if (Input.GetKeyDown(Keys.V))
+			{
+				Lighting.GI.ProbeAdaptivePlacement = !Lighting.GI.ProbeAdaptivePlacement;
+				Console.WriteLine("[GI] adaptive probes " + (Lighting.GI.ProbeAdaptivePlacement ? "on" : "off"));
 			}
 
 			if (Input.GetKeyDown(Keys.K))
@@ -245,9 +255,11 @@ namespace TestGame.Scenes
 				passes.Append(' ').Append(name).Append(' ').Append(average.ToString("0.00", CultureInfo.InvariantCulture));
 			}
 
+			ScreenProbeGatherPass gather = Game.Mono.Renderer.GetPass<ScreenProbeGatherPass>();
+			string adaptive = gather != null ? $" adaptive probes {gather.AdaptiveProbeCount}" : string.Empty;
 			Console.WriteLine(
 				$"[Stats] {statsFrames / statsTimer:0.0} fps | GPU {total.ToString("0.00", CultureInfo.InvariantCulture)} ms |{passes}" +
-				$" | GI {(Lighting.GI.Enabled ? "on" : "off")} {Lighting.GI.Mode} resolve {(Lighting.GI.ResolveActive ? "on" : "off")}");
+				$" | GI {(Lighting.GI.Enabled ? "on" : "off")} {Lighting.GI.Mode} resolve {(Lighting.GI.ResolveActive ? "on" : "off")}{adaptive}");
 
 			statsTimer = 0f;
 			statsFrames = 0;

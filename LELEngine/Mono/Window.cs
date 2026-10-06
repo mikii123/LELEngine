@@ -1,5 +1,6 @@
 using System;
 using System.Diagnostics;
+using LELEngine.Rendering;
 using OpenTK.Graphics.OpenGL4;
 using OpenTK.Windowing.Common;
 using OpenTK.Windowing.Desktop;
@@ -16,7 +17,17 @@ namespace LELEngine
 
 		#region Constructors
 
+		/// <summary>Lowest OpenGL version the engine runs on (compute shaders, SSBOs, image load/store).</summary>
+		public static readonly Version MinimumApiVersion = new Version(4, 3);
+
+		/// <summary>Newest OpenGL version the engine asks for; extra features are used when the driver grants it.</summary>
+		public static readonly Version PreferredApiVersion = new Version(4, 6);
+
 		public Window(int width, int height, string title)
+			: this(width, height, title, PreferredApiVersion)
+		{ }
+
+		public Window(int width, int height, string title, Version apiVersion)
 			: base(
 				new GameWindowSettings
 				{
@@ -26,14 +37,14 @@ namespace LELEngine
 				{
 					ClientSize = new OpenTK.Mathematics.Vector2i(width, height),
 					Title = title,
-					// 4.3 is required for compute shaders. The scene is rendered off-screen,
-					// so the default framebuffer does not need multisampling.
-					APIVersion = new Version(4, 3),
+					// The scene is rendered off-screen, so the default framebuffer does not need multisampling.
+					APIVersion = apiVersion,
 					Profile = ContextProfile.Core,
 					Flags = ContextFlags.ForwardCompatible
 				})
 		{
 			Console.WriteLine("GL version: " + GL.GetString(StringName.Version) + "\nRenderer: " + GL.GetString(StringName.Renderer));
+			GLCapabilities.Initialize();
 		}
 
 		#endregion

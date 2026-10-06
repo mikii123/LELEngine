@@ -1,8 +1,11 @@
-// Screen probe layout shared by the gather passes (Engine/ProbeAnchors, ProbeTrace, ProbeFilter, ProbeSH,
-// ProbeIntegrate). Probes sit on a grid of probeSpacing pixels; each one is anchored at the pixel
-// probe * probeSpacing + probeJitter and stores an 8x8 hemispherical octahedral map of radiance.
-// ProbeAnchors.shader resolves every probe's world position and normal once per frame into two small
-// textures that the other passes read.
+// Screen probe layout shared by the gather passes (Engine/ProbeAnchors, ProbePlacement, ProbeTrace,
+// ProbeFilter, ProbeSH, ProbeIntegrate). Uniform probes sit on a grid of probeSpacing pixels; probe (x, y)
+// is anchored at the pixel probe * probeSpacing + probeJitter and stores an 8x8 hemispherical octahedral
+// map of radiance. Rows probeCount.y and up of the probe atlas hold adaptive probes (Lumen's adaptive
+// placement): extra probes placed each frame where the uniform grid cannot be interpolated, addressed by
+// index (AdaptiveProbeTexel) and listed per screen tile (Engine/AdaptiveProbes.glsl).
+// ProbeAnchors.shader resolves every uniform probe's world position and normal once per frame into two
+// small textures that the other passes read; ProbePlacement.shader appends the adaptive ones.
 
 #define PROBE_RESOLUTION 8
 
@@ -12,13 +15,30 @@ uniform sampler2D ProbeAnchorPosition; // xyz world position, w = 1 when the pro
 uniform sampler2D ProbeAnchorNormal;
 uniform mat4 invViewProjection;
 uniform ivec2 screenSize;
-uniform ivec2 probeCount;
+uniform ivec2 probeCount;      // uniform probes per axis
+uniform int probeAtlasRows;    // uniform rows plus adaptive rows
 uniform int probeSpacing;
 uniform ivec2 probeJitter;
 
 ivec2 ProbeAnchorPixel(ivec2 probe)
 {
 	return clamp(probe * probeSpacing + probeJitter, ivec2(0), screenSize - 1);
+}
+
+// Atlas texel of the adaptive probe with the given index.
+ivec2 AdaptiveProbeTexel(uint index)
+{
+	return ivec2(int(index) % probeCount.x, probeCount.y + int(index) / probeCount.x);
+}
+
+uint PackPixel(ivec2 pixel)
+{
+	return uint(pixel.x) | (uint(pixel.y) << 16u);
+}
+
+ivec2 UnpackPixel(uint packedPixel)
+{
+	return ivec2(int(packedPixel & 0xFFFFu), int(packedPixel >> 16u));
 }
 
 vec3 ReconstructPosition(ivec2 pixel, float depth)

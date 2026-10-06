@@ -16,7 +16,7 @@ layout(binding = 0, rgba16f) uniform writeonly image2DArray ProbeSH;
 void main()
 {
 	ivec2 probe = ivec2(gl_GlobalInvocationID.xy);
-	if (any(greaterThanEqual(probe, probeCount))) return;
+	if (probe.x >= probeCount.x || probe.y >= probeAtlasRows) return;
 
 	vec3 c[9];
 	for (int i = 0; i < 9; i++) c[i] = vec3(0.0);

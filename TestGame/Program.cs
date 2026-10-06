@@ -12,10 +12,10 @@ namespace TestGame
 		#region PrivateMethods
 
 		/// <summary>
-		///     Usage: TestGame [gi=lumen|vct|0] [voxels=0|1] [sdfview=0|1] [cacheview=0|1] [emitters=0|1] [animate=0|1]
+		///     Usage: TestGame [gi=lumen|vct|0] [voxels=0|1] [sdfview=0|1] [cacheview=0|1] [probeview=0|1] [emitters=0|1] [animate=0|1]
 		///            [stats=0|1] [autocam=0|1] [dump=N] [dumpdir=path] [jitter=0|1] [resolve=0|1] [static=0|1]
 		///            [bounce=0|1] [trace=voxel|sdf] [voxres=64|128|256] [sdfres=64|128|256]
-		///            Lumen quality: [spacing=N px] [radrays=N] [radblend=0..1] [pblend=0..1] [tblend=0..1]
+		///            Lumen quality: [spacing=N px] [adaptive=0|1] [radrays=N] [radblend=0..1] [pblend=0..1] [tblend=0..1]
 		///            [importance=0|1] [pfilter=0|1] [pradius=N probes] [texels=N per meter] [ajitter=0..1] [djitter=0|1]
 		///            [rcache=0|1] [rcradio=0|1] [rcnear=meters] [rchistory=frames] [rcprobes=N per frame] [rcres=8|16] [rctrace=16|32]
 	///            [dumpafter=seconds]
@@ -33,6 +33,7 @@ namespace TestGame
 				VoxelView = GetBool(args, "voxels", false),
 				SdfView = GetBool(args, "sdfview", false),
 				SurfaceCacheView = GetBool(args, "cacheview", false),
+				ProbeView = GetBool(args, "probeview", false),
 				Emitters = GetBool(args, "emitters", true),
 				Animate = GetBool(args, "animate", true),
 				Stats = GetBool(args, "stats", false),
@@ -49,6 +50,7 @@ namespace TestGame
 				ProbeAnchorJitter = GetFloat(args, "ajitter", 0f),
 				ProbeDirectionJitter = GetBool(args, "djitter", true),
 				ProbeSpacing = GetInt(args, "spacing", 16),
+				ProbeAdaptivePlacement = GetBool(args, "adaptive", true),
 				RadiosityRays = GetInt(args, "radrays", 4),
 				RadiosityBlend = GetFloat(args, "radblend", 0.9f),
 				ProbeHistoryWeight = GetFloat(args, "pblend", 0.5f),

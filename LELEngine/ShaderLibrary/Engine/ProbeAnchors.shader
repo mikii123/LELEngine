@@ -19,13 +19,21 @@ void main()
 
 #include "Engine/ScreenProbes.glsl"
 
-// Resolves each screen probe's anchor (jittered pixel of its cell) to a world position and normal.
+// Resolves each uniform screen probe's anchor (jittered pixel of its cell) to a world position and normal.
+// The adaptive rows of the atlas are reset to "no probe"; ProbePlacement.shader fills them afterwards.
 layout(location = 0) out vec4 OutPosition;
 layout(location = 1) out vec4 OutNormal;
 
 void main()
 {
 	ivec2 probe = ivec2(gl_FragCoord.xy);
+	if (probe.y >= probeCount.y)
+	{
+		OutPosition = vec4(0.0);
+		OutNormal = vec4(0.0, 1.0, 0.0, 0.0);
+		return;
+	}
+
 	ivec2 pixel = ProbeAnchorPixel(probe);
 	float depth = texelFetch(SceneDepth, pixel, 0).r;
 	if (depth >= 1.0)

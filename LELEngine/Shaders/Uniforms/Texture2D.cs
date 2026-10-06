@@ -1,4 +1,6 @@
+using System;
 using System.IO;
+using LELEngine.Rendering;
 using OpenTK.Graphics.OpenGL4;
 using StbImageSharp;
 
@@ -10,6 +12,9 @@ namespace LELEngine.Shaders.Uniforms
 
 		public int Handle { get; }
 		public int Index;
+
+		/// <summary>Anisotropic filtering level applied to loaded textures when the context supports it.</summary>
+		public static float MaxAnisotropy = 8f;
 
 		#endregion
 
@@ -72,6 +77,11 @@ namespace LELEngine.Shaders.Uniforms
 			GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Linear);
 			GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)TextureWrapMode.Repeat);
 			GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)TextureWrapMode.Repeat);
+			if (GLCapabilities.AnisotropicFiltering)
+			{
+				// GL_TEXTURE_MAX_ANISOTROPY (core in 4.6, same value as the EXT extension).
+				GL.TexParameter(TextureTarget.Texture2D, (TextureParameterName)0x84FE, Math.Min(MaxAnisotropy, GLCapabilities.MaxAnisotropy));
+			}
 			GL.GenerateMipmap(GenerateMipmapTarget.Texture2D);
 
 			return texID;

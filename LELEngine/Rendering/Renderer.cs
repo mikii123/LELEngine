@@ -79,6 +79,7 @@ namespace LELEngine.Rendering
 			AddPass(new VoxelDebugPass());
 			AddPass(new SdfDebugPass());
 			AddPass(new SurfaceCacheDebugPass());
+			AddPass(new ProbeDebugPass());
 			AddPass(new PostProcessPass());
 		}
 

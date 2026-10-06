@@ -4,10 +4,12 @@
 
 #include "Engine/Sampling.glsl"
 #include "Engine/ScreenProbes.glsl"
+#include "Engine/AdaptiveProbes.glsl"
 
 // Per-probe history record and structured importance sampling (Lumen final gather). One thread per probe:
-//   1. reproject the probe's surface point into the previous frame and find the probe cell it came from
-//      (the history source for the temporal probe filter and for untraced directions);
+//   1. reproject the probe's surface point into the previous frame and find the probe it came from: the
+//      uniform cell there, or, when that probe lay on another surface, the closest adaptive probe of that
+//      tile (the history source for the temporal probe filter and for untraced directions);
 //   2. rank the 64 octahedral directions by last frame's filtered radiance times the cosine term and pick
 //      the most important ones for 2x2 rays. A few slots rotate through all directions so every direction
 //      is retraced within 16 frames and stale history cannot linger (Lumen refines the ray budget the same
@@ -37,7 +39,7 @@ float Luminance(vec3 c)
 void main()
 {
 	ivec2 probe = ivec2(gl_GlobalInvocationID.xy);
-	if (any(greaterThanEqual(probe, probeCount))) return;
+	if (probe.x >= probeCount.x || probe.y >= probeAtlasRows) return;
 
 	uvec4 invalid = uvec4(0u);
 
@@ -65,7 +67,28 @@ void main()
 	ivec2 previous = clamp(ivec2(floor((pixel - vec2(previousProbeJitter)) / float(probeSpacing) + 0.5)), ivec2(0), probeCount - 1);
 
 	vec4 previousAnchor = texelFetch(PreviousProbeAnchorPosition, previous, 0);
-	if (previousAnchor.w < 0.5 || length(previousAnchor.xyz - position) > historyDistanceThreshold)
+	float bestDistance = previousAnchor.w > 0.5 ? length(previousAnchor.xyz - position) : 1e9;
+	if (bestDistance > historyDistanceThreshold)
+	{
+		// The uniform probe there lay on another surface: try last frame's adaptive probes of that tile.
+		ivec2 previousPixel = clamp(ivec2(pixel), ivec2(0), screenSize - 1);
+		int tileOffset = AdaptiveTileOffset(previousPixel);
+		int count = PreviousAdaptiveTileCount(tileOffset);
+		for (int k = 0; k < count; k++)
+		{
+			ivec2 candidate = AdaptiveProbeTexel(PreviousAdaptiveTileProbe(tileOffset, k));
+			vec4 candidateAnchor = texelFetch(PreviousProbeAnchorPosition, candidate, 0);
+			if (candidateAnchor.w < 0.5) continue;
+			float d = length(candidateAnchor.xyz - position);
+			if (d < bestDistance)
+			{
+				bestDistance = d;
+				previous = candidate;
+			}
+		}
+	}
+
+	if (bestDistance > historyDistanceThreshold)
 	{
 		imageStore(ProbeSelection, probe, invalid);
 		return;

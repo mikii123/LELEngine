@@ -19,11 +19,13 @@ void main()
 
 #include "Engine/Sampling.glsl"
 #include "Engine/ScreenProbes.glsl"
+#include "Engine/AdaptiveProbes.glsl"
 
 // Per-pixel integration (Lumen final gather, step 3) at the resolve resolution: the four surrounding
-// probes are interpolated with bilinear weights multiplied by a plane / normal agreement test, their SH
-// is convolved with the pixel normal for diffuse irradiance and evaluated along the reflection direction
-// for rough specular. A temporal reprojection then accumulates the result over frames.
+// uniform probes are interpolated with bilinear weights multiplied by a plane / normal agreement test, the
+// adaptive probes of the pixel's tile join with a spatial kernel, their SH is convolved with the pixel
+// normal for diffuse irradiance and evaluated along the reflection direction for rough specular.
+// A temporal reprojection then accumulates the result over frames.
 in vec2 fUV;
 
 layout(location = 0) out vec4 OutDiffuse;   // rgb irradiance / pi, a = 0 (no occlusion term)
@@ -100,6 +102,32 @@ void main()
 		if (valid < 0.5) continue;
 
 		for (int k = 0; k < 9; k++) accum[k] += c[k] * w;
+		weightSum += w;
+	}
+
+	// Adaptive probes placed in this pixel's tile (Lumen): same plane / normal test, tent kernel in screen space.
+	int tileOffset = AdaptiveTileOffset(pixel);
+	int adaptiveCount = AdaptiveTileCount(tileOffset);
+	for (int k = 0; k < adaptiveCount; k++)
+	{
+		float spatial = AdaptiveSpatialWeight(pixel, AdaptiveTilePixel(tileOffset, k));
+		if (spatial <= 0.0) continue;
+
+		ivec2 probe = AdaptiveProbeTexel(AdaptiveTileProbe(tileOffset, k));
+		vec3 pPosition, pNormal;
+		if (!ProbeAnchor(probe, pPosition, pNormal)) continue;
+
+		float planeDistance = abs(dot(N, pPosition - position));
+		float normalWeight = max(dot(N, pNormal), 0.0);
+		if (planeDistance > planeTolerance || normalWeight < 0.5) continue;
+
+		vec3 c[9];
+		float valid;
+		ReadSH(probe, c, valid);
+		if (valid < 0.5) continue;
+
+		float w = spatial * normalWeight * (1.0 - planeDistance / planeTolerance) + 1e-4;
+		for (int i = 0; i < 9; i++) accum[i] += c[i] * w;
 		weightSum += w;
 	}
 
