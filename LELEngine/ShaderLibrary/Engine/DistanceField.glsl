@@ -38,6 +38,9 @@ vec3 SdfNormal(vec3 p)
 }
 
 // Sphere tracing. The first step is never a hit so rays can start right next to a surface.
+// A ray that runs out of steps while skimming along a surface counts as a hit on that surface: reporting
+// it as a miss would turn every grazing ray into sky and brighten the lighting of everything the ray
+// result feeds (surface cache radiosity, radiance cache probes, screen probes).
 bool TraceSdf(vec3 origin, vec3 direction, float maxDistance, out float hitT)
 {
 	float voxel = SdfVoxelSize();
@@ -45,12 +48,18 @@ bool TraceSdf(vec3 origin, vec3 direction, float maxDistance, out float hitT)
 	float minStep = voxel * 0.25;
 
 	float t = voxel * 0.5;
+	float d = 1e9;
+	bool exhausted = true;
 	for (int i = 0; i < sdfMaxSteps; i++)
 	{
 		vec3 p = origin + direction * t;
-		if (!InsideSdfGrid(p)) break;
+		if (!InsideSdfGrid(p))
+		{
+			exhausted = false;
+			break;
+		}
 
-		float d = SampleSdf(p);
+		d = SampleSdf(p);
 		if (i > 0 && d < hitEpsilon)
 		{
 			hitT = t;
@@ -58,7 +67,17 @@ bool TraceSdf(vec3 origin, vec3 direction, float maxDistance, out float hitT)
 		}
 
 		t += max(d, minStep);
-		if (t > maxDistance) break;
+		if (t > maxDistance)
+		{
+			exhausted = false;
+			break;
+		}
+	}
+
+	if (exhausted && d < voxel * 2.0)
+	{
+		hitT = t;
+		return true;
 	}
 
 	hitT = maxDistance;

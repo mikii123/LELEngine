@@ -40,7 +40,7 @@ namespace LELEngine.Rendering.Passes
 		public override void Execute(RenderContext context)
 		{
 			GlobalIlluminationSettings gi = Lighting.GI;
-			bool active = gi.Enabled && gi.ScreenSpaceResolve && gi.VoxelTexture != 0 && context.DepthPrepassDone && context.NormalRoughness != null;
+			bool active = gi.Enabled && gi.Mode == GIMode.VoxelConeTracing && gi.ScreenSpaceResolve && gi.VoxelTexture != 0 && context.DepthPrepassDone && context.NormalRoughness != null;
 			if (!active)
 			{
 				gi.ResolveActive = false;

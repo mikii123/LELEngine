@@ -27,12 +27,21 @@ namespace TestGame.Scenes
 		/// <summary>Transform that receives pitch. Defaults to the main camera.</summary>
 		public Transform CameraTransform;
 
+		/// <summary>Scripted motion for temporal stability tests: slow yaw sweep and sideways drift, no input.</summary>
+		public bool AutoPilot;
+
+		public float AutoPilotYawAmplitude = 25f;
+		public float AutoPilotStrafeAmplitude = 1.5f;
+		public float AutoPilotPeriod = 8f;
+
 		#endregion
 
 		#region PrivateFields
 
 		private float yaw;
 		private float pitch;
+		private float baseYaw;
+		private Vector3 basePosition;
 
 		#endregion
 
@@ -51,11 +60,24 @@ namespace TestGame.Scenes
 			pitch = 0f;
 
 			ApplyRotation();
-			Input.SetCursorLocked(true);
+			baseYaw = yaw;
+			basePosition = transform.position;
+			Input.SetCursorLocked(!AutoPilot);
 		}
 
 		public override void Update()
 		{
+			if (AutoPilot)
+			{
+				float phase = Time.time * MathHelper.TwoPi / AutoPilotPeriod;
+				yaw = baseYaw + AutoPilotYawAmplitude * (float)Math.Sin(phase);
+				pitch = 4f * (float)Math.Sin(phase * 0.5f);
+				ApplyRotation();
+				Vector3 right = Vector3.Cross(Vector3.UnitZ, Vector3.UnitY).Normalized();
+				transform.position = basePosition + right * (AutoPilotStrafeAmplitude * (float)Math.Sin(phase * 0.7f));
+				return;
+			}
+
 			if (Input.GetKeyDown(Keys.Escape))
 			{
 				Input.SetCursorLocked(!Input.cursorLocked);

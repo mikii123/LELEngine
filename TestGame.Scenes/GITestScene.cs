@@ -21,10 +21,30 @@ namespace TestGame.Scenes
 		public sealed class Options
 		{
 			public bool GI = true;
+
+			/// <summary>Lumen-style pipeline (surface cache + screen probes); false = voxel cone tracing.</summary>
+			public bool Lumen = true;
+
 			public bool VoxelView;
 			public bool SdfView;
+			public bool SurfaceCacheView;
 			public bool Emitters = true;
+
+			/// <summary>Animate the emitters (orbit, bobbing, pulsing). Off freezes them for stability measurements.</summary>
+			public bool Animate = true;
+
 			public bool Stats;
+
+			/// <summary>Scripted camera motion (slow yaw and strafe) for recording temporal stability tests.</summary>
+			public bool AutoCamera;
+
+			/// <summary>Dump this many consecutive frames (BMP) to <see cref="DumpDirectory" /> after a warm-up.</summary>
+			public int DumpFrames;
+
+			public string DumpDirectory = "framedump";
+
+			/// <summary>Per-frame probe jitter (off for diagnostics).</summary>
+			public bool ProbeJitter = true;
 
 			/// <summary>Half-resolution screen-space cone tracing (GIResolvePass) instead of per-fragment.</summary>
 			public bool Resolve = true;
@@ -35,11 +55,29 @@ namespace TestGame.Scenes
 			/// <summary>Feed the previous frame's radiance back when lighting voxels (multi-bounce).</summary>
 			public bool Bounce = true;
 
-			/// <summary>Cone visibility from the global distance field instead of voxel alpha.</summary>
-			public bool SdfTrace = true;
+			/// <summary>Cone visibility from the global distance field instead of voxel alpha (experimental, stamps emitters).</summary>
+			public bool SdfTrace;
 
 			public int VoxelResolution = 128;
 			public int SdfResolution = 128;
+
+			// Lumen quality knobs (defaults mirror GlobalIlluminationSettings).
+			public float ProbeAnchorJitter = 0f;
+			public bool ProbeDirectionJitter = true;
+			public int ProbeSpacing = 16;
+			public int RadiosityRays = 4;
+			public float RadiosityBlend = 0.9f;
+			public float ProbeHistoryWeight = 0.5f;
+			public float ProbeTemporalBlend = 0.9f;
+			public bool ProbeImportanceSampling = true;
+			public bool ProbeSpatialFilter = true;
+			public int ProbeFilterRadius = 1;
+			public int SurfaceCacheTexelsPerMeter = 6;
+			public bool RadianceCache = true;
+			public bool RadianceCacheForRadiosity = true;
+			public float RadianceCacheNearDistance = 2f;
+			public float RadianceCacheHistoryWeight = 0.9f;
+			public int RadianceCacheProbesPerFrame = 1024;
 		}
 
 		#endregion
@@ -59,7 +97,7 @@ namespace TestGame.Scenes
 			BuildLight(scene);
 			if (options.Emitters)
 			{
-				BuildEmitters(scene);
+				BuildEmitters(scene, options.Animate);
 			}
 			BuildPlayer(scene, options);
 
@@ -70,6 +108,10 @@ namespace TestGame.Scenes
 			if (options.SdfView)
 			{
 				Game.Mono.Renderer.GetPass<LELEngine.Rendering.Passes.SdfDebugPass>().Enabled = true;
+			}
+			if (options.SurfaceCacheView)
+			{
+				Game.Mono.Renderer.GetPass<LELEngine.Rendering.Passes.SurfaceCacheDebugPass>().Enabled = true;
 			}
 
 			// With GI on, the flat ambient only has to cover leaks; the bounce does the rest.
@@ -87,6 +129,7 @@ namespace TestGame.Scenes
 
 			// Voxel volume tightly around the room: 26 m / 128 = ~0.2 m voxels.
 			Lighting.GI.Enabled = options.GI;
+			Lighting.GI.Mode = options.Lumen ? GIMode.Lumen : GIMode.VoxelConeTracing;
 			Lighting.GI.Resolution = options.VoxelResolution;
 			Lighting.GI.GridSize = 26f;
 			Lighting.GI.Center = new Vector3(0f, 3.5f, 0f);
@@ -94,6 +137,23 @@ namespace TestGame.Scenes
 			Lighting.GI.DiffuseStrength = 1.0f;
 			Lighting.GI.SpecularStrength = 1.0f;
 			Lighting.GI.OcclusionStrength = 1.0f;
+			Lighting.GI.ProbeJitter = options.ProbeJitter;
+			Lighting.GI.ProbeAnchorJitter = options.ProbeAnchorJitter;
+			Lighting.GI.ProbeDirectionJitter = options.ProbeDirectionJitter;
+			Lighting.GI.ProbeSpacing = options.ProbeSpacing;
+			Lighting.GI.RadiosityRays = options.RadiosityRays;
+			Lighting.GI.RadiosityBlend = options.RadiosityBlend;
+			Lighting.GI.ProbeHistoryWeight = options.ProbeHistoryWeight;
+			Lighting.GI.ProbeTemporalBlend = options.ProbeTemporalBlend;
+			Lighting.GI.ProbeImportanceSampling = options.ProbeImportanceSampling;
+			Lighting.GI.ProbeSpatialFilter = options.ProbeSpatialFilter;
+			Lighting.GI.ProbeFilterRadius = options.ProbeFilterRadius;
+			Lighting.GI.RadianceCacheEnabled = options.RadianceCache;
+			Lighting.GI.RadianceCacheForRadiosity = options.RadianceCacheForRadiosity;
+			Lighting.GI.RadianceCacheNearDistance = options.RadianceCacheNearDistance;
+			Lighting.GI.RadianceCacheHistoryWeight = options.RadianceCacheHistoryWeight;
+			Lighting.GI.RadianceCacheProbesPerFrame = options.RadianceCacheProbesPerFrame;
+			Lighting.GI.SurfaceCacheTexelsPerMeter = options.SurfaceCacheTexelsPerMeter;
 			Lighting.GI.ScreenSpaceResolve = options.Resolve;
 			Lighting.GI.ResolveScale = 0.5f;
 			Lighting.GI.DynamicUpdateInterval = 1;
@@ -108,7 +168,8 @@ namespace TestGame.Scenes
 			Lighting.GI.SdfMaxSteps = 48;
 			Lighting.GI.TraceMode = options.SdfTrace ? GITraceMode.SdfDetail : GITraceMode.VoxelCones;
 			Lighting.GI.SdfDetailDistance = 1.5f;
-			Lighting.GI.SkyRadiance = new Vector3(0.45f, 0.6f, 0.85f) * 0.2f;
+			// The sky the GI sees must be the sky the camera sees: same radiance as the clear color.
+			Lighting.GI.SkyRadiance = new Vector3(0.45f, 0.6f, 0.85f);
 
 			Game.Mono.Renderer.Settings.ClearColor = new Color4(0.45f, 0.6f, 0.85f, 1f);
 			Game.Mono.Renderer.Settings.Exposure = 1.0f;
@@ -188,11 +249,12 @@ namespace TestGame.Scenes
 			sunRenderer.ReceiveGI = false;
 		}
 
-		private static void BuildEmitters(Scene scene)
+		private static void BuildEmitters(Scene scene, bool animate)
 		{
 			// Three colored orbs circling under the ceiling; their bounce light should tint ceiling and floor.
 			Vector3 orbitCenter = new Vector3(0f, 0f, 3f);
 			Color4[] colors = { new Color4(1f, 0.25f, 0.1f, 1f), new Color4(0.2f, 1f, 0.3f, 1f), new Color4(0.25f, 0.4f, 1f, 1f) };
+			EmissiveOrbiter[] emitters = new EmissiveOrbiter[colors.Length + 2];
 			for (int i = 0; i < colors.Length; i++)
 			{
 				EmissiveOrbiter orbiter = Emitter(scene, "Orb" + i, "sphere.obj", Vector3.One * 0.6f);
@@ -207,6 +269,7 @@ namespace TestGame.Scenes
 				orbiter.Intensity = 4f;
 				orbiter.PulseSpeed = 1.5f + i * 0.4f;
 				orbiter.PulseAmount = 0.4f;
+				emitters[i] = orbiter;
 			}
 
 			// Static ceiling lamp panel, slowly breathing.
@@ -219,6 +282,7 @@ namespace TestGame.Scenes
 			lamp.Intensity = 2.5f;
 			lamp.PulseSpeed = 0.7f;
 			lamp.PulseAmount = 0.6f;
+			emitters[colors.Length] = lamp;
 
 			// Low wall-washer strip along the back wall.
 			EmissiveOrbiter strip = Emitter(scene, "FloorStrip", "cube.obj", new Vector3(6f, 0.06f, 0.15f));
@@ -230,6 +294,18 @@ namespace TestGame.Scenes
 			strip.Intensity = 3f;
 			strip.PulseSpeed = 1.1f;
 			strip.PulseAmount = 0.5f;
+			emitters[colors.Length + 1] = strip;
+
+			if (!animate)
+			{
+				// Frozen at their phase-0 positions and full intensity: a static scene with emissive objects.
+				foreach (EmissiveOrbiter emitter in emitters)
+				{
+					emitter.AngularSpeed = 0f;
+					emitter.Bobbing = 0f;
+					emitter.PulseAmount = 0f;
+				}
+			}
 		}
 
 		private static void BuildPlayer(Scene scene, Options options)
@@ -250,9 +326,12 @@ namespace TestGame.Scenes
 			FpsController controller = player.AddComponent<FpsController>();
 			controller.CameraTransform = cameraObject.transform;
 			controller.EyeHeight = 1.7f;
+			controller.AutoPilot = options.AutoCamera;
 
 			GIDebugControls controls = player.AddComponent<GIDebugControls>();
 			controls.PrintStats = options.Stats;
+			controls.DumpFrames = options.DumpFrames;
+			controls.DumpDirectory = options.DumpDirectory;
 		}
 
 		private static GameObject Box(Scene scene, string name, string material, Vector3 center, Vector3 halfSize)

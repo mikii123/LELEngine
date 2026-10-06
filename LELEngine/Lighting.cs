@@ -80,7 +80,8 @@ namespace LELEngine
 
 		public static void SetGIUniforms(ShaderProgram program, bool receiveGI)
 		{
-			bool enabled = receiveGI && GI.Enabled && GI.VoxelTexture != 0;
+			// Either pipeline must have produced something this frame: a voxel volume or resolved screen buffers.
+			bool enabled = receiveGI && GI.Enabled && (GI.VoxelTexture != 0 || GI.ResolveActive);
 			program.SetInt("giEnabled", enabled ? 1 : 0);
 			if (!enabled)
 			{
@@ -286,6 +287,110 @@ namespace LELEngine
 		/// </summary>
 		public bool StaticDirty = true;
 
+		// ---- Which GI pipeline runs ----
+
+		public GIMode Mode = GIMode.Lumen;
+
+		// ---- Lumen surface cache (SurfaceCachePass) ----
+
+		public int SurfaceCacheAtlasSize = 1024;
+
+		/// <summary>Card texels per world meter.</summary>
+		public int SurfaceCacheTexelsPerMeter = 6;
+
+		public int SurfaceCacheMaxCardSize = 96;
+
+		/// <summary>Radiosity rays traced per card texel per frame.</summary>
+		public int RadiosityRays = 4;
+
+		/// <summary>History weight of the card indirect lighting accumulation (0 = no accumulation).</summary>
+		public float RadiosityBlend = 0.9f;
+
+		// ---- Lumen screen probe gather (ScreenProbeGatherPass) ----
+
+		/// <summary>Pixels between screen probes.</summary>
+		public int ProbeSpacing = 16;
+
+		public bool ProbeSpatialFilter = true;
+
+		/// <summary>Per-frame jitter of probe anchors and ray directions (needed for convergence; off = diagnostics).</summary>
+		public bool ProbeJitter = true;
+
+		/// <summary>
+		///     How far a probe's anchor pixel moves inside its cell from frame to frame, as a fraction of the cell
+		///     (1 = anywhere in the cell, 0 = always the cell centre). Lumen jitters the whole cell; here the
+		///     default is off because the history a probe carries over then comes from the same surface point,
+		///     which measured 2-3x less temporal variation in a static view. Set to 1 to average probe placement
+		///     over time instead (thin geometry gets covered more often, lighting breathes more).
+		/// </summary>
+		public float ProbeAnchorJitter = 0f;
+
+		/// <summary>Jitter ray directions inside their octahedral texel every frame.</summary>
+		public bool ProbeDirectionJitter = true;
+
+		/// <summary>
+		///     Structured importance sampling: directions ranked by last frame's radiance times cosine; the 16 most
+		///     important ones get 2x2 rays, the other 48 reuse their history. Ray budget stays 64 per probe.
+		/// </summary>
+		public bool ProbeImportanceSampling = true;
+
+		/// <summary>Radius of the spatial probe filter, in probes (1 = 3x3 neighbourhood).</summary>
+		public int ProbeFilterRadius = 1;
+
+		/// <summary>
+		///     A neighbour probe's sample is reused only when its hit point lies within this many degrees of the
+		///     centre probe's own ray direction (Lumen's angle-error rejection).
+		/// </summary>
+		public float ProbeFilterMaxAngle = 10f;
+
+		/// <summary>
+		///     Temporal probe filter (Lumen's TemporalFilterProbes): weight of the reprojected previous radiance when a
+		///     direction is retraced. Reduces the frame-to-frame colour noise of probes that see small bright surfaces.
+		/// </summary>
+		public float ProbeHistoryWeight = 0.5f;
+
+		/// <summary>A probe's history is used only when the previous probe lay within this distance (world units).</summary>
+		public float ProbeHistoryDistance = 0.3f;
+
+		/// <summary>History weight of the per-pixel temporal accumulation (0 = off).</summary>
+		public float ProbeTemporalBlend = 0.9f;
+
+		/// <summary>Length of the depth-buffer march at the start of every probe ray (world units, 0 = off).</summary>
+		public float ScreenTraceDistance = 1.5f;
+
+		public int ScreenTraceSteps = 16;
+
+		/// <summary>Depth-buffer surfaces are assumed this thick when deciding whether a ray passed behind them.</summary>
+		public float ScreenTraceThickness = 0.3f;
+
+		/// <summary>Maximum plane distance (world units) for a probe to be used by a pixel or a neighbour.</summary>
+		public float ProbePlaneTolerance = 0.3f;
+
+		// ---- Lumen world-space radiance cache (RadianceCachePass) ----
+
+		public bool RadianceCacheEnabled = true;
+
+		/// <summary>Probes per axis over the GI grid; probe spacing is GridSize / (n - 1).</summary>
+		public int RadianceCacheProbesPerAxis = 17;
+
+		/// <summary>
+		///     Probes inside the static scene bounds re-traced per frame (round robin; all of them when the budget
+		///     allows). Probes outside the scene get an eighth of this on top.
+		/// </summary>
+		public int RadianceCacheProbesPerFrame = 1024;
+
+		/// <summary>History weight of a probe's accumulation per update.</summary>
+		public float RadianceCacheHistoryWeight = 0.9f;
+
+		/// <summary>
+		///     Screen probe and radiosity rays trace the distance field this far (world units) and read the
+		///     radiance cache beyond it. 0 traces the whole field.
+		/// </summary>
+		public float RadianceCacheNearDistance = 2f;
+
+		/// <summary>Let the surface cache radiosity rays read the radiance cache too (off = radiosity traces fully).</summary>
+		public bool RadianceCacheForRadiosity = true;
+
 		// ---- Global distance field (GlobalDistanceFieldPass) ----
 
 		public bool DistanceFieldEnabled = true;
@@ -299,8 +404,13 @@ namespace LELEngine
 		/// <summary>Maximum sphere tracing iterations per ray.</summary>
 		public int SdfMaxSteps = 48;
 
-		/// <summary>How cones find geometry: voxel alpha mips, or sphere tracing the global SDF near the origin.</summary>
-		public GITraceMode TraceMode = GITraceMode.SdfDetail;
+		/// <summary>
+		///     How cones find geometry: voxel alpha mips, or sphere tracing the global SDF near the origin.
+		///     Voxel cones are the default: the SDF detail trace samples hit radiance too sharply for six fixed
+		///     cones and stamps bright features (emitters) onto nearby surfaces until it gets footprint-sized
+		///     filtering and jittered, temporally accumulated directions.
+		/// </summary>
+		public GITraceMode TraceMode = GITraceMode.VoxelCones;
 
 		/// <summary>Length of the SDF detail trace at the start of every cone (world units).</summary>
 		public float SdfDetailDistance = 1.5f;
@@ -363,6 +473,15 @@ namespace LELEngine
 		}
 
 		#endregion
+	}
+
+	public enum GIMode
+	{
+		/// <summary>Voxel cone tracing: radiance volume + cones (steps 1-3 of the roadmap).</summary>
+		VoxelConeTracing,
+
+		/// <summary>Lumen-style: surface cache cards lit with radiosity, screen probes traced through the global SDF.</summary>
+		Lumen
 	}
 
 	public enum GITraceMode

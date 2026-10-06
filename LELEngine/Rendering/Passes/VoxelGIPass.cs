@@ -109,7 +109,7 @@ namespace LELEngine.Rendering.Passes
 			GlobalIlluminationSettings gi = Lighting.GI;
 			RebuiltStaticThisFrame = false;
 
-			if (!gi.Enabled)
+			if (!gi.Enabled || gi.Mode != GIMode.VoxelConeTracing)
 			{
 				gi.VoxelTexture = 0;
 				return;

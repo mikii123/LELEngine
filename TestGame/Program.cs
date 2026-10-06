@@ -12,27 +12,55 @@ namespace TestGame
 		#region PrivateMethods
 
 		/// <summary>
-		///     Usage: TestGame [gi=0|1] [voxels=0|1] [emitters=0|1] [stats=0|1] [resolve=0|1] [static=0|1] [bounce=0|1]
-		///            [trace=sdf|voxel] [voxres=64|128|256] [sdfres=64|128|256]
+		///     Usage: TestGame [gi=lumen|vct|0] [voxels=0|1] [sdfview=0|1] [cacheview=0|1] [emitters=0|1] [animate=0|1]
+		///            [stats=0|1] [autocam=0|1] [dump=N] [dumpdir=path] [jitter=0|1] [resolve=0|1] [static=0|1]
+		///            [bounce=0|1] [trace=voxel|sdf] [voxres=64|128|256] [sdfres=64|128|256]
+		///            Lumen quality: [spacing=N px] [radrays=N] [radblend=0..1] [pblend=0..1] [tblend=0..1]
+		///            [importance=0|1] [pfilter=0|1] [pradius=N probes] [texels=N per meter] [ajitter=0..1] [djitter=0|1]
+		///            [rcache=0|1] [rcradio=0|1] [rcnear=meters] [rcblend=0..1] [rcprobes=N per frame]
 		///     Loads the GI test room with the FPS controller.
 		/// </summary>
 		private static void Main(string[] args)
 		{
 			Game.CreateWindow(1280, 720, "LELEngine");
 
+			string giValue = GetValue(args, "gi");
 			GITestScene.Options options = new GITestScene.Options
 			{
-				GI = GetBool(args, "gi", true),
+				GI = !(giValue == "0" || string.Equals(giValue, "off", StringComparison.OrdinalIgnoreCase)),
+				Lumen = !string.Equals(giValue, "vct", StringComparison.OrdinalIgnoreCase),
 				VoxelView = GetBool(args, "voxels", false),
 				SdfView = GetBool(args, "sdfview", false),
+				SurfaceCacheView = GetBool(args, "cacheview", false),
 				Emitters = GetBool(args, "emitters", true),
+				Animate = GetBool(args, "animate", true),
 				Stats = GetBool(args, "stats", false),
+				AutoCamera = GetBool(args, "autocam", false),
+				DumpFrames = GetInt(args, "dump", 0),
+				DumpDirectory = GetValue(args, "dumpdir") ?? "framedump",
+				ProbeJitter = GetBool(args, "jitter", true),
 				Resolve = GetBool(args, "resolve", true),
 				StaticCache = GetBool(args, "static", true),
 				Bounce = GetBool(args, "bounce", true),
-				SdfTrace = !string.Equals(GetValue(args, "trace"), "voxel", StringComparison.OrdinalIgnoreCase),
+				SdfTrace = string.Equals(GetValue(args, "trace"), "sdf", StringComparison.OrdinalIgnoreCase),
 				VoxelResolution = GetInt(args, "voxres", 128),
-				SdfResolution = GetInt(args, "sdfres", 128)
+				SdfResolution = GetInt(args, "sdfres", 128),
+				ProbeAnchorJitter = GetFloat(args, "ajitter", 0f),
+				ProbeDirectionJitter = GetBool(args, "djitter", true),
+				ProbeSpacing = GetInt(args, "spacing", 16),
+				RadiosityRays = GetInt(args, "radrays", 4),
+				RadiosityBlend = GetFloat(args, "radblend", 0.9f),
+				ProbeHistoryWeight = GetFloat(args, "pblend", 0.5f),
+				ProbeTemporalBlend = GetFloat(args, "tblend", 0.9f),
+				ProbeImportanceSampling = GetBool(args, "importance", true),
+				ProbeSpatialFilter = GetBool(args, "pfilter", true),
+				ProbeFilterRadius = GetInt(args, "pradius", 1),
+				SurfaceCacheTexelsPerMeter = GetInt(args, "texels", 6),
+				RadianceCache = GetBool(args, "rcache", true),
+				RadianceCacheForRadiosity = GetBool(args, "rcradio", true),
+				RadianceCacheNearDistance = GetFloat(args, "rcnear", 2f),
+				RadianceCacheHistoryWeight = GetFloat(args, "rcblend", 0.9f),
+				RadianceCacheProbesPerFrame = GetInt(args, "rcprobes", 1024)
 			};
 			GITestScene.Load(Game.Mono.LoadEmptyScene(), options);
 
@@ -50,6 +78,13 @@ namespace TestGame
 			string value = GetValue(args, name);
 			int parsed;
 			return value != null && int.TryParse(value, out parsed) ? parsed : defaultValue;
+		}
+
+		private static float GetFloat(string[] args, string name, float defaultValue)
+		{
+			string value = GetValue(args, name);
+			float parsed;
+			return value != null && float.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out parsed) ? parsed : defaultValue;
 		}
 
 		private static string GetValue(string[] args, string name)

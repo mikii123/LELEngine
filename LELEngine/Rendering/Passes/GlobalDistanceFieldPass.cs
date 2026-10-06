@@ -1,6 +1,6 @@
 using System;
 using System.Collections.Generic;
-using LELEngine.Rendering.DistanceField;
+using LELEngine.Rendering.Lumen;
 using OpenTK.Graphics.OpenGL4;
 using OpenTK.Mathematics;
 
@@ -10,10 +10,10 @@ namespace LELEngine.Rendering.Passes
 	///     Builds the global signed distance field (Lumen's "global SDF"): a world-space R16F volume over the
 	///     GI grid holding the distance to the nearest surface, clamped to a band of a few voxels.
 	///
-	///     Mesh distance fields are built once per (mesh, scale) into <see cref="DistanceFieldAtlas" />.
-	///     Static renderers are composed into a cached field when they change; dynamic renderers are
-	///     re-composed every frame, but only inside their band-padded bounds (previous and current), which
-	///     is exact because the band limits how far an object can influence the field.
+	///     Objects come from <see cref="LumenScene" /> (mesh distance fields built once per mesh and scale).
+	///     Static objects are composed into a cached field when they change; dynamic objects are re-composed
+	///     every frame, but only inside their band-padded bounds (previous and current), which is exact
+	///     because the band limits how far an object can influence the field.
 	///
 	///     Consumers: Engine/DistanceField.glsl (sphere tracing) through Lighting.SetSdfUniforms.
 	/// </summary>
@@ -23,22 +23,15 @@ namespace LELEngine.Rendering.Passes
 
 		public override string Name => "GlobalSDF";
 		public int GlobalSdf => globalSdf;
-		public DistanceFieldAtlas Atlas => atlas;
 
 		#endregion
 
 		#region PrivateFields
 
-		private DistanceFieldAtlas atlas;
 		private ComputeShader compose;
-		private int objectBuffer;
 		private int staticSdf;
 		private int globalSdf;
 		private int currentResolution;
-
-		private readonly List<MeshRenderer> staticRenderers = new List<MeshRenderer>();
-		private readonly List<MeshRenderer> dynamicRenderers = new List<MeshRenderer>();
-		private readonly List<SdfObjectData> objectData = new List<SdfObjectData>();
 
 		private List<VoxelRegion> previousRegions = new List<VoxelRegion>();
 		private List<VoxelRegion> currentRegions = new List<VoxelRegion>();
@@ -57,9 +50,7 @@ namespace LELEngine.Rendering.Passes
 
 		public override void Initialize(Renderer renderer)
 		{
-			atlas = new DistanceFieldAtlas();
 			compose = new ComputeShader("Engine/SdfCompose.shader");
-			objectBuffer = GL.GenBuffer();
 			CreateVolumes(Lighting.GI.SdfResolution);
 		}
 
@@ -78,17 +69,19 @@ namespace LELEngine.Rendering.Passes
 			}
 
 			gi.UpdateGridPlacement(context.CameraPosition);
-			PartitionRenderers(context.Renderers);
-			DetectStaticChanges(gi);
 
+			LumenScene scene = context.Renderer.LumenScene;
 			frameIndex++;
+			scene.Update(frameIndex, context.Renderers, gi);
+			DetectStaticChanges(gi, scene);
+
 			bool dynamicDue = gi.DynamicUpdateInterval <= 1 || frameIndex % gi.DynamicUpdateInterval == 0;
 			GpuProfiler profiler = context.Renderer.Profiler;
 
 			if (gi.SdfStaticDirty)
 			{
 				profiler.Split("GlobalSDF.static");
-				RebuildStaticField(gi);
+				RebuildStaticField(gi, scene);
 				// The whole working field was replaced: dynamic objects must be stamped again this frame.
 				dynamicDue = true;
 			}
@@ -96,7 +89,7 @@ namespace LELEngine.Rendering.Passes
 			if (dynamicDue)
 			{
 				profiler.Split("GlobalSDF.dynamic");
-				UpdateDynamicField(gi);
+				UpdateDynamicField(gi, scene);
 			}
 
 			gi.GlobalSdf = globalSdf;
@@ -105,15 +98,8 @@ namespace LELEngine.Rendering.Passes
 		public override void Dispose()
 		{
 			DeleteVolumes();
-			atlas?.Delete();
-			atlas = null;
 			compose?.Delete();
 			compose = null;
-			if (objectBuffer != 0)
-			{
-				GL.DeleteBuffer(objectBuffer);
-				objectBuffer = 0;
-			}
 			Lighting.GI.GlobalSdf = 0;
 		}
 
@@ -165,47 +151,25 @@ namespace LELEngine.Rendering.Passes
 			return texture;
 		}
 
-		private void PartitionRenderers(IReadOnlyList<MeshRenderer> renderers)
-		{
-			staticRenderers.Clear();
-			dynamicRenderers.Clear();
-			foreach (MeshRenderer renderer in renderers)
-			{
-				if (!renderer.ContributesToGI || renderer.Mesh == null || renderer.Mesh.Verticies.Count < 3)
-				{
-					continue;
-				}
-
-				if (renderer.IsStatic)
-				{
-					staticRenderers.Add(renderer);
-				}
-				else
-				{
-					dynamicRenderers.Add(renderer);
-				}
-			}
-		}
-
-		private void DetectStaticChanges(GlobalIlluminationSettings gi)
+		private void DetectStaticChanges(GlobalIlluminationSettings gi, LumenScene scene)
 		{
 			bool changed =
 				(gi.GridMin - lastGridMin).LengthSquared > 1e-6f
 				|| Math.Abs(gi.GridSize - lastGridSize) > 1e-5f
-				|| staticRenderers.Count != lastStaticCount;
+				|| scene.StaticObjectCount != lastStaticCount;
 
 			if (changed)
 			{
 				gi.SdfStaticDirty = true;
 				lastGridMin = gi.GridMin;
 				lastGridSize = gi.GridSize;
-				lastStaticCount = staticRenderers.Count;
+				lastStaticCount = scene.StaticObjectCount;
 			}
 		}
 
-		private void RebuildStaticField(GlobalIlluminationSettings gi)
+		private void RebuildStaticField(GlobalIlluminationSettings gi, LumenScene scene)
 		{
-			Compose(staticSdf, 0, staticRenderers, gi, VoxelRegion.Full(currentResolution));
+			Compose(staticSdf, 0, 0, scene.StaticObjectCount, gi, scene, VoxelRegion.Full(currentResolution));
 
 			GL.CopyImageSubData(
 				staticSdf, ImageTarget.Texture3D, 0, 0, 0, 0,
@@ -216,15 +180,15 @@ namespace LELEngine.Rendering.Passes
 			gi.SdfStaticDirty = false;
 		}
 
-		private void UpdateDynamicField(GlobalIlluminationSettings gi)
+		private void UpdateDynamicField(GlobalIlluminationSettings gi, LumenScene scene)
 		{
 			// An object influences the field up to one band beyond its bounds.
 			int padding = gi.SdfBandVoxels + 1;
 			currentRegions.Clear();
-			foreach (MeshRenderer renderer in dynamicRenderers)
+			for (int i = scene.StaticObjectCount; i < scene.Objects.Count; i++)
 			{
 				VoxelRegion region;
-				if (VoxelRegion.TryFromRenderer(renderer, gi.GridMin, gi.SdfVoxelSize, currentResolution, padding, out region))
+				if (VoxelRegion.TryFromRenderer(scene.Objects[i].Renderer, gi.GridMin, gi.SdfVoxelSize, currentResolution, padding, out region))
 				{
 					currentRegions.Add(region);
 				}
@@ -235,15 +199,16 @@ namespace LELEngine.Rendering.Passes
 			updateRegions.AddRange(previousRegions);
 			updateRegions.AddRange(currentRegions);
 
+			int dynamicCount = scene.Objects.Count - scene.StaticObjectCount;
 			if (updateRegions.Count > 0)
 			{
 				if (RegionCoverage(updateRegions) > FullUpdateCoverage)
 				{
-					Compose(globalSdf, staticSdf, dynamicRenderers, gi, VoxelRegion.Full(currentResolution));
+					Compose(globalSdf, staticSdf, scene.StaticObjectCount, dynamicCount, gi, scene, VoxelRegion.Full(currentResolution));
 				}
 				else
 				{
-					Compose(globalSdf, staticSdf, dynamicRenderers, gi, updateRegions);
+					Compose(globalSdf, staticSdf, scene.StaticObjectCount, dynamicCount, gi, scene, updateRegions);
 				}
 			}
 
@@ -263,28 +228,25 @@ namespace LELEngine.Rendering.Passes
 			return (float)(total / ((double)currentResolution * currentResolution * currentResolution));
 		}
 
-		private void Compose(int target, int baseSdf, List<MeshRenderer> renderers, GlobalIlluminationSettings gi, VoxelRegion region)
+		private void Compose(int target, int baseSdf, int objectStart, int objectCount, GlobalIlluminationSettings gi, LumenScene scene, VoxelRegion region)
 		{
 			updateRegions.Clear();
 			updateRegions.Add(region);
-			Compose(target, baseSdf, renderers, gi, updateRegions);
+			Compose(target, baseSdf, objectStart, objectCount, gi, scene, updateRegions);
 		}
 
-		private void Compose(int target, int baseSdf, List<MeshRenderer> renderers, GlobalIlluminationSettings gi, List<VoxelRegion> regions)
+		private void Compose(int target, int baseSdf, int objectStart, int objectCount, GlobalIlluminationSettings gi, LumenScene scene, List<VoxelRegion> regions)
 		{
-			UploadObjects(renderers);
-
 			compose.Use();
-			compose.Program.SetInt("objectCount", objectData.Count);
-			compose.Program.SetTexture("SdfAtlas", TextureTarget.Texture3D, atlas.Texture, 0);
-			compose.Program.SetVector3("atlasTexels", atlas.TexelCount);
+			scene.SetUniforms(compose.Program);
+			compose.Program.SetInt("objectStart", objectStart);
+			compose.Program.SetInt("objectCount", objectCount);
 			compose.Program.SetInt("useBase", baseSdf != 0 ? 1 : 0);
 			compose.Program.SetVector3("gridMin", gi.GridMin);
 			compose.Program.SetFloat("gridSize", gi.GridSize);
 			compose.Program.SetInt("sdfResolution", currentResolution);
 			compose.Program.SetFloat("maxDistance", gi.SdfBandVoxels * gi.SdfVoxelSize);
 
-			GL.BindBufferBase(BufferRangeTarget.ShaderStorageBuffer, 0, objectBuffer);
 			GL.BindImageTexture(0, baseSdf != 0 ? baseSdf : target, 0, true, 0, TextureAccess.ReadOnly, SizedInternalFormat.R16f);
 			GL.BindImageTexture(1, target, 0, true, 0, TextureAccess.WriteOnly, SizedInternalFormat.R16f);
 
@@ -301,55 +263,6 @@ namespace LELEngine.Rendering.Passes
 			}
 
 			ComputeShader.Barrier(MemoryBarrierFlags.ShaderImageAccessBarrierBit | MemoryBarrierFlags.TextureFetchBarrierBit);
-		}
-
-		// Builds (or fetches) each renderer's mesh field and uploads the per-object records.
-		private void UploadObjects(List<MeshRenderer> renderers)
-		{
-			objectData.Clear();
-			foreach (MeshRenderer renderer in renderers)
-			{
-				MeshDistanceField field = atlas.GetOrBuild(renderer.Mesh, renderer.transform.scale);
-				if (field == null)
-				{
-					continue;
-				}
-
-				Transform t = renderer.transform;
-				Matrix4 localToWorld = Matrix4.CreateFromQuaternion(t.rotation) * Matrix4.CreateTranslation(t.position);
-
-				objectData.Add(new SdfObjectData
-				{
-					WorldToLocal = Matrix4.Invert(localToWorld),
-					BoundsMin = new Vector4(field.BoundsMin, 0f),
-					BoundsMax = new Vector4(field.BoundsMax, 0f),
-					AtlasOrigin = new Vector4(0f, 0f, field.AtlasZ, 0f),
-					AtlasSize = new Vector4(field.Size.X, field.Size.Y, field.Size.Z, 0f),
-					Padding = new Vector4(field.TexelSize * DistanceFieldAtlas.Padding, 0f)
-				});
-			}
-
-			SdfObjectData[] array = objectData.ToArray();
-			GL.BindBuffer(BufferTarget.ShaderStorageBuffer, objectBuffer);
-			GL.BufferData(BufferTarget.ShaderStorageBuffer, Math.Max(1, array.Length) * SdfObjectData.Size, array.Length > 0 ? array : new SdfObjectData[1], BufferUsageHint.StreamDraw);
-			GL.BindBuffer(BufferTarget.ShaderStorageBuffer, 0);
-		}
-
-		#endregion
-
-		#region NestedTypes
-
-		/// <summary>Mirrors SdfObject in Engine/SdfCompose.shader (std430, 144 bytes).</summary>
-		private struct SdfObjectData
-		{
-			public const int Size = 144;
-
-			public Matrix4 WorldToLocal;
-			public Vector4 BoundsMin;
-			public Vector4 BoundsMax;
-			public Vector4 AtlasOrigin;
-			public Vector4 AtlasSize;
-			public Vector4 Padding;
 		}
 
 		#endregion

@@ -108,6 +108,12 @@ namespace LELEngine.Shaders
 			if (loc >= 0) GL.Uniform1(loc, value);
 		}
 
+		public void SetInt2(string name, int x, int y)
+		{
+			int loc = GetUniformLocation(name);
+			if (loc >= 0) GL.Uniform2(loc, x, y);
+		}
+
 		public void SetInt3(string name, int x, int y, int z)
 		{
 			int loc = GetUniformLocation(name);

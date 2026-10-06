@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using LELEngine.Rendering.Lumen;
 using LELEngine.Rendering.Passes;
 using LELEngine.Shaders;
 using OpenTK.Graphics.OpenGL4;
@@ -16,6 +17,10 @@ namespace LELEngine.Rendering
 
 		public RenderSettings Settings { get; } = new RenderSettings();
 		public GpuProfiler Profiler { get; } = new GpuProfiler();
+		public FrameDumper FrameDumper { get; } = new FrameDumper();
+
+		/// <summary>GI view of the scene: distance fields, surface cache cards and the per-frame object tables.</summary>
+		public LumenScene LumenScene { get; private set; }
 		public Framebuffer SceneTarget { get; private set; }
 		public RenderTexture SceneColor => SceneTarget.ColorAttachments[0];
 		public RenderTexture SceneDepth => SceneTarget.DepthAttachment;
@@ -47,6 +52,7 @@ namespace LELEngine.Rendering
 
 			DepthOnlyProgram = BuiltinShaders.CreateDepthOnly();
 			Fullscreen = new FullscreenQuad();
+			LumenScene = new LumenScene();
 
 			Console.WriteLine("[Renderer] GL " + GL.GetString(StringName.Version) + " | " + GL.GetString(StringName.Renderer));
 		}
@@ -62,13 +68,17 @@ namespace LELEngine.Rendering
 		{
 			AddPass(new ShadowPass());
 			AddPass(new GlobalDistanceFieldPass());
+			AddPass(new SurfaceCachePass());
+			AddPass(new RadianceCachePass());
 			AddPass(new VoxelGIPass());
 			AddPass(new GeometryPrepass());
 			AddPass(new GIResolvePass());
+			AddPass(new ScreenProbeGatherPass());
 			AddPass(new OpaquePass());
 			AddPass(new PostRenderCallbackPass());
 			AddPass(new VoxelDebugPass());
 			AddPass(new SdfDebugPass());
+			AddPass(new SurfaceCacheDebugPass());
 			AddPass(new PostProcessPass());
 		}
 
@@ -188,6 +198,12 @@ namespace LELEngine.Rendering
 			}
 
 			Profiler.EndFrame();
+
+			if (FrameDumper.Active)
+			{
+				Framebuffer.BindDefault(Width, Height);
+				FrameDumper.Capture(Width, Height);
+			}
 		}
 
 		public void Dispose()
@@ -201,6 +217,7 @@ namespace LELEngine.Rendering
 			SceneTarget?.Delete();
 			DepthOnlyProgram?.Delete();
 			Fullscreen?.Delete();
+			LumenScene?.Delete();
 			Profiler.Dispose();
 		}
 
