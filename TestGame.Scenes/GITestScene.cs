@@ -31,6 +31,9 @@ namespace TestGame.Scenes
 			/// <summary>Mark room and props static so they are voxelized once.</summary>
 			public bool StaticCache = true;
 
+			/// <summary>Feed the previous frame's radiance back when lighting voxels (multi-bounce).</summary>
+			public bool Bounce = true;
+
 			public int VoxelResolution = 128;
 		}
 
@@ -85,6 +88,9 @@ namespace TestGame.Scenes
 			Lighting.GI.ScreenSpaceResolve = options.Resolve;
 			Lighting.GI.ResolveScale = 0.5f;
 			Lighting.GI.DynamicUpdateInterval = 1;
+			Lighting.GI.LightingUpdateInterval = 1;
+			Lighting.GI.BounceStrength = options.Bounce ? 1f : 0f;
+			Lighting.GI.BounceCones = 6;
 
 			Game.Mono.Renderer.Settings.ClearColor = new Color4(0.45f, 0.6f, 0.85f, 1f);
 			Game.Mono.Renderer.Settings.Exposure = 1.0f;

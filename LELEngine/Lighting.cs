@@ -238,12 +238,25 @@ namespace LELEngine
 		/// <summary>Re-voxelize dynamic (non-static) objects every N frames. 1 = every frame.</summary>
 		public int DynamicUpdateInterval = 1;
 
-		/// <summary>Resolution of the shadow map covering the whole voxel volume, used while voxelizing.</summary>
+		/// <summary>Recompute voxel lighting (sun, shadows, bounce) every N frames. 1 = every frame.</summary>
+		public int LightingUpdateInterval = 1;
+
+		/// <summary>Resolution of the shadow map covering the whole voxel volume, used when lighting voxels.</summary>
 		public int GridShadowMapSize = 1024;
 
 		/// <summary>
-		///     Set when the static voxel cache must be rebuilt. Light, grid and resolution changes set it
+		///     Weight of indirect light fed back from the previous frame's radiance volume when lighting voxels.
+		///     1 gives multi-bounce lighting converging over a few frames; 0 keeps a single bounce.
+		/// </summary>
+		public float BounceStrength = 1f;
+
+		/// <summary>Cones traced per voxel for the bounce: 6 (hemisphere layout) or 1 (single wide cone, cheaper).</summary>
+		public int BounceCones = 6;
+
+		/// <summary>
+		///     Set when the static geometry cache must be rebuilt. Grid and resolution changes set it
 		///     automatically; call <see cref="InvalidateStatic" /> after moving or re-materialing a static renderer.
+		///     Lighting changes never require a rebuild: light is injected every frame.
 		/// </summary>
 		public bool StaticDirty = true;
 

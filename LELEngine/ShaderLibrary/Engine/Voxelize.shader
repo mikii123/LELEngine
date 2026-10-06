@@ -66,9 +66,11 @@ void main()
 
 #version 430
 
-#include "Engine/Shadows.glsl"
-
-layout(binding = 0, rgba16f) uniform writeonly image3D VoxelOutput;
+// Geometry voxelization: writes surface attributes only. Lighting is applied per frame by
+// Engine/VoxelInject.shader, so this result can be cached for static geometry.
+layout(binding = 0, rgba8) uniform writeonly image3D AlbedoOut;            // rgb albedo, a occupancy
+layout(binding = 1, rgba8) uniform writeonly image3D NormalOut;            // xyz normal * 0.5 + 0.5
+layout(binding = 2, r11f_g11f_b10f) uniform writeonly image3D EmissiveOut; // rgb emitted radiance
 
 uniform vec3 voxelGridMin;
 uniform float voxelGridSize;
@@ -79,13 +81,6 @@ uniform vec4 voxAlbedo;
 uniform vec4 voxEmissive;      // rgb color, a intensity
 uniform sampler2D voxAlbedoMap;
 uniform int voxUseAlbedoMap;
-
-struct Directional {
-	vec4 dirColor;
-	float dirStrength;
-	vec3 dirDirection;
-};
-uniform Directional LDirectional;
 
 in vec3 fWorldPos;
 in vec3 fNormal;
@@ -103,16 +98,9 @@ void main()
 		albedo *= texture(voxAlbedoMap, fUV).rgb;
 	}
 
-	vec3 N = normalize(fNormal);
-	vec3 L = normalize(-LDirectional.dirDirection);
-	float ndl = max(dot(N, L), 0.0);
-	float shadow = SampleShadow(fWorldPos, N, L);
-
-	// Outgoing radiance: directly lit diffuse plus emission.
-	vec3 radiance = albedo * LDirectional.dirColor.rgb * LDirectional.dirStrength * ndl * shadow
-		+ voxEmissive.rgb * voxEmissive.a;
-
-	imageStore(VoxelOutput, coord, vec4(radiance, 1.0));
+	imageStore(AlbedoOut, coord, vec4(albedo, 1.0));
+	imageStore(NormalOut, coord, vec4(normalize(fNormal) * 0.5 + 0.5, 1.0));
+	imageStore(EmissiveOut, coord, vec4(voxEmissive.rgb * voxEmissive.a, 0.0));
 }
 
 /////Fragment
