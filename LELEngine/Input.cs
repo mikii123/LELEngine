@@ -15,6 +15,13 @@ namespace LELEngine
 		public static Vector2 mousePosition { get; private set; }
 		public static Vector2 relativeMousePosition { get; private set; }
 
+		/// <summary>
+		///     Mouse movement since the previous update frame, in pixels. Valid also while the cursor is locked.
+		/// </summary>
+		public static Vector2 mouseDelta { get; private set; }
+
+		public static bool cursorLocked { get; private set; }
+
 		private static Vector2 lastMousePosition;
 
 		public enum StandardInputAxis
@@ -43,7 +50,17 @@ namespace LELEngine
 
 		public static void BeginFrame()
 		{
-			// State captured via events; nothing to poll here
+			// Key state is captured via events; the mouse delta is polled so it works with a grabbed cursor.
+			mouseDelta = Game.Mono.MouseState.Delta;
+		}
+
+		/// <summary>
+		///     Hides the cursor and confines it to the window (FPS style look).
+		/// </summary>
+		public static void SetCursorLocked(bool locked)
+		{
+			cursorLocked = locked;
+			Game.Mono.CursorState = locked ? CursorState.Grabbed : CursorState.Normal;
 		}
 
 		public static float GetStandardAxis(StandardInputAxis axis, float sensitivity = 0.1f)

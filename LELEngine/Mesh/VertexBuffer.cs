@@ -1,11 +1,21 @@
-﻿using System;
+using System;
 using OpenTK.Graphics.OpenGL4;
 
 namespace LELEngine
 {
+	/// <summary>
+	///     Vertex + index buffer pair. Data is uploaded once (or whenever marked dirty), not every frame.
+	/// </summary>
 	internal sealed class VertexBuffer<TVertex>
 		where TVertex : struct // vertices must be structs so we can copy them to GPU memory easily
 	{
+		#region PublicFields
+
+		public int VertexCount => count;
+		public int IndexCount => indicedata.Length;
+
+		#endregion
+
 		#region PrivateFields
 
 		private readonly int vertexSize;
@@ -16,6 +26,7 @@ namespace LELEngine
 		private int[] indicedata = { };
 
 		private int count;
+		private bool dirty = true;
 
 		#endregion
 
@@ -45,12 +56,14 @@ namespace LELEngine
 			// add vertex
 			vertices[count] = v;
 			count++;
+			dirty = true;
 		}
 
 		public void SetIndices(int[] tab)
 		{
 			Array.Resize(ref indicedata, tab.Length);
 			tab.CopyTo(indicedata, 0);
+			dirty = true;
 		}
 
 		public void Bind()
@@ -60,18 +73,26 @@ namespace LELEngine
 			GL.BindBuffer(BufferTarget.ElementArrayBuffer, indhandle);
 		}
 
+		/// <summary>
+		///     Uploads the CPU side data to the GPU if it changed since the last upload.
+		///     Requires the buffers to be bound.
+		/// </summary>
 		public void BufferData()
 		{
-			// copy contained vertices to GPU memory
+			if (!dirty)
+			{
+				return;
+			}
+
 			GL.BufferData(BufferTarget.ArrayBuffer, (IntPtr)(vertexSize * count), vertices, BufferUsageHint.StaticDraw);
 			GL.BufferData(BufferTarget.ElementArrayBuffer, (IntPtr)(indicedata.Length * sizeof(int)), indicedata, BufferUsageHint.StaticDraw);
+			dirty = false;
 		}
 
 		public void Draw()
 		{
 			// draw buffered vertices as triangles
 			GL.DrawArrays(PrimitiveType.Triangles, 0, count);
-			//GL.DrawElements(BeginMode.Triangles, indicedata.Length, DrawElementsType.UnsignedInt, 0);
 		}
 
 		public void Delete()

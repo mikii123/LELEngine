@@ -1,16 +1,14 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Reflection;
 using LELCS;
-using LELEngine.Shaders;
-using OpenTK.Graphics.OpenGL4;
-using OpenTK.Mathematics;
+using LELEngine.Rendering;
 using OpenTK.Windowing.Common;
 
 namespace LELEngine
 {
 	/// <summary>
-	///     Handles scripts logic and behaviours
+	///     Handles scripts logic and behaviours. Rendering is delegated to <see cref="Rendering.Renderer" />.
 	/// </summary>
 	public sealed class MonoBehaviour : Window
 	{
@@ -20,14 +18,15 @@ namespace LELEngine
 		public bool Loaded { get; private set; }
 		public RenderQueue RenderQueue { get; private set; }
 		public ECSManager ECSManager { get; private set; }
+		public Renderer Renderer { get; private set; }
 
 		#endregion
 
 		#region PrivateFields
 
-		private List<Behaviour> toInit = new List<Behaviour>();
-		private List<Behaviour> behaviours = new List<Behaviour>();
-		private List<MeshRenderer> meshRenderers = new List<MeshRenderer>();
+		private readonly List<Behaviour> toInit = new List<Behaviour>();
+		private readonly List<Behaviour> behaviours = new List<Behaviour>();
+		private readonly List<MeshRenderer> meshRenderers = new List<MeshRenderer>();
 		private float fixedTime;
 
 		#endregion
@@ -38,6 +37,11 @@ namespace LELEngine
 			: base(width, height, title)
 		{
 			RenderQueue = RenderQueue.PerShader;
+
+			// The GL context exists as soon as the window does, so the renderer can be created here.
+			// This lets game code configure passes before Run().
+			Renderer = new Renderer(ClientSize.X, ClientSize.Y);
+			Renderer.AddDefaultPasses();
 		}
 
 		#endregion
@@ -108,6 +112,15 @@ namespace LELEngine
 			ResetDrawState();
 		}
 
+		/// <summary>
+		///     Creates an empty scene and makes it active.
+		/// </summary>
+		public Scene LoadEmptyScene()
+		{
+			ActiveScene = new Scene();
+			return ActiveScene;
+		}
+
 		public void SetRenderQueue(RenderQueue queue)
 		{
 			RenderQueue = queue;
@@ -115,18 +128,14 @@ namespace LELEngine
 
 		public void ResetDrawState()
 		{
-			GL.BindVertexArray(0);
-			GL.BindBuffer(BufferTarget.ElementArrayBuffer, 0);
-			GL.BindBuffer(BufferTarget.ArrayBuffer, 0);
-			GL.BindTexture(TextureTarget.Texture2D, 0);
-			GL.UseProgram(0);
+			GLState.Reset();
 		}
 
 		public void InitBehaviour(Behaviour behaviour)
 		{
-			if (behaviour is MeshRenderer)
+			if (behaviour is MeshRenderer renderer)
 			{
-				meshRenderers.Add((MeshRenderer)behaviour);
+				meshRenderers.Add(renderer);
 			}
 
 			toInit.Add(behaviour);
@@ -168,6 +177,19 @@ namespace LELEngine
 			Loaded = true;
 		}
 
+		protected override void OnResize(ResizeEventArgs e)
+		{
+			base.OnResize(e);
+			Renderer?.Resize(e.Width, e.Height);
+		}
+
+		protected override void OnUnload()
+		{
+			Renderer?.Dispose();
+			Renderer = null;
+			base.OnUnload();
+		}
+
 		protected override void OnUpdateFrame(FrameEventArgs e)
 		{
 			base.OnUpdateFrame(e);
@@ -197,103 +219,9 @@ namespace LELEngine
 			renderStopwatch.Reset();
 			renderStopwatch.Start();
 
-			// clear the screen
-			GL.ClearColor(0, 0, 0, 1);
-			GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
-
-			// Enable depth test
-			GL.Enable(EnableCap.DepthTest);
-			GL.Enable(EnableCap.CullFace);
-			// Cull Back
-			GL.CullFace(CullFaceMode.Back);
-
-			Render();
-
-			PostRender();
+			Renderer?.RenderFrame(Camera.main, meshRenderers, behaviours, RenderQueue);
 
 			base.OnRenderFrame(e);
-		}
-
-		#endregion
-
-		#region PrivateMethods
-
-		private void Render()
-		{
-			switch (RenderQueue)
-			{
-				case RenderQueue.PerObject:
-				{
-					// Per object render queue
-					// very basic - for demo purposes
-					PerObjectRenderQueue();
-
-					break;
-				}
-				case RenderQueue.PerShader:
-				{
-					// Per shader render queue
-					// useful for small render queues
-					PerShaderRenderQueue();
-
-					break;
-				}
-				default:
-				{
-					PerShaderRenderQueue();
-
-					break;
-				}
-			}
-		}
-
-		private void PostRender()
-		{
-			foreach (Behaviour ob in behaviours)
-			{
-				ob.PostRender();
-				ResetDrawState();
-			}
-		}
-
-		private void PerObjectRenderQueue()
-		{
-			foreach (MeshRenderer obj in meshRenderers)
-			{
-				obj.UsingShader.Use();
-				obj.Render();
-
-				// reset state for potential further draw calls
-				ResetDrawState();
-			}
-		}
-
-		// TODO: Expand for blending
-		private void PerShaderRenderQueue()
-		{
-			// Internal storage contains only used shaders
-			foreach (KeyValuePair<string, ShaderProgram> shader in InternalStorage.Shaders)
-			{
-				// Activate the shader program
-				shader.Value.Use();
-
-				foreach (MeshRenderer renderer in meshRenderers)
-				{
-					if (renderer.UsingShader == shader.Value)
-					{
-						// Call render if it's using this shader
-						renderer.Render();
-					}
-				}
-
-				// reset state for potential further draw calls
-				ResetDrawState();
-			}
-
-			foreach (Behaviour ob in behaviours)
-			{
-				ob.PostRender();
-			}
 		}
 
 		#endregion

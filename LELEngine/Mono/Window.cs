@@ -26,9 +26,11 @@ namespace LELEngine
 				{
 					ClientSize = new OpenTK.Mathematics.Vector2i(width, height),
 					Title = title,
-					APIVersion = new Version(4, 0),
-					Flags = ContextFlags.ForwardCompatible,
-					NumberOfSamples = 4
+					// 4.3 is required for compute shaders. The scene is rendered off-screen,
+					// so the default framebuffer does not need multisampling.
+					APIVersion = new Version(4, 3),
+					Profile = ContextProfile.Core,
+					Flags = ContextFlags.ForwardCompatible
 				})
 		{
 			Console.WriteLine("GL version: " + GL.GetString(StringName.Version) + "\nRenderer: " + GL.GetString(StringName.Renderer));

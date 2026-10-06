@@ -1,7 +1,10 @@
-﻿using OpenTK.Graphics.OpenGL4;
+using OpenTK.Graphics.OpenGL4;
 
 namespace LELEngine.Shaders
 {
+	/// <summary>
+	///     Vertex array object. The layout uses fixed attribute locations so it is valid for any shader program.
+	/// </summary>
 	internal sealed class VertexArray<TVertex>
 		where TVertex : struct
 	{
@@ -13,7 +16,7 @@ namespace LELEngine.Shaders
 
 		#region Constructors
 
-		public VertexArray(VertexBuffer<TVertex> vertexBuffer, ShaderProgram program, params VertexAttribute[] attributes)
+		public VertexArray(VertexBuffer<TVertex> vertexBuffer, params VertexAttribute[] attributes)
 		{
 			// create new vertex array object
 			GL.GenVertexArrays(1, out handle);
@@ -27,7 +30,7 @@ namespace LELEngine.Shaders
 			// set all attributes
 			foreach (VertexAttribute attribute in attributes)
 			{
-				attribute.Set(program);
+				attribute.Set();
 			}
 
 			// unbind objects to reset state

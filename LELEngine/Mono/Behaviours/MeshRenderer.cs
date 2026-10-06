@@ -1,6 +1,5 @@
-﻿using LELEngine;
+using LELEngine;
 using LELEngine.Shaders;
-using OpenTK.Graphics.OpenGL4;
 
 public sealed class MeshRenderer : Behaviour
 {
@@ -43,6 +42,9 @@ public sealed class MeshRenderer : Behaviour
 	public string MaterialPath { get; private set; }
 	public string MeshPath { get; private set; }
 
+	public bool CastShadows = true;
+	public bool ReceiveShadows = true;
+
 	#endregion
 
 	#region PrivateFields
@@ -50,8 +52,6 @@ public sealed class MeshRenderer : Behaviour
 	private Mesh mesh;
 	private VertexBuffer<Vertex> vertexBuffer;
 	private VertexArray<Vertex> vertexArray;
-
-	private bool vertexBufferingDone;
 
 	#endregion
 
@@ -64,6 +64,12 @@ public sealed class MeshRenderer : Behaviour
 	{
 		MaterialPath = path;
 		Material = InternalStorage.GetOrCreateMaterial(MaterialPath);
+	}
+
+	public void SetMaterial(Material material)
+	{
+		Material = material;
+		MaterialPath = null;
 	}
 
 	/// <summary>
@@ -96,7 +102,8 @@ public sealed class MeshRenderer : Behaviour
 	}
 
 	/// <summary>
-	///     Buffer vertex layout and vertex attributes. Automatically called on every mesh change.
+	///     (Re)creates GPU buffers and the vertex layout. Automatically called on every mesh change.
+	///     The layout uses fixed attribute locations, so it works with any shader program.
 	/// </summary>
 	public void BufferVerticies()
 	{
@@ -105,14 +112,8 @@ public sealed class MeshRenderer : Behaviour
 			return;
 		}
 
-		if (vertexBuffer != null)
-		{
-			vertexBuffer.Delete();
-		}
-		if (vertexArray != null)
-		{
-			vertexArray.Delete();
-		}
+		vertexBuffer?.Delete();
+		vertexArray?.Delete();
 
 		vertexBuffer = new VertexBuffer<Vertex>(Vertex.Size);
 
@@ -121,45 +122,60 @@ public sealed class MeshRenderer : Behaviour
 			vertexBuffer.AddVertex(vertex);
 		}
 
-		// create vertex array to specify vertex layout
-		// TODO: Make this generic, and shader uniforms dependent
-		int offset = 0;
-		vertexArray = new VertexArray<Vertex>(
-			vertexBuffer,
-			UsingShader,
-			new VertexAttribute("vPosition", 3, VertexAttribPointerType.Float, Vertex.Size, 0),
-			new VertexAttribute("vColor", 4, VertexAttribPointerType.Float, Vertex.Size, 3 * 4),
-			new VertexAttribute("vTexCoord", 2, VertexAttribPointerType.Float, Vertex.Size, 3 * 4 + 4 * 4),
-			new VertexAttribute("vNormal", 3, VertexAttribPointerType.Float, Vertex.Size, 3 * 4 + 4 * 4 + 2 * 4),
-			new VertexAttribute("vTangent", 3, VertexAttribPointerType.Float, Vertex.Size, 3 * 4 + 4 * 4 + 2 * 4 + 3 * 4),
-			new VertexAttribute("vBitangent", 3, VertexAttribPointerType.Float, Vertex.Size, 3 * 4 + 4 * 4 + 2 * 4 + 3 * 4 + 3 * 4)
-		);
+		vertexArray = new VertexArray<Vertex>(vertexBuffer, VertexLayout.CreateStandardAttributes());
 
-		vertexBufferingDone = true;
+		// Upload once; later draws only bind.
+		vertexArray.Bind();
+		vertexBuffer.Bind();
+		vertexBuffer.BufferData();
 	}
 
+	/// <summary>
+	///     Full material draw: sets camera, lighting and material uniforms on the material shader, then draws.
+	///     The material shader must already be active.
+	/// </summary>
 	public override void Render()
+	{
+		if (Mesh == null || UsingShader == null)
+		{
+			return;
+		}
+
+		transform.SetModelMatrix(UsingShader);
+		Camera.main.SetUniforms(UsingShader);
+		Lighting.SetUniforms(UsingShader, ReceiveShadows);
+		Material.SetUniforms();
+
+		DrawGeometry();
+	}
+
+	/// <summary>
+	///     Draws geometry with an externally provided program (depth prepass, shadow map).
+	///     Only the model matrix is set; the caller sets view/projection. The program must be active.
+	/// </summary>
+	public void RenderDepth(ShaderProgram program)
 	{
 		if (Mesh == null)
 		{
 			return;
 		}
 
-		// set transformation uniforms
-		transform.SetModelMatrix(UsingShader);
-		Camera.main.SetUniforms(UsingShader);
+		transform.SetModelMatrix(program);
+		DrawGeometry();
+	}
 
-		// set uniforms for lights
-		Lighting.SetUniforms(UsingShader);
+	/// <summary>
+	///     Binds the buffers and issues the draw call. No uniforms are touched.
+	/// </summary>
+	public void DrawGeometry()
+	{
+		if (vertexArray == null || vertexBuffer == null)
+		{
+			return;
+		}
 
-		// set uniforms in material
-		Material.SetUniforms();
-
-		// bind vertex buffer and array objects
 		vertexArray.Bind();
 		vertexBuffer.Bind();
-
-		// upload vertices to GPU and draw them
 		vertexBuffer.BufferData();
 		vertexBuffer.Draw();
 	}

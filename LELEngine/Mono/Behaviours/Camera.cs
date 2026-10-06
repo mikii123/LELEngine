@@ -1,7 +1,6 @@
-﻿using LELEngine;
+using LELEngine;
 using LELEngine.Shaders;
 using OpenTK.Mathematics;
-using UniformMatrix4 = LELEngine.Shaders.Uniforms.Matrix4;
 
 //DO NOT CALL base IN ANY OVERRIDEN FUNCTIONS
 public sealed class Camera : Behaviour
@@ -10,20 +9,18 @@ public sealed class Camera : Behaviour
 
 	public static Camera main;
 
-	public float Aspect { get; set; } = 4 / 3;
+	public float Aspect { get; set; } = 4f / 3f;
 
-	public float NearClip { get; set; }
+	public float NearClip { get; set; } = 0.1f;
 
-	public float FarClip { get; set; }
+	public float FarClip { get; set; } = 1000f;
 
-	public float FoV { get; set; }
+	/// <summary>Vertical field of view in degrees.</summary>
+	public float FoV { get; set; } = 60f;
 
-	#endregion
-
-	#region PrivateFields
-
-	private UniformMatrix4 viewMatrix;
-	private UniformMatrix4 projectionMatrix;
+	public Matrix4 ViewMatrix { get; private set; } = Matrix4.Identity;
+	public Matrix4 ProjectionMatrix { get; private set; } = Matrix4.Identity;
+	public Matrix4 ViewProjectionMatrix { get; private set; } = Matrix4.Identity;
 
 	#endregion
 
@@ -32,36 +29,38 @@ public sealed class Camera : Behaviour
 	public override void Awake()
 	{
 		main = this;
-		projectionMatrix = new UniformMatrix4("projectionMatrix");
-		projectionMatrix.Matrix = OpenTK.Mathematics.Matrix4.CreatePerspectiveFieldOfView(FoV * QuaternionHelper.Deg2Rad2, Aspect, NearClip, FarClip);
-		viewMatrix = new UniformMatrix4("viewMatrix");
-		viewMatrix.Matrix = OpenTK.Mathematics.Matrix4.CreateFromQuaternion(transform.rotation) * OpenTK.Mathematics.Matrix4.CreateTranslation(transform.position) * OpenTK.Mathematics.Matrix4.CreateScale(transform.scale);
+		UpdateMatrices(Aspect);
 	}
 
 	#endregion
 
 	#region PublicMethods
 
+	/// <summary>
+	///     Recomputes view and projection from the current transform. Called by the renderer once per frame.
+	/// </summary>
+	public void UpdateMatrices(float aspect)
+	{
+		Aspect = aspect;
+		ProjectionMatrix = Matrix4.CreatePerspectiveFieldOfView(FoV * QuaternionHelper.Deg2Rad2, Aspect, NearClip, FarClip);
+		ViewMatrix = Matrix4.LookAt(transform.position, transform.position + transform.forward, transform.up);
+		ViewProjectionMatrix = ViewMatrix * ProjectionMatrix;
+	}
+
 	public void SetViewUniform(ShaderProgram shader)
 	{
-		viewMatrix.Matrix = OpenTK.Mathematics.Matrix4.LookAt(transform.position, transform.position + transform.forward * 2, transform.up);
-		viewMatrix.Set(shader);
+		shader.SetMatrix4("viewMatrix", ViewMatrix);
 	}
 
 	public void SetProjectionUniform(ShaderProgram shader)
 	{
-		projectionMatrix.Matrix = OpenTK.Mathematics.Matrix4.CreatePerspectiveFieldOfView(FoV * QuaternionHelper.Deg2Rad2, Aspect, NearClip, FarClip);
-		projectionMatrix.Set(shader);
+		shader.SetMatrix4("projectionMatrix", ProjectionMatrix);
 	}
 
 	public void SetUniforms(ShaderProgram shader)
 	{
-		Aspect = Game.Mono.ClientSize.X / (float)Game.Mono.ClientSize.Y;
-		projectionMatrix.Matrix = OpenTK.Mathematics.Matrix4.CreatePerspectiveFieldOfView(FoV * QuaternionHelper.Deg2Rad2, Aspect, NearClip, FarClip);
-		viewMatrix.Matrix = OpenTK.Mathematics.Matrix4.LookAt(transform.position, transform.position + transform.forward, transform.up);
-
-		projectionMatrix.Set(shader);
-		viewMatrix.Set(shader);
+		shader.SetMatrix4("projectionMatrix", ProjectionMatrix);
+		shader.SetMatrix4("viewMatrix", ViewMatrix);
 	}
 
 	#endregion

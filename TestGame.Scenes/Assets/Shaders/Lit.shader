@@ -3,12 +3,10 @@
 #version 330
 invariant gl_Position;
 
-// a transformation to apply to the vertex' position
 uniform mat4 projectionMatrix;
 uniform mat4 viewMatrix;
 uniform mat4 modelMatrix;
 
-// Vertex Attributes
 in vec3 vPosition;
 in vec4 vColor;
 in vec2 vTexCoord;
@@ -16,15 +14,16 @@ in vec3 vNormal;
 in vec3 vTangent;
 in vec3 vBitangent;
 
-// Out for fragment shader
 out vec3 fNormal;
 out vec3 fPosition;
+out vec2 fTexCoord;
 
 void main()
 {
 	gl_Position = projectionMatrix * viewMatrix * modelMatrix * vec4(vPosition, 1.0);
-	fPosition = vec3(modelMatrix * vec4(vPosition, 1.0f));
+	fPosition = vec3(modelMatrix * vec4(vPosition, 1.0));
 	fNormal = mat3(transpose(inverse(modelMatrix))) * vNormal;
+	fTexCoord = vTexCoord;
 }
 
 /////Vertex
@@ -35,32 +34,30 @@ void main()
 
 in vec3 fNormal;
 in vec3 fPosition;
+in vec2 fTexCoord;
 
-// Directional
 struct Directional {
 	vec4 dirColor;
 	float dirStrength;
 	vec3 dirDirection;
 };
 
-// Ambient
 struct Ambient {
 	vec4 ambColor;
 	float ambStrength;
 };
 
-// Specular
 struct Specular {
 	float specStrength;
 	float specShine;
 	vec3 viewPos;
 };
 
-// Light
 uniform Directional LDirectional;
 uniform Ambient LAmbient;
 uniform Specular LSpecular;
 
+// Material
 uniform vec4 Color;
 
 // Shadows (set by the engine, see Lighting.SetShadowUniforms)
@@ -83,6 +80,7 @@ float SampleShadow(vec3 worldPos, vec3 worldNormal, vec3 toLight)
 	if (proj.z > 1.0) return 1.0;
 	proj.z -= shadowDepthBias;
 
+	// 3x3 PCF on top of hardware 2x2 comparison filtering.
 	vec2 texel = 1.0 / vec2(textureSize(ShadowMap, 0));
 	float sum = 0.0;
 	for (int x = -1; x <= 1; x++)
@@ -97,27 +95,26 @@ float SampleShadow(vec3 worldPos, vec3 worldNormal, vec3 toLight)
 
 void main()
 {
-	// dirDirection is the direction the light travels; flip it to get the vector towards the light.
-	vec3 lightDir = normalize(-LDirectional.dirDirection);
-	vec3 viewDir = normalize(LSpecular.viewPos - fPosition);
-	vec3 norm = normalize(fNormal);
+	vec3 N = normalize(fNormal);
+	vec3 L = normalize(-LDirectional.dirDirection);
+	vec3 V = normalize(LSpecular.viewPos - fPosition);
+	vec3 H = normalize(L + V);
 
-	float shadow = SampleShadow(fPosition, norm, lightDir);
+	float shadow = SampleShadow(fPosition, N, L);
 
-	//Ambient
-	vec4 ambient = LAmbient.ambStrength * LAmbient.ambColor * Color;
+	vec3 albedo = Color.rgb;
+	vec3 lightColor = LDirectional.dirColor.rgb * LDirectional.dirStrength;
 
-	//Diffuse
-	float diff = max(dot(norm, lightDir), 0.0);
-	vec4 diffuse = diff * LDirectional.dirColor * LDirectional.dirStrength * Color;
+	vec3 ambient = LAmbient.ambColor.rgb * LAmbient.ambStrength * albedo;
 
-	//Specular
-	vec3 halfwayDir = normalize(lightDir + viewDir);
-	float spec = pow(max(dot(norm, halfwayDir), 0.0), LSpecular.specShine);
-	vec4 specular = LSpecular.specStrength * spec * LDirectional.dirColor;
+	float ndl = max(dot(N, L), 0.0);
+	vec3 diffuse = albedo * lightColor * ndl;
 
-	//Output
-	FragColor = ambient + (diffuse + specular) * shadow;
+	float spec = pow(max(dot(N, H), 0.0), LSpecular.specShine) * LSpecular.specStrength;
+	vec3 specular = lightColor * spec * ndl;
+
+	vec3 color = ambient + (diffuse + specular) * shadow;
+	FragColor = vec4(color, Color.a);
 }
 
 /////Fragment

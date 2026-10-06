@@ -12,6 +12,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TestGame", "TestGame\TestGa
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LELCS", "LELCS\LELCS.csproj", "{0F3A9425-67FF-4DF9-929C-55E97377A029}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "TestGame.Scenes", "TestGame.Scenes\TestGame.Scenes.csproj", "{7A1C2E5B-3F6D-4B8A-9C21-5E0F4D7B8A31}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -32,6 +34,10 @@ Global
 		{0F3A9425-67FF-4DF9-929C-55E97377A029}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{0F3A9425-67FF-4DF9-929C-55E97377A029}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{0F3A9425-67FF-4DF9-929C-55E97377A029}.Release|Any CPU.Build.0 = Release|Any CPU
+		{7A1C2E5B-3F6D-4B8A-9C21-5E0F4D7B8A31}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{7A1C2E5B-3F6D-4B8A-9C21-5E0F4D7B8A31}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{7A1C2E5B-3F6D-4B8A-9C21-5E0F4D7B8A31}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{7A1C2E5B-3F6D-4B8A-9C21-5E0F4D7B8A31}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

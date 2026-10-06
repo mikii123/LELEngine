@@ -1,12 +1,15 @@
-﻿using OpenTK.Graphics.OpenGL4;
+using OpenTK.Graphics.OpenGL4;
 
 namespace LELEngine.Shaders
 {
+	/// <summary>
+	///     Describes a single vertex attribute bound to a fixed location (see <see cref="VertexLayout" />).
+	/// </summary>
 	internal sealed class VertexAttribute
 	{
 		#region PrivateFields
 
-		private readonly string name;
+		private readonly int location;
 		private readonly int size;
 		private readonly VertexAttribPointerType type;
 		private readonly bool normalize;
@@ -17,9 +20,9 @@ namespace LELEngine.Shaders
 
 		#region Constructors
 
-		public VertexAttribute(string name, int size, VertexAttribPointerType type, int stride, int offset, bool normalize = false)
+		public VertexAttribute(int location, int size, VertexAttribPointerType type, int stride, int offset, bool normalize = false)
 		{
-			this.name = name;
+			this.location = location;
 			this.size = size;
 			this.type = type;
 			this.stride = stride;
@@ -31,15 +34,11 @@ namespace LELEngine.Shaders
 
 		#region PublicMethods
 
-		public void Set(ShaderProgram program)
+		public void Set()
 		{
-			// get location of attribute from shader program
-			int index = program.GetAttributeLocation(name);
-
-			// enable and set attribute
-			GL.EnableVertexAttribArray(index);
+			GL.EnableVertexAttribArray(location);
 			GL.VertexAttribPointer(
-				index,
+				location,
 				size,
 				type,
 				normalize,

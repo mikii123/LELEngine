@@ -107,3 +107,8 @@ Assets/SpaceBuilderGenesis/CosmosResources
 
 # Exceptions — assets are in TestGame/Assets/, not in bin/
 !TestGame/Assets/
+!TestGame.Scenes/Assets/
+
+# This is not a Unity project: project and solution files are source.
+!*.csproj
+!*.sln

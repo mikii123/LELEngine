@@ -76,6 +76,14 @@ namespace LELEngine
 			return q;
 		}
 
+		/// <summary>
+		///     Parses a float written with either '.' or ',' as decimal separator, independent of the OS culture.
+		/// </summary>
+		public static float ParseFloat(string text)
+		{
+			return float.Parse(text.Trim().Replace(',', '.'), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture);
+		}
+
 		public static string[] SplitAndReduceDup(this string input, char reduceChar)
 		{
 			var end = new List<string>();

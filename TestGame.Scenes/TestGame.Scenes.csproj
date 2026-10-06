@@ -2,13 +2,11 @@
 
   <PropertyGroup>
     <TargetFramework>net8.0</TargetFramework>
-    <OutputType>Exe</OutputType>
-    <RootNamespace>TestGame</RootNamespace>
-    <AssemblyName>TestGame</AssemblyName>
+    <RootNamespace>TestGame.Scenes</RootNamespace>
+    <AssemblyName>TestGame.Scenes</AssemblyName>
     <Nullable>disable</Nullable>
     <ImplicitUsings>disable</ImplicitUsings>
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
-    <StartupObject>TestGame.Program</StartupObject>
   </PropertyGroup>
 
   <ItemGroup>
@@ -16,20 +14,11 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\LELCS\LELCS.csproj" />
     <ProjectReference Include="..\LELEngine\LELEngine.csproj" />
-    <ProjectReference Include="..\TestGame.Scenes\TestGame.Scenes.csproj" />
   </ItemGroup>
 
+  <!-- Scene assets. Copied transitively into the output of any project referencing this one. -->
   <ItemGroup>
-    <Content Include="Assets\Meshes\**\*">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      <TargetPath>Meshes\%(RecursiveDir)%(Filename)%(Extension)</TargetPath>
-    </Content>
-    <Content Include="Assets\Textures\**\*">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      <TargetPath>Textures\%(RecursiveDir)%(Filename)%(Extension)</TargetPath>
-    </Content>
     <Content Include="Assets\Shaders\**\*">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <TargetPath>Shaders\%(RecursiveDir)%(Filename)%(Extension)</TargetPath>

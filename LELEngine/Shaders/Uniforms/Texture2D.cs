@@ -15,12 +15,13 @@ namespace LELEngine.Shaders.Uniforms
 
 		#region Constructors
 
-		public Texture2D(string name, string source, int index)
+		/// <param name="srgb">True for color data (albedo). False for normal/roughness/metalness/data maps.</param>
+		public Texture2D(string name, string source, int index, bool srgb = true)
 		{
 			Index = index;
 			Name = name;
 			string path = Path.Combine(Directory.GetCurrentDirectory(), "Textures", source);
-			Handle = LoadImage(path);
+			Handle = LoadImage(path, srgb);
 		}
 
 		public Texture2D()
@@ -41,7 +42,7 @@ namespace LELEngine.Shaders.Uniforms
 
 		#region PrivateMethods
 
-		private int LoadImage(string path)
+		private int LoadImage(string path, bool srgb)
 		{
 			StbImage.stbi_set_flip_vertically_on_load(1);
 
@@ -54,10 +55,12 @@ namespace LELEngine.Shaders.Uniforms
 			int texID = GL.GenTexture();
 			GL.BindTexture(TextureTarget.Texture2D, texID);
 
+			// Color textures are authored in sRGB; storing them as sRGB makes sampling return linear values,
+			// which the HDR pipeline expects (gamma is applied once, in the post-process pass).
 			GL.TexImage2D(
 				TextureTarget.Texture2D,
 				0,
-				PixelInternalFormat.Rgba,
+				srgb ? PixelInternalFormat.Srgb8Alpha8 : PixelInternalFormat.Rgba8,
 				image.Width,
 				image.Height,
 				0,
@@ -65,6 +68,10 @@ namespace LELEngine.Shaders.Uniforms
 				PixelType.UnsignedByte,
 				image.Data);
 
+			GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.LinearMipmapLinear);
+			GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Linear);
+			GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)TextureWrapMode.Repeat);
+			GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)TextureWrapMode.Repeat);
 			GL.GenerateMipmap(GenerateMipmapTarget.Texture2D);
 
 			return texID;

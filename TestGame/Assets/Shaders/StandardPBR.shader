@@ -120,7 +120,8 @@ vec3 fresnelSchlick(float cosTheta, vec3 F0)
 // ----------------------------------------------------------------------------
 void main()
 {
-	vec3 albedo = pow(texture(AlbedoMap, fTexCoord).rgb, vec3(2.2));
+	// AlbedoMap is stored as sRGB by the engine, so sampling already yields linear color.
+	vec3 albedo = texture(AlbedoMap, fTexCoord).rgb;
 	float metallic = texture(MetalRoughMap, fTexCoord).r;
 	float roughness = 1-texture(MetalRoughMap, fTexCoord).a;
 	//float ao = texture(AOMap, fTexCoord).r;
@@ -174,12 +175,8 @@ void main()
 	// this ambient lighting with environment lighting).
 	vec3 ambient = vec3(0.03) * albedo;// *ao;
 
+	// Tonemapping and gamma are applied once by the engine's post-process pass; output linear HDR.
 	vec3 color = ambient + Lo;
-
-	// HDR tonemapping
-	color = color / (color + vec3(1.0));
-	// gamma correct
-	color = pow(color, vec3(1.0 / 2.2));
 
 	FragColor = vec4(color, 1.0);
 }

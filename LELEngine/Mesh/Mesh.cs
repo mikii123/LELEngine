@@ -48,13 +48,13 @@ namespace LELEngine
 						switch (words[0].Trim())
 						{
 							case "v":
-								Positions.Add(new Vector3(float.Parse(words[1].Trim().Replace('.', ',')), float.Parse(words[2].Trim().Replace('.', ',')), float.Parse(words[3].Trim().Replace('.', ','))));
+								Positions.Add(new Vector3(Extensions.ParseFloat(words[1]), Extensions.ParseFloat(words[2]), Extensions.ParseFloat(words[3])));
 								break;
 							case "vt":
-								UVs.Add(new Vector2(float.Parse(words[1].Replace('.', ',')), float.Parse(words[2].Replace('.', ','))));
+								UVs.Add(new Vector2(Extensions.ParseFloat(words[1]), Extensions.ParseFloat(words[2])));
 								break;
 							case "vn":
-								Normals.Add(new Vector3(float.Parse(words[1].Replace('.', ',')), float.Parse(words[2].Replace('.', ',')), float.Parse(words[3].Replace('.', ','))));
+								Normals.Add(new Vector3(Extensions.ParseFloat(words[1]), Extensions.ParseFloat(words[2]), Extensions.ParseFloat(words[3])));
 								break;
 							case "f":
 								string[] v1 = words[1].Trim().Split('/');
