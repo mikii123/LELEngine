@@ -29,6 +29,13 @@ namespace LELEngine.Rendering.Lumen
 		public int FirstCardIndex;
 		public SurfaceCard[] Cards;
 		public bool Captured;
+
+		/// <summary>
+		///     Material state the capture depends on (albedo colour, emission colour, albedo texture). Cards are
+		///     captured in scaled-local space, so a moving or pulsing object needs no recapture: only a change of
+		///     this key does.
+		/// </summary>
+		public long CaptureKey;
 	}
 
 	/// <summary>
@@ -42,6 +49,9 @@ namespace LELEngine.Rendering.Lumen
 		public const int CardsPerObject = 6;
 		public const ushort EmptyCardIndex = 0xFFFF;
 
+		/// <summary>Card texels per radiosity probe along each axis (one probe per 4x4 block, Lumen's layout).</summary>
+		public const int RadiosityBlock = 4;
+
 		public int Size { get; }
 		public int CardIndex { get; private set; }
 		public int Albedo { get; private set; }
@@ -49,6 +59,10 @@ namespace LELEngine.Rendering.Lumen
 		public int Emissive { get; private set; }
 		public int LocalPosition { get; private set; }
 		public int IndirectLighting { get; private set; }
+
+		/// <summary>Radiosity probe atlas (Size / 4 squared, fp32): rgb irradiance / pi accumulated over frames, a = sample count (0 = none).</summary>
+		public int RadiosityProbes { get; private set; }
+		public int ProbeGridSize => Size / RadiosityBlock;
 		public int FinalLightingCurrent => finalLighting[finalIndex];
 		public int FinalLightingPrevious => finalLighting[1 - finalIndex];
 		public int CaptureFramebuffer { get; private set; }
@@ -90,6 +104,7 @@ namespace LELEngine.Rendering.Lumen
 			IndirectLighting = CreateTexture(PixelInternalFormat.Rgba16f, PixelFormat.Rgba, PixelType.Float);
 			finalLighting[0] = CreateTexture(PixelInternalFormat.Rgba16f, PixelFormat.Rgba, PixelType.Float);
 			finalLighting[1] = CreateTexture(PixelInternalFormat.Rgba16f, PixelFormat.Rgba, PixelType.Float);
+			RadiosityProbes = CreateTexture(PixelInternalFormat.Rgba32f, PixelFormat.Rgba, PixelType.Float, Size / RadiosityBlock);
 
 			// Lighting atlases are filtered when looked up; attributes are fetched by texel.
 			SetFilter(IndirectLighting, true);
@@ -169,6 +184,8 @@ namespace LELEngine.Rendering.Lumen
 
 				int width = Math.Clamp((int)Math.Ceiling(extentU * texelsPerMeter), 4, maxCardSize);
 				int height = Math.Clamp((int)Math.Ceiling(extentV * texelsPerMeter), 4, maxCardSize);
+				width = (width + RadiosityBlock - 1) / RadiosityBlock * RadiosityBlock;
+				height = (height + RadiosityBlock - 1) / RadiosityBlock * RadiosityBlock;
 
 				int x, y;
 				if (!Allocate(width, height, out x, out y))
@@ -230,7 +247,7 @@ namespace LELEngine.Rendering.Lumen
 		{
 			if (GLCapabilities.ClearTexture)
 			{
-				foreach (int texture in new[] { IndirectLighting, finalLighting[0], finalLighting[1] })
+				foreach (int texture in new[] { IndirectLighting, finalLighting[0], finalLighting[1], RadiosityProbes })
 				{
 					GL.ClearTexImage(texture, 0, PixelFormat.Rgba, PixelType.Float, IntPtr.Zero);
 				}
@@ -243,12 +260,14 @@ namespace LELEngine.Rendering.Lumen
 				GL.BindTexture(TextureTarget.Texture2D, texture);
 				GL.TexSubImage2D(TextureTarget.Texture2D, 0, 0, 0, Size, Size, PixelFormat.Rgba, PixelType.Float, zeros);
 			}
+			GL.BindTexture(TextureTarget.Texture2D, RadiosityProbes);
+			GL.TexSubImage2D(TextureTarget.Texture2D, 0, 0, 0, ProbeGridSize, ProbeGridSize, PixelFormat.Rgba, PixelType.Float, zeros);
 			GL.BindTexture(TextureTarget.Texture2D, 0);
 		}
 
 		public void Delete()
 		{
-			foreach (int texture in new[] { CardIndex, Albedo, Normal, Emissive, LocalPosition, IndirectLighting, finalLighting[0], finalLighting[1] })
+			foreach (int texture in new[] { CardIndex, Albedo, Normal, Emissive, LocalPosition, IndirectLighting, finalLighting[0], finalLighting[1], RadiosityProbes })
 			{
 				GL.DeleteTexture(texture);
 			}
@@ -264,6 +283,10 @@ namespace LELEngine.Rendering.Lumen
 
 		private bool Allocate(int width, int height, out int x, out int y)
 		{
+			// Cards are aligned to the 4x4 texel blocks of the radiosity probes so no probe block spans two cards.
+			width = (width + RadiosityBlock - 1) / RadiosityBlock * RadiosityBlock;
+			height = (height + RadiosityBlock - 1) / RadiosityBlock * RadiosityBlock;
+
 			if (shelfX + width > Size)
 			{
 				shelfY += shelfHeight;
@@ -285,9 +308,14 @@ namespace LELEngine.Rendering.Lumen
 
 		private int CreateTexture(PixelInternalFormat internalFormat, PixelFormat format, PixelType type)
 		{
+			return CreateTexture(internalFormat, format, type, Size);
+		}
+
+		private static int CreateTexture(PixelInternalFormat internalFormat, PixelFormat format, PixelType type, int size)
+		{
 			int texture = GL.GenTexture();
 			GL.BindTexture(TextureTarget.Texture2D, texture);
-			GL.TexImage2D(TextureTarget.Texture2D, 0, internalFormat, Size, Size, 0, format, type, IntPtr.Zero);
+			GL.TexImage2D(TextureTarget.Texture2D, 0, internalFormat, size, size, 0, format, type, IntPtr.Zero);
 			GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
 			GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
 			GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)TextureWrapMode.ClampToEdge);

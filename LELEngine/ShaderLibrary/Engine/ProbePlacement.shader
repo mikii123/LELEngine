@@ -14,6 +14,8 @@
 layout(local_size_x = 8, local_size_y = 8) in;
 
 uniform int placementFactor;
+uniform int refineOnlyFlagged;  // 1 on finer levels: skip tiles the coarse level found flat
+uniform int flagChildren;       // 1 on the coarse level when flagging is on: inspect the finer level's candidates
 uniform float planeTolerance;
 uniform float minCoverage;
 uniform int maxAdaptiveProbes;
@@ -37,11 +39,40 @@ void main()
 	ivec2 pixel = ivec2(gl_GlobalInvocationID.xy) * placementFactor + placementFactor / 2;
 	if (any(greaterThanEqual(pixel, screenSize))) return;
 
-	float depth = texelFetch(SceneDepth, pixel, 0).r;
-	if (depth >= 1.0) return;
+	int tiles = probeCount.x * probeCount.y;
+	int tileIndex = AdaptiveTileOffset(pixel) / ADAPTIVE_TILE_STRIDE;
+	if (refineOnlyFlagged != 0 && adaptiveLevelCount[tiles + tileIndex] == 0u) return;
 
-	vec3 position = ReconstructPosition(pixel, depth);
-	vec3 N = normalize(texelFetch(NormalRoughness, pixel, 0).xyz);
+	float depth = texelFetch(SceneDepth, pixel, 0).r;
+	bool sky = depth >= 1.0;
+	vec3 position = sky ? vec3(0.0) : ReconstructPosition(pixel, depth);
+	vec3 N = sky ? vec3(0.0) : normalize(texelFetch(NormalRoughness, pixel, 0).xyz);
+
+	// Coarse level: the tile is also flagged when one of this candidate's children (the finer level's
+	// candidates, at +-placementFactor / 4) lies on another surface or on the sky, so thin features that fall
+	// between the coarse candidates (a 4-pixel railing) still get their probes.
+	if (flagChildren != 0 && placementFactor >= 4)
+	{
+		int childOffset = placementFactor / 4;
+		for (int c = 0; c < 4; c++)
+		{
+			ivec2 child = clamp(pixel + ivec2((c & 1) * 2 - 1, (c >> 1) * 2 - 1) * childOffset, ivec2(0), screenSize - 1);
+			float childDepth = texelFetch(SceneDepth, child, 0).r;
+			bool differs = (childDepth >= 1.0) != sky;
+			if (!differs && !sky)
+			{
+				vec3 childPosition = ReconstructPosition(child, childDepth);
+				vec3 childNormal = normalize(texelFetch(NormalRoughness, child, 0).xyz);
+				differs = abs(dot(N, childPosition - position)) > planeTolerance || dot(N, childNormal) < 0.5;
+			}
+			if (differs)
+			{
+				adaptiveLevelCount[tiles + tileIndex] = 1u;
+				break;
+			}
+		}
+	}
+	if (sky) return;
 
 	// Coverage from the uniform grid: bilinear weights times the plane / normal agreement.
 	vec2 probeCoord = (vec2(pixel) - vec2(probeJitter)) / float(probeSpacing);
@@ -56,15 +87,22 @@ void main()
 		coverage += bilinear * ProbeWeight(probe, position, N);
 	}
 
-	// Coverage from adaptive probes already placed in this tile (previous hierarchy levels).
+	// Coverage only grows with the adaptive probes: a candidate the uniform grid already covers well needs
+	// neither a probe nor a tile flag, so the adaptive list walk below is skipped (most candidates on flat
+	// surfaces exit here).
+	if (coverage >= max(minCoverage, 0.5)) return;
+
+	// Coverage from adaptive probes placed by previous hierarchy levels (frozen count, see AdaptiveLevelCounts).
 	int tileOffset = AdaptiveTileOffset(pixel);
-	int count = AdaptiveTileCount(tileOffset);
+	int count = int(min(adaptiveLevelCount[tileOffset / ADAPTIVE_TILE_STRIDE], uint(MAX_ADAPTIVE_PER_TILE)));
 	for (int k = 0; k < count; k++)
 	{
 		ivec2 probe = AdaptiveProbeTexel(AdaptiveTileProbe(tileOffset, k));
 		coverage += AdaptiveSpatialWeight(pixel, AdaptiveTilePixel(tileOffset, k)) * ProbeWeight(probe, position, N);
 	}
 
+	// Anything short of full coverage marks the tile for the finer level.
+	if (coverage < 0.5) adaptiveLevelCount[tiles + tileIndex] = 1u;
 	if (coverage >= minCoverage) return;
 
 	uint index = atomicAdd(adaptiveProbeCount, 1u);

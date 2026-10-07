@@ -21,6 +21,9 @@ namespace LELEngine.Rendering
 
 		/// <summary>GI view of the scene: distance fields, surface cache cards and the per-frame object tables.</summary>
 		public LumenScene LumenScene { get; private set; }
+
+		/// <summary>Frames rendered so far; the one counter the passes share (per-pass counters can drift apart when passes are toggled).</summary>
+		public int FrameIndex { get; private set; }
 		public Framebuffer SceneTarget { get; private set; }
 		public RenderTexture SceneColor => SceneTarget.ColorAttachments[0];
 		public RenderTexture SceneDepth => SceneTarget.DepthAttachment;
@@ -178,6 +181,9 @@ namespace LELEngine.Rendering
 				Fullscreen = Fullscreen
 			};
 
+			Profiler.BeginFrame();
+			FrameIndex++;
+
 			// Clear the scene target once per frame; passes bind it themselves when they need it.
 			SceneTarget.Bind();
 			GLState.SetDepth(true, true);
@@ -185,6 +191,7 @@ namespace LELEngine.Rendering
 			GL.ClearColor(Settings.ClearColor);
 			GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
 
+			int executed = 0;
 			foreach (RenderPass pass in passes)
 			{
 				if (!pass.Enabled)
@@ -196,6 +203,15 @@ namespace LELEngine.Rendering
 				pass.Execute(context);
 				GLState.Reset();
 				Profiler.End();
+				executed++;
+
+				// Hand work to the GPU early. The driver otherwise queues the frame's first commands until its
+				// batch fills, leaving the GPU idle for milliseconds at the start of every frame; one flush
+				// after the first pass starts it, flushing after every pass costs more than it gains.
+				if (Settings.FlushBetweenPasses || (Settings.FlushAfterFirstPass && executed == 1))
+				{
+					GL.Flush();
+				}
 			}
 
 			Profiler.EndFrame();

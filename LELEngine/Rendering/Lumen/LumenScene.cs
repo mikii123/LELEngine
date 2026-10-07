@@ -29,6 +29,26 @@ namespace LELEngine.Rendering.Lumen
 		public int StaticObjectCount { get; private set; }
 		public int UpdatedFrame { get; private set; } = -1;
 
+		/// <summary>
+		///     True when a dynamic object moved, rotated, rescaled, appeared or disappeared since the previous update.
+		///     Consumers that only depend on object placement (dynamic distance field regions) skip their work otherwise.
+		/// </summary>
+		public bool DynamicChanged { get; private set; } = true;
+
+		/// <summary>True when any GI object's material colour or emission changed since the previous update.</summary>
+		public bool MaterialChanged { get; private set; } = true;
+
+		/// <summary>True when the directional light moved or changed colour or strength since the previous update.</summary>
+		public bool SunChanged { get; private set; } = true;
+
+		/// <summary>Frames in a row without object, material or sun changes; caches drop to idle budgets when high.</summary>
+		public int QuietFrames { get; private set; }
+
+		public bool IsQuiet(int frames)
+		{
+			return QuietFrames >= frames;
+		}
+
 		/// <summary>World-space bounds of the static GI objects (the "scene" the radiance cache concentrates on).</summary>
 		public bool HasStaticBounds { get; private set; }
 
@@ -41,8 +61,16 @@ namespace LELEngine.Rendering.Lumen
 
 		private readonly List<SceneObject> objects = new List<SceneObject>();
 		private readonly List<SceneObjectData> objectData = new List<SceneObjectData>();
+		private readonly Dictionary<MeshRenderer, TransformState> lastTransforms = new Dictionary<MeshRenderer, TransformState>();
+		private readonly Dictionary<MeshRenderer, MaterialState> lastMaterials = new Dictionary<MeshRenderer, MaterialState>();
+		private int lastDynamicCount = -1;
+		private Vector3 lastSunDirection;
+		private float lastSunStrength;
+		private Color4 lastSunColor;
 		private CardData[] cardData = new CardData[0];
 		private int surfaceCacheSize;
+		private int objectBufferBytes;
+		private int cardBufferBytes;
 
 		#endregion
 
@@ -81,8 +109,18 @@ namespace LELEngine.Rendering.Lumen
 			CollectObjects(renderers, true, gi);
 			StaticObjectCount = objects.Count;
 			CollectObjects(renderers, false, gi);
+			DynamicChanged = DetectDynamicChanges();
 
 			UploadTables();
+
+			Vector3 sunDirection = DirectionalLight.This != null ? DirectionalLight.This.transform.forward : -Vector3.UnitY;
+			SunChanged = (sunDirection - lastSunDirection).LengthSquared > 1e-8f || Lighting.Directional.Strength != lastSunStrength || Lighting.Directional.Color != lastSunColor;
+			lastSunDirection = sunDirection;
+			lastSunStrength = Lighting.Directional.Strength;
+			lastSunColor = Lighting.Directional.Color;
+			// A static rebuild (objects moved via InvalidateStatic) changes the lighting as much as a dynamic move;
+			// GlobalDistanceFieldPass clears the flag later in the same frame.
+			QuietFrames = DynamicChanged || MaterialChanged || SunChanged || gi.SdfStaticDirty ? 0 : QuietFrames + 1;
 		}
 
 		/// <summary>
@@ -151,6 +189,33 @@ namespace LELEngine.Rendering.Lumen
 			}
 		}
 
+		// Compares every dynamic object's transform with the one seen last frame.
+		private bool DetectDynamicChanges()
+		{
+			bool changed = false;
+			int dynamicCount = 0;
+			for (int i = StaticObjectCount; i < objects.Count; i++)
+			{
+				MeshRenderer renderer = objects[i].Renderer;
+				Transform t = renderer.transform;
+				TransformState last;
+				if (!lastTransforms.TryGetValue(renderer, out last) || last.Position != t.position || last.Rotation != t.rotation || last.Scale != t.scale)
+				{
+					changed = true;
+					lastTransforms[renderer] = new TransformState { Position = t.position, Rotation = t.rotation, Scale = t.scale };
+				}
+				dynamicCount++;
+			}
+
+			if (dynamicCount != lastDynamicCount)
+			{
+				changed = true;
+				lastDynamicCount = dynamicCount;
+			}
+
+			return changed;
+		}
+
 		private void UploadTables()
 		{
 			objectData.Clear();
@@ -162,12 +227,24 @@ namespace LELEngine.Rendering.Lumen
 			Vector3 staticMin = new Vector3(float.MaxValue);
 			Vector3 staticMax = new Vector3(float.MinValue);
 			HasStaticBounds = false;
+			bool materialChanged = false;
 
 			foreach (SceneObject o in objects)
 			{
 				Transform t = o.Renderer.transform;
 				Matrix4 localToWorld = Matrix4.CreateFromQuaternion(t.rotation) * Matrix4.CreateTranslation(t.position);
 				Vector3 scale = o.Field.Scale;
+
+				// Material state that changes the lighting (colour, emission colour and intensity).
+				Vector4 color, emissiveState;
+				if (o.Renderer.Material == null || !o.Renderer.Material.TryGetVector4("Color", out color)) color = Vector4.One;
+				if (o.Renderer.Material == null || !o.Renderer.Material.TryGetVector4("Emissive", out emissiveState)) emissiveState = Vector4.Zero;
+				MaterialState last;
+				if (!lastMaterials.TryGetValue(o.Renderer, out last) || last.Color != color || last.Emissive != emissiveState)
+				{
+					materialChanged = true;
+					lastMaterials[o.Renderer] = new MaterialState { Color = color, Emissive = emissiveState };
+				}
 
 				if (o.IsStatic)
 				{
@@ -183,6 +260,10 @@ namespace LELEngine.Rendering.Lumen
 					HasStaticBounds = true;
 				}
 
+				// Emission intensity travels in the table so pulsing emitters never recapture their cards.
+				Vector4 emissive;
+				float emissiveIntensity = o.Renderer.Material != null && o.Renderer.Material.TryGetVector4("Emissive", out emissive) ? emissive.W : 0f;
+
 				objectData.Add(new SceneObjectData
 				{
 					WorldToLocal = Matrix4.Invert(localToWorld),
@@ -191,7 +272,7 @@ namespace LELEngine.Rendering.Lumen
 					BoundsMax = new Vector4(o.Field.BoundsMax, 0f),
 					AtlasOrigin = new Vector4(0f, 0f, o.Field.AtlasZ, 0f),
 					AtlasSize = new Vector4(o.Field.Size.X, o.Field.Size.Y, o.Field.Size.Z, 0f),
-					Padding = new Vector4(o.Field.TexelSize * DistanceFieldAtlas.Padding, 0f),
+					Padding = new Vector4(o.Field.TexelSize * DistanceFieldAtlas.Padding, emissiveIntensity),
 					MeshBoundsMin = new Vector4(o.Renderer.Mesh.BoundsMin * scale, 0f),
 					MeshBoundsMax = new Vector4(o.Renderer.Mesh.BoundsMax * scale, 0f),
 					CardInfo = new Vector4i(o.Cards?.FirstCardIndex ?? 0, o.Cards?.Cards.Length ?? 0, o.IsStatic ? 0 : 1, 0)
@@ -221,13 +302,34 @@ namespace LELEngine.Rendering.Lumen
 				StaticBoundsMin = staticMin;
 				StaticBoundsMax = staticMax;
 			}
+			MaterialChanged = materialChanged;
 
+			// The tables are re-specified only when they grow; otherwise the existing storage is updated in place
+			// (glBufferData every frame makes the driver allocate and orphan two buffers per frame).
 			SceneObjectData[] objectArray = objectData.Count > 0 ? objectData.ToArray() : new SceneObjectData[1];
+			int objectBytes = objectArray.Length * SceneObjectData.Size;
 			GL.BindBuffer(BufferTarget.ShaderStorageBuffer, ObjectBuffer);
-			GL.BufferData(BufferTarget.ShaderStorageBuffer, objectArray.Length * SceneObjectData.Size, objectArray, BufferUsageHint.StreamDraw);
+			if (objectBytes > objectBufferBytes)
+			{
+				GL.BufferData(BufferTarget.ShaderStorageBuffer, objectBytes, objectArray, BufferUsageHint.DynamicDraw);
+				objectBufferBytes = objectBytes;
+			}
+			else
+			{
+				GL.BufferSubData(BufferTarget.ShaderStorageBuffer, IntPtr.Zero, objectBytes, objectArray);
+			}
 
+			int cardBytes = cardData.Length * CardData.Size;
 			GL.BindBuffer(BufferTarget.ShaderStorageBuffer, CardBuffer);
-			GL.BufferData(BufferTarget.ShaderStorageBuffer, cardData.Length * CardData.Size, cardData, BufferUsageHint.StreamDraw);
+			if (cardBytes > cardBufferBytes)
+			{
+				GL.BufferData(BufferTarget.ShaderStorageBuffer, cardBytes, cardData, BufferUsageHint.DynamicDraw);
+				cardBufferBytes = cardBytes;
+			}
+			else
+			{
+				GL.BufferSubData(BufferTarget.ShaderStorageBuffer, IntPtr.Zero, cardBytes, cardData);
+			}
 			GL.BindBuffer(BufferTarget.ShaderStorageBuffer, 0);
 		}
 
@@ -242,6 +344,19 @@ namespace LELEngine.Rendering.Lumen
 			public MeshDistanceField Field;
 			public SurfaceCardSet Cards;
 			public bool IsStatic;
+		}
+
+		private struct TransformState
+		{
+			public Vector3 Position;
+			public Quaternion Rotation;
+			public Vector3 Scale;
+		}
+
+		private struct MaterialState
+		{
+			public Vector4 Color;
+			public Vector4 Emissive;
 		}
 
 		/// <summary>Mirrors SceneObject in Engine/SceneObjects.glsl (std430, 256 bytes).</summary>

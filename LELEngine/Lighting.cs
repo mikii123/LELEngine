@@ -33,6 +33,9 @@ namespace LELEngine
 		/// <summary>Texture unit reserved for the global signed distance field.</summary>
 		public const int GlobalSdfTextureUnit = 11;
 
+		/// <summary>Texture unit reserved for the global distance field's object-id volume.</summary>
+		public const int GlobalSdfObjectIdTextureUnit = 8;
+
 		/// <summary>World -> light clip space. Written by the shadow pass every frame.</summary>
 		public static Matrix4 LightSpaceMatrix = Matrix4.Identity;
 
@@ -143,6 +146,8 @@ namespace LELEngine
 			program.SetInt("sdfMaxSteps", GI.SdfMaxSteps);
 			program.SetFloat("sdfMaxDistance", GI.SdfBandVoxels * GI.SdfVoxelSize);
 			program.SetTexture("GlobalSdf", TextureTarget.Texture3D, GI.GlobalSdf, GlobalSdfTextureUnit);
+			// Without the id volume the shaders fall back to testing every object (A/B switch, measurement).
+			program.SetTexture("GlobalSdfObjectIds", TextureTarget.Texture3D, GI.SdfObjectIdLookup ? GI.GlobalSdfObjectIds : 0, GlobalSdfObjectIdTextureUnit);
 		}
 
 		#endregion
@@ -300,11 +305,33 @@ namespace LELEngine
 
 		public int SurfaceCacheMaxCardSize = 96;
 
-		/// <summary>Radiosity rays traced per card texel per frame.</summary>
-		public int RadiosityRays = 4;
+		/// <summary>Kept for command-line compatibility; radiosity now traces 16 rays per 4x4-texel probe per frame.</summary>
+		public int RadiosityRays = 16;
 
-		/// <summary>History weight of the card indirect lighting accumulation (0 = no accumulation).</summary>
+		/// <summary>Constant history weight of the radiosity probes per update when RadiosityMaxHistorySamples is 0.</summary>
 		public float RadiosityBlend = 0.9f;
+
+		/// <summary>
+		///     Sample-count accumulation of the radiosity probes once the scene has been quiet for
+		///     RadianceCacheIdleAfterFrames: the history weight grows with the samples held up to this cap (0 = the
+		///     constant RadiosityBlend instead).
+		/// </summary>
+		public float RadiosityMaxHistorySamples = 64f;
+
+		/// <summary>Cap of the radiosity probe history while the scene is changing or has just changed (short lag).</summary>
+		public float RadiosityMovingHistorySamples = 16f;
+
+		/// <summary>
+		///     While the scene is quiet (see RadianceCacheIdleAfterFrames) only 1 / this of the radiosity probe rows
+		///     is refreshed per frame, round robin. 1 = always refresh everything.
+		/// </summary>
+		public int RadiosityIdleDivisor = 4;
+
+		/// <summary>
+		///     Radiance cache lookups whose target is at least 4 probe spacings away skip the per-probe target
+		///     visibility pass (parallax below a texel): a third fewer atlas fetches for far-field rays.
+		/// </summary>
+		public bool RadianceCacheFarShortcut = true;
 
 		// ---- Lumen screen probe gather (ScreenProbeGatherPass) ----
 
@@ -322,6 +349,13 @@ namespace LELEngine
 
 		/// <summary>A candidate pixel gets an adaptive probe when its interpolation weight from existing probes is below this.</summary>
 		public float ProbeAdaptiveMinCoverage = 0.05f;
+
+		/// <summary>
+		///     The finest adaptive placement level only visits screen tiles the coarser level flagged (a candidate
+		///     below 0.5 coverage, or a finer candidate on another surface). Pays off in views dominated by large flat
+		///     surfaces; in the test scene the flagging costs as much as it saves, so it is off by default.
+		/// </summary>
+		public bool ProbeAdaptiveFlaggedRefine = false;
 
 		public bool ProbeSpatialFilter = true;
 
@@ -347,7 +381,7 @@ namespace LELEngine
 		public bool ProbeImportanceSampling = true;
 
 		/// <summary>Radius of the spatial probe filter, in probes (1 = 3x3 neighbourhood).</summary>
-		public int ProbeFilterRadius = 1;
+		public int ProbeFilterRadius = 1; // the filter kernel is fixed at 3x3 probes; kept for CLI compatibility
 
 		/// <summary>
 		///     A neighbour probe's sample is reused only when its hit point lies within this many degrees of the
@@ -363,6 +397,19 @@ namespace LELEngine
 
 		/// <summary>A probe's history is used only when the previous probe lay within this distance (world units).</summary>
 		public float ProbeHistoryDistance = 0.3f;
+
+		/// <summary>
+		///     Sample-count accumulation of probe radiance: a texel's history weight is n / (n + 1) up to this many
+		///     samples, so static lighting converges to a noise-free value; 0 falls back to the constant
+		///     <see cref="ProbeHistoryWeight" />. Probes whose lighting changed restart their counts (see below).
+		/// </summary>
+		public float ProbeMaxHistorySamples = 32f;
+
+		/// <summary>
+		///     Relative change of a probe's summed traced radiance versus its history that counts as a lighting
+		///     change and restarts its accumulation (the change detector in ProbeCompose.shader).
+		/// </summary>
+		public float ProbeChangeThreshold = 0.5f;
 
 		/// <summary>History weight of the per-pixel temporal accumulation (0 = off).</summary>
 		public float ProbeTemporalBlend = 0.9f;
@@ -410,6 +457,36 @@ namespace LELEngine
 		public float RadianceCacheHistoryFrames = 20f;
 
 		/// <summary>
+		///     Sample-count accumulation of the radiance cache probes: the history weight grows with the number of
+		///     updates up to this cap (0 = the time-constant blend of RadianceCacheHistoryFrames instead).
+		/// </summary>
+		public float RadianceCacheMaxHistorySamples = 32f;
+
+		/// <summary>
+		///     Cap of the probe history until the grid has been swept RadianceCacheIdleAfterSweeps times since the last
+		///     change: the cache then tracks the surface cache's convergence instead of averaging the transient in.
+		/// </summary>
+		public float RadianceCacheMovingHistorySamples = 4f;
+
+		/// <summary>
+		///     Relative change of a probe's summed radiance between its fresh estimate and its history that counts as a
+		///     lighting change and restarts the probe's accumulation.
+		/// </summary>
+		public float RadianceCacheChangeThreshold = 0.25f;
+
+		/// <summary>After this many frames without object, material or sun changes the probe budget drops to a trickle.</summary>
+		public int RadianceCacheIdleAfterFrames = 60;
+
+		/// <summary>Budget divisor while idle (converged probes only need an occasional refresh).</summary>
+		public int RadianceCacheIdleDivisor = 8;
+
+		/// <summary>
+		///     Idle also requires this many full passes over the probe grid at the full budget since the last change:
+		///     a quiet scene is not a converged one until the multi-bounce chain (cache -> cards -> cache) has settled.
+		/// </summary>
+		public int RadianceCacheIdleAfterSweeps = 40;
+
+		/// <summary>
 		///     Screen probe and radiosity rays trace the distance field this far (world units) and read the
 		///     radiance cache beyond it. 0 traces the whole field.
 		/// </summary>
@@ -430,6 +507,12 @@ namespace LELEngine
 
 		/// <summary>Maximum sphere tracing iterations per ray.</summary>
 		public int SdfMaxSteps = 48;
+
+		/// <summary>
+		///     Identify the object at a ray hit from the distance field's object-id volume (one fetch) instead of
+		///     testing every scene object. Off only for A/B measurements.
+		/// </summary>
+		public bool SdfObjectIdLookup = true;
 
 		/// <summary>
 		///     How cones find geometry: voxel alpha mips, or sphere tracing the global SDF near the origin.
@@ -458,6 +541,9 @@ namespace LELEngine
 
 		/// <summary>GL handle of the global distance field texture, 0 when unavailable.</summary>
 		public int GlobalSdf;
+
+		/// <summary>GL handle of the matching object-id volume (R16UI, index + 1 of the nearest object), 0 when unavailable.</summary>
+		public int GlobalSdfObjectIds;
 
 		public bool ResolveActive;
 		public int ResolvedDiffuse;

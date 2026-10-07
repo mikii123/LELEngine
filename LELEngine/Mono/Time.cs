@@ -21,5 +21,11 @@
 
 		public static double renderDeltaTimeD;
 		public static float renderDeltaTime => (float)renderDeltaTimeD;
+
+		/// <summary>CPU time of the last Renderer.RenderFrame (command submission), milliseconds.</summary>
+		public static double cpuRenderMs;
+
+		/// <summary>Time the last SwapBuffers blocked for, milliseconds (GPU / display wait).</summary>
+		public static double swapMs;
 	}
 }

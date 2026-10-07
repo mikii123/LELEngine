@@ -41,14 +41,19 @@ namespace LELEngine.Rendering.Passes
 		private const int AdaptiveTileStride = 1 + 2 * MaxAdaptivePerTile;
 		private const int AdaptiveBufferBinding = 5;
 		private const int PreviousAdaptiveBufferBinding = 6;
+		private const int AdaptiveLevelBinding = 7;
 
 		private ShaderProgram anchors;
 		private ComputeShader adaptiveClear;
+		private ComputeShader adaptiveSnapshot;
 		private ComputeShader placement;
+		private int adaptiveLevelBuffer;
+		private Matrix4 cachedViewProjection;
+		private Matrix4 cachedInverseViewProjection = Matrix4.Identity;
 		private ComputeShader importance;
 		private ShaderProgram trace;
-		private ShaderProgram compose;
-		private ShaderProgram filter;
+		private ComputeShader compose;
+		private ComputeShader filter;
 		private ComputeShader sh;
 		private ShaderProgram integrate;
 		private int selectionTexture;
@@ -58,6 +63,9 @@ namespace LELEngine.Rendering.Passes
 		// searched for temporal history.
 		private readonly int[] adaptiveBuffers = new int[2];
 		private int adaptiveBuffer => adaptiveBuffers[pingPong];
+		private int readbackBuffer;
+		private IntPtr readbackFence = IntPtr.Zero;
+		private readonly int[] readbackValue = new int[1];
 
 		// Anchors, composed (unfiltered) and filtered radiance are kept for one frame: the next frame
 		// reprojects into them (importance PDF from the filtered map, history from the unfiltered one).
@@ -88,6 +96,7 @@ namespace LELEngine.Rendering.Passes
 		private Vector3 previousCameraForward;
 		private int frameIndex;
 		private int lastSpacing;
+		private Vector2 currentDirectionJitter = new Vector2(0.5f, 0.5f);
 
 		#endregion
 
@@ -97,15 +106,21 @@ namespace LELEngine.Rendering.Passes
 		{
 			anchors = new ShaderProgram("Engine/ProbeAnchors.shader");
 			adaptiveClear = new ComputeShader("Engine/ProbeAdaptiveClear.shader");
+			adaptiveSnapshot = new ComputeShader("Engine/ProbeAdaptiveSnapshot.shader");
 			placement = new ComputeShader("Engine/ProbePlacement.shader");
+			adaptiveLevelBuffer = GL.GenBuffer();
 			importance = new ComputeShader("Engine/ProbeImportance.shader");
 			trace = new ShaderProgram("Engine/ProbeTrace.shader");
-			compose = new ShaderProgram("Engine/ProbeCompose.shader");
-			filter = new ShaderProgram("Engine/ProbeFilter.shader");
+			compose = new ComputeShader("Engine/ProbeCompose.shader");
+			filter = new ComputeShader("Engine/ProbeFilter.shader");
 			sh = new ComputeShader("Engine/ProbeSH.shader");
 			integrate = new ShaderProgram("Engine/ProbeIntegrate.shader");
 			adaptiveBuffers[0] = GL.GenBuffer();
 			adaptiveBuffers[1] = GL.GenBuffer();
+			readbackBuffer = GL.GenBuffer();
+			GL.BindBuffer(BufferTarget.CopyWriteBuffer, readbackBuffer);
+			GL.BufferData(BufferTarget.CopyWriteBuffer, sizeof(int), IntPtr.Zero, BufferUsageHint.StreamRead);
+			GL.BindBuffer(BufferTarget.CopyWriteBuffer, 0);
 		}
 
 		public override void Execute(RenderContext context)
@@ -133,6 +148,7 @@ namespace LELEngine.Rendering.Passes
 				MathHelper.Clamp((int)(anchor.X * spacing), 0, spacing - 1),
 				MathHelper.Clamp((int)(anchor.Y * spacing), 0, spacing - 1));
 			Vector2 directionJitter = gi.ProbeJitter && gi.ProbeDirectionJitter ? R2(frameIndex * 7 + 3) : new Vector2(0.5f, 0.5f);
+			currentDirectionJitter = directionJitter;
 
 			GpuProfiler profiler = context.Renderer.Profiler;
 			GLState.SetDepth(false, false);
@@ -150,6 +166,7 @@ namespace LELEngine.Rendering.Passes
 			profiler.Split("ProbeGather.placement");
 			GL.BindBufferBase(BufferRangeTarget.ShaderStorageBuffer, AdaptiveBufferBinding, adaptiveBuffer);
 			GL.BindBufferBase(BufferRangeTarget.ShaderStorageBuffer, PreviousAdaptiveBufferBinding, adaptiveBuffers[1 - pingPong]);
+			GL.BindBufferBase(BufferRangeTarget.ShaderStorageBuffer, AdaptiveLevelBinding, adaptiveLevelBuffer);
 			adaptiveClear.Use();
 			SetProbeUniforms(adaptiveClear.Program, context, spacing, probeJitter);
 			adaptiveClear.DispatchThreads(probesX * probesY + 1, 1, 1, 64, 1, 1);
@@ -165,20 +182,48 @@ namespace LELEngine.Rendering.Passes
 				GL.BindImageTexture(0, anchorTarget.ColorAttachments[0].Handle, 0, false, 0, TextureAccess.WriteOnly, SizedInternalFormat.Rgba32f);
 				GL.BindImageTexture(1, anchorTarget.ColorAttachments[1].Handle, 0, false, 0, TextureAccess.WriteOnly, SizedInternalFormat.Rgba16f);
 				GL.BindImageTexture(2, adaptivePixelTexture, 0, false, 0, TextureAccess.WriteOnly, SizedInternalFormat.R32ui);
+				bool firstLevel = true;
 				for (int factor = spacing / 2; factor >= Math.Max(2, spacing / 4); factor /= 2)
 				{
+					// Freeze the tile counts so this level only sees probes from previous levels (deterministic set).
+					adaptiveSnapshot.Use();
+					SetProbeUniforms(adaptiveSnapshot.Program, context, spacing, probeJitter);
+					adaptiveSnapshot.Program.SetInt("clearFlags", firstLevel ? 1 : 0);
+					adaptiveSnapshot.DispatchThreads(probesX * probesY, 1, 1, 64, 1, 1);
+					ComputeShader.Barrier(MemoryBarrierFlags.ShaderStorageBarrierBit);
+
+					placement.Use();
 					placement.Program.SetInt("placementFactor", factor);
+					placement.Program.SetInt("refineOnlyFlagged", !firstLevel && gi.ProbeAdaptiveFlaggedRefine ? 1 : 0);
+					placement.Program.SetInt("flagChildren", firstLevel && gi.ProbeAdaptiveFlaggedRefine ? 1 : 0);
+					firstLevel = false;
 					placement.DispatchThreads((context.Width + factor - 1) / factor, (context.Height + factor - 1) / factor, 1, 8, 8, 1);
 					ComputeShader.Barrier(MemoryBarrierFlags.ShaderImageAccessBarrierBit | MemoryBarrierFlags.TextureFetchBarrierBit | MemoryBarrierFlags.ShaderStorageBarrierBit);
 				}
 
-				if (frameIndex % 60 == 0)
+				// Diagnostics count, read back asynchronously: copy to a staging buffer behind a fence and read it
+				// a few frames later. A direct glGetBufferSubData would drain the whole GPU queue once a second.
+				if (readbackFence != IntPtr.Zero)
 				{
-					int[] count = new int[1];
-					GL.BindBuffer(BufferTarget.ShaderStorageBuffer, adaptiveBuffer);
-					GL.GetBufferSubData(BufferTarget.ShaderStorageBuffer, IntPtr.Zero, sizeof(int), count);
-					GL.BindBuffer(BufferTarget.ShaderStorageBuffer, 0);
-					AdaptiveProbeCount = Math.Min(count[0], adaptiveMax);
+					WaitSyncStatus status = GL.ClientWaitSync(readbackFence, ClientWaitSyncFlags.None, 0);
+					if (status == WaitSyncStatus.AlreadySignaled || status == WaitSyncStatus.ConditionSatisfied)
+					{
+						GL.BindBuffer(BufferTarget.CopyReadBuffer, readbackBuffer);
+						GL.GetBufferSubData(BufferTarget.CopyReadBuffer, IntPtr.Zero, sizeof(int), readbackValue);
+						GL.BindBuffer(BufferTarget.CopyReadBuffer, 0);
+						AdaptiveProbeCount = Math.Min(readbackValue[0], adaptiveMax);
+						GL.DeleteSync(readbackFence);
+						readbackFence = IntPtr.Zero;
+					}
+				}
+				else if (frameIndex % 60 == 0)
+				{
+					GL.BindBuffer(BufferTarget.CopyReadBuffer, adaptiveBuffer);
+					GL.BindBuffer(BufferTarget.CopyWriteBuffer, readbackBuffer);
+					GL.CopyBufferSubData(BufferTarget.CopyReadBuffer, BufferTarget.CopyWriteBuffer, IntPtr.Zero, IntPtr.Zero, sizeof(int));
+					GL.BindBuffer(BufferTarget.CopyReadBuffer, 0);
+					GL.BindBuffer(BufferTarget.CopyWriteBuffer, 0);
+					readbackFence = GL.FenceSync(SyncCondition.SyncGpuCommandsComplete, WaitSyncFlags.None);
 				}
 			}
 			else
@@ -225,46 +270,54 @@ namespace LELEngine.Rendering.Passes
 			trace.SetTexture("FinalLighting", TextureTarget.Texture2D, scene.SurfaceCache.FinalLightingCurrent, 2);
 			trace.SetTexture("ProbeSelection", TextureTarget.Texture2D, selectionTexture, 3);
 			trace.SetVector3("giSkyRadiance", gi.SkyRadiance);
-			trace.SetVector2("directionJitter", directionJitter);
 			trace.SetMatrix4("viewProjection", context.ViewProjection);
 			trace.SetVector3("cameraPosition", context.CameraPosition);
 			trace.SetVector3("cameraForward", context.Camera.transform.forward);
+			trace.SetVector2("cameraClipPlanes", new Vector2(context.Camera.NearClip, context.Camera.FarClip));
 			trace.SetFloat("screenTraceDistance", gi.ScreenTraceDistance);
 			trace.SetInt("screenTraceSteps", Math.Max(1, gi.ScreenTraceSteps));
 			trace.SetFloat("screenTraceThickness", gi.ScreenTraceThickness);
 			trace.SetInt("frameIndex", frameIndex);
 			context.Fullscreen.Draw();
 
-			// ---- 1c. compose: rays -> octahedral map, temporal probe filter, history for untraced directions
+			// ---- 1c. compose: rays -> octahedral map, sample-count accumulation with the per-probe change detector
+			// (probes whose fresh rays disagree with their history restart accumulating), history for untraced
+			// directions. One workgroup per probe.
 			profiler.Split("ProbeGather.compose");
-			composeTarget.Bind();
 			compose.Use();
-			SetProbeUniforms(compose, context, spacing, probeJitter);
-			compose.SetTexture("RayResults", TextureTarget.Texture2D, traceTarget.ColorAttachments[0].Handle, 2);
-			compose.SetTexture("PreviousProbeRadiance", TextureTarget.Texture2D, previousComposed, 3);
-			compose.SetTexture("ProbeSelection", TextureTarget.Texture2D, selectionTexture, 4);
-			compose.SetVector3("giSkyRadiance", gi.SkyRadiance);
-			compose.SetFloat("probeHistoryWeight", gi.ProbeHistoryWeight);
-			context.Fullscreen.Draw();
+			SetProbeUniforms(compose.Program, context, spacing, probeJitter);
+			compose.Program.SetTexture("RayResults", TextureTarget.Texture2D, traceTarget.ColorAttachments[0].Handle, 2);
+			compose.Program.SetTexture("PreviousProbeRadiance", TextureTarget.Texture2D, previousComposed, 3);
+			compose.Program.SetTexture("ProbeSelection", TextureTarget.Texture2D, selectionTexture, 4);
+			compose.Program.SetTexture("PreviousProbeCount", TextureTarget.Texture2D, composeTargets[1 - pingPong].ColorAttachments[1].Handle, 7);
+			compose.Program.SetVector3("giSkyRadiance", gi.SkyRadiance);
+			compose.Program.SetFloat("probeHistoryWeight", gi.ProbeHistoryWeight);
+			compose.Program.SetFloat("probeMaxHistorySamples", gi.ProbeMaxHistorySamples);
+			compose.Program.SetFloat("changeThreshold", gi.ProbeChangeThreshold);
+			GL.BindImageTexture(0, composeTarget.ColorAttachments[0].Handle, 0, false, 0, TextureAccess.WriteOnly, SizedInternalFormat.Rgba16f);
+			GL.BindImageTexture(1, composeTarget.ColorAttachments[1].Handle, 0, false, 0, TextureAccess.WriteOnly, SizedInternalFormat.R32f);
+			compose.Dispatch(probesX, atlasRows, 1);
+			ComputeShader.Barrier(MemoryBarrierFlags.ShaderImageAccessBarrierBit | MemoryBarrierFlags.TextureFetchBarrierBit);
 
-			// ---- 2. filter
+			// ---- 2. filter (3x3 probe neighbourhood; one workgroup per probe)
 			profiler.Split("ProbeGather.filter");
-			filterTarget.Bind();
-			filter.Use();
-			SetProbeUniforms(filter, context, spacing, probeJitter);
-			filter.SetTexture("ProbeRadiance", TextureTarget.Texture2D, composeTarget.ColorAttachments[0].Handle, 2);
-			filter.SetTexture("AdaptivePixel", TextureTarget.Texture2D, adaptivePixelTexture, 7);
-			filter.SetFloat("planeTolerance", gi.ProbePlaneTolerance);
-			filter.SetInt("filterRadius", Math.Max(1, gi.ProbeFilterRadius));
-			filter.SetVector2("directionJitter", directionJitter);
-			filter.SetFloat("angleThreshold", (float)Math.Cos(gi.ProbeFilterMaxAngle * Math.PI / 180.0));
 			if (gi.ProbeSpatialFilter)
 			{
-				context.Fullscreen.Draw();
+				filter.Use();
+				SetProbeUniforms(filter.Program, context, spacing, probeJitter);
+				filter.Program.SetTexture("ProbeRadiance", TextureTarget.Texture2D, composeTarget.ColorAttachments[0].Handle, 2);
+				filter.Program.SetTexture("AdaptivePixel", TextureTarget.Texture2D, adaptivePixelTexture, 7);
+				filter.Program.SetFloat("planeTolerance", gi.ProbePlaneTolerance);
+				filter.Program.SetFloat("angleThreshold", (float)Math.Cos(gi.ProbeFilterMaxAngle * Math.PI / 180.0));
+				GL.BindImageTexture(0, filterTarget.ColorAttachments[0].Handle, 0, false, 0, TextureAccess.WriteOnly, SizedInternalFormat.Rgba16f);
+				filter.Dispatch(probesX, atlasRows, 1);
+				ComputeShader.Barrier(MemoryBarrierFlags.ShaderImageAccessBarrierBit | MemoryBarrierFlags.TextureFetchBarrierBit);
 			}
 			else
 			{
-				// Keep the filtered buffer valid as next frame's importance source.
+				// Keep the filtered buffer valid as next frame's importance source. The blit reads the composed map
+				// through its framebuffer attachment, which the compute barrier above does not cover.
+				GL.MemoryBarrier(MemoryBarrierFlags.FramebufferBarrierBit);
 				GL.BindFramebuffer(FramebufferTarget.ReadFramebuffer, composeTarget.Handle);
 				GL.BindFramebuffer(FramebufferTarget.DrawFramebuffer, filterTarget.Handle);
 				GL.BlitFramebuffer(0, 0, composeTarget.Width, composeTarget.Height, 0, 0, filterTarget.Width, filterTarget.Height, ClearBufferMask.ColorBufferBit, BlitFramebufferFilter.Nearest);
@@ -338,6 +391,7 @@ namespace LELEngine.Rendering.Passes
 			program.SetInt2("probeJitter", previousProbeJitter.X, previousProbeJitter.Y);
 			GL.BindBufferBase(BufferRangeTarget.ShaderStorageBuffer, AdaptiveBufferBinding, adaptiveBuffers[current]);
 			GL.BindBufferBase(BufferRangeTarget.ShaderStorageBuffer, PreviousAdaptiveBufferBinding, adaptiveBuffers[pingPong]);
+			GL.BindBufferBase(BufferRangeTarget.ShaderStorageBuffer, AdaptiveLevelBinding, adaptiveLevelBuffer);
 		}
 
 		public override void Resize(int width, int height)
@@ -349,7 +403,13 @@ namespace LELEngine.Rendering.Passes
 		{
 			anchors?.Delete();
 			adaptiveClear?.Delete();
+			adaptiveSnapshot?.Delete();
 			placement?.Delete();
+			if (adaptiveLevelBuffer != 0)
+			{
+				GL.DeleteBuffer(adaptiveLevelBuffer);
+				adaptiveLevelBuffer = 0;
+			}
 			importance?.Delete();
 			trace?.Delete();
 			compose?.Delete();
@@ -364,6 +424,16 @@ namespace LELEngine.Rendering.Passes
 			if (adaptivePixelTexture != 0)
 			{
 				GL.DeleteTexture(adaptivePixelTexture);
+			}
+			if (readbackFence != IntPtr.Zero)
+			{
+				GL.DeleteSync(readbackFence);
+				readbackFence = IntPtr.Zero;
+			}
+			if (readbackBuffer != 0)
+			{
+				GL.DeleteBuffer(readbackBuffer);
+				readbackBuffer = 0;
 			}
 			for (int i = 0; i < 2; i++)
 			{
@@ -393,12 +463,19 @@ namespace LELEngine.Rendering.Passes
 			program.SetTexture("NormalRoughness", TextureTarget.Texture2D, context.NormalRoughness.Handle, 1);
 			program.SetTexture("ProbeAnchorPosition", TextureTarget.Texture2D, anchorTarget.ColorAttachments[0].Handle, 5);
 			program.SetTexture("ProbeAnchorNormal", TextureTarget.Texture2D, anchorTarget.ColorAttachments[1].Handle, 6);
-			program.SetMatrix4("invViewProjection", Matrix4.Invert(context.ViewProjection));
+			// Inverted once per frame, not once per shader.
+			if (context.ViewProjection != cachedViewProjection)
+			{
+				cachedViewProjection = context.ViewProjection;
+				cachedInverseViewProjection = Matrix4.Invert(cachedViewProjection);
+			}
+			program.SetMatrix4("invViewProjection", cachedInverseViewProjection);
 			program.SetInt2("screenSize", context.Width, context.Height);
 			program.SetInt2("probeCount", probesX, probesY);
 			program.SetInt("probeAtlasRows", atlasRows);
 			program.SetInt("probeSpacing", spacing);
 			program.SetInt2("probeJitter", probeJitter.X, probeJitter.Y);
+			program.SetVector2("directionJitter", currentDirectionJitter);
 		}
 
 		private void EnsureTargets(int width, int height, int spacing, float resolveScale, float adaptiveFraction)
@@ -435,7 +512,8 @@ namespace LELEngine.Rendering.Passes
 
 				composeTargets[i]?.Delete();
 				composeTargets[i] = new Framebuffer(rayWidth, rayHeight);
-				composeTargets[i].AddColorAttachment(RenderTextureFormat.RGBA16F, false);
+				composeTargets[i].AddColorAttachment(RenderTextureFormat.RGBA16F, false); // accumulated radiance
+				composeTargets[i].AddColorAttachment(RenderTextureFormat.R32F, false); // per-texel sample count
 				composeTargets[i].Validate();
 
 				filterTargets[i]?.Delete();
@@ -480,6 +558,8 @@ namespace LELEngine.Rendering.Passes
 				GL.BindBuffer(BufferTarget.ShaderStorageBuffer, adaptiveBuffers[i]);
 				GL.BufferData(BufferTarget.ShaderStorageBuffer, tileZeros.Length * sizeof(uint), tileZeros, BufferUsageHint.DynamicCopy);
 			}
+			GL.BindBuffer(BufferTarget.ShaderStorageBuffer, adaptiveLevelBuffer);
+			GL.BufferData(BufferTarget.ShaderStorageBuffer, Math.Max(1, px * py) * 2 * sizeof(uint), IntPtr.Zero, BufferUsageHint.DynamicCopy);
 			GL.BindBuffer(BufferTarget.ShaderStorageBuffer, 0);
 
 			if (shTexture != 0)
@@ -488,7 +568,8 @@ namespace LELEngine.Rendering.Passes
 			}
 			shTexture = GL.GenTexture();
 			GL.BindTexture(TextureTarget.Texture2DArray, shTexture);
-			GL.TexImage3D(TextureTarget.Texture2DArray, 0, PixelInternalFormat.Rgba16f, px, atlasRows, 9, 0, PixelFormat.Rgba, PixelType.Float, IntPtr.Zero);
+			// 27 SH coefficient values + valid flag packed into 7 RGBA layers (Engine/ProbeSH.shader).
+			GL.TexImage3D(TextureTarget.Texture2DArray, 0, PixelInternalFormat.Rgba16f, px, atlasRows, 7, 0, PixelFormat.Rgba, PixelType.Float, IntPtr.Zero);
 			GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
 			GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
 			GL.TexParameter(TextureTarget.Texture2DArray, TextureParameterName.TextureMaxLevel, 0);

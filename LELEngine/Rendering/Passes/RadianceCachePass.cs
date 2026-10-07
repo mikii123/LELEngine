@@ -26,6 +26,9 @@ namespace LELEngine.Rendering.Passes
 
 		public int Atlas => atlas;
 		public bool Active { get; private set; }
+
+		/// <summary>True while the scene is quiet and the cache has converged: the probe budget is reduced.</summary>
+		public bool Idle { get; private set; }
 		public int InteriorProbeCount => interiorTotal;
 
 		#endregion
@@ -40,6 +43,7 @@ namespace LELEngine.Rendering.Passes
 		private ComputeShader resolve;
 
 		private int atlas;
+		private int accumulator; // fp32 copy of the atlas that the resolve accumulates into (see RadianceCacheResolve.shader)
 		private int atlasWidth;
 		private int atlasHeight;
 		private int probesPerAxis;
@@ -60,6 +64,7 @@ namespace LELEngine.Rendering.Passes
 		private int probeFramesBuffer;
 		private int interiorTotal;
 		private int exteriorTotal;
+		private long tracedSinceChange;
 		private int interiorNext;
 		private int exteriorNext;
 		private Vector3 listBoundsMin;
@@ -85,6 +90,8 @@ namespace LELEngine.Rendering.Passes
 			Active = gi.Enabled && gi.Mode == GIMode.Lumen && gi.RadianceCacheEnabled && gi.GlobalSdf != 0 && scene.SurfaceCache != null;
 			if (!Active)
 			{
+				Idle = false;
+				tracedSinceChange = 0;
 				return;
 			}
 
@@ -115,10 +122,21 @@ namespace LELEngine.Rendering.Passes
 			}
 
 			frameIndex++;
-			int budget = Math.Max(1, gi.RadianceCacheProbesPerFrame);
+
+			// Change-driven budget: once the scene (object placement, materials, sun) has been quiet for a while and
+			// the grid has been swept enough times at the full budget to converge, only a trickle of updates is
+			// needed; any change restores the full budget at once.
+			if (!scene.IsQuiet(1))
+			{
+				tracedSinceChange = 0;
+			}
+			long converged = (long)Math.Max(1, gi.RadianceCacheIdleAfterSweeps) * (interiorTotal + exteriorTotal);
+			Idle = scene.IsQuiet(Math.Max(1, gi.RadianceCacheIdleAfterFrames)) && tracedSinceChange >= converged;
+			int budget = Math.Max(1, Idle ? gi.RadianceCacheProbesPerFrame / Math.Max(1, gi.RadianceCacheIdleDivisor) : gi.RadianceCacheProbesPerFrame);
 			int interiorCount = Math.Min(budget, interiorTotal);
 			int exteriorCount = Math.Min(Math.Max(1, budget / 8), exteriorTotal);
 			int count = interiorCount + exteriorCount;
+			tracedSinceChange += count;
 			if (count == 0)
 			{
 				return;
@@ -154,7 +172,15 @@ namespace LELEngine.Rendering.Passes
 			resolveProgram.SetTexture("TraceBuffer", TextureTarget.Texture2D, traceBuffer, 1);
 			resolveProgram.SetInt("frameIndex", frameIndex);
 			resolveProgram.SetFloat("historyFrames", gi.RadianceCacheHistoryFrames);
-			GL.BindImageTexture(0, atlas, 0, false, 0, TextureAccess.ReadWrite, SizedInternalFormat.Rgba16f);
+			// Short history until the grid has been swept enough times since the last change for the multi-bounce
+			// chain (cache -> cards -> cache) to settle; the long history would average that transient in and
+			// then take thousands of frames to forget it.
+			bool settled = tracedSinceChange >= converged;
+			resolveProgram.SetFloat("maxHistorySamples", settled ? gi.RadianceCacheMaxHistorySamples : Math.Min(gi.RadianceCacheMaxHistorySamples, gi.RadianceCacheMovingHistorySamples));
+			resolveProgram.SetFloat("changeThreshold", gi.RadianceCacheChangeThreshold);
+			resolveProgram.SetInt("rcProbeCount", probeCount);
+			GL.BindImageTexture(0, atlas, 0, false, 0, TextureAccess.WriteOnly, SizedInternalFormat.Rgba16f);
+			GL.BindImageTexture(1, accumulator, 0, false, 0, TextureAccess.ReadWrite, SizedInternalFormat.Rgba32f);
 			resolve.Dispatch(count);
 			ComputeShader.Barrier(MemoryBarrierFlags.ShaderImageAccessBarrierBit | MemoryBarrierFlags.TextureFetchBarrierBit | MemoryBarrierFlags.ShaderStorageBarrierBit);
 
@@ -188,6 +214,7 @@ namespace LELEngine.Rendering.Passes
 			program.SetInt("rcProbeResolution", probeResolution);
 			program.SetVector2("rcAtlasSize", new Vector2(atlasWidth, atlasHeight));
 			program.SetFloat("rcNearDistance", Lighting.GI.RadianceCacheNearDistance);
+			program.SetInt("rcFarShortcut", Lighting.GI.RadianceCacheFarShortcut ? 1 : 0);
 		}
 
 		public override void Dispose()
@@ -198,6 +225,11 @@ namespace LELEngine.Rendering.Passes
 			{
 				GL.DeleteTexture(atlas);
 				atlas = 0;
+			}
+			if (accumulator != 0)
+			{
+				GL.DeleteTexture(accumulator);
+				accumulator = 0;
 			}
 			if (traceBuffer != 0)
 			{
@@ -243,6 +275,10 @@ namespace LELEngine.Rendering.Passes
 			{
 				GL.DeleteTexture(atlas);
 			}
+			if (accumulator != 0)
+			{
+				GL.DeleteTexture(accumulator);
+			}
 
 			probesPerAxis = perAxis;
 			probeResolution = resolution;
@@ -261,6 +297,13 @@ namespace LELEngine.Rendering.Passes
 			GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)TextureWrapMode.ClampToEdge);
 			GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)TextureWrapMode.ClampToEdge);
 			GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMaxLevel, 0);
+
+			accumulator = GL.GenTexture();
+			GL.BindTexture(TextureTarget.Texture2D, accumulator);
+			GL.TexImage2D(TextureTarget.Texture2D, 0, PixelInternalFormat.Rgba32f, atlasWidth, atlasHeight, 0, PixelFormat.Rgba, PixelType.Float, IntPtr.Zero);
+			GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
+			GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
+			GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMaxLevel, 0);
 			GL.BindTexture(TextureTarget.Texture2D, 0);
 			ClearAtlas();
 
@@ -269,32 +312,39 @@ namespace LELEngine.Rendering.Passes
 		}
 
 		// Alpha 0 marks "no data": consumers trace on until a probe has been resolved (no glClearTexImage in GL 4.3).
-		// Every probe's last-update frame is reset to -1 so the first update after the clear replaces the history.
+		// Every probe's last-update frame is reset to -1 and its update count to 0 so the first update after the
+		// clear replaces the history.
 		private void ClearAtlas()
 		{
 			if (GLCapabilities.ClearTexture)
 			{
 				GL.ClearTexImage(atlas, 0, PixelFormat.Rgba, PixelType.Float, IntPtr.Zero);
+				GL.ClearTexImage(accumulator, 0, PixelFormat.Rgba, PixelType.Float, IntPtr.Zero);
 			}
 			else
 			{
 				float[] zeros = new float[atlasWidth * atlasHeight * 4];
-				GL.BindTexture(TextureTarget.Texture2D, atlas);
-				GL.TexSubImage2D(TextureTarget.Texture2D, 0, 0, 0, atlasWidth, atlasHeight, PixelFormat.Rgba, PixelType.Float, zeros);
+				foreach (int texture in new[] { atlas, accumulator })
+				{
+					GL.BindTexture(TextureTarget.Texture2D, texture);
+					GL.TexSubImage2D(TextureTarget.Texture2D, 0, 0, 0, atlasWidth, atlasHeight, PixelFormat.Rgba, PixelType.Float, zeros);
+				}
 				GL.BindTexture(TextureTarget.Texture2D, 0);
 			}
 
-			int[] never = new int[Math.Max(1, probeCount)];
-			for (int i = 0; i < never.Length; i++)
+			int count = Math.Max(1, probeCount);
+			int[] frames = new int[count * 2]; // [probe] last frame, [count + probe] update count
+			for (int i = 0; i < count; i++)
 			{
-				never[i] = -1;
+				frames[i] = -1;
 			}
 			GL.BindBuffer(BufferTarget.ShaderStorageBuffer, probeFramesBuffer);
-			GL.BufferData(BufferTarget.ShaderStorageBuffer, never.Length * sizeof(int), never, BufferUsageHint.DynamicDraw);
+			GL.BufferData(BufferTarget.ShaderStorageBuffer, frames.Length * sizeof(int), frames, BufferUsageHint.DynamicDraw);
 			GL.BindBuffer(BufferTarget.ShaderStorageBuffer, 0);
 
 			interiorNext = 0;
 			exteriorNext = 0;
+			tracedSinceChange = 0;
 		}
 
 		private void EnsureTraceBuffer(int slots, int resolution)
@@ -345,6 +395,7 @@ namespace LELEngine.Rendering.Passes
 			exteriorTotal = exterior.Count;
 			interiorNext = 0;
 			exteriorNext = 0;
+			tracedSinceChange = 0;
 
 			int[] list = new int[Math.Max(1, probeCount)];
 			interior.CopyTo(list, 0);

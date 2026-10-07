@@ -31,6 +31,8 @@ namespace LELEngine.Rendering.Passes
 		private ComputeShader compose;
 		private int staticSdf;
 		private int globalSdf;
+		private int staticIds;
+		private int globalIds;
 		private int currentResolution;
 
 		private List<VoxelRegion> previousRegions = new List<VoxelRegion>();
@@ -43,6 +45,7 @@ namespace LELEngine.Rendering.Passes
 		private float lastGridSize;
 		private int lastStaticCount = -1;
 		private int frameIndex;
+		private bool dynamicPending = true;
 
 		#endregion
 
@@ -60,6 +63,7 @@ namespace LELEngine.Rendering.Passes
 			if (!gi.Enabled || !gi.DistanceFieldEnabled)
 			{
 				gi.GlobalSdf = 0;
+				gi.GlobalSdfObjectIds = 0;
 				return;
 			}
 
@@ -72,10 +76,13 @@ namespace LELEngine.Rendering.Passes
 
 			LumenScene scene = context.Renderer.LumenScene;
 			frameIndex++;
-			scene.Update(frameIndex, context.Renderers, gi);
+			scene.Update(context.Renderer.FrameIndex, context.Renderers, gi);
 			DetectStaticChanges(gi, scene);
 
-			bool dynamicDue = gi.DynamicUpdateInterval <= 1 || frameIndex % gi.DynamicUpdateInterval == 0;
+			// The dynamic composite is a pure function of object placement: skip it while nothing moved. A move is
+			// latched until a due frame, so an update interval > 1 cannot drop a change that happened in between.
+			dynamicPending |= scene.DynamicChanged;
+			bool dynamicDue = dynamicPending && (gi.DynamicUpdateInterval <= 1 || frameIndex % gi.DynamicUpdateInterval == 0);
 			GpuProfiler profiler = context.Renderer.Profiler;
 
 			if (gi.SdfStaticDirty)
@@ -90,9 +97,11 @@ namespace LELEngine.Rendering.Passes
 			{
 				profiler.Split("GlobalSDF.dynamic");
 				UpdateDynamicField(gi, scene);
+				dynamicPending = false;
 			}
 
 			gi.GlobalSdf = globalSdf;
+			gi.GlobalSdfObjectIds = globalIds;
 		}
 
 		public override void Dispose()
@@ -101,6 +110,7 @@ namespace LELEngine.Rendering.Passes
 			compose?.Delete();
 			compose = null;
 			Lighting.GI.GlobalSdf = 0;
+			Lighting.GI.GlobalSdfObjectIds = 0;
 		}
 
 		#endregion
@@ -114,26 +124,45 @@ namespace LELEngine.Rendering.Passes
 
 			staticSdf = CreateSdfTexture(resolution);
 			globalSdf = CreateSdfTexture(resolution);
+			staticIds = CreateIdTexture(resolution);
+			globalIds = CreateIdTexture(resolution);
 			currentResolution = resolution;
 			Lighting.GI.SdfResolution = resolution;
 			Lighting.GI.SdfStaticDirty = true;
 			previousRegions.Clear();
 
-			Console.WriteLine($"[SDF] Global distance field {resolution}^3 R16F (~{resolution * (long)resolution * resolution * 2 * 2 / (1024.0 * 1024.0):0} MB)");
+			Console.WriteLine($"[SDF] Global distance field {resolution}^3 R16F + object ids R16UI (~{resolution * (long)resolution * resolution * 2 * 4 / (1024.0 * 1024.0):0} MB)");
 		}
 
 		private void DeleteVolumes()
 		{
-			if (staticSdf != 0)
+			foreach (int texture in new[] { staticSdf, globalSdf, staticIds, globalIds })
 			{
-				GL.DeleteTexture(staticSdf);
-				staticSdf = 0;
+				if (texture != 0)
+				{
+					GL.DeleteTexture(texture);
+				}
 			}
-			if (globalSdf != 0)
-			{
-				GL.DeleteTexture(globalSdf);
-				globalSdf = 0;
-			}
+			staticSdf = 0;
+			globalSdf = 0;
+			staticIds = 0;
+			globalIds = 0;
+		}
+
+		// Object index + 1 of the nearest surface per voxel (0 = nothing within the band); fetched by texel.
+		private static int CreateIdTexture(int resolution)
+		{
+			int texture = GL.GenTexture();
+			GL.BindTexture(TextureTarget.Texture3D, texture);
+			GL.TexImage3D(TextureTarget.Texture3D, 0, PixelInternalFormat.R16ui, resolution, resolution, resolution, 0, PixelFormat.RedInteger, PixelType.UnsignedShort, IntPtr.Zero);
+			GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
+			GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
+			GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureWrapS, (int)TextureWrapMode.ClampToEdge);
+			GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureWrapT, (int)TextureWrapMode.ClampToEdge);
+			GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureWrapR, (int)TextureWrapMode.ClampToEdge);
+			GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureMaxLevel, 0);
+			GL.BindTexture(TextureTarget.Texture3D, 0);
+			return texture;
 		}
 
 		private static int CreateSdfTexture(int resolution)
@@ -174,6 +203,10 @@ namespace LELEngine.Rendering.Passes
 			GL.CopyImageSubData(
 				staticSdf, ImageTarget.Texture3D, 0, 0, 0, 0,
 				globalSdf, ImageTarget.Texture3D, 0, 0, 0, 0,
+				currentResolution, currentResolution, currentResolution);
+			GL.CopyImageSubData(
+				staticIds, ImageTarget.Texture3D, 0, 0, 0, 0,
+				globalIds, ImageTarget.Texture3D, 0, 0, 0, 0,
 				currentResolution, currentResolution, currentResolution);
 
 			previousRegions.Clear();
@@ -247,8 +280,12 @@ namespace LELEngine.Rendering.Passes
 			compose.Program.SetInt("sdfResolution", currentResolution);
 			compose.Program.SetFloat("maxDistance", gi.SdfBandVoxels * gi.SdfVoxelSize);
 
-			GL.BindImageTexture(0, baseSdf != 0 ? baseSdf : target, 0, true, 0, TextureAccess.ReadOnly, SizedInternalFormat.R16f);
+			bool fromStatic = baseSdf != 0;
+			int targetIds = target == staticSdf ? staticIds : globalIds;
+			GL.BindImageTexture(0, fromStatic ? baseSdf : target, 0, true, 0, TextureAccess.ReadOnly, SizedInternalFormat.R16f);
 			GL.BindImageTexture(1, target, 0, true, 0, TextureAccess.WriteOnly, SizedInternalFormat.R16f);
+			GL.BindImageTexture(2, fromStatic ? staticIds : targetIds, 0, true, 0, TextureAccess.ReadOnly, SizedInternalFormat.R16ui);
+			GL.BindImageTexture(3, targetIds, 0, true, 0, TextureAccess.WriteOnly, SizedInternalFormat.R16ui);
 
 			foreach (VoxelRegion region in regions)
 			{

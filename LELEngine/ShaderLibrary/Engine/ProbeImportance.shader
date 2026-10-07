@@ -114,10 +114,12 @@ void main()
 		importance[i] = (Luminance(prev.rgb) + 0.02) * cosTheta;
 	}
 
-	// Rotating slots: bit-reversed frame counter spreads consecutive frames over the hemisphere.
+	// Rotating slots: bit-reversed frame counter spreads consecutive frames over the hemisphere. Each probe
+	// starts the 16-frame cycle at its own phase, so the screen never refreshes the same direction in unison.
+	uint phase = HashCoord(probe, 7u) & 63u;
 	for (int k = 0; k < ROTATING_DIRECTIONS; k++)
 	{
-		int d = int(bitfieldReverse(uint(frameIndex * ROTATING_DIRECTIONS + k)) >> 26u);
+		int d = int(bitfieldReverse(uint(frameIndex * ROTATING_DIRECTIONS + k) + phase * uint(ROTATING_DIRECTIONS)) >> 26u);
 		selected[k] = d;
 		importance[d] = -2.0;
 	}

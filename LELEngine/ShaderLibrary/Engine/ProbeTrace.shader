@@ -39,7 +39,6 @@ out vec4 OutRay; // rgb radiance, a = hit distance (-1 sky / far field, -2 probe
 uniform sampler2D FinalLighting;
 uniform usampler2D ProbeSelection;
 uniform vec3 giSkyRadiance;
-uniform vec2 directionJitter;
 uniform mat4 viewProjection;
 uniform vec3 cameraPosition;
 uniform vec3 cameraForward;
@@ -48,19 +47,33 @@ uniform int screenTraceSteps;
 uniform float screenTraceThickness; // world units
 uniform int frameIndex;
 
+uniform vec2 cameraClipPlanes; // near, far: linearise depth-buffer values without a matrix multiply
+
+float LinearViewDepth(float depth)
+{
+	float z = depth * 2.0 - 1.0;
+	float n = cameraClipPlanes.x;
+	float f = cameraClipPlanes.y;
+	return 2.0 * n * f / (f + n - z * (f - n));
+}
+
 // Marches the depth buffer along the ray. Returns true on a hit (position and normal from the G-buffer).
 // travelled receives how far the march got without hitting, so the SDF trace can continue from there.
+// Clip coordinates and view depth are linear along the segment, so the whole march costs two matrix
+// multiplies instead of two per step.
 bool ScreenTrace(vec3 origin, vec3 direction, float jitter, out vec3 hitPos, out vec3 hitNormal, out float travelled)
 {
 	float stepSize = screenTraceDistance / float(screenTraceSteps);
+	vec4 clipStart = viewProjection * vec4(origin, 1.0);
+	vec4 clipStep = viewProjection * vec4(direction * stepSize, 0.0);
+	float depthStart = dot(origin - cameraPosition, cameraForward);
+	float depthStep = dot(direction, cameraForward) * stepSize;
 	travelled = 0.0;
 
 	for (int i = 0; i < screenTraceSteps; i++)
 	{
-		float t = (float(i) + jitter) * stepSize;
-		vec3 p = origin + direction * t;
-
-		vec4 clip = viewProjection * vec4(p, 1.0);
+		float steps = float(i) + jitter;
+		vec4 clip = clipStart + clipStep * steps;
 		if (clip.w <= 0.01) return false;
 		vec2 uv = clip.xy / clip.w * 0.5 + 0.5;
 		if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0)))) return false;
@@ -69,19 +82,18 @@ bool ScreenTrace(vec3 origin, vec3 direction, float jitter, out vec3 hitPos, out
 		float sceneDepth = texelFetch(SceneDepth, pixel, 0).r;
 		if (sceneDepth >= 1.0)
 		{
-			travelled = t;
+			travelled = steps * stepSize;
 			continue;
 		}
 
-		vec3 scenePos = ReconstructPosition(pixel, sceneDepth);
-		float sceneViewDepth = dot(scenePos - cameraPosition, cameraForward);
-		float rayViewDepth = dot(p - cameraPosition, cameraForward);
+		float sceneViewDepth = LinearViewDepth(sceneDepth);
+		float rayViewDepth = depthStart + depthStep * steps;
 
 		if (rayViewDepth > sceneViewDepth + 0.02)
 		{
 			if (rayViewDepth < sceneViewDepth + screenTraceThickness)
 			{
-				hitPos = scenePos;
+				hitPos = ReconstructPosition(pixel, sceneDepth);
 				hitNormal = normalize(texelFetch(NormalRoughness, pixel, 0).xyz);
 				return true;
 			}
@@ -89,7 +101,7 @@ bool ScreenTrace(vec3 origin, vec3 direction, float jitter, out vec3 hitPos, out
 			return false;
 		}
 
-		travelled = t;
+		travelled = steps * stepSize;
 	}
 
 	return false;
@@ -165,20 +177,22 @@ void main()
 		return;
 	}
 
-	// Which octahedral texel (and which part of it) does this ray sample?
+	// Which octahedral texel (and which part of it) does this ray sample? The sub-texel offset is this
+	// probe's own (see ProbeDirectionJitter), so neighbouring probes do not share their estimation error.
 	uvec4 selection = texelFetch(ProbeSelection, probe, 0);
+	vec2 probeOffset = ProbeDirectionJitter(probe);
 	vec2 octUV;
 	if (SelectionValid(selection))
 	{
 		int texelIndex = SelectedTexelIndex(selection, ray / 4);
 		int sub = ray % 4;
 		vec2 oct = vec2(texelIndex % PROBE_RESOLUTION, texelIndex / PROBE_RESOLUTION);
-		vec2 subOffset = (vec2(sub & 1, sub >> 1) + fract(directionJitter + vec2(0.37, 0.61) * float(sub))) * 0.5;
+		vec2 subOffset = (vec2(sub & 1, sub >> 1) + fract(probeOffset + vec2(0.37, 0.61) * float(sub))) * 0.5;
 		octUV = (oct + subOffset) / float(PROBE_RESOLUTION);
 	}
 	else
 	{
-		octUV = (vec2(local) + directionJitter) / float(PROBE_RESOLUTION);
+		octUV = (vec2(local) + probeOffset) / float(PROBE_RESOLUTION);
 	}
 
 	vec3 tangent, bitangent;

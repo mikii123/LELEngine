@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using LELEngine.Rendering.Lumen;
 using LELEngine.Shaders;
@@ -23,6 +24,7 @@ namespace LELEngine.Rendering.Passes
 		#region PrivateFields
 
 		private ShaderProgram capture;
+		private ComputeShader radiosity;
 		private ComputeShader lighting;
 		private GridShadowMap gridShadow;
 		private int frameIndex;
@@ -34,6 +36,7 @@ namespace LELEngine.Rendering.Passes
 		public override void Initialize(Renderer renderer)
 		{
 			capture = new ShaderProgram("Engine/CardCapture.shader");
+			radiosity = new ComputeShader("Engine/CardRadiosityProbes.shader");
 			lighting = new ComputeShader("Engine/CardLighting.shader");
 			gridShadow = new GridShadowMap(Lighting.GI.GridShadowMapSize);
 		}
@@ -48,7 +51,7 @@ namespace LELEngine.Rendering.Passes
 
 			LumenScene scene = context.Renderer.LumenScene;
 			frameIndex++;
-			scene.Update(frameIndex, context.Renderers, gi);
+			scene.Update(context.Renderer.FrameIndex, context.Renderers, gi);
 			gridShadow.EnsureSize(gi.GridShadowMapSize);
 
 			GpuProfiler profiler = context.Renderer.Profiler;
@@ -59,13 +62,13 @@ namespace LELEngine.Rendering.Passes
 			profiler.Split("SurfaceCache.shadow");
 			gridShadow.Render(context, context.Renderers, gi);
 
-			profiler.Split("SurfaceCache.lighting");
 			LightCards(context.Renderer, scene, gi);
 		}
 
 		public override void Dispose()
 		{
 			capture?.Delete();
+			radiosity?.Delete();
 			lighting?.Delete();
 			gridShadow?.Delete();
 		}
@@ -81,10 +84,19 @@ namespace LELEngine.Rendering.Passes
 
 			foreach (LumenScene.SceneObject o in scene.Objects)
 			{
-				if (o.Cards == null || (o.Cards.Captured && o.IsStatic))
+				if (o.Cards == null)
 				{
 					continue;
 				}
+
+				// Captures are transform independent (scaled-local space) and emission intensity is applied at
+				// lighting time, so a card set is recaptured only when the material inputs it stores change.
+				long key = CaptureKey(o.Renderer.Material);
+				if (o.Cards.Captured && o.Cards.CaptureKey == key)
+				{
+					continue;
+				}
+				o.Cards.CaptureKey = key;
 
 				if (!bound)
 				{
@@ -116,6 +128,41 @@ namespace LELEngine.Rendering.Passes
 			{
 				GL.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
 				GLState.SetCull(true);
+			}
+		}
+
+		// Hash of the material inputs baked into the cards (albedo colour, emission colour, albedo map handle).
+		private static long CaptureKey(Material material)
+		{
+			Vector4 albedo;
+			if (!material.TryGetVector4("Color", out albedo))
+			{
+				albedo = Vector4.One;
+			}
+
+			Vector4 emissive;
+			if (!material.TryGetVector4("Emissive", out emissive))
+			{
+				emissive = Vector4.Zero;
+			}
+
+			int albedoMap = material.GetTextureHandle("DiffuseMap");
+			if (albedoMap == 0)
+			{
+				albedoMap = material.GetTextureHandle("AlbedoMap");
+			}
+
+			unchecked
+			{
+				long hash = 17;
+				hash = hash * 31 + albedo.X.GetHashCode();
+				hash = hash * 31 + albedo.Y.GetHashCode();
+				hash = hash * 31 + albedo.Z.GetHashCode();
+				hash = hash * 31 + emissive.X.GetHashCode();
+				hash = hash * 31 + emissive.Y.GetHashCode();
+				hash = hash * 31 + emissive.Z.GetHashCode();
+				hash = hash * 31 + albedoMap;
+				return hash;
 			}
 		}
 
@@ -152,42 +199,75 @@ namespace LELEngine.Rendering.Passes
 		private void LightCards(Renderer renderer, LumenScene scene, GlobalIlluminationSettings gi)
 		{
 			SurfaceCacheAtlas atlas = scene.SurfaceCache;
-			ShaderProgram program = lighting.Program;
+			GpuProfiler profiler = renderer.Profiler;
 
 			// Last frame's final lighting becomes the radiosity input; this frame writes the other buffer.
 			atlas.SwapFinalLighting();
+			RadianceCachePass radianceCache = renderer.GetPass<RadianceCachePass>();
+			int probeRows = (atlas.UsedRows + SurfaceCacheAtlas.RadiosityBlock - 1) / SurfaceCacheAtlas.RadiosityBlock;
 
+			// ---- radiosity probes: 16 rays per 4x4 texel block, accumulated per probe. While the scene is quiet
+			// the probes are converged, so only a slice of the rows is refreshed per frame (round robin).
+			profiler.Split("SurfaceCache.radiosity");
+			int rowStart = 0;
+			int rowCount = probeRows;
+			// A change in this frame restores the full refresh at once (the cache's Idle flag lags one frame).
+			bool idle = (radianceCache != null && radianceCache.Active && gi.RadianceCacheForRadiosity ? radianceCache.Idle : scene.IsQuiet(Math.Max(1, gi.RadianceCacheIdleAfterFrames))) && scene.IsQuiet(1);
+			if (idle && gi.RadiosityIdleDivisor > 1 && probeRows > 0)
+			{
+				// Slice `frameIndex % divisor` of the rows: every row exactly once per divisor frames.
+				int divisor = gi.RadiosityIdleDivisor;
+				int slice = frameIndex % divisor;
+				rowStart = slice * probeRows / divisor;
+				rowCount = Math.Max(0, (slice + 1) * probeRows / divisor - rowStart);
+			}
+
+			ShaderProgram probes = radiosity.Program;
+			radiosity.Use();
+			scene.SetUniforms(probes);
+			Lighting.SetSdfUniforms(probes);
+			// Rays read last frame's radiance cache beyond the near distance.
+			if (radianceCache != null && gi.RadianceCacheForRadiosity)
+			{
+				radianceCache.SetUniforms(probes, 5);
+			}
+			else
+			{
+				probes.SetFloat("rcNearDistance", 0f);
+			}
+			probes.SetTexture("CardIndex", TextureTarget.Texture2D, atlas.CardIndex, 0);
+			probes.SetTexture("CardNormal", TextureTarget.Texture2D, atlas.Normal, 2);
+			probes.SetTexture("FinalLightingPrev", TextureTarget.Texture2D, atlas.FinalLightingPrevious, 4);
+			probes.SetVector3("giSkyRadiance", gi.SkyRadiance);
+			probes.SetInt("frameIndex", frameIndex);
+			probes.SetFloat("radiosityBlend", gi.RadiosityBlend);
+			// While the scene is changing (or has just stopped) the probes track with a short history; once it has
+			// been quiet for a while they accumulate to the long one.
+			bool settled = scene.IsQuiet(Math.Max(1, gi.RadianceCacheIdleAfterFrames));
+			probes.SetFloat("radiosityMaxSamples", settled ? gi.RadiosityMaxHistorySamples : Math.Min(gi.RadiosityMaxHistorySamples, gi.RadiosityMovingHistorySamples));
+			probes.SetInt2("probeRegion", atlas.ProbeGridSize, probeRows);
+			probes.SetInt("probeRowStart", rowStart);
+			GL.BindImageTexture(0, atlas.RadiosityProbes, 0, false, 0, TextureAccess.ReadWrite, SizedInternalFormat.Rgba32f);
+			if (rowCount > 0)
+			{
+				radiosity.Dispatch(atlas.ProbeGridSize, rowCount, 1);
+				ComputeShader.Barrier(MemoryBarrierFlags.ShaderImageAccessBarrierBit | MemoryBarrierFlags.TextureFetchBarrierBit);
+			}
+
+			// ---- per texel: direct sun + interpolated radiosity
+			profiler.Split("SurfaceCache.lighting");
+			ShaderProgram program = lighting.Program;
 			lighting.Use();
 			scene.SetUniforms(program);
 			Lighting.SetUniforms(program, false, false);
 			gridShadow.SetUniforms(program);
-			Lighting.SetSdfUniforms(program);
-			// Radiosity rays read last frame's radiance cache beyond the near distance.
-			RadianceCachePass radianceCache = renderer.GetPass<RadianceCachePass>();
-			if (radianceCache != null && gi.RadianceCacheForRadiosity)
-			{
-				radianceCache.SetUniforms(program, 5);
-			}
-			else
-			{
-				program.SetFloat("rcNearDistance", 0f);
-			}
-
 			program.SetTexture("CardIndex", TextureTarget.Texture2D, atlas.CardIndex, 0);
 			program.SetTexture("CardAlbedo", TextureTarget.Texture2D, atlas.Albedo, 1);
 			program.SetTexture("CardNormal", TextureTarget.Texture2D, atlas.Normal, 2);
 			program.SetTexture("CardEmissive", TextureTarget.Texture2D, atlas.Emissive, 3);
-			program.SetTexture("FinalLightingPrev", TextureTarget.Texture2D, atlas.FinalLightingPrevious, 4);
-
-			program.SetVector3("giSkyRadiance", gi.SkyRadiance);
-			program.SetInt("radiosityRays", gi.RadiosityRays);
-			program.SetFloat("radiosityBlend", gi.RadiosityBlend);
-			program.SetInt("frameIndex", frameIndex);
+			program.SetTexture("RadiosityProbes", TextureTarget.Texture2D, atlas.RadiosityProbes, 4);
 			program.SetInt2("atlasRegion", atlas.Size, atlas.UsedRows);
-
-			GL.BindImageTexture(0, atlas.IndirectLighting, 0, false, 0, TextureAccess.ReadWrite, SizedInternalFormat.Rgba16f);
-			GL.BindImageTexture(1, atlas.FinalLightingCurrent, 0, false, 0, TextureAccess.WriteOnly, SizedInternalFormat.Rgba16f);
-
+			GL.BindImageTexture(0, atlas.FinalLightingCurrent, 0, false, 0, TextureAccess.WriteOnly, SizedInternalFormat.Rgba16f);
 			lighting.DispatchThreads(atlas.Size, atlas.UsedRows, 1, 8, 8, 1);
 			ComputeShader.Barrier(MemoryBarrierFlags.ShaderImageAccessBarrierBit | MemoryBarrierFlags.TextureFetchBarrierBit);
 		}

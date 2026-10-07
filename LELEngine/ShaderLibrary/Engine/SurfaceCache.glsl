@@ -18,9 +18,16 @@ vec3 SampleSurfaceCache(int objectIndex, vec3 localPos, vec3 localNormal, sample
 	vec3 relaxedSum = vec3(0.0);
 	float relaxedWeightSum = 0.0;
 
-	for (int i = 0; i < o.cardInfo.y; i++)
+	// Fixed card layout (SurfaceCacheAtlas): card 2 * axis faces +axis, card 2 * axis + 1 faces -axis, so only
+	// the card on the side of each non-zero normal component can pass the facing test: at most three cards.
+	for (int axis = 0; axis < 3; axis++)
 	{
-		Card c = cards[o.cardInfo.x + i];
+		float component = localNormal[axis];
+		if (abs(component) <= 0.05) continue;
+		int cardIndex = 2 * axis + (component < 0.0 ? 1 : 0);
+		if (cardIndex >= o.cardInfo.y) continue;
+
+		Card c = cards[o.cardInfo.x + cardIndex];
 		float facing = dot(localNormal, c.axisZ.xyz);
 		if (facing <= 0.05) continue;
 

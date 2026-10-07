@@ -78,11 +78,20 @@ vec3 ACESFilm(vec3 x)
 	return clamp((x * (a * x + b)) / (x * (c * x + d) + e), 0.0, 1.0);
 }
 
+// Interleaved gradient noise (Jimenez 2014): a fixed per-pixel pattern in [0, 1).
+float Dither(vec2 pixel)
+{
+	return fract(52.9829189 * fract(dot(pixel, vec2(0.06711056, 0.00583715))));
+}
+
 void main()
 {
 	vec3 hdr = texture(SceneColor, fUV).rgb * Exposure;
 	vec3 color = TonemapEnabled != 0 ? ACESFilm(hdr) : clamp(hdr, 0.0, 1.0);
 	color = pow(color, vec3(1.0 / 2.2));
+	// Half an 8-bit step of static dither before quantisation: smooth gradients lose their contour bands, and
+	// a slowly drifting GI value no longer shows as a crawling band edge but as a gradual change of the pattern.
+	color += (Dither(gl_FragCoord.xy) - 0.5) / 255.0;
 	FragColor = vec4(color, 1.0);
 }
 ";

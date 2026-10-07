@@ -39,11 +39,21 @@ namespace TestGame.Scenes
 			/// <summary>Scripted camera motion (slow yaw and strafe) for recording temporal stability tests.</summary>
 			public bool AutoCamera;
 
+			/// <summary>Mouse look; off for measurement runs so a moving mouse cannot turn the camera.</summary>
+			public bool MouseLook = true;
+
+			/// <summary>GPU timer queries (per-pass times in the stats line).</summary>
+			public bool Profiler = true;
+
+			/// <summary>Start in fullscreen (the desktop compositor then stops sharing the GPU with other windows).</summary>
+			public bool Fullscreen;
+
 			/// <summary>Dump this many consecutive frames (BMP) to <see cref="DumpDirectory" /> after a warm-up.</summary>
 			public int DumpFrames;
 
 			public string DumpDirectory = "framedump";
 			public float DumpAfterSeconds = 5f;
+			public int DumpAfterFrames;
 
 			/// <summary>Per-frame probe jitter (off for diagnostics).</summary>
 			public bool ProbeJitter = true;
@@ -70,7 +80,10 @@ namespace TestGame.Scenes
 			public bool ProbeAdaptivePlacement = true;
 			public int RadiosityRays = 4;
 			public float RadiosityBlend = 0.9f;
+			public float RadiosityMaxHistorySamples = 64f;
 			public float ProbeHistoryWeight = 0.5f;
+			public float ProbeMaxHistorySamples = 32f;
+			public float ProbeChangeThreshold = 0.5f;
 			public float ProbeTemporalBlend = 0.9f;
 			public bool ProbeImportanceSampling = true;
 			public bool ProbeSpatialFilter = true;
@@ -78,8 +91,14 @@ namespace TestGame.Scenes
 			public int SurfaceCacheTexelsPerMeter = 6;
 			public bool RadianceCache = true;
 			public bool RadianceCacheForRadiosity = true;
+			public bool SdfObjectIdLookup = true;
+			public bool RadianceCacheFarShortcut = true;
+			public bool ProbeAdaptiveFlaggedRefine;
+			public int RadiosityIdleDivisor = 4;
 			public float RadianceCacheNearDistance = 2f;
 			public float RadianceCacheHistoryFrames = 20f;
+			public float RadianceCacheMaxHistorySamples = 32f;
+			public float RadianceCacheChangeThreshold = 0.25f;
 			public int RadianceCacheProbesPerFrame = 160;
 			public int RadianceCacheProbeResolution = 16;
 			public int RadianceCacheTraceResolution = 32;
@@ -153,15 +172,24 @@ namespace TestGame.Scenes
 			Lighting.GI.ProbeAdaptivePlacement = options.ProbeAdaptivePlacement;
 			Lighting.GI.RadiosityRays = options.RadiosityRays;
 			Lighting.GI.RadiosityBlend = options.RadiosityBlend;
+			Lighting.GI.RadiosityMaxHistorySamples = options.RadiosityMaxHistorySamples;
 			Lighting.GI.ProbeHistoryWeight = options.ProbeHistoryWeight;
+			Lighting.GI.ProbeMaxHistorySamples = options.ProbeMaxHistorySamples;
+			Lighting.GI.ProbeChangeThreshold = options.ProbeChangeThreshold;
 			Lighting.GI.ProbeTemporalBlend = options.ProbeTemporalBlend;
 			Lighting.GI.ProbeImportanceSampling = options.ProbeImportanceSampling;
 			Lighting.GI.ProbeSpatialFilter = options.ProbeSpatialFilter;
 			Lighting.GI.ProbeFilterRadius = options.ProbeFilterRadius;
 			Lighting.GI.RadianceCacheEnabled = options.RadianceCache;
+			Lighting.GI.SdfObjectIdLookup = options.SdfObjectIdLookup;
+			Lighting.GI.RadianceCacheFarShortcut = options.RadianceCacheFarShortcut;
+			Lighting.GI.ProbeAdaptiveFlaggedRefine = options.ProbeAdaptiveFlaggedRefine;
+			Lighting.GI.RadiosityIdleDivisor = options.RadiosityIdleDivisor;
 			Lighting.GI.RadianceCacheForRadiosity = options.RadianceCacheForRadiosity;
 			Lighting.GI.RadianceCacheNearDistance = options.RadianceCacheNearDistance;
 			Lighting.GI.RadianceCacheHistoryFrames = options.RadianceCacheHistoryFrames;
+			Lighting.GI.RadianceCacheMaxHistorySamples = options.RadianceCacheMaxHistorySamples;
+			Lighting.GI.RadianceCacheChangeThreshold = options.RadianceCacheChangeThreshold;
 			Lighting.GI.RadianceCacheProbesPerFrame = options.RadianceCacheProbesPerFrame;
 			Lighting.GI.RadianceCacheProbeResolution = options.RadianceCacheProbeResolution;
 			Lighting.GI.RadianceCacheTraceResolution = options.RadianceCacheTraceResolution;
@@ -347,12 +375,19 @@ namespace TestGame.Scenes
 			controller.CameraTransform = cameraObject.transform;
 			controller.EyeHeight = 1.7f;
 			controller.AutoPilot = options.AutoCamera;
+			controller.MouseLook = options.MouseLook;
+			Game.Mono.Renderer.Profiler.Enabled = options.Profiler;
+			if (options.Fullscreen)
+			{
+				Game.Mono.WindowState = OpenTK.Windowing.Common.WindowState.Fullscreen;
+			}
 
 			GIDebugControls controls = player.AddComponent<GIDebugControls>();
 			controls.PrintStats = options.Stats;
 			controls.DumpFrames = options.DumpFrames;
 			controls.DumpDirectory = options.DumpDirectory;
 			controls.DumpAfterSeconds = options.DumpAfterSeconds;
+			controls.DumpAfterFrames = options.DumpAfterFrames;
 		}
 
 		private static GameObject Box(Scene scene, string name, string material, Vector3 center, Vector3 halfSize)

@@ -162,6 +162,24 @@ public sealed class MeshRenderer : Behaviour
 	}
 
 	/// <summary>
+	///     Per-object part of <see cref="Render" />: model matrix and material uniforms, then the draw. The caller
+	///     has already set the camera and lighting uniforms on the (active) material shader for this object's
+	///     ReceiveShadows / ReceiveGI flags, so draws grouped by shader skip re-sending them per object.
+	/// </summary>
+	public void RenderObject()
+	{
+		if (Mesh == null || UsingShader == null)
+		{
+			return;
+		}
+
+		transform.SetModelMatrix(UsingShader);
+		Material.SetUniforms();
+
+		DrawGeometry();
+	}
+
+	/// <summary>
 	///     Draws geometry with an externally provided program (depth prepass, shadow map, voxelization).
 	///     Only the model matrix is set; the caller sets everything else. The program must be active.
 	/// </summary>

@@ -25,6 +25,15 @@ namespace LELEngine.Rendering
 
 		public Color4 ClearColor = new Color4(0f, 0f, 0f, 1f);
 
+		/// <summary>
+		///     glFlush after every pass so the GPU starts a frame while the CPU is still submitting it. The Intel
+		///     driver otherwise kicks the frame off at SwapBuffers, leaving the GPU idle for the submission time.
+		/// </summary>
+		public bool FlushBetweenPasses = false;
+
+		/// <summary>glFlush once after the first pass so the GPU starts the frame while the rest is submitted.</summary>
+		public bool FlushAfterFirstPass = true;
+
 		#endregion
 	}
 }

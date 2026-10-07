@@ -43,15 +43,26 @@ uniform float temporalBlend;      // history weight, 0 = off
 uniform int historyValid;
 uniform float planeTolerance;
 
+// Unpacks the 7-layer coefficient layout written by ProbeSH.shader.
 void ReadSH(ivec2 probe, out vec3 c[9], out float valid)
 {
-	valid = 1.0;
-	for (int i = 0; i < 9; i++)
-	{
-		vec4 s = texelFetch(ProbeSH, ivec3(probe, i), 0);
-		c[i] = s.rgb;
-		if (i == 0) valid = s.a;
-	}
+	vec4 l0 = texelFetch(ProbeSH, ivec3(probe, 0), 0);
+	vec4 l1 = texelFetch(ProbeSH, ivec3(probe, 1), 0);
+	vec4 l2 = texelFetch(ProbeSH, ivec3(probe, 2), 0);
+	vec4 l3 = texelFetch(ProbeSH, ivec3(probe, 3), 0);
+	vec4 l4 = texelFetch(ProbeSH, ivec3(probe, 4), 0);
+	vec4 l5 = texelFetch(ProbeSH, ivec3(probe, 5), 0);
+	vec4 l6 = texelFetch(ProbeSH, ivec3(probe, 6), 0);
+	c[0] = l0.rgb;
+	c[1] = vec3(l0.a, l1.rg);
+	c[2] = vec3(l1.ba, l2.r);
+	c[3] = l2.gba;
+	c[4] = l3.rgb;
+	c[5] = vec3(l3.a, l4.rg);
+	c[6] = vec3(l4.ba, l5.r);
+	c[7] = l5.gba;
+	c[8] = l6.rgb;
+	valid = l6.a;
 }
 
 void main()

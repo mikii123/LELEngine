@@ -23,6 +23,16 @@ layout(std430, binding = 6) readonly buffer PreviousAdaptiveProbeBuffer
 	uint previousAdaptiveTileData[];
 };
 
+// Per-tile data for the placement hierarchy (ProbeAdaptiveSnapshot.shader): [tile] = probe count frozen
+// before the current level (placement tests coverage against this count only, so candidates never see
+// probes appended by other threads of the same dispatch and the probe set is deterministic for a view);
+// [tiles + tile] = 1 when the coarse level found the tile not flat (a candidate below full coverage), the
+// only tiles the finer level visits.
+layout(std430, binding = 7) buffer AdaptiveLevelCounts
+{
+	uint adaptiveLevelCount[];
+};
+
 int AdaptiveTileOffset(ivec2 pixel)
 {
 	ivec2 tile = pixel / probeSpacing;

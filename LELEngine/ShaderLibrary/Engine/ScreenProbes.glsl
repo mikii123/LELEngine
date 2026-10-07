@@ -19,10 +19,26 @@ uniform ivec2 probeCount;      // uniform probes per axis
 uniform int probeAtlasRows;    // uniform rows plus adaptive rows
 uniform int probeSpacing;
 uniform ivec2 probeJitter;
+uniform vec2 directionJitter;  // this frame's low-discrepancy sub-texel offset, shared base of every probe's jitter
 
 ivec2 ProbeAnchorPixel(ivec2 probe)
 {
 	return clamp(probe * probeSpacing + probeJitter, ivec2(0), screenSize - 1);
+}
+
+// Sub-texel offset of this probe's ray directions this frame. One global value would make every probe's
+// estimation error identical and the whole screen breathe together; a 3x3 dither (so the filter's
+// neighbours sample different parts of their texels) plus a per-probe hash makes the error spatially white,
+// which the spatial filter, the bilinear probe interpolation and the temporal blends then average away.
+// Every probe still walks the frame sequence, so each converges over time like before.
+vec2 ProbeDirectionJitter(ivec2 probe)
+{
+	uint h = uint(probe.x) * 73856093u ^ uint(probe.y) * 19349663u;
+	h = (h ^ (h >> 13u)) * 0x5bd1e995u;
+	h ^= h >> 15u;
+	vec2 hashOffset = vec2(float(h & 0xFFFFu), float((h >> 16u) & 0xFFFFu)) / (65536.0 * 3.0);
+	vec2 dither = vec2(float(probe.x % 3), float(probe.y % 3)) / 3.0;
+	return fract(directionJitter + dither + hashOffset);
 }
 
 // Atlas texel of the adaptive probe with the given index.

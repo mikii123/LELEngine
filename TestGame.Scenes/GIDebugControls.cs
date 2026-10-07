@@ -31,6 +31,10 @@ namespace TestGame.Scenes
 		public int DumpFrames;
 
 		public float DumpAfterSeconds = 5f;
+
+		/// <summary>When > 0, the dump starts at this frame instead of after <see cref="DumpAfterSeconds" /> (frame rate independent).</summary>
+		public int DumpAfterFrames;
+
 		public string DumpDirectory = "framedump";
 
 		public enum DebugView
@@ -51,8 +55,18 @@ namespace TestGame.Scenes
 
 		private static readonly int[] resolutions = { 64, 128, 256 };
 		private float statsTimer;
+		private int updateFrames;
 		private int statsFrames;
+		private double cpuRenderSum;
+		private double swapSum;
+		private double gpuWallSum;
+		private double sectionWallSum;
+		private double headSum;
+		private double tailSum;
+		private double sectionElapsedSum;
 		private readonly Dictionary<string, double> passSums = new Dictionary<string, double>();
+		private readonly Dictionary<string, double> gapSums = new Dictionary<string, double>();
+		private readonly Dictionary<string, double> foreignSums = new Dictionary<string, double>();
 		private readonly List<string> passOrder = new List<string>();
 
 		#endregion
@@ -71,7 +85,9 @@ namespace TestGame.Scenes
 				AccumulateStats();
 			}
 
-			if (DumpFrames > 0 && Time.time >= DumpAfterSeconds)
+			updateFrames++;
+			bool dumpDue = DumpAfterFrames > 0 ? updateFrames >= DumpAfterFrames : Time.time >= DumpAfterSeconds;
+			if (DumpFrames > 0 && dumpDue)
 			{
 				Game.Mono.Renderer.FrameDumper.Start(DumpDirectory, DumpFrames);
 				DumpFrames = 0;
@@ -226,6 +242,13 @@ namespace TestGame.Scenes
 			GpuProfiler profiler = Game.Mono.Renderer.Profiler;
 			statsTimer += Time.deltaTime;
 			statsFrames++;
+			cpuRenderSum += Time.cpuRenderMs;
+			swapSum += Time.swapMs;
+			gpuWallSum += profiler.FrameWallMilliseconds;
+			sectionWallSum += profiler.SectionWallMilliseconds;
+			headSum += profiler.HeadMilliseconds;
+			tailSum += profiler.TailMilliseconds;
+			sectionElapsedSum += profiler.SectionElapsedMilliseconds;
 
 			foreach (KeyValuePair<string, double> result in profiler.Results)
 			{
@@ -235,6 +258,20 @@ namespace TestGame.Scenes
 					passOrder.Add(result.Key);
 				}
 				passSums[result.Key] = sum + result.Value;
+			}
+
+			foreach (KeyValuePair<string, double> gap in profiler.Gaps)
+			{
+				double sum;
+				gapSums.TryGetValue(gap.Key, out sum);
+				gapSums[gap.Key] = sum + gap.Value;
+			}
+
+			foreach (KeyValuePair<string, double> item in profiler.Foreign)
+			{
+				double sum;
+				foreignSums.TryGetValue(item.Key, out sum);
+				foreignSums[item.Key] = sum + item.Value;
 			}
 
 			if (statsTimer < StatsInterval)
@@ -255,16 +292,62 @@ namespace TestGame.Scenes
 				passes.Append(' ').Append(name).Append(' ').Append(average.ToString("0.00", CultureInfo.InvariantCulture));
 			}
 
+			// GPU idle before each section, largest first (shows which barriers / target switches drain the GPU).
+			StringBuilder gaps = new StringBuilder();
+			double gapTotal = 0;
+			foreach (KeyValuePair<string, double> gap in gapSums)
+			{
+				gapTotal += gap.Value / statsFrames;
+			}
+			foreach (KeyValuePair<string, double> gap in System.Linq.Enumerable.Take(System.Linq.Enumerable.OrderByDescending(gapSums, g => g.Value), 6))
+			{
+				double average = gap.Value / statsFrames;
+				if (average < 0.05)
+				{
+					break;
+				}
+				gaps.Append(' ').Append(gap.Key).Append(" +").Append(average.ToString("0.00", CultureInfo.InvariantCulture));
+			}
+
+			// GPU time inside our sections handed to other contexts (DWM, other apps), largest first.
+			StringBuilder foreignText = new StringBuilder();
+			double foreignTotal = 0;
+			foreach (KeyValuePair<string, double> item in foreignSums)
+			{
+				foreignTotal += item.Value / statsFrames;
+			}
+			foreach (KeyValuePair<string, double> item in System.Linq.Enumerable.Take(System.Linq.Enumerable.OrderByDescending(foreignSums, g => g.Value), 5))
+			{
+				double average = item.Value / statsFrames;
+				if (average < 0.05)
+				{
+					break;
+				}
+				foreignText.Append(' ').Append(item.Key).Append(" +").Append(average.ToString("0.00", CultureInfo.InvariantCulture));
+			}
+
 			ScreenProbeGatherPass gather = Game.Mono.Renderer.GetPass<ScreenProbeGatherPass>();
 			string adaptive = gather != null ? $" adaptive probes {gather.AdaptiveProbeCount}" : string.Empty;
 			Console.WriteLine(
-				$"[Stats] {statsFrames / statsTimer:0.0} fps | GPU {total.ToString("0.00", CultureInfo.InvariantCulture)} ms |{passes}" +
-				$" | GI {(Lighting.GI.Enabled ? "on" : "off")} {Lighting.GI.Mode} resolve {(Lighting.GI.ResolveActive ? "on" : "off")}{adaptive}");
+				$"[Stats] {statsFrames / statsTimer:0.0} fps | GPU {(sectionElapsedSum / statsFrames).ToString("0.00", CultureInfo.InvariantCulture)} ms (frame wall {(gpuWallSum / statsFrames).ToString("0.00", CultureInfo.InvariantCulture)}, pass sum {total.ToString("0.00", CultureInfo.InvariantCulture)}, skipped {profiler.SkippedSections}, head {(headSum / statsFrames).ToString("0.00", CultureInfo.InvariantCulture)}, tail {(tailSum / statsFrames).ToString("0.00", CultureInfo.InvariantCulture)})" +
+				$" | CPU render {(cpuRenderSum / statsFrames).ToString("0.00", CultureInfo.InvariantCulture)} ms swap {(swapSum / statsFrames).ToString("0.00", CultureInfo.InvariantCulture)} ms |{passes}" +
+				$" | GI {(Lighting.GI.Enabled ? "on" : "off")} {Lighting.GI.Mode} resolve {(Lighting.GI.ResolveActive ? "on" : "off")}{adaptive}" +
+				$" | gaps {gapTotal.ToString("0.00", CultureInfo.InvariantCulture)} ms:{gaps} | foreign {foreignTotal.ToString("0.00", CultureInfo.InvariantCulture)} ms:{foreignText}");
 
 			statsTimer = 0f;
 			statsFrames = 0;
+			cpuRenderSum = 0;
+			swapSum = 0;
+			gpuWallSum = 0;
+			sectionWallSum = 0;
+			headSum = 0;
+			tailSum = 0;
+			sectionElapsedSum = 0;
 			passSums.Clear();
 			passOrder.Clear();
+			gapSums.Clear();
+			foreignSums.Clear();
+			profiler.ResetCounters();
 		}
 
 		#endregion

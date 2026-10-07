@@ -207,9 +207,53 @@ namespace LELEngine.Shaders
 			return texture?.Handle ?? 0;
 		}
 
+		/// <summary>
+		///     True when one of this material's uniforms has a name the camera or lighting passes also set (legacy
+		///     materials carry e.g. "lightColor"). Draws grouped by shader send the camera and lighting uniforms once
+		///     per program; after such a material they must be sent again for the next object.
+		/// </summary>
+		public bool OverridesSharedUniforms()
+		{
+			foreach (Uniform uniform in Uniforms)
+			{
+				if (IsSharedUniform(uniform.Name))
+				{
+					return true;
+				}
+			}
+
+			return false;
+		}
+
 		#endregion
 
 		#region PrivateMethods
+
+		// Uniform names owned by Camera.SetUniforms, Transform.SetModelMatrix and Lighting.SetUniforms.
+		private static bool IsSharedUniform(string name)
+		{
+			switch (name)
+			{
+				case "projectionMatrix":
+				case "viewMatrix":
+				case "modelMatrix":
+				case "lightPosition":
+				case "CamPosition":
+				case "lightColor":
+				case "lightSpaceMatrix":
+				case "ShadowMap":
+				case "VoxelRadiance":
+				case "IndirectDiffuse":
+				case "IndirectSpecular":
+					return true;
+			}
+
+			return name.StartsWith("LAmbient.", StringComparison.Ordinal) || name.StartsWith("LDirectional.", StringComparison.Ordinal)
+				|| name.StartsWith("LSpecular.", StringComparison.Ordinal) || name.StartsWith("shadow", StringComparison.Ordinal)
+				|| name.StartsWith("gi", StringComparison.Ordinal) || name.StartsWith("voxel", StringComparison.Ordinal)
+				|| name.StartsWith("sdf", StringComparison.Ordinal) || name.StartsWith("GlobalSdf", StringComparison.Ordinal)
+				|| name.StartsWith("rc", StringComparison.Ordinal);
+		}
 
 		private T Find<T>(string name)
 			where T : Uniform

@@ -12,7 +12,7 @@ struct SceneObject
 	vec4 boundsMax;
 	vec4 atlasOrigin;   // SDF atlas texel origin
 	vec4 atlasSize;     // SDF texels per axis
-	vec4 padding;       // SDF padding ring width per axis
+	vec4 padding;       // xyz SDF padding ring width per axis, w = emissive intensity (card emission colour x this)
 	vec4 meshBoundsMin; // scaled-local mesh bounds
 	vec4 meshBoundsMax;
 	ivec4 cardInfo;     // x first card index, y card count, z 1 = dynamic
@@ -61,9 +61,9 @@ float SceneObjectDistance(SceneObject o, vec3 local)
 	return max(outsideMesh, sampled - outside);
 }
 
-// Index of the object whose surface is nearest to world point p (within maxDistance), or -1.
-// Used to identify what a global SDF ray hit, like Lumen's mesh SDF traces know their object.
-int SceneObjectAtPoint(vec3 p, float maxDistance, out vec3 localPos)
+// Index of the object whose surface is nearest to world point p (within maxDistance), or -1, by testing
+// every object. Used to identify what a global SDF ray hit, like Lumen's mesh SDF traces know their object.
+int SceneObjectAtPointSlow(vec3 p, float maxDistance, out vec3 localPos)
 {
 	int best = -1;
 	float bestDistance = maxDistance;
@@ -86,6 +86,38 @@ int SceneObjectAtPoint(vec3 p, float maxDistance, out vec3 localPos)
 
 	return best;
 }
+
+#ifdef HAS_GLOBAL_SDF
+// Fast path: the global distance field stores, per voxel, which object is nearest. One fetch and one
+// distance check identify the object at a hit; the full search only runs where the voxel's object does not
+// pass the distance test (seams between objects, points outside the field).
+int SceneObjectAtPoint(vec3 p, float maxDistance, out vec3 localPos)
+{
+	vec3 uvw = (p - sdfGridMin) / sdfGridSize;
+	ivec3 voxel = ivec3(floor(uvw * float(sdfResolution)));
+	if (all(greaterThanEqual(voxel, ivec3(0))) && all(lessThan(voxel, ivec3(sdfResolution))))
+	{
+		uint id = texelFetch(GlobalSdfObjectIds, voxel, 0).r;
+		if (id > 0u && int(id) <= sceneObjectCount)
+		{
+			SceneObject o = sceneObjects[int(id) - 1];
+			vec3 local = (o.worldToLocal * vec4(p, 1.0)).xyz;
+			if (abs(SceneObjectDistance(o, local)) <= maxDistance)
+			{
+				localPos = local;
+				return int(id) - 1;
+			}
+		}
+	}
+
+	return SceneObjectAtPointSlow(p, maxDistance, localPos);
+}
+#else
+int SceneObjectAtPoint(vec3 p, float maxDistance, out vec3 localPos)
+{
+	return SceneObjectAtPointSlow(p, maxDistance, localPos);
+}
+#endif
 
 vec3 SceneObjectWorldToLocalDir(SceneObject o, vec3 worldDir)
 {

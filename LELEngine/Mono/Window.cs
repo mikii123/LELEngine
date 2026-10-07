@@ -12,6 +12,7 @@ namespace LELEngine
 		#region OtherFields
 
 		internal Stopwatch renderStopwatch;
+		private bool framePending;
 
 		#endregion
 
@@ -31,7 +32,9 @@ namespace LELEngine
 			: base(
 				new GameWindowSettings
 				{
-					UpdateFrequency = 60.0
+					// 0 = run as fast as the GPU allows; a fixed frequency makes the loop sleep with the coarse
+					// Windows timer and costs frames when a frame takes longer than one period.
+					UpdateFrequency = 0.0
 				},
 				new NativeWindowSettings
 				{
@@ -43,7 +46,7 @@ namespace LELEngine
 					Flags = ContextFlags.ForwardCompatible
 				})
 		{
-			Console.WriteLine("GL version: " + GL.GetString(StringName.Version) + "\nRenderer: " + GL.GetString(StringName.Renderer));
+			Console.WriteLine("GL version: " + GL.GetString(StringName.Version) + "\nRenderer: " + GL.GetString(StringName.Renderer) + "\nVSync: " + VSync);
 			GLCapabilities.Initialize();
 		}
 
@@ -82,14 +85,32 @@ namespace LELEngine
 
 		protected override void OnRenderFrame(FrameEventArgs e)
 		{
-			// Child loop
+			// The frame's commands are submitted; hand them to the GPU now and present later, right before
+			// the next frame is submitted (PresentPendingFrame). On this driver SwapBuffers blocks until the
+			// GPU has finished the frame, so swapping here would leave the GPU idle during the next update
+			// and command submission; deferring the swap overlaps that CPU work with GPU rendering.
+			GL.Flush();
+			framePending = true;
 
-			// swap backbuffer
-			SwapBuffers();
-
-			// Stop the stopwatch
 			renderStopwatch.Stop();
-			Time.renderDeltaTimeD = renderStopwatch.ElapsedMilliseconds;
+			Time.renderDeltaTimeD = renderStopwatch.Elapsed.TotalMilliseconds;
+		}
+
+		/// <summary>
+		///     Presents the previously rendered frame. The time spent here is the wait for the GPU to finish
+		///     it (the frame is GPU bound) or for the display (vsync); recorded in <see cref="Time.swapMs" />.
+		/// </summary>
+		protected void PresentPendingFrame()
+		{
+			if (!framePending)
+			{
+				return;
+			}
+
+			long before = Stopwatch.GetTimestamp();
+			SwapBuffers();
+			Time.swapMs = (Stopwatch.GetTimestamp() - before) * 1000.0 / Stopwatch.Frequency;
+			framePending = false;
 		}
 
 		#endregion

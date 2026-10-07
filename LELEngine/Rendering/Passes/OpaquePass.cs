@@ -64,12 +64,19 @@ namespace LELEngine.Rendering.Passes
 			}
 		}
 
-		// Groups draws by program to minimise program switches.
+		// Groups draws by program to minimise program switches. Camera and lighting uniforms are the same for
+		// every object drawn with a program, so they are sent once per program and again only when an object's
+		// ReceiveShadows / ReceiveGI flags differ from the previous object's or the previous object's material
+		// overrode one of them (Material.OverridesSharedUniforms); each draw then only sends its model matrix
+		// and material uniforms.
 		private static void PerShader(IReadOnlyList<MeshRenderer> renderers)
 		{
 			foreach (KeyValuePair<string, ShaderProgram> shader in InternalStorage.Shaders)
 			{
 				bool used = false;
+				bool resend = true;
+				bool receiveShadows = false;
+				bool receiveGI = false;
 				foreach (MeshRenderer renderer in renderers)
 				{
 					if (renderer.UsingShader != shader.Value)
@@ -83,7 +90,20 @@ namespace LELEngine.Rendering.Passes
 						used = true;
 					}
 
-					renderer.Render();
+					if (resend || renderer.ReceiveShadows != receiveShadows || renderer.ReceiveGI != receiveGI)
+					{
+						Camera.main.SetUniforms(shader.Value);
+						Lighting.SetUniforms(shader.Value, renderer.ReceiveShadows, renderer.ReceiveGI);
+						receiveShadows = renderer.ReceiveShadows;
+						receiveGI = renderer.ReceiveGI;
+						resend = false;
+					}
+
+					renderer.RenderObject();
+					if (renderer.Material != null && renderer.Material.OverridesSharedUniforms())
+					{
+						resend = true;
+					}
 				}
 			}
 		}

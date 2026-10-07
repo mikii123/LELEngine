@@ -34,14 +34,14 @@ in vec3 fLocalNormal;
 in vec2 fTexCoord;
 
 uniform vec4 voxAlbedo;        // material base color
-uniform vec4 voxEmissive;      // rgb color, a intensity
+uniform vec4 voxEmissive;      // rgb color; the intensity (a) travels with the object table so pulsing never recaptures
 uniform sampler2D voxAlbedoMap;
 uniform int voxUseAlbedoMap;
 uniform int cardIndex;
 
 layout(location = 0) out vec4 OutAlbedo;        // rgb albedo, a = 1 valid
 layout(location = 1) out vec4 OutNormal;        // local normal * 0.5 + 0.5
-layout(location = 2) out vec4 OutEmissive;      // emitted radiance
+layout(location = 2) out vec4 OutEmissive;      // emission colour (scaled by the object's emissive intensity when lit)
 layout(location = 3) out vec4 OutLocalPosition; // xyz scaled-local position, w = 1
 layout(location = 4) out uint OutCardIndex;
 
@@ -60,7 +60,7 @@ void main()
 
 	OutAlbedo = vec4(albedo, 1.0);
 	OutNormal = vec4(n * 0.5 + 0.5, 1.0);
-	OutEmissive = vec4(voxEmissive.rgb * voxEmissive.a, 1.0);
+	OutEmissive = vec4(voxEmissive.rgb, 1.0);
 	OutLocalPosition = vec4(fLocalPos, 1.0);
 	OutCardIndex = uint(cardIndex);
 }

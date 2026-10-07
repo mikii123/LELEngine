@@ -30,6 +30,9 @@ namespace TestGame.Scenes
 		/// <summary>Scripted motion for temporal stability tests: slow yaw sweep and sideways drift, no input.</summary>
 		public bool AutoPilot;
 
+		/// <summary>Mouse look (off keeps the camera still for measurements even when the mouse moves).</summary>
+		public bool MouseLook = true;
+
 		public float AutoPilotYawAmplitude = 25f;
 		public float AutoPilotStrafeAmplitude = 1.5f;
 		public float AutoPilotPeriod = 8f;
@@ -62,7 +65,7 @@ namespace TestGame.Scenes
 			ApplyRotation();
 			baseYaw = yaw;
 			basePosition = transform.position;
-			Input.SetCursorLocked(!AutoPilot);
+			Input.SetCursorLocked(!AutoPilot && MouseLook);
 		}
 
 		public override void Update()
@@ -88,7 +91,7 @@ namespace TestGame.Scenes
 				Fly = !Fly;
 			}
 
-			if (Input.cursorLocked)
+			if (Input.cursorLocked && MouseLook)
 			{
 				Look(Input.mouseDelta);
 			}

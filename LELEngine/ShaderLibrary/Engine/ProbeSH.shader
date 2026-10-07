@@ -7,11 +7,14 @@
 
 // Projects each probe's 8x8 hemispherical radiance map onto second-order spherical harmonics
 // (Lumen converts screen probes to SH for cheap, smooth per-pixel interpolation and integration).
-// One thread per probe; 9 RGB coefficients written to the layers of an image array.
+// One thread per probe; the 27 coefficient values plus the valid flag are packed into 7 RGBA layers
+// (ProbeIntegrate.shader unpacks them: 7 fetches per probe instead of 9).
 layout(local_size_x = 8, local_size_y = 8) in;
 
 uniform sampler2D ProbeRadiance;
 layout(binding = 0, rgba16f) uniform writeonly image2DArray ProbeSH;
+
+#define SH_LAYERS 7
 
 void main()
 {
@@ -47,10 +50,13 @@ void main()
 		}
 	}
 
-	for (int i = 0; i < 9; i++)
-	{
-		imageStore(ProbeSH, ivec3(probe, i), vec4(c[i], valid ? 1.0 : 0.0));
-	}
+	imageStore(ProbeSH, ivec3(probe, 0), vec4(c[0], c[1].r));
+	imageStore(ProbeSH, ivec3(probe, 1), vec4(c[1].gb, c[2].rg));
+	imageStore(ProbeSH, ivec3(probe, 2), vec4(c[2].b, c[3]));
+	imageStore(ProbeSH, ivec3(probe, 3), vec4(c[4], c[5].r));
+	imageStore(ProbeSH, ivec3(probe, 4), vec4(c[5].gb, c[6].rg));
+	imageStore(ProbeSH, ivec3(probe, 5), vec4(c[6].b, c[7]));
+	imageStore(ProbeSH, ivec3(probe, 6), vec4(c[8], valid ? 1.0 : 0.0));
 }
 
 /////Compute

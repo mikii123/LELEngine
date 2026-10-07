@@ -15,6 +15,7 @@ uniform int rcProbesPerRow;             // probe tiles per atlas row
 uniform int rcProbeResolution;          // stored octahedral texels per probe; a tile adds a one texel border
 uniform vec2 rcAtlasSize;               // texels
 uniform float rcNearDistance;           // rays trace the distance field this far, then read the cache
+uniform int rcFarShortcut;              // 1: far targets skip the target visibility pass (see SampleRadianceCache)
 
 int RadianceCacheTileSize()
 {
@@ -42,12 +43,17 @@ vec3 RadianceCacheProbePosition(ivec3 coord)
 	return rcGridMin + vec3(coord) * rcProbeSpacing;
 }
 
+// Bilinear lookup of one probe's map at an octahedral coordinate.
+vec4 RadianceCacheProbeSampleOct(int probeIndex, vec2 oct)
+{
+	vec2 texel = vec2(RadianceCacheTileOrigin(probeIndex)) + 1.0 + oct * float(rcProbeResolution);
+	return texture(RadianceCacheAtlas, texel / rcAtlasSize);
+}
+
 // Bilinear lookup of one probe's map in the given world direction.
 vec4 RadianceCacheProbeSample(ivec3 coord, vec3 direction)
 {
-	vec2 oct = DirectionToOctahedral(direction);
-	vec2 texel = vec2(RadianceCacheTileOrigin(RadianceCacheProbeIndex(coord))) + 1.0 + oct * float(rcProbeResolution);
-	return texture(RadianceCacheAtlas, texel / rcAtlasSize);
+	return RadianceCacheProbeSampleOct(RadianceCacheProbeIndex(coord), DirectionToOctahedral(direction));
 }
 
 // Radiance arriving at world point p from `direction`, interpolated from the eight surrounding probes.
@@ -64,26 +70,31 @@ bool SampleRadianceCache(vec3 p, vec3 direction, out vec3 radiance)
 	ivec3 base = clamp(ivec3(floor(g)), ivec3(0), ivec3(rcProbesPerAxis - 2));
 	vec3 f = clamp(g - vec3(base), vec3(0.0), vec3(1.0));
 	float occlusionMargin = rcProbeSpacing * 0.25;
+	vec2 octAlong = DirectionToOctahedral(direction); // shared by the eight probes
 
 	float weights[8];
+	vec3 alongRadiance[8];
 	float hitSum = 0.0;
 	float hitMin = 1e9;
+	float hitMax = 0.0;
 	float weightSum = 0.0;
 	for (int i = 0; i < 8; i++)
 	{
 		weights[i] = 0.0;
+		alongRadiance[i] = vec3(0.0);
 		ivec3 corner = ivec3(i & 1, (i >> 1) & 1, (i >> 2) & 1);
 		vec3 w3 = mix(1.0 - f, f, vec3(corner));
 		float w = w3.x * w3.y * w3.z;
 		if (w < 1e-4) continue;
 
 		ivec3 coord = base + corner;
+		int probeIndex = RadianceCacheProbeIndex(coord);
 		vec3 probePosition = RadianceCacheProbePosition(coord);
 		vec3 toPoint = p - probePosition;
 		float distanceToPoint = length(toPoint);
 		if (distanceToPoint > 1e-3)
 		{
-			vec4 towards = RadianceCacheProbeSample(coord, toPoint / distanceToPoint);
+			vec4 towards = RadianceCacheProbeSampleOct(probeIndex, DirectionToOctahedral(toPoint / distanceToPoint));
 			if (towards.a < 0.5) continue;
 			float depth = towards.a - 1.0;
 			w *= clamp((depth - (distanceToPoint - occlusionMargin)) / occlusionMargin, 0.0, 1.0);
@@ -91,19 +102,33 @@ bool SampleRadianceCache(vec3 p, vec3 direction, out vec3 radiance)
 		}
 
 		// Hit distance along the direction as p would measure it (planar geometry assumption).
-		vec4 along = RadianceCacheProbeSample(coord, direction);
+		vec4 along = RadianceCacheProbeSampleOct(probeIndex, octAlong);
 		if (along.a < 0.5) continue;
 		float hitDistance = max((along.a - 1.0) - dot(toPoint, direction), 0.0);
 
 		weights[i] = w;
+		alongRadiance[i] = along.rgb;
 		hitSum += hitDistance * w;
 		hitMin = min(hitMin, hitDistance);
+		hitMax = max(hitMax, hitDistance);
 		weightSum += w;
 	}
 
 	radiance = vec3(0.0);
 	if (weightSum <= 1e-3) return false;
 	if (hitMin < rcProbeSpacing * 1.5) return false;
+
+	// Far targets: the parallax between a probe and p is below the map's texel size, so the samples along
+	// the ray direction already are the answer and the second lookup pass is skipped -- but only when the
+	// probes agree on what they see. A probe whose hit lies much further than the others looks past an
+	// occluder edge (over a wall top, through an opening) and is exactly what the visibility pass rejects.
+	if (rcFarShortcut != 0 && hitMin >= rcProbeSpacing * 4.0 && hitMax - hitMin <= max(2.0 * rcProbeSpacing, 0.2 * hitMin))
+	{
+		vec3 farSum = vec3(0.0);
+		for (int i = 0; i < 8; i++) farSum += alongRadiance[i] * weights[i];
+		radiance = farSum / weightSum;
+		return true;
+	}
 
 	// Look each probe up towards the surface point p sees. The probe's stored hit distance in that
 	// direction also says whether it actually reaches that point: a probe outside a room may see p

@@ -220,10 +220,14 @@ namespace LELEngine
 		protected override void OnRenderFrame(FrameEventArgs e)
 		{
 			// Start stopwatch to measure render time
+			// Show last frame first: its GPU work overlapped this frame's update, so the wait is short.
+			PresentPendingFrame();
+
 			renderStopwatch.Reset();
 			renderStopwatch.Start();
 
 			Renderer?.RenderFrame(Camera.main, meshRenderers, behaviours, RenderQueue);
+			Time.cpuRenderMs = renderStopwatch.Elapsed.TotalMilliseconds;
 
 			base.OnRenderFrame(e);
 		}
