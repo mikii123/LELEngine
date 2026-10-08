@@ -16,6 +16,12 @@ namespace LELEngine.Rendering
 		public bool DepthPrepass = true;
 
 		/// <summary>
+		///     GPU-driven geometry (see <see cref="GpuScene" />): the shadow, depth prepass and opaque passes cull on the
+		///     GPU and draw with multi-draw indirect calls. Off: one draw call per object from the CPU.
+		/// </summary>
+		public bool GpuDriven = true;
+
+		/// <summary>
 		///     Apply ACES tonemapping when resolving the HDR scene to the backbuffer.
 		///     When false, HDR color is simply clamped (gamma is still applied).
 		/// </summary>

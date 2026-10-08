@@ -1,4 +1,5 @@
 using System;
+using LELEngine.Shaders;
 using OpenTK.Graphics.OpenGL4;
 using OpenTK.Mathematics;
 
@@ -8,6 +9,7 @@ namespace LELEngine.Rendering.Passes
 	///     Renders the scene depth from the directional light into a shadow map.
 	///     The orthographic frustum follows the camera and is snapped to shadow-map texels to avoid shimmering.
 	///     Results are published through <see cref="Lighting.LightSpaceMatrix" /> and <see cref="Lighting.ShadowMap" />.
+	///     GPU-driven: the casters are culled against the light's view on the GPU and drawn by one indirect call.
 	/// </summary>
 	public sealed class ShadowPass : RenderPass
 	{
@@ -21,6 +23,7 @@ namespace LELEngine.Rendering.Passes
 		#region PrivateFields
 
 		private Framebuffer shadowTarget;
+		private ShaderProgram instancedDepth;
 
 		#endregion
 
@@ -29,6 +32,7 @@ namespace LELEngine.Rendering.Passes
 		public override void Initialize(Renderer renderer)
 		{
 			CreateTarget(Lighting.Shadows.MapSize);
+			instancedDepth = new ShaderProgram("Engine/DepthOnly.shader", new[] { ShaderProgram.InstancedDefine });
 		}
 
 		public override void Execute(RenderContext context)
@@ -53,6 +57,13 @@ namespace LELEngine.Rendering.Passes
 			ComputeLightMatrices(context, light, settings, out lightView, out lightProjection);
 			Lighting.LightSpaceMatrix = lightView * lightProjection;
 
+			GpuScene gpu = context.Renderer.GpuScene;
+			bool gpuDriven = gpu.Active && instancedDepth != null && instancedDepth.IsLinked;
+			if (gpuDriven)
+			{
+				gpu.CullShadows(Lighting.LightSpaceMatrix);
+			}
+
 			shadowTarget.Bind();
 			GLState.SetDepth(true, true);
 			GLState.SetCull(true, TriangleFace.Back);
@@ -62,15 +73,23 @@ namespace LELEngine.Rendering.Passes
 			GL.Enable(EnableCap.PolygonOffsetFill);
 			GL.PolygonOffset(settings.PolygonOffsetFactor, settings.PolygonOffsetUnits);
 
-			context.DepthOnlyProgram.Use();
-			context.DepthOnlyProgram.SetMatrix4("viewMatrix", lightView);
-			context.DepthOnlyProgram.SetMatrix4("projectionMatrix", lightProjection);
+			ShaderProgram program = gpuDriven ? instancedDepth : context.DepthOnlyProgram;
+			program.Use();
+			program.SetMatrix4("viewMatrix", lightView);
+			program.SetMatrix4("projectionMatrix", lightProjection);
 
-			foreach (MeshRenderer renderer in context.Renderers)
+			if (gpuDriven)
 			{
-				if (renderer.CastShadows)
+				gpu.DrawShadowCasters();
+			}
+			else
+			{
+				foreach (MeshRenderer renderer in context.Renderers)
 				{
-					renderer.RenderDepth(context.DepthOnlyProgram);
+					if (renderer.CastShadows)
+					{
+						renderer.RenderDepth(context.DepthOnlyProgram);
+					}
 				}
 			}
 
@@ -84,6 +103,8 @@ namespace LELEngine.Rendering.Passes
 		{
 			shadowTarget?.Delete();
 			shadowTarget = null;
+			instancedDepth?.Delete();
+			instancedDepth = null;
 			Lighting.ShadowMap = null;
 		}
 

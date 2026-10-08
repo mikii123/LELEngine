@@ -4,9 +4,12 @@ using OpenTK.Mathematics;
 
 namespace LELEngine
 {
-	public sealed class Mesh
+	public sealed class Mesh : IAsset
 	{
 		#region PublicFields
+
+		/// <summary>Root-relative path of the source file (see <see cref="AssetDatabase" />).</summary>
+		public string AssetPath { get; }
 
 		public List<Vector2> UVs = new List<Vector2>();
 		public List<Vector3> Positions = new List<Vector3>();
@@ -18,6 +21,16 @@ namespace LELEngine
 		public Vector3 BoundsMin { get; private set; }
 
 		public Vector3 BoundsMax { get; private set; }
+
+		#endregion
+
+		#region InternalFields
+
+		// Range of this mesh in the shared GPU buffers (Rendering.GeometryPool); valid while PoolGeneration matches.
+		internal int PoolGeneration;
+		internal int PoolFirstIndex;
+		internal int PoolIndexCount;
+		internal int PoolBaseVertex;
 
 		#endregion
 
@@ -33,12 +46,14 @@ namespace LELEngine
 		/// <summary>
 		///     Obj Deserializer
 		/// </summary>
-		/// <param name="name">File name (with *.obj)</param>
-		public Mesh(string name)
+		/// <param name="assetPath">Asset path (relative to <see cref="AssetDatabase.Root" />, with *.obj)</param>
+		public Mesh(string assetPath)
 		{
-			if (name.Split('.')[1] == "obj")
+			AssetPath = assetPath;
+			string extension = Path.GetExtension(assetPath).ToLowerInvariant();
+			if (extension == ".obj")
 			{
-				using (StreamReader sr = new StreamReader(Directory.GetCurrentDirectory() + "/Meshes/" + name))
+				using (StreamReader sr = new StreamReader(AssetDatabase.ToAbsolute(assetPath)))
 				{
 					var lines = new List<string>();
 					while (!sr.EndOfStream)
@@ -131,7 +146,7 @@ namespace LELEngine
 					}
 				}
 			}
-			else if (name.Split('.')[1] == "fbx")
+			else if (extension == ".fbx")
 			{
 				// To be done
 			}

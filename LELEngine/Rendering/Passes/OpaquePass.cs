@@ -6,6 +6,8 @@ namespace LELEngine.Rendering.Passes
 {
 	/// <summary>
 	///     Forward shading of all mesh renderers into the HDR scene target using their own material shaders.
+	///     GPU-driven: one indirect call per opaque bucket (instanced shader variant + shared uniform state) with the
+	///     camera culling of the GPU scene; renderers whose shader has no instanced variant draw one by one.
 	/// </summary>
 	public sealed class OpaquePass : RenderPass
 	{
@@ -32,14 +34,19 @@ namespace LELEngine.Rendering.Passes
 				GLState.SetDepth(true, true, DepthFunction.Less);
 			}
 
-			switch (context.RenderQueue)
+			GpuScene gpu = context.Renderer.GpuScene;
+			if (context.RenderQueue == RenderQueue.PerObject)
 			{
-				case RenderQueue.PerObject:
-					PerObject(context.Renderers);
-					break;
-				default:
-					PerShader(context.Renderers);
-					break;
+				PerObject(context.Renderers);
+			}
+			else if (gpu.Active)
+			{
+				GpuDriven(gpu, context);
+				PerShader(gpu.PerObjectRenderers, context.Camera);
+			}
+			else
+			{
+				PerShader(context.Renderers, context.Camera);
 			}
 
 			GLState.SetDepth(true, true, DepthFunction.Less);
@@ -49,6 +56,23 @@ namespace LELEngine.Rendering.Passes
 		#endregion
 
 		#region PrivateMethods
+
+		private static void GpuDriven(GpuScene gpu, RenderContext context)
+		{
+			gpu.EnsureCameraCulled(context.ViewProjection);
+			IReadOnlyList<OpaqueBucket> buckets = gpu.Buckets;
+			for (int i = 0; i < buckets.Count; i++)
+			{
+				OpaqueBucket bucket = buckets[i];
+				ShaderProgram program = bucket.Program;
+				program.Use();
+				context.Camera.SetUniforms(program);
+				Lighting.SetUniforms(program, bucket.ReceiveShadows, bucket.ReceiveGI);
+				// A material with its own uniforms (textures, custom values) sets them; standard ones come from the table.
+				bucket.Material?.SetUniforms(program);
+				gpu.DrawCameraBucket(i);
+			}
+		}
 
 		private static void PerObject(IReadOnlyList<MeshRenderer> renderers)
 		{
@@ -69,7 +93,7 @@ namespace LELEngine.Rendering.Passes
 		// ReceiveShadows / ReceiveGI flags differ from the previous object's or the previous object's material
 		// overrode one of them (Material.OverridesSharedUniforms); each draw then only sends its model matrix
 		// and material uniforms.
-		private static void PerShader(IReadOnlyList<MeshRenderer> renderers)
+		private static void PerShader(IReadOnlyList<MeshRenderer> renderers, Camera camera)
 		{
 			foreach (KeyValuePair<string, ShaderProgram> shader in InternalStorage.Shaders)
 			{
@@ -92,7 +116,7 @@ namespace LELEngine.Rendering.Passes
 
 					if (resend || renderer.ReceiveShadows != receiveShadows || renderer.ReceiveGI != receiveGI)
 					{
-						Camera.main.SetUniforms(shader.Value);
+						camera.SetUniforms(shader.Value);
 						Lighting.SetUniforms(shader.Value, renderer.ReceiveShadows, renderer.ReceiveGI);
 						receiveShadows = renderer.ReceiveShadows;
 						receiveGI = renderer.ReceiveGI;

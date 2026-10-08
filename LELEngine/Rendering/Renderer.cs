@@ -22,6 +22,9 @@ namespace LELEngine.Rendering
 		/// <summary>GI view of the scene: distance fields, surface cache cards and the per-frame object tables.</summary>
 		public LumenScene LumenScene { get; private set; }
 
+		/// <summary>The frame's renderers on the GPU for GPU-driven drawing (<see cref="RenderSettings.GpuDriven" />).</summary>
+		public GpuScene GpuScene { get; } = new GpuScene();
+
 		/// <summary>Frames rendered so far; the one counter the passes share (per-pass counters can drift apart when passes are toggled).</summary>
 		public int FrameIndex { get; private set; }
 		public Framebuffer SceneTarget { get; private set; }
@@ -33,11 +36,19 @@ namespace LELEngine.Rendering
 		public int Width { get; private set; }
 		public int Height { get; private set; }
 
+		/// <summary>
+		///     Where the final (tonemapped) image goes: null renders to the window's default framebuffer, otherwise
+		///     to this framebuffer's first color attachment (editor viewports). Its size should match
+		///     <see cref="Width" /> x <see cref="Height" />.
+		/// </summary>
+		public Framebuffer OutputTarget { get; set; }
+
 		#endregion
 
 		#region PrivateFields
 
 		private readonly List<RenderPass> passes = new List<RenderPass>();
+		private Framebuffer dumpTarget;
 
 		#endregion
 
@@ -151,16 +162,27 @@ namespace LELEngine.Rendering
 
 		public void RenderFrame(Camera camera, IReadOnlyList<MeshRenderer> renderers, IReadOnlyList<Behaviour> behaviours, RenderQueue queue)
 		{
+			Lighting.BeginFrame(Settings);
 			if (camera == null)
 			{
 				// Nothing to render from; present the clear color.
-				Framebuffer.BindDefault(Width, Height);
+				BindOutput();
 				GL.ClearColor(Settings.ClearColor);
 				GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
 				return;
 			}
 
 			camera.UpdateMatrices(Width / (float)Height);
+			Camera.current = camera;
+
+			// Frame dumps of a window read an offscreen copy: the window's own pixels are undefined where another
+			// window covers it.
+			bool dumpOffscreen = FrameDumper.Active && OutputTarget == null;
+			if (dumpOffscreen)
+			{
+				EnsureDumpTarget();
+				OutputTarget = dumpTarget;
+			}
 
 			RenderContext context = new RenderContext
 			{
@@ -177,12 +199,23 @@ namespace LELEngine.Rendering
 				Behaviours = behaviours,
 				RenderQueue = queue,
 				SceneTarget = SceneTarget,
+				OutputTarget = OutputTarget,
 				DepthOnlyProgram = DepthOnlyProgram,
 				Fullscreen = Fullscreen
 			};
 
 			Profiler.BeginFrame();
 			FrameIndex++;
+
+			// GPU-driven geometry: the instance and material tables for this frame's culling and indirect draws.
+			if (Settings.GpuDriven && GpuScene.IsSupported)
+			{
+				GpuScene.Build(renderers);
+			}
+			else
+			{
+				GpuScene.EndFrame();
+			}
 
 			// Clear the scene target once per frame; passes bind it themselves when they need it.
 			SceneTarget.Bind();
@@ -218,9 +251,67 @@ namespace LELEngine.Rendering
 
 			if (FrameDumper.Active)
 			{
-				Framebuffer.BindDefault(Width, Height);
-				FrameDumper.Capture(Width, Height);
+				BindOutput();
+				FrameDumper.Capture(Width, Height, OutputTarget != null);
 			}
+
+			if (dumpOffscreen)
+			{
+				OutputTarget = null;
+				GL.BindFramebuffer(FramebufferTarget.ReadFramebuffer, dumpTarget.Handle);
+				GL.BindFramebuffer(FramebufferTarget.DrawFramebuffer, 0);
+				GL.BlitFramebuffer(0, 0, Width, Height, 0, 0, Width, Height, ClearBufferMask.ColorBufferBit, BlitFramebufferFilter.Nearest);
+				GL.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
+			}
+
+			// Like Unity, the current camera is defined only while a frame renders (and a stale one would keep an
+			// unloaded scene alive); the GPU scene drops its renderer references for the same reason.
+			Camera.current = null;
+			GpuScene.EndFrame();
+		}
+
+		private void EnsureDumpTarget()
+		{
+			if (dumpTarget != null && dumpTarget.Width == Width && dumpTarget.Height == Height)
+			{
+				return;
+			}
+
+			dumpTarget?.Delete();
+			dumpTarget = new Framebuffer(Width, Height);
+			dumpTarget.AddColorAttachment(RenderTextureFormat.RGBA8);
+			dumpTarget.Validate();
+		}
+
+		/// <summary>Binds the frame's final destination (<see cref="OutputTarget" /> or the default framebuffer).</summary>
+		public void BindOutput()
+		{
+			if (OutputTarget != null)
+			{
+				OutputTarget.Bind();
+			}
+			else
+			{
+				Framebuffer.BindDefault(Width, Height);
+			}
+		}
+
+		/// <summary>
+		///     Drops everything the GI keeps per scene object (surface cache cards, distance field instances, object
+		///     tables) and marks the static caches dirty. Call when the rendered scene is replaced (scene load,
+		///     editor reload): the cached state is keyed by the old scene's renderers.
+		/// </summary>
+		public void InvalidateSceneCaches()
+		{
+			LumenScene?.Delete();
+			LumenScene = new LumenScene();
+			foreach (RenderPass pass in passes)
+			{
+				pass.ReleaseSceneReferences();
+			}
+
+			GpuScene.EndFrame();
+			Lighting.GI.InvalidateStatic();
 		}
 
 		public void Dispose()
@@ -230,8 +321,10 @@ namespace LELEngine.Rendering
 				pass.Dispose();
 			}
 			passes.Clear();
+			GpuScene.Dispose();
 
 			SceneTarget?.Delete();
+			dumpTarget?.Delete();
 			DepthOnlyProgram?.Delete();
 			Fullscreen?.Delete();
 			LumenScene?.Delete();

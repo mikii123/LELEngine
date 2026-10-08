@@ -29,6 +29,13 @@ namespace LELEngine.Rendering
 		public virtual void Resize(int width, int height)
 		{ }
 
+		/// <summary>
+		///     Called when the rendered scene is replaced: drop every reference to the old scene's objects, so an
+		///     unloaded scene (and the script assembly behind its components) can be collected.
+		/// </summary>
+		public virtual void ReleaseSceneReferences()
+		{ }
+
 		public virtual void Dispose()
 		{ }
 

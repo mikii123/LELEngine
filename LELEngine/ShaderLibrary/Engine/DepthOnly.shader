@@ -5,18 +5,15 @@ invariant gl_Position;
 
 #include "Engine/Instancing.glsl"
 
+// Depth only (shadow maps, depth passes). gl_Position is invariant so it matches the material shaders exactly.
 uniform mat4 projectionMatrix;
 uniform mat4 viewMatrix;
 
 in vec3 vPosition;
-in vec3 vNormal;
-
-out vec3 fNormal;
 
 void main()
 {
 	gl_Position = projectionMatrix * viewMatrix * LelModelMatrix() * vec4(vPosition, 1.0);
-	fNormal = LelNormalMatrix() * vNormal;
 	LelVertexSetup();
 }
 
@@ -26,16 +23,8 @@ void main()
 
 #version 430
 
-#include "Engine/Instancing.glsl"
-
-in vec3 fNormal;
-
-out vec4 NormalRoughness;
-
 void main()
 {
-	// Conventional material parameter (0 = material default): per draw, or from the material table.
-	NormalRoughness = vec4(normalize(fNormal), LelRoughness());
 }
 
 /////Fragment

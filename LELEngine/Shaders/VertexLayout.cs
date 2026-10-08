@@ -19,12 +19,19 @@ namespace LELEngine.Shaders
 		public const int TangentLocation = 4;
 		public const int BitangentLocation = 5;
 
+		/// <summary>
+		///     Per-instance index of GPU-driven draws when the context has no shader draw parameters (an identity buffer
+		///     read through the draw's base instance, see GeometryPool).
+		/// </summary>
+		public const int InstanceIndexLocation = 6;
+
 		public const string PositionName = "vPosition";
 		public const string ColorName = "vColor";
 		public const string TexCoordName = "vTexCoord";
 		public const string NormalName = "vNormal";
 		public const string TangentName = "vTangent";
 		public const string BitangentName = "vBitangent";
+		public const string InstanceIndexName = "vInstanceIndex";
 
 		#endregion
 
@@ -41,6 +48,7 @@ namespace LELEngine.Shaders
 			GL.BindAttribLocation(programHandle, NormalLocation, NormalName);
 			GL.BindAttribLocation(programHandle, TangentLocation, TangentName);
 			GL.BindAttribLocation(programHandle, BitangentLocation, BitangentName);
+			GL.BindAttribLocation(programHandle, InstanceIndexLocation, InstanceIndexName);
 		}
 
 		/// <summary>

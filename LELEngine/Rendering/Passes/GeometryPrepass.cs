@@ -7,7 +7,7 @@ namespace LELEngine.Rendering.Passes
 	///     Thin G-buffer prepass: writes scene depth plus world normal and roughness for all opaque geometry.
 	///     The opaque pass then shades with depth test LEQUAL and no depth writes (each pixel shaded once),
 	///     and screen-space passes (GI resolve) get geometry without re-rasterizing the scene.
-	///     Shares the depth texture with the scene target.
+	///     Shares the depth texture with the scene target. GPU-driven: every visible instance in one indirect call.
 	/// </summary>
 	public sealed class GeometryPrepass : RenderPass
 	{
@@ -23,6 +23,7 @@ namespace LELEngine.Rendering.Passes
 		private Framebuffer gbuffer;
 		private RenderTexture normalRoughness;
 		private ShaderProgram program;
+		private ShaderProgram instancedProgram;
 
 		#endregion
 
@@ -31,6 +32,7 @@ namespace LELEngine.Rendering.Passes
 		public override void Initialize(Renderer renderer)
 		{
 			program = new ShaderProgram("Engine/GBuffer.shader");
+			instancedProgram = program.GetInstancedVariant();
 
 			gbuffer = new Framebuffer(renderer.Width, renderer.Height);
 			normalRoughness = gbuffer.AddColorAttachment(RenderTextureFormat.RGBA16F, false);
@@ -53,6 +55,13 @@ namespace LELEngine.Rendering.Passes
 				return;
 			}
 
+			GpuScene gpu = context.Renderer.GpuScene;
+			bool gpuDriven = gpu.Active && instancedProgram != null;
+			if (gpuDriven)
+			{
+				gpu.EnsureCameraCulled(context.ViewProjection);
+			}
+
 			// Depth was already cleared with the scene target (shared texture); clear only our color.
 			gbuffer.Bind();
 			GL.ClearColor(0f, 0f, 0f, 0f);
@@ -62,20 +71,28 @@ namespace LELEngine.Rendering.Passes
 			GLState.SetCull(true, TriangleFace.Back);
 			GLState.SetColorWrite(true);
 
-			program.Use();
-			program.SetMatrix4("viewMatrix", context.View);
-			program.SetMatrix4("projectionMatrix", context.Projection);
+			ShaderProgram active = gpuDriven ? instancedProgram : program;
+			active.Use();
+			active.SetMatrix4("viewMatrix", context.View);
+			active.SetMatrix4("projectionMatrix", context.Projection);
 
-			foreach (MeshRenderer renderer in context.Renderers)
+			if (gpuDriven)
 			{
-				Material.ResetStandardUniforms(program);
-				float roughness;
-				if (renderer.Material != null && renderer.Material.TryGetFloat("Roughness", out roughness))
+				gpu.DrawCameraAll();
+			}
+			else
+			{
+				foreach (MeshRenderer renderer in context.Renderers)
 				{
-					program.SetFloat("Roughness", roughness);
-				}
+					Material.ResetStandardUniforms(program);
+					float roughness;
+					if (renderer.Material != null && renderer.Material.TryGetFloat("Roughness", out roughness))
+					{
+						program.SetFloat("Roughness", roughness);
+					}
 
-				renderer.RenderWith(program);
+					renderer.RenderWith(program);
+				}
 			}
 
 			context.DepthPrepassDone = true;
@@ -86,8 +103,10 @@ namespace LELEngine.Rendering.Passes
 		{
 			gbuffer?.Delete();
 			gbuffer = null;
+			// Deletes the instanced variant too.
 			program?.Delete();
 			program = null;
+			instancedProgram = null;
 		}
 
 		#endregion

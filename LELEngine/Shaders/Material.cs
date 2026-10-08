@@ -14,9 +14,12 @@ namespace LELEngine.Shaders
 	///     "uniform" / type / name / value (value line only for non-matrix types).
 	///     Materials from InternalStorage are shared; call <see cref="Clone" /> for per-object values.
 	/// </summary>
-	public sealed class Material
+	public sealed class Material : IAsset
 	{
 		#region PublicFields
+
+		/// <summary>Root-relative path of the .material file; copies made with <see cref="Clone" /> keep it.</summary>
+		public string AssetPath { get; private set; }
 
 		public ShaderProgram UsingShader { get; private set; }
 		public string ShaderPath { get; }
@@ -32,9 +35,11 @@ namespace LELEngine.Shaders
 
 		#region Constructors
 
+		/// <param name="path">Asset path or file name of the .material file (see <see cref="AssetDatabase.Resolve" />).</param>
 		public Material(string path)
 		{
-			using (StreamReader sr = new StreamReader(Directory.GetCurrentDirectory() + "/Materials/" + path))
+			AssetPath = AssetDatabase.Resolve(path, "Materials") ?? path;
+			using (StreamReader sr = new StreamReader(AssetDatabase.ToAbsolute(AssetPath)))
 			{
 				ShaderPath = sr.ReadLine().Trim();
 				while (!sr.EndOfStream)
@@ -112,6 +117,7 @@ namespace LELEngine.Shaders
 		public Material Clone()
 		{
 			Material copy = new Material(UsingShader, ShaderPath);
+			copy.AssetPath = AssetPath;
 			copy.textureIndex = textureIndex;
 			foreach (Uniform uniform in Uniforms)
 			{
@@ -137,12 +143,57 @@ namespace LELEngine.Shaders
 		/// </summary>
 		public void SetUniforms()
 		{
-			ResetStandardUniforms(UsingShader);
+			SetUniforms(UsingShader);
+		}
+
+		/// <summary>Uploads this material's values to the given program (e.g. the instanced variant of its shader).</summary>
+		public void SetUniforms(ShaderProgram program)
+		{
+			ResetStandardUniforms(program);
 
 			foreach (Uniform ob in Uniforms)
 			{
-				ob.Set(UsingShader);
+				ob.Set(program);
 			}
+		}
+
+		/// <summary>
+		///     The material sets only the standard parameters (Color, Emissive, Roughness). GPU-driven draws read those
+		///     from the material table, so such materials of one shader share a multi-draw call; a material with other
+		///     uniforms gets a call of its own with them set.
+		/// </summary>
+		public bool HasOnlyStandardUniforms()
+		{
+			foreach (Uniform uniform in Uniforms)
+			{
+				if (!IsStandardUniform(uniform.Name))
+				{
+					return false;
+				}
+			}
+
+			return true;
+		}
+
+		/// <summary>The standard parameters with the defaults of <see cref="ResetStandardUniforms" />.</summary>
+		public void GetStandardParameters(out Vector4 color, out Vector4 emissive, out float roughness)
+		{
+			if (!TryGetVector4("Color", out color))
+			{
+				color = Vector4.One;
+			}
+
+			if (!TryGetVector4("Emissive", out emissive))
+			{
+				emissive = Vector4.Zero;
+			}
+
+			TryGetFloat("Roughness", out roughness);
+		}
+
+		public static bool IsStandardUniform(string name)
+		{
+			return name == "Color" || name == "Emissive" || name == "Roughness";
 		}
 
 		/// <summary>
