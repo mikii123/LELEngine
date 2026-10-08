@@ -67,8 +67,8 @@ namespace TestGame.Scenes
 			/// <summary>Feed the previous frame's radiance back when lighting voxels (multi-bounce).</summary>
 			public bool Bounce = true;
 
-			/// <summary>Cone visibility from the global distance field instead of voxel alpha (experimental, stamps emitters).</summary>
-			public bool SdfTrace;
+			/// <summary>How voxel GI cones find geometry (default: visibility from the distance field).</summary>
+			public GITraceMode TraceMode = GITraceMode.SdfCones;
 
 			public int VoxelResolution = 128;
 			public int SdfResolution = 128;
@@ -102,6 +102,24 @@ namespace TestGame.Scenes
 			public int RadianceCacheProbesPerFrame = 160;
 			public int RadianceCacheProbeResolution = 16;
 			public int RadianceCacheTraceResolution = 32;
+
+			/// <summary>GPU-driven geometry (culling + multi-draw indirect); off draws every object from the CPU.</summary>
+			public bool GpuDriven = true;
+
+			/// <summary>Extra small cubes on the floor, outside the GI (draw submission measurements).</summary>
+			public int StressObjects;
+
+			/// <summary>Strength of the indirect specular term (0 isolates the diffuse GI).</summary>
+			public float GISpecularStrength = 1f;
+
+			/// <summary>Resolution of the voxel GI resolve relative to the screen.</summary>
+			public float ResolveScale = 0.5f;
+
+			/// <summary>Resolution of the Lumen screen probe integration relative to the screen.</summary>
+			public float ScreenProbeResolveScale = 1f;
+
+			/// <summary>Adaptive screen probe capacity as a fraction of the uniform probe grid.</summary>
+			public float ProbeAdaptiveFraction = 0.5f;
 		}
 
 		#endregion
@@ -113,6 +131,7 @@ namespace TestGame.Scenes
 			Load(scene, new Options());
 		}
 
+		/// <summary>Builds the room in code, sets its look and quality from the options, then applies the harness options.</summary>
 		public static void Load(Scene scene, Options options)
 		{
 			markStatic = options.StaticCache;
@@ -123,8 +142,17 @@ namespace TestGame.Scenes
 			{
 				BuildEmitters(scene, options.Animate);
 			}
-			BuildPlayer(scene, options);
+			BuildPlayer(scene);
+			ApplySettings(options);
+			ApplyHarness(scene, options);
+		}
 
+		/// <summary>
+		///     Measurement / debugging switches that are not part of the scene: debug views, profiler, fullscreen,
+		///     camera autopilot and mouse look, stats and frame dumps. Works on a built or a loaded scene.
+		/// </summary>
+		public static void ApplyHarness(Scene scene, Options options)
+		{
 			if (options.VoxelView)
 			{
 				Game.Mono.Renderer.GetPass<LELEngine.Rendering.Passes.VoxelDebugPass>().Enabled = true;
@@ -142,13 +170,48 @@ namespace TestGame.Scenes
 				Game.Mono.Renderer.GetPass<LELEngine.Rendering.Passes.ProbeDebugPass>().Enabled = true;
 			}
 
+			Game.Mono.Renderer.Profiler.Enabled = options.Profiler;
+			Game.Mono.Renderer.Settings.GpuDriven = options.GpuDriven;
+			if (options.StressObjects > 0)
+			{
+				BuildStress(scene, options.StressObjects);
+			}
+
+			if (options.Fullscreen)
+			{
+				Game.Mono.WindowState = OpenTK.Windowing.Common.WindowState.Fullscreen;
+			}
+
+			FpsController controller = scene.FindObjectOfType<FpsController>();
+			if (controller != null)
+			{
+				controller.AutoPilot = options.AutoCamera;
+				controller.MouseLook = options.MouseLook;
+			}
+
+			GIDebugControls controls = scene.FindObjectOfType<GIDebugControls>();
+			if (controls != null)
+			{
+				controls.PrintStats = options.Stats;
+				controls.DumpFrames = options.DumpFrames;
+				controls.DumpDirectory = options.DumpDirectory;
+				controls.DumpAfterSeconds = options.DumpAfterSeconds;
+				controls.DumpAfterFrames = options.DumpAfterFrames;
+			}
+		}
+
+		#endregion
+
+		#region PrivateMethods
+
+		/// <summary>Environment, shadow and GI settings of the room (written into the active scene's settings).</summary>
+		private static void ApplySettings(Options options)
+		{
 			// With GI on, the flat ambient only has to cover leaks; the bounce does the rest.
-			Lighting.Ambient.Color = new Color4(0.55f, 0.6f, 0.75f, 1f);
-			Lighting.Ambient.Strength = 0.06f;
-			Lighting.Directional.Color = new Color4(1f, 0.96f, 0.9f, 1f);
-			Lighting.Directional.Strength = 1.25f;
-			Lighting.Specular.Strength = 0.25f;
-			Lighting.Specular.Shine = 48f;
+			Lighting.Environment.AmbientColor = new Color4(0.55f, 0.6f, 0.75f, 1f);
+			Lighting.Environment.AmbientStrength = 0.06f;
+			Lighting.Environment.SpecularStrength = 0.25f;
+			Lighting.Environment.SpecularShine = 48f;
 
 			Lighting.Shadows.Enabled = true;
 			Lighting.Shadows.MapSize = 2048;
@@ -163,7 +226,7 @@ namespace TestGame.Scenes
 			Lighting.GI.Center = new Vector3(0f, 3.5f, 0f);
 			Lighting.GI.FollowCamera = false;
 			Lighting.GI.DiffuseStrength = 1.0f;
-			Lighting.GI.SpecularStrength = 1.0f;
+			Lighting.GI.SpecularStrength = options.GISpecularStrength;
 			Lighting.GI.OcclusionStrength = 1.0f;
 			Lighting.GI.ProbeJitter = options.ProbeJitter;
 			Lighting.GI.ProbeAnchorJitter = options.ProbeAnchorJitter;
@@ -195,7 +258,9 @@ namespace TestGame.Scenes
 			Lighting.GI.RadianceCacheTraceResolution = options.RadianceCacheTraceResolution;
 			Lighting.GI.SurfaceCacheTexelsPerMeter = options.SurfaceCacheTexelsPerMeter;
 			Lighting.GI.ScreenSpaceResolve = options.Resolve;
-			Lighting.GI.ResolveScale = 0.5f;
+			Lighting.GI.ResolveScale = options.ResolveScale;
+			Lighting.GI.ScreenProbeResolveScale = options.ScreenProbeResolveScale;
+			Lighting.GI.ProbeAdaptiveFraction = options.ProbeAdaptiveFraction;
 			Lighting.GI.DynamicUpdateInterval = 1;
 			Lighting.GI.LightingUpdateInterval = 1;
 			Lighting.GI.BounceStrength = options.Bounce ? 1f : 0f;
@@ -206,13 +271,13 @@ namespace TestGame.Scenes
 			Lighting.GI.SdfResolution = options.SdfResolution;
 			Lighting.GI.SdfBandVoxels = 8;
 			Lighting.GI.SdfMaxSteps = 48;
-			Lighting.GI.TraceMode = options.SdfTrace ? GITraceMode.SdfDetail : GITraceMode.VoxelCones;
+			Lighting.GI.TraceMode = options.TraceMode;
 			Lighting.GI.SdfDetailDistance = 1.5f;
 			// The sky the GI sees must be the sky the camera sees: same radiance as the clear color.
 			Lighting.GI.SkyRadiance = new Vector3(0.45f, 0.6f, 0.85f);
 
-			Game.Mono.Renderer.Settings.ClearColor = new Color4(0.45f, 0.6f, 0.85f, 1f);
-			Game.Mono.Renderer.Settings.Exposure = 1.0f;
+			Lighting.Environment.BackgroundColor = new Color4(0.45f, 0.6f, 0.85f, 1f);
+			Lighting.Environment.Exposure = 1.0f;
 		}
 
 		#endregion
@@ -282,7 +347,9 @@ namespace TestGame.Scenes
 			GameObject light = scene.CreateGameObject("Sun");
 			Vector3 lightDirection = new Vector3(-0.45f, -0.75f, 0.35f).Normalized();
 			light.transform.rotation = QuaternionHelper.LookRotation(lightDirection, Vector3.UnitY);
-			light.AddComponent<DirectionalLight>();
+			DirectionalLight sun = light.AddComponent<DirectionalLight>();
+			sun.Color = new Color4(1f, 0.96f, 0.9f, 1f);
+			sun.Strength = 1.25f;
 
 			// Visible sun disc far along the opposite of the light direction. Not a shadow caster, not voxelized.
 			GameObject sunDisc = scene.CreateGameObject("SunDisc");
@@ -356,7 +423,7 @@ namespace TestGame.Scenes
 			}
 		}
 
-		private static void BuildPlayer(Scene scene, Options options)
+		private static void BuildPlayer(Scene scene)
 		{
 			GameObject player = scene.CreateGameObject("Player");
 			player.transform.position = new Vector3(0f, 1.7f, -8f);
@@ -374,20 +441,26 @@ namespace TestGame.Scenes
 			FpsController controller = player.AddComponent<FpsController>();
 			controller.CameraTransform = cameraObject.transform;
 			controller.EyeHeight = 1.7f;
-			controller.AutoPilot = options.AutoCamera;
-			controller.MouseLook = options.MouseLook;
-			Game.Mono.Renderer.Profiler.Enabled = options.Profiler;
-			if (options.Fullscreen)
-			{
-				Game.Mono.WindowState = OpenTK.Windowing.Common.WindowState.Fullscreen;
-			}
 
-			GIDebugControls controls = player.AddComponent<GIDebugControls>();
-			controls.PrintStats = options.Stats;
-			controls.DumpFrames = options.DumpFrames;
-			controls.DumpDirectory = options.DumpDirectory;
-			controls.DumpAfterSeconds = options.DumpAfterSeconds;
-			controls.DumpAfterFrames = options.DumpAfterFrames;
+			player.AddComponent<GIDebugControls>();
+		}
+
+		/// <summary>A grid of small cubes on the floor; they stay out of the GI, so only the draw cost grows.</summary>
+		private static void BuildStress(Scene scene, int count)
+		{
+			int side = (int)System.Math.Ceiling(System.Math.Sqrt(count));
+			float spacing = RoomHalfSize * 1.8f / side;
+			for (int i = 0; i < count; i++)
+			{
+				GameObject go = scene.CreateGameObject("Stress" + i);
+				go.transform.position = new Vector3(-RoomHalfSize * 0.9f + (i % side + 0.5f) * spacing, 0.06f, -RoomHalfSize * 0.9f + (i / side + 0.5f) * spacing);
+				go.transform.scale = new Vector3(0.06f);
+
+				MeshRenderer renderer = go.AddComponent<MeshRenderer>();
+				renderer.SetMaterial("LitGray.material");
+				renderer.SetMesh("cube.obj");
+				renderer.ContributesToGI = false;
+			}
 		}
 
 		private static GameObject Box(Scene scene, string name, string material, Vector3 center, Vector3 halfSize)

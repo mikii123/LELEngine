@@ -82,6 +82,11 @@ namespace LELEngine.Rendering.Passes
 		private int lastStaticCount = -1;
 		private int frameIndex;
 
+		// Static cache state of this pass (each renderer has its own): rebuilt when dirty or when the settings'
+		// static version moved on (GlobalIlluminationSettings.InvalidateStatic).
+		private bool staticDirty = true;
+		private int builtStaticVersion = -1;
+
 		#endregion
 
 		#region PublicMethods
@@ -134,7 +139,7 @@ namespace LELEngine.Rendering.Passes
 			bool lightingDue = !previousValid || gi.LightingUpdateInterval <= 1 || frameIndex % gi.LightingUpdateInterval == 0;
 			GpuProfiler profiler = context.Renderer.Profiler;
 
-			if (gi.StaticDirty)
+			if (staticDirty || gi.StaticVersion != builtStaticVersion)
 			{
 				profiler.Split("VoxelGI.static");
 				RebuildStaticCache(gi);
@@ -175,6 +180,14 @@ namespace LELEngine.Rendering.Passes
 			}
 
 			gi.VoxelTexture = VoxelTexture;
+		}
+
+		public override void ReleaseSceneReferences()
+		{
+			staticRenderers.Clear();
+			dynamicRenderers.Clear();
+			lastStaticCount = -1;
+			staticDirty = true;
 		}
 
 		public override void Dispose()
@@ -251,7 +264,7 @@ namespace LELEngine.Rendering.Passes
 			radianceRegions[1].Clear();
 
 			Lighting.GI.Resolution = resolution;
-			Lighting.GI.StaticDirty = true;
+			staticDirty = true;
 			previousRegions.Clear();
 
 			long voxels = (long)resolution * resolution * resolution;
@@ -333,7 +346,7 @@ namespace LELEngine.Rendering.Passes
 
 			if (changed)
 			{
-				gi.StaticDirty = true;
+				staticDirty = true;
 				lastGridMin = gi.GridMin;
 				lastGridSize = gi.GridSize;
 				lastStaticCount = staticRenderers.Count;
@@ -364,7 +377,8 @@ namespace LELEngine.Rendering.Passes
 			radianceRegions[0].Clear();
 			radianceRegions[1].Clear();
 
-			gi.StaticDirty = false;
+			staticDirty = false;
+			builtStaticVersion = gi.StaticVersion;
 			RebuiltStaticThisFrame = true;
 		}
 
@@ -635,8 +649,16 @@ namespace LELEngine.Rendering.Passes
 			program.SetFloat("giBounceStrength", previousValid ? gi.BounceStrength : 0f);
 			program.SetInt("giBounceCones", gi.BounceCones);
 			program.SetTexture("VoxelRadiance", TextureTarget.Texture3D, radiance[current], 0);
-			// The bounce always uses voxel cones (cheap, and the SDF has no radiance of its own); sky light leaks in through openings.
-			program.SetInt("giTraceMode", 0);
+			// The bounce traces like the materials: with SDF cones walls stop it, voxel cones would bring the light
+			// from outside in through them. The SDF detail trace is not used here (binary, too sharp per voxel).
+			bool sdf = gi.DistanceFieldEnabled && gi.GlobalSdf != 0;
+			int traceMode = Lighting.TraceModeUniform(sdf) == 2 ? 2 : 0;
+			program.SetInt("giTraceMode", traceMode);
+			if (traceMode == 2)
+			{
+				Lighting.SetSdfUniforms(program);
+			}
+
 			program.SetVector3("giSkyRadiance", gi.SkyRadiance);
 
 			staticGeometry.BindImages(0, TextureAccess.ReadOnly, false);

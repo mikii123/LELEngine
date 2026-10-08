@@ -1,8 +1,10 @@
 using System;
+using System.IO;
 using System.Reflection;
 using LELCS;
 using LELCS.Model;
 using LELEngine;
+using LELEngine.Serialization;
 using TestGame.Scenes;
 
 namespace TestGame
@@ -18,11 +20,14 @@ namespace TestGame
 		///            Lumen quality: [spacing=N px] [adaptive=0|1] [radrays=N] [radblend=0..1] [pblend=0..1] [tblend=0..1]
 		///            [importance=0|1] [pfilter=0|1] [pradius=N probes] [texels=N per meter] [ajitter=0..1] [djitter=0|1]
 		///            [rcache=0|1] [rcradio=0|1] [rcnear=meters] [rchistory=frames] [rcprobes=N per frame] [rcres=8|16] [rctrace=16|32]
-	///            [dumpafter=seconds]
+	///            [dumpafter=seconds] [gpudriven=0|1] [stress=N extra cubes] [focus=0|1]
+	///            Fallback tests: environment LEL_GL_DISABLE=drawparameters,indirectparameters,subgroups
 		///     Loads the GI test room with the FPS controller.
 		/// </summary>
 		private static void Main(string[] args)
 		{
+			// focus=0: automated runs open the window without taking the keyboard focus.
+			Window.StartFocused = GetBool(args, "focus", true);
 			Game.CreateWindow(1280, 720, "LELEngine");
 
 			string giValue = GetValue(args, "gi");
@@ -47,7 +52,7 @@ namespace TestGame
 				Resolve = GetBool(args, "resolve", true),
 				StaticCache = GetBool(args, "static", true),
 				Bounce = GetBool(args, "bounce", true),
-				SdfTrace = string.Equals(GetValue(args, "trace"), "sdf", StringComparison.OrdinalIgnoreCase),
+				TraceMode = ParseTraceMode(GetValue(args, "trace")),
 				VoxelResolution = GetInt(args, "voxres", 128),
 				SdfResolution = GetInt(args, "sdfres", 128),
 				ProbeAnchorJitter = GetFloat(args, "ajitter", 0f),
@@ -79,9 +84,49 @@ namespace TestGame
 				RadianceCacheProbeResolution = GetInt(args, "rcres", 16),
 				RadianceCacheTraceResolution = GetInt(args, "rctrace", 32),
 				DumpAfterSeconds = GetFloat(args, "dumpafter", 5f),
-				DumpAfterFrames = GetInt(args, "dumpframe", 0)
+				DumpAfterFrames = GetInt(args, "dumpframe", 0),
+				GpuDriven = GetBool(args, "gpudriven", true),
+				StressObjects = GetInt(args, "stress", 0),
+				ResolveScale = GetFloat(args, "resolvescale", 0.5f),
+				GISpecularStrength = GetFloat(args, "gispec", 1f),
+				ScreenProbeResolveScale = GetFloat(args, "presolve", 1f),
+				ProbeAdaptiveFraction = GetFloat(args, "pfraction", 0.5f)
 			};
-			GITestScene.Load(Game.Mono.LoadEmptyScene(), options);
+			// genmeta=dir1;dir2 creates missing .meta files for the asset files below the folders, then exits.
+			string genMeta = GetValue(args, "genmeta");
+			if (genMeta != null)
+			{
+				foreach (string folder in genMeta.Split(';', StringSplitOptions.RemoveEmptyEntries))
+				{
+					Console.WriteLine($"[Assets] {AssetDatabase.CreateMissingMetaFiles(folder)} meta files created in {folder}");
+				}
+
+				return;
+			}
+
+			// scene=path loads a scene file instead of building the room in code (look and quality come from the
+			// file; only the harness switches apply). savescene=path writes the code-built room to a scene file.
+			string scenePath = GetValue(args, "scene");
+			Scene scene;
+			if (scenePath != null)
+			{
+				scene = SceneSerializer.Load(Path.GetFullPath(scenePath));
+				SceneManager.SetActiveScene(scene);
+				GITestScene.ApplyHarness(scene, options);
+			}
+			else
+			{
+				scene = Game.Mono.LoadEmptyScene();
+				scene.Name = "GITest";
+				GITestScene.Load(scene, options);
+			}
+
+			string savePath = GetValue(args, "savescene");
+			if (savePath != null)
+			{
+				SceneSerializer.Save(scene, Path.GetFullPath(savePath));
+				Console.WriteLine("[Scene] Saved " + Path.GetFullPath(savePath));
+			}
 
 			Game.Mono.InitializeECSScope(Assembly.GetExecutingAssembly());
 			ECSManager manager = Game.Mono.ECSManager;
@@ -90,6 +135,17 @@ namespace TestGame
 
 			Game.Mono.Run();
 			// Main function is frozen until game window closes
+		}
+
+		/// <summary>trace=voxel (voxel alpha cones), trace=sdf (SDF detail near field), default / trace=cones (SDF cones).</summary>
+		private static GITraceMode ParseTraceMode(string value)
+		{
+			switch (value?.ToLowerInvariant())
+			{
+				case "voxel": return GITraceMode.VoxelCones;
+				case "sdf": return GITraceMode.SdfDetail;
+				default: return GITraceMode.SdfCones;
+			}
 		}
 
 		private static int GetInt(string[] args, string name, int defaultValue)

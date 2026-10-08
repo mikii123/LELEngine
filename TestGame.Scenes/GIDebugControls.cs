@@ -89,11 +89,15 @@ namespace TestGame.Scenes
 			bool dumpDue = DumpAfterFrames > 0 ? updateFrames >= DumpAfterFrames : Time.time >= DumpAfterSeconds;
 			if (DumpFrames > 0 && dumpDue)
 			{
-				Game.Mono.Renderer.FrameDumper.Start(DumpDirectory, DumpFrames);
+				Game.Renderer.FrameDumper.Start(DumpDirectory, DumpFrames);
 				DumpFrames = 0;
 			}
 
-			Renderer renderer = Game.Mono.Renderer;
+			Renderer renderer = Game.Renderer;
+			if (renderer == null)
+			{
+				return;
+			}
 			VoxelDebugPass voxelDebug = renderer.GetPass<VoxelDebugPass>();
 			SdfDebugPass sdfDebug = renderer.GetPass<SdfDebugPass>();
 			SurfaceCacheDebugPass cacheDebug = renderer.GetPass<SurfaceCacheDebugPass>();
@@ -203,8 +207,8 @@ namespace TestGame.Scenes
 
 			if (Input.GetKeyDown(Keys.F8))
 			{
-				renderer.Settings.Tonemap = !renderer.Settings.Tonemap;
-				Console.WriteLine("[Renderer] tonemap " + (renderer.Settings.Tonemap ? "on" : "off"));
+				Lighting.Environment.Tonemap = !Lighting.Environment.Tonemap;
+				Console.WriteLine("[Renderer] tonemap " + (Lighting.Environment.Tonemap ? "on" : "off"));
 			}
 
 			if (Input.GetKeyDown(Keys.F9))
@@ -227,7 +231,7 @@ namespace TestGame.Scenes
 
 			if (Input.GetKeyDown(Keys.T))
 			{
-				Lighting.GI.TraceMode = Lighting.GI.TraceMode == GITraceMode.SdfDetail ? GITraceMode.VoxelCones : GITraceMode.SdfDetail;
+				Lighting.GI.TraceMode = (GITraceMode)(((int)Lighting.GI.TraceMode + 1) % 3);
 				Console.WriteLine("[GI] trace mode " + Lighting.GI.TraceMode);
 			}
 		}
@@ -239,7 +243,7 @@ namespace TestGame.Scenes
 		// Averages GPU pass times over the stats interval; single frames are too noisy to read.
 		private void AccumulateStats()
 		{
-			GpuProfiler profiler = Game.Mono.Renderer.Profiler;
+			GpuProfiler profiler = Game.Renderer.Profiler;
 			statsTimer += Time.deltaTime;
 			statsFrames++;
 			cpuRenderSum += Time.cpuRenderMs;
@@ -326,11 +330,12 @@ namespace TestGame.Scenes
 				foreignText.Append(' ').Append(item.Key).Append(" +").Append(average.ToString("0.00", CultureInfo.InvariantCulture));
 			}
 
-			ScreenProbeGatherPass gather = Game.Mono.Renderer.GetPass<ScreenProbeGatherPass>();
+			ScreenProbeGatherPass gather = Game.Renderer.GetPass<ScreenProbeGatherPass>();
 			string adaptive = gather != null ? $" adaptive probes {gather.AdaptiveProbeCount}" : string.Empty;
 			Console.WriteLine(
 				$"[Stats] {statsFrames / statsTimer:0.0} fps | GPU {(sectionElapsedSum / statsFrames).ToString("0.00", CultureInfo.InvariantCulture)} ms (frame wall {(gpuWallSum / statsFrames).ToString("0.00", CultureInfo.InvariantCulture)}, pass sum {total.ToString("0.00", CultureInfo.InvariantCulture)}, skipped {profiler.SkippedSections}, head {(headSum / statsFrames).ToString("0.00", CultureInfo.InvariantCulture)}, tail {(tailSum / statsFrames).ToString("0.00", CultureInfo.InvariantCulture)})" +
-				$" | CPU render {(cpuRenderSum / statsFrames).ToString("0.00", CultureInfo.InvariantCulture)} ms swap {(swapSum / statsFrames).ToString("0.00", CultureInfo.InvariantCulture)} ms |{passes}" +
+				$" | CPU render {(cpuRenderSum / statsFrames).ToString("0.00", CultureInfo.InvariantCulture)} ms swap {(swapSum / statsFrames).ToString("0.00", CultureInfo.InvariantCulture)} ms" +
+				$" (GPU scene {Game.Renderer.GpuScene.LastInstanceCount} instances, build {Game.Renderer.GpuScene.LastBuildMilliseconds.ToString("0.00", CultureInfo.InvariantCulture)} ms) |{passes}" +
 				$" | GI {(Lighting.GI.Enabled ? "on" : "off")} {Lighting.GI.Mode} resolve {(Lighting.GI.ResolveActive ? "on" : "off")}{adaptive}" +
 				$" | gaps {gapTotal.ToString("0.00", CultureInfo.InvariantCulture)} ms:{gaps} | foreign {foreignTotal.ToString("0.00", CultureInfo.InvariantCulture)} ms:{foreignText}");
 

@@ -17,6 +17,9 @@ namespace LELEngine
 		public static LightProperties Ambient = new LightProperties("LAmbient.ambColor", "LAmbient.ambStrength");
 		public static LightProperties Specular = new LightProperties("LSpecular.viewPos");
 
+		/// <summary>Live settings of the active scene (see <see cref="SceneSettings.Activate" />).</summary>
+		public static EnvironmentSettings Environment = new EnvironmentSettings();
+
 		public static ShadowSettings Shadows = new ShadowSettings();
 		public static GlobalIlluminationSettings GI = new GlobalIlluminationSettings();
 
@@ -36,6 +39,9 @@ namespace LELEngine
 		/// <summary>Texture unit reserved for the global distance field's object-id volume.</summary>
 		public const int GlobalSdfObjectIdTextureUnit = 8;
 
+		/// <summary>Texture unit reserved for the G-buffer normals of the GI resolve's upsampling.</summary>
+		public const int ResolveNormalTextureUnit = 9;
+
 		/// <summary>World -> light clip space. Written by the shadow pass every frame.</summary>
 		public static Matrix4 LightSpaceMatrix = Matrix4.Identity;
 
@@ -45,6 +51,22 @@ namespace LELEngine
 		#endregion
 
 		#region PublicMethods
+
+		/// <summary>
+		///     Per-frame sync before rendering: the sun's color and strength from the scene's directional light, the
+		///     environment into the uniform carriers and the renderer's clear color / exposure / tonemapping.
+		/// </summary>
+		public static void BeginFrame(RenderSettings settings)
+		{
+			DirectionalLight light = DirectionalLight.This;
+			if (light != null)
+			{
+				Directional.Color = light.Color;
+				Directional.Strength = light.Strength;
+			}
+
+			Environment.ApplyTo(settings);
+		}
 
 		public static void SetUniforms(ShaderProgram program)
 		{
@@ -58,7 +80,8 @@ namespace LELEngine
 
 		public static void SetUniforms(ShaderProgram program, bool receiveShadows, bool receiveGI)
 		{
-			Vector3 camPos = Camera.main != null ? Camera.main.transform.position : Vector3.Zero;
+			Camera camera = Camera.current ?? Camera.main;
+			Vector3 camPos = camera != null ? camera.transform.position : Vector3.Zero;
 			Vector3 lightDir = DirectionalLight.This != null ? DirectionalLight.This.transform.forward : -Vector3.UnitY;
 
 			// Legacy names used by older shaders (PBR / black hole)
@@ -102,7 +125,7 @@ namespace LELEngine
 
 			program.SetVector3("giSkyRadiance", GI.SkyRadiance);
 			bool sdf = GI.DistanceFieldEnabled && GI.GlobalSdf != 0;
-			program.SetInt("giTraceMode", sdf && GI.TraceMode == GITraceMode.SdfDetail ? 1 : 0);
+			program.SetInt("giTraceMode", TraceModeUniform(sdf));
 			program.SetFloat("giSdfDetailDistance", GI.SdfDetailDistance);
 			if (sdf)
 			{
@@ -117,6 +140,7 @@ namespace LELEngine
 				program.SetVector2("giScreenSize", new Vector2(GI.ScreenWidth, GI.ScreenHeight));
 				program.SetTexture("IndirectDiffuse", TextureTarget.Texture2D, GI.ResolvedDiffuse, IndirectDiffuseTextureUnit);
 				program.SetTexture("IndirectSpecular", TextureTarget.Texture2D, GI.ResolvedSpecular, IndirectSpecularTextureUnit);
+				program.SetInt("giResolveNormals", GI.ResolvedNormals != 0 ? 1 : 0);				program.SetTexture("GINormalRoughness", TextureTarget.Texture2D, GI.ResolvedNormals, ResolveNormalTextureUnit);
 			}
 		}
 
@@ -133,6 +157,22 @@ namespace LELEngine
 			program.SetFloat("shadowNormalBias", Shadows.NormalBias);
 			program.SetFloat("shadowDepthBias", Shadows.DepthBias);
 			program.SetTexture("ShadowMap", TextureTarget.Texture2D, ShadowMap.Handle, ShadowMapTextureUnit);
+		}
+
+		/// <summary>giTraceMode of Engine/VoxelConeTracingCore.glsl: 0 voxel cones, 1 SDF detail, 2 SDF cones (voxel cones without the field).</summary>
+		public static int TraceModeUniform(bool sdfAvailable)
+		{
+			if (!sdfAvailable)
+			{
+				return 0;
+			}
+
+			switch (GI.TraceMode)
+			{
+				case GITraceMode.SdfDetail: return 1;
+				case GITraceMode.SdfCones: return 2;
+				default: return 0;
+			}
 		}
 
 		/// <summary>
@@ -203,6 +243,7 @@ namespace LELEngine
 	/// <summary>
 	///     Directional shadow map configuration.
 	/// </summary>
+	[Serializable]
 	public sealed class ShadowSettings
 	{
 		#region PublicFields
@@ -232,7 +273,9 @@ namespace LELEngine
 
 	/// <summary>
 	///     Voxel cone tracing configuration (see VoxelGIPass) plus the runtime volume it publishes.
+	///     Configuration fields are saved with the scene; runtime state is [NonSerialized].
 	/// </summary>
+	[Serializable]
 	public sealed class GlobalIlluminationSettings
 	{
 		#region PublicFields
@@ -264,8 +307,14 @@ namespace LELEngine
 		/// </summary>
 		public bool ScreenSpaceResolve = true;
 
-		/// <summary>Resolution of the GI resolve relative to the screen (0.5 = half width and height).</summary>
+		/// <summary>Resolution of the voxel GI resolve relative to the screen (0.5 = half width and height).</summary>
 		public float ResolveScale = 0.5f;
+		/// <summary>
+		///     Resolution of the Lumen screen probe integration relative to the screen. 1 = per pixel, as in Lumen: at
+		///     lower values detail smaller than two pixels (distant small objects) gets the blended lighting of its
+		///     neighbours and turns into mush. Costs about 0.7 ms more than 0.5 on the Intel iGPU at 1280x720.
+		/// </summary>
+		public float ScreenProbeResolveScale = 1f;
 
 		/// <summary>Re-voxelize dynamic (non-static) objects every N frames. 1 = every frame.</summary>
 		public int DynamicUpdateInterval = 1;
@@ -286,11 +335,13 @@ namespace LELEngine
 		public int BounceCones = 6;
 
 		/// <summary>
-		///     Set when the static geometry cache must be rebuilt. Grid and resolution changes set it
-		///     automatically; call <see cref="InvalidateStatic" /> after moving or re-materialing a static renderer.
-		///     Lighting changes never require a rebuild: light is injected every frame.
+		///     Incremented by <see cref="InvalidateStatic" /> (call it after moving or re-materialing a static
+		///     renderer). Every pass with a static cache (voxel geometry, global SDF) rebuilds it when the version
+		///     differs from the one it last built, so several renderers (editor views) each rebuild their own.
+		///     Grid and resolution changes are detected by the passes themselves. Lighting changes never require a
+		///     rebuild: light is injected every frame.
 		/// </summary>
-		public bool StaticDirty = true;
+		[NonSerialized] public int StaticVersion;
 
 		// ---- Which GI pipeline runs ----
 
@@ -515,12 +566,11 @@ namespace LELEngine
 		public bool SdfObjectIdLookup = true;
 
 		/// <summary>
-		///     How cones find geometry: voxel alpha mips, or sphere tracing the global SDF near the origin.
-		///     Voxel cones are the default: the SDF detail trace samples hit radiance too sharply for six fixed
-		///     cones and stamps bright features (emitters) onto nearby surfaces until it gets footprint-sized
-		///     filtering and jittered, temporally accumulated directions.
+		///     How voxel GI cones find geometry (see <see cref="GITraceMode" />). SDF cones are the default: voxel
+		///     cones leak through walls about one voxel thick and give stepped corners, the SDF detail trace is
+		///     binary per cone (banded corners). Falls back to voxel cones without the distance field.
 		/// </summary>
-		public GITraceMode TraceMode = GITraceMode.VoxelCones;
+		public GITraceMode TraceMode = GITraceMode.SdfCones;
 
 		/// <summary>Length of the SDF detail trace at the start of every cone (world units).</summary>
 		public float SdfDetailDistance = 1.5f;
@@ -528,30 +578,30 @@ namespace LELEngine
 		/// <summary>Radiance from outside the scene seen by cones that escape (linear RGB).</summary>
 		public Vector3 SkyRadiance = Vector3.Zero;
 
-		/// <summary>Set when the static part of the global distance field must be recomposed.</summary>
-		public bool SdfStaticDirty = true;
-
 		// ---- Runtime data written by VoxelGIPass / GIResolvePass ----
 
 		/// <summary>GL handle of the 3D radiance texture, 0 when unavailable.</summary>
-		public int VoxelTexture;
+		[NonSerialized] public int VoxelTexture;
 
 		/// <summary>World-space minimum corner of the volume for the current frame.</summary>
-		public Vector3 GridMin;
+		[NonSerialized] public Vector3 GridMin;
 
 		/// <summary>GL handle of the global distance field texture, 0 when unavailable.</summary>
-		public int GlobalSdf;
+		[NonSerialized] public int GlobalSdf;
 
 		/// <summary>GL handle of the matching object-id volume (R16UI, index + 1 of the nearest object), 0 when unavailable.</summary>
-		public int GlobalSdfObjectIds;
+		[NonSerialized] public int GlobalSdfObjectIds;
 
-		public bool ResolveActive;
-		public int ResolvedDiffuse;
-		public int ResolvedSpecular;
-		public int ResolveWidth;
-		public int ResolveHeight;
-		public int ScreenWidth;
-		public int ScreenHeight;
+		[NonSerialized] public bool ResolveActive;
+		[NonSerialized] public int ResolvedDiffuse;
+		[NonSerialized] public int ResolvedSpecular;
+
+		/// <summary>Full-resolution G-buffer normals the resolve was computed with (normal-aware upsampling).</summary>
+		[NonSerialized] public int ResolvedNormals;
+		[NonSerialized] public int ResolveWidth;
+		[NonSerialized] public int ResolveHeight;
+		[NonSerialized] public int ScreenWidth;
+		[NonSerialized] public int ScreenHeight;
 
 		#endregion
 
@@ -562,8 +612,7 @@ namespace LELEngine
 
 		public void InvalidateStatic()
 		{
-			StaticDirty = true;
-			SdfStaticDirty = true;
+			StaticVersion++;
 		}
 
 		/// <summary>
@@ -607,6 +656,13 @@ namespace LELEngine
 		///     through the global distance field (radiance read from the voxel volume at the hit), then the
 		///     voxel cone continues. Removes leaks through nearby thin geometry.
 		/// </summary>
-		SdfDetail
+		SdfDetail,
+
+		/// <summary>
+		///     The whole cone's visibility from the global distance field (distance field AO: continuous, never
+		///     through a wall); radiance from the voxel volume where the cone runs into surfaces. Smooth corners,
+		///     no leaks through walls.
+		/// </summary>
+		SdfCones
 	}
 }

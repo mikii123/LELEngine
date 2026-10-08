@@ -30,12 +30,19 @@ layout(location = 1) out vec4 OutSpecular;  // rgb specular radiance, a linear v
 uniform sampler2D SceneDepth;
 uniform sampler2D NormalRoughness;
 uniform mat4 invViewProjection;
+uniform vec2 resolveTargetSize;
 uniform vec3 cameraPosition;
 uniform vec3 cameraForward;
 
 void main()
 {
-	float depth = texture(SceneDepth, fUV).r;
+	// One full-resolution pixel per resolve texel, read exactly (the material upsample looks up the normal of the
+	// same pixel): the texel's centre falls on a corner between full-resolution pixels.
+	vec2 screen = vec2(textureSize(SceneDepth, 0));
+	ivec2 pixel = clamp(ivec2(gl_FragCoord.xy * screen / resolveTargetSize), ivec2(0), ivec2(screen) - 1);
+	vec2 uv = (vec2(pixel) + 0.5) / screen;
+
+	float depth = texelFetch(SceneDepth, pixel, 0).r;
 	if (depth >= 1.0)
 	{
 		// Sky: nothing to light, push the depth far so no surface pixel picks it during upsampling.
@@ -44,11 +51,11 @@ void main()
 		return;
 	}
 
-	vec4 clip = vec4(fUV * 2.0 - 1.0, depth * 2.0 - 1.0, 1.0);
+	vec4 clip = vec4(uv * 2.0 - 1.0, depth * 2.0 - 1.0, 1.0);
 	vec4 world = invViewProjection * clip;
 	vec3 position = world.xyz / world.w;
 
-	vec4 nr = texture(NormalRoughness, fUV);
+	vec4 nr = texelFetch(NormalRoughness, pixel, 0);
 	vec3 N = normalize(nr.xyz);
 	float roughness = nr.w > 0.0 ? nr.w : 0.6;
 	vec3 V = normalize(cameraPosition - position);

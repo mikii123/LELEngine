@@ -138,7 +138,7 @@ namespace LELEngine.Rendering.Passes
 			frameIndex++;
 			int spacing = Math.Max(4, gi.ProbeSpacing);
 			lastSpacing = spacing;
-			EnsureTargets(context.Width, context.Height, spacing, gi.ResolveScale, gi.ProbeAdaptivePlacement ? gi.ProbeAdaptiveFraction : 0f);
+			EnsureTargets(context.Width, context.Height, spacing, MathHelper.Clamp(gi.ScreenProbeResolveScale, 0.25f, 1f), gi.ProbeAdaptivePlacement ? gi.ProbeAdaptiveFraction : 0f);
 
 			// Jitter: probe anchor inside its cell and ray direction inside its octahedral texel (R2 sequence).
 			float anchorScale = gi.ProbeJitter ? MathHelper.Clamp(gi.ProbeAnchorJitter, 0f, 1f) : 0f;
@@ -360,6 +360,7 @@ namespace LELEngine.Rendering.Passes
 			// Publish for the material shaders (same contract as GIResolvePass).
 			gi.ResolvedDiffuse = target.ColorAttachments[0].Handle;
 			gi.ResolvedSpecular = target.ColorAttachments[1].Handle;
+			gi.ResolvedNormals = context.NormalRoughness.Handle;
 			gi.ResolveWidth = outputWidth;
 			gi.ResolveHeight = outputHeight;
 			gi.ScreenWidth = context.Width;

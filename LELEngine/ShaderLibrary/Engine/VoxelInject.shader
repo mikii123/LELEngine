@@ -79,7 +79,9 @@ void main()
 	vec3 bounce = vec3(0.0);
 	if (giBounceStrength > 0.0)
 	{
-		vec4 irradiance = giBounceCones >= 6 ? TraceDiffuseCones(position, N) : TraceWideCone(position, N);
+		// The position is the voxel center, inside the geometry: start past the voxel's surface side.
+		float offset = voxelSize * 1.5;
+		vec4 irradiance = giBounceCones >= 6 ? TraceDiffuseConesFrom(position, N, offset) : TraceWideConeFrom(position, N, offset);
 		bounce = irradiance.rgb * giBounceStrength;
 	}
 

@@ -62,6 +62,7 @@ namespace LELEngine.Rendering.Passes
 			program.SetTexture("SceneDepth", TextureTarget.Texture2D, context.SceneDepth.Handle, 0);
 			program.SetTexture("NormalRoughness", TextureTarget.Texture2D, context.NormalRoughness.Handle, 1);
 			program.SetMatrix4("invViewProjection", Matrix4.Invert(context.ViewProjection));
+			program.SetVector2("resolveTargetSize", new Vector2(width, height));
 			program.SetVector3("cameraPosition", context.CameraPosition);
 			program.SetVector3("cameraForward", context.Camera.transform.forward);
 
@@ -72,6 +73,7 @@ namespace LELEngine.Rendering.Passes
 
 			gi.ResolvedDiffuse = diffuse.Handle;
 			gi.ResolvedSpecular = specular.Handle;
+			gi.ResolvedNormals = context.NormalRoughness.Handle;
 			gi.ResolveWidth = width;
 			gi.ResolveHeight = height;
 			gi.ScreenWidth = context.Width;

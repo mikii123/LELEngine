@@ -5,12 +5,16 @@
 // The volume stores premultiplied radiance (rgb) and occupancy (a); mip levels average both,
 // so front-to-back compositing with (1 - alpha) weights is correct.
 //
-// Two visibility modes (giTraceMode):
-//   0  voxel cones: occlusion from the voxel alpha mips (fast, leaks through thin geometry)
+// Visibility modes (giTraceMode):
+//   0  voxel cones: occlusion from the voxel alpha mips (fast, leaks through thin geometry: at coarse mips a
+//                   wall one voxel thick averages with the empty space on both sides and cones pass through)
 //   1  SDF detail:  the first giSdfDetailDistance of every cone is sphere-traced through the global
 //                   distance field (exact visibility, no leaks through nearby walls); a hit reads the
 //                   radiance volume at the surface, otherwise the voxel cone continues from there.
-//                   This mirrors Lumen's near detail traces falling back to coarse far-field tracing.
+//                   Binary per cone: six cones give seven occlusion levels (banded corners).
+//   2  SDF cones:   the whole cone's visibility comes from the global distance field (distance field AO):
+//                   continuous, it only decreases (no cone sees through a wall), and where it decreases the
+//                   cone takes the radiance of the surfaces there from the voxel volume.
 
 #include "Engine/DistanceField.glsl"
 
@@ -98,15 +102,85 @@ vec4 TraceConeSdfDetail(vec3 origin, vec3 direction, float aperture, float maxDi
 	return TraceConeVoxel(origin, direction, aperture, detail, maxDistance);
 }
 
+// Voxel cone with distance field opacity (giTraceMode 2). The samples sit where TraceConeVoxel puts them (fixed
+// positions along the cone, every half diameter, footprint of the diameter), so the radiance from the mips stays
+// smooth; sample positions that followed the distance (sphere tracing) drew rings and contours on the walls.
+// The global distance field sets a floor under each sample's opacity, 1 - d / r (d = distance to the nearest
+// surface, r = cone radius, as in distance field AO): a cone cannot pass a wall that the coarse mips averaged
+// away, and near the origin, where the voxel occupancy is blocky (stepped corners), the field alone decides.
+// rgb = radiance (premultiplied by the cone's coverage), a = occlusion.
+vec4 TraceConeSdf(vec3 origin, vec3 direction, float aperture, float maxDistance)
+{
+	float voxelSize = VoxelSize();
+	float sdfVoxel = SdfVoxelSize();
+	float maxMip = log2(float(voxelResolution));
+	// A little narrower than the cone: a 60-degree cone tilted 60 degrees from a plane touches it along one edge,
+	// and the sphere approximation of its cross-section would darken every flat surface.
+	float occlusionAperture = aperture * 0.85;
+	// The field stores distances only up to its band: the radius stays inside it, so a distance at the band edge
+	// reads as free rather than as a surface there.
+	float maxRadius = sdfMaxDistance * 0.9;
+
+	vec3 color = vec3(0.0);
+	float alpha = 0.0;
+	float dist = voxelSize;
+	while (dist < maxDistance && alpha < 0.98)
+	{
+		vec3 p = origin + direction * dist;
+		vec3 uvw = (p - voxelGridMin) / voxelGridSize;
+		if (any(lessThan(uvw, vec3(0.0))) || any(greaterThan(uvw, vec3(1.0)))) break;
+
+		float diameter = max(voxelSize, 2.0 * aperture * dist);
+		float mip = min(log2(diameter / voxelSize), maxMip);
+		vec4 s = textureLod(VoxelRadiance, uvw, mip);
+
+		float fieldAlpha = 0.0;
+		if (InsideSdfGrid(p))
+		{
+			float radius = clamp(occlusionAperture * dist, sdfVoxel * 0.5, maxRadius);
+			fieldAlpha = 1.0 - clamp(SampleSdf(p) / radius, 0.0, 1.0);
+		}
+
+		// The field alone near the origin, the larger of both further out (the voxels also see what lies beyond the
+		// field's band).
+		float voxelWeight = smoothstep(voxelSize * 2.0, voxelSize * 6.0, dist);
+		float a = mix(fieldAlpha, max(s.a, fieldAlpha), voxelWeight);
+		// Half-diameter steps overlap: two samples make up one footprint's opacity.
+		a = 1.0 - sqrt(1.0 - min(a, 0.999));
+		// The occupied voxels' average radiance in the footprint.
+		vec3 radiance = s.rgb / max(s.a, 0.02);
+		color += (1.0 - alpha) * a * radiance;
+		alpha += (1.0 - alpha) * a;
+
+		dist += diameter * 0.5;
+	}
+
+	// Whatever the cone did not hit sees the sky.
+	color += (1.0 - alpha) * giSkyRadiance;
+	return vec4(color, alpha);
+}
+
 vec4 TraceCone(vec3 origin, vec3 direction, float aperture, float maxDistance)
 {
+	if (giTraceMode == 2)
+	{
+		return TraceConeSdf(origin, direction, aperture, maxDistance);
+	}
+
 	return giTraceMode != 0
 		? TraceConeSdfDetail(origin, direction, aperture, maxDistance)
 		: TraceConeVoxel(origin, direction, aperture, 0.0, maxDistance);
 }
 
-// Six 60-degree cones over the hemisphere. rgb = indirect irradiance (multiply by albedo), a = occlusion.
-vec4 TraceDiffuseCones(vec3 position, vec3 normal)
+// Start offset off the surface, so the cones' footprints do not take in the surface's own voxels.
+float ConeStartOffset()
+{
+	return VoxelSize() * 1.5;
+}
+
+// Six 60-degree cones over the hemisphere, starting <offset> off the surface along the normal.
+// rgb = indirect irradiance (multiply by albedo), a = occlusion.
+vec4 TraceDiffuseConesFrom(vec3 position, vec3 normal, float offset)
 {
 	const vec3 coneDirs[6] = vec3[6](
 		vec3(0.0, 1.0, 0.0),
@@ -122,12 +196,14 @@ vec4 TraceDiffuseCones(vec3 position, vec3 normal)
 	vec3 tangent = normalize(cross(helper, normal));
 	vec3 bitangent = cross(normal, tangent);
 
-	// Push the start point off the surface so the cone does not sample its own voxel.
-	vec3 origin = position + normal * VoxelSize() * 1.5;
+	vec3 origin = position + normal * offset;
 	float maxDistance = ConeMaxDistance();
 
 	vec4 result = vec4(0.0);
-	for (int i = 0; i < 6; i++)
+	// The bound depends on a uniform only so the compiler keeps the loop: unrolled, every cone would inline all
+	// three trace modes (seconds of shader compilation on Intel).
+	int cones = giTraceMode >= 0 ? 6 : 0;
+	for (int i = 0; i < cones; i++)
 	{
 		vec3 d = coneDirs[i];
 		vec3 direction = normalize(tangent * d.x + normal * d.y + bitangent * d.z);
@@ -137,11 +213,21 @@ vec4 TraceDiffuseCones(vec3 position, vec3 normal)
 	return result;
 }
 
+// Hemisphere cones from a surface point.
+vec4 TraceDiffuseCones(vec3 position, vec3 normal)
+{
+	return TraceDiffuseConesFrom(position, normal, ConeStartOffset());
+}
+
 // Single wide cone along the normal: a crude but cheap stand-in for the hemisphere.
+vec4 TraceWideConeFrom(vec3 position, vec3 normal, float offset)
+{
+	return TraceCone(position + normal * offset, normal, 1.0, ConeMaxDistance());
+}
+
 vec4 TraceWideCone(vec3 position, vec3 normal)
 {
-	vec3 origin = position + normal * VoxelSize() * 1.5;
-	return TraceCone(origin, normal, 1.0, ConeMaxDistance());
+	return TraceWideConeFrom(position, normal, ConeStartOffset());
 }
 
 // Single cone along the mirror direction; roughness in [0,1] widens the cone.
@@ -149,6 +235,6 @@ vec3 TraceSpecularCone(vec3 position, vec3 normal, vec3 viewDir, float roughness
 {
 	vec3 reflected = reflect(-viewDir, normal);
 	float aperture = clamp(roughness, 0.03, 1.0);
-	vec3 origin = position + normal * VoxelSize() * 1.5;
+	vec3 origin = position + normal * ConeStartOffset();
 	return TraceCone(origin, reflected, aperture, ConeMaxDistance()).rgb;
 }
