@@ -1,0 +1,5 @@
+Lit.shader
+uniform
+	vec4
+		Color
+			0.6 0.6 0.6 1

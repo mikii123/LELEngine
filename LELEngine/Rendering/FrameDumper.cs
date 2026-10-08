@@ -37,10 +37,10 @@ namespace LELEngine.Rendering
 		}
 
 		/// <summary>
-		///     Reads the currently bound (default) framebuffer and writes it. Call after the frame is complete,
-		///     before the buffer swap.
+		///     Reads the currently bound framebuffer (the default one's back buffer, or an offscreen target's first
+		///     color attachment) and writes it. Call after the frame is complete, before the buffer swap.
 		/// </summary>
-		public void Capture(int width, int height)
+		public void Capture(int width, int height, bool offscreen = false)
 		{
 			if (remaining <= 0)
 			{
@@ -55,7 +55,7 @@ namespace LELEngine.Rendering
 			}
 
 			GL.PixelStore(PixelStoreParameter.PackAlignment, 4);
-			GL.ReadBuffer(ReadBufferMode.Back);
+			GL.ReadBuffer(offscreen ? ReadBufferMode.ColorAttachment0 : ReadBufferMode.Back);
 			GL.ReadPixels(0, 0, width, height, PixelFormat.Bgr, PixelType.UnsignedByte, pixels);
 
 			string path = Path.Combine(directory, $"frame_{Written:000}.bmp");

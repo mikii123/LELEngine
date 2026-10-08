@@ -30,7 +30,7 @@ namespace LELEngine.Rendering.Passes
 
 		public override void Execute(RenderContext context)
 		{
-			Framebuffer.BindDefault(context.Width, context.Height);
+			context.Renderer.BindOutput();
 			GLState.SetDepth(false, false);
 			GLState.SetCull(false);
 

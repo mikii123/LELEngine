@@ -47,6 +47,10 @@ namespace LELEngine.Rendering.Passes
 		private int frameIndex;
 		private bool dynamicPending = true;
 
+		// Static field state of this pass (each renderer has its own), see GlobalIlluminationSettings.StaticVersion.
+		private bool staticDirty = true;
+		private int builtStaticVersion = -1;
+
 		#endregion
 
 		#region PublicMethods
@@ -85,7 +89,7 @@ namespace LELEngine.Rendering.Passes
 			bool dynamicDue = dynamicPending && (gi.DynamicUpdateInterval <= 1 || frameIndex % gi.DynamicUpdateInterval == 0);
 			GpuProfiler profiler = context.Renderer.Profiler;
 
-			if (gi.SdfStaticDirty)
+			if (staticDirty || gi.StaticVersion != builtStaticVersion)
 			{
 				profiler.Split("GlobalSDF.static");
 				RebuildStaticField(gi, scene);
@@ -128,7 +132,7 @@ namespace LELEngine.Rendering.Passes
 			globalIds = CreateIdTexture(resolution);
 			currentResolution = resolution;
 			Lighting.GI.SdfResolution = resolution;
-			Lighting.GI.SdfStaticDirty = true;
+			staticDirty = true;
 			previousRegions.Clear();
 
 			Console.WriteLine($"[SDF] Global distance field {resolution}^3 R16F + object ids R16UI (~{resolution * (long)resolution * resolution * 2 * 4 / (1024.0 * 1024.0):0} MB)");
@@ -189,7 +193,7 @@ namespace LELEngine.Rendering.Passes
 
 			if (changed)
 			{
-				gi.SdfStaticDirty = true;
+				staticDirty = true;
 				lastGridMin = gi.GridMin;
 				lastGridSize = gi.GridSize;
 				lastStaticCount = scene.StaticObjectCount;
@@ -210,7 +214,10 @@ namespace LELEngine.Rendering.Passes
 				currentResolution, currentResolution, currentResolution);
 
 			previousRegions.Clear();
-			gi.SdfStaticDirty = false;
+			staticDirty = false;
+			builtStaticVersion = gi.StaticVersion;
+			// A rebuilt static field changes the lighting as much as a dynamic move: caches leave their idle budgets.
+			scene.MarkChanged();
 		}
 
 		private void UpdateDynamicField(GlobalIlluminationSettings gi, LumenScene scene)

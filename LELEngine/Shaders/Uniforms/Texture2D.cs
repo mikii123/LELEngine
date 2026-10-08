@@ -25,8 +25,8 @@ namespace LELEngine.Shaders.Uniforms
 		{
 			Index = index;
 			Name = name;
-			string path = Path.Combine(Directory.GetCurrentDirectory(), "Textures", source);
-			Handle = LoadImage(path, srgb);
+			string assetPath = AssetDatabase.Resolve(source, "Textures") ?? "Textures/" + source;
+			Handle = LoadImage(AssetDatabase.ToAbsolute(assetPath), srgb);
 		}
 
 		public Texture2D()

@@ -5,9 +5,22 @@ using OpenTK.Windowing.GraphicsLibraryFramework;
 
 namespace LELEngine
 {
+	/// <summary>Window-side state the input system reads (the game window, or the editor's game view).</summary>
+	public interface IInputHost
+	{
+		MouseState MouseState { get; }
+		CursorState CursorState { get; set; }
+		Vector2i ClientSize { get; }
+		bool IsKeyDown(Keys key);
+		bool IsMouseButtonDown(MouseButton button);
+	}
+
 	public sealed class Input
 	{
 		#region PublicFields
+
+		/// <summary>Source of keyboard / mouse state; set by the host that owns the window.</summary>
+		public static IInputHost Host;
 
 		public static List<KeyController> Pressed = new List<KeyController>();
 		public static List<KeyController> UnPressed = new List<KeyController>();
@@ -51,7 +64,7 @@ namespace LELEngine
 		public static void BeginFrame()
 		{
 			// Key state is captured via events; the mouse delta is polled so it works with a grabbed cursor.
-			mouseDelta = Game.Mono.MouseState.Delta;
+			mouseDelta = Host != null ? Host.MouseState.Delta : Vector2.Zero;
 		}
 
 		/// <summary>
@@ -60,7 +73,10 @@ namespace LELEngine
 		public static void SetCursorLocked(bool locked)
 		{
 			cursorLocked = locked;
-			Game.Mono.CursorState = locked ? CursorState.Grabbed : CursorState.Normal;
+			if (Host != null)
+			{
+				Host.CursorState = locked ? CursorState.Grabbed : CursorState.Normal;
+			}
 		}
 
 		public static float GetStandardAxis(StandardInputAxis axis, float sensitivity = 0.1f)
@@ -78,12 +94,12 @@ namespace LELEngine
 
 		public static bool GetMouseButton(MouseButton button)
 		{
-			return Game.Mono.IsMouseButtonDown(button);
+			return Host != null && Host.IsMouseButtonDown(button);
 		}
 
 		public static bool GetKey(Keys code)
 		{
-			return Game.Mono.IsKeyDown(code);
+			return Host != null && Host.IsKeyDown(code);
 		}
 
 		public static bool GetKeyUp(Keys code)
@@ -126,7 +142,8 @@ namespace LELEngine
 
 		public static void Input_MouseMove(MouseMoveEventArgs e)
 		{
-			relativeMousePosition = new Vector2(e.X / (float)Game.Mono.ClientSize.X, e.Y / (float)Game.Mono.ClientSize.Y);
+			Vector2i size = Host != null ? Host.ClientSize : new Vector2i(1, 1);
+			relativeMousePosition = new Vector2(e.X / (float)size.X, e.Y / (float)size.Y);
 			mousePosition = new Vector2(e.X, e.Y);
 		}
 

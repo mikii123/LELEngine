@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <!-- A window application: no console window; the log goes to Player.log (and to stdout when redirected). -->
+    <OutputType>WinExe</OutputType>
+    <RootNamespace>LELEngine.Player</RootNamespace>
+    <AssemblyName>LELEngine.Player</AssemblyName>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <!-- Game builds load the game's scripts assembly next to the player. -->
+    <RollForward>Major</RollForward>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\LELCS\LELCS.csproj" />
+    <ProjectReference Include="..\LELEngine\LELEngine.csproj" />
+  </ItemGroup>
+
+</Project>

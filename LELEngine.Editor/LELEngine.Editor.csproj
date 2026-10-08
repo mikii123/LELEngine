@@ -1,0 +1,85 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <!-- A window application: the editor opens no console window. Batch mode attaches to the calling terminal;
+         LELEngine.Editor.Console.exe (written next to it) is the console twin for terminals and CI: the shell
+         waits for it and gets its exit code. -->
+    <OutputType>WinExe</OutputType>
+    <RootNamespace>LELEngine.Editor</RootNamespace>
+    <AssemblyName>LELEngine.Editor</AssemblyName>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="OpenTK" Version="4.9.4" />
+    <PackageReference Include="Hexa.NET.ImGui" Version="2.2.9" />
+    <PackageReference Include="Hexa.NET.ImGuizmo" Version="2.2.9" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\LELCS\LELCS.csproj" />
+    <ProjectReference Include="..\LELEngine\LELEngine.csproj" />
+    <!-- Built first; its output is copied to Player/ next to the editor (game builds start from it). -->
+    <ProjectReference Include="..\LELEngine.Player\LELEngine.Player.csproj" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+  <Target Name="CopyPlayer" AfterTargets="Build">
+    <ItemGroup>
+      <PlayerFiles Include="..\LELEngine.Player\bin\$(Configuration)\$(TargetFramework)\**\*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(PlayerFiles)" DestinationFiles="@(PlayerFiles->'$(OutDir)Player\%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
+  </Target>
+
+  <!-- Console twin of the launcher: the same app host (it starts LELEngine.Editor.dll) with the PE subsystem set to
+       console. -->
+  <UsingTask TaskName="WriteConsoleAppHost" TaskFactory="RoslynCodeTaskFactory" AssemblyFile="$(MSBuildToolsPath)\Microsoft.Build.Tasks.Core.dll">
+    <ParameterGroup>
+      <Source ParameterType="System.String" Required="true" />
+      <Destination ParameterType="System.String" Required="true" />
+    </ParameterGroup>
+    <Task>
+      <Code Type="Fragment" Language="cs"><![CDATA[
+        byte[] image = System.IO.File.ReadAllBytes(Source);
+        int header = System.BitConverter.ToInt32(image, 0x3C);
+        if (header <= 0 || header + 24 + 70 > image.Length || image[header] != (byte)'P' || image[header + 1] != (byte)'E')
+        {
+          Log.LogError("Not a PE image: " + Source);
+          return false;
+        }
+
+        // Optional header (after the 4-byte signature and the 20-byte file header): Subsystem at offset 68.
+        int subsystem = header + 24 + 68;
+        image[subsystem] = 3; // IMAGE_SUBSYSTEM_WINDOWS_CUI
+        image[subsystem + 1] = 0;
+        System.IO.File.WriteAllBytes(Destination, image);
+      ]]></Code>
+    </Task>
+  </UsingTask>
+
+  <Target Name="ConsoleAppHost" AfterTargets="Build" Condition="'$(OS)' == 'Windows_NT' And Exists('$(OutDir)$(AssemblyName).exe')" Inputs="$(OutDir)$(AssemblyName).exe" Outputs="$(OutDir)$(AssemblyName).Console.exe">
+    <WriteConsoleAppHost Source="$(OutDir)$(AssemblyName).exe" Destination="$(OutDir)$(AssemblyName).Console.exe" />
+  </Target>
+
+  <!-- Starter assets copied into every new project (Templates/NewProject/Assets in the editor output). -->
+  <ItemGroup>
+    <Content Include="Templates\**\*">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="..\TestGame\Assets\Meshes\cube.obj" Link="Templates\NewProject\Assets\Meshes\Cube.obj">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="..\TestGame\Assets\Meshes\sphere.obj" Link="Templates\NewProject\Assets\Meshes\Sphere.obj">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="..\TestGame\Assets\Meshes\quad.obj" Link="Templates\NewProject\Assets\Meshes\Quad.obj">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="..\TestGame.Scenes\Assets\Shaders\Lit.shader" Link="Templates\NewProject\Assets\Shaders\Lit.shader">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+
+</Project>

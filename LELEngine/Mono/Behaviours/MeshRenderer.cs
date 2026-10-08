@@ -1,6 +1,7 @@
 using LELEngine;
 using LELEngine.Shaders;
 
+[ExecuteAlways]
 public sealed class MeshRenderer : Behaviour
 {
 	#region PublicFields
@@ -19,28 +20,24 @@ public sealed class MeshRenderer : Behaviour
 		}
 	}
 
+	/// <summary>The mesh drawn; it uploads into the shared geometry buffers (Rendering.GeometryPool) on first use.</summary>
 	public Mesh Mesh
 	{
 		get => mesh;
-		private set
-		{
-			if (value == null)
-			{
-				mesh = null;
-				return;
-			}
-
-			if (mesh != value)
-			{
-				mesh = value;
-				BufferVerticies();
-			}
-		}
+		private set => mesh = value;
 	}
 
-	public Material Material { get; private set; }
-	public string MaterialPath { get; private set; }
-	public string MeshPath { get; private set; }
+	public Material Material
+	{
+		get => material;
+		private set => material = value;
+	}
+
+	/// <summary>Asset path of the material (null for a material created in code).</summary>
+	public string MaterialPath => material?.AssetPath;
+
+	/// <summary>Asset path of the mesh.</summary>
+	public string MeshPath => mesh?.AssetPath;
 
 	public bool CastShadows = true;
 	public bool ReceiveShadows = true;
@@ -61,38 +58,32 @@ public sealed class MeshRenderer : Behaviour
 
 	#region PrivateFields
 
-	private Mesh mesh;
-	private VertexBuffer<Vertex> vertexBuffer;
-	private VertexArray<Vertex> vertexArray;
+	[SerializeField] private Mesh mesh;
+	[SerializeField] private Material material;
 
 	#endregion
 
 	#region PublicMethods
 
 	/// <summary>
-	///     Set the material. Automatically set shader.
+	///     Set the material by asset path or file name. Automatically set shader.
 	/// </summary>
 	public void SetMaterial(string path)
 	{
-		MaterialPath = path;
-		Material = InternalStorage.GetOrCreateMaterial(MaterialPath);
+		Material = InternalStorage.GetOrCreateMaterial(path);
 	}
 
 	public void SetMaterial(Material material)
 	{
 		Material = material;
-		MaterialPath = null;
 	}
 
 	/// <summary>
-	///     Set the mesh.
+	///     Set the mesh by asset path or file name.
 	/// </summary>
 	public void SetMesh(string path)
 	{
-		MeshPath = path;
-
-		// Set the mesh
-		Mesh = InternalStorage.GetOrCreateMesh(MeshPath);
+		Mesh = InternalStorage.GetOrCreateMesh(path);
 	}
 
 	public void SetMesh(Mesh _mesh)
@@ -114,32 +105,12 @@ public sealed class MeshRenderer : Behaviour
 	}
 
 	/// <summary>
-	///     (Re)creates GPU buffers and the vertex layout. Automatically called on every mesh change.
-	///     The layout uses fixed attribute locations, so it works with any shader program.
+	///     Uploads the mesh into the shared geometry buffers now instead of at its first draw. The vertex layout uses
+	///     fixed attribute locations, so it works with any shader program.
 	/// </summary>
 	public void BufferVerticies()
 	{
-		if (Mesh == null)
-		{
-			return;
-		}
-
-		vertexBuffer?.Delete();
-		vertexArray?.Delete();
-
-		vertexBuffer = new VertexBuffer<Vertex>(Vertex.Size);
-
-		foreach (Vertex vertex in Mesh.Verticies)
-		{
-			vertexBuffer.AddVertex(vertex);
-		}
-
-		vertexArray = new VertexArray<Vertex>(vertexBuffer, VertexLayout.CreateStandardAttributes());
-
-		// Upload once; later draws only bind.
-		vertexArray.Bind();
-		vertexBuffer.Bind();
-		vertexBuffer.BufferData();
+		LELEngine.Rendering.GeometryPool.Prepare(Mesh);
 	}
 
 	/// <summary>
@@ -154,7 +125,7 @@ public sealed class MeshRenderer : Behaviour
 		}
 
 		transform.SetModelMatrix(UsingShader);
-		Camera.main.SetUniforms(UsingShader);
+		(Camera.current ?? Camera.main)?.SetUniforms(UsingShader);
 		Lighting.SetUniforms(UsingShader, ReceiveShadows, ReceiveGI);
 		Material.SetUniforms();
 
@@ -203,19 +174,11 @@ public sealed class MeshRenderer : Behaviour
 	}
 
 	/// <summary>
-	///     Binds the buffers and issues the draw call. No uniforms are touched.
+	///     Binds the shared geometry and issues the draw call. No uniforms are touched.
 	/// </summary>
 	public void DrawGeometry()
 	{
-		if (vertexArray == null || vertexBuffer == null)
-		{
-			return;
-		}
-
-		vertexArray.Bind();
-		vertexBuffer.Bind();
-		vertexBuffer.BufferData();
-		vertexBuffer.Draw();
+		LELEngine.Rendering.GeometryPool.Draw(mesh);
 	}
 
 	#endregion

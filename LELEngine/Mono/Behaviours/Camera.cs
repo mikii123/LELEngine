@@ -2,35 +2,34 @@ using LELEngine;
 using LELEngine.Shaders;
 using OpenTK.Mathematics;
 
-//DO NOT CALL base IN ANY OVERRIDEN FUNCTIONS
+/// <summary>
+///     Perspective camera. <see cref="main" /> is the first enabled camera of the active scene (also in edit
+///     mode); <see cref="current" /> is the camera the renderer is drawing with right now (the editor's scene view
+///     camera is not part of any scene).
+/// </summary>
+[ExecuteAlways]
 public sealed class Camera : Behaviour
 {
 	#region PublicFields
 
-	public static Camera main;
+	public static Camera main => SceneManager.ActiveScene?.MainCamera;
 
-	public float Aspect { get; set; } = 4f / 3f;
-
-	public float NearClip { get; set; } = 0.1f;
-
-	public float FarClip { get; set; } = 1000f;
+	/// <summary>Camera of the frame being rendered (set by the renderer).</summary>
+	public static Camera current { get; internal set; }
 
 	/// <summary>Vertical field of view in degrees.</summary>
-	public float FoV { get; set; } = 60f;
+	public float FoV = 60f;
+
+	public float NearClip = 0.1f;
+
+	public float FarClip = 1000f;
+
+	/// <summary>Width / height of the view; set by the renderer every frame.</summary>
+	[System.NonSerialized] public float Aspect = 4f / 3f;
 
 	public Matrix4 ViewMatrix { get; private set; } = Matrix4.Identity;
 	public Matrix4 ProjectionMatrix { get; private set; } = Matrix4.Identity;
 	public Matrix4 ViewProjectionMatrix { get; private set; } = Matrix4.Identity;
-
-	#endregion
-
-	#region UnityMethods
-
-	public override void Awake()
-	{
-		main = this;
-		UpdateMatrices(Aspect);
-	}
 
 	#endregion
 

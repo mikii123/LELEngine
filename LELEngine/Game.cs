@@ -6,7 +6,14 @@ namespace LELEngine
 	{
 		#region PublicFields
 
-		public static MonoBehaviour Mono;
+		/// <summary>The standalone game host (window, renderer, game loop) created by <see cref="CreateWindow" />.</summary>
+		public static GameHost Mono;
+
+		/// <summary>
+		///     Renderer that draws the game (the standalone host's, or the editor's game view). Scripts use this
+		///     rather than <see cref="Mono" />, which does not exist inside the editor.
+		/// </summary>
+		public static Rendering.Renderer Renderer { get; set; }
 
 		#endregion
 
@@ -26,7 +33,7 @@ namespace LELEngine
 			{
 				try
 				{
-					Mono = new MonoBehaviour(width, height, title, version);
+					Mono = new GameHost(width, height, title, version);
 					return;
 				}
 				catch (Exception e) when (version > Window.MinimumApiVersion)

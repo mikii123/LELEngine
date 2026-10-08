@@ -64,6 +64,7 @@ namespace LELEngine.Rendering.Lumen
 		private readonly Dictionary<MeshRenderer, TransformState> lastTransforms = new Dictionary<MeshRenderer, TransformState>();
 		private readonly Dictionary<MeshRenderer, MaterialState> lastMaterials = new Dictionary<MeshRenderer, MaterialState>();
 		private int lastDynamicCount = -1;
+		private int lastStaticVersion = -1;
 		private Vector3 lastSunDirection;
 		private float lastSunStrength;
 		private Color4 lastSunColor;
@@ -118,9 +119,16 @@ namespace LELEngine.Rendering.Lumen
 			lastSunDirection = sunDirection;
 			lastSunStrength = Lighting.Directional.Strength;
 			lastSunColor = Lighting.Directional.Color;
-			// A static rebuild (objects moved via InvalidateStatic) changes the lighting as much as a dynamic move;
-			// GlobalDistanceFieldPass clears the flag later in the same frame.
-			QuietFrames = DynamicChanged || MaterialChanged || SunChanged || gi.SdfStaticDirty ? 0 : QuietFrames + 1;
+			// A static invalidation (objects moved via InvalidateStatic) changes the lighting as much as a dynamic move.
+			bool staticChanged = gi.StaticVersion != lastStaticVersion;
+			lastStaticVersion = gi.StaticVersion;
+			QuietFrames = DynamicChanged || MaterialChanged || SunChanged || staticChanged ? 0 : QuietFrames + 1;
+		}
+
+		/// <summary>Something outside the tracked state changed the lighting (static field rebuilt): restart the quiet count.</summary>
+		public void MarkChanged()
+		{
+			QuietFrames = 0;
 		}
 
 		/// <summary>
@@ -189,6 +197,23 @@ namespace LELEngine.Rendering.Lumen
 			}
 		}
 
+		private static void Prune<TValue>(Dictionary<MeshRenderer, TValue> table, HashSet<MeshRenderer> alive)
+		{
+			var dead = new List<MeshRenderer>();
+			foreach (MeshRenderer renderer in table.Keys)
+			{
+				if (!alive.Contains(renderer))
+				{
+					dead.Add(renderer);
+				}
+			}
+
+			foreach (MeshRenderer renderer in dead)
+			{
+				table.Remove(renderer);
+			}
+		}
+
 		// Compares every dynamic object's transform with the one seen last frame.
 		private bool DetectDynamicChanges()
 		{
@@ -211,6 +236,21 @@ namespace LELEngine.Rendering.Lumen
 			{
 				changed = true;
 				lastDynamicCount = dynamicCount;
+			}
+
+			// Destroyed renderers (or renderers that became static / stopped contributing) drop out of the
+			// change-tracking tables. Their surface cache cards stay allocated until the scene caches are reset
+			// (Renderer.InvalidateSceneCaches).
+			if (lastTransforms.Count > dynamicCount || lastMaterials.Count > objects.Count)
+			{
+				var alive = new HashSet<MeshRenderer>();
+				foreach (SceneObject o in objects)
+				{
+					alive.Add(o.Renderer);
+				}
+
+				Prune(lastTransforms, alive);
+				Prune(lastMaterials, alive);
 			}
 
 			return changed;

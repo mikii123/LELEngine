@@ -33,6 +33,9 @@ namespace LELEngine.Rendering
 		public RenderTexture SceneColor => SceneTarget.ColorAttachments[0];
 		public RenderTexture SceneDepth => SceneTarget.DepthAttachment;
 
+		/// <summary>Destination of the post-processed image; null = the window's default framebuffer.</summary>
+		public Framebuffer OutputTarget;
+
 		/// <summary>Engine depth-only program (shadow pass, depth prepass).</summary>
 		public ShaderProgram DepthOnlyProgram;
 		public FullscreenQuad Fullscreen;

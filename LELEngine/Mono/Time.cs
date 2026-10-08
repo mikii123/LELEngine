@@ -27,5 +27,12 @@
 
 		/// <summary>Time the last SwapBuffers blocked for, milliseconds (GPU / display wait).</summary>
 		public static double swapMs;
+
+		/// <summary>Restarts the game clock (the editor does this when play mode starts).</summary>
+		public static void ResetTime()
+		{
+			timeD = 0;
+			lastFrameD = 0;
+		}
 	}
 }

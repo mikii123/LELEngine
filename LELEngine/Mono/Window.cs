@@ -7,7 +7,7 @@ using OpenTK.Windowing.Desktop;
 
 namespace LELEngine
 {
-	public class Window : GameWindow
+	public class Window : GameWindow, IInputHost
 	{
 		#region OtherFields
 
@@ -23,6 +23,9 @@ namespace LELEngine
 
 		/// <summary>Newest OpenGL version the engine asks for; extra features are used when the driver grants it.</summary>
 		public static readonly Version PreferredApiVersion = new Version(4, 6);
+
+		/// <summary>New windows take the keyboard focus. Automated runs turn it off so they do not interrupt the user.</summary>
+		public static bool StartFocused { get; set; } = true;
 
 		public Window(int width, int height, string title)
 			: this(width, height, title, PreferredApiVersion)
@@ -43,7 +46,8 @@ namespace LELEngine
 					// The scene is rendered off-screen, so the default framebuffer does not need multisampling.
 					APIVersion = apiVersion,
 					Profile = ContextProfile.Core,
-					Flags = ContextFlags.ForwardCompatible
+					Flags = ContextFlags.ForwardCompatible,
+					StartFocused = StartFocused
 				})
 		{
 			Console.WriteLine("GL version: " + GL.GetString(StringName.Version) + "\nRenderer: " + GL.GetString(StringName.Renderer) + "\nVSync: " + VSync);
@@ -67,6 +71,8 @@ namespace LELEngine
 
 		protected override void OnUpdateFrame(FrameEventArgs e)
 		{
+			// Raises the UpdateFrame event (hosts and test hooks subscribe to it).
+			base.OnUpdateFrame(e);
 			Time.deltaTimeD = e.Time;
 			Time.timeD += e.Time;
 
@@ -94,6 +100,7 @@ namespace LELEngine
 
 			renderStopwatch.Stop();
 			Time.renderDeltaTimeD = renderStopwatch.Elapsed.TotalMilliseconds;
+			base.OnRenderFrame(e);
 		}
 
 		/// <summary>

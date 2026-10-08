@@ -1,9 +1,16 @@
-﻿using LELEngine;
+using System;
+using System.Collections.Generic;
+using LELEngine;
 using LELEngine.Shaders;
 using OpenTK.Mathematics;
 using Matrix4 = LELEngine.Shaders.Uniforms.Matrix4;
 
-// Do NOT call "base" in any overridden functions
+/// <summary>
+///     Position, rotation and scale of a GameObject, relative to its parent. The local values are stored and
+///     serialized; world values are derived through the parent chain (row-vector convention: v * M, with
+///     local matrix = scale * rotation * translation and world = local * parent world).
+/// </summary>
+[ExecuteAlways]
 public sealed class Transform : Behaviour
 {
 	#region PublicFields
@@ -14,39 +21,156 @@ public sealed class Transform : Behaviour
 
 	public Vector3 right => (rotation * Vector3.UnitX).Normalized();
 
-	/// <summary>Local-to-world matrix (row-vector convention, as used with OpenTK: v * M).</summary>
-	public OpenTK.Mathematics.Matrix4 LocalToWorld =>
-		OpenTK.Mathematics.Matrix4.CreateScale(scale) * OpenTK.Mathematics.Matrix4.CreateFromQuaternion(rotation) * OpenTK.Mathematics.Matrix4.CreateTranslation(position);
+	/// <summary>Local-to-parent matrix.</summary>
+	public OpenTK.Mathematics.Matrix4 LocalMatrix =>
+		OpenTK.Mathematics.Matrix4.CreateScale(m_LocalScale) * OpenTK.Mathematics.Matrix4.CreateFromQuaternion(m_LocalRotation) * OpenTK.Mathematics.Matrix4.CreateTranslation(m_LocalPosition);
 
-	public Transform parent;
+	/// <summary>Local-to-world matrix.</summary>
+	public OpenTK.Mathematics.Matrix4 LocalToWorld => parentTransform == null ? LocalMatrix : LocalMatrix * parentTransform.LocalToWorld;
+
+	public OpenTK.Mathematics.Matrix4 WorldToLocal => LocalToWorld.Inverted();
+
+	public Transform parent
+	{
+		get => parentTransform;
+		set => SetParent(value, true);
+	}
+
+	public IReadOnlyList<Transform> Children => children;
+
+	public int childCount => children.Count;
+
+	public Transform root => parentTransform == null ? this : parentTransform.root;
 
 	#endregion
 
 	#region PrivateFields
 
-	private Matrix4 modelMatrix = new Matrix4("modelMatrix");
+	[SerializeField] private Vector3 m_LocalPosition = Vector3.Zero;
+	[SerializeField] private Quaternion m_LocalRotation = Quaternion.Identity;
+	[SerializeField] private Vector3 m_LocalScale = Vector3.One;
 
-	#endregion
-
-	#region UnityMethods
-
-	public override void LateUpdate()
-	{
-		modelMatrix.Matrix = OpenTK.Mathematics.Matrix4.CreateScale(scale) * OpenTK.Mathematics.Matrix4.CreateFromQuaternion(rotation) * OpenTK.Mathematics.Matrix4.CreateTranslation(position);
-	}
+	private Transform parentTransform;
+	private readonly List<Transform> children = new List<Transform>();
+	private readonly Matrix4 modelMatrix = new Matrix4("modelMatrix");
 
 	#endregion
 
 	#region PublicMethods
 
+	/// <summary>Uploads the world matrix as "modelMatrix" (computed at draw time, so edit mode needs no update).</summary>
 	public void SetModelMatrix(ShaderProgram program)
 	{
+		modelMatrix.Matrix = LocalToWorld;
 		modelMatrix.Set(program);
 	}
 
-	public void SetParent(Transform _transform)
+	/// <summary>Re-parents the transform, keeping its world position, rotation and (approximately) scale.</summary>
+	public void SetParent(Transform newParent)
 	{
-		parent = _transform;
+		SetParent(newParent, true);
+	}
+
+	public void SetParent(Transform newParent, bool worldPositionStays)
+	{
+		if (newParent == parentTransform)
+		{
+			return;
+		}
+
+		if (newParent != null && (newParent == this || newParent.IsChildOf(this)))
+		{
+			Debug.LogError($"Cannot parent '{gameObject?.Name}' to its own descendant '{newParent.gameObject?.Name}'.");
+			return;
+		}
+
+		Vector3 worldPosition = position;
+		Quaternion worldRotation = rotation;
+		Vector3 worldScale = lossyScale;
+
+		parentTransform?.children.Remove(this);
+		parentTransform = newParent;
+		newParent?.children.Add(this);
+
+		if (worldPositionStays)
+		{
+			position = worldPosition;
+			rotation = worldRotation;
+			if (newParent == null)
+			{
+				m_LocalScale = worldScale;
+			}
+			else
+			{
+				Vector3 parentScale = newParent.lossyScale;
+				m_LocalScale = new Vector3(
+					SafeDivide(worldScale.X, parentScale.X),
+					SafeDivide(worldScale.Y, parentScale.Y),
+					SafeDivide(worldScale.Z, parentScale.Z));
+			}
+		}
+
+		Scene scene = gameObject?.scene;
+		if (scene != null && gameObject != null && !gameObject.destroyed)
+		{
+			scene.OnHierarchyActiveChanged(gameObject);
+		}
+	}
+
+	public bool IsChildOf(Transform other)
+	{
+		for (Transform t = parentTransform; t != null; t = t.parentTransform)
+		{
+			if (t == other)
+			{
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	public Transform GetChild(int index)
+	{
+		return children[index];
+	}
+
+	public int GetSiblingIndex()
+	{
+		return parentTransform != null ? parentTransform.children.IndexOf(this) : -1;
+	}
+
+	/// <summary>Moves this transform within its parent's children (root order is the scene's object order).</summary>
+	public void SetSiblingIndex(int index)
+	{
+		if (parentTransform == null)
+		{
+			return;
+		}
+
+		List<Transform> siblings = parentTransform.children;
+		siblings.Remove(this);
+		siblings.Insert(Math.Clamp(index, 0, siblings.Count), this);
+	}
+
+	public Vector3 TransformPoint(Vector3 point)
+	{
+		return Vector3.TransformPosition(point, LocalToWorld);
+	}
+
+	public Vector3 InverseTransformPoint(Vector3 point)
+	{
+		return Vector3.TransformPosition(point, WorldToLocal);
+	}
+
+	public Vector3 TransformDirection(Vector3 direction)
+	{
+		return rotation * direction;
+	}
+
+	public Vector3 InverseTransformDirection(Vector3 direction)
+	{
+		return rotation.Inverted() * direction;
 	}
 
 	public void LookAt(Vector3 pos)
@@ -65,123 +189,61 @@ public sealed class Transform : Behaviour
 
 	#region Positions
 
-	private Vector3 _position;
+	public Vector3 localPosition
+	{
+		get => m_LocalPosition;
+		set => m_LocalPosition = value;
+	}
 
 	public Vector3 position
 	{
-		get
-		{
-			if (parent != null)
-			{
-				return parent.position +
-					parent.right * localPosition.X +
-					parent.up * localPosition.Y +
-					parent.forward * localPosition.Z;
-			}
-
-			return _position;
-		}
-		set
-		{
-			_position = value;
-			if (parent != null)
-			{
-				localPosition = value - parent.position;
-			}
-		}
-	}
-
-	private Vector3 _localPosition = Vector3.Zero;
-
-	public Vector3 localPosition
-	{
-		get
-		{
-			if (parent != null)
-			{
-				return _localPosition;
-			}
-
-			return position;
-		}
-		set
-		{
-			_localPosition = value;
-			if (parent == null)
-			{
-				position = value;
-			}
-		}
+		get => parentTransform == null ? m_LocalPosition : parentTransform.TransformPoint(m_LocalPosition);
+		set => m_LocalPosition = parentTransform == null ? value : parentTransform.InverseTransformPoint(value);
 	}
 
 	#endregion
 
 	#region Rotations
 
-	private Quaternion _rotation = Quaternion.Identity;
+	public Quaternion localRotation
+	{
+		get => m_LocalRotation;
+		set => m_LocalRotation = value;
+	}
 
 	public Quaternion rotation
 	{
-		get
-		{
-			if (parent != null)
-			{
-				return parent.rotation * localRotation;
-			}
-
-			return _rotation;
-		}
-		set
-		{
-			_rotation = value;
-			if (parent != null)
-			{
-				localRotation = value * parent.rotation.Inverted();
-			}
-		}
-	}
-
-	private Quaternion _localRotation = Quaternion.Identity;
-
-	public Quaternion localRotation
-	{
-		get
-		{
-			if (parent != null)
-			{
-				return _localRotation;
-			}
-
-			return rotation;
-		}
-		set
-		{
-			_localRotation = value;
-			if (parent == null)
-			{
-				rotation = value;
-			}
-		}
+		get => parentTransform == null ? m_LocalRotation : parentTransform.rotation * m_LocalRotation;
+		set => m_LocalRotation = parentTransform == null ? value : parentTransform.rotation.Inverted() * value;
 	}
 
 	#endregion
 
 	#region Scale
 
-	private Vector3 _scale = Vector3.One;
+	public Vector3 localScale
+	{
+		get => m_LocalScale;
+		set => m_LocalScale = value;
+	}
 
+	/// <summary>Approximate world scale (product of the local scales along the parent chain).</summary>
+	public Vector3 lossyScale => parentTransform == null ? m_LocalScale : parentTransform.lossyScale * m_LocalScale;
+
+	/// <summary>Getter: world scale (<see cref="lossyScale" />); setter: local scale.</summary>
 	public Vector3 scale
 	{
-		get
-		{
-			if (parent != null)
-			{
-				return parent.scale * _scale;
-			}
+		get => lossyScale;
+		set => m_LocalScale = value;
+	}
 
-			return _scale;
-		}
-		set => _scale = value;
+	#endregion
+
+	#region PrivateMethods
+
+	private static float SafeDivide(float value, float divisor)
+	{
+		return Math.Abs(divisor) > 1e-8f ? value / divisor : value;
 	}
 
 	#endregion
