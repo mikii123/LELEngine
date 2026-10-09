@@ -7,7 +7,8 @@ namespace LELEngine.Editor
 	///     Command line actions for automated editor tests (screenshots of a scripted session):
 	///     select=ObjectName, addcomponent=ObjectName;Type.Name, playframe=N, stopframe=N, saveframe=N,
 	///     touchscript=N;path (rewrites a script file at frame N to trigger a rebuild), buildgame=N;outputFolder,
-	///     focusscene=N, nudgecamera=N, dumpview=f1,f2,...;folder, reportframes=f1,f2,..., focuswindow=N;Name.
+	///     focusscene=N, nudgecamera=N, dumpview=f1,f2,...;folder, reportframes=f1,f2,..., focuswindow=N;Name,
+	///     maximize=N, restore=N, grow=N, slowframes=ms.
 	/// </summary>
 	internal sealed class TestHooks
 	{
@@ -18,6 +19,8 @@ namespace LELEngine.Editor
 		private int frame;
 		private bool selected;
 		private bool componentAdded;
+		private readonly System.Diagnostics.Stopwatch frameClock = System.Diagnostics.Stopwatch.StartNew();
+		private double lastFrameMs;
 
 		#endregion
 
@@ -46,6 +49,22 @@ namespace LELEngine.Editor
 		public void Update()
 		{
 			frame++;
+			// maximize=N / restore=N / grow=N (10 px larger): window size changes; slowframes=ms: logs every frame
+			// slower than that (also on the project launcher).
+			if (Is("maximize")) editor.Window.WindowState = OpenTK.Windowing.Common.WindowState.Maximized;
+			if (Is("restore")) editor.Window.WindowState = OpenTK.Windowing.Common.WindowState.Normal;
+			if (Is("grow")) editor.Window.ClientSize += new OpenTK.Mathematics.Vector2i(10, 10);
+			if (values.TryGetValue("slowframes", out string slow) && double.TryParse(slow, out double slowMs))
+			{
+				double now = frameClock.Elapsed.TotalMilliseconds;
+				if (frame > 2 && now - lastFrameMs > slowMs)
+				{
+					Debug.Log($"[Test] Frame {frame}: {now - lastFrameMs:0.0} ms ({editor.Window.ClientSize.X}x{editor.Window.ClientSize.Y})");
+				}
+
+				lastFrameMs = now;
+			}
+
 			Scene scene = editor.Scene;
 			if (scene == null)
 			{

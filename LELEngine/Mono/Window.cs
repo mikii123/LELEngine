@@ -1,7 +1,9 @@
 using System;
 using System.Diagnostics;
+using System.Runtime.InteropServices;
 using LELEngine.Rendering;
 using OpenTK.Graphics.OpenGL4;
+using OpenTK.Mathematics;
 using OpenTK.Windowing.Common;
 using OpenTK.Windowing.Desktop;
 
@@ -13,6 +15,8 @@ namespace LELEngine
 
 		internal Stopwatch renderStopwatch;
 		private bool framePending;
+		private Vector2i pendingFrameSize;
+		private bool resizedSinceSwap;
 
 		#endregion
 
@@ -41,7 +45,7 @@ namespace LELEngine
 				},
 				new NativeWindowSettings
 				{
-					ClientSize = new OpenTK.Mathematics.Vector2i(width, height),
+					ClientSize = new Vector2i(width, height),
 					Title = title,
 					// The scene is rendered off-screen, so the default framebuffer does not need multisampling.
 					APIVersion = apiVersion,
@@ -61,6 +65,9 @@ namespace LELEngine
 		protected override void OnResize(ResizeEventArgs e)
 		{
 			GL.Viewport(0, 0, e.Width, e.Height);
+			// The pending frame has the old size; the next swap waits for the earlier ones (see PresentPendingFrame).
+			framePending = false;
+			resizedSinceSwap = true;
 		}
 
 		protected override void OnLoad()
@@ -97,6 +104,7 @@ namespace LELEngine
 			// and command submission; deferring the swap overlaps that CPU work with GPU rendering.
 			GL.Flush();
 			framePending = true;
+			pendingFrameSize = FramebufferSize;
 
 			renderStopwatch.Stop();
 			Time.renderDeltaTimeD = renderStopwatch.Elapsed.TotalMilliseconds;
@@ -106,6 +114,8 @@ namespace LELEngine
 		/// <summary>
 		///     Presents the previously rendered frame. The time spent here is the wait for the GPU to finish
 		///     it (the frame is GPU bound) or for the display (vsync); recorded in <see cref="Time.swapMs" />.
+		///     A frame rendered before the window was resized is dropped, and the first swap after a resize
+		///     waits until the earlier frames are presented (see <see cref="WaitForQueuedPresents" />).
 		/// </summary>
 		protected void PresentPendingFrame()
 		{
@@ -114,11 +124,44 @@ namespace LELEngine
 				return;
 			}
 
+			framePending = false;
+			if (pendingFrameSize != FramebufferSize)
+			{
+				return;
+			}
+
+			if (resizedSinceSwap)
+			{
+				resizedSinceSwap = false;
+				WaitForQueuedPresents();
+			}
+
 			long before = Stopwatch.GetTimestamp();
 			SwapBuffers();
 			Time.swapMs = (Stopwatch.GetTimestamp() - before) * 1000.0 / Stopwatch.Frequency;
-			framePending = false;
 		}
+
+		#endregion
+
+		#region PrivateMethods
+
+		/// <summary>
+		///     Drains the presentation queue before the first swap at a new window size. Drivers that present OpenGL
+		///     through a DXGI swap chain (Intel) resize it on that swap; resizing while earlier presents are still
+		///     queued stalls for ~2 s in the D3D runtime (the same issue as microsoft/angle#111), and the swaps after
+		///     it block: maximizing or restoring froze the editor. Costs one composition interval per resize.
+		/// </summary>
+		private static void WaitForQueuedPresents()
+		{
+			GL.Finish();
+			if (OperatingSystem.IsWindows())
+			{
+				DwmFlush();
+			}
+		}
+
+		[DllImport("dwmapi.dll")]
+		private static extern int DwmFlush();
 
 		#endregion
 	}

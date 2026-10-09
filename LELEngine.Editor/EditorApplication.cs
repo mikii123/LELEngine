@@ -150,6 +150,7 @@ namespace LELEngine.Editor
 			if (Project == null)
 			{
 				launcher.Update();
+				testHooks.Update();
 				return;
 			}
 

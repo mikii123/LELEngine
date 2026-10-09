@@ -34,6 +34,9 @@ namespace LELEngine.Editor
 		private int indexBuffer;
 		private int vertexBufferSize;
 		private int indexBufferSize;
+
+		// Base vertex and first index of each draw list in this frame's buffers.
+		private (int vertex, int index)[] drawLists = new (int, int)[16];
 		private int program;
 		private int projectionLocation;
 		private int textureLocation;
@@ -179,26 +182,46 @@ void main()
 			GL.BindBuffer(BufferTarget.ElementArrayBuffer, indexBuffer);
 			GL.ActiveTexture(TextureUnit.Texture0);
 
-			NVector2 clipOffset = raw->DisplayPos;
+			// All draw lists go into one fresh buffer store per frame. Orphaning (BufferData with no data) never waits
+			// for the GPU to finish reading the previous frame's data; rewriting the store in place would wait for
+			// it, which stalls the UI for as long as the driver holds the GPU (seconds right after a window resize).
+			int totalVertexBytes = 0;
+			int totalIndexBytes = 0;
+			for (int n = 0; n < raw->CmdListsCount; n++)
+			{
+				ImDrawList* list = raw->CmdLists.Data[n];
+				totalVertexBytes += list->VtxBuffer.Size * sizeof(ImDrawVert);
+				totalIndexBytes += list->IdxBuffer.Size * sizeof(ushort);
+			}
+
+			vertexBufferSize = Math.Max(vertexBufferSize, totalVertexBytes);
+			indexBufferSize = Math.Max(indexBufferSize, totalIndexBytes);
+			GL.BufferData(BufferTarget.ArrayBuffer, vertexBufferSize, IntPtr.Zero, BufferUsageHint.StreamDraw);
+			GL.BufferData(BufferTarget.ElementArrayBuffer, indexBufferSize, IntPtr.Zero, BufferUsageHint.StreamDraw);
+			if (drawLists.Length < raw->CmdListsCount)
+			{
+				Array.Resize(ref drawLists, raw->CmdListsCount * 2);
+			}
+
+			int vertexOffset = 0;
+			int indexOffset = 0;
 			for (int n = 0; n < raw->CmdListsCount; n++)
 			{
 				ImDrawList* list = raw->CmdLists.Data[n];
 				int vertexBytes = list->VtxBuffer.Size * sizeof(ImDrawVert);
 				int indexBytes = list->IdxBuffer.Size * sizeof(ushort);
-				if (vertexBytes > vertexBufferSize)
-				{
-					vertexBufferSize = Math.Max(vertexBytes, vertexBufferSize * 2);
-					GL.BufferData(BufferTarget.ArrayBuffer, vertexBufferSize, IntPtr.Zero, BufferUsageHint.StreamDraw);
-				}
+				GL.BufferSubData(BufferTarget.ArrayBuffer, (IntPtr)vertexOffset, vertexBytes, (IntPtr)list->VtxBuffer.Data);
+				GL.BufferSubData(BufferTarget.ElementArrayBuffer, (IntPtr)indexOffset, indexBytes, (IntPtr)list->IdxBuffer.Data);
+				drawLists[n] = (vertexOffset / sizeof(ImDrawVert), indexOffset / sizeof(ushort));
+				vertexOffset += vertexBytes;
+				indexOffset += indexBytes;
+			}
 
-				if (indexBytes > indexBufferSize)
-				{
-					indexBufferSize = Math.Max(indexBytes, indexBufferSize * 2);
-					GL.BufferData(BufferTarget.ElementArrayBuffer, indexBufferSize, IntPtr.Zero, BufferUsageHint.StreamDraw);
-				}
-
-				GL.BufferSubData(BufferTarget.ArrayBuffer, IntPtr.Zero, vertexBytes, (IntPtr)list->VtxBuffer.Data);
-				GL.BufferSubData(BufferTarget.ElementArrayBuffer, IntPtr.Zero, indexBytes, (IntPtr)list->IdxBuffer.Data);
+			NVector2 clipOffset = raw->DisplayPos;
+			for (int n = 0; n < raw->CmdListsCount; n++)
+			{
+				ImDrawList* list = raw->CmdLists.Data[n];
+				(int baseVertex, int baseIndex) = drawLists[n];
 
 				for (int c = 0; c < list->CmdBuffer.Size; c++)
 				{
@@ -220,7 +243,7 @@ void main()
 					GL.Scissor((int)clipMinX, (int)(framebufferHeight - clipMaxY), (int)(clipMaxX - clipMinX), (int)(clipMaxY - clipMinY));
 					ImTextureID texture = new ImDrawCmdPtr(cmd).GetTexID();
 					GL.BindTexture(TextureTarget.Texture2D, (int)texture.Handle);
-					GL.DrawElementsBaseVertex(PrimitiveType.Triangles, (int)cmd->ElemCount, DrawElementsType.UnsignedShort, (IntPtr)(cmd->IdxOffset * sizeof(ushort)), (int)cmd->VtxOffset);
+					GL.DrawElementsBaseVertex(PrimitiveType.Triangles, (int)cmd->ElemCount, DrawElementsType.UnsignedShort, (IntPtr)((baseIndex + cmd->IdxOffset) * sizeof(ushort)), baseVertex + (int)cmd->VtxOffset);
 				}
 			}
 
