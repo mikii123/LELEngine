@@ -149,6 +149,7 @@ namespace LELEngine.Editor
 		{
 			if (Project == null)
 			{
+				launcher.Update();
 				return;
 			}
 

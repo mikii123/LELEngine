@@ -183,6 +183,23 @@ namespace LELEngine.Editor
 				list.RemoveRange(12, list.Count - 12);
 			}
 
+			Save(list);
+		}
+
+		/// <summary>Drops a project from the list (the folder stays on disk).</summary>
+		public static void Remove(string root)
+		{
+			List<string> list = Load();
+			list.RemoveAll(p => string.Equals(Path.GetFullPath(p), Path.GetFullPath(root), StringComparison.OrdinalIgnoreCase));
+			Save(list);
+		}
+
+		#endregion
+
+		#region PrivateMethods
+
+		private static void Save(List<string> list)
+		{
 			Directory.CreateDirectory(EditorDataFolder);
 			File.WriteAllText(Path.Combine(EditorDataFolder, "recent.json"), JsonSerializer.Serialize(list, new JsonSerializerOptions { WriteIndented = true }));
 		}
