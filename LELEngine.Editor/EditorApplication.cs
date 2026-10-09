@@ -207,6 +207,12 @@ namespace LELEngine.Editor
 			buildPanel.Draw();
 			Edits.Flush();
 
+			if (testHooks.PendingFocus != null)
+			{
+				ImGui.SetWindowFocus(testHooks.PendingFocus);
+				testHooks.PendingFocus = null;
+			}
+
 			DrawModals();
 		}
 
@@ -894,26 +900,15 @@ namespace LELEngine.Editor
 
 		private void DrawPlayControls()
 		{
-			float width = 200f;
+			float button = ImGui.GetFrameHeight() * 1.5f;
+			float width = button * 3f + ImGui.GetStyle().ItemSpacing.X * 2f;
 			ImGui.SetCursorPosX((ImGui.GetWindowWidth() - width) * 0.5f);
 			bool playing = IsPlaying;
-			if (playing)
-			{
-				ImGui.PushStyleColor(ImGuiCol.Button, new System.Numerics.Vector4(0.2f, 0.45f, 0.75f, 1f));
-			}
-
-			if (ImGui.Button(playing ? "  Stop  " : "  Play  ")) TogglePlay();
-			if (playing)
-			{
-				ImGui.PopStyleColor();
-			}
-
-			if (ImGui.IsItemHovered()) ImGui.SetTooltip(playing ? "Stop (Ctrl+P)" : "Play (Ctrl+P)");
+			if (EditorGui.IconButton("play", playing ? Icon.Stop : Icon.Play, playing, playing ? "Stop (Ctrl+P)" : "Play (Ctrl+P)")) TogglePlay();
 			ImGui.BeginDisabled(!playing);
-			if (ImGui.Button(PlayState == PlayState.Paused ? "Resume" : "Pause")) TogglePause();
-			if (ImGui.IsItemHovered()) ImGui.SetTooltip("Pause (Ctrl+Shift+P)");
-			if (ImGui.Button("Step")) Step();
-			if (ImGui.IsItemHovered()) ImGui.SetTooltip("Step one frame");
+			bool paused = PlayState == PlayState.Paused;
+			if (EditorGui.IconButton("pause", Icon.Pause, paused, paused ? "Resume (Ctrl+Shift+P)" : "Pause (Ctrl+Shift+P)")) TogglePause();
+			if (EditorGui.IconButton("step", Icon.Step, false, "Step one frame")) Step();
 			ImGui.EndDisabled();
 		}
 

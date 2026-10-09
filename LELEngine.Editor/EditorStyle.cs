@@ -14,6 +14,9 @@ namespace LELEngine.Editor
 		public static readonly NVector4 Dim = new NVector4(0.55f, 0.55f, 0.58f, 1f);
 		public static readonly NVector4 Selection = new NVector4(1f, 0.6f, 0.15f, 1f);
 
+		/// <summary>Highlight of active toggle buttons (play mode running).</summary>
+		public static readonly NVector4 Accent = new NVector4(0.2f, 0.45f, 0.75f, 1f);
+
 		#endregion
 
 		#region PublicMethods
