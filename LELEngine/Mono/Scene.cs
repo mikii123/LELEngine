@@ -274,6 +274,16 @@ namespace LELEngine
 				}
 			}
 
+			// Navigation step (agents move, obstacles carve) between Update and LateUpdate, as in Unity.
+			try
+			{
+				Navigation.NavMesh.Update(this, deltaTime);
+			}
+			catch (Exception e)
+			{
+				Debug.LogException(e);
+			}
+
 			foreach (Behaviour component in active)
 			{
 				if (!component.enableCalled || component.destroyed) continue;

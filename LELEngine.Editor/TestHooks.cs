@@ -8,7 +8,7 @@ namespace LELEngine.Editor
 	///     select=ObjectName, addcomponent=ObjectName;Type.Name, playframe=N, stopframe=N, saveframe=N,
 	///     touchscript=N;path (rewrites a script file at frame N to trigger a rebuild), buildgame=N;outputFolder,
 	///     focusscene=N, nudgecamera=N, dumpview=f1,f2,...;folder, reportframes=f1,f2,..., focuswindow=N;Name,
-	///     maximize=N, restore=N, grow=N, slowframes=ms.
+	///     maximize=N, restore=N, grow=N, slowframes=ms, bakenav=N.
 	/// </summary>
 	internal sealed class TestHooks
 	{
@@ -92,6 +92,18 @@ namespace LELEngine.Editor
 					componentAdded = true;
 					Debug.Log("[Test] Added " + type.Name + " to " + go.Name);
 				}
+			}
+
+			// bakenav=N: bakes every NavMeshSurface of the scene at frame N.
+			if (Is("bakenav"))
+			{
+				foreach (Navigation.NavMeshSurface surface in scene.FindObjectsOfType<Navigation.NavMeshSurface>())
+				{
+					surface.BuildNavMesh();
+					Debug.Log($"[Test] Baked {surface.gameObject.Name}: {surface.NavMeshData?.Tiles.Length ?? 0} tiles, {surface.NavMeshData?.PolygonCount ?? 0} polygons");
+				}
+
+				editor.MarkDirty();
 			}
 
 			if (Is("playframe")) editor.EnterPlayMode();

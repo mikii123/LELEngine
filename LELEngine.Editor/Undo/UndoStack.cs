@@ -25,8 +25,8 @@ namespace LELEngine.Editor
 		#region PublicFields
 
 		public ulong ComponentId;
-		public string Before;
-		public string After;
+		public byte[] Before;
+		public byte[] After;
 
 		#endregion
 
@@ -46,7 +46,7 @@ namespace LELEngine.Editor
 
 		#region PrivateMethods
 
-		private void Apply(EditorApplication editor, string json)
+		private void Apply(EditorApplication editor, byte[] data)
 		{
 			Behaviour component = editor.Scene?.FindComponentById(ComponentId);
 			if (component == null)
@@ -54,7 +54,7 @@ namespace LELEngine.Editor
 				return;
 			}
 
-			EditorSerialization.ApplyComponent(component, json);
+			EditorSerialization.ApplyComponent(component, data);
 			editor.NotifyChanged(component.gameObject);
 		}
 
@@ -111,8 +111,8 @@ namespace LELEngine.Editor
 	{
 		#region PublicFields
 
-		public string Before;
-		public string After;
+		public byte[] Before;
+		public byte[] After;
 
 		#endregion
 
@@ -132,7 +132,7 @@ namespace LELEngine.Editor
 
 		#region PrivateMethods
 
-		private static void Apply(EditorApplication editor, string json)
+		private static void Apply(EditorApplication editor, byte[] data)
 		{
 			Scene scene = editor.Scene;
 			if (scene == null)
@@ -140,7 +140,7 @@ namespace LELEngine.Editor
 				return;
 			}
 
-			EditorSerialization.ApplyObject(scene.Settings, json, scene);
+			EditorSerialization.ApplyObject(scene.Settings, data, scene);
 			scene.Settings.GI.InvalidateStatic();
 			editor.MarkDirty();
 		}
@@ -156,8 +156,8 @@ namespace LELEngine.Editor
 	{
 		#region PublicFields
 
-		public string Before;
-		public string After;
+		public byte[] Before;
+		public byte[] After;
 		public ulong SelectionBefore;
 		public ulong SelectionAfter;
 
@@ -255,7 +255,7 @@ namespace LELEngine.Editor
 
 		private readonly EditorApplication editor;
 		private object target;
-		private string before;
+		private byte[] before;
 		private bool commitRequested;
 
 		#endregion
@@ -311,8 +311,8 @@ namespace LELEngine.Editor
 				return;
 			}
 
-			string after = Capture(target);
-			if (after != before)
+			byte[] after = Capture(target);
+			if (!EditorSerialization.SameState(after, before))
 			{
 				switch (target)
 				{
@@ -340,7 +340,7 @@ namespace LELEngine.Editor
 
 		#region PrivateMethods
 
-		private string Capture(object editTarget)
+		private byte[] Capture(object editTarget)
 		{
 			switch (editTarget)
 			{

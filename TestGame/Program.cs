@@ -114,6 +114,15 @@ namespace TestGame
 				SceneManager.SetActiveScene(scene);
 				GITestScene.ApplyHarness(scene, options);
 			}
+			else if (GetBool(args, "nav", false))
+			{
+				// nav=1: the navigation test scene (navagents=N, navdebug=0|1).
+				scene = Game.Mono.LoadEmptyScene();
+				scene.Name = "NavTest";
+				NavTestScene.Load(scene, GetInt(args, "navagents", 24), GetBool(args, "navdebug", true), options.Animate);
+				Game.Mono.Renderer.Settings.GpuDriven = options.GpuDriven;
+				GITestScene.InstallHarness(scene, options);
+			}
 			else
 			{
 				scene = Game.Mono.LoadEmptyScene();

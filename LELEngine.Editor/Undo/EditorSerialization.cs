@@ -1,49 +1,33 @@
 using System;
-using System.IO;
-using System.Text;
-using System.Text.Encodings.Web;
-using System.Text.Json;
 using LELEngine.Serialization;
 
 namespace LELEngine.Editor
 {
-	/// <summary>JSON snapshots of single components and settings objects (undo records, copy / paste of values).</summary>
+	/// <summary>Binary snapshots of single components and settings objects (undo records, copy / paste of values).</summary>
 	internal static class EditorSerialization
 	{
 		#region PublicMethods
 
-		/// <summary>The serialized state of a component: {"enabled": ..., "fields": {...}}.</summary>
-		public static string CaptureComponent(Behaviour component)
+		/// <summary>The serialized state of a component: enabled flag and fields.</summary>
+		public static byte[] CaptureComponent(Behaviour component)
 		{
-			var context = new SerializationContext { Scene = component.gameObject?.scene, Location = component.GetType().Name };
-			return Write(writer =>
-			{
-				writer.WriteStartObject();
-				writer.WriteBoolean("enabled", component.enabled);
-				writer.WritePropertyName("fields");
-				writer.WriteStartObject();
-				ValueSerializer.WriteFields(writer, component, context);
-				writer.WriteEndObject();
-				writer.WriteEndObject();
-			});
+			var writer = new BinaryDocumentWriter(new SerializationContext { Scene = component.gameObject?.scene, Location = component.GetType().Name }, 1024);
+			writer.Body.WriteInt32(writer.TypeId(component.GetType()));
+			writer.Body.WriteBool(component.enabled);
+			int lengthPosition = writer.Body.ReserveInt32();
+			writer.WriteFields(component);
+			writer.Body.PatchInt32(lengthPosition, writer.Body.Length - lengthPosition - 4);
+			return writer.ToArray();
 		}
 
-		public static void ApplyComponent(Behaviour component, string json)
+		public static void ApplyComponent(Behaviour component, byte[] data)
 		{
 			Scene scene = component.gameObject?.scene;
-			using (JsonDocument document = JsonDocument.Parse(json))
-			{
-				JsonElement value;
-				if (document.RootElement.TryGetProperty("enabled", out value))
-				{
-					component.enabled = value.GetBoolean();
-				}
-
-				if (document.RootElement.TryGetProperty("fields", out value))
-				{
-					ValueSerializer.ReadFields(value, component, ContextFor(scene));
-				}
-			}
+			var reader = new BinaryDocumentReader(data, ContextFor(scene));
+			reader.Context.Location = component.GetType().Name;
+			int typeId = reader.Body.ReadInt32();
+			component.enabled = reader.Body.ReadBool();
+			reader.ReadFieldBlock(component, typeId);
 
 			if (component is ISerializationCallbackReceiver receiver)
 			{
@@ -54,23 +38,23 @@ namespace LELEngine.Editor
 		}
 
 		/// <summary>Fields of any serializable object (scene settings).</summary>
-		public static string CaptureObject(object target, Scene scene)
+		public static byte[] CaptureObject(object target, Scene scene)
 		{
-			var context = new SerializationContext { Scene = scene, Location = target.GetType().Name };
-			return Write(writer =>
-			{
-				writer.WriteStartObject();
-				ValueSerializer.WriteFields(writer, target, context);
-				writer.WriteEndObject();
-			});
+			var writer = new BinaryDocumentWriter(new SerializationContext { Scene = scene, Location = target.GetType().Name }, 1024);
+			writer.WriteObjectValue(target, 0);
+			return writer.ToArray();
 		}
 
-		public static void ApplyObject(object target, string json, Scene scene)
+		public static void ApplyObject(object target, byte[] data, Scene scene)
 		{
-			using (JsonDocument document = JsonDocument.Parse(json))
-			{
-				ValueSerializer.ReadFields(document.RootElement, target, ContextFor(scene));
-			}
+			var reader = new BinaryDocumentReader(data, ContextFor(scene));
+			reader.Context.Location = target.GetType().Name;
+			reader.ReadObjectValue(target.GetType(), target, 0);
+		}
+
+		public static bool SameState(byte[] a, byte[] b)
+		{
+			return a == b || (a != null && b != null && a.AsSpan().SequenceEqual(b));
 		}
 
 		/// <summary>Reference resolution context holding every object and component of the scene by id.</summary>
@@ -92,23 +76,6 @@ namespace LELEngine.Editor
 			}
 
 			return context;
-		}
-
-		#endregion
-
-		#region PrivateMethods
-
-		private static string Write(Action<Utf8JsonWriter> write)
-		{
-			using (var stream = new MemoryStream())
-			{
-				using (var writer = new Utf8JsonWriter(stream, new JsonWriterOptions { Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping }))
-				{
-					write(writer);
-				}
-
-				return Encoding.UTF8.GetString(stream.ToArray());
-			}
 		}
 
 		#endregion

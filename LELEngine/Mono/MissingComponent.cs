@@ -1,3 +1,5 @@
+using LELEngine.Serialization;
+
 namespace LELEngine
 {
 	/// <summary>
@@ -12,12 +14,8 @@ namespace LELEngine
 		/// <summary>Type name stored in the scene file.</summary>
 		public string TypeName { get; internal set; }
 
-		#endregion
-
-		#region InternalFields
-
-		/// <summary>The component's JSON entry as it was read.</summary>
-		internal string RawJson;
+		/// <summary>The component's field values as they were read.</summary>
+		public SerializedNode Data { get; internal set; }
 
 		#endregion
 	}

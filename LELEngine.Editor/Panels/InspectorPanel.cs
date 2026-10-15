@@ -190,6 +190,7 @@ namespace LELEngine.Editor
 			else
 			{
 				changed = FieldDrawer.DrawFields(component, context);
+				changed |= CustomInspectors.Draw(component, context);
 			}
 
 			if (changed)

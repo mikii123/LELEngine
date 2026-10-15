@@ -27,6 +27,9 @@ namespace LELEngine.Editor
 		/// <summary>Views render every frame, not only on changes (animated shaders, time-based effects).</summary>
 		public bool AlwaysRefresh { get; private set; }
 
+		/// <summary>Draw the navmesh, agents and obstacles in the view.</summary>
+		public bool ShowNavigation { get; private set; } = true;
+
 		#endregion
 
 		#region PrivateFields
@@ -133,7 +136,25 @@ namespace LELEngine.Editor
 			ApplyCamera();
 			if (refresh.ShouldRender(camera, ViewRenderer.Width, ViewRenderer.Height, editor.SceneVersion, continuous))
 			{
+				ViewRenderer.Renderer.Settings.DebugPrimitives = true;
+				DrawGizmos();
 				ViewRenderer.Render(camera, editor.Scene);
+			}
+		}
+
+		/// <summary>World-space gizmos drawn into the view through <see cref="Rendering.DebugDraw" />.</summary>
+		private void DrawGizmos()
+		{
+			if (!ShowNavigation)
+			{
+				return;
+			}
+
+			Navigation.NavMeshDebug.DrawAll();
+			GameObject selected = editor.Selected;
+			if (selected != null && selected.scene == editor.Scene)
+			{
+				Navigation.NavMeshDebug.DrawSurfaceBounds(selected.GetComponent<Navigation.NavMeshSurface>());
 			}
 		}
 
@@ -299,6 +320,19 @@ namespace LELEngine.Editor
 			{
 				ImGui.SetTooltip("Render the views every frame. Off: they render when the camera or the scene changes,\n" +
 					"then for a few seconds while the lighting settles, and keep the last image.");
+			}
+
+			ImGui.SameLine();
+			bool showNavigation = ShowNavigation;
+			if (ImGui.Checkbox("Nav", ref showNavigation))
+			{
+				ShowNavigation = showNavigation;
+				editor.NotifySceneChanged();
+			}
+
+			if (ImGui.IsItemHovered())
+			{
+				ImGui.SetTooltip("Show the navmesh, agents and obstacles.");
 			}
 
 			ImGui.SameLine();

@@ -90,6 +90,7 @@ namespace LELEngine.Rendering
 			AddPass(new ScreenProbeGatherPass());
 			AddPass(new OpaquePass());
 			AddPass(new PostRenderCallbackPass());
+			AddPass(new DebugDrawPass());
 			AddPass(new VoxelDebugPass());
 			AddPass(new SdfDebugPass());
 			AddPass(new SurfaceCacheDebugPass());

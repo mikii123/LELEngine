@@ -1,37 +1,28 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Text;
-using System.Text.Encodings.Web;
-using System.Text.Json;
 
 namespace LELEngine.Serialization
 {
 	/// <summary>
-	///     Scene files (.scene, JSON):
+	///     Scene files (.scene): a <see cref="BinaryDocument" /> whose body is
 	///     <code>
-	///     {
-	///       "format": "LELEngine.Scene", "version": 1, "name": "...",
-	///       "settings": { "Environment": {...}, "Shadows": {...}, "GI": {...} },
-	///       "gameObjects": [
-	///         { "id": 123, "name": "Floor", "active": true, "parent": null,
-	///           "components": [ { "type": "Transform, LELEngine", "id": 124, "enabled": true, "fields": {...} }, ... ] },
-	///         ...
-	///       ]
-	///     }
+	///     name:string-id
+	///     settings: Object value (SceneSettings)
+	///     objectCount:int32, then per GameObject (depth first, a parent before its children, children in sibling order):
+	///       id:uint64, name:string-id, active:bool, parent:uint64 (0 = root), hideFlags:int32, componentCount:int32,
+	///       per component: typeId:int32, id:uint64, enabled:bool, length:int32, fields
 	///     </code>
-	///     Objects are written depth first (a parent before its children, children in sibling order). Loading
-	///     creates every object and component first, then reads all fields (so references in any direction
+	///     Loading creates every object and component first, then reads all fields (so references in any direction
 	///     resolve), then calls <see cref="ISerializationCallbackReceiver.OnAfterDeserialize" />. The component
-	///     lifecycle does not start: the caller decides between play and edit mode.
+	///     lifecycle does not start: the caller decides between play and edit mode. Scenes saved by older versions
+	///     as JSON still load (<see cref="LegacySceneJson" />); saving always writes the binary format.
 	/// </summary>
 	public static class SceneSerializer
 	{
 		#region PublicFields
 
 		public const string Extension = ".scene";
-		public const string Format = "LELEngine.Scene";
-		public const int Version = 1;
 
 		#endregion
 
@@ -45,66 +36,44 @@ namespace LELEngine.Serialization
 				Directory.CreateDirectory(directory);
 			}
 
-			File.WriteAllText(absolutePath, SaveToString(scene), new UTF8Encoding(false));
+			File.WriteAllBytes(absolutePath, SaveToBytes(scene));
 		}
 
-		public static string SaveToString(Scene scene)
+		/// <summary>The whole scene as a document (files, play mode and undo snapshots).</summary>
+		public static byte[] SaveToBytes(Scene scene)
 		{
-			var context = new SerializationContext { Scene = scene };
-			var options = new JsonWriterOptions { Indented = true, Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
-			using (var stream = new MemoryStream())
+			var writer = new BinaryDocumentWriter(new SerializationContext { Scene = scene });
+			writer.Body.WriteInt32(writer.StringId(scene.Name));
+			writer.Context.Location = "settings";
+			writer.WriteObjectValue(scene.Settings, 0);
+
+			List<GameObject> roots = scene.GetRootGameObjects();
+			int countPosition = writer.Body.ReserveInt32();
+			int count = 0;
+			foreach (GameObject root in roots)
 			{
-				using (var writer = new Utf8JsonWriter(stream, options))
-				{
-					writer.WriteStartObject();
-					writer.WriteString("format", Format);
-					writer.WriteNumber("version", Version);
-					writer.WriteString("name", scene.Name);
-
-					writer.WritePropertyName("settings");
-					writer.WriteStartObject();
-					context.Location = "settings";
-					ValueSerializer.WriteFields(writer, scene.Settings, context);
-					writer.WriteEndObject();
-
-					writer.WritePropertyName("gameObjects");
-					writer.WriteStartArray();
-					foreach (GameObject root in scene.GetRootGameObjects())
-					{
-						WriteObjectTree(writer, root, context);
-					}
-
-					writer.WriteEndArray();
-					writer.WriteEndObject();
-				}
-
-				return Encoding.UTF8.GetString(stream.ToArray());
+				count += WriteObjectTree(writer, root);
 			}
+
+			writer.Body.PatchInt32(countPosition, count);
+			return writer.ToArray();
 		}
 
 		/// <summary>Serializes GameObjects with their children (copy, duplicate, prefab-like snapshots).</summary>
-		public static string SerializeObjects(Scene scene, IEnumerable<GameObject> roots)
+		public static byte[] SerializeObjects(Scene scene, IEnumerable<GameObject> roots)
 		{
-			var context = new SerializationContext { Scene = scene };
-			var options = new JsonWriterOptions { Indented = false, Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping };
-			using (var stream = new MemoryStream())
+			var writer = new BinaryDocumentWriter(new SerializationContext { Scene = scene });
+			writer.Body.WriteInt32(-1);
+			writer.Body.WriteInt32(-1);
+			int countPosition = writer.Body.ReserveInt32();
+			int count = 0;
+			foreach (GameObject root in roots)
 			{
-				using (var writer = new Utf8JsonWriter(stream, options))
-				{
-					writer.WriteStartObject();
-					writer.WritePropertyName("gameObjects");
-					writer.WriteStartArray();
-					foreach (GameObject root in roots)
-					{
-						WriteObjectTree(writer, root, context);
-					}
-
-					writer.WriteEndArray();
-					writer.WriteEndObject();
-				}
-
-				return Encoding.UTF8.GetString(stream.ToArray());
+				count += WriteObjectTree(writer, root);
 			}
+
+			writer.Body.PatchInt32(countPosition, count);
+			return writer.ToArray();
 		}
 
 		/// <summary>
@@ -113,162 +82,112 @@ namespace LELEngine.Serialization
 		///     The copied roots are parented to <paramref name="parent" /> keeping their local transforms. In a running
 		///     scene the copies' lifecycle starts after their fields are read.
 		/// </summary>
-		public static List<GameObject> InstantiateObjects(string json, Scene scene, Transform parent = null)
+		public static List<GameObject> InstantiateObjects(byte[] data, Scene scene, Transform parent = null)
 		{
 			var roots = new List<GameObject>();
-			using (JsonDocument document = JsonDocument.Parse(json))
+			var context = new SerializationContext { Scene = scene };
+			foreach (GameObject go in scene.GameObjects)
 			{
-				var context = new SerializationContext { Scene = scene };
-				foreach (GameObject go in scene.GameObjects)
+				context.Objects[go.Id] = go;
+				foreach (Behaviour component in go.Components)
 				{
-					context.Objects[go.Id] = go;
-					foreach (Behaviour component in go.Components)
+					context.Objects[component.Id] = component;
+				}
+			}
+
+			var reader = new BinaryDocumentReader(data, context);
+			reader.Body.ReadInt32();
+			SkipObjectValue(reader);
+
+			scene.SuspendActivation();
+			try
+			{
+				var pending = new List<PendingComponent>();
+				var copied = new HashSet<ulong>();
+				int count = reader.Body.ReadInt32();
+				for (int i = 0; i < count; i++)
+				{
+					GameObject go = ReadObject(reader, scene, pending, true, copied, parent);
+					if (go.transform.parent == parent)
 					{
-						context.Objects[component.Id] = component;
+						roots.Add(go);
 					}
 				}
 
-				scene.SuspendActivation();
-				try
-				{
-					var pending = new List<(Behaviour component, JsonElement fields, string location)>();
-					var copied = new HashSet<ulong>();
-					JsonElement objects;
-					if (document.RootElement.TryGetProperty("gameObjects", out objects))
-					{
-						foreach (JsonElement entry in objects.EnumerateArray())
-						{
-							GameObject go = CreateObject(entry, scene, context, pending, true, copied, parent);
-							if (go.transform.parent == parent)
-							{
-								roots.Add(go);
-							}
-						}
-					}
-
-					foreach ((Behaviour component, JsonElement fields, string location) item in pending)
-					{
-						context.Location = item.location;
-						ValueSerializer.ReadFields(item.fields, item.component, context);
-					}
-
-					foreach ((Behaviour component, JsonElement fields, string location) item in pending)
-					{
-						if (item.component is ISerializationCallbackReceiver receiver)
-						{
-							try
-							{
-								receiver.OnAfterDeserialize();
-							}
-							catch (Exception e)
-							{
-								Debug.LogException(e, item.component);
-							}
-						}
-					}
-				}
-				finally
-				{
-					scene.ResumeActivation();
-				}
+				ReadPendingFields(reader, pending);
+			}
+			finally
+			{
+				scene.ResumeActivation();
 			}
 
 			return roots;
 		}
 
-		/// <summary>Loads a scene file. The returned scene is not active and its lifecycle has not started.</summary>
+		/// <summary>Loads a scene file (binary, or a legacy JSON scene). The returned scene is not active and its lifecycle has not started.</summary>
 		public static Scene Load(string absolutePath)
 		{
-			Scene scene = LoadFromString(File.ReadAllText(absolutePath), Path.GetFileNameWithoutExtension(absolutePath));
+			byte[] data = File.ReadAllBytes(absolutePath);
+			string name = Path.GetFileNameWithoutExtension(absolutePath);
+			Scene scene = BinaryDocument.IsBinary(data) ? LoadFromBytes(data, name) : LegacySceneJson.Load(System.Text.Encoding.UTF8.GetString(data), name);
 			scene.Path = AssetDatabase.ToAssetPath(absolutePath) ?? absolutePath;
 			return scene;
 		}
 
-		public static Scene LoadFromString(string json, string fallbackName = null)
+		public static Scene LoadFromBytes(byte[] data, string fallbackName = null)
 		{
-			using (JsonDocument document = JsonDocument.Parse(json, new JsonDocumentOptions { AllowTrailingCommas = true, CommentHandling = JsonCommentHandling.Skip }))
+			var context = new SerializationContext();
+			var reader = new BinaryDocumentReader(data, context);
+			string name = reader.String(reader.Body.ReadInt32());
+			var scene = new Scene(name ?? fallbackName ?? "Untitled");
+			context.Scene = scene;
+
+			context.Location = "settings";
+			scene.Settings = reader.ReadObjectValue(typeof(SceneSettings), scene.Settings, 0) as SceneSettings ?? new SceneSettings();
+
+			// Pass 1: objects and components with their ids, hierarchy and enabled flags.
+			var pending = new List<PendingComponent>();
+			int count = reader.Body.ReadInt32();
+			for (int i = 0; i < count; i++)
 			{
-				JsonElement root = document.RootElement;
-				JsonElement value;
-				string name = root.TryGetProperty("name", out value) && value.ValueKind == JsonValueKind.String ? value.GetString() : fallbackName ?? "Untitled";
-				var scene = new Scene(name);
-				var context = new SerializationContext { Scene = scene };
-
-				if (root.TryGetProperty("settings", out value))
-				{
-					context.Location = "settings";
-					ValueSerializer.ReadFields(value, scene.Settings, context);
-				}
-
-				// Pass 1: objects and components with their ids, hierarchy and enabled flags.
-				var pending = new List<(Behaviour component, JsonElement fields, string location)>();
-				if (root.TryGetProperty("gameObjects", out value))
-				{
-					foreach (JsonElement entry in value.EnumerateArray())
-					{
-						CreateObject(entry, scene, context, pending, false, null, null);
-					}
-				}
-
-				// Pass 2: field values (references to any object of the file resolve now).
-				foreach ((Behaviour component, JsonElement fields, string location) item in pending)
-				{
-					context.Location = item.location;
-					ValueSerializer.ReadFields(item.fields, item.component, context);
-				}
-
-				// Pass 3: derived state.
-				foreach ((Behaviour component, JsonElement fields, string location) item in pending)
-				{
-					if (item.component is ISerializationCallbackReceiver receiver)
-					{
-						try
-						{
-							receiver.OnAfterDeserialize();
-						}
-						catch (Exception e)
-						{
-							Debug.LogException(e, item.component);
-						}
-					}
-				}
-
-				return scene;
+				ReadObject(reader, scene, pending, false, null, null);
 			}
+
+			// Pass 2 and 3: field values (references to any object of the file resolve now), then derived state.
+			ReadPendingFields(reader, pending);
+			return scene;
 		}
 
 		#endregion
 
 		#region PrivateMethods
 
-		private static void WriteObjectTree(Utf8JsonWriter writer, GameObject go, SerializationContext context)
+		private struct PendingComponent
+		{
+			public Behaviour Component;
+			public int TypeId;
+			public int Position;
+			public string Location;
+		}
+
+		/// <summary>Writes the object and its descendants; returns how many objects were written.</summary>
+		private static int WriteObjectTree(BinaryDocumentWriter writer, GameObject go)
 		{
 			if ((go.hideFlags & HideFlags.DontSave) != 0 || go.destroyed)
 			{
-				return;
+				return 0;
 			}
 
-			writer.WriteStartObject();
-			writer.WriteNumber("id", go.Id);
-			writer.WriteString("name", go.Name);
-			writer.WriteBoolean("active", go.activeSelf);
+			ByteWriter body = writer.Body;
+			body.WriteUInt64(go.Id);
+			body.WriteInt32(writer.StringId(go.Name));
+			body.WriteBool(go.activeSelf);
 			Transform parent = go.transform.parent;
-			if (parent != null)
-			{
-				writer.WriteNumber("parent", parent.gameObject.Id);
-			}
-			else
-			{
-				writer.WriteNull("parent");
-			}
+			body.WriteUInt64(parent != null ? parent.gameObject.Id : 0);
+			body.WriteInt32((int)go.hideFlags);
 
-			if (go.hideFlags != HideFlags.None)
-			{
-				writer.WriteNumber("hideFlags", (int)go.hideFlags);
-			}
-
-			writer.WritePropertyName("components");
-			writer.WriteStartArray();
+			int countPosition = body.ReserveInt32();
+			int count = 0;
 			foreach (Behaviour component in go.Components)
 			{
 				if (component.destroyed)
@@ -276,9 +195,18 @@ namespace LELEngine.Serialization
 					continue;
 				}
 
-				if (component is MissingComponent missing && missing.RawJson != null)
+				count++;
+				if (component is MissingComponent missing)
 				{
-					writer.WriteRawValue(missing.RawJson);
+					// Written back as read: its type name becomes a schema of the stored fields.
+					SerializedNode node = missing.Data ?? new SerializedNode { TypeName = missing.TypeName };
+					node.TypeName = missing.TypeName ?? node.TypeName ?? "Missing";
+					body.WriteInt32(writer.GenericTypeId(node));
+					body.WriteUInt64(component.Id);
+					body.WriteBool(component.enabled);
+					int genericLengthPosition = body.ReserveInt32();
+					writer.WriteGenericFields(node);
+					body.PatchInt32(genericLengthPosition, body.Length - genericLengthPosition - 4);
 					continue;
 				}
 
@@ -294,35 +222,40 @@ namespace LELEngine.Serialization
 					}
 				}
 
-				context.Location = go.Name + "/" + component.GetType().Name;
-				writer.WriteStartObject();
-				writer.WriteString("type", TypeRegistry.GetName(component.GetType()));
-				writer.WriteNumber("id", component.Id);
-				writer.WriteBoolean("enabled", component.enabled);
-				writer.WritePropertyName("fields");
-				writer.WriteStartObject();
-				ValueSerializer.WriteFields(writer, component, context);
-				writer.WriteEndObject();
-				writer.WriteEndObject();
+				writer.Context.Location = go.Name + "/" + component.GetType().Name;
+				body.WriteInt32(writer.TypeId(component.GetType()));
+				body.WriteUInt64(component.Id);
+				body.WriteBool(component.enabled);
+				int lengthPosition = body.ReserveInt32();
+				writer.WriteFields(component);
+				body.PatchInt32(lengthPosition, body.Length - lengthPosition - 4);
 			}
 
-			writer.WriteEndArray();
-			writer.WriteEndObject();
+			body.PatchInt32(countPosition, count);
 
+			int written = 1;
 			foreach (Transform child in go.transform.Children)
 			{
-				WriteObjectTree(writer, child.gameObject, context);
+				written += WriteObjectTree(writer, child.gameObject);
 			}
+
+			return written;
 		}
 
-		/// <param name="remap">Instantiate copies: new ids; file ids map to the copies in <paramref name="context" />.</param>
+		/// <param name="remap">Instantiate copies: new ids; file ids map to the copies in the reader's context.</param>
 		/// <param name="copied">With remap: file ids of the objects copied so far (parents inside the copy).</param>
 		/// <param name="rootParent">With remap: parent of copied objects whose parent is not part of the copy.</param>
-		private static GameObject CreateObject(JsonElement entry, Scene scene, SerializationContext context, List<(Behaviour, JsonElement, string)> pending, bool remap, HashSet<ulong> copied, Transform rootParent)
+		private static GameObject ReadObject(BinaryDocumentReader reader, Scene scene, List<PendingComponent> pending, bool remap, HashSet<ulong> copied, Transform rootParent)
 		{
-			JsonElement value;
-			ulong id = entry.TryGetProperty("id", out value) && value.ValueKind == JsonValueKind.Number ? value.GetUInt64() : 0;
-			string name = entry.TryGetProperty("name", out value) && value.ValueKind == JsonValueKind.String ? value.GetString() : "GameObject";
+			ByteReader body = reader.Body;
+			SerializationContext context = reader.Context;
+			ulong id = body.ReadUInt64();
+			string name = reader.String(body.ReadInt32()) ?? "GameObject";
+			bool active = body.ReadBool();
+			ulong parentId = body.ReadUInt64();
+			var hideFlags = (HideFlags)body.ReadInt32();
+			int componentCount = body.ReadInt32();
+
 			var go = new GameObject(name, scene, remap ? 0 : id);
 			context.Objects[id != 0 ? id : go.Id] = go;
 			if (remap && id != 0)
@@ -330,12 +263,7 @@ namespace LELEngine.Serialization
 				copied.Add(id);
 			}
 
-			if (entry.TryGetProperty("hideFlags", out value) && value.ValueKind == JsonValueKind.Number)
-			{
-				go.hideFlags = (HideFlags)value.GetInt32();
-			}
-
-			ulong parentId = entry.TryGetProperty("parent", out value) && value.ValueKind == JsonValueKind.Number ? value.GetUInt64() : 0;
+			go.hideFlags = hideFlags;
 			if (remap && (parentId == 0 || !copied.Contains(parentId)))
 			{
 				if (rootParent != null)
@@ -356,27 +284,25 @@ namespace LELEngine.Serialization
 				}
 			}
 
-			if (entry.TryGetProperty("active", out value) && value.ValueKind == JsonValueKind.False)
+			if (!active)
 			{
 				go.SetActive(false);
 			}
 
-			if (!entry.TryGetProperty("components", out value))
+			for (int i = 0; i < componentCount; i++)
 			{
-				return go;
-			}
-
-			foreach (JsonElement componentEntry in value.EnumerateArray())
-			{
-				JsonElement property;
-				string typeName = componentEntry.TryGetProperty("type", out property) ? property.GetString() : null;
-				ulong fileComponentId = componentEntry.TryGetProperty("id", out property) && property.ValueKind == JsonValueKind.Number ? property.GetUInt64() : 0;
+				int typeId = body.ReadInt32();
+				ulong fileComponentId = body.ReadUInt64();
+				bool enabled = body.ReadBool();
 				ulong componentId = remap ? 0 : fileComponentId;
-				bool enabled = !componentEntry.TryGetProperty("enabled", out property) || property.ValueKind != JsonValueKind.False;
-				JsonElement fields = componentEntry.TryGetProperty("fields", out property) ? property : default;
+				int length = body.ReadInt32();
+				int fieldsPosition = body.Position;
+				int end = fieldsPosition + length;
 
-				Type type = TypeRegistry.Resolve(typeName);
+				Type type = reader.ResolveType(typeId);
+				string typeName = reader.Schema(typeId)?.Name;
 				Behaviour component;
+				bool missing = false;
 				if (type == typeof(Transform))
 				{
 					component = go.transform;
@@ -399,7 +325,8 @@ namespace LELEngine.Serialization
 
 					if (component == null)
 					{
-						component = Missing(typeName, componentEntry);
+						component = new MissingComponent { TypeName = typeName };
+						missing = true;
 					}
 
 					go.LinkComponent(component, componentId);
@@ -407,7 +334,8 @@ namespace LELEngine.Serialization
 				else
 				{
 					Debug.LogWarning($"[Scene] '{name}': component type '{typeName}' not found; kept as a missing component");
-					component = Missing(typeName, componentEntry);
+					component = new MissingComponent { TypeName = typeName };
+					missing = true;
 					go.LinkComponent(component, componentId);
 				}
 
@@ -417,19 +345,52 @@ namespace LELEngine.Serialization
 					component.enabled = false;
 				}
 
-				if (!(component is MissingComponent) && fields.ValueKind == JsonValueKind.Object)
+				if (missing)
 				{
-					// Fields are read in pass 2; the element stays valid while the document is alive.
-					pending.Add((component, fields, name + "/" + type?.Name));
+					// Generic data has no references to resolve: read it now.
+					body.Position = fieldsPosition - 4;
+					((MissingComponent)component).Data = reader.ReadGenericBlock(typeId);
 				}
+				else
+				{
+					// Fields are read in pass 2 (after every object exists).
+					pending.Add(new PendingComponent { Component = component, TypeId = typeId, Position = fieldsPosition - 4, Location = name + "/" + type.Name });
+				}
+
+				body.Position = end;
 			}
 
 			return go;
 		}
 
-		private static MissingComponent Missing(string typeName, JsonElement entry)
+		private static void ReadPendingFields(BinaryDocumentReader reader, List<PendingComponent> pending)
 		{
-			return new MissingComponent { TypeName = typeName, RawJson = entry.GetRawText() };
+			foreach (PendingComponent item in pending)
+			{
+				reader.Context.Location = item.Location;
+				reader.Body.Position = item.Position;
+				reader.ReadFieldBlock(item.Component, item.TypeId);
+			}
+
+			foreach (PendingComponent item in pending)
+			{
+				if (item.Component is ISerializationCallbackReceiver receiver)
+				{
+					try
+					{
+						receiver.OnAfterDeserialize();
+					}
+					catch (Exception e)
+					{
+						Debug.LogException(e, item.Component);
+					}
+				}
+			}
+		}
+
+		private static void SkipObjectValue(BinaryDocumentReader reader)
+		{
+			reader.SkipValue(ValueTag.Object, ValueTag.Null);
 		}
 
 		#endregion

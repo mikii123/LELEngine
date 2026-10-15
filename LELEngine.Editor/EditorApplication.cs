@@ -72,7 +72,7 @@ namespace LELEngine.Editor
 		private string lastTitle;
 
 		// Play mode: the edit scene as it was when play started.
-		private string playSnapshot;
+		private byte[] playSnapshot;
 		private string playScenePath;
 		private bool playSceneDirty;
 
@@ -111,6 +111,7 @@ namespace LELEngine.Editor
 
 			gameInput = new GameInputHost(window, () => PlayState == PlayState.Playing && GameView.HasInputFocus);
 			Input.Host = gameInput;
+			Navigation.NavMesh.NavMeshChanged += NotifySceneChanged;
 			window.KeyDown += OnWindowKeyDown;
 			window.KeyUp += OnWindowKeyUp;
 			window.MouseMove += OnWindowMouseMove;
@@ -232,6 +233,7 @@ namespace LELEngine.Editor
 			bool continuous = PlayState == PlayState.Playing || SceneView.AlwaysRefresh || EditModeScriptsRunning();
 			SceneView.Render(continuous);
 			GameView.Render(continuous);
+			DebugDraw.Clear();
 		}
 
 		/// <summary>A view must render on its next frame(s) whatever changed.</summary>
@@ -383,10 +385,10 @@ namespace LELEngine.Editor
 		}
 
 		/// <summary>Reloads the scene from a snapshot (undo of structural changes), keeping its path.</summary>
-		public void RestoreSnapshot(string json, ulong selection)
+		public void RestoreSnapshot(byte[] snapshot, ulong selection)
 		{
 			string path = Scene?.Path;
-			Scene scene = SceneSerializer.LoadFromString(json);
+			Scene scene = SceneSerializer.LoadFromBytes(snapshot);
 			scene.Path = path;
 			ReplaceScene(scene, IsPlaying);
 			Selected = selection != 0 ? scene.FindObjectById(selection) : null;
@@ -433,10 +435,10 @@ namespace LELEngine.Editor
 			}
 
 			Edits.Commit();
-			string before = SceneSerializer.SaveToString(Scene);
+			byte[] before = SceneSerializer.SaveToBytes(Scene);
 			ulong selectionBefore = Selected?.Id ?? 0;
 			change();
-			string after = SceneSerializer.SaveToString(Scene);
+			byte[] after = SceneSerializer.SaveToBytes(Scene);
 			Undo.Push(new SceneSnapshotRecord { Name = name, Before = before, After = after, SelectionBefore = selectionBefore, SelectionAfter = Selected?.Id ?? 0 });
 			MarkDirty();
 			Lighting.GI.InvalidateStatic();
@@ -467,8 +469,8 @@ namespace LELEngine.Editor
 
 			RecordStructural("Duplicate " + target.Name, () =>
 			{
-				string json = SceneSerializer.SerializeObjects(Scene, new[] { target });
-				List<GameObject> copies = SceneSerializer.InstantiateObjects(json, Scene, target.transform.parent);
+				byte[] data = SceneSerializer.SerializeObjects(Scene, new[] { target });
+				List<GameObject> copies = SceneSerializer.InstantiateObjects(data, Scene, target.transform.parent);
 				if (copies.Count > 0)
 				{
 					Selected = copies[0];
@@ -561,7 +563,7 @@ namespace LELEngine.Editor
 			}
 
 			Edits.Commit();
-			playSnapshot = SceneSerializer.SaveToString(Scene);
+			playSnapshot = SceneSerializer.SaveToBytes(Scene);
 			playScenePath = Scene.Path;
 			playSceneDirty = SceneDirty;
 
@@ -576,7 +578,7 @@ namespace LELEngine.Editor
 				Scripts.ReloadNow();
 			}
 
-			Scene play = SceneSerializer.LoadFromString(playSnapshot);
+			Scene play = SceneSerializer.LoadFromBytes(playSnapshot);
 			play.Path = playScenePath;
 			Time.ResetTime();
 			PlayState = PlayState.Playing;
@@ -595,7 +597,7 @@ namespace LELEngine.Editor
 
 			Input.SetCursorLocked(false);
 			PlayState = PlayState.Edit;
-			Scene edit = SceneSerializer.LoadFromString(playSnapshot);
+			Scene edit = SceneSerializer.LoadFromBytes(playSnapshot);
 			edit.Path = playScenePath;
 			ReplaceScene(edit, false);
 			SceneDirty = playSceneDirty;
@@ -617,7 +619,7 @@ namespace LELEngine.Editor
 			}
 
 			Edits.Commit();
-			string snapshot = SceneSerializer.SaveToString(scene);
+			byte[] snapshot = SceneSerializer.SaveToBytes(scene);
 			string path = scene.Path;
 			ulong selected = Selected?.Id ?? 0;
 			bool playing = IsPlaying;
@@ -628,7 +630,7 @@ namespace LELEngine.Editor
 
 			reload();
 
-			Scene reloaded = SceneSerializer.LoadFromString(snapshot);
+			Scene reloaded = SceneSerializer.LoadFromBytes(snapshot);
 			reloaded.Path = path;
 			ReplaceScene(reloaded, playing);
 			Selected = selected != 0 ? reloaded.FindObjectById(selected) : null;
@@ -888,6 +890,36 @@ namespace LELEngine.Editor
 			if (ImGui.MenuItem("Cube")) CreateObject("Cube", go => DefaultScene.AddMesh(go, "Cube.obj"), parent);
 			if (ImGui.MenuItem("Sphere")) CreateObject("Sphere", go => DefaultScene.AddMesh(go, "Sphere.obj"), parent);
 			if (ImGui.MenuItem("Quad")) CreateObject("Quad", go => DefaultScene.AddMesh(go, "Quad.obj"), parent);
+			ImGui.Separator();
+			if (ImGui.BeginMenu("Navigation"))
+			{
+				if (ImGui.MenuItem("NavMesh Surface")) CreateObject("NavMesh Surface", go => go.AddComponent<Navigation.NavMeshSurface>(), parent);
+				if (ImGui.MenuItem("NavMesh Agent"))
+				{
+					CreateObject("NavMesh Agent", go =>
+					{
+						go.transform.localScale = new Vector3(0.35f, 0.9f, 0.35f);
+						DefaultScene.AddMesh(go, "Cube.obj");
+						Navigation.NavMeshAgent agent = go.AddComponent<Navigation.NavMeshAgent>();
+						agent.radius = 0.35f;
+						agent.height = 1.8f;
+						agent.baseOffset = 0.9f;
+					}, parent);
+				}
+
+				if (ImGui.MenuItem("NavMesh Obstacle"))
+				{
+					CreateObject("NavMesh Obstacle", go =>
+					{
+						DefaultScene.AddMesh(go, "Cube.obj");
+						Navigation.NavMeshObstacle obstacle = go.AddComponent<Navigation.NavMeshObstacle>();
+						obstacle.size = new Vector3(2f, 2f, 2f);
+					}, parent);
+				}
+
+				ImGui.EndMenu();
+			}
+
 			ImGui.Separator();
 			if (ImGui.MenuItem("Camera")) CreateObject("Camera", go => go.AddComponent<Camera>(), parent);
 			if (ImGui.MenuItem("Directional Light"))

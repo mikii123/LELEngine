@@ -150,6 +150,7 @@ namespace LELEngine
 				Renderer?.RenderFrame(null, System.Array.Empty<MeshRenderer>(), System.Array.Empty<Behaviour>(), RenderQueue);
 			}
 			Time.cpuRenderMs = renderStopwatch.Elapsed.TotalMilliseconds;
+			DebugDraw.Clear();
 
 			base.OnRenderFrame(e);
 		}

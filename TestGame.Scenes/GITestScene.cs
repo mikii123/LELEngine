@@ -147,6 +147,18 @@ namespace TestGame.Scenes
 			ApplyHarness(scene, options);
 		}
 
+		/// <summary>Adds the frame dump / stats controls to a scene without them (other test scenes), then applies the harness.</summary>
+		public static void InstallHarness(Scene scene, Options options)
+		{
+			if (scene.FindObjectOfType<GIDebugControls>() == null)
+			{
+				GameObject host = scene.CreateGameObject("Harness");
+				host.AddComponent<GIDebugControls>();
+			}
+
+			ApplyHarness(scene, options);
+		}
+
 		/// <summary>
 		///     Measurement / debugging switches that are not part of the scene: debug views, profiler, fullscreen,
 		///     camera autopilot and mouse look, stats and frame dumps. Works on a built or a loaded scene.

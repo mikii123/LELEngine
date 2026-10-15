@@ -40,6 +40,9 @@ namespace LELEngine.Rendering
 		/// <summary>glFlush once after the first pass so the GPU starts the frame while the rest is submitted.</summary>
 		public bool FlushAfterFirstPass = true;
 
+		/// <summary>Draw the <see cref="DebugDraw" /> primitives (editor scene view; games use DebugDraw.VisibleInGame).</summary>
+		public bool DebugPrimitives;
+
 		#endregion
 	}
 }
