@@ -6,6 +6,9 @@ UI system and Recast/Detour-style navigation.
 
 Built on .NET 10, OpenTK 4.9 (GLFW) and OpenGL 4.6 (4.3 minimum), developed and tuned on an Intel integrated GPU.
 
+![The editor with the GI test room in the scene view](docs/images/editor.png)
+*The editor: hierarchy, scene view with the move gizmo on the selected object, inspector and project browser.*
+
 ## Features
 
 **Scene model**
@@ -24,6 +27,10 @@ Built on .NET 10, OpenTK 4.9 (GLFW) and OpenGL 4.6 (4.3 minimum), developed and 
     radiance cache, and screen probes with adaptive placement and temporal/spatial filtering.
   - **Voxel cone tracing mode**: an SDF-assisted voxel GI with multi-bounce injection.
 - PBR materials (GGX), shaders with `#include` support from the engine shader library.
+
+![Lumen-style global illumination in the test room](docs/images/lumen-gi.png)
+*Lumen mode GI: color bleeding from the red and green walls and light from emissive objects, with no analytic
+point lights.*
 
 **UI (`LELEngine.UIElements`)**
 - A retained UI modelled on Unity UI Toolkit: one `UIDocument` component per document, with no extra GameObjects.
@@ -48,6 +55,9 @@ Built on .NET 10, OpenTK 4.9 (GLFW) and OpenGL 4.6 (4.3 minimum), developed and 
 - **UI Builder**: a separate window for editing UXML documents with a live preview, inspector, USS editor and
   canvas picking.
 - Build Settings produce a standalone game folder. Batch mode (`-batchmode`) covers build machines and scripts.
+
+![Play mode in the game view](docs/images/play-mode.png)
+*Play mode: the game view runs the scene's scripts (here the orbiting emitters).*
 
 ## Repository layout
 
