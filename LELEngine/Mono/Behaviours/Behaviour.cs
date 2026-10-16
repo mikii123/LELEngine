@@ -83,6 +83,10 @@ namespace LELEngine
 		public virtual void OnValidate()
 		{ }
 
+		/// <summary>Editor: called when the component is added in the editor, to fit its defaults to the object.</summary>
+		public virtual void Reset()
+		{ }
+
 		#endregion
 
 		#region PublicMethods

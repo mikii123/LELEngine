@@ -136,17 +136,19 @@ namespace LELEngine.Navigation.Builder
 			HeightfieldLayer layer = HeightfieldLayer.FromData(layerData, cs, ch);
 			if (shapes != null)
 			{
-				// Shapes are inflated by the agent radius: the eroded navmesh keeps agents off the obstacle.
+				// Shapes are inflated by the agent radius: the eroded navmesh keeps agents off the obstacle. Vertically a
+				// shape blocks the floors whose agent space (the agent height above them) it overlaps, as in Unity.
 				float inflate = settings.AgentRadius;
+				int clearance = (int)Math.Ceiling(settings.AgentHeight / ch);
 				foreach (CarveShape shape in shapes)
 				{
 					if (shape.IsCylinder)
 					{
-						layer.MarkCylinderArea(shape.Center - new Vector3(0f, shape.HalfExtents.Y, 0f), shape.Radius + inflate, shape.HalfExtents.Y * 2f, NavMeshArea.Null);
+						layer.MarkCylinderArea(shape.Center - new Vector3(0f, shape.HalfExtents.Y, 0f), shape.Radius + inflate, shape.HalfExtents.Y * 2f, clearance, NavMeshArea.Null);
 					}
 					else
 					{
-						layer.MarkOrientedBoxArea(shape.Center, shape.AxisX, shape.AxisZ, shape.HalfExtents + new Vector3(inflate, 0f, inflate), NavMeshArea.Null);
+						layer.MarkOrientedBoxArea(shape.Center, shape.AxisX, shape.AxisZ, shape.HalfExtents + new Vector3(inflate, 0f, inflate), clearance, NavMeshArea.Null);
 					}
 				}
 			}

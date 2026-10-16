@@ -88,8 +88,11 @@ namespace LELEngine.Navigation.Builder
 
 		// ---------------------------------------------------------------- obstacle marking
 
-		/// <summary>Cells inside a vertical cylinder (local space) get the area (0 carves them out).</summary>
-		public void MarkCylinderArea(Vector3 position, float radius, float height, byte area)
+		/// <summary>
+		///     Cells inside a vertical cylinder (local space) get the area (0 carves them out). A cell counts when the
+		///     shape overlaps the <paramref name="clearance" /> cells above its floor (the space an agent stands in).
+		/// </summary>
+		public void MarkCylinderArea(Vector3 position, float radius, float height, int clearance, byte area)
 		{
 			float ics = 1f / CellSize;
 			float ich = 1f / CellHeight;
@@ -125,7 +128,7 @@ namespace LELEngine.Navigation.Builder
 
 					int index = x + z * Width;
 					int y = Heights[index];
-					if (y == EmptyHeight || y < miny || y > maxy)
+					if (y == EmptyHeight || y < miny - clearance || y > maxy)
 					{
 						continue;
 					}
@@ -137,9 +140,10 @@ namespace LELEngine.Navigation.Builder
 
 		/// <summary>
 		///     Cells inside a box rotated about the vertical axis (local space): <paramref name="axisX" /> and
-		///     <paramref name="axisZ" /> are the box's horizontal axes (unit length), the extents half sizes.
+		///     <paramref name="axisZ" /> are the box's horizontal axes (unit length), the extents half sizes; cells count as
+		///     in <see cref="MarkCylinderArea" />.
 		/// </summary>
-		public void MarkOrientedBoxArea(Vector3 center, Vector2 axisX, Vector2 axisZ, Vector3 halfExtents, byte area)
+		public void MarkOrientedBoxArea(Vector3 center, Vector2 axisX, Vector2 axisZ, Vector3 halfExtents, int clearance, byte area)
 		{
 			float ics = 1f / CellSize;
 			float ich = 1f / CellHeight;
@@ -178,7 +182,7 @@ namespace LELEngine.Navigation.Builder
 
 					int index = x + z * Width;
 					int y = Heights[index];
-					if (y == EmptyHeight || y < miny || y > maxy)
+					if (y == EmptyHeight || y < miny - clearance || y > maxy)
 					{
 						continue;
 					}

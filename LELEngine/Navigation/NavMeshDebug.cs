@@ -14,7 +14,6 @@ namespace LELEngine.Navigation
 		public static float YOffset = 0.02f;
 
 		public static Color4 WalkableFill = new Color4(0.1f, 0.55f, 1f, 0.2f);
-		public static Color4 CarvedFill = new Color4(0.95f, 0.55f, 0.1f, 0.22f);
 		public static Color4 EdgeColor = new Color4(0.05f, 0.2f, 0.45f, 0.5f);
 		public static Color4 BoundaryColor = new Color4(0.05f, 0.2f, 0.6f, 1f);
 		public static Color4 AgentColor = new Color4(0.2f, 1f, 0.3f, 1f);
@@ -151,7 +150,6 @@ namespace LELEngine.Navigation
 
 		private static void DrawTile(NavTile tile, Span<Vector3> verts)
 		{
-			Color4 fill = tile.Carved ? CarvedFill : WalkableFill;
 			Vector3 lift = new Vector3(0f, YOffset, 0f);
 			for (int p = 0; p < tile.PolyCount; p++)
 			{
@@ -162,7 +160,7 @@ namespace LELEngine.Navigation
 				}
 
 				int area = tile.Area(p);
-				Color4 color = area == NavMeshArea.Walkable ? fill : AreaColor(area);
+				Color4 color = area == NavMeshArea.Walkable ? WalkableFill : AreaColor(area);
 				DebugDraw.Polygon(verts.Slice(0, n), color);
 				for (int i = 0; i < n; i++)
 				{

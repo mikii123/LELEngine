@@ -88,7 +88,7 @@ namespace LELEngine.Editor
 				Type type = parts.Length > 1 ? TypeRegistry.Resolve(parts[1]) : null;
 				if (go != null && type != null)
 				{
-					editor.RecordStructural("Add " + type.Name, () => go.AddComponent(type));
+					editor.RecordStructural("Add " + type.Name, () => go.AddComponent(type)?.Reset());
 					componentAdded = true;
 					Debug.Log("[Test] Added " + type.Name + " to " + go.Name);
 				}

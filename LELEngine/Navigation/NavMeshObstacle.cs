@@ -43,7 +43,7 @@ namespace LELEngine.Navigation
 		[Tooltip("Carve only after the obstacle stood still for a while; a moving obstacle is avoided dynamically.")]
 		public bool carveOnlyStationary = true;
 
-		[Tooltip("Movement that counts as a change of the carved hole.")]
+		[Tooltip("Distance the shape must move (translation, rotation or scale) before the hole is carved again; 0 re-carves on any change.")]
 		public float carvingMoveThreshold = 0.1f;
 
 		[Tooltip("Seconds without movement before a moving obstacle carves again.")]
@@ -65,6 +65,9 @@ namespace LELEngine.Navigation
 		internal Vector3 LastPosition;
 		internal Quaternion LastRotation;
 		internal Vector3 LastScale;
+		internal bool ShapeChanged;
+		internal Vector3 CarvedMin;
+		internal Vector3 CarvedMax;
 
 		#endregion
 
@@ -95,6 +98,30 @@ namespace LELEngine.Navigation
 				Registered = false;
 				NavMesh.Carver.Remove(this);
 			}
+		}
+
+		/// <summary>Shape fields changed: the carved hole is rebuilt.</summary>
+		public override void OnValidate()
+		{
+			ShapeChanged = true;
+		}
+
+		/// <summary>Added in the editor: the shape fits the object's mesh (as Unity's obstacle does).</summary>
+		public override void Reset()
+		{
+			Mesh mesh = GetComponent<MeshRenderer>()?.Mesh;
+			if (mesh == null)
+			{
+				return;
+			}
+
+			Vector3 min = mesh.BoundsMin;
+			Vector3 max = mesh.BoundsMax;
+			center = (min + max) * 0.5f;
+			size = max - min;
+			radius = Math.Max(size.X, size.Z) * 0.5f;
+			height = size.Y;
+			ShapeChanged = true;
 		}
 
 		#endregion
@@ -282,9 +309,7 @@ namespace LELEngine.Navigation
 				}
 
 				Transform t = obstacle.transform;
-				bool moved = (t.position - obstacle.LastPosition).Length > obstacle.carvingMoveThreshold
-					|| Math.Abs(NavMath.QuaternionDot(t.rotation, obstacle.LastRotation)) < 0.9995f
-					|| (t.lossyScale - obstacle.LastScale).Length > 0.01f;
+				bool moved = Movement(obstacle, obstacle.LastPosition, obstacle.LastRotation, obstacle.LastScale) > obstacle.carvingMoveThreshold;
 				if (moved)
 				{
 					obstacle.LastPosition = t.position;
@@ -301,10 +326,8 @@ namespace LELEngine.Navigation
 					&& (!obstacle.carveOnlyStationary || obstacle.StationaryTime >= obstacle.carvingTimeToStationary);
 				if (shouldCarve)
 				{
-					bool changed = !obstacle.Carved
-						|| (t.position - obstacle.CarvedPosition).Length > obstacle.carvingMoveThreshold
-						|| Math.Abs(NavMath.QuaternionDot(t.rotation, obstacle.CarvedRotation)) < 0.9995f
-						|| (t.lossyScale - obstacle.CarvedScale).Length > 0.01f;
+					bool changed = !obstacle.Carved || obstacle.ShapeChanged
+						|| Movement(obstacle, obstacle.CarvedPosition, obstacle.CarvedRotation, obstacle.CarvedScale) > obstacle.carvingMoveThreshold;
 					if (changed)
 					{
 						if (obstacle.Carved)
@@ -316,8 +339,9 @@ namespace LELEngine.Navigation
 						obstacle.CarvedRotation = t.rotation;
 						obstacle.CarvedScale = t.lossyScale;
 						obstacle.Carved = true;
-						obstacle.GetWorldBounds(out Vector3 min, out Vector3 max);
-						MarkTiles(min, max, null);
+						obstacle.ShapeChanged = false;
+						obstacle.GetWorldBounds(out obstacle.CarvedMin, out obstacle.CarvedMax);
+						MarkTiles(obstacle.CarvedMin, obstacle.CarvedMax, null);
 					}
 				}
 				else if (obstacle.Carved)
@@ -372,20 +396,40 @@ namespace LELEngine.Navigation
 			}
 		}
 
+		/// <summary>
+		///     How far (world units) the obstacle's shape moved since the given transform: translation plus how far its
+		///     farthest point travels by the rotation and the scale change. One distance for <see cref="NavMeshObstacle.carvingMoveThreshold" />.
+		/// </summary>
+		private static float Movement(NavMeshObstacle obstacle, in Vector3 position, in Quaternion rotation, in Vector3 scale)
+		{
+			Transform t = obstacle.transform;
+			Vector3 currentScale = t.lossyScale;
+			// Local reach of the shape: from the pivot to its farthest point.
+			Vector3 extent = obstacle.shape == NavMeshObstacleShape.Box ? obstacle.size * 0.5f : new Vector3(obstacle.radius, obstacle.height * 0.5f, obstacle.radius);
+			Vector3 local = new Vector3(Math.Abs(obstacle.center.X), Math.Abs(obstacle.center.Y), Math.Abs(obstacle.center.Z)) + new Vector3(Math.Abs(extent.X), Math.Abs(extent.Y), Math.Abs(extent.Z));
+			float distance = (t.position - position).Length;
+			Quaternion currentRotation = t.rotation;
+			if (currentRotation != rotation)
+			{
+				// Rotation angle times the reach: the arc the farthest point travels.
+				float dot = Math.Min(1f, Math.Abs(NavMath.QuaternionDot(currentRotation, rotation)));
+				float maxScale = Math.Max(Math.Abs(currentScale.X), Math.Max(Math.Abs(currentScale.Y), Math.Abs(currentScale.Z)));
+				distance += 2f * (float)Math.Acos(dot) * (local * maxScale).Length;
+			}
+
+			if (currentScale != scale)
+			{
+				Vector3 delta = currentScale - scale;
+				distance += new Vector3(Math.Abs(delta.X) * local.X, Math.Abs(delta.Y) * local.Y, Math.Abs(delta.Z) * local.Z).Length;
+			}
+
+			return distance;
+		}
+
 		private void MarkCarvedTiles(NavMeshObstacle obstacle)
 		{
-			// Bounds at the carved transform (the obstacle may have moved since).
-			Transform t = obstacle.transform;
-			Vector3 position = t.position;
-			Quaternion rotation = t.rotation;
-			Vector3 scale = t.localScale;
-			t.position = obstacle.CarvedPosition;
-			t.rotation = obstacle.CarvedRotation;
-			obstacle.GetWorldBounds(out Vector3 min, out Vector3 max);
-			t.position = position;
-			t.rotation = rotation;
-			t.localScale = scale;
-			MarkTiles(min, max, null);
+			// Bounds of the carved hole (the obstacle may have moved or changed shape since).
+			MarkTiles(obstacle.CarvedMin, obstacle.CarvedMax, null);
 		}
 
 		private void MarkTiles(in Vector3 min, in Vector3 max, NavSurface only)
@@ -484,8 +528,9 @@ namespace LELEngine.Navigation
 				var local = new List<CarveShape>();
 				Vector3 tileMin = Vector3.TransformPosition(tile.LayerData.BoundsMin, surface.LocalToWorld);
 				Vector3 tileMax = Vector3.TransformPosition(tile.LayerData.BoundsMax, surface.LocalToWorld);
+				// Up by the agent height too: a shape above the floor still blocks the agents standing on it.
 				Vector3 wmin = Vector3.ComponentMin(tileMin, tileMax) - new Vector3(1f);
-				Vector3 wmax = Vector3.ComponentMax(tileMin, tileMax) + new Vector3(1f);
+				Vector3 wmax = Vector3.ComponentMax(tileMin, tileMax) + new Vector3(1f, 1f + surface.Data.Settings.AgentHeight, 1f);
 				foreach (ObstacleShape shape in shapes)
 				{
 					if (!NavMath.OverlapBounds(wmin, wmax, shape.BoundsMin, shape.BoundsMax))

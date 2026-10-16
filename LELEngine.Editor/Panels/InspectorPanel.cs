@@ -293,7 +293,7 @@ namespace LELEngine.Editor
 				if (ImGui.Selectable(name))
 				{
 					Type selected = type;
-					editor.RecordStructural("Add " + type.Name, () => go.AddComponent(selected));
+					editor.RecordStructural("Add " + type.Name, () => go.AddComponent(selected)?.Reset());
 					ImGui.CloseCurrentPopup();
 				}
 			}
