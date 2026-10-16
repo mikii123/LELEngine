@@ -23,7 +23,11 @@ Built on .NET 10, OpenTK 4.9 (GLFW) and OpenGL 4.6 (4.3 minimum), developed and 
   configured per file like Unity's texture importer. Materials are documents of typed properties declared by the
   shader's `//Properties` block.
 
-**2D physics (Box2D)**
+**2D physics (Box2D v3)**
+- Box2D v3 in pure C# (Box2D.NET): soft-step solver with sub-steps, sleeping islands, continuous collision, and
+  the step spread over worker threads (`Physics2DSettings.WorkerCount`, automatic by default).
+- Simulates in the XY plane (side views) or the XZ plane (top-down), a project setting: the same 2D API and
+  results in both, with transforms mapped into the chosen plane.
 - `Rigidbody2D`, `BoxCollider2D`, `CircleCollider2D`, `CapsuleCollider2D`, `PolygonCollider2D`, `EdgeCollider2D`,
   joints (distance, spring, hinge, slider, fixed, wheel, friction, relative, target), `PhysicsMaterial2D` assets,
   layers with a collision matrix.
@@ -71,7 +75,11 @@ point lights.*
 - Game scripts compile in the background with `dotnet build`, and a full domain reload swaps them in.
 - **UI Builder**: a separate window for editing UXML documents with a live preview, inspector, USS editor and
   canvas picking.
-- Build Settings produce a standalone game folder. Batch mode (`-batchmode`) covers build machines and scripts.
+- Project Settings (Edit > Project Settings...) has tabs for lighting quality (shadow map, GI method and its
+  tunables), 2D physics and the build. They are saved to `ProjectSettings/ProjectSettings.asset` and go into
+  builds. The Lighting panel keeps what belongs to a scene: its environment, shadow reach and GI volume.
+- The Build tab (File > Build Settings...) produces a standalone game folder. Batch mode (`-batchmode`) covers
+  build machines and scripts.
 
 ![Play mode in the game view](docs/images/play-mode.png)
 *Play mode: the game view runs the scene's scripts (here the orbiting emitters).*
@@ -85,6 +93,7 @@ point lights.*
 | `LELEngine.Player` | Generic player executable used by game builds |
 | `TestGame` | Test and measurement harness that runs the scenes below from the command line |
 | `TestGame.Scenes` | Test scenes: GI room, navigation, UI showcase, Box2D physics |
+| `LELEngine.Benchmarks` | Headless benchmarks: `dotnet run --project LELEngine.Benchmarks -c Release -- physics2d [scenario] [workers=N] [nosleep=1] [plane=xz]` (pyramid, pyramids, rain, chains, queries, rays, closest, overlaps; each reports a state checksum that must match between the planes), and `physics2d-scene` runs the Box2D test scene without a window |
 
 ## Building
 

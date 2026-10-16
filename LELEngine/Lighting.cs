@@ -20,8 +20,17 @@ namespace LELEngine
 		/// <summary>Live settings of the active scene (see <see cref="SceneSettings.Activate" />).</summary>
 		public static EnvironmentSettings Environment = new EnvironmentSettings();
 
-		public static ShadowSettings Shadows = new ShadowSettings();
-		public static GlobalIlluminationSettings GI = new GlobalIlluminationSettings();
+		/// <summary>The active scene's shadow reach (see <see cref="SceneSettings.Activate" />).</summary>
+		public static SceneShadowSettings SceneShadows = new SceneShadowSettings();
+
+		/// <summary>The active scene's GI volume and strengths (see <see cref="SceneSettings.Activate" />).</summary>
+		public static SceneGISettings SceneGI = new SceneGISettings();
+
+		/// <summary>The shadow map: the project's quality settings with the active scene's reach.</summary>
+		public static ShadowSettings Shadows => ProjectSettings.Current.Shadows;
+
+		/// <summary>Global illumination: the project's method and tunables with the active scene's volume and strengths.</summary>
+		public static GlobalIlluminationSettings GI => ProjectSettings.Current.GI;
 
 		/// <summary>Texture unit reserved for the directional shadow map (material textures use 0..N).</summary>
 		public const int ShadowMapTextureUnit = 15;
@@ -272,7 +281,8 @@ namespace LELEngine
 	}
 
 	/// <summary>
-	///     Directional shadow map configuration.
+	///     Directional shadow map quality, project-wide (part of <see cref="ProjectSettings" />); its reach comes
+	///     from the active scene (<see cref="Distance" />, <see cref="DepthRange" />).
 	/// </summary>
 	[Serializable]
 	public sealed class ShadowSettings
@@ -284,11 +294,19 @@ namespace LELEngine
 		/// <summary>Shadow map resolution (square).</summary>
 		public int MapSize = 2048;
 
-		/// <summary>Half extent of the orthographic shadow frustum around the camera, in world units.</summary>
-		public float Distance = 60f;
+		/// <summary>The active scene's half extent of the orthographic shadow frustum around the camera (<see cref="SceneShadowSettings" />).</summary>
+		public float Distance
+		{
+			get => Lighting.SceneShadows.Distance;
+			set => Lighting.SceneShadows.Distance = value;
+		}
 
-		/// <summary>Half depth range of the shadow frustum along the light direction.</summary>
-		public float DepthRange = 200f;
+		/// <summary>The active scene's half depth range of the shadow frustum along the light direction.</summary>
+		public float DepthRange
+		{
+			get => Lighting.SceneShadows.DepthRange;
+			set => Lighting.SceneShadows.DepthRange = value;
+		}
 
 		/// <summary>Offset along the surface normal before projecting into the shadow map (world units).</summary>
 		public float NormalBias = 0.05f;
@@ -303,31 +321,82 @@ namespace LELEngine
 	}
 
 	/// <summary>
-	///     Voxel cone tracing configuration (see VoxelGIPass) plus the runtime volume it publishes.
-	///     Configuration fields are saved with the scene; runtime state is [NonSerialized].
+	///     Global illumination, project-wide (part of <see cref="ProjectSettings" />): the method (voxel cone tracing
+	///     or Lumen) and its tunables, plus the runtime volume the passes publish ([NonSerialized]). Whether the
+	///     active scene uses GI, its volume and its strengths come from the scene (<see cref="SceneGISettings" />,
+	///     reached through the properties of the same names).
 	/// </summary>
 	[Serializable]
 	public sealed class GlobalIlluminationSettings
 	{
 		#region PublicFields
 
-		public bool Enabled = true;
+		// ---- The active scene's part (SceneGISettings) ----
+
+		/// <summary>The active scene uses global illumination.</summary>
+		public bool Enabled
+		{
+			get => Lighting.SceneGI.Enabled;
+			set => Lighting.SceneGI.Enabled = value;
+		}
+
+		/// <summary>World-space edge length of the active scene's cubic GI volume.</summary>
+		public float GridSize
+		{
+			get => Lighting.SceneGI.GridSize;
+			set => Lighting.SceneGI.GridSize = value;
+		}
+
+		/// <summary>The active scene's volume center when <see cref="FollowCamera" /> is off.</summary>
+		public Vector3 Center
+		{
+			get => Lighting.SceneGI.Center;
+			set => Lighting.SceneGI.Center = value;
+		}
+
+		/// <summary>Center the volume on the camera (snapped to voxels) instead of <see cref="Center" />.</summary>
+		public bool FollowCamera
+		{
+			get => Lighting.SceneGI.FollowCamera;
+			set => Lighting.SceneGI.FollowCamera = value;
+		}
+
+		public float DiffuseStrength
+		{
+			get => Lighting.SceneGI.DiffuseStrength;
+			set => Lighting.SceneGI.DiffuseStrength = value;
+		}
+
+		public float SpecularStrength
+		{
+			get => Lighting.SceneGI.SpecularStrength;
+			set => Lighting.SceneGI.SpecularStrength = value;
+		}
+
+		public float OcclusionStrength
+		{
+			get => Lighting.SceneGI.OcclusionStrength;
+			set => Lighting.SceneGI.OcclusionStrength = value;
+		}
+
+		/// <summary>Weight of the multi-bounce feedback (see <see cref="SceneGISettings.BounceStrength" />).</summary>
+		public float BounceStrength
+		{
+			get => Lighting.SceneGI.BounceStrength;
+			set => Lighting.SceneGI.BounceStrength = value;
+		}
+
+		/// <summary>Radiance from outside the scene seen by cones that escape (linear RGB).</summary>
+		public Vector3 SkyRadiance
+		{
+			get => Lighting.SceneGI.SkyRadiance;
+			set => Lighting.SceneGI.SkyRadiance = value;
+		}
+
+		// ---- Project-wide ----
 
 		/// <summary>Voxels per axis. Memory is Resolution^3 * 8 bytes (RGBA16F) plus mips.</summary>
 		public int Resolution = 128;
-
-		/// <summary>World-space edge length of the cubic voxel volume.</summary>
-		public float GridSize = 32f;
-
-		/// <summary>Volume center when <see cref="FollowCamera" /> is off.</summary>
-		public Vector3 Center = Vector3.Zero;
-
-		/// <summary>Center the volume on the camera (snapped to voxels) instead of <see cref="Center" />.</summary>
-		public bool FollowCamera;
-
-		public float DiffuseStrength = 1f;
-		public float SpecularStrength = 1f;
-		public float OcclusionStrength = 1f;
 
 		/// <summary>Maximum cone length in world units. 0 uses the grid size.</summary>
 		public float ConeMaxDistance;
@@ -355,12 +424,6 @@ namespace LELEngine
 
 		/// <summary>Resolution of the shadow map covering the whole voxel volume, used when lighting voxels.</summary>
 		public int GridShadowMapSize = 1024;
-
-		/// <summary>
-		///     Weight of indirect light fed back from the previous frame's radiance volume when lighting voxels.
-		///     1 gives multi-bounce lighting converging over a few frames; 0 keeps a single bounce.
-		/// </summary>
-		public float BounceStrength = 1f;
 
 		/// <summary>Cones traced per voxel for the bounce: 6 (hemisphere layout) or 1 (single wide cone, cheaper).</summary>
 		public int BounceCones = 6;
@@ -605,9 +668,6 @@ namespace LELEngine
 
 		/// <summary>Length of the SDF detail trace at the start of every cone (world units).</summary>
 		public float SdfDetailDistance = 1.5f;
-
-		/// <summary>Radiance from outside the scene seen by cones that escape (linear RGB).</summary>
-		public Vector3 SkyRadiance = Vector3.Zero;
 
 		// ---- Runtime data written by VoxelGIPass / GIResolvePass ----
 

@@ -21,6 +21,7 @@ namespace LELEngine.Editor
 	///       Shaders/Engine/   engine shader library
 	///       Game.dll          the scripts, compiled in the chosen configuration
 	///       Data/             the project's assets with their .meta files (scripts excluded)
+	///       ProjectSettings.asset  physics and lighting quality (binary)
 	///       boot.json         start scene, window title
 	///     </code>
 	///     Runs on a background thread; <paramref name="log" /> is called from it.
@@ -150,12 +151,24 @@ namespace LELEngine.Editor
 
 			log($"Converted {converted} documents to binary.");
 
-			// 5. Boot configuration.
+			// 5. Project settings (physics, lighting quality), binary like the assets; the defaults when the project has none.
+			string projectSettingsTarget = Path.Combine(output, ProjectSettings.FileName);
+			if (File.Exists(project.ProjectSettingsFile))
+			{
+				Documents.ConvertFile(project.ProjectSettingsFile, projectSettingsTarget, DocumentFormat.Binary);
+			}
+			else
+			{
+				new ProjectSettings().Save(projectSettingsTarget, DocumentFormat.Binary);
+			}
+
+			// 6. Boot configuration.
 			new BootConfig
 			{
 				DataFolder = "Data",
 				GameAssembly = hasScripts ? ProjectGenerator.AssemblyName + ".dll" : null,
 				StartScene = settings.StartScene,
+				ProjectSettings = ProjectSettings.FileName,
 				Title = project.Name,
 				RunInBackground = project.RunInBackground
 			}.Save(Path.Combine(output, BootConfig.FileName));

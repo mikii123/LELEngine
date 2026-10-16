@@ -1,25 +1,30 @@
 using System;
 using System.Collections.Generic;
-using Box2DSharp.Collision;
-using Box2DSharp.Collision.Collider;
-using Box2DSharp.Collision.Shapes;
-using Box2DSharp.Dynamics;
-using Box2DSharp.Dynamics.Contacts;
-using Box2DSharp.Dynamics.Joints;
+using Box2D.NET;
 using OpenTK.Mathematics;
-using B2Transform = Box2DSharp.Common.Transform;
-using B2Vector2 = System.Numerics.Vector2;
+using static Box2D.NET.B2Bodies;
+using static Box2D.NET.B2Contacts;
+using static Box2D.NET.B2Distances;
+using static Box2D.NET.B2Joints;
+using static Box2D.NET.B2MathFunction;
+using static Box2D.NET.B2Shapes;
+using static Box2D.NET.B2Types;
+using static Box2D.NET.B2Worlds;
+using B2Vector2 = Box2D.NET.B2Vec2;
 
 namespace LELEngine
 {
 	/// <summary>
-	///     The 2D physics world of a scene (Box2D through Box2DSharp): bodies of the scene's <see cref="Rigidbody2D" />
-	///     components, fixtures of its <see cref="Collider2D" /> components (static bodies for colliders without a
+	///     The 2D physics world of a scene (Box2D v3 through Box2D.NET): bodies of the scene's <see cref="Rigidbody2D" />
+	///     components, shapes of its <see cref="Collider2D" /> components (static bodies for colliders without a
 	///     rigidbody) and its <see cref="Joint2D" /> constraints. Stepped from the scene's fixed update; writes the
-	///     body poses back to the transforms, delivers OnCollision / OnTrigger callbacks and answers the queries of
-	///     <see cref="Physics2D" />. Colliders of child objects attach to the nearest ancestor rigidbody, as in Unity.
+	///     body poses back to the transforms, delivers OnCollision / OnTrigger callbacks (from Box2D's contact and
+	///     sensor events, read after the step) and answers the queries of <see cref="Physics2D" />. Colliders of child
+	///     objects attach to the nearest ancestor rigidbody, as in Unity. Layers become shape filter bits (category =
+	///     the layer, mask = its row of the collision matrix); pairs ignored with IgnoreCollision go through Box2D's
+	///     custom filter.
 	/// </summary>
-	public sealed class PhysicsScene2D : IDisposable, IContactListener, IContactFilter, IDestructionListener
+	public sealed class PhysicsScene2D : IDisposable
 	{
 		#region PublicFields
 
@@ -35,10 +40,13 @@ namespace LELEngine
 
 		#region InternalFields
 
-		internal World World { get; }
+		internal B2WorldId World { get; }
+
+		/// <summary>The world plane of this simulation (the project's setting when the world was created).</summary>
+		internal PlaneBasis Plane { get; }
 
 		/// <summary>Static body at the origin: joints without a connected body attach here; colliders without a rigidbody use their own static bodies.</summary>
-		internal Body GroundBody { get; }
+		internal B2BodyId GroundBody { get; }
 
 		internal float LastStepDeltaTime { get; private set; } = 0.02f;
 
@@ -62,13 +70,28 @@ namespace LELEngine
 		private readonly List<Joint2D> joints = new List<Joint2D>();
 		private readonly List<ContactEvent> events = new List<ContactEvent>();
 		private readonly HashSet<(ulong, ulong)> ignoredPairs = new HashSet<(ulong, ulong)>();
-		private readonly List<Collider2D> stayA = new List<Collider2D>();
-		private readonly List<Collider2D> stayB = new List<Collider2D>();
 		private readonly List<Behaviour> callbackBuffer = new List<Behaviour>();
-		private static readonly GJkProfile gjkProfile = new GJkProfile();
+		private readonly int[] filteredMatrix = new int[32];
+		private readonly b2CustomFilterFcn customFilter;
+		private readonly QueryState query = new QueryState();
+		private B2ContactData[] contactBuffer = new B2ContactData[16];
+		private B2ShapeId[] visitorBuffer = new B2ShapeId[16];
+
+		/// <summary>
+		///     Colliders of shapes destroyed recently, by shape id: Box2D reports the end of their contacts and sensor
+		///     overlaps after they are gone (the shape id is no longer valid then). Kept for one step.
+		/// </summary>
+		private readonly Dictionary<long, (Collider2D collider, int step)> destroyedShapes = new Dictionary<long, (Collider2D, int)>();
+
+		private readonly List<long> expired = new List<long>();
+		private int stepIndex;
+		private Vector2 appliedGravity;
 		private bool disposed;
 
-		private Physics2DSettings Settings => Scene.Settings.Physics2D;
+		private static Physics2DSettings Settings => ProjectSettings.Current.Physics2D;
+
+		private static readonly b2OverlapResultFcn overlapCallback = (shape, context) => ((QueryState)context).OnOverlap(shape);
+		private static readonly b2CastResultFcn rayCallback = (shape, point, normal, fraction, context) => ((QueryState)context).OnCast(shape, point, normal, fraction);
 
 		#endregion
 
@@ -77,14 +100,30 @@ namespace LELEngine
 		internal PhysicsScene2D(Scene scene)
 		{
 			Scene = scene;
-			World = new World(Physics2DMath.ToB2(scene.Settings.Physics2D.Gravity));
-			World.SetContactListener(this);
-			World.SetContactFilter(this);
-			World.DestructionListener = this;
-			World.ContinuousPhysics = true;
+			Plane = PlaneBasis.Of(Settings.SimulationPlane);
+			B2WorldDef def = b2DefaultWorldDef();
+			appliedGravity = Settings.Gravity;
+			def.gravity = Physics2DMath.ToB2(appliedGravity);
+			def.enableContinuous = true;
+			int workers = PhysicsTaskSystem.Resolve(Settings.WorkerCount);
+			if (workers > 1)
+			{
+				// Box2D splits its step over the shared worker threads; the world's own worker count travels as the context.
+				PhysicsTaskSystem tasks = PhysicsTaskSystem.Get(workers);
+				def.workerCount = workers;
+				def.enqueueTask = tasks.Enqueue;
+				def.finishTask = tasks.Finish;
+				def.userTaskContext = workers;
+			}
 
-			var ground = new BodyDef { BodyType = BodyType.StaticBody, Position = B2Vector2.Zero, Enabled = true, Awake = true, AllowSleep = true, GravityScale = 1f };
-			GroundBody = World.CreateBody(ref ground);
+			World = b2CreateWorld(def);
+			customFilter = CustomFilter;
+			query.Scene = this;
+			Array.Copy(MatrixOf(Settings), filteredMatrix, 32);
+
+			B2BodyDef ground = b2DefaultBodyDef();
+			ground.type = B2BodyType.b2_staticBody;
+			GroundBody = b2CreateBody(World, ground);
 		}
 
 		#endregion
@@ -101,22 +140,23 @@ namespace LELEngine
 			disposed = true;
 			foreach (Joint2D joint in joints)
 			{
-				joint.joint = null;
+				joint.joint = default;
 				joint.world = null;
 			}
 
 			foreach (Collider2D collider in colliders)
 			{
-				collider.fixtures.Clear();
-				collider.ownStaticBody = null;
-				collider.body = null;
+				collider.shapes.Clear();
+				collider.chains.Clear();
+				collider.ownStaticBody = default;
+				collider.body = default;
 				collider.attachedRigidbody = null;
 				collider.world = null;
 			}
 
 			foreach (Rigidbody2D body in bodies)
 			{
-				body.body = null;
+				body.body = default;
 				body.world = null;
 			}
 
@@ -124,14 +164,15 @@ namespace LELEngine
 			colliders.Clear();
 			bodies.Clear();
 			events.Clear();
-			World.Dispose();
+			destroyedShapes.Clear();
+			b2DestroyWorld(World);
 		}
 
 		// ---------------------------------------------------------------- registration
 
 		internal void AddRigidbody(Rigidbody2D rigidbody)
 		{
-			if (disposed || rigidbody.body != null || rigidbody.gameObject == null)
+			if (disposed || rigidbody.hasBody || rigidbody.gameObject == null)
 			{
 				return;
 			}
@@ -140,25 +181,23 @@ namespace LELEngine
 			Vector2 position;
 			float angle;
 			Vector2 scale;
-			Physics2DMath.PlanarPose(transform, null, out position, out angle, out scale);
+			Plane.PlanarPose(transform, null, out position, out angle, out scale);
 
-			var def = new BodyDef
-			{
-				BodyType = ToBox2D(rigidbody.bodyType),
-				Position = Physics2DMath.ToB2(position),
-				Angle = angle,
-				LinearDamping = rigidbody.linearDamping,
-				AngularDamping = rigidbody.angularDamping,
-				AllowSleep = rigidbody.sleepMode != RigidbodySleepMode2D.NeverSleep,
-				Awake = rigidbody.sleepMode != RigidbodySleepMode2D.StartAsleep,
-				FixedRotation = (rigidbody.constraints & RigidbodyConstraints2D.FreezeRotation) != 0,
-				Bullet = rigidbody.collisionDetectionMode == CollisionDetectionMode2D.Continuous,
-				Enabled = rigidbody.simulated,
-				GravityScale = 1f,
-				UserData = rigidbody
-			};
+			B2BodyDef def = b2DefaultBodyDef();
+			def.type = ToBox2D(rigidbody.bodyType);
+			def.position = Physics2DMath.ToB2(position);
+			def.rotation = b2MakeRot(angle);
+			def.linearDamping = rigidbody.linearDamping;
+			def.angularDamping = rigidbody.angularDamping;
+			def.gravityScale = rigidbody.gravityScale;
+			def.enableSleep = rigidbody.sleepMode != RigidbodySleepMode2D.NeverSleep;
+			def.isAwake = rigidbody.sleepMode != RigidbodySleepMode2D.StartAsleep;
+			def.motionLocks = rigidbody.MotionLocks();
+			def.isBullet = rigidbody.collisionDetectionMode == CollisionDetectionMode2D.Continuous;
+			def.isEnabled = rigidbody.simulated;
+			def.userData = B2UserData.Ref(rigidbody);
 
-			rigidbody.body = World.CreateBody(ref def);
+			rigidbody.body = b2CreateBody(World, def);
 			rigidbody.world = this;
 			rigidbody.OnBodyCreated(position, angle);
 			bodies.Add(rigidbody);
@@ -185,7 +224,7 @@ namespace LELEngine
 
 		internal void RemoveRigidbody(Rigidbody2D rigidbody)
 		{
-			if (disposed || rigidbody.body == null)
+			if (disposed || !rigidbody.hasBody)
 			{
 				return;
 			}
@@ -204,9 +243,19 @@ namespace LELEngine
 				DetachCollider(collider);
 			}
 
-			// Joints on this body are destroyed by Box2D (SayGoodbye nulls them); they come back when both bodies exist again.
-			World.DestroyBody(rigidbody.body);
-			rigidbody.body = null;
+			// Box2D destroys the joints on the body with it; they come back when both bodies exist again.
+			foreach (Joint2D joint in joints)
+			{
+				if (joint.hasJoint && (joint.attachedRigidbody == rigidbody || joint.connectedBody == rigidbody))
+				{
+					b2DestroyJoint(joint.joint, true);
+					joint.joint = default;
+					joint.dirty = true;
+				}
+			}
+
+			b2DestroyBody(rigidbody.body);
+			rigidbody.body = default;
 			rigidbody.world = null;
 			bodies.Remove(rigidbody);
 
@@ -243,7 +292,7 @@ namespace LELEngine
 			collider.world = null;
 		}
 
-		/// <summary>Recreates a collider's fixtures (its shape, offset, trigger flag or scale changed).</summary>
+		/// <summary>Recreates a collider's shapes (its shape, offset, trigger flag or scale changed).</summary>
 		internal void RebuildCollider(Collider2D collider)
 		{
 			if (disposed || collider.world != this)
@@ -283,12 +332,12 @@ namespace LELEngine
 
 		internal void RemoveJoint(Joint2D joint)
 		{
-			if (joint.joint != null && !disposed)
+			if (joint.hasJoint && !disposed && b2Joint_IsValid(joint.joint))
 			{
-				World.DestroyJoint(joint.joint);
+				b2DestroyJoint(joint.joint, true);
 			}
 
-			joint.joint = null;
+			joint.joint = default;
 			joint.world = null;
 			joints.Remove(joint);
 		}
@@ -301,7 +350,7 @@ namespace LELEngine
 				Rigidbody2D rigidbody = t.gameObject.GetComponent<Rigidbody2D>();
 				if (rigidbody != null)
 				{
-					return rigidbody.body != null ? rigidbody : null;
+					return rigidbody.hasBody ? rigidbody : null;
 				}
 			}
 
@@ -319,8 +368,13 @@ namespace LELEngine
 			}
 
 			LastStepDeltaTime = deltaTime;
+			stepIndex++;
 			ApplyPendingChanges();
-			World.Gravity = Physics2DMath.ToB2(Settings.Gravity);
+			if (Settings.Gravity != appliedGravity)
+			{
+				appliedGravity = Settings.Gravity;
+				b2World_SetGravity(World, Physics2DMath.ToB2(appliedGravity));
+			}
 
 			foreach (Rigidbody2D rigidbody in bodies)
 			{
@@ -330,7 +384,7 @@ namespace LELEngine
 			IsStepping = true;
 			try
 			{
-				World.Step(deltaTime, Math.Max(1, Settings.VelocityIterations), Math.Max(1, Settings.PositionIterations));
+				b2World_Step(World, deltaTime, Math.Clamp(Settings.SubStepCount, 1, 16));
 			}
 			finally
 			{
@@ -342,8 +396,10 @@ namespace LELEngine
 				rigidbody.AfterStep(deltaTime);
 			}
 
+			CollectEvents();
 			DispatchEvents();
-			CheckJointBreaks(deltaTime);
+			BreakJoints();
+			ForgetDestroyedShapes();
 		}
 
 		/// <summary>Moves interpolating bodies' transforms between the last two steps (every frame, after the fixed steps).</summary>
@@ -356,7 +412,7 @@ namespace LELEngine
 
 			foreach (Rigidbody2D rigidbody in bodies)
 			{
-				if (rigidbody.interpolation != RigidbodyInterpolation2D.None && rigidbody.body != null)
+				if (rigidbody.interpolation != RigidbodyInterpolation2D.None && rigidbody.hasBody)
 				{
 					rigidbody.Interpolate(alpha);
 				}
@@ -364,6 +420,12 @@ namespace LELEngine
 		}
 
 		// ---------------------------------------------------------------- collision filtering
+
+		/// <summary>The shape filter of a layer: its bit as the category, its row of the collision matrix as the mask.</summary>
+		internal B2Filter FilterFor(int layer)
+		{
+			return new B2Filter(1UL << (layer & 31), (ulong)(uint)filteredMatrix[layer & 31], 0);
+		}
 
 		internal void IgnoreCollision(Collider2D a, Collider2D b, bool ignore)
 		{
@@ -373,17 +435,19 @@ namespace LELEngine
 			}
 
 			(ulong, ulong) key = PairKey(a, b);
-			if (ignore)
+			bool changed = ignore ? ignoredPairs.Add(key) : ignoredPairs.Remove(key);
+			if (!changed || disposed)
 			{
-				ignoredPairs.Add(key);
-			}
-			else
-			{
-				ignoredPairs.Remove(key);
+				return;
 			}
 
-			a.Refilter();
-			b.Refilter();
+			// The custom filter runs only while there is something to ignore.
+			b2World_SetCustomFilterCallback(World, ignoredPairs.Count > 0 ? customFilter : null, this);
+
+			// Box2D filters a pair when it starts overlapping: resetting the shapes' proxies drops their contacts so
+			// the pair is filtered again.
+			ResetProxies(a);
+			ResetProxies(b);
 		}
 
 		internal bool GetIgnoreCollision(Collider2D a, Collider2D b)
@@ -391,95 +455,7 @@ namespace LELEngine
 			return a != null && b != null && ignoredPairs.Contains(PairKey(a, b));
 		}
 
-		bool IContactFilter.ShouldCollide(Fixture fixtureA, Fixture fixtureB)
-		{
-			var a = fixtureA.UserData as Collider2D;
-			var b = fixtureB.UserData as Collider2D;
-			if (a == null || b == null)
-			{
-				return true;
-			}
-
-			GameObject goA = a.gameObject;
-			GameObject goB = b.gameObject;
-			if (goA == null || goB == null)
-			{
-				return false;
-			}
-
-			if (Settings.GetIgnoreLayerCollision(goA.layer, goB.layer))
-			{
-				return false;
-			}
-
-			return ignoredPairs.Count == 0 || !ignoredPairs.Contains(PairKey(a, b));
-		}
-
-		// ---------------------------------------------------------------- contact events
-
-		void IContactListener.BeginContact(Contact contact)
-		{
-			Record(contact, true);
-		}
-
-		void IContactListener.EndContact(Contact contact)
-		{
-			Record(contact, false);
-		}
-
-		void IContactListener.PreSolve(Contact contact, in Manifold oldManifold)
-		{ }
-
-		void IContactListener.PostSolve(Contact contact, in ContactImpulse impulse)
-		{ }
-
-		void IDestructionListener.SayGoodbye(Joint joint)
-		{
-			if (joint.UserData is Joint2D component)
-			{
-				component.joint = null;
-				component.dirty = true;
-			}
-		}
-
-		void IDestructionListener.SayGoodbye(Fixture fixture)
-		{
-			if (fixture.UserData is Collider2D collider)
-			{
-				collider.fixtures.Remove(fixture);
-			}
-		}
-
 		// ---------------------------------------------------------------- queries
-
-		/// <summary>Colliders whose fixtures overlap the AABB, filtered by layer and trigger settings (callback returns false to stop).</summary>
-		internal void QueryAabb(Vector2 min, Vector2 max, int layerMask, bool includeTriggers, Func<Fixture, bool> visit)
-		{
-			if (disposed)
-			{
-				return;
-			}
-
-			var aabb = new AABB(Physics2DMath.ToB2(min), Physics2DMath.ToB2(max));
-			IQueryCallback callback = new QueryCollector(this, layerMask, includeTriggers, visit);
-			World.QueryAABB(ref callback, ref aabb);
-		}
-
-		internal bool Accepts(Fixture fixture, int layerMask, bool includeTriggers)
-		{
-			var collider = fixture.UserData as Collider2D;
-			if (collider == null || collider.destroyed || collider.gameObject == null)
-			{
-				return false;
-			}
-
-			if (!includeTriggers && fixture.IsSensor)
-			{
-				return false;
-			}
-
-			return (layerMask & (1 << collider.gameObject.layer)) != 0;
-		}
 
 		internal bool QueriesHitTriggers => Settings.QueriesHitTriggers;
 
@@ -503,37 +479,10 @@ namespace LELEngine
 				distance = 1e5f;
 			}
 
-			if (Settings.QueriesStartInColliders)
-			{
-				// Colliders containing the origin hit at distance 0 (Box2D ignores shapes the ray starts inside).
-				var inside = new List<Collider2D>();
-				OverlapPointAll(origin, layerMask, triggers, inside);
-				foreach (Collider2D collider in inside)
-				{
-					results.Add(new RaycastHit2D { collider = collider, point = origin, normal = -direction, centroid = origin, distance = 0f, fraction = 0f });
-				}
-
-				if (closestOnly && results.Count > 0)
-				{
-					return 1;
-				}
-			}
-
-			if (distance <= 0f)
-			{
-				return results.Count;
-			}
-
-			B2Vector2 p1 = Physics2DMath.ToB2(origin);
-			B2Vector2 p2 = Physics2DMath.ToB2(origin + direction * distance);
-			IRayCastCallback callback = new RayCollector(this, layerMask, triggers, results, closestOnly, distance, origin);
-			World.RayCast(ref callback, ref p1, ref p2);
-			results.Sort((a, b) => a.distance.CompareTo(b.distance));
-			if (closestOnly && results.Count > 1)
-			{
-				results.RemoveRange(1, results.Count - 1);
-			}
-
+			query.BeginCast(layerMask, triggers, Settings.QueriesStartInColliders, results, closestOnly, distance, origin, direction, false);
+			b2World_CastRay(World, Physics2DMath.ToB2(origin), Physics2DMath.ToB2(direction * distance), QueryFilter(layerMask), rayCallback, query);
+			query.End();
+			Finish(results, closestOnly);
 			return results.Count;
 		}
 
@@ -546,21 +495,15 @@ namespace LELEngine
 			}
 
 			B2Vector2 p = Physics2DMath.ToB2(point);
-			QueryAabb(point - new Vector2(0.001f), point + new Vector2(0.001f), layerMask, hitTriggers ?? Settings.QueriesHitTriggers, fixture =>
-			{
-				var collider = (Collider2D)fixture.UserData;
-				if (!results.Contains(collider) && fixture.TestPoint(ref p))
-				{
-					results.Add(collider);
-				}
-
-				return true;
-			});
+			var aabb = new B2AABB(new B2Vector2(p.X - 0.001f, p.Y - 0.001f), new B2Vector2(p.X + 0.001f, p.Y + 0.001f));
+			query.BeginOverlap(layerMask, hitTriggers ?? Settings.QueriesHitTriggers, results, p, true);
+			b2World_OverlapAABB(World, aabb, QueryFilter(layerMask), overlapCallback, query);
+			query.End();
 			return results.Count;
 		}
 
-		/// <summary>Colliders overlapping a shape placed with the given transform.</summary>
-		internal int OverlapShapeAll(Shape shape, B2Transform transform, int layerMask, bool? hitTriggers, List<Collider2D> results)
+		/// <summary>Colliders overlapping a convex shape (points and radius in world space).</summary>
+		internal int OverlapShapeAll(B2ShapeProxy proxy, int layerMask, bool? hitTriggers, List<Collider2D> results)
 		{
 			results.Clear();
 			if (disposed)
@@ -568,35 +511,14 @@ namespace LELEngine
 				return 0;
 			}
 
-			AABB bounds;
-			shape.ComputeAABB(out bounds, ref transform, 0);
-			B2Transform xf = transform;
-			QueryAabb(Physics2DMath.ToEngine(bounds.LowerBound), Physics2DMath.ToEngine(bounds.UpperBound), layerMask, hitTriggers ?? Settings.QueriesHitTriggers, fixture =>
-			{
-				var collider = (Collider2D)fixture.UserData;
-				if (results.Contains(collider))
-				{
-					return true;
-				}
-
-				B2Transform bodyTransform = fixture.Body.GetTransform();
-				int children = fixture.Shape.GetChildCount();
-				for (int child = 0; child < children; child++)
-				{
-					if (CollisionUtils.TestOverlap(shape, 0, fixture.Shape, child, ref xf, ref bodyTransform, gjkProfile))
-					{
-						results.Add(collider);
-						break;
-					}
-				}
-
-				return true;
-			});
+			query.BeginOverlap(layerMask, hitTriggers ?? Settings.QueriesHitTriggers, results, default, false);
+			b2World_OverlapShape(World, ref proxy, QueryFilter(layerMask), overlapCallback, query);
+			query.End();
 			return results.Count;
 		}
 
-		/// <summary>Sweeps a shape along a direction and reports what it would hit (circle and box casts).</summary>
-		internal int ShapeCastAll(Shape shape, B2Transform transform, Vector2 direction, float distance, int layerMask, bool? hitTriggers, List<RaycastHit2D> results, bool closestOnly)
+		/// <summary>Sweeps a convex shape (world space) along a direction and reports what it would hit (circle and box casts).</summary>
+		internal int ShapeCastAll(B2ShapeProxy proxy, Vector2 direction, float distance, int layerMask, bool? hitTriggers, List<RaycastHit2D> results, bool closestOnly)
 		{
 			results.Clear();
 			if (disposed)
@@ -615,54 +537,11 @@ namespace LELEngine
 				distance = 1e5f;
 			}
 
-			AABB start;
-			shape.ComputeAABB(out start, ref transform, 0);
-			B2Vector2 translation = Physics2DMath.ToB2(direction * distance);
-			var end = new B2Transform(transform.Position + translation, transform.Rotation.Angle);
-			AABB endBounds;
-			shape.ComputeAABB(out endBounds, ref end, 0);
-			Vector2 min = Vector2.ComponentMin(Physics2DMath.ToEngine(start.LowerBound), Physics2DMath.ToEngine(endBounds.LowerBound));
-			Vector2 max = Vector2.ComponentMax(Physics2DMath.ToEngine(start.UpperBound), Physics2DMath.ToEngine(endBounds.UpperBound));
-
-			var proxyB = new DistanceProxy();
-			proxyB.Set(shape, 0);
-			B2Transform xf = transform;
-			Vector2 origin = Physics2DMath.ToEngine(transform.Position);
-			QueryAabb(min, max, layerMask, hitTriggers ?? Settings.QueriesHitTriggers, fixture =>
-			{
-				var collider = (Collider2D)fixture.UserData;
-				B2Transform bodyTransform = fixture.Body.GetTransform();
-				int children = fixture.Shape.GetChildCount();
-				for (int child = 0; child < children; child++)
-				{
-					var proxyA = new DistanceProxy();
-					proxyA.Set(fixture.Shape, child);
-					var input = new ShapeCastInput { ProxyA = proxyA, ProxyB = proxyB, TransformA = bodyTransform, TransformB = xf, TranslationB = translation };
-					ShapeCastOutput output;
-					if (DistanceAlgorithm.ShapeCast(out output, ref input) && output.Lambda >= 0f && output.Lambda <= 1f)
-					{
-						results.Add(new RaycastHit2D
-						{
-							collider = collider,
-							point = Physics2DMath.ToEngine(output.Point),
-							normal = Physics2DMath.ToEngine(output.Normal),
-							fraction = output.Lambda,
-							distance = output.Lambda * distance,
-							centroid = origin + direction * (output.Lambda * distance)
-						});
-						break;
-					}
-				}
-
-				return true;
-			});
-
-			results.Sort((a, b) => a.distance.CompareTo(b.distance));
-			if (closestOnly && results.Count > 1)
-			{
-				results.RemoveRange(1, results.Count - 1);
-			}
-
+			Vector2 origin = Physics2DMath.ToEngine(ProxyCenter(proxy));
+			query.BeginCast(layerMask, hitTriggers ?? Settings.QueriesHitTriggers, Settings.QueriesStartInColliders, results, closestOnly, distance, origin, direction, true);
+			b2World_CastShape(World, ref proxy, Physics2DMath.ToB2(direction * distance), QueryFilter(layerMask), rayCallback, query);
+			query.End();
+			Finish(results, closestOnly);
 			return results.Count;
 		}
 
@@ -675,17 +554,98 @@ namespace LELEngine
 				return;
 			}
 
-			foreach (Contact contact in World.ContactManager.ContactList)
+			foreach (B2ShapeId shape in collider.shapes)
 			{
-				if (!contact.IsTouching || !contact.IsEnabled)
+				int count = ContactsOf(shape);
+				for (int i = 0; i < count; i++)
 				{
-					continue;
-				}
+					ref B2ContactData data = ref contactBuffer[i];
+					if (data.manifold.pointCount <= 0)
+					{
+						continue;
+					}
 
-				var a = contact.FixtureA.UserData as Collider2D;
-				var b = contact.FixtureB.UserData as Collider2D;
-				if (a == collider && b != null && !results.Contains(b)) results.Add(b);
-				else if (b == collider && a != null && !results.Contains(a)) results.Add(a);
+					B2ShapeId other = B2ShapeEquals(data.shapeIdA, shape) ? data.shapeIdB : data.shapeIdA;
+					Collider2D otherCollider = ColliderOf(other);
+					if (otherCollider != null && otherCollider != collider && !results.Contains(otherCollider))
+					{
+						results.Add(otherCollider);
+					}
+				}
+			}
+		}
+
+		/// <summary>A shape as a convex proxy in world space (for casts of a collider's own shapes).</summary>
+		internal static B2ShapeProxy WorldProxy(B2ShapeId shape)
+		{
+			B2Transform xf = b2Body_GetTransform(b2Shape_GetBody(shape));
+			switch (b2Shape_GetType(shape))
+			{
+				case B2ShapeType.b2_circleShape:
+				{
+					B2Circle circle = b2Shape_GetCircle(shape);
+					return b2MakeProxy(b2TransformPoint(xf, circle.center), 1, circle.radius);
+				}
+				case B2ShapeType.b2_capsuleShape:
+				{
+					B2Capsule capsule = b2Shape_GetCapsule(shape);
+					return b2MakeProxy(b2TransformPoint(xf, capsule.center1), b2TransformPoint(xf, capsule.center2), 2, capsule.radius);
+				}
+				case B2ShapeType.b2_polygonShape:
+				{
+					B2Polygon polygon = b2Shape_GetPolygon(shape);
+					Span<B2Vector2> points = stackalloc B2Vector2[polygon.count];
+					for (int i = 0; i < polygon.count; i++)
+					{
+						points[i] = b2TransformPoint(xf, polygon.vertices[i]);
+					}
+
+					return b2MakeProxy(points, polygon.count, polygon.radius);
+				}
+				case B2ShapeType.b2_chainSegmentShape:
+				{
+					B2Segment segment = b2Shape_GetChainSegment(shape).segment;
+					return b2MakeProxy(b2TransformPoint(xf, segment.point1), b2TransformPoint(xf, segment.point2), 2, 0f);
+				}
+				default:
+				{
+					B2Segment segment = b2Shape_GetSegment(shape);
+					return b2MakeProxy(b2TransformPoint(xf, segment.point1), b2TransformPoint(xf, segment.point2), 2, 0f);
+				}
+			}
+		}
+
+		#endregion
+
+		#region InternalMethods
+
+		internal static B2BodyType ToBox2D(RigidbodyType2D type)
+		{
+			switch (type)
+			{
+				case RigidbodyType2D.Kinematic: return B2BodyType.b2_kinematicBody;
+				case RigidbodyType2D.Static: return B2BodyType.b2_staticBody;
+				default: return B2BodyType.b2_dynamicBody;
+			}
+		}
+
+		/// <summary>The collider of a shape, also for a shape destroyed since the last step (its end events).</summary>
+		internal Collider2D ColliderOf(B2ShapeId shape)
+		{
+			if (b2Shape_IsValid(shape))
+			{
+				return b2Shape_GetUserData(shape).GetRef<Collider2D>();
+			}
+
+			return destroyedShapes.TryGetValue(ShapeKey(shape), out (Collider2D collider, int step) entry) ? entry.collider : null;
+		}
+
+		/// <summary>Called before a collider destroys its shapes: their contacts end after they are gone.</summary>
+		internal void ShapesDestroyed(Collider2D collider)
+		{
+			foreach (B2ShapeId shape in collider.shapes)
+			{
+				destroyedShapes[ShapeKey(shape)] = (collider, stepIndex);
 			}
 		}
 
@@ -693,67 +653,159 @@ namespace LELEngine
 
 		#region PrivateMethods
 
-		private static BodyType ToBox2D(RigidbodyType2D type)
-		{
-			switch (type)
-			{
-				case RigidbodyType2D.Kinematic: return BodyType.KinematicBody;
-				case RigidbodyType2D.Static: return BodyType.StaticBody;
-				default: return BodyType.DynamicBody;
-			}
-		}
-
 		private static (ulong, ulong) PairKey(Collider2D a, Collider2D b)
 		{
 			return a.Id < b.Id ? (a.Id, b.Id) : (b.Id, a.Id);
 		}
 
+		private static long ShapeKey(B2ShapeId shape)
+		{
+			return ((long)shape.generation << 32) | (uint)shape.index1;
+		}
+
+		private static bool B2ShapeEquals(B2ShapeId a, B2ShapeId b)
+		{
+			return a.index1 == b.index1 && a.generation == b.generation && a.world0 == b.world0;
+		}
+
+		/// <summary>Queries filter by layer natively: the query's mask is the layer mask, its category accepts every shape mask.</summary>
+		private static B2QueryFilter QueryFilter(int layerMask)
+		{
+			return new B2QueryFilter(ulong.MaxValue, (ulong)(uint)layerMask);
+		}
+
+		private static int[] MatrixOf(Physics2DSettings settings)
+		{
+			var matrix = new int[32];
+			for (int i = 0; i < 32; i++)
+			{
+				matrix[i] = settings.GetLayerCollisionMask(i);
+			}
+
+			return matrix;
+		}
+
+		private static B2Vector2 ProxyCenter(in B2ShapeProxy proxy)
+		{
+			float x = 0f;
+			float y = 0f;
+			for (int i = 0; i < proxy.count; i++)
+			{
+				x += proxy.points[i].X;
+				y += proxy.points[i].Y;
+			}
+
+			return new B2Vector2(x / Math.Max(1, proxy.count), y / Math.Max(1, proxy.count));
+		}
+
+		private static void Finish(List<RaycastHit2D> results, bool closestOnly)
+		{
+			if (results.Count > 1)
+			{
+				results.Sort((a, b) => a.distance.CompareTo(b.distance));
+			}
+
+			if (closestOnly && results.Count > 1)
+			{
+				results.RemoveRange(1, results.Count - 1);
+			}
+		}
+
+		private bool CustomFilter(B2ShapeId shapeA, B2ShapeId shapeB, object context)
+		{
+			if (ignoredPairs.Count == 0)
+			{
+				return true;
+			}
+
+			Collider2D a = ColliderOf(shapeA);
+			Collider2D b = ColliderOf(shapeB);
+			return a == null || b == null || !ignoredPairs.Contains(PairKey(a, b));
+		}
+
+		/// <summary>Drops a collider's contacts so its pairs are filtered again (a filter change resets the broad-phase proxy).</summary>
+		private static void ResetProxies(Collider2D collider)
+		{
+			foreach (B2ShapeId shape in collider.shapes)
+			{
+				if (!b2Shape_IsValid(shape))
+				{
+					continue;
+				}
+
+				B2Filter filter = b2Shape_GetFilter(shape);
+				B2Filter changed = filter;
+				changed.groupIndex = filter.groupIndex == 0 ? int.MinValue : 0;
+				b2Shape_SetFilter(shape, changed);
+				b2Shape_SetFilter(shape, filter);
+			}
+		}
+
 		private void AttachCollider(Collider2D collider)
 		{
 			Rigidbody2D owner = FindOwner(collider);
-			Body body;
+			B2BodyId body;
 			if (owner != null)
 			{
 				body = owner.body;
 			}
 			else
 			{
-				// A static body at the origin; the fixtures are built in world space.
-				var def = new BodyDef { BodyType = BodyType.StaticBody, Position = B2Vector2.Zero, Enabled = true, Awake = true, AllowSleep = true, GravityScale = 1f, UserData = collider };
-				body = World.CreateBody(ref def);
+				// A static body at the origin; the shapes are built in world space.
+				B2BodyDef def = b2DefaultBodyDef();
+				def.type = B2BodyType.b2_staticBody;
+				def.userData = B2UserData.Ref(collider);
+				body = b2CreateBody(World, def);
 				collider.ownStaticBody = body;
 			}
 
 			collider.attachedRigidbody = owner;
 			collider.body = body;
-			collider.CreateFixtures(body, owner?.transform);
+			collider.CreateShapes(body, owner?.transform);
 			collider.shapeDirty = false;
 			owner?.MassChanged();
 		}
 
 		private void DetachCollider(Collider2D collider)
 		{
-			collider.DestroyFixtures();
-			if (collider.ownStaticBody != null)
+			ShapesDestroyed(collider);
+			collider.DestroyShapes();
+			if (collider.ownStaticBody.index1 != 0)
 			{
-				World.DestroyBody(collider.ownStaticBody);
-				collider.ownStaticBody = null;
+				b2DestroyBody(collider.ownStaticBody);
+				collider.ownStaticBody = default;
 			}
 
 			Rigidbody2D owner = collider.attachedRigidbody;
 			collider.attachedRigidbody = null;
-			collider.body = null;
+			collider.body = default;
 			owner?.MassChanged();
 		}
 
 		private void ApplyPendingChanges()
 		{
+			// A changed layer collision matrix goes into every shape's filter.
+			int[] matrix = MatrixOf(Settings);
+			bool matrixChanged = false;
+			for (int i = 0; i < 32; i++)
+			{
+				if (matrix[i] != filteredMatrix[i])
+				{
+					filteredMatrix[i] = matrix[i];
+					matrixChanged = true;
+				}
+			}
+
 			foreach (Collider2D collider in colliders.ToArray())
 			{
 				if (collider.shapeDirty || collider.StaticPoseChanged())
 				{
 					DetachCollider(collider);
 					AttachCollider(collider);
+				}
+				else if (matrixChanged)
+				{
+					collider.Refilter();
 				}
 			}
 
@@ -765,143 +817,229 @@ namespace LELEngine
 			CreateJointsIfReady();
 			foreach (Joint2D joint in joints)
 			{
-				if (joint.joint != null && joint.runtimeDirty)
+				if (!joint.hasJoint)
+				{
+					continue;
+				}
+
+				if (joint.runtimeDirty)
 				{
 					joint.runtimeDirty = false;
 					joint.ApplyRuntimeSettings();
 				}
+
+				if (joint.breakForce != joint.appliedBreakForce || joint.breakTorque != joint.appliedBreakTorque)
+				{
+					b2Joint_SetForceThreshold(joint.joint, Threshold(joint.breakForce));
+					b2Joint_SetTorqueThreshold(joint.joint, Threshold(joint.breakTorque));
+					joint.appliedBreakForce = joint.breakForce;
+					joint.appliedBreakTorque = joint.breakTorque;
+				}
 			}
+		}
+
+		/// <summary>A break force or torque as a Box2D joint event threshold (infinity: never reported).</summary>
+		private static float Threshold(float value)
+		{
+			return float.IsNaN(value) || value >= float.MaxValue ? float.MaxValue : Math.Max(0f, value);
 		}
 
 		private void CreateJointsIfReady()
 		{
 			foreach (Joint2D joint in joints.ToArray())
 			{
-				if (!joint.dirty && joint.joint != null)
+				if (!joint.dirty && joint.hasJoint)
 				{
 					continue;
 				}
 
-				if (joint.joint != null)
+				if (joint.hasJoint)
 				{
-					World.DestroyJoint(joint.joint);
-					joint.joint = null;
+					if (b2Joint_IsValid(joint.joint))
+					{
+						b2DestroyJoint(joint.joint, true);
+					}
+
+					joint.joint = default;
 				}
 
-				Body bodyA = joint.attachedRigidbody?.body;
-				Body bodyB = joint.connectedBody != null ? joint.connectedBody.body : GroundBody;
-				if (bodyA == null || bodyB == null || bodyA == bodyB)
+				Rigidbody2D attached = joint.attachedRigidbody;
+				if (attached == null || !attached.hasBody)
 				{
 					continue;
 				}
 
-				JointDef def;
+				B2BodyId bodyA = attached.body;
+				B2BodyId bodyB = joint.connectedBody != null ? joint.connectedBody.body : GroundBody;
+				if (bodyB.index1 == 0 || bodyA == bodyB)
+				{
+					continue;
+				}
+
+				B2JointDef def = b2DefaultJointDef();
+				def.bodyIdA = bodyA;
+				def.bodyIdB = bodyB;
+				def.collideConnected = joint.enableCollision;
+				def.userData = B2UserData.Ref(joint);
+				// Box2D reports the joint in its joint events once its force or torque reaches these (see BreakJoints).
+				def.forceThreshold = Threshold(joint.breakForce);
+				def.torqueThreshold = Threshold(joint.breakTorque);
+				joint.appliedBreakForce = joint.breakForce;
+				joint.appliedBreakTorque = joint.breakTorque;
 				try
 				{
-					def = joint.CreateDefinition(bodyA, bodyB);
+					joint.joint = joint.CreateJoint(this, def);
 				}
 				catch (Exception e)
 				{
 					Debug.LogException(e, joint);
-					def = null;
+					joint.joint = default;
 				}
 
-				if (def == null)
+				if (!joint.hasJoint)
 				{
 					continue;
 				}
 
-				def.BodyA = bodyA;
-				def.BodyB = bodyB;
-				def.CollideConnected = joint.enableCollision;
-				def.UserData = joint;
-				joint.joint = World.CreateJoint(def);
 				joint.dirty = false;
 				joint.runtimeDirty = false;
 				joint.ApplyRuntimeSettings();
 			}
 		}
 
-		private void CheckJointBreaks(float deltaTime)
+		/// <summary>Joints whose force or torque reached their break threshold in the step (Box2D's joint events) break.</summary>
+		private void BreakJoints()
 		{
-			foreach (Joint2D joint in joints.ToArray())
-			{
-				if (joint.joint == null || (float.IsPositiveInfinity(joint.breakForce) && float.IsPositiveInfinity(joint.breakTorque)))
-				{
-					continue;
-				}
-
-				float inverseDt = 1f / deltaTime;
-				Vector2 force = Physics2DMath.ToEngine(joint.joint.GetReactionForce(inverseDt));
-				float torque = joint.joint.GetReactionTorque(inverseDt);
-				if (force.Length > joint.breakForce || Math.Abs(torque) > joint.breakTorque)
-				{
-					GameObject go = joint.gameObject;
-					RemoveJoint(joint);
-					if (go != null)
-					{
-						Send(go, PhysicsCallbacks.Mask.JointBreak, component => component.OnJointBreak2D(joint));
-					}
-
-					GameObject.Destroy(joint);
-				}
-			}
-		}
-
-		private void Record(Contact contact, bool begin)
-		{
-			var a = contact.FixtureA.UserData as Collider2D;
-			var b = contact.FixtureB.UserData as Collider2D;
-			if (a == null || b == null)
+			B2JointEvents jointEvents = b2World_GetJointEvents(World);
+			if (jointEvents.count == 0)
 			{
 				return;
 			}
 
-			bool sensor = contact.FixtureA.IsSensor || contact.FixtureB.IsSensor;
-			var record = new ContactEvent { A = a, B = b, Begin = begin, Sensor = sensor, Points = Array.Empty<ContactPoint2D>() };
-			if (!sensor)
+			var broken = new List<Joint2D>();
+			for (int i = 0; i < jointEvents.count; i++)
 			{
-				record.VelocityA = Physics2DMath.ToEngine(contact.FixtureA.Body.LinearVelocity);
-				record.VelocityB = Physics2DMath.ToEngine(contact.FixtureB.Body.LinearVelocity);
-				if (begin && (PhysicsCallbacks.AnyHandles(a.gameObject, PhysicsCallbacks.Mask.CollisionEnter) || PhysicsCallbacks.AnyHandles(b.gameObject, PhysicsCallbacks.Mask.CollisionEnter)))
+				Joint2D joint = jointEvents.jointEvents[i].userData.GetRef<Joint2D>();
+				if (joint != null && joint.hasJoint && joint.world == this && !broken.Contains(joint))
 				{
-					record.Points = ContactPoints(contact, a, b);
+					broken.Add(joint);
 				}
 			}
 
-			events.Add(record);
+			foreach (Joint2D joint in broken)
+			{
+				GameObject go = joint.gameObject;
+				RemoveJoint(joint);
+				if (go != null)
+				{
+					Send(go, PhysicsCallbacks.Mask.JointBreak, component => component.OnJointBreak2D(joint));
+				}
+
+				GameObject.Destroy(joint);
+			}
 		}
 
-		/// <summary>Contact points of a touching contact from A's view (normal from A to B).</summary>
-		private static ContactPoint2D[] ContactPoints(Contact contact, Collider2D a, Collider2D b)
+		/// <summary>Box2D's contact and sensor events of the step become the pending OnCollision / OnTrigger events.</summary>
+		private void CollectEvents()
 		{
-			int count = contact.Manifold.PointCount;
+			B2ContactEvents contacts = b2World_GetContactEvents(World);
+			for (int i = 0; i < contacts.beginCount; i++)
+			{
+				ref B2ContactBeginTouchEvent e = ref contacts.beginEvents[i];
+				Collider2D a = ColliderOf(e.shapeIdA);
+				Collider2D b = ColliderOf(e.shapeIdB);
+				if (a == null || b == null)
+				{
+					continue;
+				}
+
+				var record = new ContactEvent { A = a, B = b, Begin = true, Points = Array.Empty<ContactPoint2D>(), VelocityA = VelocityOf(a), VelocityB = VelocityOf(b) };
+				if ((PhysicsCallbacks.AnyHandles(a.gameObject, PhysicsCallbacks.Mask.CollisionEnter) || PhysicsCallbacks.AnyHandles(b.gameObject, PhysicsCallbacks.Mask.CollisionEnter))
+				    && b2Contact_IsValid(e.contactId))
+				{
+					B2ContactData data = b2Contact_GetData(e.contactId);
+					record.Points = ContactPoints(data.manifold, a, b, record.VelocityA, record.VelocityB);
+				}
+
+				events.Add(record);
+			}
+
+			for (int i = 0; i < contacts.endCount; i++)
+			{
+				ref B2ContactEndTouchEvent e = ref contacts.endEvents[i];
+				Collider2D a = ColliderOf(e.shapeIdA);
+				Collider2D b = ColliderOf(e.shapeIdB);
+				if (a == null || b == null)
+				{
+					continue;
+				}
+
+				events.Add(new ContactEvent { A = a, B = b, Begin = false, Points = Array.Empty<ContactPoint2D>(), VelocityA = VelocityOf(a), VelocityB = VelocityOf(b) });
+			}
+
+			B2SensorEvents sensors = b2World_GetSensorEvents(World);
+			for (int i = 0; i < sensors.beginCount; i++)
+			{
+				ref B2SensorBeginTouchEvent e = ref sensors.beginEvents[i];
+				AddSensorEvent(e.sensorShapeId, e.visitorShapeId, true);
+			}
+
+			for (int i = 0; i < sensors.endCount; i++)
+			{
+				ref B2SensorEndTouchEvent e = ref sensors.endEvents[i];
+				AddSensorEvent(e.sensorShapeId, e.visitorShapeId, false);
+			}
+		}
+
+		private void AddSensorEvent(B2ShapeId sensorShape, B2ShapeId visitorShape, bool begin)
+		{
+			Collider2D sensor = ColliderOf(sensorShape);
+			Collider2D visitor = ColliderOf(visitorShape);
+			// Box2D sensors also see static shapes; a trigger event (as in Unity) needs a dynamic body on one side.
+			if (sensor != null && visitor != null && sensor != visitor && (IsDynamic(sensor) || IsDynamic(visitor)))
+			{
+				events.Add(new ContactEvent { A = sensor, B = visitor, Begin = begin, Sensor = true, Points = Array.Empty<ContactPoint2D>() });
+			}
+		}
+
+		private static bool IsDynamic(Collider2D collider)
+		{
+			return collider.attachedRigidbody != null && collider.attachedRigidbody.bodyType == RigidbodyType2D.Dynamic;
+		}
+
+		/// <summary>The collider's body velocity at the start of the step (before the contact resolved it), zero for static ones.</summary>
+		private static Vector2 VelocityOf(Collider2D collider)
+		{
+			return collider.attachedRigidbody?.stepStartVelocity ?? Vector2.Zero;
+		}
+
+		/// <summary>Contact points of a touching contact from A's view (Box2D's normal points from A to B).</summary>
+		private static ContactPoint2D[] ContactPoints(in B2Manifold manifold, Collider2D a, Collider2D b, Vector2 velocityA, Vector2 velocityB)
+		{
+			int count = manifold.pointCount;
 			if (count <= 0)
 			{
 				return Array.Empty<ContactPoint2D>();
 			}
 
-			WorldManifold manifold;
-			contact.GetWorldManifold(out manifold);
-			Vector2 normal = Physics2DMath.ToEngine(manifold.Normal);
-			Vector2 velocityA = Physics2DMath.ToEngine(contact.FixtureA.Body.LinearVelocity);
-			Vector2 velocityB = Physics2DMath.ToEngine(contact.FixtureB.Body.LinearVelocity);
+			Vector2 normal = Physics2DMath.ToEngine(manifold.normal);
 			var points = new ContactPoint2D[count];
 			for (int i = 0; i < count; i++)
 			{
+				B2ManifoldPoint point = manifold.points[i];
 				points[i] = new ContactPoint2D
 				{
-					point = Physics2DMath.ToEngine(manifold.Points[i]),
+					point = Physics2DMath.ToEngine(point.point),
 					normal = normal,
-					separation = manifold.Separations[i],
-					normalImpulse = contact.Manifold.Points[i].NormalImpulse,
-					tangentImpulse = contact.Manifold.Points[i].TangentImpulse,
+					separation = point.separation,
+					normalImpulse = point.normalImpulse,
+					tangentImpulse = point.tangentImpulse,
 					collider = a,
 					otherCollider = b,
 					rigidbody = a.attachedRigidbody,
 					otherRigidbody = b.attachedRigidbody,
 					relativeVelocity = velocityB - velocityA,
-					enabled = contact.IsEnabled
+					enabled = true
 				};
 			}
 
@@ -937,49 +1075,156 @@ namespace LELEngine
 				}
 			}
 
-			// Stay callbacks for every touching contact.
-			stayA.Clear();
-			stayB.Clear();
-			foreach (Contact contact in World.ContactManager.ContactList)
+			DispatchStay();
+		}
+
+		/// <summary>
+		///     Stay callbacks: each collider whose object handles OnCollisionStay2D gets its touching contacts (from Box2D's
+		///     per-shape contact data), and each trigger reports what overlaps it to whichever side handles OnTriggerStay2D.
+		///     Skipped when nothing in the scene handles them.
+		/// </summary>
+		private void DispatchStay()
+		{
+			PhysicsCallbacks.Mask wanted = PhysicsCallbacks.Mask.None;
+			foreach (Behaviour component in Scene.ActiveBehaviours)
 			{
-				if (!contact.IsTouching || !contact.IsEnabled)
+				wanted |= PhysicsCallbacks.Of(component.GetType()) & (PhysicsCallbacks.Mask.CollisionStay | PhysicsCallbacks.Mask.TriggerStay);
+			}
+
+			if (wanted == PhysicsCallbacks.Mask.None)
+			{
+				return;
+			}
+
+			foreach (Collider2D collider in colliders.ToArray())
+			{
+				GameObject go = collider.gameObject;
+				if (go == null || collider.world != this)
 				{
 					continue;
 				}
 
-				var a = contact.FixtureA.UserData as Collider2D;
-				var b = contact.FixtureB.UserData as Collider2D;
-				if (a == null || b == null || a.gameObject == null || b.gameObject == null)
+				if (collider.isTrigger)
+				{
+					if ((wanted & PhysicsCallbacks.Mask.TriggerStay) != 0)
+					{
+						TriggerStay(collider);
+					}
+
+					continue;
+				}
+
+				if ((wanted & PhysicsCallbacks.Mask.CollisionStay) == 0 || !PhysicsCallbacks.AnyHandles(go, PhysicsCallbacks.Mask.CollisionStay))
 				{
 					continue;
 				}
 
-				bool sensor = contact.FixtureA.IsSensor || contact.FixtureB.IsSensor;
-				if (sensor)
+				foreach (B2ShapeId shape in collider.shapes.ToArray())
 				{
-					if (PhysicsCallbacks.AnyHandles(a.gameObject, PhysicsCallbacks.Mask.TriggerStay)) Send(a.gameObject, PhysicsCallbacks.Mask.TriggerStay, component => component.OnTriggerStay2D(b));
-					if (PhysicsCallbacks.AnyHandles(b.gameObject, PhysicsCallbacks.Mask.TriggerStay)) Send(b.gameObject, PhysicsCallbacks.Mask.TriggerStay, component => component.OnTriggerStay2D(a));
+					int count = ContactsOf(shape);
+					for (int i = 0; i < count; i++)
+					{
+						B2ContactData data = contactBuffer[i];
+						if (data.manifold.pointCount <= 0)
+						{
+							continue;
+						}
+
+						bool selfIsA = B2ShapeEquals(data.shapeIdA, shape);
+						Collider2D other = ColliderOf(selfIsA ? data.shapeIdB : data.shapeIdA);
+						if (other == null || other.gameObject == null)
+						{
+							continue;
+						}
+
+						Collider2D a = selfIsA ? collider : other;
+						Collider2D b = selfIsA ? other : collider;
+						var record = new ContactEvent { A = a, B = b, Begin = true, VelocityA = VelocityOf(a), VelocityB = VelocityOf(b) };
+						record.Points = ContactPoints(data.manifold, a, b, record.VelocityA, record.VelocityB);
+						Send(go, PhysicsCallbacks.Mask.CollisionStay, component => component.OnCollisionStay2D(BuildCollision(record, selfIsA)));
+					}
+				}
+			}
+		}
+
+		private void TriggerStay(Collider2D trigger)
+		{
+			bool handlesTrigger = PhysicsCallbacks.AnyHandles(trigger.gameObject, PhysicsCallbacks.Mask.TriggerStay);
+			foreach (B2ShapeId shape in trigger.shapes.ToArray())
+			{
+				if (!b2Shape_IsValid(shape))
+				{
 					continue;
 				}
 
-				bool handlesA = PhysicsCallbacks.AnyHandles(a.gameObject, PhysicsCallbacks.Mask.CollisionStay);
-				bool handlesB = PhysicsCallbacks.AnyHandles(b.gameObject, PhysicsCallbacks.Mask.CollisionStay);
-				if (!handlesA && !handlesB)
+				int capacity = b2Shape_GetSensorCapacity(shape);
+				if (capacity <= 0)
 				{
 					continue;
 				}
 
-				var record = new ContactEvent
+				if (visitorBuffer.Length < capacity)
 				{
-					A = a,
-					B = b,
-					Begin = true,
-					Points = ContactPoints(contact, a, b),
-					VelocityA = Physics2DMath.ToEngine(contact.FixtureA.Body.LinearVelocity),
-					VelocityB = Physics2DMath.ToEngine(contact.FixtureB.Body.LinearVelocity)
-				};
-				if (handlesA) Send(a.gameObject, PhysicsCallbacks.Mask.CollisionStay, component => component.OnCollisionStay2D(BuildCollision(record, true)));
-				if (handlesB) Send(b.gameObject, PhysicsCallbacks.Mask.CollisionStay, component => component.OnCollisionStay2D(BuildCollision(record, false)));
+					visitorBuffer = new B2ShapeId[Math.Max(capacity, visitorBuffer.Length * 2)];
+				}
+
+				int count = b2Shape_GetSensorData(shape, visitorBuffer, capacity);
+				for (int i = 0; i < count; i++)
+				{
+					Collider2D visitor = ColliderOf(visitorBuffer[i]);
+					if (visitor == null || visitor.gameObject == null || trigger.gameObject == null || !(IsDynamic(trigger) || IsDynamic(visitor)))
+					{
+						continue;
+					}
+
+					if (handlesTrigger) Send(trigger.gameObject, PhysicsCallbacks.Mask.TriggerStay, component => component.OnTriggerStay2D(visitor));
+					if (PhysicsCallbacks.AnyHandles(visitor.gameObject, PhysicsCallbacks.Mask.TriggerStay)) Send(visitor.gameObject, PhysicsCallbacks.Mask.TriggerStay, component => component.OnTriggerStay2D(trigger));
+				}
+			}
+		}
+
+		/// <summary>The shape's contacts into <see cref="contactBuffer" />; returns how many.</summary>
+		private int ContactsOf(B2ShapeId shape)
+		{
+			if (!b2Shape_IsValid(shape))
+			{
+				return 0;
+			}
+
+			int capacity = b2Shape_GetContactCapacity(shape);
+			if (capacity <= 0)
+			{
+				return 0;
+			}
+
+			if (contactBuffer.Length < capacity)
+			{
+				contactBuffer = new B2ContactData[Math.Max(capacity, contactBuffer.Length * 2)];
+			}
+
+			return b2Shape_GetContactData(shape, contactBuffer, capacity);
+		}
+
+		/// <summary>Destroyed shapes are remembered for the step after their destruction (when their end events arrive).</summary>
+		private void ForgetDestroyedShapes()
+		{
+			if (destroyedShapes.Count == 0)
+			{
+				return;
+			}
+
+			expired.Clear();
+			foreach (KeyValuePair<long, (Collider2D collider, int step)> entry in destroyedShapes)
+			{
+				if (entry.Value.step < stepIndex)
+				{
+					expired.Add(entry.Key);
+				}
+			}
+
+			foreach (long key in expired)
+			{
+				destroyedShapes.Remove(key);
 			}
 		}
 
@@ -1009,7 +1254,7 @@ namespace LELEngine
 				relativeVelocity = fromA ? e.VelocityB - e.VelocityA : e.VelocityA - e.VelocityB
 			};
 
-			if (e.Points.Length == 0)
+			if (e.Points == null || e.Points.Length == 0)
 			{
 				return collision;
 			}
@@ -1067,74 +1312,119 @@ namespace LELEngine
 
 		#region NestedTypes
 
-		private sealed class QueryCollector : IQueryCallback
+		/// <summary>
+		///     State of the running query, handed to Box2D's callbacks as their context (one per world, reused: queries
+		///     allocate no delegates or closures).
+		/// </summary>
+		private sealed class QueryState
 		{
-			private readonly PhysicsScene2D scene;
-			private readonly int layerMask;
-			private readonly bool triggers;
-			private readonly Func<Fixture, bool> visit;
+			public PhysicsScene2D Scene;
+			private bool triggers;
+			private bool startInColliders;
+			private List<Collider2D> colliderResults;
+			private List<RaycastHit2D> hitResults;
+			private bool closestOnly;
+			private bool testPoint;
+			private bool shapeCast;
+			private B2Vector2 point;
+			private float distance;
+			private Vector2 origin;
+			private Vector2 direction;
 
-			public QueryCollector(PhysicsScene2D scene, int layerMask, bool triggers, Func<Fixture, bool> visit)
+			public void BeginOverlap(int layerMask, bool triggers, List<Collider2D> results, B2Vector2 point, bool testPoint)
 			{
-				this.scene = scene;
-				this.layerMask = layerMask;
 				this.triggers = triggers;
-				this.visit = visit;
+				colliderResults = results;
+				this.point = point;
+				this.testPoint = testPoint;
 			}
 
-			public bool QueryCallback(Fixture fixture)
+			public void BeginCast(int layerMask, bool triggers, bool startInColliders, List<RaycastHit2D> results, bool closestOnly, float distance, Vector2 origin, Vector2 direction, bool shapeCast)
 			{
-				return !scene.Accepts(fixture, layerMask, triggers) || visit(fixture);
-			}
-		}
-
-		private sealed class RayCollector : IRayCastCallback
-		{
-			private readonly PhysicsScene2D scene;
-			private readonly int layerMask;
-			private readonly bool triggers;
-			private readonly List<RaycastHit2D> results;
-			private readonly bool closestOnly;
-			private readonly float distance;
-			private readonly Vector2 origin;
-
-			public RayCollector(PhysicsScene2D scene, int layerMask, bool triggers, List<RaycastHit2D> results, bool closestOnly, float distance, Vector2 origin)
-			{
-				this.scene = scene;
-				this.layerMask = layerMask;
 				this.triggers = triggers;
-				this.results = results;
+				this.startInColliders = startInColliders;
+				hitResults = results;
 				this.closestOnly = closestOnly;
 				this.distance = distance;
 				this.origin = origin;
+				this.direction = direction;
+				this.shapeCast = shapeCast;
 			}
 
-			public float RayCastCallback(Fixture fixture, in B2Vector2 point, in B2Vector2 normal, float fraction)
+			public void End()
 			{
-				if (!scene.Accepts(fixture, layerMask, triggers))
+				colliderResults = null;
+				hitResults = null;
+			}
+
+			public bool OnOverlap(B2ShapeId shape)
+			{
+				Collider2D collider = Accept(shape);
+				if (collider == null || colliderResults.Contains(collider))
+				{
+					return true;
+				}
+
+				if (!testPoint || b2Shape_TestPoint(shape, point))
+				{
+					colliderResults.Add(collider);
+				}
+
+				return true;
+			}
+
+			public float OnCast(B2ShapeId shape, B2Vector2 hitPoint, B2Vector2 normal, float fraction)
+			{
+				Collider2D collider = Accept(shape);
+				if (collider == null)
 				{
 					return -1f;
 				}
 
+				// Box2D reports a cast that starts inside a shape as a hit at fraction 0 without a normal.
+				Vector2 hitNormal = Physics2DMath.ToEngine(normal);
+				if (fraction <= 0f && hitNormal == Vector2.Zero)
+				{
+					if (!startInColliders)
+					{
+						return -1f;
+					}
+
+					hitNormal = -direction;
+				}
+
+				Vector2 p = Physics2DMath.ToEngine(hitPoint);
 				var hit = new RaycastHit2D
 				{
-					collider = (Collider2D)fixture.UserData,
-					point = Physics2DMath.ToEngine(point),
-					normal = Physics2DMath.ToEngine(normal),
+					collider = collider,
+					point = p,
+					normal = hitNormal,
 					fraction = fraction,
 					distance = fraction * distance,
-					centroid = Physics2DMath.ToEngine(point)
+					centroid = shapeCast ? origin + direction * (fraction * distance) : p
 				};
 
 				if (closestOnly)
 				{
-					results.Clear();
-					results.Add(hit);
+					hitResults.Clear();
+					hitResults.Add(hit);
 					return fraction;
 				}
 
-				results.Add(hit);
+				hitResults.Add(hit);
 				return 1f;
+			}
+
+			/// <summary>The shape's collider when the query may report it (layers are filtered by Box2D already).</summary>
+			private Collider2D Accept(B2ShapeId shape)
+			{
+				Collider2D collider = b2Shape_GetUserData(shape).GetRef<Collider2D>();
+				if (collider == null || collider.destroyed || collider.gameObject == null)
+				{
+					return null;
+				}
+
+				return !triggers && b2Shape_IsSensor(shape) ? null : collider;
 			}
 		}
 

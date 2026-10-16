@@ -5,10 +5,12 @@ using OpenTK.Mathematics;
 namespace LELEngine
 {
 	/// <summary>
-	///     Per-scene look: environment (ambient, specular, background, exposure), shadows and global illumination.
-	///     Saved with the scene. <see cref="Activate" /> makes these objects the live settings
-	///     (<see cref="Lighting.Environment" />, <see cref="Lighting.Shadows" />, <see cref="Lighting.GI" />), so
-	///     edits made at runtime or in the editor apply to the scene directly.
+	///     Per-scene lighting, saved with the scene: the environment (ambient, specular, background, skybox, exposure),
+	///     the reach of the shadow map and where and how strongly global illumination lights the scene. How shadows
+	///     and GI are computed (quality, GI method and its tunables) is project-wide (<see cref="ProjectSettings" />).
+	///     <see cref="Activate" /> makes these objects the live settings (<see cref="Lighting.Environment" />,
+	///     <see cref="Lighting.SceneShadows" />, <see cref="Lighting.SceneGI" />), so edits made at runtime or in the
+	///     editor apply to the scene directly.
 	/// </summary>
 	[Serializable]
 	public sealed class SceneSettings
@@ -16,9 +18,8 @@ namespace LELEngine
 		#region PublicFields
 
 		public EnvironmentSettings Environment = new EnvironmentSettings();
-		public ShadowSettings Shadows = new ShadowSettings();
-		public GlobalIlluminationSettings GI = new GlobalIlluminationSettings();
-		public Physics2DSettings Physics2D = new Physics2DSettings();
+		public SceneShadowSettings Shadows = new SceneShadowSettings();
+		public SceneGISettings GI = new SceneGISettings();
 
 		#endregion
 
@@ -27,94 +28,61 @@ namespace LELEngine
 		public void Activate()
 		{
 			Lighting.Environment = Environment;
-			Lighting.Shadows = Shadows;
-			Lighting.GI = GI;
-			GI.InvalidateStatic();
+			Lighting.SceneShadows = Shadows;
+			Lighting.SceneGI = GI;
+			Lighting.GI.InvalidateStatic();
 		}
 
 		#endregion
 	}
 
-	/// <summary>2D physics of the scene (see <see cref="LELEngine.Physics2D" />): gravity, solver iterations, query options and the layer collision matrix.</summary>
+	/// <summary>The shadow map's reach in the scene (its resolution and biases are project-wide, see <see cref="ShadowSettings" />).</summary>
 	[Serializable]
-	public sealed class Physics2DSettings
+	public sealed class SceneShadowSettings
 	{
 		#region PublicFields
 
-		public Vector2 Gravity = new Vector2(0f, -9.81f);
+		/// <summary>Half extent of the orthographic shadow frustum around the camera, in world units.</summary>
+		public float Distance = 60f;
 
-		[Range(1, 50)] public int VelocityIterations = 8;
-		[Range(1, 50)] public int PositionIterations = 3;
-
-		/// <summary>Queries (raycasts, overlaps) report trigger colliders.</summary>
-		public bool QueriesHitTriggers = true;
-
-		/// <summary>Raycasts starting inside a collider report it.</summary>
-		public bool QueriesStartInColliders = true;
-
-		/// <summary>Friction and bounciness of colliders without a material.</summary>
-		[Range(0f, 1f)] public float DefaultFriction = 0.4f;
-		[Range(0f, 1f)] public float DefaultBounciness;
-
-		/// <summary>Per layer: the mask of layers it collides with (bit n = layer n); all by default.</summary>
-		[HideInInspector] public int[] LayerCollisionMatrix = DefaultMatrix();
+		/// <summary>Half depth range of the shadow frustum along the light direction.</summary>
+		public float DepthRange = 200f;
 
 		#endregion
+	}
 
-		#region PublicMethods
+	/// <summary>
+	///     Global illumination in the scene: whether it is on, the volume it covers and how strongly it lights (the
+	///     method and its tunables are project-wide, see <see cref="GlobalIlluminationSettings" />).
+	/// </summary>
+	[Serializable]
+	public sealed class SceneGISettings
+	{
+		#region PublicFields
 
-		public bool GetIgnoreLayerCollision(int layer1, int layer2)
-		{
-			EnsureMatrix();
-			return (LayerCollisionMatrix[layer1 & 31] & (1 << (layer2 & 31))) == 0;
-		}
+		public bool Enabled = true;
 
-		public void IgnoreLayerCollision(int layer1, int layer2, bool ignore)
-		{
-			EnsureMatrix();
-			int a = layer1 & 31;
-			int b = layer2 & 31;
-			if (ignore)
-			{
-				LayerCollisionMatrix[a] &= ~(1 << b);
-				LayerCollisionMatrix[b] &= ~(1 << a);
-			}
-			else
-			{
-				LayerCollisionMatrix[a] |= 1 << b;
-				LayerCollisionMatrix[b] |= 1 << a;
-			}
-		}
+		/// <summary>World-space edge length of the cubic GI volume.</summary>
+		public float GridSize = 32f;
 
-		/// <summary>The mask of layers a layer collides with.</summary>
-		public int GetLayerCollisionMask(int layer)
-		{
-			EnsureMatrix();
-			return LayerCollisionMatrix[layer & 31];
-		}
+		/// <summary>Volume center when <see cref="FollowCamera" /> is off.</summary>
+		public Vector3 Center = Vector3.Zero;
 
-		#endregion
+		/// <summary>Center the volume on the camera (snapped to voxels) instead of <see cref="Center" />.</summary>
+		public bool FollowCamera;
 
-		#region PrivateMethods
+		public float DiffuseStrength = 1f;
+		public float SpecularStrength = 1f;
+		public float OcclusionStrength = 1f;
 
-		private static int[] DefaultMatrix()
-		{
-			var matrix = new int[32];
-			for (int i = 0; i < 32; i++)
-			{
-				matrix[i] = -1;
-			}
+		/// <summary>
+		///     Weight of indirect light fed back from the previous frame's radiance volume when lighting voxels.
+		///     1 gives multi-bounce lighting converging over a few frames; 0 keeps a single bounce.
+		/// </summary>
+		public float BounceStrength = 1f;
 
-			return matrix;
-		}
-
-		private void EnsureMatrix()
-		{
-			if (LayerCollisionMatrix == null || LayerCollisionMatrix.Length != 32)
-			{
-				LayerCollisionMatrix = DefaultMatrix();
-			}
-		}
+		/// <summary>Radiance from outside the scene seen by cones that escape (linear RGB).</summary>
+		public Vector3 SkyRadiance = Vector3.Zero;
 
 		#endregion
 	}

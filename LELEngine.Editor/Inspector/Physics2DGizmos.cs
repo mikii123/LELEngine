@@ -69,32 +69,33 @@ namespace LELEngine.Editor
 		private static void DrawCollider(Collider2D collider)
 		{
 			Transform transform = collider.transform;
+			PlaneBasis plane = collider.Plane;
 			Color4 color = collider.isTrigger ? TriggerColor : ColliderColor;
 			switch (collider)
 			{
 				case BoxCollider2D box:
 				{
 					Vector2 half = box.size * 0.5f;
-					DrawPolygon(transform, collider.offset, new[] { new Vector2(-half.X, -half.Y), new Vector2(half.X, -half.Y), new Vector2(half.X, half.Y), new Vector2(-half.X, half.Y) }, color);
+					DrawPolygon(plane, transform, collider.offset, new[] { new Vector2(-half.X, -half.Y), new Vector2(half.X, -half.Y), new Vector2(half.X, half.Y), new Vector2(-half.X, half.Y) }, color);
 					break;
 				}
 				case CircleCollider2D circle:
-					DrawCircle(transform, collider.offset, circle.radius, color);
+					DrawCircle(plane, transform, collider.offset, circle.radius, color);
 					break;
 				case CapsuleCollider2D capsule:
-					DrawCapsule(transform, collider.offset, capsule.size, capsule.direction, color);
+					DrawCapsule(plane, transform, collider.offset, capsule.size, capsule.direction, color);
 					break;
 				case PolygonCollider2D polygon:
 					if (polygon.points != null && polygon.points.Count >= 2)
 					{
-						DrawPolygon(transform, collider.offset, polygon.points.ToArray(), color);
+						DrawPolygon(plane, transform, collider.offset, polygon.points.ToArray(), color);
 					}
 
 					break;
 				case EdgeCollider2D edge:
 					if (edge.points != null && edge.points.Count >= 2)
 					{
-						DrawPath(transform, collider.offset, edge.points, color, false);
+						DrawPath(plane, transform, collider.offset, edge.points, color, false);
 					}
 
 					break;
@@ -103,17 +104,16 @@ namespace LELEngine.Editor
 
 		private static void DrawJoint(AnchoredJoint2D joint)
 		{
-			Vector3 scale = joint.transform.lossyScale;
-			Vector2 anchor = joint.anchor * new Vector2(scale.X, scale.Y);
-			Vector3 world = joint.transform.position + joint.transform.rotation * new Vector3(anchor.X, anchor.Y, 0f);
-			DrawCross(world, 0.12f, JointColor);
+			PlaneBasis plane = joint.world?.Plane ?? PlaneBasis.Current;
+			Vector2 anchor = joint.anchor * plane.ScaleOf(joint.transform.lossyScale);
+			Vector3 world = joint.transform.position + joint.transform.rotation * plane.FromPlane(anchor);
+			DrawCross(plane, world, 0.12f, JointColor);
 
 			Vector3 other;
 			if (joint.connectedBody != null)
 			{
-				Vector3 otherScale = joint.connectedBody.transform.lossyScale;
-				Vector2 connected = joint.connectedAnchor * new Vector2(otherScale.X, otherScale.Y);
-				other = joint.connectedBody.transform.position + joint.connectedBody.transform.rotation * new Vector3(connected.X, connected.Y, 0f);
+				Vector2 connected = joint.connectedAnchor * plane.ScaleOf(joint.connectedBody.transform.lossyScale);
+				other = joint.connectedBody.transform.position + joint.connectedBody.transform.rotation * plane.FromPlane(connected);
 			}
 			else if (joint.autoConfigureConnectedAnchor)
 			{
@@ -121,30 +121,31 @@ namespace LELEngine.Editor
 			}
 			else
 			{
-				other = new Vector3(joint.connectedAnchor.X, joint.connectedAnchor.Y, world.Z);
+				other = plane.FromPlane(joint.connectedAnchor, world);
 			}
 
-			DrawCross(other, 0.12f, JointColor);
+			DrawCross(plane, other, 0.12f, JointColor);
 			DebugDraw.Line(world, other, JointColor);
 		}
 
-		private static void DrawPolygon(Transform transform, Vector2 offset, Vector2[] points, Color4 color)
+		private static void DrawPolygon(PlaneBasis plane, Transform transform, Vector2 offset, Vector2[] points, Color4 color)
 		{
-			DrawPath(transform, offset, points, color, true);
+			DrawPath(plane, transform, offset, points, color, true);
 		}
 
-		private static void DrawPath(Transform transform, Vector2 offset, IReadOnlyList<Vector2> points, Color4 color, bool closed)
+		/// <summary>A collider-local 2D path: the plane maps it into the object's local space, the transform into the world.</summary>
+		private static void DrawPath(PlaneBasis plane, Transform transform, Vector2 offset, IReadOnlyList<Vector2> points, Color4 color, bool closed)
 		{
 			int count = closed ? points.Count : points.Count - 1;
 			for (int i = 0; i < count; i++)
 			{
-				Vector3 a = transform.TransformPoint(new Vector3(points[i].X + offset.X, points[i].Y + offset.Y, 0f));
-				Vector3 b = transform.TransformPoint(new Vector3(points[(i + 1) % points.Count].X + offset.X, points[(i + 1) % points.Count].Y + offset.Y, 0f));
+				Vector3 a = transform.TransformPoint(plane.FromPlane(points[i] + offset));
+				Vector3 b = transform.TransformPoint(plane.FromPlane(points[(i + 1) % points.Count] + offset));
 				DebugDraw.Line(a, b, color);
 			}
 		}
 
-		private static void DrawCircle(Transform transform, Vector2 offset, float radius, Color4 color)
+		private static void DrawCircle(PlaneBasis plane, Transform transform, Vector2 offset, float radius, Color4 color)
 		{
 			const int segments = 32;
 			var points = new Vector2[segments];
@@ -154,10 +155,10 @@ namespace LELEngine.Editor
 				points[i] = new Vector2(MathF.Cos(a) * radius, MathF.Sin(a) * radius);
 			}
 
-			DrawPolygon(transform, offset, points, color);
+			DrawPolygon(plane, transform, offset, points, color);
 		}
 
-		private static void DrawCapsule(Transform transform, Vector2 offset, Vector2 size, CapsuleDirection2D direction, Color4 color)
+		private static void DrawCapsule(PlaneBasis plane, Transform transform, Vector2 offset, Vector2 size, CapsuleDirection2D direction, Color4 color)
 		{
 			bool vertical = direction == CapsuleDirection2D.Vertical;
 			float radius = (vertical ? size.X : size.Y) * 0.5f;
@@ -176,13 +177,13 @@ namespace LELEngine.Editor
 				points.Add(vertical ? new Vector2(MathF.Cos(a) * radius, MathF.Sin(a) * radius - half) : new Vector2(MathF.Cos(a + MathF.PI * 0.5f) * radius + half, MathF.Sin(a + MathF.PI * 0.5f) * radius));
 			}
 
-			DrawPolygon(transform, offset, points.ToArray(), color);
+			DrawPolygon(plane, transform, offset, points.ToArray(), color);
 		}
 
-		private static void DrawCross(Vector3 center, float size, Color4 color)
+		private static void DrawCross(PlaneBasis plane, Vector3 center, float size, Color4 color)
 		{
-			DebugDraw.Line(center + new Vector3(-size, 0f, 0f), center + new Vector3(size, 0f, 0f), color);
-			DebugDraw.Line(center + new Vector3(0f, -size, 0f), center + new Vector3(0f, size, 0f), color);
+			DebugDraw.Line(center - plane.U * size, center + plane.U * size, color);
+			DebugDraw.Line(center - plane.V * size, center + plane.V * size, color);
 		}
 
 		#endregion

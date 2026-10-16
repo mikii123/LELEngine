@@ -1,17 +1,20 @@
 using System;
 using System.Collections.Generic;
-using Box2DSharp.Collision.Shapes;
-using Box2DSharp.Dynamics;
+using Box2D.NET;
 using OpenTK.Mathematics;
-using B2Vector2 = System.Numerics.Vector2;
+using static Box2D.NET.B2Bodies;
+using static Box2D.NET.B2Ids;
+using static Box2D.NET.B2MathFunction;
+using B2Vector2 = Box2D.NET.B2Vec2;
 
 namespace LELEngine
 {
 	/// <summary>
 	///     A body in the scene's 2D physics world (Box2D): the colliders of this object and of its children without a
 	///     rigidbody of their own become its shapes. Dynamic bodies move under forces, gravity and collisions in the
-	///     XY plane; the transform follows the body after every physics step (its Z position and non-Z rotation are
-	///     kept). Moving the transform directly teleports the body. API modelled on Unity's Rigidbody2D.
+	///     project's simulation plane (XY or XZ, see <see cref="Physics2DSettings.SimulationPlane" />); the transform
+	///     follows the body after every physics step (its position along the plane's normal and its rotation about
+	///     other axes are kept). Moving the transform directly teleports the body. API modelled on Unity's Rigidbody2D.
 	/// </summary>
 	public sealed class Rigidbody2D : Behaviour
 	{
@@ -44,15 +47,14 @@ namespace LELEngine
 		/// <summary>Linear velocity in units per second.</summary>
 		public Vector2 velocity
 		{
-			get => body != null ? Physics2DMath.ToEngine(body.LinearVelocity) : initialVelocity;
+			get => hasBody ? Physics2DMath.ToEngine(b2Body_GetLinearVelocity(body)) : initialVelocity;
 			set
 			{
 				initialVelocity = value;
-				if (body != null)
+				if (hasBody)
 				{
-					B2Vector2 v = Physics2DMath.ToB2(value);
-					body.SetLinearVelocity(ref v);
-					body.IsAwake = true;
+					b2Body_SetLinearVelocity(body, Physics2DMath.ToB2(value));
+					b2Body_SetAwake(body, true);
 				}
 			}
 		}
@@ -87,67 +89,68 @@ namespace LELEngine
 		/// <summary>Angular velocity in degrees per second.</summary>
 		public float angularVelocity
 		{
-			get => body != null ? body.AngularVelocity * Physics2DMath.Rad2Deg : initialAngularVelocity;
+			get => hasBody ? b2Body_GetAngularVelocity(body) * Physics2DMath.Rad2Deg : initialAngularVelocity;
 			set
 			{
 				initialAngularVelocity = value;
-				if (body != null)
+				if (hasBody)
 				{
-					body.SetAngularVelocity(value * Physics2DMath.Deg2Rad);
-					body.IsAwake = true;
+					b2Body_SetAngularVelocity(body, value * Physics2DMath.Deg2Rad);
+					b2Body_SetAwake(body, true);
 				}
 			}
 		}
 
-		/// <summary>Position of the body (its transform's XY); setting it teleports.</summary>
+		/// <summary>Position of the body (its transform's position in the simulation plane); setting it teleports.</summary>
 		public Vector2 position
 		{
-			get => body != null ? Physics2DMath.ToEngine(body.GetPosition()) : transform != null ? transform.position.Xy : Vector2.Zero;
+			get => hasBody ? Physics2DMath.ToEngine(b2Body_GetPosition(body)) : transform != null ? Plane.ToPlane(transform.position) : Vector2.Zero;
 			set
 			{
-				if (body != null)
+				if (hasBody)
 				{
-					B2Vector2 p = Physics2DMath.ToB2(value);
-					body.SetTransform(ref p, body.GetAngle());
-					WriteTransform(value, body.GetAngle());
+					B2Rot q = b2Body_GetRotation(body);
+					b2Body_SetTransform(body, Physics2DMath.ToB2(value), q);
+					float angle = b2Rot_GetAngle(q);
+					WriteTransform(value, angle);
 					currentPosition = previousPosition = value;
 				}
 				else if (transform != null)
 				{
-					transform.position = new Vector3(value.X, value.Y, transform.position.Z);
+					transform.position = Plane.FromPlane(value, transform.position);
 				}
 			}
 		}
 
-		/// <summary>Rotation about Z in degrees.</summary>
+		/// <summary>Rotation in the simulation plane in degrees (about Z in the XY plane, about -Y in the XZ plane).</summary>
 		public float rotation
 		{
-			get => body != null ? body.GetAngle() * Physics2DMath.Rad2Deg : transform != null ? Physics2DMath.AngleOf(transform.rotation) * Physics2DMath.Rad2Deg : 0f;
+			get => hasBody ? b2Rot_GetAngle(b2Body_GetRotation(body)) * Physics2DMath.Rad2Deg : transform != null ? Plane.AngleOf(transform.rotation) * Physics2DMath.Rad2Deg : 0f;
 			set
 			{
 				float angle = value * Physics2DMath.Deg2Rad;
-				if (body != null)
+				if (hasBody)
 				{
-					B2Vector2 p = body.GetPosition();
-					body.SetTransform(ref p, angle);
+					B2Vector2 p = b2Body_GetPosition(body);
+					b2Body_SetTransform(body, p, b2MakeRot(angle));
 					WriteTransform(Physics2DMath.ToEngine(p), angle);
 					currentAngle = previousAngle = angle;
 				}
 				else if (transform != null)
 				{
-					baseRotation = Physics2DMath.RemoveZ(transform.rotation);
-					transform.rotation = Physics2DMath.WithZ(baseRotation, angle);
+					baseRotation = Plane.RemoveTurn(transform.rotation);
+					transform.rotation = Plane.WithTurn(baseRotation, angle);
 				}
 			}
 		}
 
-		public float inertia => body?.Inertia ?? 0f;
-		public Vector2 worldCenterOfMass => body != null ? Physics2DMath.ToEngine(body.GetWorldCenter()) : position;
+		public float inertia => hasBody ? b2Body_GetRotationalInertia(body) : 0f;
+		public Vector2 worldCenterOfMass => hasBody ? Physics2DMath.ToEngine(b2Body_GetWorldCenterOfMass(body)) : position;
 
 		/// <summary>Center of mass in the body's local space; set to override the computed one.</summary>
 		public Vector2 centerOfMass
 		{
-			get => body != null ? Physics2DMath.ToEngine(body.GetLocalCenter()) : customCenter ?? Vector2.Zero;
+			get => hasBody ? Physics2DMath.ToEngine(b2Body_GetLocalCenterOfMass(body)) : customCenter ?? Vector2.Zero;
 			set
 			{
 				customCenter = value;
@@ -189,15 +192,21 @@ namespace LELEngine
 			}
 		}
 
-		/// <summary>The Box2D body, for code that needs the engine underneath (null while not simulated).</summary>
-		public Body Box2DBody => body;
+		/// <summary>The Box2D body, for code that needs the engine underneath (a null id while not simulated).</summary>
+		public B2BodyId Box2DBody => body;
 
 		#endregion
 
 		#region InternalFields
 
-		internal Body body;
+		internal B2BodyId body;
 		internal PhysicsScene2D world;
+
+		/// <summary>True while the Box2D body exists.</summary>
+		internal bool hasBody => body.index1 != 0;
+
+		/// <summary>Linear velocity at the start of the last step: the "before the hit" velocity collision callbacks report.</summary>
+		internal Vector2 stepStartVelocity;
 
 		#endregion
 
@@ -215,11 +224,11 @@ namespace LELEngine
 		private Vector2 currentPosition;
 		private float previousAngle;
 		private float currentAngle;
-		private Vector2 frozenPosition;
 		private Vector2? moveTarget;
 		private float? moveAngle;
-		private bool gravityScaleApplied;
 		private readonly List<Collider2D> colliderBuffer = new List<Collider2D>();
+
+		private PlaneBasis Plane => world?.Plane ?? PlaneBasis.Current;
 
 		#endregion
 
@@ -256,78 +265,77 @@ namespace LELEngine
 
 		public bool IsSleeping()
 		{
-			return body != null && !body.IsAwake;
+			return hasBody && !b2Body_IsAwake(body);
 		}
 
 		public bool IsAwake()
 		{
-			return body != null && body.IsAwake;
+			return hasBody && b2Body_IsAwake(body);
 		}
 
 		public void Sleep()
 		{
-			if (body != null)
+			if (hasBody)
 			{
-				body.IsAwake = false;
+				b2Body_SetAwake(body, false);
 			}
 		}
 
 		public void WakeUp()
 		{
-			if (body != null)
+			if (hasBody)
 			{
-				body.IsAwake = true;
+				b2Body_SetAwake(body, true);
 			}
 		}
 
 		public void AddForce(Vector2 force, ForceMode2D mode = ForceMode2D.Force)
 		{
-			if (body == null)
+			if (!hasBody)
 			{
 				return;
 			}
 
 			B2Vector2 f = Physics2DMath.ToB2(force);
-			if (mode == ForceMode2D.Impulse) body.ApplyLinearImpulseToCenter(ref f, true);
-			else body.ApplyForceToCenter(ref f, true);
+			if (mode == ForceMode2D.Impulse) b2Body_ApplyLinearImpulseToCenter(body, f, true);
+			else b2Body_ApplyForceToCenter(body, f, true);
 		}
 
 		public void AddForceAtPosition(Vector2 force, Vector2 worldPosition, ForceMode2D mode = ForceMode2D.Force)
 		{
-			if (body == null)
+			if (!hasBody)
 			{
 				return;
 			}
 
 			B2Vector2 f = Physics2DMath.ToB2(force);
 			B2Vector2 p = Physics2DMath.ToB2(worldPosition);
-			if (mode == ForceMode2D.Impulse) body.ApplyLinearImpulse(ref f, ref p, true);
-			else body.ApplyForce(ref f, ref p, true);
+			if (mode == ForceMode2D.Impulse) b2Body_ApplyLinearImpulse(body, f, p, true);
+			else b2Body_ApplyForce(body, f, p, true);
 		}
 
 		/// <summary>Force in the body's local axes.</summary>
 		public void AddRelativeForce(Vector2 relativeForce, ForceMode2D mode = ForceMode2D.Force)
 		{
-			if (body == null)
+			if (!hasBody)
 			{
 				return;
 			}
 
-			B2Vector2 local = Physics2DMath.ToB2(relativeForce);
-			B2Vector2 f = body.GetWorldVector(ref local);
-			if (mode == ForceMode2D.Impulse) body.ApplyLinearImpulseToCenter(ref f, true);
-			else body.ApplyForceToCenter(ref f, true);
+			B2Vector2 f = b2Body_GetWorldVector(body, Physics2DMath.ToB2(relativeForce));
+			if (mode == ForceMode2D.Impulse) b2Body_ApplyLinearImpulseToCenter(body, f, true);
+			else b2Body_ApplyForceToCenter(body, f, true);
 		}
 
 		public void AddTorque(float torque, ForceMode2D mode = ForceMode2D.Force)
 		{
-			if (body == null)
+			if (!hasBody)
 			{
 				return;
 			}
 
-			if (mode == ForceMode2D.Impulse) body.ApplyAngularImpulse(torque, true);
-			else body.ApplyTorque(torque, true);
+			if (mode == ForceMode2D.Impulse) b2Body_ApplyAngularImpulse(body, torque, true);
+			else b2Body_ApplyTorque(body, torque, true);
 		}
 
 		/// <summary>Moves a kinematic body to the position during the next step (dynamic bodies teleport).</summary>
@@ -359,69 +367,33 @@ namespace LELEngine
 		/// <summary>A world point in the body's local space.</summary>
 		public Vector2 GetPoint(Vector2 worldPoint)
 		{
-			if (body == null)
-			{
-				return worldPoint - position;
-			}
-
-			B2Vector2 p = Physics2DMath.ToB2(worldPoint);
-			return Physics2DMath.ToEngine(body.GetLocalPoint(ref p));
+			return hasBody ? Physics2DMath.ToEngine(b2Body_GetLocalPoint(body, Physics2DMath.ToB2(worldPoint))) : worldPoint - position;
 		}
 
 		/// <summary>A local point in world space.</summary>
 		public Vector2 GetRelativePoint(Vector2 localPoint)
 		{
-			if (body == null)
-			{
-				return position + localPoint;
-			}
-
-			B2Vector2 p = Physics2DMath.ToB2(localPoint);
-			return Physics2DMath.ToEngine(body.GetWorldPoint(ref p));
+			return hasBody ? Physics2DMath.ToEngine(b2Body_GetWorldPoint(body, Physics2DMath.ToB2(localPoint))) : position + localPoint;
 		}
 
 		public Vector2 GetVector(Vector2 worldVector)
 		{
-			if (body == null)
-			{
-				return worldVector;
-			}
-
-			B2Vector2 v = Physics2DMath.ToB2(worldVector);
-			return Physics2DMath.ToEngine(body.GetLocalVector(ref v));
+			return hasBody ? Physics2DMath.ToEngine(b2Body_GetLocalVector(body, Physics2DMath.ToB2(worldVector))) : worldVector;
 		}
 
 		public Vector2 GetRelativeVector(Vector2 localVector)
 		{
-			if (body == null)
-			{
-				return localVector;
-			}
-
-			B2Vector2 v = Physics2DMath.ToB2(localVector);
-			return Physics2DMath.ToEngine(body.GetWorldVector(ref v));
+			return hasBody ? Physics2DMath.ToEngine(b2Body_GetWorldVector(body, Physics2DMath.ToB2(localVector))) : localVector;
 		}
 
 		public Vector2 GetPointVelocity(Vector2 worldPoint)
 		{
-			if (body == null)
-			{
-				return velocity;
-			}
-
-			B2Vector2 p = Physics2DMath.ToB2(worldPoint);
-			return Physics2DMath.ToEngine(body.GetLinearVelocityFromWorldPoint(ref p));
+			return hasBody ? Physics2DMath.ToEngine(b2Body_GetWorldPointVelocity(body, Physics2DMath.ToB2(worldPoint))) : velocity;
 		}
 
 		public Vector2 GetRelativePointVelocity(Vector2 localPoint)
 		{
-			if (body == null)
-			{
-				return velocity;
-			}
-
-			B2Vector2 p = Physics2DMath.ToB2(localPoint);
-			return Physics2DMath.ToEngine(body.GetLinearVelocityFromLocalPoint(ref p));
+			return hasBody ? Physics2DMath.ToEngine(b2Body_GetLocalPointVelocity(body, Physics2DMath.ToB2(localPoint))) : velocity;
 		}
 
 		public int GetAttachedColliders(List<Collider2D> results)
@@ -509,52 +481,52 @@ namespace LELEngine
 
 		internal void OnBodyCreated(Vector2 position, float angle)
 		{
-			baseRotation = Physics2DMath.RemoveZ(transform.rotation);
+			baseRotation = Plane.RemoveTurn(transform.rotation);
 			lastWrittenPosition = transform.position;
 			lastWrittenRotation = transform.rotation;
 			previousPosition = currentPosition = position;
 			previousAngle = currentAngle = angle;
-			frozenPosition = position;
 			if (initialVelocity != Vector2.Zero)
 			{
-				B2Vector2 v = Physics2DMath.ToB2(initialVelocity);
-				body.SetLinearVelocity(ref v);
+				b2Body_SetLinearVelocity(body, Physics2DMath.ToB2(initialVelocity));
 			}
 
 			if (initialAngularVelocity != 0f)
 			{
-				body.SetAngularVelocity(initialAngularVelocity * Physics2DMath.Deg2Rad);
+				b2Body_SetAngularVelocity(body, initialAngularVelocity * Physics2DMath.Deg2Rad);
 			}
 
 			settingsDirty = false;
-			massDirty = !useAutoMass || customCenter.HasValue;
+			massDirty = true;
 		}
 
 		/// <summary>Pushes the serialized settings into the body (creation, inspector edits, property setters).</summary>
 		internal void ApplyBodySettings()
 		{
-			if (body == null)
+			if (!hasBody)
 			{
 				return;
 			}
 
-			BodyType type = bodyType == RigidbodyType2D.Kinematic ? BodyType.KinematicBody : bodyType == RigidbodyType2D.Static ? BodyType.StaticBody : BodyType.DynamicBody;
-			if (body.BodyType != type)
+			B2BodyType type = PhysicsScene2D.ToBox2D(bodyType);
+			if (b2Body_GetType(body) != type)
 			{
-				body.BodyType = type;
+				b2Body_SetType(body, type);
+				massDirty = true;
 			}
 
-			body.LinearDamping = linearDamping;
-			body.AngularDamping = angularDamping;
-			body.IsSleepingAllowed = sleepMode != RigidbodySleepMode2D.NeverSleep;
-			body.IsFixedRotation = (constraints & RigidbodyConstraints2D.FreezeRotation) != 0;
-			body.IsBullet = collisionDetectionMode == CollisionDetectionMode2D.Continuous;
-			if (body.IsEnabled != simulated)
+			b2Body_SetLinearDamping(body, linearDamping);
+			b2Body_SetAngularDamping(body, angularDamping);
+			b2Body_SetGravityScale(body, gravityScale);
+			b2Body_EnableSleep(body, sleepMode != RigidbodySleepMode2D.NeverSleep);
+			b2Body_SetMotionLocks(body, MotionLocks());
+			b2Body_SetBullet(body, collisionDetectionMode == CollisionDetectionMode2D.Continuous);
+			if (b2Body_IsEnabled(body) != simulated)
 			{
-				body.IsEnabled = simulated;
+				if (simulated) b2Body_Enable(body);
+				else b2Body_Disable(body);
 			}
 
-			gravityScaleApplied = Box2DAccess.SetGravityScale(body, gravityScale);
 			settingsDirty = false;
 			if (massDirty)
 			{
@@ -562,10 +534,19 @@ namespace LELEngine
 			}
 		}
 
+		/// <summary>The constraints as Box2D motion locks (frozen axes take no velocity, so the solver never moves them).</summary>
+		internal B2MotionLocks MotionLocks()
+		{
+			return new B2MotionLocks(
+				(constraints & RigidbodyConstraints2D.FreezePositionX) != 0,
+				(constraints & RigidbodyConstraints2D.FreezePositionY) != 0,
+				(constraints & RigidbodyConstraints2D.FreezeRotation) != 0);
+		}
+
 		internal void MassChanged()
 		{
 			massDirty = true;
-			if (body != null && world != null && !world.IsStepping)
+			if (hasBody && world != null && !world.IsStepping)
 			{
 				ApplyMass();
 			}
@@ -574,7 +555,7 @@ namespace LELEngine
 		/// <summary>Before a step: transform edits, settings and kinematic moves reach the body.</summary>
 		internal void SyncToBody()
 		{
-			if (body == null || transform == null)
+			if (!hasBody || transform == null)
 			{
 				return;
 			}
@@ -587,72 +568,48 @@ namespace LELEngine
 			Vector3 position = transform.position;
 			Quaternion rotation = transform.rotation;
 			bool moved = (position - lastWrittenPosition).LengthSquared > 1e-10f;
-			bool rotated = !rotated_Equal(rotation, lastWrittenRotation);
+			bool rotated = !RotationEquals(rotation, lastWrittenRotation);
 			if (moved || rotated)
 			{
 				// The transform was moved by a script or the editor: teleport the body.
-				baseRotation = Physics2DMath.RemoveZ(rotation);
-				float angle = Physics2DMath.AngleOf(rotation);
-				B2Vector2 p = new B2Vector2(position.X, position.Y);
-				body.SetTransform(ref p, angle);
-				body.IsAwake = true;
+				PlaneBasis plane = Plane;
+				baseRotation = plane.RemoveTurn(rotation);
+				float angle = plane.AngleOf(rotation);
+				Vector2 planar = plane.ToPlane(position);
+				b2Body_SetTransform(body, Physics2DMath.ToB2(planar), b2MakeRot(angle));
+				b2Body_SetAwake(body, true);
 				lastWrittenPosition = position;
 				lastWrittenRotation = rotation;
-				previousPosition = currentPosition = position.Xy;
+				previousPosition = currentPosition = planar;
 				previousAngle = currentAngle = angle;
-				frozenPosition = position.Xy;
 			}
 		}
 
 		internal void BeforeStep(float deltaTime)
 		{
-			if (body == null)
+			if (!hasBody)
 			{
 				return;
 			}
 
-			previousPosition = Physics2DMath.ToEngine(body.GetPosition());
-			previousAngle = body.GetAngle();
+			B2Transform pose = b2Body_GetTransform(body);
+			previousPosition = Physics2DMath.ToEngine(pose.p);
+			previousAngle = b2Rot_GetAngle(pose.q);
+			stepStartVelocity = Physics2DMath.ToEngine(b2Body_GetLinearVelocity(body));
 
-			if (bodyType == RigidbodyType2D.Kinematic)
+			if (bodyType == RigidbodyType2D.Kinematic && (moveTarget.HasValue || moveAngle.HasValue))
 			{
-				if (moveTarget.HasValue)
-				{
-					B2Vector2 v = Physics2DMath.ToB2((moveTarget.Value - previousPosition) / deltaTime);
-					body.SetLinearVelocity(ref v);
-				}
-
-				if (moveAngle.HasValue)
-				{
-					float delta = moveAngle.Value - previousAngle;
-					while (delta > MathF.PI) delta -= 2f * MathF.PI;
-					while (delta < -MathF.PI) delta += 2f * MathF.PI;
-					body.SetAngularVelocity(delta / deltaTime);
-				}
-
-				if (moveTarget.HasValue || moveAngle.HasValue)
-				{
-					body.IsAwake = true;
-				}
-			}
-			else if (body.BodyType == BodyType.DynamicBody && gravityScale != 1f && body.IsAwake)
-			{
-				if (gravityScaleApplied && Math.Abs(Box2DAccess.GetGravityScale(body) - gravityScale) > 1e-6f)
-				{
-					Box2DAccess.SetGravityScale(body, gravityScale);
-				}
-				else if (!gravityScaleApplied)
-				{
-					// The port hides the gravity scale: the difference is applied as a force.
-					B2Vector2 gravity = world.World.Gravity * (body.Mass * (gravityScale - 1f));
-					body.ApplyForceToCenter(ref gravity, false);
-				}
+				// Box2D sets the velocities that reach the target in this step.
+				var target = new B2Transform(
+					moveTarget.HasValue ? Physics2DMath.ToB2(moveTarget.Value) : pose.p,
+					moveAngle.HasValue ? b2MakeRot(moveAngle.Value) : pose.q);
+				b2Body_SetTargetTransform(body, target, deltaTime, true);
 			}
 		}
 
 		internal void AfterStep(float deltaTime)
 		{
-			if (body == null || transform == null)
+			if (!hasBody || transform == null)
 			{
 				return;
 			}
@@ -661,46 +618,20 @@ namespace LELEngine
 			{
 				if (moveTarget.HasValue)
 				{
-					B2Vector2 zero = B2Vector2.Zero;
-					body.SetLinearVelocity(ref zero);
+					b2Body_SetLinearVelocity(body, b2Vec2_zero);
 					moveTarget = null;
 				}
 
 				if (moveAngle.HasValue)
 				{
-					body.SetAngularVelocity(0f);
+					b2Body_SetAngularVelocity(body, 0f);
 					moveAngle = null;
 				}
 			}
 
-			B2Vector2 p = body.GetPosition();
-			bool freezeX = (constraints & RigidbodyConstraints2D.FreezePositionX) != 0;
-			bool freezeY = (constraints & RigidbodyConstraints2D.FreezePositionY) != 0;
-			if (freezeX || freezeY)
-			{
-				B2Vector2 v = body.LinearVelocity;
-				if (freezeX)
-				{
-					p.X = frozenPosition.X;
-					v.X = 0f;
-				}
-
-				if (freezeY)
-				{
-					p.Y = frozenPosition.Y;
-					v.Y = 0f;
-				}
-
-				body.SetTransform(ref p, body.GetAngle());
-				body.SetLinearVelocity(ref v);
-			}
-			else
-			{
-				frozenPosition = Physics2DMath.ToEngine(p);
-			}
-
-			currentPosition = Physics2DMath.ToEngine(p);
-			currentAngle = body.GetAngle();
+			B2Transform pose = b2Body_GetTransform(body);
+			currentPosition = Physics2DMath.ToEngine(pose.p);
+			currentAngle = b2Rot_GetAngle(pose.q);
 			if (interpolation == RigidbodyInterpolation2D.None || bodyType == RigidbodyType2D.Static)
 			{
 				WriteTransform(currentPosition, currentAngle);
@@ -709,7 +640,7 @@ namespace LELEngine
 
 		internal void Interpolate(float alpha)
 		{
-			if (body == null || transform == null || bodyType == RigidbodyType2D.Static)
+			if (!hasBody || transform == null || bodyType == RigidbodyType2D.Static)
 			{
 				return;
 			}
@@ -720,8 +651,8 @@ namespace LELEngine
 			if (interpolation == RigidbodyInterpolation2D.Extrapolate)
 			{
 				float ahead = alpha * (world?.LastStepDeltaTime ?? 0.02f);
-				position = currentPosition + Physics2DMath.ToEngine(body.LinearVelocity) * ahead;
-				angle = currentAngle + body.AngularVelocity * ahead;
+				position = currentPosition + Physics2DMath.ToEngine(b2Body_GetLinearVelocity(body)) * ahead;
+				angle = currentAngle + b2Body_GetAngularVelocity(body) * ahead;
 			}
 			else
 			{
@@ -739,51 +670,53 @@ namespace LELEngine
 
 		#region PrivateMethods
 
-		private static bool rotated_Equal(Quaternion a, Quaternion b)
+		private static bool RotationEquals(Quaternion a, Quaternion b)
 		{
 			return Math.Abs(a.X - b.X) < 1e-6f && Math.Abs(a.Y - b.Y) < 1e-6f && Math.Abs(a.Z - b.Z) < 1e-6f && Math.Abs(a.W - b.W) < 1e-6f;
 		}
 
 		private void WriteTransform(Vector2 position, float angle)
 		{
-			Vector3 current = transform.position;
-			var world = new Vector3(position.X, position.Y, current.Z);
-			transform.position = world;
-			transform.rotation = Physics2DMath.WithZ(baseRotation, angle);
+			PlaneBasis plane = Plane;
+			transform.position = plane.FromPlane(position, transform.position);
+			transform.rotation = plane.WithTurn(baseRotation, angle);
 			lastWrittenPosition = transform.position;
 			lastWrittenRotation = transform.rotation;
 		}
 
+		/// <summary>
+		///     Mass from the shapes (they are created without updating it, so a body with many shapes is not recomputed
+		///     once per shape), then the explicit mass or center when set.
+		/// </summary>
 		private void ApplyMass()
 		{
 			massDirty = false;
-			if (body == null || body.BodyType != BodyType.DynamicBody)
+			if (!hasBody || b2Body_GetType(body) != B2BodyType.b2_dynamicBody)
 			{
 				return;
 			}
 
-			Box2DAccess.ResetMassData(body);
+			b2Body_ApplyMassFromShapes(body);
 			if (useAutoMass && !customCenter.HasValue)
 			{
 				return;
 			}
 
-			MassData data;
-			body.GetMassData(out data);
+			B2MassData data = b2Body_GetMassData(body);
 			if (!useAutoMass)
 			{
 				float target = Math.Max(0.0001f, mass);
-				float factor = data.Mass > 0f ? target / data.Mass : 1f;
-				data.RotationInertia = data.Mass > 0f ? data.RotationInertia * factor : target * 0.1f;
-				data.Mass = target;
+				float factor = data.mass > 0f ? target / data.mass : 1f;
+				data.rotationalInertia = data.mass > 0f ? data.rotationalInertia * factor : target * 0.1f;
+				data.mass = target;
 			}
 
 			if (customCenter.HasValue)
 			{
-				data.Center = Physics2DMath.ToB2(customCenter.Value);
+				data.center = Physics2DMath.ToB2(customCenter.Value);
 			}
 
-			body.SetMassData(ref data);
+			b2Body_SetMassData(body, data);
 		}
 
 		private static void CollectColliders(GameObject go, List<Collider2D> results, bool root)

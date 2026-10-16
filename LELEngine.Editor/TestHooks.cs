@@ -8,7 +8,7 @@ namespace LELEngine.Editor
 	///     select=ObjectName, addcomponent=ObjectName;Type.Name, playframe=N, stopframe=N, saveframe=N,
 	///     touchscript=N;path (rewrites a script file at frame N to trigger a rebuild), buildgame=N;outputFolder,
 	///     focusscene=N, nudgecamera=N, dumpview=f1,f2,...;folder, reportframes=f1,f2,..., focuswindow=N;Name,
-	///     maximize=N, restore=N, grow=N, slowframes=ms, bakenav=N.
+	///     maximize=N, restore=N, grow=N, slowframes=ms, bakenav=N, projectsettings=N;Tab.
 	/// </summary>
 	internal sealed class TestHooks
 	{
@@ -196,6 +196,16 @@ namespace LELEngine.Editor
 				}
 			}
 			if (Is("nudgecamera")) editor.SceneView.RotateView(20f);
+
+			// projectsettings=N;Tab: the Project Settings window on that tab (Lighting, Physics2D, Build) at frame N.
+			if (values.TryGetValue("projectsettings", out string settingsTab))
+			{
+				string[] parts = settingsTab.Split(';');
+				if (int.TryParse(parts[0], out int at) && at == frame)
+				{
+					editor.ShowProjectSettings(parts.Length > 1 && Enum.TryParse(parts[1], true, out ProjectSettingsWindow.Tab tab) ? tab : null);
+				}
+			}
 
 			// dumpview=f1,f2,...;folder: the scene view image of each listed frame into folder/fNNNN (lossless).
 			if (values.TryGetValue("dumpview", out string dump))

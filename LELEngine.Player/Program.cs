@@ -87,6 +87,10 @@ namespace LELEngine.Player
 			}
 
 			AssetDatabase.Initialize(dataFolder);
+			if (!string.IsNullOrEmpty(boot.ProjectSettings))
+			{
+				ProjectSettings.Load(Path.GetFullPath(Path.Combine(baseDirectory, boot.ProjectSettings)));
+			}
 
 			Assembly game = null;
 			if (!string.IsNullOrEmpty(gameAssembly))

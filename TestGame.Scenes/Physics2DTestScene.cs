@@ -25,7 +25,6 @@ namespace TestGame.Scenes
 			environment.BackgroundColor = new Color4(0.16f, 0.3f, 0.6f, 1f);
 			scene.Settings.GI.Enabled = false;
 			scene.Settings.Shadows.Distance = 30f;
-			scene.Settings.Physics2D.Gravity = new Vector2(0f, -9.81f);
 
 			GameObject cameraObject = scene.CreateGameObject("Main Camera");
 			cameraObject.transform.position = new Vector3(0f, 4f, -16f);

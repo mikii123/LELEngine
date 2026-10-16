@@ -1,9 +1,9 @@
 using System;
 using System.Collections.Generic;
-using Box2DSharp.Collision.Shapes;
+using Box2D.NET;
 using OpenTK.Mathematics;
-using B2Transform = Box2DSharp.Common.Transform;
-using B2Vector2 = System.Numerics.Vector2;
+using static Box2D.NET.B2Distances;
+using B2Vector2 = Box2D.NET.B2Vec2;
 
 namespace LELEngine
 {
@@ -20,9 +20,10 @@ namespace LELEngine
 	}
 
 	/// <summary>
-	///     Global 2D physics API (Unity's Physics2D): gravity and settings of the active scene, layer collision
-	///     control, and queries into the active scene's world (raycasts, overlaps, casts). Queries use the scene's
-	///     QueriesHitTriggers / QueriesStartInColliders settings unless a <see cref="ContactFilter2D" /> says otherwise.
+	///     Global 2D physics API (Unity's Physics2D): gravity and settings of the project (<see cref="ProjectSettings.Physics2D" />),
+	///     layer collision control, and queries into the active scene's world (raycasts, overlaps, casts). Queries use
+	///     the QueriesHitTriggers / QueriesStartInColliders settings unless a <see cref="ContactFilter2D" /> says otherwise.
+	///     Positions and directions are 2D coordinates in the simulation plane (XY or XZ).
 	/// </summary>
 	public static class Physics2D
 	{
@@ -49,21 +50,13 @@ namespace LELEngine
 			}
 		}
 
-		public static int velocityIterations
+		/// <summary>Box2D v3 solver sub-steps per physics step (what the v3 solver uses instead of iterations).</summary>
+		public static int subStepCount
 		{
-			get => Settings?.VelocityIterations ?? 8;
+			get => Settings?.SubStepCount ?? 4;
 			set
 			{
-				if (Settings != null) Settings.VelocityIterations = Math.Max(1, value);
-			}
-		}
-
-		public static int positionIterations
-		{
-			get => Settings?.PositionIterations ?? 3;
-			set
-			{
-				if (Settings != null) Settings.PositionIterations = Math.Max(1, value);
+				if (Settings != null) Settings.SubStepCount = Math.Clamp(value, 1, 16);
 			}
 		}
 
@@ -92,7 +85,7 @@ namespace LELEngine
 		private static readonly List<RaycastHit2D> hitBuffer = new List<RaycastHit2D>();
 		private static readonly List<Collider2D> colliderBuffer = new List<Collider2D>();
 
-		private static Physics2DSettings Settings => SceneManager.ActiveScene?.Settings.Physics2D;
+		private static Physics2DSettings Settings => ProjectSettings.Current.Physics2D;
 
 		/// <summary>The active scene's world (created on demand: queries on a scene without physics return nothing).</summary>
 		private static PhysicsScene2D World => SceneManager.ActiveScene?.Physics2DIfCreated;
@@ -259,7 +252,7 @@ namespace LELEngine
 				return Array.Empty<Collider2D>();
 			}
 
-			world.OverlapShapeAll(Circle(radius), new B2Transform(Physics2DMath.ToB2(point), 0f), layerMask, null, colliderBuffer);
+			world.OverlapShapeAll(Circle(point, radius), layerMask, null, colliderBuffer);
 			return colliderBuffer.ToArray();
 		}
 
@@ -272,7 +265,7 @@ namespace LELEngine
 				return 0;
 			}
 
-			return world.OverlapShapeAll(Circle(radius), new B2Transform(Physics2DMath.ToB2(point), 0f), filter.useLayerMask ? filter.layerMask.value : AllLayers, filter.useTriggers, results);
+			return world.OverlapShapeAll(Circle(point, radius), filter.useLayerMask ? filter.layerMask.value : AllLayers, filter.useTriggers, results);
 		}
 
 		public static Collider2D OverlapBox(Vector2 point, Vector2 size, float angle, int layerMask = DefaultRaycastLayers)
@@ -288,7 +281,7 @@ namespace LELEngine
 				return Array.Empty<Collider2D>();
 			}
 
-			world.OverlapShapeAll(Box(size), new B2Transform(Physics2DMath.ToB2(point), angle * Physics2DMath.Deg2Rad), layerMask, null, colliderBuffer);
+			world.OverlapShapeAll(Box(point, size, angle), layerMask, null, colliderBuffer);
 			return colliderBuffer.ToArray();
 		}
 
@@ -301,7 +294,7 @@ namespace LELEngine
 				return 0;
 			}
 
-			return world.OverlapShapeAll(Box(size), new B2Transform(Physics2DMath.ToB2(point), angle * Physics2DMath.Deg2Rad), filter.useLayerMask ? filter.layerMask.value : AllLayers, filter.useTriggers, results);
+			return world.OverlapShapeAll(Box(point, size, angle), filter.useLayerMask ? filter.layerMask.value : AllLayers, filter.useTriggers, results);
 		}
 
 		/// <summary>Colliders inside the axis-aligned rectangle spanned by two corners.</summary>
@@ -327,7 +320,7 @@ namespace LELEngine
 				return default;
 			}
 
-			world.ShapeCastAll(Circle(radius), new B2Transform(Physics2DMath.ToB2(origin), 0f), direction, distance, layerMask, null, hitBuffer, true);
+			world.ShapeCastAll(Circle(origin, radius), direction, distance, layerMask, null, hitBuffer, true);
 			return hitBuffer.Count > 0 ? hitBuffer[0] : default;
 		}
 
@@ -339,7 +332,7 @@ namespace LELEngine
 				return Array.Empty<RaycastHit2D>();
 			}
 
-			world.ShapeCastAll(Circle(radius), new B2Transform(Physics2DMath.ToB2(origin), 0f), direction, distance, layerMask, null, hitBuffer, false);
+			world.ShapeCastAll(Circle(origin, radius), direction, distance, layerMask, null, hitBuffer, false);
 			return hitBuffer.ToArray();
 		}
 
@@ -351,7 +344,7 @@ namespace LELEngine
 				return default;
 			}
 
-			world.ShapeCastAll(Box(size), new B2Transform(Physics2DMath.ToB2(origin), angle * Physics2DMath.Deg2Rad), direction, distance, layerMask, null, hitBuffer, true);
+			world.ShapeCastAll(Box(origin, size, angle), direction, distance, layerMask, null, hitBuffer, true);
 			return hitBuffer.Count > 0 ? hitBuffer[0] : default;
 		}
 
@@ -363,7 +356,7 @@ namespace LELEngine
 				return Array.Empty<RaycastHit2D>();
 			}
 
-			world.ShapeCastAll(Box(size), new B2Transform(Physics2DMath.ToB2(origin), angle * Physics2DMath.Deg2Rad), direction, distance, layerMask, null, hitBuffer, false);
+			world.ShapeCastAll(Box(origin, size, angle), direction, distance, layerMask, null, hitBuffer, false);
 			return hitBuffer.ToArray();
 		}
 
@@ -376,16 +369,31 @@ namespace LELEngine
 			return colliders.Length > 0 ? colliders[0] : null;
 		}
 
-		private static CircleShape Circle(float radius)
+		/// <summary>A circle at a world point, as a query shape.</summary>
+		private static B2ShapeProxy Circle(Vector2 center, float radius)
 		{
-			return new CircleShape { Position = B2Vector2.Zero, Radius = Math.Max(0.0001f, radius) };
+			return b2MakeProxy(Physics2DMath.ToB2(center), 1, Math.Max(0.0001f, radius));
 		}
 
-		private static PolygonShape Box(Vector2 size)
+		/// <summary>A box at a world point turned by an angle in degrees, as a query shape.</summary>
+		private static B2ShapeProxy Box(Vector2 center, Vector2 size, float angle)
 		{
-			var box = new PolygonShape();
-			box.SetAsBox(Math.Max(0.0001f, size.X * 0.5f), Math.Max(0.0001f, size.Y * 0.5f));
-			return box;
+			float hx = Math.Max(0.0001f, size.X * 0.5f);
+			float hy = Math.Max(0.0001f, size.Y * 0.5f);
+			float radians = angle * Physics2DMath.Deg2Rad;
+			float c = MathF.Cos(radians);
+			float s = MathF.Sin(radians);
+			Span<B2Vector2> corners = stackalloc B2Vector2[4];
+			corners[0] = Corner(center, -hx, -hy, c, s);
+			corners[1] = Corner(center, hx, -hy, c, s);
+			corners[2] = Corner(center, hx, hy, c, s);
+			corners[3] = Corner(center, -hx, hy, c, s);
+			return b2MakeProxy(corners, 4, 0f);
+		}
+
+		private static B2Vector2 Corner(Vector2 center, float x, float y, float c, float s)
+		{
+			return new B2Vector2(center.X + c * x - s * y, center.Y + s * x + c * y);
 		}
 
 		#endregion

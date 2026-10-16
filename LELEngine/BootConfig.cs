@@ -23,6 +23,9 @@ namespace LELEngine
 		/// <summary>Asset path (relative to the data folder) of the scene loaded at startup.</summary>
 		public string StartScene { get; set; }
 
+		/// <summary>The project's settings document relative to the executable (physics, lighting quality; see <see cref="LELEngine.ProjectSettings" />).</summary>
+		public string ProjectSettings { get; set; } = LELEngine.ProjectSettings.FileName;
+
 		public string Title { get; set; } = "LELEngine";
 		public int Width { get; set; } = 1280;
 		public int Height { get; set; } = 720;

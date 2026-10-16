@@ -107,7 +107,7 @@ namespace LELEngine.Editor
 		#endregion
 	}
 
-	/// <summary>Scene settings (environment, shadows, GI).</summary>
+	/// <summary>Scene lighting settings (environment, shadow reach, the GI volume).</summary>
 	internal sealed class SettingsRecord : UndoRecord
 	{
 		#region PublicFields
@@ -142,8 +142,44 @@ namespace LELEngine.Editor
 			}
 
 			EditorSerialization.ApplyObject(scene.Settings, data, scene);
-			scene.Settings.GI.InvalidateStatic();
+			Lighting.GI.InvalidateStatic();
 			editor.MarkDirty();
+		}
+
+		#endregion
+	}
+
+	/// <summary>Project settings (physics, lighting quality), before and after an edit; applying also saves the file.</summary>
+	internal sealed class ProjectSettingsRecord : UndoRecord
+	{
+		#region PublicFields
+
+		public byte[] Before;
+		public byte[] After;
+
+		#endregion
+
+		#region PublicMethods
+
+		public override void Undo(EditorApplication editor)
+		{
+			Apply(editor, Before);
+		}
+
+		public override void Redo(EditorApplication editor)
+		{
+			Apply(editor, After);
+		}
+
+		#endregion
+
+		#region PrivateMethods
+
+		private static void Apply(EditorApplication editor, byte[] data)
+		{
+			EditorSerialization.ApplyObject(ProjectSettings.Current, data, null);
+			Lighting.GI.InvalidateStatic();
+			editor.SaveProjectSettings();
 		}
 
 		#endregion
@@ -383,6 +419,11 @@ namespace LELEngine.Editor
 					case SceneSettings _:
 						editor.Undo.Push(new SettingsRecord { Name = "Edit scene settings", Before = before, After = after });
 						break;
+					case ProjectSettings _:
+						// Saved when the edit ends, like assets.
+						editor.Undo.Push(new ProjectSettingsRecord { Name = "Edit project settings", Before = before, After = after });
+						editor.SaveProjectSettings();
+						break;
 					case Shaders.Material material:
 						// Assets save when the edit ends (Unity writes material changes to disk as they happen).
 						editor.Undo.Push(new AssetStateRecord { Name = "Edit " + material.name, AssetPath = material.AssetPath, Before = before, After = after });
@@ -438,6 +479,8 @@ namespace LELEngine.Editor
 					return EditorSerialization.CaptureComponent(component);
 				case SceneSettings settings:
 					return EditorSerialization.CaptureObject(settings, editor.Scene);
+				case ProjectSettings projectSettings:
+					return EditorSerialization.CaptureObject(projectSettings, null);
 				case Shaders.Material material:
 					return material.ToBytes();
 				case PhysicsMaterial2D physicsMaterial:

@@ -1,150 +1,111 @@
 using System;
 using System.Collections.Generic;
-using System.Reflection;
-using Box2DSharp.Collision.Shapes;
-using Box2DSharp.Dynamics;
+using Box2D.NET;
 using OpenTK.Mathematics;
-using B2Vector2 = System.Numerics.Vector2;
+using static Box2D.NET.B2MathFunction;
+using B2Vector2 = Box2D.NET.B2Vec2;
 
 namespace LELEngine
 {
-	/// <summary>Members of Box2DSharp that are not public but needed (shape radius, mass reset, gravity scale), reached through reflection once.</summary>
-	internal static class Box2DAccess
-	{
-		#region PrivateFields
-
-		private static readonly Action<Shape, float> setRadius = CreateSetter<Shape, float>("Radius");
-		private static readonly Action<Body> resetMassData = CreateAction<Body>("ResetMassData");
-		private static readonly FieldInfo gravityScale = typeof(Body).GetField("GravityScale", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public);
-
-		#endregion
-
-		#region PublicMethods
-
-		/// <summary>Rounding radius of polygons and edges (Box2D's shape radius); false when the port does not allow it.</summary>
-		public static bool SetRadius(Shape shape, float radius)
-		{
-			if (setRadius == null)
-			{
-				return false;
-			}
-
-			setRadius(shape, radius);
-			return true;
-		}
-
-		/// <summary>Recomputes the body's mass from its fixtures (after an explicit mass was set).</summary>
-		public static void ResetMassData(Body body)
-		{
-			resetMassData?.Invoke(body);
-		}
-
-		public static bool SetGravityScale(Body body, float scale)
-		{
-			if (gravityScale == null)
-			{
-				return false;
-			}
-
-			gravityScale.SetValue(body, scale);
-			return true;
-		}
-
-		public static float GetGravityScale(Body body)
-		{
-			return gravityScale != null ? (float)gravityScale.GetValue(body) : 1f;
-		}
-
-		#endregion
-
-		#region PrivateMethods
-
-		private static Action<T, TValue> CreateSetter<T, TValue>(string property)
-		{
-			try
-			{
-				MethodInfo setter = typeof(T).GetProperty(property, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)?.GetSetMethod(true);
-				return setter != null ? (Action<T, TValue>)Delegate.CreateDelegate(typeof(Action<T, TValue>), setter) : null;
-			}
-			catch (Exception)
-			{
-				return null;
-			}
-		}
-
-		private static Action<T> CreateAction<T>(string method)
-		{
-			try
-			{
-				MethodInfo info = typeof(T).GetMethod(method, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null, Type.EmptyTypes, null);
-				return info != null ? (Action<T>)Delegate.CreateDelegate(typeof(Action<T>), info) : null;
-			}
-			catch (Exception)
-			{
-				return null;
-			}
-		}
-
-		#endregion
-	}
-
-	/// <summary>Conversions between the engine's 3D transforms / OpenTK vectors and Box2D's XY plane, plus polygon helpers.</summary>
-	internal static class Physics2DMath
+	/// <summary>
+	///     The world plane of a 2D simulation as an orthonormal basis: <see cref="U" /> and <see cref="V" /> are the
+	///     world directions of 2D x and y, <see cref="Normal" /> (U × V) the axis bodies turn about. The same basis maps
+	///     a collider's local 2D shape into its object's local space, so an unrotated object lies in the plane. The
+	///     coordinate along the normal is left as it is.
+	/// </summary>
+	internal readonly struct PlaneBasis
 	{
 		#region PublicFields
 
-		public const float Deg2Rad = (float)(Math.PI / 180.0);
-		public const float Rad2Deg = (float)(180.0 / Math.PI);
+		public static readonly PlaneBasis XY = new PlaneBasis(SimulationPlane2D.XY, Vector3.UnitX, Vector3.UnitY);
+
+		/// <summary>The XY plane turned 90° about X (Y onto Z): 2D y is world Z and bodies turn about -Y, as in Unity's top-down convention.</summary>
+		public static readonly PlaneBasis XZ = new PlaneBasis(SimulationPlane2D.XZ, Vector3.UnitX, Vector3.UnitZ);
+
+		public readonly SimulationPlane2D Kind;
+		public readonly Vector3 U;
+		public readonly Vector3 V;
+		public readonly Vector3 Normal;
+
+		/// <summary>The project's plane (for components outside a physics world).</summary>
+		public static PlaneBasis Current => Of(ProjectSettings.Current.Physics2D.SimulationPlane);
+
+		#endregion
+
+		#region Constructors
+
+		private PlaneBasis(SimulationPlane2D kind, Vector3 u, Vector3 v)
+		{
+			Kind = kind;
+			U = u;
+			V = v;
+			Normal = Vector3.Cross(u, v);
+		}
 
 		#endregion
 
 		#region PublicMethods
 
-		public static B2Vector2 ToB2(Vector2 v)
+		public static PlaneBasis Of(SimulationPlane2D plane)
 		{
-			return new B2Vector2(v.X, v.Y);
+			return plane == SimulationPlane2D.XZ ? XZ : XY;
 		}
 
-		public static B2Vector2 ToB2(Vector3 v)
+		/// <summary>The 2D coordinates of a world (or local) point or direction.</summary>
+		public Vector2 ToPlane(Vector3 v)
 		{
-			return new B2Vector2(v.X, v.Y);
+			return new Vector2(Vector3.Dot(v, U), Vector3.Dot(v, V));
 		}
 
-		public static Vector2 ToEngine(B2Vector2 v)
+		/// <summary>The 3D point of 2D coordinates; the coordinate along the normal comes from <paramref name="normalOf" />.</summary>
+		public Vector3 FromPlane(Vector2 v, Vector3 normalOf)
 		{
-			return new Vector2(v.X, v.Y);
+			return U * v.X + V * v.Y + Normal * Vector3.Dot(normalOf, Normal);
 		}
 
-		/// <summary>Rotation of a transform about the Z axis in radians (the angle of its world X axis in the XY plane).</summary>
-		public static float AngleOf(Quaternion rotation)
+		/// <summary>The 3D direction of a 2D vector.</summary>
+		public Vector3 FromPlane(Vector2 v)
 		{
-			Vector3 right = rotation * Vector3.UnitX;
+			return U * v.X + V * v.Y;
+		}
+
+		/// <summary>Rotation about the normal in radians (the angle of the rotated U axis in the plane).</summary>
+		public float AngleOf(Quaternion rotation)
+		{
+			Vector2 right = ToPlane(rotation * U);
 			return MathF.Atan2(right.Y, right.X);
 		}
 
-		/// <summary>The part of a rotation that is not about Z (kept while the body rotates in the plane).</summary>
-		public static Quaternion RemoveZ(Quaternion rotation)
+		/// <summary>The part of a rotation that is not about the normal (kept while the body turns in the plane).</summary>
+		public Quaternion RemoveTurn(Quaternion rotation)
 		{
-			float angle = AngleOf(rotation);
-			return (Quaternion.FromAxisAngle(Vector3.UnitZ, -angle) * rotation).Normalized();
+			return (Quaternion.FromAxisAngle(Normal, -AngleOf(rotation)) * rotation).Normalized();
 		}
 
-		public static Quaternion WithZ(Quaternion baseRotation, float angle)
+		public Quaternion WithTurn(Quaternion baseRotation, float angle)
 		{
-			return (Quaternion.FromAxisAngle(Vector3.UnitZ, angle) * baseRotation).Normalized();
+			return (Quaternion.FromAxisAngle(Normal, angle) * baseRotation).Normalized();
+		}
+
+		/// <summary>The (signed) scale of a transform along its local U and V axes.</summary>
+		public Vector2 ScaleOf(Vector3 lossyScale)
+		{
+			return new Vector2(Vector3.Dot(lossyScale, Unsigned(U)), Vector3.Dot(lossyScale, Unsigned(V)));
 		}
 
 		/// <summary>
-		///     Position, rotation and scale of a transform in the XY plane: in the frame of a rigidbody's body (its
-		///     world position and Z rotation; the body's own scale and the child's offsets remain in the result) or in
-		///     the world (<paramref name="owner" /> null).
+		///     Position, rotation and scale of a transform in the plane: in the frame of a rigidbody's body (its world
+		///     position and rotation about the normal; the body's own scale and the child's offsets remain in the
+		///     result) or in the world (<paramref name="owner" /> null).
 		/// </summary>
-		public static void PlanarPose(Transform transform, Transform owner, out Vector2 position, out float angle, out Vector2 scale)
+		public void PlanarPose(Transform transform, Transform owner, out Vector2 position, out float angle, out Vector2 scale)
 		{
-			Matrix4 matrix = transform.LocalToWorld;
+			// Local-to-world in plane coordinates on both sides (row vectors: local 2D → local 3D → world → world 2D).
+			Matrix4 basis = new Matrix4(new Vector4(U, 0f), new Vector4(V, 0f), new Vector4(Normal, 0f), Vector4.UnitW);
+			Matrix4 matrix = basis * transform.LocalToWorld * Matrix4.Transpose(basis);
 			if (owner != null)
 			{
-				Vector3 ownerPosition = owner.position;
+				Vector2 ownerPosition = ToPlane(owner.position);
 				Matrix4 frame = Matrix4.CreateRotationZ(AngleOf(owner.rotation)) * Matrix4.CreateTranslation(ownerPosition.X, ownerPosition.Y, 0f);
 				matrix = matrix * frame.Inverted();
 			}
@@ -162,6 +123,58 @@ namespace LELEngine
 			}
 
 			scale = new Vector2(sx, sy);
+		}
+
+		#endregion
+
+		#region PrivateMethods
+
+		private static Vector3 Unsigned(Vector3 axis)
+		{
+			return new Vector3(MathF.Abs(axis.X), MathF.Abs(axis.Y), MathF.Abs(axis.Z));
+		}
+
+		#endregion
+	}
+
+	/// <summary>Conversions between OpenTK vectors and Box2D's, plus polygon helpers.</summary>
+	internal static class Physics2DMath
+	{
+		#region PublicFields
+
+		public const float Deg2Rad = (float)(Math.PI / 180.0);
+		public const float Rad2Deg = (float)(180.0 / Math.PI);
+
+		#endregion
+
+		#region PublicMethods
+
+		public static B2Vector2 ToB2(Vector2 v)
+		{
+			return new B2Vector2(v.X, v.Y);
+		}
+
+		public static Vector2 ToEngine(B2Vector2 v)
+		{
+			return new Vector2(v.X, v.Y);
+		}
+
+		/// <summary>A Box2D transform from a position and an angle in radians.</summary>
+		public static B2Transform Pose(Vector2 position, float angle)
+		{
+			return new B2Transform(ToB2(position), b2MakeRot(angle));
+		}
+
+		public static float Angle(B2Rot rotation)
+		{
+			return b2Rot_GetAngle(rotation);
+		}
+
+		public static float DistanceSquared(B2Vector2 a, B2Vector2 b)
+		{
+			float x = a.X - b.X;
+			float y = a.Y - b.Y;
+			return x * x + y * y;
 		}
 
 		/// <summary>A collider-local point placed in body space: scaled, rotated by the collider object's angle and translated.</summary>

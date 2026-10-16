@@ -1,16 +1,25 @@
 using System;
-using Box2DSharp.Dynamics;
-using Box2DSharp.Dynamics.Joints;
+using Box2D.NET;
 using OpenTK.Mathematics;
-using B2Vector2 = System.Numerics.Vector2;
+using static Box2D.NET.B2Bodies;
+using static Box2D.NET.B2DistanceJoints;
+using static Box2D.NET.B2Joints;
+using static Box2D.NET.B2MathFunction;
+using static Box2D.NET.B2MotorJoints;
+using static Box2D.NET.B2PrismaticJoints;
+using static Box2D.NET.B2RevoluteJoints;
+using static Box2D.NET.B2WeldJoints;
+using static Box2D.NET.B2WheelJoints;
+using B2Vector2 = Box2D.NET.B2Vec2;
 
 namespace LELEngine
 {
 	/// <summary>
 	///     Base of the 2D joints: constrains this object's <see cref="Rigidbody2D" /> to <see cref="connectedBody" />
 	///     (or to the world when null). The Box2D joint exists while both bodies do; it is rebuilt when a setting
-	///     that defines it changes. A joint whose reaction exceeds <see cref="breakForce" /> / <see cref="breakTorque" />
-	///     breaks: OnJointBreak2D is sent and the component is destroyed.
+	///     that defines it changes. A joint whose force reaches <see cref="breakForce" /> or whose torque reaches
+	///     <see cref="breakTorque" /> breaks (Box2D's joint event thresholds): OnJointBreak2D is sent and the component
+	///     is destroyed.
 	/// </summary>
 	public abstract class Joint2D : Behaviour
 	{
@@ -47,21 +56,28 @@ namespace LELEngine
 		public Rigidbody2D attachedRigidbody => gameObject?.GetComponent<Rigidbody2D>();
 
 		/// <summary>Force the joint applied in the last step (world units).</summary>
-		public Vector2 reactionForce => joint != null && world != null ? Physics2DMath.ToEngine(joint.GetReactionForce(1f / world.LastStepDeltaTime)) : Vector2.Zero;
+		public Vector2 reactionForce => hasJoint ? Physics2DMath.ToEngine(b2Joint_GetConstraintForce(joint)) : Vector2.Zero;
 
-		public float reactionTorque => joint != null && world != null ? joint.GetReactionTorque(1f / world.LastStepDeltaTime) : 0f;
+		public float reactionTorque => hasJoint ? b2Joint_GetConstraintTorque(joint) : 0f;
 
-		/// <summary>The Box2D joint (null while not simulated).</summary>
-		public Joint Box2DJoint => joint;
+		/// <summary>The Box2D joint (a null id while not simulated).</summary>
+		public B2JointId Box2DJoint => joint;
 
 		#endregion
 
 		#region InternalFields
 
-		internal Joint joint;
+		internal B2JointId joint;
 		internal PhysicsScene2D world;
 		internal bool dirty = true;
 		internal bool runtimeDirty;
+
+		/// <summary>The break force and torque the Box2D joint's event thresholds were last set to.</summary>
+		internal float appliedBreakForce;
+		internal float appliedBreakTorque;
+
+		/// <summary>True while the Box2D joint exists.</summary>
+		internal bool hasJoint => joint.index1 != 0;
 
 		#endregion
 
@@ -95,8 +111,11 @@ namespace LELEngine
 
 		#region InternalMethods
 
-		/// <summary>The Box2D definition; BodyA / BodyB / CollideConnected / UserData are filled by the world.</summary>
-		internal abstract JointDef CreateDefinition(Body bodyA, Body bodyB);
+		/// <summary>
+		///     Creates the Box2D joint. <paramref name="baseDef" /> carries the bodies (A = this object's body, B = the
+		///     connected body or the world's ground body), the collide-connected flag and the user data.
+		/// </summary>
+		internal abstract B2JointId CreateJoint(PhysicsScene2D world, B2JointDef baseDef);
 
 		/// <summary>Settings that change without recreating the joint (motors, limits).</summary>
 		internal virtual void ApplyRuntimeSettings()
@@ -114,7 +133,7 @@ namespace LELEngine
 			runtimeDirty = true;
 		}
 
-		/// <summary>World scale of this object's XY axes (anchors are scaled like Unity does).</summary>
+		/// <summary>World scale of this object along the simulation plane's axes (anchors are scaled like Unity does).</summary>
 		protected Vector2 LocalScale(Transform t)
 		{
 			if (t == null)
@@ -122,8 +141,30 @@ namespace LELEngine
 				return Vector2.One;
 			}
 
-			Vector3 scale = t.lossyScale;
-			return new Vector2(scale.X, scale.Y);
+			return (world?.Plane ?? PlaneBasis.Current).ScaleOf(t.lossyScale);
+		}
+
+		/// <summary>
+		///     Box2D v3 joints are placed by a local frame on each body. Both frames are given the same world rotation
+		///     (<paramref name="worldAngle" />, radians), so the joint starts at angle zero (Unity measures hinge angles
+		///     from the creation pose) and its x axis (slider and wheel axes) points along that angle.
+		/// </summary>
+		protected static void SetFrames(ref B2JointDef def, B2Vector2 localA, B2Vector2 localB, float worldAngle)
+		{
+			B2Rot world = b2MakeRot(worldAngle);
+			def.localFrameA = new B2Transform(localA, b2InvMulRot(b2Body_GetRotation(def.bodyIdA), world));
+			def.localFrameB = new B2Transform(localB, b2InvMulRot(b2Body_GetRotation(def.bodyIdB), world));
+		}
+
+		/// <summary>The joint's frames in world space: frame A's origin and x axis, frame B's origin, and B's angle relative to A (radians).</summary>
+		protected void WorldFrames(out B2Vector2 originA, out B2Vector2 axis, out B2Vector2 originB, out float angle)
+		{
+			B2Transform a = b2MulTransforms(b2Body_GetTransform(b2Joint_GetBodyA(joint)), b2Joint_GetLocalFrameA(joint));
+			B2Transform b = b2MulTransforms(b2Body_GetTransform(b2Joint_GetBodyB(joint)), b2Joint_GetLocalFrameB(joint));
+			originA = a.p;
+			axis = new B2Vector2(a.q.c, a.q.s);
+			originB = b.p;
+			angle = b2Rot_GetAngle(b2InvMulRot(a.q, b.q));
 		}
 
 		#endregion
@@ -175,15 +216,15 @@ namespace LELEngine
 		#region InternalMethods
 
 		/// <summary>Anchor A in body A's local frame and anchor B in body B's frame (resolving the auto configuration).</summary>
-		protected void ResolveAnchors(Body bodyA, Body bodyB, out B2Vector2 localA, out B2Vector2 localB, out B2Vector2 worldA, out B2Vector2 worldB)
+		protected void ResolveAnchors(B2BodyId bodyA, B2BodyId bodyB, out B2Vector2 localA, out B2Vector2 localB, out B2Vector2 worldA, out B2Vector2 worldB)
 		{
 			Vector2 scaleA = LocalScale(transform);
 			localA = new B2Vector2(m_Anchor.X * scaleA.X, m_Anchor.Y * scaleA.Y);
-			worldA = bodyA.GetWorldPoint(ref localA);
+			worldA = b2Body_GetWorldPoint(bodyA, localA);
 			if (m_AutoConfigureConnectedAnchor)
 			{
 				worldB = worldA;
-				localB = bodyB.GetLocalPoint(ref worldB);
+				localB = b2Body_GetLocalPoint(bodyB, worldB);
 				// Keep the configured value readable in the inspector.
 				m_ConnectedAnchor = connectedBody != null ? Physics2DMath.ToEngine(localB) : Physics2DMath.ToEngine(worldB);
 				return;
@@ -193,12 +234,12 @@ namespace LELEngine
 			{
 				Vector2 scaleB = LocalScale(connectedBody.transform);
 				localB = new B2Vector2(m_ConnectedAnchor.X * scaleB.X, m_ConnectedAnchor.Y * scaleB.Y);
-				worldB = bodyB.GetWorldPoint(ref localB);
+				worldB = b2Body_GetWorldPoint(bodyB, localB);
 			}
 			else
 			{
 				worldB = Physics2DMath.ToB2(m_ConnectedAnchor);
-				localB = bodyB.GetLocalPoint(ref worldB);
+				localB = b2Body_GetLocalPoint(bodyB, worldB);
 			}
 		}
 
@@ -222,26 +263,31 @@ namespace LELEngine
 
 		#region InternalMethods
 
-		internal override JointDef CreateDefinition(Body bodyA, Body bodyB)
+		internal override B2JointId CreateJoint(PhysicsScene2D world, B2JointDef baseDef)
 		{
 			B2Vector2 localA, localB, worldA, worldB;
-			ResolveAnchors(bodyA, bodyB, out localA, out localB, out worldA, out worldB);
+			ResolveAnchors(baseDef.bodyIdA, baseDef.bodyIdB, out localA, out localB, out worldA, out worldB);
 			if (autoConfigureDistance)
 			{
-				distance = Math.Max(0.005f, B2Vector2.Distance(worldA, worldB));
+				distance = Math.Max(0.005f, MathF.Sqrt(Physics2DMath.DistanceSquared(worldA, worldB)));
 			}
 
 			float length = Math.Max(0.005f, distance);
-			return new DistanceJointDef
+			B2DistanceJointDef def = b2DefaultDistanceJointDef();
+			def.@base = baseDef;
+			SetFrames(ref def.@base, localA, localB, 0f);
+			def.length = length;
+			if (maxDistanceOnly)
 			{
-				LocalAnchorA = localA,
-				LocalAnchorB = localB,
-				Length = length,
-				MinLength = maxDistanceOnly ? 0f : length,
-				MaxLength = length,
-				Stiffness = 0f,
-				Damping = 0f
-			};
+				// A rope: the spring is on but without stiffness, so only the upper limit holds.
+				def.enableSpring = true;
+				def.hertz = 0f;
+				def.enableLimit = true;
+				def.minLength = 0f;
+				def.maxLength = length;
+			}
+
+			return b2CreateDistanceJoint(world.World, def);
 		}
 
 		#endregion
@@ -264,28 +310,23 @@ namespace LELEngine
 
 		#region InternalMethods
 
-		internal override JointDef CreateDefinition(Body bodyA, Body bodyB)
+		internal override B2JointId CreateJoint(PhysicsScene2D world, B2JointDef baseDef)
 		{
 			B2Vector2 localA, localB, worldA, worldB;
-			ResolveAnchors(bodyA, bodyB, out localA, out localB, out worldA, out worldB);
+			ResolveAnchors(baseDef.bodyIdA, baseDef.bodyIdB, out localA, out localB, out worldA, out worldB);
 			if (autoConfigureDistance)
 			{
-				distance = Math.Max(0.005f, B2Vector2.Distance(worldA, worldB));
+				distance = Math.Max(0.005f, MathF.Sqrt(Physics2DMath.DistanceSquared(worldA, worldB)));
 			}
 
-			float stiffness;
-			float damping;
-			JointUtils.LinearStiffness(out stiffness, out damping, Math.Max(0f, frequency), dampingRatio, bodyA, bodyB);
-			return new DistanceJointDef
-			{
-				LocalAnchorA = localA,
-				LocalAnchorB = localB,
-				Length = Math.Max(0.005f, distance),
-				MinLength = 0f,
-				MaxLength = float.MaxValue,
-				Stiffness = stiffness,
-				Damping = damping
-			};
+			B2DistanceJointDef def = b2DefaultDistanceJointDef();
+			def.@base = baseDef;
+			SetFrames(ref def.@base, localA, localB, 0f);
+			def.length = Math.Max(0.005f, distance);
+			def.enableSpring = frequency > 0f;
+			def.hertz = Math.Max(0f, frequency);
+			def.dampingRatio = dampingRatio;
+			return b2CreateDistanceJoint(world.World, def);
 		}
 
 		#endregion
@@ -304,10 +345,10 @@ namespace LELEngine
 		public JointAngleLimits2D limits = new JointAngleLimits2D { min = -45f, max = 45f };
 
 		/// <summary>Current angle in degrees.</summary>
-		public float jointAngle => joint is RevoluteJoint revolute ? revolute.GetJointAngle() * Physics2DMath.Rad2Deg : 0f;
+		public float jointAngle => hasJoint ? b2RevoluteJoint_GetAngle(joint) * Physics2DMath.Rad2Deg : 0f;
 
 		/// <summary>Current angular speed in degrees per second.</summary>
-		public float jointSpeed => joint is RevoluteJoint revolute ? revolute.GetJointSpeed() * Physics2DMath.Rad2Deg : 0f;
+		public float jointSpeed => hasJoint ? (b2Body_GetAngularVelocity(b2Joint_GetBodyB(joint)) - b2Body_GetAngularVelocity(b2Joint_GetBodyA(joint))) * Physics2DMath.Rad2Deg : 0f;
 
 		#endregion
 
@@ -315,7 +356,7 @@ namespace LELEngine
 
 		public float GetMotorTorque(float timeStep)
 		{
-			return joint is RevoluteJoint revolute ? revolute.GetMotorTorque(1f / Math.Max(1e-6f, timeStep)) : 0f;
+			return hasJoint ? b2RevoluteJoint_GetMotorTorque(joint) : 0f;
 		}
 
 		#endregion
@@ -331,36 +372,50 @@ namespace LELEngine
 
 		#region InternalMethods
 
-		internal override JointDef CreateDefinition(Body bodyA, Body bodyB)
+		internal override B2JointId CreateJoint(PhysicsScene2D world, B2JointDef baseDef)
 		{
 			B2Vector2 localA, localB, worldA, worldB;
-			ResolveAnchors(bodyA, bodyB, out localA, out localB, out worldA, out worldB);
-			return new RevoluteJointDef
-			{
-				LocalAnchorA = localA,
-				LocalAnchorB = localB,
-				ReferenceAngle = bodyB.GetAngle() - bodyA.GetAngle(),
-				EnableLimit = useLimits,
-				LowerAngle = Math.Min(limits.min, limits.max) * Physics2DMath.Deg2Rad,
-				UpperAngle = Math.Max(limits.min, limits.max) * Physics2DMath.Deg2Rad,
-				EnableMotor = useMotor,
-				MotorSpeed = motor.motorSpeed * Physics2DMath.Deg2Rad,
-				MaxMotorTorque = motor.maxMotorTorque
-			};
+			ResolveAnchors(baseDef.bodyIdA, baseDef.bodyIdB, out localA, out localB, out worldA, out worldB);
+			B2RevoluteJointDef def = b2DefaultRevoluteJointDef();
+			def.@base = baseDef;
+			SetFrames(ref def.@base, localA, localB, 0f);
+			def.enableLimit = useLimits;
+			def.lowerAngle = LowerLimit();
+			def.upperAngle = UpperLimit();
+			def.enableMotor = useMotor;
+			def.motorSpeed = motor.motorSpeed * Physics2DMath.Deg2Rad;
+			def.maxMotorTorque = motor.maxMotorTorque;
+			return b2CreateRevoluteJoint(world.World, def);
 		}
 
 		internal override void ApplyRuntimeSettings()
 		{
-			if (!(joint is RevoluteJoint revolute))
+			if (!hasJoint)
 			{
 				return;
 			}
 
-			revolute.EnableLimit(useLimits);
-			revolute.SetLimits(Math.Min(limits.min, limits.max) * Physics2DMath.Deg2Rad, Math.Max(limits.min, limits.max) * Physics2DMath.Deg2Rad);
-			revolute.EnableMotor(useMotor);
-			revolute.SetMotorSpeed(motor.motorSpeed * Physics2DMath.Deg2Rad);
-			revolute.SetMaxMotorTorque(motor.maxMotorTorque);
+			b2RevoluteJoint_EnableLimit(joint, useLimits);
+			b2RevoluteJoint_SetLimits(joint, LowerLimit(), UpperLimit());
+			b2RevoluteJoint_EnableMotor(joint, useMotor);
+			b2RevoluteJoint_SetMotorSpeed(joint, motor.motorSpeed * Physics2DMath.Deg2Rad);
+			b2RevoluteJoint_SetMaxMotorTorque(joint, motor.maxMotorTorque);
+			b2Joint_WakeBodies(joint);
+		}
+
+		#endregion
+
+		#region PrivateMethods
+
+		// Box2D v3 keeps revolute limits within ±0.99π.
+		private float LowerLimit()
+		{
+			return Math.Clamp(Math.Min(limits.min, limits.max) * Physics2DMath.Deg2Rad, -0.99f * MathF.PI, 0.99f * MathF.PI);
+		}
+
+		private float UpperLimit()
+		{
+			return Math.Clamp(Math.Max(limits.min, limits.max) * Physics2DMath.Deg2Rad, -0.99f * MathF.PI, 0.99f * MathF.PI);
 		}
 
 		#endregion
@@ -380,8 +435,8 @@ namespace LELEngine
 		public bool useLimits;
 		public JointTranslationLimits2D limits = new JointTranslationLimits2D { min = -1f, max = 1f };
 
-		public float jointTranslation => joint is PrismaticJoint prismatic ? prismatic.GetJointTranslation() : 0f;
-		public float jointSpeed => joint is PrismaticJoint prismatic ? prismatic.GetJointSpeed() : 0f;
+		public float jointTranslation => hasJoint ? b2PrismaticJoint_GetTranslation(joint) : 0f;
+		public float jointSpeed => hasJoint ? b2PrismaticJoint_GetSpeed(joint) : 0f;
 
 		#endregion
 
@@ -396,48 +451,44 @@ namespace LELEngine
 
 		#region InternalMethods
 
-		internal override JointDef CreateDefinition(Body bodyA, Body bodyB)
+		internal override B2JointId CreateJoint(PhysicsScene2D world, B2JointDef baseDef)
 		{
 			B2Vector2 localA, localB, worldA, worldB;
-			ResolveAnchors(bodyA, bodyB, out localA, out localB, out worldA, out worldB);
+			ResolveAnchors(baseDef.bodyIdA, baseDef.bodyIdB, out localA, out localB, out worldA, out worldB);
 			if (autoConfigureAngle)
 			{
 				B2Vector2 delta = worldB - worldA;
-				if (delta.LengthSquared() > 1e-8f)
+				if (delta.X * delta.X + delta.Y * delta.Y > 1e-8f)
 				{
 					angle = MathF.Atan2(delta.Y, delta.X) * Physics2DMath.Rad2Deg;
 				}
 			}
 
-			float radians = angle * Physics2DMath.Deg2Rad;
-			var worldAxis = new B2Vector2(MathF.Cos(radians), MathF.Sin(radians));
-			return new PrismaticJointDef
-			{
-				LocalAnchorA = localA,
-				LocalAnchorB = localB,
-				LocalAxisA = bodyA.GetLocalVector(ref worldAxis),
-				ReferenceAngle = bodyB.GetAngle() - bodyA.GetAngle(),
-				EnableLimit = useLimits,
-				LowerTranslation = Math.Min(limits.min, limits.max),
-				UpperTranslation = Math.Max(limits.min, limits.max),
-				EnableMotor = useMotor,
-				MotorSpeed = motor.motorSpeed,
-				MaxMotorForce = motor.maxMotorTorque
-			};
+			B2PrismaticJointDef def = b2DefaultPrismaticJointDef();
+			def.@base = baseDef;
+			SetFrames(ref def.@base, localA, localB, angle * Physics2DMath.Deg2Rad);
+			def.enableLimit = useLimits;
+			def.lowerTranslation = Math.Min(limits.min, limits.max);
+			def.upperTranslation = Math.Max(limits.min, limits.max);
+			def.enableMotor = useMotor;
+			def.motorSpeed = motor.motorSpeed;
+			def.maxMotorForce = motor.maxMotorTorque;
+			return b2CreatePrismaticJoint(world.World, def);
 		}
 
 		internal override void ApplyRuntimeSettings()
 		{
-			if (!(joint is PrismaticJoint prismatic))
+			if (!hasJoint)
 			{
 				return;
 			}
 
-			prismatic.EnableLimit(useLimits);
-			prismatic.SetLimits(Math.Min(limits.min, limits.max), Math.Max(limits.min, limits.max));
-			prismatic.EnableMotor(useMotor);
-			prismatic.SetMotorSpeed(motor.motorSpeed);
-			prismatic.SetMaxMotorForce(motor.maxMotorTorque);
+			b2PrismaticJoint_EnableLimit(joint, useLimits);
+			b2PrismaticJoint_SetLimits(joint, Math.Min(limits.min, limits.max), Math.Max(limits.min, limits.max));
+			b2PrismaticJoint_EnableMotor(joint, useMotor);
+			b2PrismaticJoint_SetMotorSpeed(joint, motor.motorSpeed);
+			b2PrismaticJoint_SetMaxMotorForce(joint, motor.maxMotorTorque);
+			b2Joint_WakeBodies(joint);
 		}
 
 		#endregion
@@ -457,25 +508,19 @@ namespace LELEngine
 
 		#region InternalMethods
 
-		internal override JointDef CreateDefinition(Body bodyA, Body bodyB)
+		internal override B2JointId CreateJoint(PhysicsScene2D world, B2JointDef baseDef)
 		{
 			B2Vector2 localA, localB, worldA, worldB;
-			ResolveAnchors(bodyA, bodyB, out localA, out localB, out worldA, out worldB);
-			float stiffness = 0f;
-			float damping = 0f;
-			if (frequency > 0f)
-			{
-				JointUtils.AngularStiffness(out stiffness, out damping, frequency, dampingRatio, bodyA, bodyB);
-			}
-
-			return new WeldJointDef
-			{
-				LocalAnchorA = localA,
-				LocalAnchorB = localB,
-				ReferenceAngle = bodyB.GetAngle() - bodyA.GetAngle(),
-				Stiffness = stiffness,
-				Damping = damping
-			};
+			ResolveAnchors(baseDef.bodyIdA, baseDef.bodyIdB, out localA, out localB, out worldA, out worldB);
+			B2WeldJointDef def = b2DefaultWeldJointDef();
+			def.@base = baseDef;
+			SetFrames(ref def.@base, localA, localB, 0f);
+			float hertz = Math.Max(0f, frequency);
+			def.linearHertz = hertz;
+			def.angularHertz = hertz;
+			def.linearDampingRatio = dampingRatio;
+			def.angularDampingRatio = dampingRatio;
+			return b2CreateWeldJoint(world.World, def);
 		}
 
 		#endregion
@@ -490,10 +535,54 @@ namespace LELEngine
 		public bool useMotor;
 		public JointMotor2D motor;
 
-		public float jointTranslation => joint is WheelJoint wheel ? wheel.GetJointTranslation() : 0f;
-		public float jointLinearSpeed => joint is WheelJoint wheel ? wheel.GetJointLinearSpeed() : 0f;
-		public float jointAngle => joint is WheelJoint wheel ? wheel.GetJointAngle() * Physics2DMath.Rad2Deg : 0f;
-		public float jointSpeed => joint is WheelJoint wheel ? wheel.GetJointAngularSpeed() * Physics2DMath.Rad2Deg : 0f;
+		/// <summary>Position of the wheel along the suspension axis.</summary>
+		public float jointTranslation
+		{
+			get
+			{
+				if (!hasJoint)
+				{
+					return 0f;
+				}
+
+				WorldFrames(out B2Vector2 originA, out B2Vector2 axis, out B2Vector2 originB, out float _);
+				return b2Dot(originB - originA, axis);
+			}
+		}
+
+		/// <summary>Speed of the wheel along the suspension axis.</summary>
+		public float jointLinearSpeed
+		{
+			get
+			{
+				if (!hasJoint)
+				{
+					return 0f;
+				}
+
+				WorldFrames(out B2Vector2 originA, out B2Vector2 axis, out B2Vector2 originB, out float _);
+				B2Vector2 relative = b2Body_GetWorldPointVelocity(b2Joint_GetBodyB(joint), originB) - b2Body_GetWorldPointVelocity(b2Joint_GetBodyA(joint), originB);
+				return b2Dot(relative, axis);
+			}
+		}
+
+		/// <summary>Angle of the wheel in degrees.</summary>
+		public float jointAngle
+		{
+			get
+			{
+				if (!hasJoint)
+				{
+					return 0f;
+				}
+
+				WorldFrames(out B2Vector2 _, out B2Vector2 _, out B2Vector2 _, out float angle);
+				return angle * Physics2DMath.Rad2Deg;
+			}
+		}
+
+		/// <summary>Angular speed of the wheel in degrees per second.</summary>
+		public float jointSpeed => hasJoint ? (b2Body_GetAngularVelocity(b2Joint_GetBodyB(joint)) - b2Body_GetAngularVelocity(b2Joint_GetBodyA(joint))) * Physics2DMath.Rad2Deg : 0f;
 
 		#endregion
 
@@ -508,49 +597,43 @@ namespace LELEngine
 
 		#region InternalMethods
 
-		internal override JointDef CreateDefinition(Body bodyA, Body bodyB)
+		internal override B2JointId CreateJoint(PhysicsScene2D world, B2JointDef baseDef)
 		{
 			B2Vector2 localA, localB, worldA, worldB;
-			ResolveAnchors(bodyA, bodyB, out localA, out localB, out worldA, out worldB);
-			float radians = suspension.angle * Physics2DMath.Deg2Rad;
-			var worldAxis = new B2Vector2(MathF.Cos(radians), MathF.Sin(radians));
-			float stiffness;
-			float damping;
-			JointUtils.LinearStiffness(out stiffness, out damping, Math.Max(0f, suspension.frequency), suspension.dampingRatio, bodyA, bodyB);
-			return new WheelJointDef
-			{
-				LocalAnchorA = localA,
-				LocalAnchorB = localB,
-				LocalAxisA = bodyA.GetLocalVector(ref worldAxis),
-				EnableMotor = useMotor,
-				MotorSpeed = motor.motorSpeed * Physics2DMath.Deg2Rad,
-				MaxMotorTorque = motor.maxMotorTorque,
-				Stiffness = stiffness,
-				Damping = damping
-			};
+			ResolveAnchors(baseDef.bodyIdA, baseDef.bodyIdB, out localA, out localB, out worldA, out worldB);
+			B2WheelJointDef def = b2DefaultWheelJointDef();
+			def.@base = baseDef;
+			// The frames' x axis is the suspension axis.
+			SetFrames(ref def.@base, localA, localB, suspension.angle * Physics2DMath.Deg2Rad);
+			def.enableSpring = suspension.frequency > 0f;
+			def.hertz = Math.Max(0f, suspension.frequency);
+			def.dampingRatio = suspension.dampingRatio;
+			def.enableMotor = useMotor;
+			def.motorSpeed = motor.motorSpeed * Physics2DMath.Deg2Rad;
+			def.maxMotorTorque = motor.maxMotorTorque;
+			return b2CreateWheelJoint(world.World, def);
 		}
 
 		internal override void ApplyRuntimeSettings()
 		{
-			if (!(joint is WheelJoint wheel))
+			if (!hasJoint)
 			{
 				return;
 			}
 
-			float stiffness;
-			float damping;
-			JointUtils.LinearStiffness(out stiffness, out damping, Math.Max(0f, suspension.frequency), suspension.dampingRatio, joint.BodyA, joint.BodyB);
-			wheel.SetStiffness(stiffness);
-			wheel.SetDamping(damping);
-			wheel.EnableMotor(useMotor);
-			wheel.SetMotorSpeed(motor.motorSpeed * Physics2DMath.Deg2Rad);
-			wheel.SetMaxMotorTorque(motor.maxMotorTorque);
+			b2WheelJoint_EnableSpring(joint, suspension.frequency > 0f);
+			b2WheelJoint_SetSpringHertz(joint, Math.Max(0f, suspension.frequency));
+			b2WheelJoint_SetSpringDampingRatio(joint, suspension.dampingRatio);
+			b2WheelJoint_EnableMotor(joint, useMotor);
+			b2WheelJoint_SetMotorSpeed(joint, motor.motorSpeed * Physics2DMath.Deg2Rad);
+			b2WheelJoint_SetMaxMotorTorque(joint, motor.maxMotorTorque);
+			b2Joint_WakeBodies(joint);
 		}
 
 		#endregion
 	}
 
-	/// <summary>Resists relative motion between the bodies (top-down friction).</summary>
+	/// <summary>Resists relative motion between the bodies (top-down friction): a Box2D motor joint driving the relative velocity to zero.</summary>
 	public sealed class FrictionJoint2D : AnchoredJoint2D
 	{
 		#region PublicFields
@@ -571,26 +654,34 @@ namespace LELEngine
 
 		#region InternalMethods
 
-		internal override JointDef CreateDefinition(Body bodyA, Body bodyB)
+		internal override B2JointId CreateJoint(PhysicsScene2D world, B2JointDef baseDef)
 		{
 			B2Vector2 localA, localB, worldA, worldB;
-			ResolveAnchors(bodyA, bodyB, out localA, out localB, out worldA, out worldB);
-			return new FrictionJointDef { LocalAnchorA = localA, LocalAnchorB = localB, MaxForce = maxForce, MaxTorque = maxTorque };
+			ResolveAnchors(baseDef.bodyIdA, baseDef.bodyIdB, out localA, out localB, out worldA, out worldB);
+			B2MotorJointDef def = b2DefaultMotorJointDef();
+			def.@base = baseDef;
+			SetFrames(ref def.@base, localA, localB, 0f);
+			def.maxVelocityForce = Math.Max(0f, maxForce);
+			def.maxVelocityTorque = Math.Max(0f, maxTorque);
+			return b2CreateMotorJoint(world.World, def);
 		}
 
 		internal override void ApplyRuntimeSettings()
 		{
-			if (joint is FrictionJoint friction)
+			if (hasJoint)
 			{
-				friction.MaxForce = maxForce;
-				friction.MaxTorque = maxTorque;
+				b2MotorJoint_SetMaxVelocityForce(joint, Math.Max(0f, maxForce));
+				b2MotorJoint_SetMaxVelocityTorque(joint, Math.Max(0f, maxTorque));
 			}
 		}
 
 		#endregion
 	}
 
-	/// <summary>Keeps a relative position and angle between the bodies (a motor joint).</summary>
+	/// <summary>
+	///     Keeps a relative position and angle between the bodies: a Box2D motor joint whose linear and angular springs
+	///     pull the connected body to the offset, with at most <see cref="maxForce" /> / <see cref="maxTorque" />.
+	/// </summary>
 	public sealed class RelativeJoint2D : Joint2D
 	{
 		#region PublicFields
@@ -598,7 +689,10 @@ namespace LELEngine
 		public float maxForce = 10000f;
 		public float maxTorque = 10000f;
 
-		[Range(0f, 1f)] public float correctionScale = 0.3f;
+		[Tooltip("Stiffness of the pull towards the offset, in Hz.")]
+		public float frequency = 3f;
+
+		[Range(0f, 2f)] public float dampingRatio = 1f;
 
 		[Tooltip("The offsets are taken from the bodies' relative placement when the joint is created.")]
 		public bool autoConfigureOffset = true;
@@ -621,44 +715,65 @@ namespace LELEngine
 
 		#region InternalMethods
 
-		internal override JointDef CreateDefinition(Body bodyA, Body bodyB)
+		internal override B2JointId CreateJoint(PhysicsScene2D world, B2JointDef baseDef)
 		{
 			if (autoConfigureOffset)
 			{
-				B2Vector2 positionB = bodyB.GetPosition();
-				linearOffset = Physics2DMath.ToEngine(bodyA.GetLocalPoint(ref positionB));
-				angularOffset = (bodyB.GetAngle() - bodyA.GetAngle()) * Physics2DMath.Rad2Deg;
+				linearOffset = Physics2DMath.ToEngine(b2Body_GetLocalPoint(baseDef.bodyIdA, b2Body_GetPosition(baseDef.bodyIdB)));
+				angularOffset = b2Rot_GetAngle(b2InvMulRot(b2Body_GetRotation(baseDef.bodyIdA), b2Body_GetRotation(baseDef.bodyIdB))) * Physics2DMath.Rad2Deg;
 			}
 
-			return new MotorJointDef
-			{
-				LinearOffset = Physics2DMath.ToB2(linearOffset),
-				AngularOffset = angularOffset * Physics2DMath.Deg2Rad,
-				MaxForce = maxForce,
-				MaxTorque = maxTorque,
-				CorrectionFactor = correctionScale
-			};
+			B2MotorJointDef def = b2DefaultMotorJointDef();
+			def.@base = baseDef;
+			def.@base.localFrameA = OffsetFrame();
+			def.@base.localFrameB = b2Transform_identity;
+			Tune(ref def);
+			return b2CreateMotorJoint(world.World, def);
 		}
 
 		internal override void ApplyRuntimeSettings()
 		{
-			if (!(joint is MotorJoint motor))
+			if (!hasJoint)
 			{
 				return;
 			}
 
-			B2Vector2 offset = Physics2DMath.ToB2(linearOffset);
-			motor.SetLinearOffset(ref offset);
-			motor.SetAngularOffset(angularOffset * Physics2DMath.Deg2Rad);
-			motor.SetMaxForce(maxForce);
-			motor.SetMaxTorque(maxTorque);
-			motor.SetCorrectionFactor(correctionScale);
+			B2MotorJointDef def = default;
+			Tune(ref def);
+			b2Joint_SetLocalFrameA(joint, OffsetFrame());
+			b2MotorJoint_SetLinearHertz(joint, def.linearHertz);
+			b2MotorJoint_SetAngularHertz(joint, def.angularHertz);
+			b2MotorJoint_SetLinearDampingRatio(joint, def.linearDampingRatio);
+			b2MotorJoint_SetAngularDampingRatio(joint, def.angularDampingRatio);
+			b2MotorJoint_SetMaxSpringForce(joint, def.maxSpringForce);
+			b2MotorJoint_SetMaxSpringTorque(joint, def.maxSpringTorque);
+			b2Joint_WakeBodies(joint);
+		}
+
+		#endregion
+
+		#region PrivateMethods
+
+		private B2Transform OffsetFrame()
+		{
+			return new B2Transform(Physics2DMath.ToB2(linearOffset), b2MakeRot(angularOffset * Physics2DMath.Deg2Rad));
+		}
+
+		private void Tune(ref B2MotorJointDef def)
+		{
+			float hertz = Math.Max(0.01f, frequency);
+			def.linearHertz = hertz;
+			def.angularHertz = hertz;
+			def.linearDampingRatio = Math.Max(0f, dampingRatio);
+			def.angularDampingRatio = Math.Max(0f, dampingRatio);
+			def.maxSpringForce = Math.Max(0f, maxForce);
+			def.maxSpringTorque = Math.Max(0f, maxTorque);
 		}
 
 		#endregion
 	}
 
-	/// <summary>Pulls the anchor towards a world target (a soft mouse joint).</summary>
+	/// <summary>Pulls the anchor towards a world target with a spring of at most <see cref="maxForce" /> (a Box2D motor joint from the ground).</summary>
 	public sealed class TargetJoint2D : Joint2D
 	{
 		#region PublicFields
@@ -668,7 +783,9 @@ namespace LELEngine
 
 		public bool autoConfigureTarget = true;
 		public Vector2 target;
-		public float maxForce = 10000f;
+
+		[Tooltip("The most force the spring pulls with, in newtons.")]
+		public float maxForce = 1000f;
 
 		[Range(0f, 1f)] public float dampingRatio = 1f;
 		public float frequency = 5f;
@@ -686,39 +803,41 @@ namespace LELEngine
 
 		#region InternalMethods
 
-		internal override JointDef CreateDefinition(Body bodyA, Body bodyB)
+		internal override B2JointId CreateJoint(PhysicsScene2D world, B2JointDef baseDef)
 		{
-			// Box2D's mouse joint moves body B: the ground is A and this body is B.
+			// The ground holds the target and this body is pulled: the ground is A, this body B.
+			B2BodyId body = baseDef.bodyIdA;
 			Vector2 scale = LocalScale(transform);
 			var local = new B2Vector2(anchor.X * scale.X, anchor.Y * scale.Y);
-			B2Vector2 worldAnchor = bodyA.GetWorldPoint(ref local);
 			if (autoConfigureTarget)
 			{
-				target = Physics2DMath.ToEngine(worldAnchor);
+				target = Physics2DMath.ToEngine(b2Body_GetWorldPoint(body, local));
 			}
 
-			float stiffness;
-			float damping;
-			JointUtils.LinearStiffness(out stiffness, out damping, Math.Max(0.01f, frequency), dampingRatio, bodyB, bodyA);
-			var def = new MouseJointDef { Target = Physics2DMath.ToB2(target), MaxForce = maxForce * Math.Max(0.0001f, bodyA.Mass), Stiffness = stiffness, Damping = damping };
-			return def;
+			B2MotorJointDef def = b2DefaultMotorJointDef();
+			def.@base = baseDef;
+			def.@base.bodyIdA = world.GroundBody;
+			def.@base.bodyIdB = body;
+			def.@base.localFrameA = new B2Transform(Physics2DMath.ToB2(target), b2Rot_identity);
+			def.@base.localFrameB = new B2Transform(local, b2Rot_identity);
+			def.linearHertz = Math.Max(0.01f, frequency);
+			def.linearDampingRatio = dampingRatio;
+			def.maxSpringForce = Math.Max(0f, maxForce);
+			return b2CreateMotorJoint(world.World, def);
 		}
 
 		internal override void ApplyRuntimeSettings()
 		{
-			if (!(joint is MouseJoint mouse))
+			if (!hasJoint)
 			{
 				return;
 			}
 
-			B2Vector2 t = Physics2DMath.ToB2(target);
-			mouse.SetTarget(ref t);
-			mouse.MaxForce = maxForce * Math.Max(0.0001f, joint.BodyB.Mass);
-			float stiffness;
-			float damping;
-			JointUtils.LinearStiffness(out stiffness, out damping, Math.Max(0.01f, frequency), dampingRatio, joint.BodyB, joint.BodyA);
-			mouse.Stiffness = stiffness;
-			mouse.Damping = damping;
+			b2Joint_SetLocalFrameA(joint, new B2Transform(Physics2DMath.ToB2(target), b2Rot_identity));
+			b2MotorJoint_SetLinearHertz(joint, Math.Max(0.01f, frequency));
+			b2MotorJoint_SetLinearDampingRatio(joint, dampingRatio);
+			b2MotorJoint_SetMaxSpringForce(joint, Math.Max(0f, maxForce));
+			b2Joint_WakeBodies(joint);
 		}
 
 		#endregion

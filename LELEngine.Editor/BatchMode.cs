@@ -121,6 +121,7 @@ namespace LELEngine.Editor
 			}
 
 			ProjectInfo project = ProjectInfo.Load(projectPath);
+			project.LoadProjectSettings();
 			AssetDatabase.Initialize(project.AssetsPath, true);
 			ProjectGenerator.Generate(project);
 			Debug.Log($"[Batch] Opened project {project.Name} ({project.RootPath})");

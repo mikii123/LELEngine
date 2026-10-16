@@ -11,7 +11,8 @@ namespace LELEngine.Editor
 	///     <code>
 	///     Project/
 	///       Assets/            everything the game uses (scenes, scripts, meshes, materials, shaders, textures) + .meta
-	///       ProjectSettings/   Project.json (name, scenes in the build, start scene)
+	///       ProjectSettings/   Project.json (name, scenes in the build, start scene; editor only),
+	///                          ProjectSettings.asset (physics, lighting quality; goes into builds)
 	///       Library/           editor caches (build output of the scripts, editor state); safe to delete
 	///       Project.csproj     generated: open it (or Project.sln) in any IDE to edit the scripts
 	///     </code>
@@ -42,6 +43,9 @@ namespace LELEngine.Editor
 		[JsonIgnore] public string LibraryPath => Path.Combine(RootPath, "Library");
 		[JsonIgnore] public string SettingsPath => Path.Combine(RootPath, "ProjectSettings");
 		[JsonIgnore] public string SettingsFile => Path.Combine(SettingsPath, "Project.json");
+
+		/// <summary>The runtime project settings document (<see cref="LELEngine.ProjectSettings" />).</summary>
+		[JsonIgnore] public string ProjectSettingsFile => Path.Combine(SettingsPath, LELEngine.ProjectSettings.FileName);
 
 		#endregion
 
@@ -115,6 +119,17 @@ namespace LELEngine.Editor
 		{
 			Directory.CreateDirectory(SettingsPath);
 			File.WriteAllText(SettingsFile, JsonSerializer.Serialize(this, JsonOptions));
+		}
+
+		/// <summary>Makes the project's settings document the live <see cref="LELEngine.ProjectSettings" />, writing the defaults when it has none.</summary>
+		public void LoadProjectSettings()
+		{
+			bool existed = File.Exists(ProjectSettingsFile);
+			LELEngine.ProjectSettings settings = LELEngine.ProjectSettings.Load(ProjectSettingsFile);
+			if (!existed)
+			{
+				settings.Save(ProjectSettingsFile);
+			}
 		}
 
 		#endregion

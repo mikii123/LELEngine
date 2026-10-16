@@ -67,7 +67,7 @@ namespace LELEngine.Editor
 		private readonly ProjectPanel projectPanel;
 		private readonly ConsolePanel consolePanel;
 		private readonly LightingPanel lightingPanel;
-		private readonly BuildPanel buildPanel;
+		private readonly ProjectSettingsWindow projectSettingsWindow;
 		private readonly GameInputHost gameInput;
 		private readonly TestHooks testHooks;
 		private readonly bool layoutFileExisted;
@@ -110,7 +110,7 @@ namespace LELEngine.Editor
 			projectPanel = new ProjectPanel(this);
 			consolePanel = new ConsolePanel(this);
 			lightingPanel = new LightingPanel(this);
-			buildPanel = new BuildPanel(this);
+			projectSettingsWindow = new ProjectSettingsWindow(this);
 
 			gameInput = new GameInputHost(window, () => PlayState == PlayState.Playing && GameView.HasInputFocus);
 			Input.Host = gameInput;
@@ -217,7 +217,7 @@ namespace LELEngine.Editor
 			lightingPanel.Draw();
 			projectPanel.Draw();
 			consolePanel.Draw();
-			buildPanel.Draw();
+			projectSettingsWindow.Draw();
 			ObjectPicker.Draw(this);
 			Edits.Flush();
 
@@ -284,6 +284,8 @@ namespace LELEngine.Editor
 			CloseProject();
 
 			Project = project;
+			// Physics and lighting quality of the project; projects from before the file get it with the defaults.
+			project.LoadProjectSettings();
 			AssetDatabase.Initialize(project.AssetsPath, true);
 			RecentProjects.Add(project.RootPath);
 			Debug.Log($"[Editor] Opened project {project.Name} ({project.RootPath})");
@@ -346,6 +348,7 @@ namespace LELEngine.Editor
 			Undo.Clear();
 			Edits.Cancel();
 			InternalStorage.Clear();
+			ProjectSettings.Use(null);
 			Project = null;
 		}
 
@@ -700,7 +703,31 @@ namespace LELEngine.Editor
 
 		public void ShowBuildWindow()
 		{
-			buildPanel.Open = true;
+			projectSettingsWindow.Show(ProjectSettingsWindow.Tab.Build);
+		}
+
+		/// <summary>Opens the Project Settings window (on the given tab, or the last one shown).</summary>
+		public void ShowProjectSettings(ProjectSettingsWindow.Tab? tab = null)
+		{
+			projectSettingsWindow.Show(tab);
+		}
+
+		/// <summary>Writes the live project settings to ProjectSettings/ProjectSettings.asset.</summary>
+		public void SaveProjectSettings()
+		{
+			if (Project == null)
+			{
+				return;
+			}
+
+			try
+			{
+				ProjectSettings.Current.Save(Project.ProjectSettingsFile);
+			}
+			catch (Exception e)
+			{
+				Debug.LogError("[Editor] Cannot save the project settings: " + e.Message);
+			}
 		}
 
 		// ---------------------------------------------------------------- UI Builder (own window)
@@ -985,6 +1012,8 @@ namespace LELEngine.Editor
 					Project.Save();
 				}
 
+				ImGui.Separator();
+				if (ImGui.MenuItem("Project Settings...")) ShowProjectSettings();
 				ImGui.EndMenu();
 			}
 
@@ -1050,7 +1079,7 @@ namespace LELEngine.Editor
 					CreateObject("Box 2D", go =>
 					{
 						// Cube.obj spans -1..1, so the scale is the half size; the colliders fit the mesh like Unity's Reset.
-						go.transform.localScale = new Vector3(0.5f, 0.5f, 0.25f);
+						go.transform.localScale = Planar(0.5f, 0.5f, 0.25f);
 						DefaultScene.AddMesh(go, "Cube.obj");
 						go.AddComponent<Rigidbody2D>();
 						go.AddComponent<BoxCollider2D>().FitToRenderer();
@@ -1072,7 +1101,7 @@ namespace LELEngine.Editor
 				{
 					CreateObject("Ground 2D", go =>
 					{
-						go.transform.localScale = new Vector3(5f, 0.25f, 0.25f);
+						go.transform.localScale = Planar(5f, 0.25f, 0.25f);
 						MeshRenderer renderer = DefaultScene.AddMesh(go, "Cube.obj");
 						renderer.IsStatic = true;
 						go.AddComponent<BoxCollider2D>().FitToRenderer();
@@ -1083,7 +1112,7 @@ namespace LELEngine.Editor
 				{
 					CreateObject("Capsule 2D", go =>
 					{
-						go.transform.localScale = new Vector3(0.25f, 0.5f, 0.25f);
+						go.transform.localScale = Planar(0.25f, 0.5f, 0.25f);
 						DefaultScene.AddMesh(go, "Cube.obj");
 						go.AddComponent<Rigidbody2D>();
 						go.AddComponent<CapsuleCollider2D>().FitToRenderer();
@@ -1108,8 +1137,8 @@ namespace LELEngine.Editor
 							GameObject link = Scene.CreateGameObject("Link " + (i + 1));
 							link.transform.SetParent(go.transform, false);
 							// Links of 0.25 x 0.6 m hanging end to end; the anchor is in unscaled local space (the mesh top).
-							link.transform.localPosition = new Vector3(0f, -0.3f - 0.6f * i, 0f);
-							link.transform.localScale = new Vector3(0.125f, 0.3f, 0.125f);
+							link.transform.localPosition = Planar(0f, -0.3f - 0.6f * i, 0f);
+							link.transform.localScale = Planar(0.125f, 0.3f, 0.125f);
 							DefaultScene.AddMesh(link, "Cube.obj");
 							Rigidbody2D body = link.AddComponent<Rigidbody2D>();
 							link.AddComponent<BoxCollider2D>().FitToRenderer();
@@ -1134,6 +1163,12 @@ namespace LELEngine.Editor
 					go.AddComponent<DirectionalLight>();
 				}, parent);
 			}
+		}
+
+		/// <summary>A vector of the 2D physics plane (x and y in the plane, depth along its normal): XY → (x, y, depth), XZ → (x, depth, y).</summary>
+		private static Vector3 Planar(float x, float y, float depth)
+		{
+			return ProjectSettings.Current.Physics2D.SimulationPlane == SimulationPlane2D.XZ ? new Vector3(x, depth, y) : new Vector3(x, y, depth);
 		}
 
 		private void DrawPlayControls()

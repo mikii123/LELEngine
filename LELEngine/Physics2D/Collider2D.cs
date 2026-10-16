@@ -1,12 +1,16 @@
 using System;
 using System.Collections.Generic;
-using Box2DSharp.Collision;
-using Box2DSharp.Collision.Collider;
-using Box2DSharp.Collision.Shapes;
-using Box2DSharp.Dynamics;
+using Box2D.NET;
 using OpenTK.Mathematics;
-using B2Transform = Box2DSharp.Common.Transform;
-using B2Vector2 = System.Numerics.Vector2;
+using static Box2D.NET.B2Bodies;
+using static Box2D.NET.B2Constants;
+using static Box2D.NET.B2Geometries;
+using static Box2D.NET.B2Hulls;
+using static Box2D.NET.B2MathFunction;
+using static Box2D.NET.B2Shapes;
+using static Box2D.NET.B2Types;
+using static Box2D.NET.B2Worlds;
+using B2Vector2 = Box2D.NET.B2Vec2;
 
 namespace LELEngine
 {
@@ -14,7 +18,7 @@ namespace LELEngine
 	///     Base of the 2D collision shapes. A collider belongs to the nearest <see cref="Rigidbody2D" /> up the
 	///     hierarchy (its shapes are built in that body's space, including this object's offset, rotation and scale);
 	///     without one it is a static collider in world space. Triggers overlap without colliding and report
-	///     OnTrigger callbacks. Shape edits (inspector or properties) rebuild the Box2D fixtures.
+	///     OnTrigger callbacks. Shape edits (inspector or properties) rebuild the Box2D shapes.
 	/// </summary>
 	public abstract class Collider2D : Behaviour
 	{
@@ -38,11 +42,9 @@ namespace LELEngine
 			{
 				if (m_IsTrigger != value)
 				{
+					// Box2D fixes the sensor flag when a shape is created: the shapes are rebuilt.
 					m_IsTrigger = value;
-					foreach (Fixture fixture in fixtures)
-					{
-						fixture.IsSensor = value;
-					}
+					MarkDirty();
 				}
 			}
 		}
@@ -76,9 +78,12 @@ namespace LELEngine
 			set
 			{
 				m_Density = value;
-				foreach (Fixture fixture in fixtures)
+				foreach (B2ShapeId shape in shapes)
 				{
-					fixture.Density = value;
+					if (b2Shape_IsValid(shape))
+					{
+						b2Shape_SetDensity(shape, Math.Max(0f, value), false);
+					}
 				}
 
 				attachedRigidbody?.MassChanged();
@@ -88,38 +93,34 @@ namespace LELEngine
 		/// <summary>The rigidbody this collider is attached to (null for static colliders or while not simulated).</summary>
 		public Rigidbody2D attachedRigidbody { get; internal set; }
 
-		public float friction => m_Material?.friction ?? attachedRigidbody?.sharedMaterial?.friction ?? gameObject?.scene?.Settings.Physics2D.DefaultFriction ?? 0.4f;
-		public float bounciness => m_Material?.bounciness ?? attachedRigidbody?.sharedMaterial?.bounciness ?? gameObject?.scene?.Settings.Physics2D.DefaultBounciness ?? 0f;
+		public float friction => m_Material?.friction ?? attachedRigidbody?.sharedMaterial?.friction ?? ProjectSettings.Current.Physics2D.DefaultFriction;
+		public float bounciness => m_Material?.bounciness ?? attachedRigidbody?.sharedMaterial?.bounciness ?? ProjectSettings.Current.Physics2D.DefaultBounciness;
 
 		/// <summary>World-space bounds of the shapes (empty while not simulated).</summary>
 		public Rect bounds
 		{
 			get
 			{
-				if (fixtures.Count == 0)
+				if (shapes.Count == 0)
 				{
 					return Rect.zero;
 				}
 
 				Vector2 min = new Vector2(float.MaxValue);
 				Vector2 max = new Vector2(float.MinValue);
-				foreach (Fixture fixture in fixtures)
+				foreach (B2ShapeId shape in shapes)
 				{
-					int children = fixture.Shape.GetChildCount();
-					for (int child = 0; child < children; child++)
-					{
-						AABB aabb = fixture.GetAABB(child);
-						min = Vector2.ComponentMin(min, Physics2DMath.ToEngine(aabb.LowerBound));
-						max = Vector2.ComponentMax(max, Physics2DMath.ToEngine(aabb.UpperBound));
-					}
+					B2AABB aabb = b2Shape_GetAABB(shape);
+					min = Vector2.ComponentMin(min, Physics2DMath.ToEngine(aabb.lowerBound));
+					max = Vector2.ComponentMax(max, Physics2DMath.ToEngine(aabb.upperBound));
 				}
 
 				return Rect.MinMaxRect(min.X, min.Y, max.X, max.Y);
 			}
 		}
 
-		/// <summary>The Box2D fixtures (empty while not simulated).</summary>
-		public IReadOnlyList<Fixture> Fixtures => fixtures;
+		/// <summary>The Box2D shapes, chain segments included (empty while not simulated).</summary>
+		public IReadOnlyList<B2ShapeId> Shapes => shapes;
 
 		#endregion
 
@@ -143,18 +144,21 @@ namespace LELEngine
 
 		#region ProtectedMethods
 
-		/// <summary>The XY bounds of this object's mesh in its local space; false without a renderer or a mesh.</summary>
+		/// <summary>The bounds of this object's mesh in its local space, in the simulation plane; false without a renderer or a mesh.</summary>
 		protected bool TryGetMeshBounds(out Vector2 min, out Vector2 max)
 		{
 			Mesh mesh = gameObject?.GetComponent<MeshRenderer>()?.Mesh;
-			if (mesh == null || (mesh.BoundsMax.X <= mesh.BoundsMin.X && mesh.BoundsMax.Y <= mesh.BoundsMin.Y))
+			PlaneBasis plane = Plane;
+			Vector2 a = mesh != null ? plane.ToPlane(mesh.BoundsMin) : Vector2.Zero;
+			Vector2 b = mesh != null ? plane.ToPlane(mesh.BoundsMax) : Vector2.Zero;
+			min = Vector2.ComponentMin(a, b);
+			max = Vector2.ComponentMax(a, b);
+			if (mesh == null || (max.X <= min.X && max.Y <= min.Y))
 			{
 				min = max = Vector2.Zero;
 				return false;
 			}
 
-			min = new Vector2(mesh.BoundsMin.X, mesh.BoundsMin.Y);
-			max = new Vector2(mesh.BoundsMax.X, mesh.BoundsMax.Y);
 			return true;
 		}
 
@@ -163,9 +167,16 @@ namespace LELEngine
 		#region InternalFields
 
 		internal PhysicsScene2D world;
-		internal Body body;
-		internal Body ownStaticBody;
-		internal readonly List<Fixture> fixtures = new List<Fixture>();
+		internal B2BodyId body;
+		internal B2BodyId ownStaticBody;
+
+		/// <summary>The simulation plane: the world's, or the project's outside a world.</summary>
+		internal PlaneBasis Plane => world?.Plane ?? PlaneBasis.Current;
+
+		/// <summary>Every shape of the collider, the segments of its chains included.</summary>
+		internal readonly List<B2ShapeId> shapes = new List<B2ShapeId>();
+
+		internal readonly List<B2ChainId> chains = new List<B2ChainId>();
 		internal bool shapeDirty;
 
 		#endregion
@@ -173,7 +184,6 @@ namespace LELEngine
 		#region PrivateFields
 
 		private Matrix4 staticPose;
-		private static readonly GJkProfile gjkProfile = new GJkProfile();
 
 		#endregion
 
@@ -243,9 +253,9 @@ namespace LELEngine
 		public bool OverlapPoint(Vector2 point)
 		{
 			B2Vector2 p = Physics2DMath.ToB2(point);
-			foreach (Fixture fixture in fixtures)
+			foreach (B2ShapeId shape in shapes)
 			{
-				if (fixture.TestPoint(ref p))
+				if (b2Shape_TestPoint(shape, p))
 				{
 					return true;
 				}
@@ -257,39 +267,27 @@ namespace LELEngine
 		/// <summary>The point of this collider closest to a world position (the position itself when inside).</summary>
 		public Vector2 ClosestPoint(Vector2 position)
 		{
-			if (fixtures.Count == 0)
+			if (shapes.Count == 0)
 			{
 				return position;
 			}
 
 			B2Vector2 p = Physics2DMath.ToB2(position);
-			var pointProxy = new DistanceProxy();
-			pointProxy.Set(new[] { p }, 1, 0f);
 			float best = float.MaxValue;
 			Vector2 result = position;
-			foreach (Fixture fixture in fixtures)
+			foreach (B2ShapeId shape in shapes)
 			{
-				if (fixture.TestPoint(ref p))
+				if (b2Shape_TestPoint(shape, p))
 				{
 					return position;
 				}
 
-				B2Transform bodyTransform = fixture.Body.GetTransform();
-				int children = fixture.Shape.GetChildCount();
-				for (int child = 0; child < children; child++)
+				B2Vector2 closest = b2Shape_GetClosestPoint(shape, p);
+				float distance = Physics2DMath.DistanceSquared(closest, p);
+				if (distance < best)
 				{
-					var proxy = new DistanceProxy();
-					proxy.Set(fixture.Shape, child);
-					var input = new DistanceInput { ProxyA = pointProxy, ProxyB = proxy, TransformA = new B2Transform(B2Vector2.Zero, 0f), TransformB = bodyTransform, UseRadii = true };
-					var cache = new SimplexCache();
-					DistanceOutput output;
-					GJkProfile profile = gjkProfile;
-					DistanceAlgorithm.Distance(out output, ref cache, ref input, ref profile);
-					if (output.Distance < best)
-					{
-						best = output.Distance;
-						result = Physics2DMath.ToEngine(output.PointB);
-					}
+					best = distance;
+					result = Physics2DMath.ToEngine(closest);
 				}
 			}
 
@@ -300,16 +298,16 @@ namespace LELEngine
 		public int Cast(Vector2 direction, List<RaycastHit2D> results, float distance = float.PositiveInfinity, bool ignoreSiblingColliders = true)
 		{
 			results.Clear();
-			if (world == null || fixtures.Count == 0)
+			if (world == null || shapes.Count == 0)
 			{
 				return 0;
 			}
 
 			var hits = new List<RaycastHit2D>();
-			foreach (Fixture fixture in fixtures)
+			foreach (B2ShapeId shape in shapes)
 			{
-				B2Transform transform = fixture.Body.GetTransform();
-				world.ShapeCastAll(fixture.Shape, transform, direction, distance, -1, null, hits, false);
+				B2ShapeProxy proxy = PhysicsScene2D.WorldProxy(shape);
+				world.ShapeCastAll(proxy, direction, distance, -1, null, hits, false);
 				foreach (RaycastHit2D hit in hits)
 				{
 					if (hit.collider == this || (ignoreSiblingColliders && hit.collider.body == body))
@@ -334,7 +332,7 @@ namespace LELEngine
 				return 0;
 			}
 
-			Vector2 origin = transform != null ? transform.position.Xy : Vector2.Zero;
+			Vector2 origin = transform != null ? world.Plane.ToPlane(transform.position) : Vector2.Zero;
 			var hits = new List<RaycastHit2D>();
 			world.RaycastAll(origin, direction, distance, layerMask, null, hits, false);
 			foreach (RaycastHit2D hit in hits)
@@ -353,68 +351,117 @@ namespace LELEngine
 		#region InternalMethods
 
 		/// <summary>Shapes of this collider in the given space (body space of the owner, or world space when static): scale, the object's rotation and offset applied.</summary>
-		internal abstract void BuildShapes(List<Shape> shapes, Vector2 scale, float angle, Vector2 translation);
+		internal abstract void BuildShapes(List<ShapeGeometry> shapes, Vector2 scale, float angle, Vector2 translation);
 
-		/// <summary>Creates the fixtures on the body (owner null: a static body at the origin, shapes in world space).</summary>
-		internal void CreateFixtures(Body target, Transform owner)
+		/// <summary>Creates the shapes on the body (owner null: a static body at the origin, shapes in world space).</summary>
+		internal void CreateShapes(B2BodyId target, Transform owner)
 		{
 			Vector2 position;
 			float angle;
 			Vector2 scale;
-			Physics2DMath.PlanarPose(transform, owner, out position, out angle, out scale);
+			world.Plane.PlanarPose(transform, owner, out position, out angle, out scale);
 			if (owner == null)
 			{
 				staticPose = transform.LocalToWorld;
 			}
 
-			var shapes = new List<Shape>();
+			var geometry = new List<ShapeGeometry>();
 			try
 			{
-				BuildShapes(shapes, scale, angle, position);
+				BuildShapes(geometry, scale, angle, position);
 			}
 			catch (Exception e)
 			{
 				Debug.LogException(e, this);
 			}
 
-			foreach (Shape shape in shapes)
-			{
-				var def = new FixtureDef
-				{
-					Shape = shape,
-					Density = Math.Max(0f, m_Density),
-					Friction = friction,
-					Restitution = bounciness,
-					IsSensor = m_IsTrigger,
-					Filter = new Filter { CategoryBits = 1, MaskBits = ushort.MaxValue, GroupIndex = 0 },
-					UserData = this
-				};
-				fixtures.Add(target.CreateFixture(def));
-			}
+			B2ShapeDef def = b2DefaultShapeDef();
+			def.userData = B2UserData.Ref(this);
+			def.density = Math.Max(0f, m_Density);
+			def.material.friction = friction;
+			def.material.restitution = bounciness;
+			def.isSensor = m_IsTrigger;
+			def.filter = world.FilterFor(gameObject.layer);
+			// Every shape is a sensor visitor (a trigger sees it) and reports contacts (OnCollision callbacks);
+			// pairs ignored with Physics2D.IgnoreCollision go through the world's custom filter.
+			def.enableSensorEvents = true;
+			def.enableContactEvents = true;
+			def.enableCustomFiltering = true;
+			// The body's mass is computed once after all of its shapes exist (Rigidbody2D.MassChanged).
+			def.updateBodyMass = false;
 
-			if (target.BodyType == BodyType.DynamicBody)
+			foreach (ShapeGeometry shape in geometry)
 			{
-				target.IsAwake = true;
-			}
-		}
-
-		internal void DestroyFixtures()
-		{
-			if (body != null)
-			{
-				foreach (Fixture fixture in fixtures.ToArray())
+				switch (shape.Kind)
 				{
-					body.DestroyFixture(fixture);
+					case ShapeKind.Circle:
+						shapes.Add(b2CreateCircleShape(target, def, shape.Circle));
+						break;
+					case ShapeKind.Capsule:
+						shapes.Add(b2CreateCapsuleShape(target, def, shape.Capsule));
+						break;
+					case ShapeKind.Polygon:
+						shapes.Add(b2CreatePolygonShape(target, def, shape.Polygon));
+						break;
+					case ShapeKind.Segment:
+						shapes.Add(b2CreateSegmentShape(target, def, shape.Segment));
+						break;
+					case ShapeKind.Chain:
+						B2ChainDef chainDef = b2DefaultChainDef();
+						chainDef.userData = def.userData;
+						chainDef.points = shape.ChainPoints;
+						chainDef.count = shape.ChainPoints.Length;
+						chainDef.isLoop = false;
+						chainDef.filter = def.filter;
+						chainDef.enableSensorEvents = true;
+						var material = b2DefaultSurfaceMaterial();
+						material.friction = def.material.friction;
+						material.restitution = def.material.restitution;
+						chainDef.materials = new[] { material };
+						chainDef.materialCount = 1;
+						B2ChainId chain = b2CreateChain(target, chainDef);
+						chains.Add(chain);
+						int count = b2Chain_GetSegmentCount(chain);
+						var segments = new B2ShapeId[count];
+						b2Chain_GetSegments(chain, segments, count);
+						shapes.AddRange(segments);
+						break;
 				}
 			}
 
-			fixtures.Clear();
+			if (b2Body_GetType(target) == B2BodyType.b2_dynamicBody)
+			{
+				b2Body_SetAwake(target, true);
+			}
 		}
 
-		/// <summary>A static collider whose transform moved since its fixtures were built (rebuilt before the step).</summary>
+		internal void DestroyShapes()
+		{
+			foreach (B2ChainId chain in chains)
+			{
+				if (b2Chain_IsValid(chain))
+				{
+					b2DestroyChain(chain);
+				}
+			}
+
+			foreach (B2ShapeId shape in shapes)
+			{
+				// Chain segments went with their chain.
+				if (b2Shape_IsValid(shape))
+				{
+					b2DestroyShape(shape, false);
+				}
+			}
+
+			chains.Clear();
+			shapes.Clear();
+		}
+
+		/// <summary>A static collider whose transform moved since its shapes were built (rebuilt before the step).</summary>
 		internal bool StaticPoseChanged()
 		{
-			return ownStaticBody != null && transform != null && !MatrixEquals(transform.LocalToWorld, staticPose);
+			return ownStaticBody.index1 != 0 && transform != null && !MatrixEquals(transform.LocalToWorld, staticPose);
 		}
 
 		internal void MarkDirty()
@@ -423,11 +470,21 @@ namespace LELEngine
 			world?.RebuildCollider(this);
 		}
 
+		/// <summary>The layer's collision mask into the shapes (layer or matrix changed).</summary>
 		internal void Refilter()
 		{
-			foreach (Fixture fixture in fixtures)
+			if (world == null || gameObject == null)
 			{
-				fixture.Refilter();
+				return;
+			}
+
+			B2Filter filter = world.FilterFor(gameObject.layer);
+			foreach (B2ShapeId shape in shapes)
+			{
+				if (b2Shape_IsValid(shape))
+				{
+					b2Shape_SetFilter(shape, filter);
+				}
 			}
 		}
 
@@ -436,43 +493,29 @@ namespace LELEngine
 			Refilter();
 		}
 
-		/// <summary>Places a collider-local point into the fixture space.</summary>
+		/// <summary>Places a collider-local point into the shape space.</summary>
 		protected B2Vector2 Place(Vector2 local, Vector2 scale, float angle, Vector2 translation)
 		{
 			return Physics2DMath.Place(local + m_Offset, scale, angle, translation);
 		}
 
 		/// <summary>Adds a convex polygon (any winding, at most 8 vertices) as a shape; concave or larger ones are triangulated.</summary>
-		protected static void AddPolygon(List<Shape> shapes, List<B2Vector2> points, float radius)
+		private protected static void AddPolygon(List<ShapeGeometry> shapes, List<B2Vector2> points, float radius)
 		{
 			if (points.Count < 3)
 			{
 				return;
 			}
 
-			if (points.Count <= Box2DSharp.Common.Settings.MaxPolygonVertices && Physics2DMath.IsConvex(points) && Math.Abs(Physics2DMath.SignedArea(points)) > 1e-6f)
+			if (points.Count <= B2_MAX_POLYGON_VERTICES && Physics2DMath.IsConvex(points) && Math.Abs(Physics2DMath.SignedArea(points)) > 1e-6f)
 			{
-				var polygon = new PolygonShape();
-				polygon.Set(points.ToArray(), points.Count);
-				if (radius > 0f)
-				{
-					Box2DAccess.SetRadius(polygon, radius);
-				}
-
-				shapes.Add(polygon);
+				AddHull(shapes, points.ToArray(), radius);
 				return;
 			}
 
 			foreach (B2Vector2[] triangle in Physics2DMath.Triangulate(points))
 			{
-				var polygon = new PolygonShape();
-				polygon.Set(triangle, 3);
-				if (radius > 0f)
-				{
-					Box2DAccess.SetRadius(polygon, radius);
-				}
-
-				shapes.Add(polygon);
+				AddHull(shapes, triangle, radius);
 			}
 		}
 
@@ -480,12 +523,27 @@ namespace LELEngine
 
 		#region PrivateMethods
 
+		/// <summary>A convex polygon from its points (Box2D's hull drops collinear and duplicate points; a degenerate one is skipped).</summary>
+		private static void AddHull(List<ShapeGeometry> shapes, B2Vector2[] points, float radius)
+		{
+			B2Hull hull = b2ComputeHull(points, points.Length);
+			if (hull.count < 3)
+			{
+				return;
+			}
+
+			shapes.Add(new ShapeGeometry { Kind = ShapeKind.Polygon, Polygon = b2MakePolygon(hull, Math.Max(0f, radius)) });
+		}
+
 		private void ApplyMaterial()
 		{
-			foreach (Fixture fixture in fixtures)
+			foreach (B2ShapeId shape in shapes)
 			{
-				fixture.Friction = friction;
-				fixture.Restitution = bounciness;
+				if (b2Shape_IsValid(shape))
+				{
+					b2Shape_SetFriction(shape, friction);
+					b2Shape_SetRestitution(shape, bounciness);
+				}
 			}
 		}
 
@@ -495,6 +553,28 @@ namespace LELEngine
 		}
 
 		#endregion
+	}
+
+	internal enum ShapeKind
+	{
+		Circle,
+		Capsule,
+		Polygon,
+		Segment,
+		Chain
+	}
+
+	/// <summary>One Box2D shape of a collider, in the space of the body it goes on.</summary>
+	internal struct ShapeGeometry
+	{
+		public ShapeKind Kind;
+		public B2Circle Circle;
+		public B2Capsule Capsule;
+		public B2Polygon Polygon;
+		public B2Segment Segment;
+
+		/// <summary>Chain points with a ghost point at each end (Box2D's open chain).</summary>
+		public B2Vector2[] ChainPoints;
 	}
 
 	/// <summary>Axis-aligned box in the collider's local space (rotation and scale come from the transform).</summary>
@@ -547,7 +627,7 @@ namespace LELEngine
 
 		#region InternalMethods
 
-		internal override void BuildShapes(List<Shape> shapes, Vector2 scale, float angle, Vector2 translation)
+		internal override void BuildShapes(List<ShapeGeometry> shapes, Vector2 scale, float angle, Vector2 translation)
 		{
 			float hx = Math.Max(0.005f, Math.Abs(m_Size.X) * 0.5f);
 			float hy = Math.Max(0.005f, Math.Abs(m_Size.Y) * 0.5f);
@@ -601,20 +681,18 @@ namespace LELEngine
 
 		#region InternalMethods
 
-		internal override void BuildShapes(List<Shape> shapes, Vector2 scale, float angle, Vector2 translation)
+		internal override void BuildShapes(List<ShapeGeometry> shapes, Vector2 scale, float angle, Vector2 translation)
 		{
-			var circle = new CircleShape
-			{
-				Position = Place(Vector2.Zero, scale, angle, translation),
-				Radius = Math.Max(0.005f, Math.Abs(m_Radius) * Math.Max(Math.Abs(scale.X), Math.Abs(scale.Y)))
-			};
-			shapes.Add(circle);
+			var circle = new B2Circle(
+				Place(Vector2.Zero, scale, angle, translation),
+				Math.Max(0.005f, Math.Abs(m_Radius) * Math.Max(Math.Abs(scale.X), Math.Abs(scale.Y))));
+			shapes.Add(new ShapeGeometry { Kind = ShapeKind.Circle, Circle = circle });
 		}
 
 		#endregion
 	}
 
-	/// <summary>A box with fully rounded ends (a Box2D polygon with a radius).</summary>
+	/// <summary>A box with fully rounded ends (a Box2D capsule).</summary>
 	public sealed class CapsuleCollider2D : Collider2D
 	{
 		#region PublicFields
@@ -664,32 +742,22 @@ namespace LELEngine
 
 		#region InternalMethods
 
-		internal override void BuildShapes(List<Shape> shapes, Vector2 scale, float angle, Vector2 translation)
+		internal override void BuildShapes(List<ShapeGeometry> shapes, Vector2 scale, float angle, Vector2 translation)
 		{
 			float sx = Math.Abs(scale.X);
 			float sy = Math.Abs(scale.Y);
 			float width = Math.Abs(m_Size.X) * sx;
 			float height = Math.Abs(m_Size.Y) * sy;
 			bool vertical = m_Direction == CapsuleDirection2D.Vertical;
-			float radius = (vertical ? width : height) * 0.5f;
-			float halfLength = Math.Max(0.01f, (vertical ? height : width) * 0.5f - radius);
-			radius = Math.Max(0.005f, radius);
+			float radius = Math.Max(0.005f, (vertical ? width : height) * 0.5f);
+			float halfLength = Math.Max(0.005f, (vertical ? height : width) * 0.5f - radius);
 
-			// The inner segment as a thin box; the radius rounds it into a capsule.
-			float thin = 0.01f;
+			// The inner segment (already scaled: Place scales again, so it is divided out first) and the radius.
 			Vector2 unscaled = new Vector2(1f / Math.Max(sx, 1e-6f), 1f / Math.Max(sy, 1e-6f));
-			Vector2 a = vertical ? new Vector2(-thin, -halfLength) : new Vector2(-halfLength, -thin);
-			Vector2 b = vertical ? new Vector2(thin, -halfLength) : new Vector2(halfLength, -thin);
-			Vector2 c = vertical ? new Vector2(thin, halfLength) : new Vector2(halfLength, thin);
-			Vector2 d = vertical ? new Vector2(-thin, halfLength) : new Vector2(-halfLength, thin);
-			var points = new List<B2Vector2>
-			{
-				Place(a * unscaled, scale, angle, translation),
-				Place(b * unscaled, scale, angle, translation),
-				Place(c * unscaled, scale, angle, translation),
-				Place(d * unscaled, scale, angle, translation)
-			};
-			AddPolygon(shapes, points, radius);
+			Vector2 a = vertical ? new Vector2(0f, -halfLength) : new Vector2(-halfLength, 0f);
+			Vector2 b = -a;
+			var capsule = new B2Capsule(Place(a * unscaled, scale, angle, translation), Place(b * unscaled, scale, angle, translation), radius);
+			shapes.Add(new ShapeGeometry { Kind = ShapeKind.Capsule, Capsule = capsule });
 		}
 
 		#endregion
@@ -739,7 +807,7 @@ namespace LELEngine
 
 		#region InternalMethods
 
-		internal override void BuildShapes(List<Shape> shapes, Vector2 scale, float angle, Vector2 translation)
+		internal override void BuildShapes(List<ShapeGeometry> shapes, Vector2 scale, float angle, Vector2 translation)
 		{
 			if (m_Points == null || m_Points.Count < 3)
 			{
@@ -758,7 +826,7 @@ namespace LELEngine
 		#endregion
 	}
 
-	/// <summary>Open chain of line segments (one-sided-free edges, for ground and walls); default is a horizontal unit segment.</summary>
+	/// <summary>Open chain of line segments (for ground and walls); default is a horizontal unit segment.</summary>
 	public sealed class EdgeCollider2D : Collider2D
 	{
 		#region PublicFields
@@ -795,7 +863,7 @@ namespace LELEngine
 
 		#region InternalMethods
 
-		internal override void BuildShapes(List<Shape> shapes, Vector2 scale, float angle, Vector2 translation)
+		internal override void BuildShapes(List<ShapeGeometry> shapes, Vector2 scale, float angle, Vector2 translation)
 		{
 			if (m_Points == null || m_Points.Count < 2)
 			{
@@ -806,7 +874,7 @@ namespace LELEngine
 			foreach (Vector2 point in m_Points)
 			{
 				B2Vector2 p = Place(point, scale, angle, translation);
-				if (placed.Count == 0 || B2Vector2.DistanceSquared(placed[placed.Count - 1], p) > 1e-6f)
+				if (placed.Count == 0 || Physics2DMath.DistanceSquared(placed[placed.Count - 1], p) > 1e-6f)
 				{
 					placed.Add(p);
 				}
@@ -818,33 +886,32 @@ namespace LELEngine
 			}
 
 			float radius = Math.Max(0f, m_EdgeRadius) * Math.Max(Math.Abs(scale.X), Math.Abs(scale.Y));
-			if (radius > 0f || placed.Count == 2)
+			if (radius > 0f)
 			{
+				// Thick edges: one capsule per segment.
 				for (int i = 0; i + 1 < placed.Count; i++)
 				{
-					var edge = new EdgeShape();
-					B2Vector2 a = placed[i];
-					B2Vector2 b = placed[i + 1];
-					edge.SetTwoSided(ref a, ref b);
-					if (radius > 0f)
-					{
-						Box2DAccess.SetRadius(edge, radius);
-					}
-
-					shapes.Add(edge);
+					shapes.Add(new ShapeGeometry { Kind = ShapeKind.Capsule, Capsule = new B2Capsule(placed[i], placed[i + 1], radius) });
 				}
 
 				return;
 			}
 
-			// A chain gives smooth sliding over the joins (no ghost collisions between segments).
-			var chain = new ChainShape();
+			if (placed.Count == 2)
+			{
+				shapes.Add(new ShapeGeometry { Kind = ShapeKind.Segment, Segment = new B2Segment(placed[0], placed[1]) });
+				return;
+			}
+
+			// A chain gives smooth sliding over the joins (no ghost collisions between segments). Box2D's open chain
+			// takes a ghost point before the first and after the last point (they shape the end normals only).
 			B2Vector2 first = placed[0];
 			B2Vector2 last = placed[placed.Count - 1];
-			B2Vector2 prev = first + (first - placed[1]);
-			B2Vector2 next = last + (last - placed[placed.Count - 2]);
-			chain.CreateChain(placed.ToArray(), placed.Count, prev, next);
-			shapes.Add(chain);
+			var chain = new B2Vector2[placed.Count + 2];
+			chain[0] = first + (first - placed[1]);
+			placed.CopyTo(chain, 1);
+			chain[chain.Length - 1] = last + (last - placed[placed.Count - 2]);
+			shapes.Add(new ShapeGeometry { Kind = ShapeKind.Chain, ChainPoints = chain });
 		}
 
 		#endregion
