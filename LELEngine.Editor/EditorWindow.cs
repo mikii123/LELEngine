@@ -84,6 +84,13 @@ namespace LELEngine.Editor
 			editor = new EditorApplication(this, layoutExisted ? layout : null, args);
 		}
 
+		/// <summary>Makes this window's GL and ImGui contexts current again (after another editor window used its own).</summary>
+		public void MakeEditorCurrent()
+		{
+			MakeCurrent();
+			imgui?.Activate();
+		}
+
 		protected override void OnUpdateFrame(FrameEventArgs e)
 		{
 			base.OnUpdateFrame(e);

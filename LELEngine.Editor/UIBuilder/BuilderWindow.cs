@@ -60,7 +60,7 @@ namespace LELEngine.Editor.UIBuilder
 			imgui = new ImGuiController(native, layout);
 			EditorStyle.Apply();
 			Builder = new UIBuilder(editor, this);
-			owner.MakeCurrent();
+			owner.MakeEditorCurrent();
 		}
 
 		#endregion
@@ -114,13 +114,25 @@ namespace LELEngine.Editor.UIBuilder
 			}
 			finally
 			{
-				owner.MakeCurrent();
+				owner.MakeEditorCurrent();
 			}
 		}
 
 		public void Focus()
 		{
 			native?.Focus();
+		}
+
+		/// <summary>
+		///     Closes the window like its close button (unsaved changes ask first). Safe mid-frame: the window is disposed
+		///     by the editor after the frame, never while its ImGui context is drawing.
+		/// </summary>
+		public void Close()
+		{
+			if (Builder.RequestClose())
+			{
+				closeRequested = true;
+			}
 		}
 
 		public void Dispose()
@@ -141,7 +153,7 @@ namespace LELEngine.Editor.UIBuilder
 			native?.Closing -= OnClosing;
 			native?.Dispose();
 			native = null;
-			owner.MakeCurrent();
+			owner.MakeEditorCurrent();
 		}
 
 		#endregion

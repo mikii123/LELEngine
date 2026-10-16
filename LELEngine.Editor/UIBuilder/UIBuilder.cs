@@ -667,7 +667,7 @@ namespace LELEngine.Editor.UIBuilder
 				if (ImGui.MenuItem("Save", "Ctrl+S")) Save();
 				if (ImGui.MenuItem("Save As...")) openSaveAsPopup = true;
 				ImGui.Separator();
-				if (ImGui.MenuItem("Close")) window.Dispose();
+				if (ImGui.MenuItem("Close")) window.Close();
 				ImGui.EndMenu();
 			}
 
@@ -1494,7 +1494,7 @@ namespace LELEngine.Editor.UIBuilder
 					{
 						closeConfirmed = true;
 						ImGui.CloseCurrentPopup();
-						window.Dispose();
+						window.Close();
 					}
 				}
 
@@ -1503,7 +1503,7 @@ namespace LELEngine.Editor.UIBuilder
 				{
 					closeConfirmed = true;
 					ImGui.CloseCurrentPopup();
-					window.Dispose();
+					window.Close();
 				}
 
 				ImGui.SameLine();
