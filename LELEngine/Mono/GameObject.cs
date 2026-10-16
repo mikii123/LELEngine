@@ -23,6 +23,28 @@ namespace LELEngine
 
 		public HideFlags hideFlags;
 
+		/// <summary>Layer (0..31) the object belongs to: collision filtering and queries (see <see cref="LayerMask" />).</summary>
+		public int layer
+		{
+			get => layerIndex;
+			set
+			{
+				int clamped = Math.Clamp(value, 0, 31);
+				if (layerIndex == clamped)
+				{
+					return;
+				}
+
+				layerIndex = clamped;
+				foreach (Behaviour component in components)
+				{
+					component.OnLayerChanged();
+				}
+			}
+		}
+
+		private int layerIndex;
+
 		/// <summary>The object's own active flag.</summary>
 		public bool activeSelf { get; private set; } = true;
 

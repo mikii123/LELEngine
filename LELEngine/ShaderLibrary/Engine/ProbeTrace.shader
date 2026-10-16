@@ -23,6 +23,7 @@ void main()
 #include "Engine/Sampling.glsl"
 #include "Engine/RadianceCache.glsl"
 #include "Engine/ScreenProbes.glsl"
+#include "Engine/Sky.glsl"
 
 // Screen probe ray tracing (Lumen final gather, step 1): one probe per probeSpacing x probeSpacing pixels,
 // anchored at a jittered pixel of its cell, 64 rays per probe, exactly one ray per fragment.
@@ -38,7 +39,6 @@ out vec4 OutRay; // rgb radiance, a = hit distance (-1 sky / far field, -2 probe
 
 uniform sampler2D FinalLighting;
 uniform usampler2D ProbeSelection;
-uniform vec3 giSkyRadiance;
 uniform mat4 viewProjection;
 uniform vec3 cameraPosition;
 uniform vec3 cameraForward;
@@ -160,7 +160,7 @@ vec4 TraceRay(vec3 position, vec3 normal, vec3 direction, float jitter)
 		return vec4(radiance, length(hitPos - position));
 	}
 
-	return vec4(giSkyRadiance, -1.0);
+	return vec4(SkyRadiance(direction), -1.0);
 }
 
 void main()

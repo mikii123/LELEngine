@@ -73,12 +73,18 @@ namespace LELEngine
 			}
 		}
 
+		/// <summary>The scene's 2D physics world (created on first use: a rigidbody or collider becoming active, a query).</summary>
+		public PhysicsScene2D Physics2D => physics2D ??= new PhysicsScene2D(this);
+
+		/// <summary>The physics world when one was created (null until then).</summary>
+		public PhysicsScene2D Physics2DIfCreated => physics2D;
+
 		#endregion
 
 		#region PrivateFields
 
-		/// <summary>Fixed update step in seconds.</summary>
-		private const float FixedStep = 0.02f;
+		/// <summary>Fixed steps per frame at most (a stalled frame does not catch up forever).</summary>
+		private const int MaxFixedStepsPerFrame = 8;
 
 		private readonly List<GameObject> objects = new List<GameObject>();
 		private readonly List<Behaviour> components = new List<Behaviour>();
@@ -91,9 +97,10 @@ namespace LELEngine
 		private Camera mainCamera;
 		private DirectionalLight mainLight;
 		private bool dirty = true;
-		private float fixedTime;
+		private double fixedAccumulator;
 		private int activationSuspended;
 		private List<Behaviour> deferredActivation = new List<Behaviour>();
+		private PhysicsScene2D physics2D;
 
 		private enum Callback
 		{
@@ -254,11 +261,18 @@ namespace LELEngine
 				}
 			}
 
-			List<Behaviour> active = ActiveBehaviours as List<Behaviour>;
-			fixedTime += deltaTime;
-			if (fixedTime >= FixedStep)
+			// Fixed steps (FixedUpdate, then the physics step and its collision callbacks) catch up with the frame time,
+			// as in Unity; a frame longer than Time.maximumDeltaTime runs a bounded number of steps.
+			double step = Math.Max(0.001, Time.fixedDeltaTimeD);
+			fixedAccumulator += Math.Min(deltaTime, Math.Max(step, Time.maximumDeltaTimeD));
+			int steps = 0;
+			while (fixedAccumulator >= step && steps < MaxFixedStepsPerFrame)
 			{
-				foreach (Behaviour component in active)
+				fixedAccumulator -= step;
+				steps++;
+				Time.inFixedTimeStep = true;
+				List<Behaviour> fixedBatch = ActiveBehaviours as List<Behaviour>;
+				foreach (Behaviour component in fixedBatch)
 				{
 					if (!component.enableCalled || component.destroyed) continue;
 					try
@@ -271,9 +285,31 @@ namespace LELEngine
 					}
 				}
 
-				fixedTime = 0f;
+				if (IsPlaying && physics2D != null && global::LELEngine.Physics2D.simulationMode == SimulationMode2D.FixedUpdate)
+				{
+					physics2D.Step((float)step);
+				}
+
+				Time.fixedTimeD += step;
+				Time.inFixedTimeStep = false;
 			}
 
+			if (steps == MaxFixedStepsPerFrame)
+			{
+				fixedAccumulator = 0;
+			}
+
+			if (IsPlaying && physics2D != null)
+			{
+				if (global::LELEngine.Physics2D.simulationMode == SimulationMode2D.Update)
+				{
+					physics2D.Step(deltaTime);
+				}
+
+				physics2D.ApplyInterpolation((float)(fixedAccumulator / step));
+			}
+
+			List<Behaviour> active = ActiveBehaviours as List<Behaviour>;
 			foreach (Behaviour component in active)
 			{
 				if (!component.enableCalled || component.destroyed) continue;
@@ -324,6 +360,8 @@ namespace LELEngine
 			destroyQueue.Clear();
 			componentDestroyQueue.Clear();
 			pendingStart.Clear();
+			physics2D?.Dispose();
+			physics2D = null;
 			dirty = true;
 		}
 

@@ -1,4 +1,6 @@
+using System;
 using LELEngine;
+using LELEngine.Shaders;
 using OpenTK.Mathematics;
 
 namespace TestGame.Scenes
@@ -16,6 +18,9 @@ namespace TestGame.Scenes
 		public const float RoomHalfSize = 10f;
 		public const float WallHeight = 6f;
 		public const float WallThickness = 0.25f;
+
+		/// <summary>Towards the sun; the directional light shines the opposite way and the procedural sky puts its disc there.</summary>
+		public static readonly Vector3 SunDirection = new Vector3(0.45f, 0.75f, -0.35f).Normalized();
 
 		/// <summary>Startup switches, mainly for comparing renders from the command line.</summary>
 		public sealed class Options
@@ -35,6 +40,12 @@ namespace TestGame.Scenes
 			public bool Animate = true;
 
 			public bool Stats;
+
+			/// <summary>A procedural skybox (gradient sky with a sun) as the environment: the GI samples it for rays that leave the room.</summary>
+			public bool Sky;
+
+			/// <summary>Skybox from a project asset instead of the procedural sky: a .material, a cubemap or a panorama image (skybox=path).</summary>
+			public string SkyboxAsset;
 
 			/// <summary>Scripted camera motion (slow yaw and strafe) for recording temporal stability tests.</summary>
 			public bool AutoCamera;
@@ -144,6 +155,11 @@ namespace TestGame.Scenes
 			}
 			BuildPlayer(scene);
 			ApplySettings(options);
+			if (options.Sky)
+			{
+				scene.Settings.Environment.Skybox = CreateSkybox(options, SunDirection);
+			}
+
 			ApplyHarness(scene, options);
 		}
 
@@ -158,6 +174,90 @@ namespace TestGame.Scenes
 
 			ApplyHarness(scene, options);
 		}
+
+		#endregion
+
+		#region InternalMethods
+
+		/// <summary>The skybox the options ask for: a project asset (skybox=path), else the procedural sky with its sun at <paramref name="sunDirection" />.</summary>
+		internal static Material CreateSkybox(Options options, Vector3 sunDirection)
+		{
+			if (!string.IsNullOrEmpty(options.SkyboxAsset))
+			{
+				Material asset = LoadSkyboxAsset(options.SkyboxAsset);
+				if (asset != null)
+				{
+					return asset;
+				}
+			}
+
+			return CreateProceduralSky(sunDirection);
+		}
+
+		/// <summary>A gradient sky with a sun disc towards <paramref name="sunDirection" />, as a skybox material on the engine's cubemap shader (sky=1).</summary>
+		internal static Material CreateProceduralSky(Vector3 sunDirection)
+		{
+			Vector3 sun = sunDirection.Normalized();
+			Cubemap cubemap = Cubemap.Generate(64, direction =>
+			{
+				float up = Math.Clamp(direction.Y, -1f, 1f);
+				Vector3 zenith = new Vector3(0.18f, 0.4f, 0.95f);
+				Vector3 horizon = new Vector3(0.75f, 0.85f, 1f);
+				Vector3 ground = new Vector3(0.16f, 0.13f, 0.1f);
+				Vector3 color = up >= 0f ? Vector3.Lerp(horizon, zenith, (float)Math.Pow(up, 0.6)) : Vector3.Lerp(horizon, ground, Math.Min(1f, -up * 4f));
+				float disc = Vector3.Dot(direction, sun);
+				color += new Vector3(1f, 0.95f, 0.85f) * (40f * (float)Math.Clamp((disc - 0.996) / 0.004, 0.0, 1.0) + 0.6f * (float)Math.Pow(Math.Max(0f, disc), 16.0));
+				return new Color4(color.X, color.Y, color.Z, 1f);
+			}, "procedural sky");
+
+			var material = new Material(InternalStorage.GetOrCreateShader("Engine/Skybox.shader")) { name = "Procedural Sky" };
+			material.SetTexture("Cubemap", cubemap);
+			material.SetFloat("Exposure", 1f);
+			return material;
+		}
+
+		/// <summary>
+		///     A skybox material from the project assets: a .material as it is, a cubemap on the engine's cubemap
+		///     shader, any other image as an equirectangular panorama. Null (with a warning) when nothing fits.
+		/// </summary>
+		private static Material LoadSkyboxAsset(string nameOrPath)
+		{
+			string path = AssetDatabase.Resolve(nameOrPath, "Materials") ?? AssetDatabase.Resolve(nameOrPath, "Textures");
+			if (path == null)
+			{
+				Debug.LogWarning("[Sky] Skybox asset not found: " + nameOrPath);
+				return null;
+			}
+
+			if (path.EndsWith(".material", StringComparison.OrdinalIgnoreCase))
+			{
+				return InternalStorage.GetOrCreateMaterial(path);
+			}
+
+			Texture texture = AssetDatabase.Load<Texture>(path);
+			Material material;
+			switch (texture)
+			{
+				case Cubemap cubemap:
+					material = new Material(InternalStorage.GetOrCreateShader("Engine/Skybox.shader")) { name = cubemap.name + " sky" };
+					material.SetTexture("Cubemap", cubemap);
+					break;
+				case Texture2D panorama:
+					material = new Material(InternalStorage.GetOrCreateShader("Engine/SkyboxPanoramic.shader")) { name = panorama.name + " sky" };
+					material.SetTexture("Panorama", panorama);
+					break;
+				default:
+					Debug.LogWarning("[Sky] " + path + " is not a cubemap, a panorama image or a material");
+					return null;
+			}
+
+			material.SetFloat("Exposure", 1f);
+			return material;
+		}
+
+		#endregion
+
+		#region PublicMethods
 
 		/// <summary>
 		///     Measurement / debugging switches that are not part of the scene: debug views, profiler, fullscreen,
@@ -217,7 +317,7 @@ namespace TestGame.Scenes
 		#region PrivateMethods
 
 		/// <summary>Environment, shadow and GI settings of the room (written into the active scene's settings).</summary>
-		private static void ApplySettings(Options options)
+		internal static void ApplySettings(Options options)
 		{
 			// With GI on, the flat ambient only has to cover leaks; the bounce does the rest.
 			Lighting.Environment.AmbientColor = new Color4(0.55f, 0.6f, 0.75f, 1f);
@@ -357,7 +457,7 @@ namespace TestGame.Scenes
 		private static void BuildLight(Scene scene)
 		{
 			GameObject light = scene.CreateGameObject("Sun");
-			Vector3 lightDirection = new Vector3(-0.45f, -0.75f, 0.35f).Normalized();
+			Vector3 lightDirection = -SunDirection;
 			light.transform.rotation = QuaternionHelper.LookRotation(lightDirection, Vector3.UnitY);
 			DirectionalLight sun = light.AddComponent<DirectionalLight>();
 			sun.Color = new Color4(1f, 0.96f, 0.9f, 1f);
@@ -435,7 +535,8 @@ namespace TestGame.Scenes
 			}
 		}
 
-		private static void BuildPlayer(Scene scene)
+		/// <summary>The FPS player with the camera and the debug controls at the usual start (also used by the other test scenes).</summary>
+		internal static void BuildPlayer(Scene scene)
 		{
 			GameObject player = scene.CreateGameObject("Player");
 			player.transform.position = new Vector3(0f, 1.7f, -8f);

@@ -156,7 +156,7 @@ namespace LELEngine.Rendering.Passes
 			SetUniforms(traceProgram, 7);
 			SetScheduleUniforms(traceProgram, interiorCount);
 			traceProgram.SetTexture("FinalLighting", TextureTarget.Texture2D, scene.SurfaceCache.FinalLightingCurrent, 2);
-			traceProgram.SetVector3("giSkyRadiance", gi.SkyRadiance);
+			Lighting.SetSkyUniforms(traceProgram);
 			traceProgram.SetInt("frameIndex", frameIndex);
 			GL.BindImageTexture(0, traceBuffer, 0, false, 0, TextureAccess.WriteOnly, SizedInternalFormat.Rgba16f);
 			int groupsPerProbe = traceRes / TraceGroupSize * (traceRes / TraceGroupSize);

@@ -1,3 +1,7 @@
+//Properties
+Color ("Color", Color) = (1, 1, 1, 1)
+/////Properties
+
 //Vertex
 
 #version 430

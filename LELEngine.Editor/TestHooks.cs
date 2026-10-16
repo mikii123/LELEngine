@@ -81,6 +81,24 @@ namespace LELEngine.Editor
 				}
 			}
 
+			// selectasset=path shows a project file in the inspector at frame 6 (materials, textures, ...).
+			if (frame == 6 && values.TryGetValue("selectasset", out string assetPath))
+			{
+				editor.SelectAsset(assetPath);
+			}
+
+			// setskybox=N;Materials/Sky.material assigns the scene's skybox material at frame N.
+			if (values.TryGetValue("setskybox", out string skybox))
+			{
+				string[] parts = skybox.Split(';');
+				if (parts.Length == 2 && int.TryParse(parts[0], out int at) && at == frame)
+				{
+					scene.Settings.Environment.Skybox = InternalStorage.GetOrCreateMaterial(parts[1]);
+					editor.MarkDirty();
+					Debug.Log("[Test] Skybox set to " + parts[1]);
+				}
+			}
+
 			if (!componentAdded && values.TryGetValue("addcomponent", out string add) && frame > 60 && editor.Scripts != null && !editor.Scripts.IsBuilding)
 			{
 				string[] parts = add.Split(';');

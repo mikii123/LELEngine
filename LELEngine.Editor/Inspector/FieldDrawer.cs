@@ -410,69 +410,21 @@ namespace LELEngine.Editor
 
 		private static bool DrawAsset(Type type, ref object value)
 		{
-			bool changed = false;
-			string current = (value as IAsset)?.AssetPath;
-			if (ImGui.BeginCombo("##v", current ?? "None"))
+			// Image files import as one texture kind: only files of the field's kind are offered.
+			Func<string, bool> filter = null;
+			if (type == typeof(Texture2D) || type == typeof(Cubemap) || type == typeof(Texture3D) || type == typeof(Sprite))
 			{
-				if (ImGui.Selectable("None", current == null))
-				{
-					value = null;
-					changed = true;
-				}
-
-				foreach (string path in AssetDatabase.GetAllAssetPaths(AssetExtensions(type)))
-				{
-					if (ImGui.Selectable(path, string.Equals(path, current, StringComparison.OrdinalIgnoreCase)))
-					{
-						value = AssetDatabase.Load(type, path);
-						changed = true;
-					}
-				}
-
-				ImGui.EndCombo();
+				Type textureType = type;
+				filter = path => MaterialEditor.ShapeMatches(path, textureType);
 			}
 
-			if (ImGui.BeginDragDropTarget())
-			{
-				if (!ImGui.AcceptDragDropPayload(ProjectPanel.DragType).IsNull && ProjectPanel.DraggedAsset != null)
-				{
-					string path = ProjectPanel.DraggedAsset;
-					foreach (string extension in AssetExtensions(type))
-					{
-						if (path.EndsWith(extension, StringComparison.OrdinalIgnoreCase))
-						{
-							value = AssetDatabase.Load(type, path);
-							changed = true;
-							break;
-						}
-					}
-				}
-
-				ImGui.EndDragDropTarget();
-			}
-
-			return changed;
+			return AssetField.Draw(type, ref value, filter);
 		}
 
 		/// <summary>File extensions of the assets a field of this type accepts.</summary>
 		public static string[] AssetExtensions(Type type)
 		{
-			if (type == typeof(Mesh))
-			{
-				return new[] { ".obj" };
-			}
-
-			if (type == typeof(Shaders.Material))
-			{
-				return new[] { ".material" };
-			}
-
-			if (UIElements.UIAssets.IsUIAssetType(type))
-			{
-				return UIElements.UIAssets.ExtensionsOf(type);
-			}
-
-			return new string[0];
+			return AssetDatabase.GetExtensions(type);
 		}
 
 		private static bool DrawList(string label, Type type, Type element, ref object value, InspectorContext context, int depth)

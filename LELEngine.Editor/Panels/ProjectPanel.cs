@@ -179,6 +179,7 @@ namespace LELEngine.Editor
 				if (ImGui.Selectable(file, selected, ImGuiSelectableFlags.AllowDoubleClick))
 				{
 					selectedFile = assetPath;
+					editor.SelectAsset(assetPath);
 					if (ImGui.IsMouseDoubleClicked(ImGuiMouseButton.Left))
 					{
 						OpenAsset(assetPath);
@@ -200,7 +201,15 @@ namespace LELEngine.Editor
 				if (ImGui.BeginPopupContextItem("##file_context"))
 				{
 					selectedFile = assetPath;
+					editor.SelectAsset(assetPath);
 					if (ImGui.MenuItem("Open")) OpenAsset(assetPath);
+					if (TextureAssets.IsImageFile(assetPath) && ImGui.MenuItem("Reimport"))
+					{
+						TextureAssets.Reimport(assetPath);
+						AssetThumbnails.Invalidate(assetPath);
+						editor.NotifySceneChanged();
+					}
+
 					if (ImGui.MenuItem("Show in Explorer")) ShowInExplorer(Absolute(assetPath));
 					ImGui.EndPopup();
 				}
@@ -213,6 +222,7 @@ namespace LELEngine.Editor
 				if (ImGui.MenuItem("Create Folder")) StartCreate("Folder", "New Folder");
 				if (ImGui.MenuItem("Create C# Script")) StartCreate("Script", "NewBehaviour");
 				if (ImGui.MenuItem("Create Material")) StartCreate("Material", "NewMaterial");
+				if (ImGui.MenuItem("Create Physics Material 2D")) StartCreate("PhysicsMaterial2D", "NewPhysicsMaterial");
 				if (ImGui.MenuItem("Create Scene")) StartCreate("Scene", "NewScene");
 				if (ImGui.MenuItem("Create UI Document (UXML)")) StartCreate("UXML", "NewDocument");
 				if (ImGui.MenuItem("Create Style Sheet (USS)")) StartCreate("USS", "NewStyle");
@@ -260,6 +270,11 @@ namespace LELEngine.Editor
 			else if (assetPath.EndsWith(".uxml", StringComparison.OrdinalIgnoreCase) || assetPath.EndsWith(".uss", StringComparison.OrdinalIgnoreCase))
 			{
 				editor.OpenUIBuilder(assetPath);
+			}
+			else if (AssetDatabase.GetAssetType(assetPath) != null && !assetPath.EndsWith(".shader", StringComparison.OrdinalIgnoreCase))
+			{
+				// Materials, textures, meshes, physics materials: edited in the inspector.
+				editor.SelectAsset(assetPath);
 			}
 			else
 			{
@@ -352,10 +367,27 @@ namespace LELEngine.Editor
 					File.WriteAllText(target, ScriptTemplate(className));
 					break;
 				case "Material":
-					target = Absolute(Combine(folder, name + ".material"));
+				{
+					target = Absolute(Combine(folder, name + Shaders.Material.Extension));
 					EnsureNew(target);
-					File.WriteAllText(target, "Lit.shader\nuniform\n\tvec4\n\t\tColor\n\t\t\t0.8 0.8 0.8 1\n");
+					string lit = AssetDatabase.Resolve("Lit.shader", "Shaders");
+					var material = new Shaders.Material(lit != null ? InternalStorage.GetOrCreateShader(lit) : null);
+					if (!material.HasProperty("Color"))
+					{
+						material.SetColor("Color", new OpenTK.Mathematics.Color4(0.8f, 0.8f, 0.8f, 1f));
+					}
+
+					material.Save(AssetDatabase.ToAssetPath(target));
+					InternalStorage.RegisterMaterial(material);
 					break;
+				}
+				case "PhysicsMaterial2D":
+				{
+					target = Absolute(Combine(folder, name + PhysicsMaterial2D.Extension));
+					EnsureNew(target);
+					new PhysicsMaterial2D(name).Save(AssetDatabase.ToAssetPath(target));
+					break;
+				}
 				case "Scene":
 					target = Absolute(Combine(folder, name + SceneSerializer.Extension));
 					EnsureNew(target);
@@ -390,6 +422,10 @@ namespace LELEngine.Editor
 			AssetDatabase.Refresh(true);
 			editor.NotifyAssetsChanged();
 			selectedFile = AssetDatabase.ToAssetPath(target);
+			if (selectedFile != null && File.Exists(target))
+			{
+				editor.SelectAsset(selectedFile);
+			}
 		}
 
 		private static void EnsureNew(string path)

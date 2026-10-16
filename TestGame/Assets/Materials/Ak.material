@@ -1,13 +1,16 @@
-StandardSpecAlpha.shader
-uniform 
-	sampler2D
-		DiffuseMap
-			MRARDiff.png
-uniform 
-	sampler2D 
-		SpecularMap
-			MRARSpec.png
-uniform
-	sampler2D 
-		NormalMap
-			MRARNorm.png
+{
+  "$format": "LELEngine",
+  "$version": 2,
+  "$kind": "Object",
+  "$type": "LELEngine.Shaders.Material, LELEngine",
+  "m_Shader": { "guid": "2d32a6eeb6d64a96aa3dfa067f0f4de1", "path": "Shaders/StandardSpecAlpha.shader" },
+  "m_Properties": [
+    { "$type": "LELEngine.Shaders.TextureProperty, LELEngine", "name": "DiffuseMap", "value": { "guid": "b856ddd6f4cb44ec8d142264d57e4cfb", "path": "Textures/MRARDiff.png" } },
+    { "$type": "LELEngine.Shaders.TextureProperty, LELEngine", "name": "SpecularMap", "value": { "guid": "25f399d9f4744e4cb3b7c5e36422f6cc", "path": "Textures/MRARSpec.png" } },
+    { "$type": "LELEngine.Shaders.TextureProperty, LELEngine", "name": "NormalMap", "value": { "guid": "45fe9fa0030448549604a5c94abb932e", "path": "Textures/MRARNorm.png" } }
+  ],
+  "$types": {
+    "LELEngine.Shaders.Material, LELEngine": { "m_Shader": "Asset", "m_Properties": "Array<Object>" },
+    "LELEngine.Shaders.TextureProperty, LELEngine": { "name": "String", "value": "Asset" }
+  }
+}

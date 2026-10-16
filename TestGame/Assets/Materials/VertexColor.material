@@ -1,1 +1,11 @@
-VertexColor.shader
+{
+  "$format": "LELEngine",
+  "$version": 2,
+  "$kind": "Object",
+  "$type": "LELEngine.Shaders.Material, LELEngine",
+  "m_Shader": { "guid": "7adfc335c321495cb397f3d15105ed52", "path": "Shaders/VertexColor.shader" },
+  "m_Properties": [],
+  "$types": {
+    "LELEngine.Shaders.Material, LELEngine": { "m_Shader": "Asset", "m_Properties": "Array<Object>" }
+  }
+}

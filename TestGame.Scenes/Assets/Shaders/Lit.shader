@@ -1,3 +1,9 @@
+//Properties
+Color ("Color", Color) = (1, 1, 1, 1)
+[HDR] Emissive ("Emissive (rgb color, a intensity)", Color) = (0, 0, 0, 0)
+Roughness ("Roughness", Range(0, 1)) = 0.6
+/////Properties
+
 //Vertex
 
 #version 430

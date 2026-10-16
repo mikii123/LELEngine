@@ -12,7 +12,8 @@
   <ItemGroup>
     <PackageReference Include="OpenTK" Version="4.9.4" />
     <PackageReference Include="StbImageSharp" Version="2.30.16" />
-    <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
+    <!-- 2D physics: a C# port of Box2D 2.4.1 (LELEngine.Physics2D wraps it with a Unity-style API). -->
+    <PackageReference Include="Box2DSharp" Version="0.6.0" />
   </ItemGroup>
 
   <!-- Engine GLSL library (includes and engine-owned passes). Published to Shaders/Engine/ in the game output. -->

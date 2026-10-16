@@ -17,12 +17,15 @@ namespace LELEngine.Shaders
 	///     extensions in compute stages). A shader that includes "Engine/Instancing.glsl" also has an instanced
 	///     variant (<see cref="GetInstancedVariant" />) for GPU-driven draws.
 	/// </summary>
-	public sealed class ShaderProgram
+	public sealed class ShaderProgram : IAsset
 	{
 		#region PublicFields
 
 		/// <summary>Define of the instanced variant: instance and material data come from the GPU scene buffers.</summary>
 		public const string InstancedDefine = "LEL_INSTANCED";
+
+		/// <summary>Closing tag of the Properties block of a .shader file (material parameters, see <see cref="ShaderProperty" />).</summary>
+		public const string PropertiesTag = "/////Properties";
 
 		public int Handle => handle;
 		public string Name { get; }
@@ -31,11 +34,19 @@ namespace LELEngine.Shaders
 		/// <summary>The .shader file this program was loaded from (null for programs built from sources).</summary>
 		public string SourcePath { get; }
 
+		/// <summary>Root-relative path of the .shader asset, or the engine-relative path of an engine shader; null for inline programs.</summary>
+		public string AssetPath { get; }
+
+		public string SubAssetName => null;
+
 		/// <summary>The source includes Engine/Instancing.glsl: it can be drawn GPU-driven.</summary>
 		public bool SupportsInstancing { get; }
 
 		/// <summary>This program is the instanced variant (compiled with <see cref="InstancedDefine" />).</summary>
 		public bool IsInstancedVariant { get; }
+
+		/// <summary>Material parameters declared in the file's Properties block (empty when it has none).</summary>
+		public IReadOnlyList<ShaderProperty> Properties => properties;
 
 		#endregion
 
@@ -45,6 +56,8 @@ namespace LELEngine.Shaders
 
 		private readonly int handle;
 		private readonly Dictionary<string, int> uniformCache = new Dictionary<string, int>();
+		private readonly Dictionary<string, ActiveUniformType> uniformTypes = new Dictionary<string, ActiveUniformType>(StringComparer.Ordinal);
+		private readonly List<ShaderProperty> properties = new List<ShaderProperty>();
 		private ShaderProgram instancedVariant;
 		private bool instancedVariantCreated;
 
@@ -75,8 +88,9 @@ namespace LELEngine.Shaders
 		{
 			Name = defines.Length == 0 ? path : path + " [" + string.Join(", ", defines) + "]";
 			SourcePath = path;
+			AssetPath = AssetDatabase.Resolve(path, "Shaders") ?? path.Replace('\\', '/');
 			IsInstancedVariant = Array.IndexOf(defines, InstancedDefine) >= 0;
-			List<Shader> shaders = LoadShaderFromFile(path, defines, out bool includesInstancing);
+			List<Shader> shaders = LoadShaderFromFile(path, defines, properties, out bool includesInstancing);
 			SupportsInstancing = includesInstancing;
 
 			handle = GL.CreateProgram();
@@ -155,6 +169,79 @@ namespace LELEngine.Shaders
 		public bool HasUniform(string name)
 		{
 			return GetUniformLocation(name) >= 0;
+		}
+
+		/// <summary>GLSL type of an active uniform (<see cref="ActiveUniformType.Float" /> when unknown).</summary>
+		public ActiveUniformType GetUniformType(string name)
+		{
+			ActiveUniformType type;
+			return uniformTypes.TryGetValue(name, out type) ? type : ActiveUniformType.Float;
+		}
+
+		/// <summary>
+		///     Active uniforms that are material parameters: not the camera / lighting / engine uniforms
+		///     (<see cref="Material.IsSharedUniform" />). Materials of shaders without a Properties block edit these.
+		/// </summary>
+		public List<KeyValuePair<string, ActiveUniformType>> GetMaterialUniforms()
+		{
+			var result = new List<KeyValuePair<string, ActiveUniformType>>();
+			foreach (KeyValuePair<string, ActiveUniformType> uniform in uniformTypes)
+			{
+				if (!Material.IsSharedUniform(uniform.Key) && !uniform.Key.Contains("."))
+				{
+					result.Add(uniform);
+				}
+			}
+
+			result.Sort((a, b) => string.Compare(a.Key, b.Key, StringComparison.OrdinalIgnoreCase));
+			return result;
+		}
+
+		/// <summary>The declared property of this name, or null.</summary>
+		public ShaderProperty FindProperty(string name)
+		{
+			foreach (ShaderProperty property in properties)
+			{
+				if (property.Name == name)
+				{
+					return property;
+				}
+			}
+
+			return null;
+		}
+
+		/// <summary>True when the path names a shader of the engine library (Shaders/Engine/...), not a project asset.</summary>
+		public static bool IsEngineShader(string path)
+		{
+			return !string.IsNullOrEmpty(path) && File.Exists(Path.Combine(ShadersRoot, path.Replace('/', Path.DirectorySeparatorChar)));
+		}
+
+		/// <summary>Material parameters of a .shader file without compiling it (editor listings).</summary>
+		public static List<ShaderProperty> ReadProperties(string absolutePath)
+		{
+			var block = new List<string>();
+			var result = new List<ShaderProperty>();
+			foreach (string line in File.ReadAllLines(absolutePath))
+			{
+				string trimmed = line.TrimEnd('\r');
+				if (trimmed == PropertiesTag)
+				{
+					result.AddRange(ShaderProperty.Parse(block, absolutePath));
+					break;
+				}
+
+				ShaderType ignored;
+				if (Shader.TryParseTag(trimmed, out ignored))
+				{
+					// A stage closed before any Properties block: the file has none.
+					break;
+				}
+
+				block.Add(trimmed);
+			}
+
+			return result;
 		}
 
 		// Convenience setters. Every one of them is a no-op when the uniform does not exist
@@ -281,6 +368,36 @@ namespace LELEngine.Shaders
 			{
 				GL.DetachShader(handle, shader.Handle);
 			}
+
+			if (IsLinked)
+			{
+				CollectUniforms();
+			}
+		}
+
+		/// <summary>Names and types of the active uniforms (array uniforms by their base name).</summary>
+		private void CollectUniforms()
+		{
+			int count;
+			GL.GetProgram(handle, GetProgramParameterName.ActiveUniforms, out count);
+			for (int i = 0; i < count; i++)
+			{
+				int size;
+				ActiveUniformType type;
+				string name = GL.GetActiveUniform(handle, i, out size, out type);
+				if (string.IsNullOrEmpty(name))
+				{
+					continue;
+				}
+
+				int bracket = name.IndexOf('[');
+				if (bracket > 0)
+				{
+					name = name.Substring(0, bracket);
+				}
+
+				uniformTypes[name] = type;
+			}
 		}
 
 		/// <summary>Engine shader library (engine passes and includes such as "Engine/DistanceField.glsl").</summary>
@@ -302,7 +419,7 @@ namespace LELEngine.Shaders
 			return asset != null ? AssetDatabase.ToAbsolute(asset) : engine;
 		}
 
-		private static List<Shader> LoadShaderFromFile(string path, string[] defines, out bool includesInstancing)
+		private static List<Shader> LoadShaderFromFile(string path, string[] defines, List<ShaderProperty> properties, out bool includesInstancing)
 		{
 			var shaders = new List<Shader>();
 			string fullPath = ResolveShaderPath(path);
@@ -312,8 +429,17 @@ namespace LELEngine.Shaders
 			var stage = new List<string>();
 			foreach (string rawLine in File.ReadAllLines(fullPath))
 			{
+				string line = rawLine.TrimEnd('\r');
+				if (line == PropertiesTag)
+				{
+					// The Properties block is metadata for materials, not GLSL.
+					properties.AddRange(ShaderProperty.Parse(stage, path));
+					stage.Clear();
+					continue;
+				}
+
 				ShaderType type;
-				if (!Shader.TryParseTag(rawLine.TrimEnd('\r'), out type))
+				if (!Shader.TryParseTag(line, out type))
 				{
 					stage.Add(rawLine);
 					continue;

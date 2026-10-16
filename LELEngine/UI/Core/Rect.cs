@@ -1,9 +1,13 @@
 using System;
 using OpenTK.Mathematics;
 
-namespace LELEngine.UIElements
+namespace LELEngine
 {
-	/// <summary>Axis-aligned rectangle in UI (y-down) coordinates: position of the top-left corner and size.</summary>
+	/// <summary>
+	///     Axis-aligned rectangle: position of a corner and size. The UI uses it in y-down panel coordinates (top-left
+	///     corner); sprites and 2D physics in y-up texture / world units (bottom-left corner).
+	/// </summary>
+	[Serializable]
 	public struct Rect : IEquatable<Rect>
 	{
 		#region PublicFields
@@ -168,7 +172,10 @@ namespace LELEngine.UIElements
 
 		#endregion
 	}
+}
 
+namespace LELEngine.UIElements
+{
 	/// <summary>
 	///     2D affine transform (row-major 2x3: x' = m00 * x + m01 * y + tx, y' = m10 * x + m11 * y + ty) used for
 	///     element-to-panel transforms. Cheaper than a 4x4 matrix and enough for translate / rotate / scale.

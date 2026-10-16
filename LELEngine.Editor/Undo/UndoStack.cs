@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 
 namespace LELEngine.Editor
@@ -143,6 +144,66 @@ namespace LELEngine.Editor
 			EditorSerialization.ApplyObject(scene.Settings, data, scene);
 			scene.Settings.GI.InvalidateStatic();
 			editor.MarkDirty();
+		}
+
+		#endregion
+	}
+
+	/// <summary>Values of a document asset (material, physics material), before and after an edit; applying also saves the file.</summary>
+	internal sealed class AssetStateRecord : UndoRecord
+	{
+		#region PublicFields
+
+		public string AssetPath;
+		public byte[] Before;
+		public byte[] After;
+
+		#endregion
+
+		#region PublicMethods
+
+		public override void Undo(EditorApplication editor)
+		{
+			Apply(editor, Before);
+		}
+
+		public override void Redo(EditorApplication editor)
+		{
+			Apply(editor, After);
+		}
+
+		/// <summary>Writes a document asset's state into its loaded instance and its file.</summary>
+		public static void Apply(EditorApplication editor, string assetPath, byte[] data)
+		{
+			if (assetPath == null || data == null)
+			{
+				return;
+			}
+
+			Type type = AssetDatabase.GetAssetType(assetPath);
+			if (type == typeof(Shaders.Material))
+			{
+				Shaders.Material material = InternalStorage.GetOrCreateMaterial(assetPath);
+				material.ApplyBytes(data);
+				material.Save();
+				MaterialEditor.MaterialChanged(editor);
+			}
+			else if (type == typeof(PhysicsMaterial2D))
+			{
+				PhysicsMaterial2D material = PhysicsMaterial2D.Load(assetPath);
+				Serialization.Documents.ReadObject(data, typeof(PhysicsMaterial2D), material);
+				material.Save();
+				editor.NotifySceneChanged();
+			}
+		}
+
+		#endregion
+
+		#region PrivateMethods
+
+		private void Apply(EditorApplication editor, byte[] data)
+		{
+			Apply(editor, AssetPath, data);
 		}
 
 		#endregion
@@ -322,11 +383,40 @@ namespace LELEngine.Editor
 					case SceneSettings _:
 						editor.Undo.Push(new SettingsRecord { Name = "Edit scene settings", Before = before, After = after });
 						break;
+					case Shaders.Material material:
+						// Assets save when the edit ends (Unity writes material changes to disk as they happen).
+						editor.Undo.Push(new AssetStateRecord { Name = "Edit " + material.name, AssetPath = material.AssetPath, Before = before, After = after });
+						SaveAsset(material);
+						break;
+					case PhysicsMaterial2D physicsMaterial:
+						editor.Undo.Push(new AssetStateRecord { Name = "Edit " + physicsMaterial.name, AssetPath = physicsMaterial.AssetPath, Before = before, After = after });
+						SaveAsset(physicsMaterial);
+						break;
 				}
 			}
 
 			target = null;
 			before = null;
+		}
+
+		private static void SaveAsset(object asset)
+		{
+			try
+			{
+				switch (asset)
+				{
+					case Shaders.Material material when material.AssetPath != null:
+						material.Save();
+						break;
+					case PhysicsMaterial2D physicsMaterial when physicsMaterial.AssetPath != null:
+						physicsMaterial.Save();
+						break;
+				}
+			}
+			catch (Exception e)
+			{
+				Debug.LogError("[Editor] Cannot save the asset: " + e.Message);
+			}
 		}
 
 		public void Cancel()
@@ -348,6 +438,10 @@ namespace LELEngine.Editor
 					return EditorSerialization.CaptureComponent(component);
 				case SceneSettings settings:
 					return EditorSerialization.CaptureObject(settings, editor.Scene);
+				case Shaders.Material material:
+					return material.ToBytes();
+				case PhysicsMaterial2D physicsMaterial:
+					return Serialization.Documents.WriteObject(physicsMaterial, Serialization.DocumentFormat.Binary);
 				default:
 					return null;
 			}

@@ -71,6 +71,16 @@ namespace LELEngine.Editor
 			GameObject go = editor.Selected;
 			if (go == null || go.scene != editor.Scene)
 			{
+				if (editor.SelectedAsset != null)
+				{
+					context.Scene = editor.Scene;
+					context.LabelWidth = Math.Max(110f, ImGui.GetContentRegionAvail().X * 0.38f);
+					ImGui.PushID(editor.SelectedAsset);
+					AssetInspectors.Draw(editor.SelectedAsset, context);
+					ImGui.PopID();
+					return;
+				}
+
 				ImGui.TextDisabled("Nothing selected");
 				return;
 			}
@@ -119,6 +129,32 @@ namespace LELEngine.Editor
 			else if (!ImGui.IsItemActive())
 			{
 				nameBuffer = go.Name;
+			}
+
+			// Layer (collision filtering, queries).
+			ImGui.AlignTextToFramePadding();
+			ImGui.TextDisabled("Layer");
+			ImGui.SameLine();
+			ImGui.SetNextItemWidth(160);
+			if (ImGui.BeginCombo("##layer", LayerMask.DisplayName(go.layer)))
+			{
+				for (int layer = 0; layer < 32; layer++)
+				{
+					string name = LayerMask.LayerToName(layer);
+					if (name.Length == 0 && layer != go.layer && layer < 8)
+					{
+						continue;
+					}
+
+					if (ImGui.Selectable(LayerMask.DisplayName(layer), layer == go.layer) && layer != go.layer)
+					{
+						int previous = go.layer;
+						editor.RecordStructural("Change layer of " + go.Name, () => go.layer = layer);
+						editor.NotifyChanged(go);
+					}
+				}
+
+				ImGui.EndCombo();
 			}
 		}
 

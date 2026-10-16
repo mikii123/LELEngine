@@ -9,17 +9,17 @@ namespace LELEngine
 		#region PublicFields
 
 		/// <summary>
-		///     Contains all of the loaded shaders
+		///     Contains all of the loaded shaders (by asset path, or engine-relative path for engine shaders)
 		/// </summary>
 		public static Dictionary<string, ShaderProgram> Shaders { get; } = new Dictionary<string, ShaderProgram>();
 
 		/// <summary>
-		///     Contains all of the loaded materials
+		///     Contains all of the loaded materials (by asset path)
 		/// </summary>
 		public static Dictionary<string, Material> Materials { get; } = new Dictionary<string, Material>();
 
 		/// <summary>
-		///     Contains all of the loaded meshes
+		///     Contains all of the loaded meshes (by asset path)
 		/// </summary>
 		public static Dictionary<string, Mesh> Meshes { get; } = new Dictionary<string, Mesh>();
 
@@ -41,38 +41,40 @@ namespace LELEngine
 			Shaders.Clear();
 			Materials.Clear();
 			Meshes.Clear();
+			TextureAssets.Clear();
+			PhysicsMaterial2D.ClearCache();
 			Rendering.GeometryPool.Clear();
 			Navigation.NavMeshSurface.ClearCaches();
 			UIElements.UIAssets.Clear();
+			Rendering.SkyEnvironment.Clear();
 		}
 
 		/// <summary>
 		///     Gets the shader specified by name. Returns null if it doesn't exist
 		/// </summary>
 		/// <param name="name">Name of the shader (with .*)</param>
-		/// <returns></returns>
 		public static ShaderProgram GetShader(string name)
 		{
 			ShaderProgram sp = null;
-			Shaders.TryGetValue(name, out sp);
+			Shaders.TryGetValue(ShaderKey(name), out sp);
 
 			return sp;
 		}
 
 		/// <summary>
-		///     Gets a shader specified by name. Creates new one if it doesn't exist.
+		///     Gets a shader by asset path, file name or engine path ("Engine/Skybox.shader"). Creates it on first use;
+		///     programs are cached by their resolved path, so "Lit.shader" and "Shaders/Lit.shader" are the same program.
 		/// </summary>
-		/// <param name="name">Name of the shader (with .*)</param>
-		/// <returns></returns>
 		public static ShaderProgram GetOrCreateShader(string name)
 		{
+			string key = ShaderKey(name);
 			ShaderProgram sp = null;
-			Shaders.TryGetValue(name, out sp);
+			Shaders.TryGetValue(key, out sp);
 			if (sp == null)
 			{
-				Console.WriteLine("Creating Shader " + name);
-				sp = new ShaderProgram(name);
-				Shaders.Add(name, sp);
+				Console.WriteLine("Creating Shader " + key);
+				sp = new ShaderProgram(key);
+				Shaders.Add(key, sp);
 			}
 
 			return sp;
@@ -90,11 +92,26 @@ namespace LELEngine
 			if (!Materials.TryGetValue(assetPath, out mat))
 			{
 				Console.WriteLine("Creating Material " + assetPath);
-				mat = new Material(assetPath);
+				mat = Material.Load(assetPath);
 				Materials.Add(assetPath, mat);
 			}
 
 			return mat;
+		}
+
+		/// <summary>Registers a material object under its asset path (a material created and saved by the editor).</summary>
+		public static void RegisterMaterial(Material material)
+		{
+			if (material?.AssetPath != null)
+			{
+				Materials[material.AssetPath] = material;
+			}
+		}
+
+		/// <summary>Drops a cached material (its file was deleted or replaced) so the next use reloads it.</summary>
+		public static void ForgetMaterial(string assetPath)
+		{
+			Materials.Remove(assetPath);
 		}
 
 		/// <summary>
@@ -113,6 +130,20 @@ namespace LELEngine
 			}
 
 			return mesh;
+		}
+
+		#endregion
+
+		#region PrivateMethods
+
+		private static string ShaderKey(string name)
+		{
+			if (string.IsNullOrEmpty(name))
+			{
+				return name;
+			}
+
+			return AssetDatabase.Resolve(name, "Shaders") ?? name.Replace('\\', '/');
 		}
 
 		#endregion

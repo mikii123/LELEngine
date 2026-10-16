@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using LELEngine.Serialization;
 
 namespace LELEngine.Editor
 {
@@ -110,10 +111,13 @@ namespace LELEngine.Editor
 				}
 			}
 
-			// 4. Assets (everything but the scripts; the meta files keep the GUIDs the scenes reference).
+			// 4. Assets (everything but the scripts; the meta files keep the GUIDs the scenes reference). The editor's
+			//    readable JSON documents (scenes, materials, meta files, physics materials) become binary: the player
+			//    loads them without parsing text, and no type has to be loaded to convert them.
 			log("Copying assets...");
 			string data = Path.Combine(output, "Data");
 			int copied = 0;
+			int converted = 0;
 			foreach (string file in Directory.GetFiles(project.AssetsPath, "*", SearchOption.AllDirectories))
 			{
 				string relative = Path.GetRelativePath(project.AssetsPath, file);
@@ -122,9 +126,29 @@ namespace LELEngine.Editor
 					continue;
 				}
 
-				Copy(file, Path.Combine(data, relative));
+				string target = Path.Combine(data, relative);
+				if (Documents.IsDocumentFile(file))
+				{
+					try
+					{
+						Documents.ConvertFile(file, target, DocumentFormat.Binary);
+						converted++;
+					}
+					catch (Exception e)
+					{
+						log("Warning: " + relative + " could not be converted to binary (" + e.Message + "); copied as is.");
+						Copy(file, target);
+					}
+				}
+				else
+				{
+					Copy(file, target);
+				}
+
 				copied++;
 			}
+
+			log($"Converted {converted} documents to binary.");
 
 			// 5. Boot configuration.
 			new BootConfig

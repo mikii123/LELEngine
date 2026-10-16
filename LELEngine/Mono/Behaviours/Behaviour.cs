@@ -87,6 +87,33 @@ namespace LELEngine
 		public virtual void Reset()
 		{ }
 
+		// 2D physics (see Physics2D): called on every component of both objects after a physics step.
+
+		/// <summary>A collider of this object started touching another (non-trigger) collider.</summary>
+		public virtual void OnCollisionEnter2D(Collision2D collision)
+		{ }
+
+		/// <summary>Called every physics step while the colliders touch.</summary>
+		public virtual void OnCollisionStay2D(Collision2D collision)
+		{ }
+
+		public virtual void OnCollisionExit2D(Collision2D collision)
+		{ }
+
+		/// <summary>A trigger collider of this object (or the other one) started overlapping the other collider.</summary>
+		public virtual void OnTriggerEnter2D(Collider2D other)
+		{ }
+
+		public virtual void OnTriggerStay2D(Collider2D other)
+		{ }
+
+		public virtual void OnTriggerExit2D(Collider2D other)
+		{ }
+
+		/// <summary>A joint of this object broke (its reaction force or torque exceeded the break limit); the joint component is destroyed.</summary>
+		public virtual void OnJointBreak2D(Joint2D joint)
+		{ }
+
 		#endregion
 
 		#region PublicMethods
@@ -147,6 +174,10 @@ namespace LELEngine
 
 		/// <summary>Engine resources of the component (GPU buffers, ...); released on destroy in every mode.</summary>
 		protected internal virtual void ReleaseResources()
+		{ }
+
+		/// <summary>The GameObject's layer changed (physics shapes refilter).</summary>
+		protected internal virtual void OnLayerChanged()
 		{ }
 
 		#endregion

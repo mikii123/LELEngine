@@ -30,6 +30,9 @@ namespace LELEngine.Serialization
 		public string Name;
 		public ValueTag Tag;
 		public ValueTag ElementTag;
+
+		/// <summary>Members of an enum field (or enum element type) when the document records them (JSON); null otherwise.</summary>
+		public KeyValuePair<string, long>[] EnumMembers;
 	}
 
 	/// <summary>A type as stored in a document: its name (see <see cref="TypeRegistry.GetName" />) and fields.</summary>
@@ -75,39 +78,64 @@ namespace LELEngine.Serialization
 		public object Value;
 	}
 
+	/// <summary>
+	///     Generic array data: boxed items, or (blittable element types read without a live type) the raw element
+	///     bytes as stored, so large buffers convert between formats without boxing.
+	/// </summary>
 	public sealed class SerializedArray
 	{
 		public ValueTag ElementTag;
 		public readonly List<object> Items = new List<object>();
+
+		/// <summary>Raw bytes of all elements (file layout) when the array was read in bulk; null when <see cref="Items" /> holds the values.</summary>
+		public byte[] Bytes;
+
+		public int Count => Bytes != null ? Bytes.Length / Math.Max(1, SerializationUtility.FixedSize(ElementTag)) : Items.Count;
 	}
 
+	/// <summary>An asset file by GUID and path, plus the name of a sub-asset inside it (a sprite of a sheet); null = none.</summary>
 	public struct AssetReference
 	{
 		public string Guid;
 		public string Path;
+		public string Name;
+
+		public bool IsNull => Guid == null && Path == null;
 	}
 
 	/// <summary>
-	///     The binary container of scenes and snapshots ("LELB"): a string table, a type table (every type with
-	///     the names and encodings of its fields, so data survives scripts gaining, losing or retyping fields and
-	///     unknown types are kept verbatim), then the body the caller lays out. Field values are written by type
-	///     (no boxing for primitives and math types), arrays of blittable elements as one block of bytes, nested
-	///     objects with their runtime type (polymorphic fields).
+	///     The binary container of scenes, assets and snapshots ("LELB"): a string table, a type table (every type
+	///     with the names and encodings of its fields, so data survives scripts gaining, losing or retyping fields
+	///     and unknown types are kept verbatim), the document kind, then the body the caller lays out. Field values
+	///     are written by type (no boxing for primitives and math types), arrays of blittable elements as one block
+	///     of bytes, nested objects with their runtime type (polymorphic fields). The JSON form of the same model is
+	///     <see cref="JsonDocumentWriter" /> / <see cref="JsonDocumentReader" />; <see cref="Documents" /> converts
+	///     between the two without the types being loaded.
 	///     <code>
 	///     "LELB" version:int32
 	///     strings: count:int32, (len:int32, utf8)*
 	///     types: count:int32, (name:string-id, fieldCount:int32, (name:string-id, tag:byte, elementTag:byte)*)*
+	///     kind: string-id (version 2+; "Scene" or "Object")
 	///     body: length:int32, bytes
 	///     Object value: typeId:int32 (-1 = null), length:int32, fields in schema order
 	///     Array value: count:int32 (-1 = null), elementTag:byte, elements
+	///     Asset value: guid:string-id, path:string-id, name:string-id (version 2+)
 	///     </code>
 	/// </summary>
 	public static class BinaryDocument
 	{
 		public const int Magic = 0x424C454C; // "LELB"
-		public const int Version = 1;
 
-		/// <summary>True when the bytes start with the binary header (false for the legacy JSON scenes).</summary>
+		/// <summary>Version 2: document kind in the header, sub-asset names in asset values, GameObject layers.</summary>
+		public const int Version = 2;
+
+		/// <summary>Body of a scene file (see <see cref="SceneSerializer" />).</summary>
+		public const string KindScene = "Scene";
+
+		/// <summary>Body of a single root object (assets such as materials, meta files, settings).</summary>
+		public const string KindObject = "Object";
+
+		/// <summary>True when the bytes start with the binary header (false for JSON documents).</summary>
 		public static bool IsBinary(byte[] data)
 		{
 			return data != null && data.Length >= 8 && data[0] == (byte)'L' && data[1] == (byte)'E' && data[2] == (byte)'L' && data[3] == (byte)'B';
@@ -121,6 +149,9 @@ namespace LELEngine.Serialization
 
 		public readonly ByteWriter Body;
 		public readonly SerializationContext Context;
+
+		/// <summary>What the body holds (<see cref="BinaryDocument.KindScene" /> or <see cref="BinaryDocument.KindObject" />).</summary>
+		public string Kind = BinaryDocument.KindObject;
 
 		#endregion
 
@@ -138,7 +169,7 @@ namespace LELEngine.Serialization
 
 		public BinaryDocumentWriter(SerializationContext context, int capacity = 16384)
 		{
-			Context = context;
+			Context = context ?? new SerializationContext();
 			Body = new ByteWriter(capacity);
 		}
 
@@ -262,7 +293,7 @@ namespace LELEngine.Serialization
 				case ValueTag.Object: WriteObjectValue(value, depth); break;
 				case ValueTag.Array: WriteArrayValue(value, elementTag, depth); break;
 				case ValueTag.SceneRef: Body.WriteUInt64(ReferenceId(value)); break;
-				case ValueTag.Asset: WriteAsset(value as IAsset); break;
+				case ValueTag.Asset: WriteAsset(value); break;
 				default: break;
 			}
 		}
@@ -294,6 +325,8 @@ namespace LELEngine.Serialization
 		/// <summary>The whole document: header, tables and body.</summary>
 		public byte[] ToArray()
 		{
+			// The kind is interned before the string table is written (it may be the first use of that string).
+			StringId(Kind ?? BinaryDocument.KindObject);
 			var output = new ByteWriter(Body.Length + 1024);
 			output.WriteInt32(BinaryDocument.Magic);
 			output.WriteInt32(BinaryDocument.Version);
@@ -303,6 +336,7 @@ namespace LELEngine.Serialization
 				output.WriteString(value);
 			}
 
+			int kindId = StringId(Kind ?? BinaryDocument.KindObject);
 			output.WriteInt32(types.Count);
 			foreach (SchemaType type in types)
 			{
@@ -316,9 +350,25 @@ namespace LELEngine.Serialization
 				}
 			}
 
+			output.WriteInt32(kindId);
 			output.WriteInt32(Body.Length);
 			output.WriteBytes(Body.WrittenSpan);
 			return output.ToArray();
+		}
+
+		/// <summary>The schemas registered so far (the type table written to the header).</summary>
+		public IReadOnlyList<SchemaType> Types => types;
+
+		/// <summary>Registers the schema of a generic node (its type name and property layout) and returns the type id.</summary>
+		public int RegisterSchema(SchemaType schema)
+		{
+			var node = new SerializedNode { TypeName = schema.Name };
+			foreach (SchemaField field in schema.Fields)
+			{
+				node.Properties.Add(new SerializedProperty { Name = field.Name, Tag = field.Tag, ElementTag = field.ElementTag });
+			}
+
+			return GenericTypeId(node);
 		}
 
 		#endregion
@@ -367,8 +417,14 @@ namespace LELEngine.Serialization
 
 			if (value is SerializedArray generic)
 			{
-				Body.WriteInt32(generic.Items.Count);
+				Body.WriteInt32(generic.Count);
 				Body.WriteByte((byte)generic.ElementTag);
+				if (generic.Bytes != null)
+				{
+					Body.WriteBytes(generic.Bytes);
+					return;
+				}
+
 				foreach (object item in generic.Items)
 				{
 					WriteValue(item, generic.ElementTag, ValueTag.Null, depth + 1);
@@ -408,54 +464,15 @@ namespace LELEngine.Serialization
 
 		private ulong ReferenceId(object value)
 		{
-			Scene scene = Context?.Scene;
-			if (value is GameObject go)
-			{
-				return go.scene == scene && (go.hideFlags & HideFlags.DontSave) == 0 && !go.destroyed ? go.Id : 0;
-			}
-
-			if (value is Behaviour component)
-			{
-				GameObject owner = component.gameObject;
-				bool saved = owner != null && owner.scene == scene && (owner.hideFlags & HideFlags.DontSave) == 0 && !component.destroyed;
-				return saved ? component.Id : 0;
-			}
-
-			if (value is ulong id)
-			{
-				return id;
-			}
-
-			return 0;
+			return DocumentValues.SceneReferenceId(value, Context);
 		}
 
-		private void WriteAsset(IAsset asset)
+		private void WriteAsset(object value)
 		{
-			if (asset == null)
-			{
-				Body.WriteInt32(-1);
-				Body.WriteInt32(-1);
-				return;
-			}
-
-			string path = asset.AssetPath;
-			if (path == null)
-			{
-				// A runtime-created object (procedural mesh, code-built material) has no file to point at.
-				Debug.LogWarning($"[Serialization] {Context?.Location}: {asset.GetType().Name} is not an asset file; saved as null");
-				Body.WriteInt32(-1);
-				Body.WriteInt32(-1);
-				return;
-			}
-
-			string guid = AssetDatabase.GetGuid(path);
-			if (guid == null)
-			{
-				Debug.LogWarning($"[Serialization] {Context?.Location}: '{path}' has no meta file; saved by path only");
-			}
-
-			Body.WriteInt32(StringId(guid));
-			Body.WriteInt32(StringId(path));
+			AssetReference reference = value is AssetReference stored ? stored : DocumentValues.ReferenceOf(value as IAsset, Context);
+			Body.WriteInt32(StringId(reference.Guid));
+			Body.WriteInt32(StringId(reference.Path));
+			Body.WriteInt32(StringId(reference.Name));
 		}
 
 		/// <summary>Schema id of an unknown-typed object's data (name and the stored property layout).</summary>
@@ -505,6 +522,12 @@ namespace LELEngine.Serialization
 		public readonly SerializationContext Context;
 		public int TypeCount => types.Length;
 
+		/// <summary>Format version the document was written with.</summary>
+		public int Version { get; }
+
+		/// <summary>What the body holds (<see cref="BinaryDocument.KindScene" /> for version 1 documents, which were all scenes).</summary>
+		public string Kind { get; }
+
 		#endregion
 
 		#region PrivateFields
@@ -521,17 +544,17 @@ namespace LELEngine.Serialization
 
 		public BinaryDocumentReader(byte[] data, SerializationContext context)
 		{
-			Context = context;
+			Context = context ?? new SerializationContext();
 			var header = new ByteReader(data);
 			if (header.ReadInt32() != BinaryDocument.Magic)
 			{
 				throw new InvalidOperationException("Not a LELEngine binary document");
 			}
 
-			int version = header.ReadInt32();
-			if (version > BinaryDocument.Version)
+			Version = header.ReadInt32();
+			if (Version > BinaryDocument.Version)
 			{
-				throw new InvalidOperationException($"Document version {version} is newer than this engine supports ({BinaryDocument.Version})");
+				throw new InvalidOperationException($"Document version {Version} is newer than this engine supports ({BinaryDocument.Version})");
 			}
 
 			strings = new string[header.ReadInt32()];
@@ -552,6 +575,7 @@ namespace LELEngine.Serialization
 				types[i] = type;
 			}
 
+			Kind = Version >= 2 ? String(header.ReadInt32()) ?? BinaryDocument.KindObject : BinaryDocument.KindScene;
 			int bodyLength = header.ReadInt32();
 			Body = new ByteReader(data, header.Position, bodyLength);
 			resolvedTypes = new Type[types.Length];
@@ -750,13 +774,28 @@ namespace LELEngine.Serialization
 				}
 				case ValueTag.Asset:
 				{
-					var reference = new AssetReference { Guid = String(Body.ReadInt32()), Path = String(Body.ReadInt32()) };
+					AssetReference reference = ReadAssetReference();
 					return targetType != null ? LoadAsset(reference, targetType) : reference;
 				}
 				default:
 					return null;
 			}
 		}
+
+		/// <summary>Reads an Asset value (two string ids in version 1 documents, three from version 2).</summary>
+		public AssetReference ReadAssetReference()
+		{
+			var reference = new AssetReference { Guid = String(Body.ReadInt32()), Path = String(Body.ReadInt32()) };
+			if (Version >= 2)
+			{
+				reference.Name = String(Body.ReadInt32());
+			}
+
+			return reference;
+		}
+
+		/// <summary>Bytes of an Asset value in this document's version.</summary>
+		private int AssetValueSize => Version >= 2 ? 12 : 8;
 
 		/// <summary>Advances past a value without decoding it.</summary>
 		public void SkipValue(ValueTag tag, ValueTag elementTag)
@@ -781,7 +820,7 @@ namespace LELEngine.Serialization
 					return;
 				}
 				case ValueTag.Asset:
-					Body.Skip(8);
+					Body.Skip(AssetValueSize);
 					return;
 				case ValueTag.Object:
 				{
@@ -802,7 +841,7 @@ namespace LELEngine.Serialization
 					}
 
 					ValueTag stored = (ValueTag)Body.ReadByte();
-					int elementSize = stored == ValueTag.Asset ? 8 : SerializationUtility.FixedSize(stored);
+					int elementSize = stored == ValueTag.Asset ? AssetValueSize : SerializationUtility.FixedSize(stored);
 					if (elementSize > 0)
 					{
 						Body.Skip(count * elementSize);
@@ -899,7 +938,7 @@ namespace LELEngine.Serialization
 					return;
 				}
 				case ValueTag.SceneRef: accessor.SetBoxed(target, ResolveReference(Body.ReadUInt64(), field.FieldType)); return;
-				case ValueTag.Asset: accessor.SetBoxed(target, LoadAsset(new AssetReference { Guid = String(Body.ReadInt32()), Path = String(Body.ReadInt32()) }, field.FieldType)); return;
+				case ValueTag.Asset: accessor.SetBoxed(target, LoadAsset(ReadAssetReference(), field.FieldType)); return;
 				default: return;
 			}
 		}
@@ -916,6 +955,12 @@ namespace LELEngine.Serialization
 			if (targetType == null)
 			{
 				var generic = new SerializedArray { ElementTag = stored };
+				if (SerializationUtility.IsBlittable(stored))
+				{
+					generic.Bytes = Body.ReadBytes(count * SerializationUtility.FixedSize(stored)).ToArray();
+					return generic;
+				}
+
 				for (int i = 0; i < count; i++)
 				{
 					generic.Items.Add(ReadBoxed(stored, ValueTag.Null, null, null, depth + 1));
@@ -1030,210 +1075,22 @@ namespace LELEngine.Serialization
 
 		private object ResolveReference(ulong id, Type type)
 		{
-			if (id == 0 || Context == null)
-			{
-				return null;
-			}
-
-			object target;
-			if (!Context.Objects.TryGetValue(id, out target))
-			{
-				Debug.LogWarning($"[Serialization] {Context.Location}: reference to missing object {id}");
-				return null;
-			}
-
-			// A component field may point at the GameObject's component of that type.
-			if (target is GameObject go && type != typeof(GameObject))
-			{
-				return go.GetComponent(type);
-			}
-
-			return type.IsInstanceOfType(target) ? target : null;
+			return DocumentValues.ResolveReference(id, type, Context);
 		}
 
 		private static object LoadAsset(AssetReference reference, Type type)
 		{
-			if (reference.Guid == null && reference.Path == null)
-			{
-				return null;
-			}
-
-			return reference.Guid != null ? AssetDatabase.LoadByGuid(type, reference.Guid, reference.Path) : AssetDatabase.Load(type, AssetDatabase.Resolve(reference.Path, null));
+			return DocumentValues.LoadAsset(reference, type);
 		}
 
 		private static object TryCreate(Type type)
 		{
-			try
-			{
-				return Activator.CreateInstance(type, true);
-			}
-			catch (Exception e)
-			{
-				Debug.LogWarning($"[Serialization] Cannot create {type.Name}: {e.Message}");
-				return null;
-			}
+			return DocumentValues.TryCreate(type);
 		}
 
-		/// <summary>Conversions between encodings of a field that changed type (numbers, enums, number arrays to vectors).</summary>
 		private bool TryConvert(object value, ValueTag storedTag, Type targetType, out object result)
 		{
-			result = null;
-			ValueTag wanted = SerializationUtility.TagOf(targetType, out ValueTag wantedElement);
-			if (value == null)
-			{
-				return !targetType.IsValueType;
-			}
-
-			try
-			{
-				if (targetType.IsEnum)
-				{
-					if (value is string name)
-					{
-						result = Enum.Parse(targetType, name, true);
-						return true;
-					}
-
-					if (IsNumber(storedTag))
-					{
-						result = Enum.ToObject(targetType, Convert.ToInt64(value));
-						return true;
-					}
-
-					return false;
-				}
-
-				if (IsNumber(wanted) || wanted == ValueTag.Bool || wanted == ValueTag.Char || wanted == ValueTag.String)
-				{
-					if (storedTag == ValueTag.Enum)
-					{
-						value = (long)value;
-					}
-
-					if (IsNumber(storedTag) || storedTag == ValueTag.Bool || storedTag == ValueTag.Char || storedTag == ValueTag.String || storedTag == ValueTag.Enum)
-					{
-						result = Convert.ChangeType(value, targetType, System.Globalization.CultureInfo.InvariantCulture);
-						return true;
-					}
-
-					return false;
-				}
-
-				if (value is SerializedArray numbers && numbers.Items.Count >= 2 && IsNumber(numbers.ElementTag))
-				{
-					float[] f = new float[4];
-					for (int i = 0; i < Math.Min(4, numbers.Items.Count); i++)
-					{
-						f[i] = Convert.ToSingle(numbers.Items[i]);
-					}
-
-					switch (wanted)
-					{
-						case ValueTag.Vector2: result = new Vector2(f[0], f[1]); return true;
-						case ValueTag.Vector3: result = new Vector3(f[0], f[1], f[2]); return true;
-						case ValueTag.Vector4: result = new Vector4(f[0], f[1], f[2], f[3]); return true;
-						case ValueTag.Quaternion: result = new Quaternion(f[0], f[1], f[2], f[3]); return true;
-						case ValueTag.Color4: result = new Color4(f[0], f[1], f[2], f[3]); return true;
-						case ValueTag.Vector2i: result = new Vector2i((int)f[0], (int)f[1]); return true;
-						case ValueTag.Vector3i: result = new Vector3i((int)f[0], (int)f[1], (int)f[2]); return true;
-						case ValueTag.Vector4i: result = new Vector4i((int)f[0], (int)f[1], (int)f[2], (int)f[3]); return true;
-					}
-				}
-
-				if (wanted == ValueTag.Array && value is SerializedArray items)
-				{
-					Type elementType = SerializationUtility.GetElementType(targetType);
-					IList list = targetType.IsArray ? Array.CreateInstance(elementType, items.Items.Count) : (IList)Activator.CreateInstance(targetType);
-					for (int i = 0; i < items.Items.Count; i++)
-					{
-						object item;
-						if (!TryConvert(items.Items[i], items.ElementTag, elementType, out item))
-						{
-							return false;
-						}
-
-						if (targetType.IsArray)
-						{
-							list[i] = item;
-						}
-						else
-						{
-							list.Add(item);
-						}
-					}
-
-					result = list;
-					return true;
-				}
-
-				if (wanted == ValueTag.SceneRef && value is ulong id)
-				{
-					result = ResolveReference(id, targetType);
-					return true;
-				}
-
-				if (wanted == ValueTag.Asset && value is AssetReference asset)
-				{
-					result = LoadAsset(asset, targetType);
-					return true;
-				}
-
-				if (wanted == ValueTag.Object && value is SerializedNode node)
-				{
-					result = FromNode(node, targetType);
-					return result != null;
-				}
-
-				if (targetType.IsInstanceOfType(value))
-				{
-					result = value;
-					return true;
-				}
-			}
-			catch (Exception)
-			{
-				// Not convertible.
-			}
-
-			return false;
-		}
-
-		/// <summary>Instantiates a live object from generic data (a script that came back with a changed field layout).</summary>
-		private object FromNode(SerializedNode node, Type declaredType)
-		{
-			Type type = TypeRegistry.Resolve(node.TypeName);
-			if (type == null || !declaredType.IsAssignableFrom(type))
-			{
-				type = !declaredType.IsAbstract && !declaredType.IsInterface ? declaredType : null;
-			}
-
-			if (type == null)
-			{
-				return null;
-			}
-
-			object target = TryCreate(type);
-			if (target == null)
-			{
-				return null;
-			}
-
-			foreach (SerializedField field in SerializationUtility.GetFields(type))
-			{
-				SerializedProperty property = node.Find(field.Name);
-				object converted;
-				if (property != null && TryConvert(property.Value, property.Tag, field.FieldType, out converted))
-				{
-					field.Accessor.SetBoxed(target, converted);
-				}
-			}
-
-			return target;
-		}
-
-		private static bool IsNumber(ValueTag tag)
-		{
-			return tag >= ValueTag.SByte && tag <= ValueTag.Double;
+			return DocumentValues.TryConvert(value, storedTag, targetType, Context, out result);
 		}
 
 		#endregion

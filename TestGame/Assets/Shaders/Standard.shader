@@ -1,3 +1,9 @@
+//Properties
+DiffuseMap ("Diffuse", 2D) = "white" {}
+SpecularMap ("Specular", 2D) = "black" {}
+NormalMap ("Normal", 2D) = "normal" {}
+/////Properties
+
 //Vertex
 
 #version 430

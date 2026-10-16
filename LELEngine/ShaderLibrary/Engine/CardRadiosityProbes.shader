@@ -19,7 +19,7 @@ layout(local_size_x = 16) in;
 uniform usampler2D CardIndex;
 uniform sampler2D CardNormal;
 uniform sampler2D FinalLightingPrev;
-uniform vec3 giSkyRadiance;
+#include "Engine/Sky.glsl"
 uniform int frameIndex;
 uniform float radiosityBlend;      // constant history weight per update when radiosityMaxSamples is 0
 uniform float radiosityMaxSamples; // sample-count accumulation cap (lower while the scene is changing, see SurfaceCachePass)
@@ -84,7 +84,7 @@ void main()
 	vec3 origin = position + N * sdfVoxel;
 	float maxDistance = rcNearDistance > 0.0 ? rcNearDistance : sdfGridSize;
 
-	vec3 radiance = giSkyRadiance;
+	vec3 radiance = SkyRadiance(direction);
 	float hitT;
 	bool hit = TraceSdf(origin, direction, maxDistance, hitT);
 	if (!hit && rcNearDistance > 0.0)

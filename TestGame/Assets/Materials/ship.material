@@ -1,13 +1,16 @@
-Standard.shader
-uniform 
-	sampler2D
-		DiffuseMap
-			SciFi_Fighter-MK6-diffuse.jpg
-uniform 
-	sampler2D 
-		SpecularMap
-			SciFi_Fighter-MK6-spec.jpg
-uniform
-	sampler2D 
-		NormalMap
-			SciFi_Fighter-MK6-bump.jpg
+{
+  "$format": "LELEngine",
+  "$version": 2,
+  "$kind": "Object",
+  "$type": "LELEngine.Shaders.Material, LELEngine",
+  "m_Shader": { "guid": "4e2c44a0f9774ea18357a448523dc0de", "path": "Shaders/Standard.shader" },
+  "m_Properties": [
+    { "$type": "LELEngine.Shaders.TextureProperty, LELEngine", "name": "DiffuseMap", "value": { "guid": "0865b3f5fa3644b68d0541b74399864f", "path": "Textures/SciFi_Fighter-MK6-diffuse.jpg" } },
+    { "$type": "LELEngine.Shaders.TextureProperty, LELEngine", "name": "SpecularMap", "value": { "guid": "4a942c454ca147baabc0a672c2b89bd9", "path": "Textures/SciFi_Fighter-MK6-spec.jpg" } },
+    { "$type": "LELEngine.Shaders.TextureProperty, LELEngine", "name": "NormalMap", "value": { "guid": "5d7df18bf003481b817d9313cf564852", "path": "Textures/SciFi_Fighter-MK6-bump.jpg" } }
+  ],
+  "$types": {
+    "LELEngine.Shaders.Material, LELEngine": { "m_Shader": "Asset", "m_Properties": "Array<Object>" },
+    "LELEngine.Shaders.TextureProperty, LELEngine": { "name": "String", "value": "Asset" }
+  }
+}

@@ -85,6 +85,14 @@ namespace LELEngine.Editor
 				ImGui.PopID();
 			}
 
+			if (ImGui.CollapsingHeader("Physics 2D"))
+			{
+				ImGui.PushID("physics2d");
+				changed |= FieldDrawer.DrawFields(scene.Settings.Physics2D, context);
+				changed |= DrawLayerCollisionMatrix(scene.Settings.Physics2D);
+				ImGui.PopID();
+			}
+
 			if (changed)
 			{
 				editor.MarkDirty();
@@ -92,6 +100,81 @@ namespace LELEngine.Editor
 		}
 
 		private static readonly string[] GIModeNames = { "Standard (no GI)", "Voxel (cone tracing)", "Lumen (screen probes)" };
+
+		/// <summary>Which layers collide with which (the used layers: named ones and those of the scene's objects).</summary>
+		private bool DrawLayerCollisionMatrix(Physics2DSettings physics)
+		{
+			if (!ImGui.TreeNodeEx("Layer Collision Matrix", ImGuiTreeNodeFlags.SpanAvailWidth))
+			{
+				return false;
+			}
+
+			var layers = new System.Collections.Generic.List<int>();
+			for (int i = 0; i < 32; i++)
+			{
+				if (LayerMask.LayerToName(i).Length > 0)
+				{
+					layers.Add(i);
+				}
+			}
+
+			Scene scene = editor.Scene;
+			if (scene != null)
+			{
+				foreach (GameObject go in scene.GameObjects)
+				{
+					if (!layers.Contains(go.layer))
+					{
+						layers.Add(go.layer);
+					}
+				}
+			}
+
+			layers.Sort();
+			bool changed = false;
+			if (ImGui.BeginTable("##matrix", layers.Count + 1, ImGuiTableFlags.SizingFixedFit | ImGuiTableFlags.BordersInner))
+			{
+				ImGui.TableNextRow();
+				ImGui.TableSetColumnIndex(0);
+				foreach (int column in layers)
+				{
+					ImGui.TableNextColumn();
+					ImGui.TextDisabled(LayerMask.DisplayName(column));
+				}
+
+				foreach (int row in layers)
+				{
+					ImGui.TableNextRow();
+					ImGui.TableSetColumnIndex(0);
+					ImGui.TextUnformatted(LayerMask.DisplayName(row));
+					foreach (int column in layers)
+					{
+						ImGui.TableNextColumn();
+						if (column < row)
+						{
+							continue;
+						}
+
+						bool collide = !physics.GetIgnoreLayerCollision(row, column);
+						ImGui.PushID(row * 32 + column);
+						if (ImGui.Checkbox("##c", ref collide))
+						{
+							editor.Edits.Begin(context.UndoTarget);
+							physics.IgnoreLayerCollision(row, column, !collide);
+							editor.Edits.RequestCommit();
+							changed = true;
+						}
+
+						ImGui.PopID();
+					}
+				}
+
+				ImGui.EndTable();
+			}
+
+			ImGui.TreePop();
+			return changed;
+		}
 
 		/// <summary>Standard lighting, voxel cone tracing or Lumen for the scene; undoable like any setting.</summary>
 		private bool DrawGIMode(GlobalIlluminationSettings gi)

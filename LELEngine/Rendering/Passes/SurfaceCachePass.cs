@@ -238,7 +238,7 @@ namespace LELEngine.Rendering.Passes
 			probes.SetTexture("CardIndex", TextureTarget.Texture2D, atlas.CardIndex, 0);
 			probes.SetTexture("CardNormal", TextureTarget.Texture2D, atlas.Normal, 2);
 			probes.SetTexture("FinalLightingPrev", TextureTarget.Texture2D, atlas.FinalLightingPrevious, 4);
-			probes.SetVector3("giSkyRadiance", gi.SkyRadiance);
+			Lighting.SetSkyUniforms(probes);
 			probes.SetInt("frameIndex", frameIndex);
 			probes.SetFloat("radiosityBlend", gi.RadiosityBlend);
 			// While the scene is changing (or has just stopped) the probes track with a short history; once it has

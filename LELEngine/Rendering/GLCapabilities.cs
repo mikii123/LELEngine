@@ -31,6 +31,9 @@ namespace LELEngine.Rendering
 
 		public static int MaxImageUnits { get; private set; }
 
+		/// <summary>Texture units a fragment or compute stage can sample (at least 16).</summary>
+		public static int MaxTextureUnits { get; private set; } = 16;
+
 		/// <summary>
 		///     gl_BaseInstance in vertex shaders (ARB_shader_draw_parameters, core in GLSL 4.60): GPU-driven draws read
 		///     their instance index directly. Fallback: a per-instance vertex attribute (see GeometryPool).
@@ -96,6 +99,8 @@ namespace LELEngine.Rendering
 				MaxAnisotropy = GL.GetFloat((GetPName)0x84FF);
 			}
 			MaxImageUnits = GL.GetInteger((GetPName)0x8F38);
+			// GL_MAX_TEXTURE_IMAGE_UNITS (fragment) and GL_MAX_COMPUTE_TEXTURE_IMAGE_UNITS.
+			MaxTextureUnits = Math.Max(16, Math.Min(GL.GetInteger((GetPName)0x8872), GL.GetInteger((GetPName)0x91BC)));
 
 			ShaderDrawParametersExtension = HasExtension("GL_ARB_shader_draw_parameters");
 			ShaderDrawParameters = ShaderDrawParametersExtension || IsAtLeast(4, 6);

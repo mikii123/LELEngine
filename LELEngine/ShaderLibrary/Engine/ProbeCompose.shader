@@ -3,6 +3,8 @@
 #version 430
 
 #include "Engine/ScreenProbes.glsl"
+#include "Engine/Sampling.glsl"
+#include "Engine/Sky.glsl"
 
 // Turns the per-probe ray results back into the octahedral radiance map and applies Lumen's temporal probe
 // filter: directions traced this frame (2x2 rays when importance sampled) are blended with the reprojected
@@ -25,7 +27,6 @@ uniform sampler2D RayResults;
 uniform sampler2D PreviousProbeRadiance;
 uniform sampler2D PreviousProbeCount;
 uniform usampler2D ProbeSelection;
-uniform vec3 giSkyRadiance;
 uniform float probeHistoryWeight;     // constant history weight when probeMaxHistorySamples is 0
 uniform float probeMaxHistorySamples; // cap of the per-texel sample count (0 = constant weight)
 uniform float changeThreshold;        // relative change of the summed radiance that counts as a lighting change
@@ -125,7 +126,8 @@ void main()
 	{
 		// Not traced this frame: history, or sky when there is none.
 		bool hasHistory = history.a > -1.5;
-		imageStore(OutRadiance, texel, hasHistory ? history : vec4(giSkyRadiance, -1.0));
+		vec3 sky = SkyRadiance(OctahedralToDirection((vec2(oct) + 0.5) / float(PROBE_RESOLUTION)));
+		imageStore(OutRadiance, texel, hasHistory ? history : vec4(sky, -1.0));
 		imageStore(OutCount, texel, vec4(hasHistory ? previousCount : 0.0));
 		return;
 	}

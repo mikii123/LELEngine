@@ -1,13 +1,16 @@
-Standard.shader
-uniform 
-	sampler2D
-		DiffuseMap
-			opentksquare.png
-uniform 
-	sampler2D 
-		SpecularMap
-			container2_spec.png
-uniform
-	sampler2D 
-		NormalMap
-			normalMapTest.gif
+{
+  "$format": "LELEngine",
+  "$version": 2,
+  "$kind": "Object",
+  "$type": "LELEngine.Shaders.Material, LELEngine",
+  "m_Shader": { "guid": "4e2c44a0f9774ea18357a448523dc0de", "path": "Shaders/Standard.shader" },
+  "m_Properties": [
+    { "$type": "LELEngine.Shaders.TextureProperty, LELEngine", "name": "DiffuseMap", "value": { "guid": "b457331b2fa24cf3bfe42f529876920e", "path": "Textures/opentksquare.png" } },
+    { "$type": "LELEngine.Shaders.TextureProperty, LELEngine", "name": "SpecularMap", "value": { "guid": "29eb41373dd64c3aac5f27142acafebb", "path": "Textures/container2_spec.png" } },
+    { "$type": "LELEngine.Shaders.TextureProperty, LELEngine", "name": "NormalMap", "value": { "guid": "a76f38c56c1841e3a7efda4913372474", "path": "Textures/normalMapTest.gif" } }
+  ],
+  "$types": {
+    "LELEngine.Shaders.Material, LELEngine": { "m_Shader": "Asset", "m_Properties": "Array<Object>" },
+    "LELEngine.Shaders.TextureProperty, LELEngine": { "name": "String", "value": "Asset" }
+  }
+}

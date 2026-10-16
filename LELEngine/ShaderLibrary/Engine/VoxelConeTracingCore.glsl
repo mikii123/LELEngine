@@ -28,7 +28,8 @@ uniform float giOcclusionStrength;
 uniform float giConeMaxDistance;
 uniform int giTraceMode;
 uniform float giSdfDetailDistance;
-uniform vec3 giSkyRadiance; // radiance arriving from outside the scene (cones that escape)
+// Radiance arriving from outside the scene (cones that escape): the skybox or the constant sky color.
+#include "Engine/Sky.glsl"
 
 float VoxelSize()
 {
@@ -85,7 +86,7 @@ vec4 TraceConeVoxel(vec3 origin, vec3 direction, float aperture, float startDist
 	}
 
 	// Whatever the cone did not hit sees the sky.
-	color += (1.0 - alpha) * giSkyRadiance;
+	color += (1.0 - alpha) * SkyRadiance(direction);
 	return vec4(color, alpha);
 }
 
@@ -156,7 +157,7 @@ vec4 TraceConeSdf(vec3 origin, vec3 direction, float aperture, float maxDistance
 	}
 
 	// Whatever the cone did not hit sees the sky.
-	color += (1.0 - alpha) * giSkyRadiance;
+	color += (1.0 - alpha) * SkyRadiance(direction);
 	return vec4(color, alpha);
 }
 

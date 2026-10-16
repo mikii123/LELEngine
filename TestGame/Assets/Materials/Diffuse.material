@@ -1,13 +1,16 @@
-Standard.shader
-uniform 
-	sampler2D
-		DiffuseMap
-			Axe_diff.png
-uniform 
-	sampler2D 
-		SpecularMap
-			Axe_spec.png
-uniform
-	sampler2D 
-		NormalMap
-			Axe_normal.png
+{
+  "$format": "LELEngine",
+  "$version": 2,
+  "$kind": "Object",
+  "$type": "LELEngine.Shaders.Material, LELEngine",
+  "m_Shader": { "guid": "4e2c44a0f9774ea18357a448523dc0de", "path": "Shaders/Standard.shader" },
+  "m_Properties": [
+    { "$type": "LELEngine.Shaders.TextureProperty, LELEngine", "name": "DiffuseMap", "value": { "guid": "ac375a68ef1847dd9eca9086241b535f", "path": "Textures/Axe_diff.png" } },
+    { "$type": "LELEngine.Shaders.TextureProperty, LELEngine", "name": "SpecularMap", "value": { "guid": "5f177969dd154d3f8f2335860530eb72", "path": "Textures/Axe_spec.png" } },
+    { "$type": "LELEngine.Shaders.TextureProperty, LELEngine", "name": "NormalMap", "value": { "guid": "97b90258ff12494999da2c71bbcbb04d", "path": "Textures/Axe_normal.png" } }
+  ],
+  "$types": {
+    "LELEngine.Shaders.Material, LELEngine": { "m_Shader": "Asset", "m_Properties": "Array<Object>" },
+    "LELEngine.Shaders.TextureProperty, LELEngine": { "name": "String", "value": "Asset" }
+  }
+}

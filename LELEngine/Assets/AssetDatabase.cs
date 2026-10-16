@@ -2,24 +2,31 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text.Json;
+using LELEngine.Serialization;
 
 namespace LELEngine
 {
-	/// <summary>An object loaded from an asset file (mesh, material, ...). Scenes reference it by the file's GUID.</summary>
+	/// <summary>An object loaded from an asset file (mesh, material, texture, ...). Scenes reference it by the file's GUID.</summary>
 	public interface IAsset
 	{
 		/// <summary>Path of the source file relative to <see cref="AssetDatabase.Root" /> ("/" separated), null for runtime objects.</summary>
 		string AssetPath { get; }
+
+		/// <summary>Name of this object inside its file when the file holds several (a sprite of a sheet); null for the main asset.</summary>
+		string SubAssetName => null;
 	}
 
 	/// <summary>
-	///     Asset files and their identities. Every asset file has a sidecar "file.ext.meta" holding its GUID, so
-	///     references survive renames and moves (the meta file moves with it). The root is the folder all asset
-	///     paths are relative to: a project's Assets folder in the editor, the Data folder of a build, or the
-	///     executable's folder for the legacy layout (Meshes/, Materials/, Textures/, Shaders/ next to the exe).
+	///     Asset files and their identities. Every asset file has a sidecar "file.ext.meta" (an <see cref="AssetMeta" />
+	///     document) holding its GUID and import settings, so references survive renames and moves (the meta file
+	///     moves with it). The root is the folder all asset paths are relative to: a project's Assets folder in the
+	///     editor, the Data folder of a build, or the executable's folder for the legacy layout (Meshes/, Materials/,
+	///     Textures/, Shaders/ next to the exe).
 	///
-	///     Engine shaders (the GLSL library and engine passes) are engine resources, not project assets: they are
-	///     always looked up in <see cref="EngineShadersRoot" /> first.
+	///     Asset types register their file extensions and loader (<see cref="RegisterAssetType" />); scenes and
+	///     materials reference assets through <see cref="Load" /> / <see cref="LoadByGuid" />. Engine shaders (the GLSL
+	///     library and engine passes) are engine resources, not project assets: they are always looked up in
+	///     <see cref="EngineShadersRoot" /> first.
 	/// </summary>
 	public static class AssetDatabase
 	{
@@ -40,15 +47,36 @@ namespace LELEngine
 		/// <summary>Folder holding the engine's shader library (Shaders/Engine/...), next to the engine binaries.</summary>
 		public static string EngineShadersRoot => Path.Combine(AppContext.BaseDirectory, "Shaders");
 
+		/// <summary>Raised after the index was rebuilt (files added, moved or deleted).</summary>
+		public static event Action Refreshed;
+
 		#endregion
 
 		#region PrivateFields
+
+		private sealed class AssetTypeInfo
+		{
+			public Type Type;
+			public string[] Extensions;
+			public Func<Type, string, string, object> Loader;
+		}
 
 		private static readonly object sync = new object();
 		private static string root;
 		private static readonly Dictionary<string, string> pathsByGuid = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 		private static readonly Dictionary<string, string> guidsByPath = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 		private static readonly Dictionary<string, List<string>> pathsByFileName = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+		private static readonly Dictionary<string, AssetMeta> metaCache = new Dictionary<string, AssetMeta>(StringComparer.OrdinalIgnoreCase);
+		private static readonly List<AssetTypeInfo> assetTypes = new List<AssetTypeInfo>();
+
+		#endregion
+
+		#region Constructors
+
+		static AssetDatabase()
+		{
+			RegisterBuiltinTypes();
+		}
 
 		#endregion
 
@@ -65,6 +93,8 @@ namespace LELEngine
 				root = Path.GetFullPath(assetRoot);
 				Rebuild(createMissingMeta);
 			}
+
+			Refreshed?.Invoke();
 		}
 
 		/// <summary>Re-reads the meta files under the root (after files were added, moved or deleted).</summary>
@@ -75,7 +105,98 @@ namespace LELEngine
 				EnsureInitialized();
 				Rebuild(createMissingMeta);
 			}
+
+			Refreshed?.Invoke();
 		}
+
+		// ---------------------------------------------------------------- asset types
+
+		/// <summary>
+		///     Registers a type loadable from files with the given extensions. The loader receives the requested type
+		///     (the registered type or a base of it), the root-relative path and the sub-asset name (or null).
+		/// </summary>
+		public static void RegisterAssetType(Type type, string[] extensions, Func<Type, string, string, object> loader)
+		{
+			lock (sync)
+			{
+				assetTypes.RemoveAll(info => info.Type == type);
+				assetTypes.Add(new AssetTypeInfo { Type = type, Extensions = extensions ?? Array.Empty<string>(), Loader = loader });
+			}
+		}
+
+		/// <summary>File extensions of the assets a field of this type accepts (empty when the type is not an asset type).</summary>
+		public static string[] GetExtensions(Type type)
+		{
+			lock (sync)
+			{
+				foreach (AssetTypeInfo info in assetTypes)
+				{
+					if (info.Type == type)
+					{
+						return info.Extensions;
+					}
+				}
+
+				// A base type (Texture, IAsset): every registered type assignable to it.
+				var union = new List<string>();
+				foreach (AssetTypeInfo info in assetTypes)
+				{
+					if (type.IsAssignableFrom(info.Type))
+					{
+						foreach (string extension in info.Extensions)
+						{
+							if (!union.Contains(extension))
+							{
+								union.Add(extension);
+							}
+						}
+					}
+				}
+
+				return union.ToArray();
+			}
+		}
+
+		/// <summary>The registered asset type whose extensions include the file's, or null (scripts, unknown files).</summary>
+		public static Type GetAssetType(string assetPath)
+		{
+			if (string.IsNullOrEmpty(assetPath))
+			{
+				return null;
+			}
+
+			lock (sync)
+			{
+				foreach (AssetTypeInfo info in assetTypes)
+				{
+					foreach (string extension in info.Extensions)
+					{
+						if (assetPath.EndsWith(extension, StringComparison.OrdinalIgnoreCase))
+						{
+							return info.Type;
+						}
+					}
+				}
+			}
+
+			return null;
+		}
+
+		/// <summary>True when a file with this extension loads as the given type (or a type assignable to it).</summary>
+		public static bool AcceptsFile(Type type, string assetPath)
+		{
+			foreach (string extension in GetExtensions(type))
+			{
+				if (assetPath.EndsWith(extension, StringComparison.OrdinalIgnoreCase))
+				{
+					return true;
+				}
+			}
+
+			return false;
+		}
+
+		// ---------------------------------------------------------------- identity
 
 		/// <summary>GUID of the asset at a root-relative path, or null when it has no meta file.</summary>
 		public static string GetGuid(string assetPath)
@@ -125,6 +246,24 @@ namespace LELEngine
 			}
 
 			return Normalize(full.Substring(rootFull.Length));
+		}
+
+		/// <summary>True when the path names an engine resource shipped next to the binaries (engine shaders) rather than a project asset.</summary>
+		public static bool IsEngineResource(string path)
+		{
+			if (string.IsNullOrEmpty(path))
+			{
+				return false;
+			}
+
+			try
+			{
+				return File.Exists(Path.Combine(EngineShadersRoot, path.Replace('/', Path.DirectorySeparatorChar)));
+			}
+			catch (Exception)
+			{
+				return false;
+			}
 		}
 
 		/// <summary>
@@ -201,6 +340,14 @@ namespace LELEngine
 			}
 		}
 
+		/// <summary>Indexed asset paths of files loadable as the type.</summary>
+		public static List<string> FindAssets(Type type)
+		{
+			return GetAllAssetPaths(GetExtensions(type));
+		}
+
+		// ---------------------------------------------------------------- meta files
+
 		/// <summary>Creates the meta file of an asset if it is missing; returns the asset's GUID.</summary>
 		public static string EnsureMeta(string assetPath)
 		{
@@ -211,14 +358,15 @@ namespace LELEngine
 				return existing;
 			}
 
-			string guid = Guid.NewGuid().ToString("N");
-			WriteMeta(ToAbsolute(normalized) + MetaExtension, guid);
+			var meta = new AssetMeta { guid = Guid.NewGuid().ToString("N") };
+			WriteMeta(ToAbsolute(normalized) + MetaExtension, meta);
 			lock (sync)
 			{
-				Register(normalized, guid);
+				Register(normalized, meta.guid);
+				metaCache[normalized] = meta;
 			}
 
-			return guid;
+			return meta.guid;
 		}
 
 		/// <summary>Creates missing meta files for every asset file below a folder (any folder, not only the root).</summary>
@@ -232,42 +380,118 @@ namespace LELEngine
 					continue;
 				}
 
-				WriteMeta(file + MetaExtension, Guid.NewGuid().ToString("N"));
+				WriteMeta(file + MetaExtension, new AssetMeta { guid = Guid.NewGuid().ToString("N") });
 				created++;
 			}
 
 			return created;
 		}
 
+		/// <summary>The meta document of an asset (GUID and import settings); a default one for files without a meta file.</summary>
+		public static AssetMeta GetMeta(string assetPath)
+		{
+			string normalized = Normalize(assetPath);
+			lock (sync)
+			{
+				EnsureInitialized();
+				AssetMeta meta;
+				if (metaCache.TryGetValue(normalized, out meta))
+				{
+					return meta;
+				}
+
+				string file = ToAbsolute(normalized) + MetaExtension;
+				meta = File.Exists(file) ? ReadMeta(file) : null;
+				meta = meta ?? new AssetMeta { guid = GetGuid(normalized) };
+				metaCache[normalized] = meta;
+				return meta;
+			}
+		}
+
+		/// <summary>
+		///     Import settings of an asset: the importer stored in its meta file, or a new default importer of
+		///     <typeparamref name="T" /> (not saved until <see cref="SaveMeta" />).
+		/// </summary>
+		public static T GetImporter<T>(string assetPath)
+			where T : AssetImporter, new()
+		{
+			AssetMeta meta = GetMeta(assetPath);
+			T importer = meta.importer as T;
+			if (importer == null)
+			{
+				importer = new T();
+				meta.importer = importer;
+			}
+
+			return importer;
+		}
+
+		/// <summary>Writes an asset's meta document (import settings changed in the editor).</summary>
+		public static void SaveMeta(string assetPath, AssetMeta meta)
+		{
+			string normalized = Normalize(assetPath);
+			if (string.IsNullOrEmpty(meta.guid))
+			{
+				meta.guid = GetGuid(normalized) ?? Guid.NewGuid().ToString("N");
+			}
+
+			WriteMeta(ToAbsolute(normalized) + MetaExtension, meta);
+			lock (sync)
+			{
+				Register(normalized, meta.guid);
+				metaCache[normalized] = meta;
+			}
+		}
+
+		// ---------------------------------------------------------------- loading
+
 		/// <summary>Loads (or returns the cached) asset of the given type from a root-relative path.</summary>
 		public static object Load(Type type, string assetPath)
 		{
-			if (assetPath == null)
+			return Load(type, assetPath, null);
+		}
+
+		/// <summary>Loads an asset, or one of its sub-assets by name (a sprite of a sheet).</summary>
+		public static object Load(Type type, string assetPath, string subAsset)
+		{
+			if (assetPath == null || type == null)
 			{
 				return null;
 			}
 
-			if (type == typeof(Mesh))
+			AssetTypeInfo info = FindLoader(type, assetPath);
+			if (info == null)
 			{
-				return InternalStorage.GetOrCreateMesh(assetPath);
+				Debug.LogWarning($"[Assets] No loader for {type.Name} ({assetPath})");
+				return null;
 			}
 
-			if (type == typeof(Shaders.Material))
+			try
 			{
-				return InternalStorage.GetOrCreateMaterial(assetPath);
-			}
+				object result = info.Loader(type, Normalize(assetPath), subAsset);
+				if (result != null && !type.IsInstanceOfType(result))
+				{
+					Debug.LogWarning($"[Assets] {assetPath} loaded as {result.GetType().Name}, which is not a {type.Name}");
+					return null;
+				}
 
-			if (UIElements.UIAssets.IsUIAssetType(type))
+				return result;
+			}
+			catch (Exception e)
 			{
-				return UIElements.UIAssets.Load(type, assetPath);
+				Debug.LogError($"[Assets] Cannot load {assetPath} as {type.Name}: {e.Message}");
+				return null;
 			}
+		}
 
-			Debug.LogWarning($"[Assets] No loader for {type.Name} ({assetPath})");
-			return null;
+		public static T Load<T>(string assetPath, string subAsset = null)
+			where T : class
+		{
+			return Load(typeof(T), assetPath, subAsset) as T;
 		}
 
 		/// <summary>Loads an asset by GUID; falls back to the path hint when the GUID is unknown.</summary>
-		public static object LoadByGuid(Type type, string guid, string pathHint)
+		public static object LoadByGuid(Type type, string guid, string pathHint, string subAsset = null)
 		{
 			string path = GetPath(guid);
 			if (path == null && pathHint != null)
@@ -277,6 +501,10 @@ namespace LELEngine
 				{
 					Debug.LogWarning($"[Assets] GUID {guid} not found, using '{path}' from the path hint");
 				}
+				else if (IsEngineResource(pathHint))
+				{
+					path = pathHint;
+				}
 			}
 
 			if (path == null)
@@ -285,12 +513,74 @@ namespace LELEngine
 				return null;
 			}
 
-			return Load(type, path);
+			return Load(type, path, subAsset);
 		}
 
 		#endregion
 
 		#region PrivateMethods
+
+		private static void RegisterBuiltinTypes()
+		{
+			RegisterAssetType(typeof(Mesh), new[] { ".obj", ".fbx" }, (type, path, sub) => InternalStorage.GetOrCreateMesh(path));
+			RegisterAssetType(typeof(Shaders.Material), new[] { ".material" }, (type, path, sub) => InternalStorage.GetOrCreateMaterial(path));
+			RegisterAssetType(typeof(Shaders.ShaderProgram), new[] { ".shader" }, (type, path, sub) => InternalStorage.GetOrCreateShader(path));
+			RegisterAssetType(typeof(Texture), TextureAssets.ImageExtensions, TextureAssets.Load);
+			RegisterAssetType(typeof(Texture2D), TextureAssets.ImageExtensions, TextureAssets.Load);
+			RegisterAssetType(typeof(Texture3D), TextureAssets.ImageExtensions, TextureAssets.Load);
+			RegisterAssetType(typeof(Cubemap), TextureAssets.ImageExtensions, TextureAssets.Load);
+			RegisterAssetType(typeof(Sprite), TextureAssets.ImageExtensions, TextureAssets.Load);
+			RegisterAssetType(typeof(UIElements.StyleSheet), UIElements.UIAssets.StyleSheetExtensions, (type, path, sub) => UIElements.UIAssets.Load(type, path));
+			RegisterAssetType(typeof(UIElements.VisualTreeAsset), UIElements.UIAssets.VisualTreeExtensions, (type, path, sub) => UIElements.UIAssets.Load(type, path));
+			RegisterAssetType(typeof(UIElements.FontAsset), UIElements.UIAssets.FontExtensions, (type, path, sub) => UIElements.UIAssets.Load(type, path));
+			RegisterAssetType(typeof(PhysicsMaterial2D), new[] { PhysicsMaterial2D.Extension }, (type, path, sub) => PhysicsMaterial2D.Load(path));
+		}
+
+		private static AssetTypeInfo FindLoader(Type type, string assetPath)
+		{
+			lock (sync)
+			{
+				// The exact type first (Texture2D), then a registered subtype matching the file (Texture -> images), then a base.
+				foreach (AssetTypeInfo info in assetTypes)
+				{
+					if (info.Type == type)
+					{
+						return info;
+					}
+				}
+
+				foreach (AssetTypeInfo info in assetTypes)
+				{
+					if (type.IsAssignableFrom(info.Type) && MatchesExtension(info, assetPath))
+					{
+						return info;
+					}
+				}
+
+				foreach (AssetTypeInfo info in assetTypes)
+				{
+					if (info.Type.IsAssignableFrom(type))
+					{
+						return info;
+					}
+				}
+			}
+
+			return null;
+		}
+
+		private static bool MatchesExtension(AssetTypeInfo info, string assetPath)
+		{
+			foreach (string extension in info.Extensions)
+			{
+				if (assetPath.EndsWith(extension, StringComparison.OrdinalIgnoreCase))
+				{
+					return true;
+				}
+			}
+
+			return false;
+		}
 
 		private static void EnsureInitialized()
 		{
@@ -314,6 +604,7 @@ namespace LELEngine
 			pathsByGuid.Clear();
 			guidsByPath.Clear();
 			pathsByFileName.Clear();
+			metaCache.Clear();
 			if (!Directory.Exists(root))
 			{
 				return;
@@ -379,14 +670,21 @@ namespace LELEngine
 			return !name.EndsWith(MetaExtension, StringComparison.OrdinalIgnoreCase) && !name.StartsWith(".", StringComparison.Ordinal);
 		}
 
+		/// <summary>The GUID of a meta file: a quick look at the "guid" property of a JSON meta, the whole document for a binary one.</summary>
 		private static string ReadGuid(string metaFile)
 		{
 			try
 			{
-				using (JsonDocument document = JsonDocument.Parse(File.ReadAllText(metaFile)))
+				byte[] data = File.ReadAllBytes(metaFile);
+				if (Documents.IsBinary(data))
+				{
+					return Documents.ReadObject<AssetMeta>(data)?.guid;
+				}
+
+				using (JsonDocument document = JsonDocument.Parse(data, new JsonDocumentOptions { AllowTrailingCommas = true, CommentHandling = JsonCommentHandling.Skip }))
 				{
 					JsonElement guid;
-					return document.RootElement.TryGetProperty("guid", out guid) ? guid.GetString() : null;
+					return document.RootElement.TryGetProperty("guid", out guid) && guid.ValueKind == JsonValueKind.String ? guid.GetString() : null;
 				}
 			}
 			catch (Exception)
@@ -395,9 +693,22 @@ namespace LELEngine
 			}
 		}
 
-		private static void WriteMeta(string metaFile, string guid)
+		private static AssetMeta ReadMeta(string metaFile)
 		{
-			File.WriteAllText(metaFile, "{\n  \"guid\": \"" + guid + "\"\n}\n");
+			try
+			{
+				return Documents.ReadObject(File.ReadAllBytes(metaFile), typeof(AssetMeta), new AssetMeta()) as AssetMeta;
+			}
+			catch (Exception e)
+			{
+				Debug.LogWarning("[Assets] Cannot read " + metaFile + ": " + e.Message);
+				return null;
+			}
+		}
+
+		private static void WriteMeta(string metaFile, AssetMeta meta)
+		{
+			Documents.WriteObjectFile(metaFile, meta);
 		}
 
 		private static string Normalize(string path)

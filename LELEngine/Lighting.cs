@@ -42,6 +42,12 @@ namespace LELEngine
 		/// <summary>Texture unit reserved for the G-buffer normals of the GI resolve's upsampling.</summary>
 		public const int ResolveNormalTextureUnit = 9;
 
+		/// <summary>
+		///     Texture unit of the skybox cubemap the GI samples for rays that leave the scene. Above the 16 units every
+		///     context has, so it never collides with a pass's own textures; bound only when the context has it.
+		/// </summary>
+		public const int SkyboxTextureUnit = 16;
+
 		/// <summary>World -> light clip space. Written by the shadow pass every frame.</summary>
 		public static Matrix4 LightSpaceMatrix = Matrix4.Identity;
 
@@ -66,6 +72,31 @@ namespace LELEngine
 			}
 
 			Environment.ApplyTo(settings);
+			SkyEnvironment.Update(Environment.Skybox);
+		}
+
+		/// <summary>
+		///     The sky the GI shaders see (Engine/Sky.glsl): the constant sky color and, when the environment has a
+		///     skybox material with a cubemap or panorama, that cubemap with its tint, exposure and rotation.
+		/// </summary>
+		public static void SetSkyUniforms(ShaderProgram program)
+		{
+			program.SetVector3("giSkyRadiance", GI.SkyRadiance);
+			bool hasUnit = SkyboxTextureUnit < GLCapabilities.MaxTextureUnits;
+			bool enabled = SkyEnvironment.Enabled && hasUnit;
+			program.SetInt("giSkyboxEnabled", enabled ? 1 : 0);
+			if (!hasUnit)
+			{
+				return;
+			}
+
+			program.SetTexture("giSkybox", TextureTarget.TextureCubeMap, enabled ? SkyEnvironment.CubemapHandle : SkyEnvironment.BlackCubemapHandle, SkyboxTextureUnit);
+			if (enabled)
+			{
+				program.SetVector4("giSkyboxTint", SkyEnvironment.TintExposure);
+				program.SetVector2("giSkyboxRotation", SkyEnvironment.Rotation);
+				program.SetFloat("giSkyboxLod", SkyEnvironment.Lod);
+			}
 		}
 
 		public static void SetUniforms(ShaderProgram program)
@@ -123,7 +154,7 @@ namespace LELEngine
 			program.SetFloat("giConeMaxDistance", GI.ConeMaxDistance);
 			program.SetTexture("VoxelRadiance", TextureTarget.Texture3D, GI.VoxelTexture, VoxelTextureUnit);
 
-			program.SetVector3("giSkyRadiance", GI.SkyRadiance);
+			SetSkyUniforms(program);
 			bool sdf = GI.DistanceFieldEnabled && GI.GlobalSdf != 0;
 			program.SetInt("giTraceMode", TraceModeUniform(sdf));
 			program.SetFloat("giSdfDetailDistance", GI.SdfDetailDistance);

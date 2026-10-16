@@ -32,6 +32,9 @@ namespace LELEngine.Editor
 		public ProjectInfo Project { get; private set; }
 		public Scene Scene => SceneManager.ActiveScene;
 		public GameObject Selected { get; private set; }
+
+		/// <summary>Asset path of the project file shown in the inspector (when no GameObject is selected).</summary>
+		public string SelectedAsset { get; private set; }
 		public bool SceneDirty { get; private set; }
 		public PlayState PlayState { get; private set; } = PlayState.Edit;
 		public bool IsPlaying => PlayState != PlayState.Edit;
@@ -112,6 +115,7 @@ namespace LELEngine.Editor
 			gameInput = new GameInputHost(window, () => PlayState == PlayState.Playing && GameView.HasInputFocus);
 			Input.Host = gameInput;
 			Navigation.NavMesh.NavMeshChanged += NotifySceneChanged;
+			TextureAssets.TextureReplaced += OnTextureReplaced;
 			window.KeyDown += OnWindowKeyDown;
 			window.KeyUp += OnWindowKeyUp;
 			window.MouseMove += OnWindowMouseMove;
@@ -214,6 +218,7 @@ namespace LELEngine.Editor
 			projectPanel.Draw();
 			consolePanel.Draw();
 			buildPanel.Draw();
+			ObjectPicker.Draw(this);
 			Edits.Flush();
 
 			if (testHooks.PendingFocus != null)
@@ -334,10 +339,41 @@ namespace LELEngine.Editor
 			assetWatcher?.Dispose();
 			assetWatcher = null;
 			Selected = null;
+			SelectedAsset = null;
+			AssetInspectors.Deselected();
+			ObjectPicker.Close();
+			AssetThumbnails.Clear();
 			Undo.Clear();
 			Edits.Cancel();
 			InternalStorage.Clear();
 			Project = null;
+		}
+
+		/// <summary>A reimport replaced a texture object (its shape changed): materials holding the old one take the new one.</summary>
+		private static void OnTextureReplaced(string path, Texture old, Texture replacement)
+		{
+			foreach (Shaders.Material material in InternalStorage.Materials.Values)
+			{
+				foreach (Shaders.MaterialProperty property in material.Properties)
+				{
+					if (property is Shaders.TextureProperty texture && ReferenceEquals(texture.value, old))
+					{
+						texture.value = replacement;
+					}
+				}
+			}
+
+			Shaders.Material sky = Lighting.Environment?.Skybox;
+			if (sky != null && !InternalStorage.Materials.ContainsValue(sky))
+			{
+				foreach (Shaders.MaterialProperty property in sky.Properties)
+				{
+					if (property is Shaders.TextureProperty texture && ReferenceEquals(texture.value, old))
+					{
+						texture.value = replacement;
+					}
+				}
+			}
 		}
 
 		// ---------------------------------------------------------------- scenes
@@ -413,6 +449,24 @@ namespace LELEngine.Editor
 			}
 
 			Selected = go;
+			if (go != null && SelectedAsset != null)
+			{
+				SelectedAsset = null;
+				AssetInspectors.Deselected();
+			}
+		}
+
+		/// <summary>Shows a project file in the inspector (clears the GameObject selection, as in Unity).</summary>
+		public void SelectAsset(string assetPath)
+		{
+			if (!string.Equals(SelectedAsset, assetPath, StringComparison.OrdinalIgnoreCase))
+			{
+				Edits.Commit();
+				AssetInspectors.Deselected();
+			}
+
+			Selected = null;
+			SelectedAsset = assetPath;
 		}
 
 		public void MarkDirty()
@@ -713,6 +767,7 @@ namespace LELEngine.Editor
 
 		public void Dispose()
 		{
+			TextureAssets.TextureReplaced -= OnTextureReplaced;
 			uiBuilder?.Dispose();
 			uiBuilder = null;
 			CloseProject();
@@ -982,6 +1037,87 @@ namespace LELEngine.Editor
 						DefaultScene.AddMesh(go, "Cube.obj");
 						Navigation.NavMeshObstacle obstacle = go.AddComponent<Navigation.NavMeshObstacle>();
 						obstacle.size = new Vector3(2f, 2f, 2f);
+					}, parent);
+				}
+
+				ImGui.EndMenu();
+			}
+
+			if (ImGui.BeginMenu("Physics 2D"))
+			{
+				if (ImGui.MenuItem("Dynamic Box (Rigidbody2D + BoxCollider2D)"))
+				{
+					CreateObject("Box 2D", go =>
+					{
+						// Cube.obj spans -1..1, so the scale is the half size; the colliders fit the mesh like Unity's Reset.
+						go.transform.localScale = new Vector3(0.5f, 0.5f, 0.25f);
+						DefaultScene.AddMesh(go, "Cube.obj");
+						go.AddComponent<Rigidbody2D>();
+						go.AddComponent<BoxCollider2D>().FitToRenderer();
+					}, parent);
+				}
+
+				if (ImGui.MenuItem("Dynamic Circle (Rigidbody2D + CircleCollider2D)"))
+				{
+					CreateObject("Circle 2D", go =>
+					{
+						go.transform.localScale = new Vector3(0.5f, 0.5f, 0.5f);
+						DefaultScene.AddMesh(go, "Sphere.obj");
+						go.AddComponent<Rigidbody2D>();
+						go.AddComponent<CircleCollider2D>().FitToRenderer();
+					}, parent);
+				}
+
+				if (ImGui.MenuItem("Static Ground (BoxCollider2D)"))
+				{
+					CreateObject("Ground 2D", go =>
+					{
+						go.transform.localScale = new Vector3(5f, 0.25f, 0.25f);
+						MeshRenderer renderer = DefaultScene.AddMesh(go, "Cube.obj");
+						renderer.IsStatic = true;
+						go.AddComponent<BoxCollider2D>().FitToRenderer();
+					}, parent);
+				}
+
+				if (ImGui.MenuItem("Dynamic Capsule (Rigidbody2D + CapsuleCollider2D)"))
+				{
+					CreateObject("Capsule 2D", go =>
+					{
+						go.transform.localScale = new Vector3(0.25f, 0.5f, 0.25f);
+						DefaultScene.AddMesh(go, "Cube.obj");
+						go.AddComponent<Rigidbody2D>();
+						go.AddComponent<CapsuleCollider2D>().FitToRenderer();
+					}, parent);
+				}
+
+				if (ImGui.MenuItem("Edge Ground (EdgeCollider2D)"))
+				{
+					CreateObject("Edge 2D", go => go.AddComponent<EdgeCollider2D>(), parent);
+				}
+
+				ImGui.Separator();
+				if (ImGui.MenuItem("Hinge Chain (3 links)"))
+				{
+					CreateObject("Chain Anchor", go =>
+					{
+						Rigidbody2D anchor = go.AddComponent<Rigidbody2D>();
+						anchor.bodyType = RigidbodyType2D.Static;
+						Rigidbody2D previous = anchor;
+						for (int i = 0; i < 3; i++)
+						{
+							GameObject link = Scene.CreateGameObject("Link " + (i + 1));
+							link.transform.SetParent(go.transform, false);
+							// Links of 0.25 x 0.6 m hanging end to end; the anchor is in unscaled local space (the mesh top).
+							link.transform.localPosition = new Vector3(0f, -0.3f - 0.6f * i, 0f);
+							link.transform.localScale = new Vector3(0.125f, 0.3f, 0.125f);
+							DefaultScene.AddMesh(link, "Cube.obj");
+							Rigidbody2D body = link.AddComponent<Rigidbody2D>();
+							link.AddComponent<BoxCollider2D>().FitToRenderer();
+							HingeJoint2D hinge = link.AddComponent<HingeJoint2D>();
+							hinge.connectedBody = previous;
+							hinge.anchor = new Vector2(0f, 1f);
+							previous = body;
+						}
 					}, parent);
 				}
 

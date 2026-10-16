@@ -147,13 +147,18 @@ namespace LELEngine.Editor
 		/// <summary>World-space gizmos drawn into the view through <see cref="Rendering.DebugDraw" />.</summary>
 		private void DrawGizmos()
 		{
+			GameObject selected = editor.Selected;
+			if (selected != null && selected.scene == editor.Scene)
+			{
+				Physics2DGizmos.Draw(selected);
+			}
+
 			if (!ShowNavigation)
 			{
 				return;
 			}
 
 			Navigation.NavMeshDebug.DrawAll();
-			GameObject selected = editor.Selected;
 			if (selected != null && selected.scene == editor.Scene)
 			{
 				Navigation.NavMeshDebug.DrawSurfaceBounds(selected.GetComponent<Navigation.NavMeshSurface>());

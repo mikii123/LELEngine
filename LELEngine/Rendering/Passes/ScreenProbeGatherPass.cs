@@ -269,7 +269,7 @@ namespace LELEngine.Rendering.Passes
 			}
 			trace.SetTexture("FinalLighting", TextureTarget.Texture2D, scene.SurfaceCache.FinalLightingCurrent, 2);
 			trace.SetTexture("ProbeSelection", TextureTarget.Texture2D, selectionTexture, 3);
-			trace.SetVector3("giSkyRadiance", gi.SkyRadiance);
+			Lighting.SetSkyUniforms(trace);
 			trace.SetMatrix4("viewProjection", context.ViewProjection);
 			trace.SetVector3("cameraPosition", context.CameraPosition);
 			trace.SetVector3("cameraForward", context.Camera.transform.forward);
@@ -290,7 +290,7 @@ namespace LELEngine.Rendering.Passes
 			compose.Program.SetTexture("PreviousProbeRadiance", TextureTarget.Texture2D, previousComposed, 3);
 			compose.Program.SetTexture("ProbeSelection", TextureTarget.Texture2D, selectionTexture, 4);
 			compose.Program.SetTexture("PreviousProbeCount", TextureTarget.Texture2D, composeTargets[1 - pingPong].ColorAttachments[1].Handle, 7);
-			compose.Program.SetVector3("giSkyRadiance", gi.SkyRadiance);
+			Lighting.SetSkyUniforms(compose.Program);
 			compose.Program.SetFloat("probeHistoryWeight", gi.ProbeHistoryWeight);
 			compose.Program.SetFloat("probeMaxHistorySamples", gi.ProbeMaxHistorySamples);
 			compose.Program.SetFloat("changeThreshold", gi.ProbeChangeThreshold);

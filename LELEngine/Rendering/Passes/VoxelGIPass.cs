@@ -659,7 +659,7 @@ namespace LELEngine.Rendering.Passes
 				Lighting.SetSdfUniforms(program);
 			}
 
-			program.SetVector3("giSkyRadiance", gi.SkyRadiance);
+			Lighting.SetSkyUniforms(program);
 
 			staticGeometry.BindImages(0, TextureAccess.ReadOnly, false);
 			dynamicGeometry.BindImages(3, TextureAccess.ReadOnly, false);

@@ -28,7 +28,6 @@ namespace LELEngine.UIElements
 		private static readonly Dictionary<string, StyleSheet> styleSheets = new Dictionary<string, StyleSheet>(StringComparer.OrdinalIgnoreCase);
 		private static readonly Dictionary<string, VisualTreeAsset> visualTrees = new Dictionary<string, VisualTreeAsset>(StringComparer.OrdinalIgnoreCase);
 		private static readonly Dictionary<string, FontAsset> fonts = new Dictionary<string, FontAsset>(StringComparer.OrdinalIgnoreCase);
-		private static readonly Dictionary<string, Texture> textures = new Dictionary<string, Texture>(StringComparer.OrdinalIgnoreCase);
 		private static readonly Dictionary<string, DateTime> fileTimes = new Dictionary<string, DateTime>(StringComparer.OrdinalIgnoreCase);
 
 		#endregion
@@ -166,6 +165,7 @@ namespace LELEngine.UIElements
 			return font;
 		}
 
+		/// <summary>An image for the UI (top-down, display color space); see <see cref="TextureAssets.LoadForUI" />.</summary>
 		public static Texture LoadTexture(string assetPath)
 		{
 			string resolved = Resolve(assetPath);
@@ -174,23 +174,7 @@ namespace LELEngine.UIElements
 				return null;
 			}
 
-			Texture texture;
-			lock (textures)
-			{
-				if (textures.TryGetValue(resolved, out texture))
-				{
-					return texture;
-				}
-
-				texture = Texture.Load(AssetDatabase.ToAbsolute(resolved), resolved);
-				if (texture != null)
-				{
-					textures[resolved] = texture;
-					fileTimes[resolved] = File.GetLastWriteTimeUtc(AssetDatabase.ToAbsolute(resolved));
-				}
-			}
-
-			return texture;
+			return TextureAssets.LoadForUI(AssetDatabase.ToAbsolute(resolved), resolved);
 		}
 
 		/// <summary>
@@ -284,16 +268,6 @@ namespace LELEngine.UIElements
 				}
 
 				fonts.Clear();
-			}
-
-			lock (textures)
-			{
-				foreach (Texture texture in textures.Values)
-				{
-					texture.Release();
-				}
-
-				textures.Clear();
 			}
 
 			fileTimes.Clear();

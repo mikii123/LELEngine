@@ -17,8 +17,9 @@ namespace TestGame
 		///            Lumen quality: [spacing=N px] [adaptive=0|1] [radrays=N] [radblend=0..1] [pblend=0..1] [tblend=0..1]
 		///            [importance=0|1] [pfilter=0|1] [pradius=N probes] [texels=N per meter] [ajitter=0..1] [djitter=0|1]
 		///            [rcache=0|1] [rcradio=0|1] [rcnear=meters] [rchistory=frames] [rcprobes=N per frame] [rcres=8|16] [rctrace=16|32]
-	///            [dumpafter=seconds] [gpudriven=0|1] [stress=N extra cubes] [focus=0|1]
-	///            Fallback tests: environment LEL_GL_DISABLE=drawparameters,indirectparameters,subgroups
+		///            [dumpafter=seconds] [gpudriven=0|1] [stress=N extra cubes] [focus=0|1]
+		///            Scenes: [outdoor=1 open-sky yard] [sky=0|1 procedural skybox] [skybox=asset path] [physics=1] [nav=1] [ui=1] [scene=path]
+		///            Fallback tests: environment LEL_GL_DISABLE=drawparameters,indirectparameters,subgroups
 		///     Loads the GI test room with the FPS controller.
 		/// </summary>
 		private static void Main(string[] args)
@@ -27,6 +28,8 @@ namespace TestGame
 			Window.StartFocused = GetBool(args, "focus", true);
 			Game.CreateWindow(1280, 720, "LELEngine");
 
+			// outdoor=1: the open-sky yard, with the procedural skybox unless sky=0.
+			bool outdoor = GetBool(args, "outdoor", false);
 			string giValue = GetValue(args, "gi");
 			GITestScene.Options options = new GITestScene.Options
 			{
@@ -39,6 +42,8 @@ namespace TestGame
 				Emitters = GetBool(args, "emitters", true),
 				Animate = GetBool(args, "animate", true),
 				Stats = GetBool(args, "stats", false),
+				Sky = GetBool(args, "sky", outdoor),
+				SkyboxAsset = GetValue(args, "skybox"),
 				AutoCamera = GetBool(args, "autocam", false),
 				MouseLook = GetBool(args, "mouselook", true),
 				Profiler = GetBool(args, "profiler", true),
@@ -111,12 +116,28 @@ namespace TestGame
 				SceneManager.SetActiveScene(scene);
 				GITestScene.ApplyHarness(scene, options);
 			}
+			else if (outdoor)
+			{
+				// outdoor=1: the open-sky yard (sky=0 for the flat sky color, skybox=path for a project asset).
+				scene = Game.Mono.LoadEmptyScene();
+				scene.Name = "SkyTest";
+				SkyTestScene.Load(scene, options);
+			}
 			else if (GetBool(args, "nav", false))
 			{
 				// nav=1: the navigation test scene (navagents=N, navdebug=0|1).
 				scene = Game.Mono.LoadEmptyScene();
 				scene.Name = "NavTest";
 				NavTestScene.Load(scene, GetInt(args, "navagents", 24), GetBool(args, "navdebug", true), options.Animate);
+				Game.Mono.Renderer.Settings.GpuDriven = options.GpuDriven;
+				GITestScene.InstallHarness(scene, options);
+			}
+			else if (GetBool(args, "physics2d", false) || GetBool(args, "physics", false))
+			{
+				// physics=1 (or physics2d=1): the Box2D test scene (stack, ball, capsules, hinge chain, spring, platform, trigger, queries).
+				scene = Game.Mono.LoadEmptyScene();
+				scene.Name = "Physics2DTest";
+				Physics2DTestScene.Load(scene, options.Animate);
 				Game.Mono.Renderer.Settings.GpuDriven = options.GpuDriven;
 				GITestScene.InstallHarness(scene, options);
 			}

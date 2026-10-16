@@ -14,9 +14,21 @@ Built on .NET 10, OpenTK 4.9 (GLFW) and OpenGL 4.6 (4.3 minimum), developed and 
 **Scene model**
 - GameObjects with a Transform hierarchy and `Behaviour` components (`Awake`, `OnEnable`, `Start`, `Update`,
   `LateUpdate`, `OnDisable`, `OnDestroy`, `[ExecuteAlways]`).
-- Public and `[SerializeField]` fields are serialized into scenes. Scenes use a fast binary format (LELB) with
-  schema tables, polymorphic values and bulk arrays. Older JSON scenes still load.
-- Assets are referenced by GUID from `.meta` sidecar files (`AssetDatabase`).
+- Public and `[SerializeField]` fields are serialized into scenes. One document model, two encodings: the editor
+  writes readable JSON (scenes, materials, `.meta` files, physics materials), game builds convert every document
+  to the fast binary form (LELB: schema tables, polymorphic values, bulk arrays). The conversion needs no types
+  loaded, so a build never runs game code.
+- Assets are referenced by GUID from `.meta` sidecar files (`AssetDatabase`), which also hold import settings.
+- Textures: 2D, 3D (slice grids), cubemaps (crosses, strips, panoramas, HDR) and sprites (single or sliced sheets),
+  configured per file like Unity's texture importer. Materials are documents of typed properties declared by the
+  shader's `//Properties` block.
+
+**2D physics (Box2D)**
+- `Rigidbody2D`, `BoxCollider2D`, `CircleCollider2D`, `CapsuleCollider2D`, `PolygonCollider2D`, `EdgeCollider2D`,
+  joints (distance, spring, hinge, slider, fixed, wheel, friction, relative, target), `PhysicsMaterial2D` assets,
+  layers with a collision matrix.
+- The `Physics2D` API: raycasts, linecasts, overlaps, circle and box casts; `OnCollision*2D` / `OnTrigger*2D`
+  callbacks on every component; fixed-step simulation with optional transform interpolation.
 
 **Rendering**
 - Pass-based renderer: HDR target, depth prepass, directional shadow maps, post-processing, GPU profiler.
@@ -27,6 +39,8 @@ Built on .NET 10, OpenTK 4.9 (GLFW) and OpenGL 4.6 (4.3 minimum), developed and 
     radiance cache, and screen probes with adaptive placement and temporal/spatial filtering.
   - **Voxel cone tracing mode**: an SDF-assisted voxel GI with multi-bounce injection.
 - PBR materials (GGX), shaders with `#include` support from the engine shader library.
+- Skybox materials (`Engine/Skybox.shader` for cubemaps, `Engine/SkyboxPanoramic.shader` for panoramas) set in
+  the scene's environment settings.
 
 ![Lumen-style global illumination in the test room](docs/images/lumen-gi.png)
 *Lumen mode GI: color bleeding from the red and green walls and light from emissive objects, with no analytic
@@ -48,7 +62,10 @@ point lights.*
 
 **Editor (`LELEngine.Editor`)**
 - Project launcher, dockable Dear ImGui interface, hierarchy, inspector, project browser, console, undo/redo and
-  gizmos.
+  gizmos (including 2D collider outlines).
+- Asset inspectors: a Unity-style material editor (shader picker, colors, ranges, texture slots with an object
+  picker and drag and drop), texture import settings with previews and Apply/Revert, shader, mesh and physics
+  material views. Material edits apply live, are undoable and save to the asset file.
 - Scene and game views render through the same renderer as the game. Play, pause and step restore the scene
   snapshot when you stop.
 - Game scripts compile in the background with `dotnet build`, and a full domain reload swaps them in.
@@ -67,7 +84,7 @@ point lights.*
 | `LELEngine.Editor` | The editor application (and the UI Builder) |
 | `LELEngine.Player` | Generic player executable used by game builds |
 | `TestGame` | Test and measurement harness that runs the scenes below from the command line |
-| `TestGame.Scenes` | Test scenes: GI room, navigation, UI showcase |
+| `TestGame.Scenes` | Test scenes: GI room, navigation, UI showcase, Box2D physics |
 
 ## Building
 
@@ -96,6 +113,9 @@ dotnet run --project TestGame -c Release -- gi=lumen
 | `gi=lumen\|vct\|0` | Global illumination mode |
 | `ui=1` | UI showcase scene |
 | `nav=1` | Navigation scene with crowd agents |
+| `physics=1` | Box2D scene: stack, ball, pendulum, hinge chain, capsules, spring, moving platform, trigger, queries |
+| `outdoor=1` | Open-sky yard under the procedural skybox (`sky=0` for the flat sky color, `skybox=path` for a cubemap, panorama or material asset) |
+| `sky=1` | Procedural skybox in the GI room: rays that leave the room sample it |
 | `stats=1` | GPU and CPU timings in the console |
 | `animate=0` | Freeze the moving emitters |
 
@@ -116,3 +136,29 @@ public sealed class Spinner : Behaviour
 ```
 
 In an editor project, put scripts in `Assets/Scripts`. They compile in the background when saved.
+
+A 2D physics script looks like its Unity counterpart:
+
+```csharp
+using LELEngine;
+using OpenTK.Mathematics;
+
+public sealed class Jumper : Behaviour
+{
+	public float Impulse = 5f;
+	private Rigidbody2D body;
+
+	public override void Start()
+	{
+		body = GetComponent<Rigidbody2D>();
+	}
+
+	public override void OnCollisionEnter2D(Collision2D collision)
+	{
+		if (Physics2D.Raycast(body.position, new Vector2(0f, -1f), 0.6f))
+		{
+			body.AddForce(new Vector2(0f, Impulse), ForceMode2D.Impulse);
+		}
+	}
+}
+```

@@ -1,5 +1,17 @@
-Lit.shader
-uniform
-	vec4
-		Color
-			0.6 0.6 0.6 1
+{
+  "$format": "LELEngine",
+  "$version": 2,
+  "$kind": "Object",
+  "$type": "LELEngine.Shaders.Material, LELEngine",
+  "m_Shader": { "path": "Shaders/Lit.shader" },
+  "m_Properties": [
+    { "$type": "LELEngine.Shaders.ColorProperty, LELEngine", "name": "Color", "value": [0.6, 0.6, 0.6, 1] },
+    { "$type": "LELEngine.Shaders.ColorProperty, LELEngine", "name": "Emissive", "value": [0, 0, 0, 0] },
+    { "$type": "LELEngine.Shaders.FloatProperty, LELEngine", "name": "Roughness", "value": 0.6 }
+  ],
+  "$types": {
+    "LELEngine.Shaders.Material, LELEngine": { "m_Shader": "Asset", "m_Properties": "Array<Object>" },
+    "LELEngine.Shaders.ColorProperty, LELEngine": { "name": "String", "value": "Color4" },
+    "LELEngine.Shaders.FloatProperty, LELEngine": { "name": "String", "value": "Single" }
+  }
+}

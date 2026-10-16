@@ -7,9 +7,23 @@
 		public static float frameRate => (float)frameRateD;
 
 		public static double deltaTimeD;
-		public static double fixedDeltaTimeD;
+
+		/// <summary>Length of a fixed update / physics step in seconds (0.02 = 50 Hz).</summary>
+		public static double fixedDeltaTimeD = 0.02;
+
 		public static double timeD;
 		public static double lastFrameD;
+
+		/// <summary>Time at the start of the current fixed step (physics time).</summary>
+		public static double fixedTimeD;
+
+		public static float fixedTime => (float)fixedTimeD;
+
+		/// <summary>True while FixedUpdate and the physics callbacks run.</summary>
+		public static bool inFixedTimeStep;
+
+		/// <summary>Fixed steps per frame at most: a stalled frame does not catch up forever (Unity's maximum allowed timestep).</summary>
+		public static double maximumDeltaTimeD = 0.1;
 
 		public static float deltaTime => (float)deltaTimeD;
 
@@ -33,6 +47,7 @@
 		{
 			timeD = 0;
 			lastFrameD = 0;
+			fixedTimeD = 0;
 		}
 	}
 }

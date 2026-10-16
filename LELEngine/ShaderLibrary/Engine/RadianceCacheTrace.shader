@@ -18,7 +18,7 @@
 layout(local_size_x = 16, local_size_y = 16) in;
 
 uniform sampler2D FinalLighting;
-uniform vec3 giSkyRadiance;
+#include "Engine/Sky.glsl"
 uniform int frameIndex;
 uniform int rcTraceResolution;   // rays per axis per probe, a multiple of 16
 uniform int traceSlotsPerRow;    // tiles per scratch buffer row
@@ -69,7 +69,7 @@ void main()
 	vec2 jitter = vec2(HashToFloat(seed), HashToFloat(seed * 747796405u + 2891336453u));
 	vec3 direction = OctahedralToDirection((vec2(texel) + jitter) / float(rcTraceResolution));
 
-	vec3 radiance = giSkyRadiance;
+	vec3 radiance = SkyRadiance(direction);
 	float depth = sdfGridSize; // misses: further than anything in the field
 	float hitT;
 	if (TraceSdf(position, direction, sdfGridSize, hitT))

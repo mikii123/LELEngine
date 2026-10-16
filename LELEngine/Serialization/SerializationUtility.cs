@@ -116,6 +116,7 @@ namespace LELEngine.Serialization
 
 			BulkListAccess.Clear();
 			UIElements.UxmlRegistry.Clear();
+			PhysicsCallbacks.ClearCache();
 		}
 
 		public static bool IsSupported(Type type)
@@ -252,6 +253,88 @@ namespace LELEngine.Serialization
 		public static bool IsBlittable(ValueTag tag)
 		{
 			return tag != ValueTag.Enum && tag != ValueTag.SceneRef && FixedSize(tag) > 0;
+		}
+
+		/// <summary>
+		///     The encoding of a field as written in a JSON type table: "Single", "Array&lt;Vector3&gt;",
+		///     "Enum(Standard=0,Lumen=2)", "Array&lt;Enum(A=1,B=2)&gt;".
+		/// </summary>
+		public static string TagSpec(ValueTag tag, ValueTag elementTag, KeyValuePair<string, long>[] enumMembers)
+		{
+			return tag == ValueTag.Array ? "Array<" + SingleTagSpec(elementTag, enumMembers) + ">" : SingleTagSpec(tag, enumMembers);
+		}
+
+		/// <summary>Parses a <see cref="TagSpec" /> string.</summary>
+		public static bool TryParseTagSpec(string spec, out ValueTag tag, out ValueTag elementTag, out KeyValuePair<string, long>[] enumMembers)
+		{
+			tag = ValueTag.Null;
+			elementTag = ValueTag.Null;
+			enumMembers = null;
+			if (string.IsNullOrWhiteSpace(spec))
+			{
+				return false;
+			}
+
+			spec = spec.Trim();
+			if (spec.StartsWith("Array<", StringComparison.Ordinal) && spec.EndsWith(">", StringComparison.Ordinal))
+			{
+				tag = ValueTag.Array;
+				return TryParseSingleTagSpec(spec.Substring(6, spec.Length - 7), out elementTag, out enumMembers);
+			}
+
+			return TryParseSingleTagSpec(spec, out tag, out enumMembers);
+		}
+
+		private static string SingleTagSpec(ValueTag tag, KeyValuePair<string, long>[] enumMembers)
+		{
+			if (tag != ValueTag.Enum || enumMembers == null || enumMembers.Length == 0)
+			{
+				return tag.ToString();
+			}
+
+			var builder = new System.Text.StringBuilder("Enum(");
+			for (int i = 0; i < enumMembers.Length; i++)
+			{
+				if (i > 0)
+				{
+					builder.Append(',');
+				}
+
+				builder.Append(enumMembers[i].Key).Append('=').Append(enumMembers[i].Value.ToString(System.Globalization.CultureInfo.InvariantCulture));
+			}
+
+			return builder.Append(')').ToString();
+		}
+
+		private static bool TryParseSingleTagSpec(string spec, out ValueTag tag, out KeyValuePair<string, long>[] enumMembers)
+		{
+			enumMembers = null;
+			int open = spec.IndexOf('(');
+			string name = open >= 0 ? spec.Substring(0, open) : spec;
+			if (!Enum.TryParse(name.Trim(), true, out tag))
+			{
+				tag = ValueTag.Null;
+				return false;
+			}
+
+			if (open < 0 || !spec.EndsWith(")", StringComparison.Ordinal))
+			{
+				return true;
+			}
+
+			var members = new List<KeyValuePair<string, long>>();
+			foreach (string entry in spec.Substring(open + 1, spec.Length - open - 2).Split(','))
+			{
+				int eq = entry.IndexOf('=');
+				long value;
+				if (eq > 0 && long.TryParse(entry.Substring(eq + 1).Trim(), System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out value))
+				{
+					members.Add(new KeyValuePair<string, long>(entry.Substring(0, eq).Trim(), value));
+				}
+			}
+
+			enumMembers = members.Count > 0 ? members.ToArray() : null;
+			return true;
 		}
 
 		/// <summary>Name shown in the inspector: "m_LocalPosition" -> "Local Position", "moveSpeed" -> "Move Speed".</summary>

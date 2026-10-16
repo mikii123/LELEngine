@@ -1,0 +1,228 @@
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.IO;
+using Hexa.NET.ImGui;
+using LELEngine.Serialization;
+using LELEngine.Shaders;
+using NVector2 = System.Numerics.Vector2;
+
+namespace LELEngine.Editor
+{
+	/// <summary>
+	///     The inspector of a selected project file: a material editor, texture import settings, shader properties,
+	///     mesh statistics, physics material values, scene / script / UI document actions, or the plain file info.
+	/// </summary>
+	internal static class AssetInspectors
+	{
+		#region PublicMethods
+
+		public static void Draw(string assetPath, InspectorContext context)
+		{
+			string absolute = AssetDatabase.ToAbsolute(assetPath);
+			if (!File.Exists(absolute))
+			{
+				ImGui.TextDisabled("The file no longer exists: " + assetPath);
+				return;
+			}
+
+			Type type = AssetDatabase.GetAssetType(assetPath);
+			string kind = Kind(assetPath, type);
+			ImGui.TextUnformatted(Path.GetFileName(assetPath));
+			ImGui.SameLine();
+			ImGui.TextDisabled("(" + kind + ")");
+			ImGui.TextDisabled(assetPath);
+			string guid = AssetDatabase.GetGuid(assetPath);
+			if (guid != null)
+			{
+				ImGui.TextDisabled("GUID " + guid);
+			}
+
+			ImGui.Separator();
+			ImGui.Spacing();
+
+			if (type == typeof(Material))
+			{
+				Material material = InternalStorage.GetOrCreateMaterial(assetPath);
+				MaterialEditor.Draw(material, context);
+			}
+			else if (TextureAssets.IsImageFile(assetPath))
+			{
+				TextureImporterInspector.Draw(assetPath, context);
+			}
+			else if (type == typeof(ShaderProgram))
+			{
+				DrawShader(assetPath, absolute);
+			}
+			else if (type == typeof(Mesh))
+			{
+				DrawMesh(assetPath);
+			}
+			else if (type == typeof(PhysicsMaterial2D))
+			{
+				PhysicsMaterial2D material = PhysicsMaterial2D.Load(assetPath);
+				context.UndoTarget = material;
+				if (FieldDrawer.DrawFields(material, context))
+				{
+					context.Editor.NotifySceneChanged();
+				}
+			}
+			else if (assetPath.EndsWith(SceneSerializer.Extension, StringComparison.OrdinalIgnoreCase))
+			{
+				if (ImGui.Button("Open Scene", new NVector2(-1, 0)))
+				{
+					context.Editor.OpenScene(assetPath);
+				}
+
+				DrawFileInfo(absolute);
+			}
+			else if (assetPath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
+			{
+				if (ImGui.Button("Open Script", new NVector2(-1, 0)))
+				{
+					OpenExternally(absolute);
+				}
+
+				if (ImGui.Button("Open Script Project", new NVector2(-1, 0)) && context.Editor.Scripts != null)
+				{
+					context.Editor.Scripts.OpenInIde();
+				}
+
+				DrawFileInfo(absolute);
+			}
+			else if (assetPath.EndsWith(".uxml", StringComparison.OrdinalIgnoreCase) || assetPath.EndsWith(".uss", StringComparison.OrdinalIgnoreCase))
+			{
+				if (ImGui.Button("Open in UI Builder", new NVector2(-1, 0)))
+				{
+					context.Editor.OpenUIBuilder(assetPath);
+				}
+
+				DrawFileInfo(absolute);
+			}
+			else
+			{
+				if (ImGui.Button("Open", new NVector2(-1, 0)))
+				{
+					OpenExternally(absolute);
+				}
+
+				DrawFileInfo(absolute);
+			}
+		}
+
+		/// <summary>Selection left the asset: inspectors drop their working state.</summary>
+		public static void Deselected()
+		{
+			TextureImporterInspector.Reset();
+		}
+
+		#endregion
+
+		#region PrivateMethods
+
+		private static string Kind(string assetPath, Type type)
+		{
+			if (type == typeof(ShaderProgram)) return "Shader";
+			if (TextureAssets.IsImageFile(assetPath))
+			{
+				var importer = AssetDatabase.GetMeta(assetPath).importer as TextureImporter ?? TextureImporter.CreateDefault(assetPath);
+				switch (importer.shape)
+				{
+					case TextureImporterShape.Cube: return "Cubemap";
+					case TextureImporterShape.Texture3D: return "Texture 3D";
+					default: return importer.textureType == TextureImporterType.Sprite ? "Sprite" : "Texture 2D";
+				}
+			}
+
+			if (type != null) return type.Name;
+			if (assetPath.EndsWith(SceneSerializer.Extension, StringComparison.OrdinalIgnoreCase)) return "Scene";
+			if (assetPath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase)) return "C# Script";
+			return Path.GetExtension(assetPath).TrimStart('.').ToUpperInvariant() + " file";
+		}
+
+		private static void DrawShader(string assetPath, string absolute)
+		{
+			List<ShaderProperty> properties;
+			try
+			{
+				properties = ShaderProgram.ReadProperties(absolute);
+			}
+			catch (Exception e)
+			{
+				properties = new List<ShaderProperty>();
+				ImGui.TextColored(EditorStyle.Error, e.Message);
+			}
+
+			if (ImGui.Button("Open", new NVector2(-1, 0)))
+			{
+				OpenExternally(absolute);
+			}
+
+			ImGui.Spacing();
+			ImGui.SeparatorText("Properties");
+			if (properties.Count == 0)
+			{
+				ImGui.TextDisabled("No Properties block: materials show the shader's uniforms instead.");
+			}
+
+			foreach (ShaderProperty property in properties)
+			{
+				string type = property.Type == ShaderPropertyType.Range ? $"Range({property.RangeMin:0.##}, {property.RangeMax:0.##})" : property.Type.ToString();
+				ImGui.BulletText(property.Name + "  (" + type + ")  \"" + property.DisplayName + "\"");
+			}
+
+			ShaderProgram program = InternalStorage.GetShader(assetPath);
+			if (program != null)
+			{
+				ImGui.Spacing();
+				ImGui.TextDisabled(program.IsLinked ? "Compiled" + (program.SupportsInstancing ? ", GPU-driven capable" : "") : "Does not compile (see the console)");
+			}
+
+			DrawFileInfo(absolute);
+		}
+
+		private static void DrawMesh(string assetPath)
+		{
+			try
+			{
+				Mesh mesh = InternalStorage.GetOrCreateMesh(assetPath);
+				ImGui.Text($"{mesh.Verticies.Count} vertices, {mesh.indicies.Count / 3} triangles");
+				ImGui.TextDisabled($"Bounds {mesh.BoundsMin} .. {mesh.BoundsMax}");
+			}
+			catch (Exception e)
+			{
+				ImGui.TextColored(EditorStyle.Error, "Cannot load: " + e.Message);
+			}
+
+			DrawFileInfo(AssetDatabase.ToAbsolute(assetPath));
+		}
+
+		private static void DrawFileInfo(string absolute)
+		{
+			try
+			{
+				var info = new FileInfo(absolute);
+				ImGui.Spacing();
+				ImGui.TextDisabled((info.Length >= 1024 * 1024 ? $"{info.Length / (1024f * 1024f):0.0} MB" : $"{info.Length / 1024f:0.0} KB") + ", modified " + info.LastWriteTime.ToString("g"));
+			}
+			catch (Exception)
+			{
+				// No info.
+			}
+		}
+
+		private static void OpenExternally(string absolute)
+		{
+			try
+			{
+				Process.Start(new ProcessStartInfo(absolute) { UseShellExecute = true });
+			}
+			catch (Exception e)
+			{
+				Debug.LogWarning("[Editor] Cannot open " + absolute + ": " + e.Message);
+			}
+		}
+
+		#endregion
+	}
+}

@@ -89,6 +89,7 @@ namespace LELEngine.Rendering
 			AddPass(new GIResolvePass());
 			AddPass(new ScreenProbeGatherPass());
 			AddPass(new OpaquePass());
+			AddPass(new SkyboxPass());
 			AddPass(new PostRenderCallbackPass());
 			AddPass(new DebugDrawPass());
 			AddPass(new VoxelDebugPass());
