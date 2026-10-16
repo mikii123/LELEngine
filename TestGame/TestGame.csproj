@@ -16,7 +16,6 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\LELCS\LELCS.csproj" />
     <ProjectReference Include="..\LELEngine\LELEngine.csproj" />
     <ProjectReference Include="..\TestGame.Scenes\TestGame.Scenes.csproj" />
   </ItemGroup>

@@ -15,10 +15,6 @@
     <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
   </ItemGroup>
 
-  <ItemGroup>
-    <ProjectReference Include="..\LELCS\LELCS.csproj" />
-  </ItemGroup>
-
   <!-- Engine GLSL library (includes and engine-owned passes). Published to Shaders/Engine/ in the game output. -->
   <ItemGroup>
     <Content Include="ShaderLibrary\**\*">

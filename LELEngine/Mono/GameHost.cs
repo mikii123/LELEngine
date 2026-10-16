@@ -1,5 +1,3 @@
-using System.Reflection;
-using LELCS;
 using LELEngine.Rendering;
 using OpenTK.Windowing.Common;
 
@@ -17,7 +15,6 @@ namespace LELEngine
 		public Scene ActiveScene => SceneManager.ActiveScene;
 		public bool Loaded { get; private set; }
 		public RenderQueue RenderQueue { get; private set; }
-		public ECSManager ECSManager { get; private set; }
 		public Renderer Renderer { get; private set; }
 
 		/// <summary>
@@ -50,11 +47,6 @@ namespace LELEngine
 		#endregion
 
 		#region PublicMethods
-
-		public void InitializeECSScope(Assembly assembly)
-		{
-			ECSManager = new ECSManager(assembly);
-		}
 
 		/// <summary>
 		///     Creates an empty scene and makes it active.
@@ -127,7 +119,6 @@ namespace LELEngine
 			}
 
 			Input.BeginFrame();
-			ECSManager?.Execute();
 			SceneManager.ActiveScene?.Update(Time.deltaTime);
 			Input.EndFrame();
 			ApplyUICursor();

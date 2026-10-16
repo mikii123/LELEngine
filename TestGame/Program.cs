@@ -1,8 +1,5 @@
 using System;
 using System.IO;
-using System.Reflection;
-using LELCS;
-using LELCS.Model;
 using LELEngine;
 using LELEngine.Serialization;
 using TestGame.Scenes;
@@ -146,10 +143,8 @@ namespace TestGame
 				Console.WriteLine("[Scene] Saved " + Path.GetFullPath(savePath));
 			}
 
-			Game.Mono.InitializeECSScope(Assembly.GetExecutingAssembly());
-			ECSManager manager = Game.Mono.ECSManager;
-			ECSEntity ecsEntity = manager.CreateEntity();
-			manager.SetComponent(ecsEntity, new FrameRateCounterComponent());
+			// Added after saving: the counter is a TestGame type that saved scenes should not reference.
+			scene.CreateGameObject("FrameRateCounter").AddComponent<FrameRateCounter>();
 
 			Game.Mono.Run();
 			// Main function is frozen until game window closes

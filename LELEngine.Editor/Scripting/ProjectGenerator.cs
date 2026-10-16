@@ -72,7 +72,7 @@ namespace LELEngine.Editor
 		private static string Csproj(string name)
 		{
 			string editor = AppContext.BaseDirectory;
-			var references = new List<string> { "LELEngine.dll", "LELCS.dll" };
+			var references = new List<string> { "LELEngine.dll" };
 			references.AddRange(Directory.GetFiles(editor, "OpenTK*.dll").Select(Path.GetFileName).OrderBy(f => f, StringComparer.OrdinalIgnoreCase));
 
 			var builder = new StringBuilder();

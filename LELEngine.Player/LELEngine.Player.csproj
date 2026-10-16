@@ -13,7 +13,6 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\LELCS\LELCS.csproj" />
     <ProjectReference Include="..\LELEngine\LELEngine.csproj" />
   </ItemGroup>
 

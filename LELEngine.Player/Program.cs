@@ -106,10 +106,6 @@ namespace LELEngine.Player
 			Window.StartFocused = GetValue(args, "focus") != "0";
 			Game.CreateWindow(boot.Width, boot.Height, boot.Title);
 			Game.Mono.RunInBackground = boot.RunInBackground;
-			if (game != null)
-			{
-				Game.Mono.InitializeECSScope(game);
-			}
 
 			if (string.IsNullOrEmpty(startScene))
 			{
