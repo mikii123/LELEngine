@@ -35,12 +35,22 @@ namespace LELEngine
 		/// <summary>Texture unit reserved for the directional shadow map (material textures use 0..N).</summary>
 		public const int ShadowMapTextureUnit = 15;
 
+		/// <summary>Texture unit reserved for the shadow map's transmittance attachment (transparent casters).</summary>
+		public const int ShadowTransmittanceTextureUnit = 10;
+
 		/// <summary>Texture unit reserved for the voxel radiance volume.</summary>
 		public const int VoxelTextureUnit = 14;
 
 		/// <summary>Texture units reserved for the screen-space GI resolve buffers.</summary>
 		public const int IndirectDiffuseTextureUnit = 13;
 		public const int IndirectSpecularTextureUnit = 12;
+
+		/// <summary>
+		///     Texture units of the radiance cache atlas and its per-probe SH for the GI volume path of transparent
+		///     materials (Engine/VolumeLighting.glsl). The same units as the resolve buffers: a draw reads one or the other.
+		/// </summary>
+		public const int VolumeProbeTextureUnit = 13;
+		public const int VolumeProbeSHTextureUnit = 12;
 
 		/// <summary>Texture unit reserved for the global signed distance field.</summary>
 		public const int GlobalSdfTextureUnit = 11;
@@ -62,6 +72,19 @@ namespace LELEngine
 
 		/// <summary>Depth texture of the directional light, or null when shadows are off.</summary>
 		public static RenderTexture ShadowMap;
+
+		/// <summary>
+		///     Transmittance of the transparent casters in the directional light's map (see <see cref="Rendering.TransparentShadows" />),
+		///     or null when the frame drew none.
+		/// </summary>
+		public static RenderTexture ShadowTransmittance;
+
+		/// <summary>
+		///     The Lumen radiance cache of the frame being rendered, for shaders that light from the GI volume
+		///     (Engine/RadianceCache.glsl, Engine/VolumeProbes.glsl). Published by RadianceCachePass every frame; a
+		///     default (invalid) binding while the cache is off.
+		/// </summary>
+		public static RadianceCacheBinding RadianceCache;
 
 		#endregion
 
@@ -184,6 +207,72 @@ namespace LELEngine
 			}
 		}
 
+		/// <summary>
+		///     GI for surfaces that are not in the depth buffer (transparent materials, Engine/VolumeLighting.glsl): the
+		///     screen-space resolve is never read; voxel cone tracing traces its cones per fragment, Lumen interpolates
+		///     the radiance cache probes (irradiance from their spherical harmonics, reflections from their maps).
+		///     Call after <see cref="SetUniforms(ShaderProgram, bool, bool)" /> with receiveGI false.
+		/// </summary>
+		public static void SetVolumeGIUniforms(ShaderProgram program, bool receiveGI)
+		{
+			bool voxels = GI.Mode == GIMode.VoxelConeTracing && GI.VoxelTexture != 0;
+			bool probes = GI.Mode == GIMode.Lumen && RadianceCache.Valid;
+			bool enabled = receiveGI && GI.Enabled && (voxels || probes);
+			program.SetInt("giEnabled", enabled ? 1 : 0);
+			program.SetInt("giResolveMode", 0);
+			program.SetInt("giVolumeMode", !enabled ? 0 : voxels ? 1 : 2);
+			if (!enabled)
+			{
+				return;
+			}
+
+			program.SetFloat("giDiffuseStrength", GI.DiffuseStrength);
+			program.SetFloat("giSpecularStrength", GI.SpecularStrength);
+			program.SetFloat("giOcclusionStrength", GI.OcclusionStrength);
+			SetSkyUniforms(program);
+			if (voxels)
+			{
+				program.SetVector3("voxelGridMin", GI.GridMin);
+				program.SetFloat("voxelGridSize", GI.GridSize);
+				program.SetInt("voxelResolution", GI.Resolution);
+				program.SetFloat("giConeMaxDistance", GI.ConeMaxDistance);
+				program.SetTexture("VoxelRadiance", TextureTarget.Texture3D, GI.VoxelTexture, VoxelTextureUnit);
+				bool sdf = GI.DistanceFieldEnabled && GI.GlobalSdf != 0;
+				program.SetInt("giTraceMode", TraceModeUniform(sdf));
+				program.SetFloat("giSdfDetailDistance", GI.SdfDetailDistance);
+				if (sdf)
+				{
+					SetSdfUniforms(program);
+				}
+			}
+			else
+			{
+				SetRadianceCacheUniforms(program, VolumeProbeTextureUnit);
+				program.SetTexture("RadianceCacheSH", TextureTarget.Texture2DArray, RadianceCache.SH, VolumeProbeSHTextureUnit);
+			}
+		}
+
+		/// <summary>Binds the published radiance cache for Engine/RadianceCache.glsl (an unavailable cache sets rcNearDistance 0).</summary>
+		public static void SetRadianceCacheUniforms(ShaderProgram program, int textureUnit)
+		{
+			RadianceCacheBinding cache = RadianceCache;
+			if (!cache.Valid)
+			{
+				program.SetFloat("rcNearDistance", 0f);
+				return;
+			}
+
+			program.SetTexture("RadianceCacheAtlas", TextureTarget.Texture2D, cache.Atlas, textureUnit);
+			program.SetVector3("rcGridMin", cache.GridMin);
+			program.SetFloat("rcProbeSpacing", cache.ProbeSpacing);
+			program.SetInt("rcProbesPerAxis", cache.ProbesPerAxis);
+			program.SetInt("rcProbesPerRow", cache.ProbesPerRow);
+			program.SetInt("rcProbeResolution", cache.ProbeResolution);
+			program.SetVector2("rcAtlasSize", cache.AtlasSize);
+			program.SetFloat("rcNearDistance", GI.RadianceCacheNearDistance);
+			program.SetInt("rcFarShortcut", GI.RadianceCacheFarShortcut ? 1 : 0);
+		}
+
 		public static void SetShadowUniforms(ShaderProgram program, bool receiveShadows)
 		{
 			bool enabled = receiveShadows && Shadows.Enabled && ShadowMap != null;
@@ -197,6 +286,7 @@ namespace LELEngine
 			program.SetFloat("shadowNormalBias", Shadows.NormalBias);
 			program.SetFloat("shadowDepthBias", Shadows.DepthBias);
 			program.SetTexture("ShadowMap", TextureTarget.Texture2D, ShadowMap.Handle, ShadowMapTextureUnit);
+			TransparentShadows.SetUniforms(program, ShadowTransmittance, ShadowTransmittanceTextureUnit);
 		}
 
 		/// <summary>giTraceMode of Engine/VoxelConeTracingCore.glsl: 0 voxel cones, 1 SDF detail, 2 SDF cones (voxel cones without the field).</summary>
@@ -233,6 +323,25 @@ namespace LELEngine
 		#endregion
 
 		#region NestedTypes
+
+		/// <summary>GL handles and layout of a frame's radiance cache (see <see cref="RadianceCache" />).</summary>
+		public struct RadianceCacheBinding
+		{
+			public bool Valid;
+
+			/// <summary>Octahedral radiance maps of the probes (rgb radiance, a = hit distance + 1).</summary>
+			public int Atlas;
+
+			/// <summary>Second-order spherical harmonics of every probe, 7 RGBA layers (Engine/RadianceCacheSH.shader).</summary>
+			public int SH;
+
+			public Vector3 GridMin;
+			public float ProbeSpacing;
+			public int ProbesPerAxis;
+			public int ProbesPerRow;
+			public int ProbeResolution;
+			public Vector2 AtlasSize;
+		}
 
 		public class LightProperties
 		{

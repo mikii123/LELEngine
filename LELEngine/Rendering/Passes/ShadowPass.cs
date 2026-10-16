@@ -9,7 +9,9 @@ namespace LELEngine.Rendering.Passes
 	///     Renders the scene depth from the directional light into a shadow map.
 	///     The orthographic frustum follows the camera and is snapped to shadow-map texels to avoid shimmering.
 	///     Results are published through <see cref="Lighting.LightSpaceMatrix" /> and <see cref="Lighting.ShadowMap" />.
-	///     GPU-driven: the casters are culled against the light's view on the GPU and drawn by one indirect call.
+	///     GPU-driven: the opaque casters are culled against the light's view on the GPU and drawn by one indirect
+	///     call; the transparent casters follow into the map's transmittance attachment (<see cref="TransparentShadows" />,
+	///     published as <see cref="Lighting.ShadowTransmittance" />).
 	/// </summary>
 	public sealed class ShadowPass : RenderPass
 	{
@@ -43,6 +45,7 @@ namespace LELEngine.Rendering.Passes
 			if (!settings.Enabled || light == null)
 			{
 				Lighting.ShadowMap = null;
+				Lighting.ShadowTransmittance = null;
 				return;
 			}
 
@@ -93,10 +96,14 @@ namespace LELEngine.Rendering.Passes
 				}
 			}
 
+			// Transparent casters: what they let through, in the map's transmittance attachment.
+			RenderTexture transmittance = TransparentShadows.Draw(context, shadowTarget, lightView, lightProjection);
+
 			GL.Disable(EnableCap.PolygonOffsetFill);
 			GLState.SetColorWrite(true);
 
 			Lighting.ShadowMap = shadowTarget.DepthAttachment;
+			Lighting.ShadowTransmittance = transmittance;
 		}
 
 		public override void Dispose()
@@ -106,6 +113,7 @@ namespace LELEngine.Rendering.Passes
 			instancedDepth?.Delete();
 			instancedDepth = null;
 			Lighting.ShadowMap = null;
+			Lighting.ShadowTransmittance = null;
 		}
 
 		#endregion

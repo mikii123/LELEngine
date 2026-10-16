@@ -36,7 +36,8 @@ namespace LELEngine.Rendering
 	}
 
 	/// <summary>
-	///     The frame's renderers on the GPU, for GPU-driven rendering: an instance table (world and normal matrices,
+	///     The frame's opaque renderers on the GPU (transparent ones draw per object in the transparent pass), for
+	///     GPU-driven rendering: an instance table (world and normal matrices,
 	///     local bounds, the mesh range in <see cref="GeometryPool" />, material index, flags), a material table (the
 	///     standard parameters Color, Emissive, Roughness) and the opaque buckets (one per shader variant and shared
 	///     uniform state). Rebuilt every frame; each view (camera, shadow map) is culled by Engine/InstanceCull.shader,

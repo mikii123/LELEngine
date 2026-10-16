@@ -131,6 +131,9 @@ namespace TestGame.Scenes
 
 			/// <summary>Adaptive screen probe capacity as a fraction of the uniform probe grid.</summary>
 			public float ProbeAdaptiveFraction = 0.5f;
+
+			/// <summary>Glass props (transparent materials: sorting, blending, GI from the volume); off for the plain room.</summary>
+			public bool Glass = true;
 		}
 
 		#endregion
@@ -148,6 +151,10 @@ namespace TestGame.Scenes
 			markStatic = options.StaticCache;
 			BuildRoom(scene);
 			BuildProps(scene);
+			if (options.Glass)
+			{
+				BuildGlass(scene);
+			}
 			BuildLight(scene);
 			if (options.Emitters)
 			{
@@ -452,6 +459,29 @@ namespace TestGame.Scenes
 			{
 				Box(scene, "RailPost" + i, "LitWhite.material", new Vector3(i * 3f, 0.5f, -5.5f), new Vector3(0.03f, 0.5f, 0.03f));
 			}
+		}
+
+		/// <summary>
+		///     Transparent props in front of the player's start: a tinted pane over the short box, a glass sphere over
+		///     the tall box, a second pane that overlaps the first on screen from further back (a sorting check: the
+		///     amber pane must show through the cyan one, never over it), and a flat pane near the player whose
+		///     shadow falls on the floor in view (a translucent, amber-tinted shadow as strong as the pane's opacity).
+		/// </summary>
+		private static void BuildGlass(Scene scene)
+		{
+			GameObject pane = Box(scene, "GlassPane", "GlassCyan.material", new Vector3(2.5f, 1.5f, -2f), new Vector3(1.5f, 1.2f, 0.02f));
+			pane.transform.rotation = QuaternionHelper.Euler(0f, -20f, 0f);
+
+			Box(scene, "GlassPaneBehind", "GlassAmber.material", new Vector3(1.5f, 1.3f, 0f), new Vector3(1f, 0.9f, 0.02f));
+
+			Box(scene, "GlassTable", "GlassAmber.material", new Vector3(-3.2f, 0.9f, -6.3f), new Vector3(1.2f, 0.02f, 0.7f));
+
+			GameObject sphere = scene.CreateGameObject("GlassSphere");
+			sphere.transform.position = new Vector3(-2.5f, 1.1f, -2.5f);
+			sphere.transform.scale = Vector3.One * 0.9f;
+			MeshRenderer renderer = sphere.AddComponent<MeshRenderer>();
+			renderer.SetMaterial("GlassRed.material");
+			renderer.SetMesh("sphere.obj");
 		}
 
 		private static void BuildLight(Scene scene)

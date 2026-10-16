@@ -87,7 +87,8 @@ void main()
 	// ---- direct sun light (engine convention: lightColor = irradiance / pi)
 	vec3 L = normalize(-LDirectional.dirDirection);
 	float ndl = max(dot(N, L), 0.0);
-	float shadow = ndl > 0.0 ? SampleShadow(position, N, L) : 1.0;
+	// Per channel: light through tinted transparent casters keeps their colour in the bounce.
+	vec3 shadow = ndl > 0.0 ? SampleShadowRGB(position, N, L) : vec3(1.0);
 	vec3 direct = LDirectional.dirColor.rgb * LDirectional.dirStrength * ndl * shadow;
 
 	// ---- indirect: the card's radiosity probes

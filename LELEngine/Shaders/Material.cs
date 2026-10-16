@@ -43,6 +43,30 @@ namespace LELEngine.Shaders
 		public string ShaderPath => m_Shader?.AssetPath;
 		public IReadOnlyList<MaterialProperty> Properties => m_Properties;
 
+		/// <summary>Blend, depth, cull and queue state of the shader (the defaults without a shader).</summary>
+		public ShaderRenderState RenderState => m_Shader?.RenderState ?? ShaderRenderState.Default;
+
+		/// <summary>
+		///     Render queue (<see cref="MaterialQueue" />): the shader's unless overridden (set -1 to follow the shader
+		///     again). Queues above <see cref="MaterialQueue.GeometryLast" /> draw in the transparent pass.
+		/// </summary>
+		public int renderQueue
+		{
+			get => m_RenderQueue >= 0 ? m_RenderQueue : RenderState.Queue;
+			set => m_RenderQueue = value;
+		}
+
+		/// <summary>The queue is overridden on this material (not the shader's).</summary>
+		public bool OverridesRenderQueue => m_RenderQueue >= 0;
+
+		/// <summary>
+		///     Drawn by the transparent pass: after the opaques and the sky, sorted back to front, with the shader's blend
+		///     state, and lit by the GI volume (cones or radiance cache probes) instead of the screen-space resolve. Such
+		///     renderers cast translucent shadows (the light through them is mix(1, Color.rgb, Color.a)), are not
+		///     voxelized and get no distance field or surface cache cards.
+		/// </summary>
+		public bool IsTransparent => MaterialQueue.IsTransparent(renderQueue);
+
 		/// <summary>The main color ("Color"), white when the material has none.</summary>
 		public Color4 color
 		{
@@ -97,6 +121,7 @@ namespace LELEngine.Shaders
 
 		[SerializeField] private ShaderProgram m_Shader;
 		[SerializeField] private List<MaterialProperty> m_Properties = new List<MaterialProperty>();
+		[SerializeField] private int m_RenderQueue = -1;
 
 		#endregion
 
@@ -121,6 +146,7 @@ namespace LELEngine.Shaders
 			m_Shader = source.m_Shader;
 			name = source.name;
 			AssetPath = source.AssetPath;
+			m_RenderQueue = source.m_RenderQueue;
 			foreach (MaterialProperty property in source.m_Properties)
 			{
 				m_Properties.Add(property.Clone());

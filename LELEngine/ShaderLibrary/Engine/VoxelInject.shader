@@ -72,7 +72,8 @@ void main()
 	// Direct light. The shadow map is sampled on the surface side of the voxel, not at its center.
 	vec3 L = normalize(-LDirectional.dirDirection);
 	float ndl = max(dot(N, L), 0.0);
-	float shadow = ndl > 0.0 ? SampleShadow(position + N * voxelSize * 0.5, N, L) : 1.0;
+	// Per channel: light through tinted transparent casters keeps their colour in the bounce.
+	vec3 shadow = ndl > 0.0 ? SampleShadowRGB(position + N * voxelSize * 0.5, N, L) : vec3(1.0);
 	vec3 direct = LDirectional.dirColor.rgb * LDirectional.dirStrength * ndl * shadow;
 
 	// Indirect light arriving at this voxel, from last frame's radiance volume.

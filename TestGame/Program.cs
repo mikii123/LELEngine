@@ -17,7 +17,7 @@ namespace TestGame
 		///            Lumen quality: [spacing=N px] [adaptive=0|1] [radrays=N] [radblend=0..1] [pblend=0..1] [tblend=0..1]
 		///            [importance=0|1] [pfilter=0|1] [pradius=N probes] [texels=N per meter] [ajitter=0..1] [djitter=0|1]
 		///            [rcache=0|1] [rcradio=0|1] [rcnear=meters] [rchistory=frames] [rcprobes=N per frame] [rcres=8|16] [rctrace=16|32]
-		///            [dumpafter=seconds] [gpudriven=0|1] [stress=N extra cubes] [focus=0|1]
+		///            [dumpafter=seconds] [gpudriven=0|1] [stress=N extra cubes] [focus=0|1] [glass=0|1 transparent props]
 		///            Scenes: [outdoor=1 open-sky yard] [sky=0|1 procedural skybox] [skybox=asset path] [physics=1] [nav=1] [ui=1] [scene=path]
 		///            Fallback tests: environment LEL_GL_DISABLE=drawparameters,indirectparameters,subgroups
 		///     Loads the GI test room with the FPS controller.
@@ -92,7 +92,8 @@ namespace TestGame
 				ResolveScale = GetFloat(args, "resolvescale", 0.5f),
 				GISpecularStrength = GetFloat(args, "gispec", 1f),
 				ScreenProbeResolveScale = GetFloat(args, "presolve", 1f),
-				ProbeAdaptiveFraction = GetFloat(args, "pfraction", 0.5f)
+				ProbeAdaptiveFraction = GetFloat(args, "pfraction", 0.5f),
+				Glass = GetBool(args, "glass", true)
 			};
 			// genmeta=dir1;dir2 creates missing .meta files for the asset files below the folders, then exits.
 			string genMeta = GetValue(args, "genmeta");

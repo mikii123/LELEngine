@@ -34,6 +34,8 @@ namespace LELEngine.Shaders
 	///     /////Properties
 	///     </code>
 	///     Attributes: [HDR] (color picker with intensity), [HideInInspector], [NoScaleOffset] and [Normal] (accepted).
+	///     The same block takes the shader's render state lines (Blend, ZWrite, ZTest, Cull, Queue; see
+	///     <see cref="ShaderRenderState" />).
 	/// </summary>
 	public sealed class ShaderProperty
 	{

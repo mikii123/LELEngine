@@ -49,6 +49,9 @@ namespace LELEngine.Editor
 				ImGui.TextColored(EditorStyle.Error, "The shader does not compile (see the console).");
 			}
 
+			changed |= DrawRenderQueue(material, context);
+			ImGui.Spacing();
+
 			var shown = new HashSet<string>(StringComparer.Ordinal);
 			if (shader.Properties.Count > 0)
 			{
@@ -187,6 +190,54 @@ namespace LELEngine.Editor
 				}
 
 				ImGui.EndDragDropTarget();
+			}
+
+			return changed;
+		}
+
+		/// <summary>
+		///     The shader's render state (queue, blending, depth, cull) and the material's queue: the shader's by default,
+		///     editable per material (a queue above 2500 draws the material in the transparent pass).
+		/// </summary>
+		private static bool DrawRenderQueue(Material material, InspectorContext context)
+		{
+			ShaderRenderState state = material.RenderState;
+			ImGui.TextDisabled(state.Describe());
+			if (ImGui.IsItemHovered())
+			{
+				ImGui.SetTooltip("Declared by the shader in its Properties block (Blend, ZWrite, ZTest, Cull, Queue).");
+			}
+
+			FieldDrawer.Label("Render Queue", null, context);
+			int queue = material.renderQueue;
+			ImGui.SetNextItemWidth(Math.Max(60f, ImGui.GetContentRegionAvail().X - 110f));
+			bool changed = ImGui.InputInt("##queue", ref queue, 10, 100);
+			context.Track(changed);
+			if (changed)
+			{
+				// Back on the shader's own queue: no override.
+				material.renderQueue = queue == state.Queue ? -1 : Math.Max(0, queue);
+			}
+
+			ImGui.SameLine();
+			if (material.OverridesRenderQueue)
+			{
+				if (ImGui.SmallButton("Shader's"))
+				{
+					context.Editor.Edits.Begin(material);
+					material.renderQueue = -1;
+					context.Editor.Edits.RequestCommit();
+					changed = true;
+				}
+
+				if (ImGui.IsItemHovered())
+				{
+					ImGui.SetTooltip("Follow the shader's queue (" + state.Queue + ") again.");
+				}
+			}
+			else
+			{
+				ImGui.TextDisabled("(from shader)");
 			}
 
 			return changed;

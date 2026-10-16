@@ -24,7 +24,12 @@ namespace LELEngine.Rendering
 		public int Width;
 		public int Height;
 
+		/// <summary>The frame's opaque renderers (depth prepass, shadows, GI, opaque pass).</summary>
 		public IReadOnlyList<MeshRenderer> Renderers;
+
+		/// <summary>The frame's transparent renderers (<see cref="MeshRenderer.IsTransparent" />), drawn by the transparent pass only.</summary>
+		public IReadOnlyList<MeshRenderer> TransparentRenderers;
+
 		public IReadOnlyList<Behaviour> Behaviours;
 		public RenderQueue RenderQueue;
 
@@ -38,6 +43,9 @@ namespace LELEngine.Rendering
 
 		/// <summary>Engine depth-only program (shadow pass, depth prepass).</summary>
 		public ShaderProgram DepthOnlyProgram;
+
+		/// <summary>Program of the transparent shadow casters: their transmittance and depth (<see cref="TransparentShadows" />).</summary>
+		public ShaderProgram TransparentShadowProgram;
 		public FullscreenQuad Fullscreen;
 
 		/// <summary>Set by the geometry prepass so the opaque pass can switch to EQUAL depth testing.</summary>

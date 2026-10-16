@@ -5,9 +5,10 @@ using OpenTK.Graphics.OpenGL4;
 namespace LELEngine.Rendering.Passes
 {
 	/// <summary>
-	///     Forward shading of all mesh renderers into the HDR scene target using their own material shaders.
+	///     Forward shading of the opaque mesh renderers into the HDR scene target using their own material shaders.
 	///     GPU-driven: one indirect call per opaque bucket (instanced shader variant + shared uniform state) with the
-	///     camera culling of the GPU scene; renderers whose shader has no instanced variant draw one by one.
+	///     camera culling of the GPU scene; renderers whose shader has no instanced variant draw one by one. Of the
+	///     shader's render state only the cull mode applies here (transparent materials have their own pass).
 	/// </summary>
 	public sealed class OpaquePass : RenderPass
 	{
@@ -50,6 +51,7 @@ namespace LELEngine.Rendering.Passes
 			}
 
 			GLState.SetDepth(true, true, DepthFunction.Less);
+			GLState.SetCull(true, TriangleFace.Back);
 			GLState.Reset();
 		}
 
@@ -66,6 +68,7 @@ namespace LELEngine.Rendering.Passes
 				OpaqueBucket bucket = buckets[i];
 				ShaderProgram program = bucket.Program;
 				program.Use();
+				program.RenderState.ApplyCull();
 				context.Camera.SetUniforms(program);
 				Lighting.SetUniforms(program, bucket.ReceiveShadows, bucket.ReceiveGI);
 				// A material with its own uniforms (textures, custom values) sets them; standard ones come from the table.
@@ -84,6 +87,7 @@ namespace LELEngine.Rendering.Passes
 				}
 
 				renderer.UsingShader.Use();
+				renderer.UsingShader.RenderState.ApplyCull();
 				renderer.Render();
 			}
 		}
@@ -111,6 +115,7 @@ namespace LELEngine.Rendering.Passes
 					if (!used)
 					{
 						shader.Value.Use();
+						shader.Value.RenderState.ApplyCull();
 						used = true;
 					}
 

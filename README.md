@@ -43,6 +43,14 @@ Built on .NET 10, OpenTK 4.9 (GLFW) and OpenGL 4.6 (4.3 minimum), developed and 
     radiance cache, and screen probes with adaptive placement and temporal/spatial filtering.
   - **Voxel cone tracing mode**: an SDF-assisted voxel GI with multi-bounce injection.
 - PBR materials (GGX), shaders with `#include` support from the engine shader library.
+- Transparency: a shader declares its render state next to its properties (`Blend One OneMinusSrcAlpha`,
+  `ZWrite Off`, `Cull Off`, `Queue Transparent`); materials can override the queue. Transparent objects draw after
+  the opaques and the sky, sorted by queue and back to front, double-sided ones back faces first, and get global
+  illumination in every GI mode: per-fragment cones in voxel mode, the radiance cache probes (spherical harmonics
+  plus reflection lookups, the cache runs for them even when it is switched off for the opaques) in Lumen mode,
+  since they are not in the depth buffer the screen-space resolve covers. They cast translucent shadows (a
+  transmittance map next to every shadow map: a 35% cyan pane casts a 35% cyan shadow), in the camera shadow map
+  and in the shadow maps that light the GI.
 - Skybox materials (`Engine/Skybox.shader` for cubemaps, `Engine/SkyboxPanoramic.shader` for panoramas) set in
   the scene's environment settings.
 

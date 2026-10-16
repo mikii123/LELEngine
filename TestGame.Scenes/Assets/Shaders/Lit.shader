@@ -87,7 +87,8 @@ void main()
 	vec3 V = normalize(LSpecular.viewPos - fPosition);
 	vec3 H = normalize(L + V);
 
-	float shadow = SampleShadow(fPosition, N, L);
+	// Per channel: tinted transparent casters colour their shadows.
+	vec3 shadow = SampleShadowRGB(fPosition, N, L);
 
 	vec3 albedo = color.rgb;
 	vec3 lightColor = LDirectional.dirColor.rgb * LDirectional.dirStrength;

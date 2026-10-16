@@ -65,6 +65,7 @@ namespace LELEngine.Rendering.Passes
 		private ComputeShader mip;
 		private ComputeShader mipBlocks;
 		private Framebuffer gridShadow;
+		private RenderTexture gridShadowTransmittance;
 
 		private readonly List<MeshRenderer> staticRenderers = new List<MeshRenderer>();
 		private readonly List<MeshRenderer> dynamicRenderers = new List<MeshRenderer>();
@@ -127,6 +128,7 @@ namespace LELEngine.Rendering.Passes
 			if (gridShadow.Width != gi.GridShadowMapSize)
 			{
 				gridShadow.Delete();
+				gridShadowTransmittance = null;
 				CreateGridShadow(gi.GridShadowMapSize);
 			}
 
@@ -205,6 +207,7 @@ namespace LELEngine.Rendering.Passes
 			}
 			gridShadow?.Delete();
 			gridShadow = null;
+			gridShadowTransmittance = null;
 			voxelize?.Delete();
 			clearGeometry?.Delete();
 			clearRadiance?.Delete();
@@ -604,6 +607,8 @@ namespace LELEngine.Rendering.Passes
 				}
 			}
 
+			gridShadowTransmittance = TransparentShadows.Draw(context, gridShadow, lightView, lightProjection);
+
 			GL.Disable(EnableCap.PolygonOffsetFill);
 			GLState.SetColorWrite(true);
 			GL.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
@@ -640,6 +645,7 @@ namespace LELEngine.Rendering.Passes
 			program.SetFloat("shadowNormalBias", shadows.NormalBias);
 			program.SetFloat("shadowDepthBias", shadows.DepthBias);
 			program.SetTexture("ShadowMap", TextureTarget.Texture2D, gridShadow.DepthAttachment.Handle, 1);
+			TransparentShadows.SetUniforms(program, gridShadowTransmittance, 2);
 
 			// Grid and cone parameters for the bounce; the previous frame's radiance is the trace target.
 			program.SetVector3("voxelGridMin", gi.GridMin);

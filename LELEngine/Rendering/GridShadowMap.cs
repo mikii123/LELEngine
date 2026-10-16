@@ -17,6 +17,10 @@ namespace LELEngine.Rendering
 		public Matrix4 LightView { get; private set; }
 		public Matrix4 LightProjection { get; private set; }
 		public RenderTexture Depth => target.DepthAttachment;
+
+		/// <summary>Transmittance of the transparent casters (<see cref="TransparentShadows" />), null when the last render drew none.</summary>
+		public RenderTexture Transmittance { get; private set; }
+
 		public int Size => target.Width;
 
 		#endregion
@@ -43,12 +47,14 @@ namespace LELEngine.Rendering
 			if (target.Width != size)
 			{
 				target.Delete();
+				Transmittance = null;
 				Create(size);
 			}
 		}
 
 		/// <summary>
-		///     Renders all shadow casters among <paramref name="casters" /> from the sun, covering the GI grid.
+		///     Renders all shadow casters among <paramref name="casters" /> (the opaque renderers) and the frame's
+		///     transparent casters from the sun, covering the GI grid.
 		/// </summary>
 		public void Render(RenderContext context, IReadOnlyList<MeshRenderer> casters, GlobalIlluminationSettings gi)
 		{
@@ -89,15 +95,18 @@ namespace LELEngine.Rendering
 				}
 			}
 
+			Transmittance = TransparentShadows.Draw(context, target, LightView, LightProjection);
+
 			GL.Disable(EnableCap.PolygonOffsetFill);
 			GLState.SetColorWrite(true);
 			GL.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
 		}
 
 		/// <summary>
-		///     Binds this map for Engine/Shadows.glsl on the reserved shadow texture unit.
+		///     Binds this map for Engine/Shadows.glsl on the reserved shadow texture unit (the transmittance on
+		///     <paramref name="transmittanceUnit" />, a unit the program does not use otherwise).
 		/// </summary>
-		public void SetUniforms(ShaderProgram program)
+		public void SetUniforms(ShaderProgram program, int transmittanceUnit)
 		{
 			ShadowSettings shadows = Lighting.Shadows;
 			program.SetInt("shadowsEnabled", shadows.Enabled ? 1 : 0);
@@ -105,12 +114,14 @@ namespace LELEngine.Rendering
 			program.SetFloat("shadowNormalBias", shadows.NormalBias);
 			program.SetFloat("shadowDepthBias", shadows.DepthBias);
 			program.SetTexture("ShadowMap", TextureTarget.Texture2D, target.DepthAttachment.Handle, Lighting.ShadowMapTextureUnit);
+			TransparentShadows.SetUniforms(program, Transmittance, transmittanceUnit);
 		}
 
 		public void Delete()
 		{
 			target?.Delete();
 			target = null;
+			Transmittance = null;
 		}
 
 		#endregion

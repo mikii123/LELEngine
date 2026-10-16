@@ -7,7 +7,10 @@
 
 #include "Engine/VoxelConeTracingCore.glsl"
 
+#ifndef LEL_GI_ENABLED_UNIFORM
+#define LEL_GI_ENABLED_UNIFORM
 uniform int giEnabled;
+#endif
 
 // Screen-space resolve (GIResolvePass)
 uniform int giResolveMode;

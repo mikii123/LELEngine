@@ -54,6 +54,9 @@ public sealed class MeshRenderer : Behaviour
 	/// </summary>
 	public bool IsStatic;
 
+	/// <summary>The material draws in the transparent pass (see <see cref="LELEngine.Shaders.Material.IsTransparent" />).</summary>
+	public bool IsTransparent => material != null && material.IsTransparent;
+
 	#endregion
 
 	#region PrivateFields

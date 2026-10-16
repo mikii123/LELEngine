@@ -48,6 +48,9 @@ namespace LELEngine.Shaders
 		/// <summary>Material parameters declared in the file's Properties block (empty when it has none).</summary>
 		public IReadOnlyList<ShaderProperty> Properties => properties;
 
+		/// <summary>Blend, depth, cull and queue state declared in the Properties block (the defaults when it declares none).</summary>
+		public ShaderRenderState RenderState => renderState;
+
 		#endregion
 
 		#region PrivateFields
@@ -58,6 +61,7 @@ namespace LELEngine.Shaders
 		private readonly Dictionary<string, int> uniformCache = new Dictionary<string, int>();
 		private readonly Dictionary<string, ActiveUniformType> uniformTypes = new Dictionary<string, ActiveUniformType>(StringComparer.Ordinal);
 		private readonly List<ShaderProperty> properties = new List<ShaderProperty>();
+		private readonly ShaderRenderState renderState = new ShaderRenderState();
 		private ShaderProgram instancedVariant;
 		private bool instancedVariantCreated;
 
@@ -90,7 +94,7 @@ namespace LELEngine.Shaders
 			SourcePath = path;
 			AssetPath = AssetDatabase.Resolve(path, "Shaders") ?? path.Replace('\\', '/');
 			IsInstancedVariant = Array.IndexOf(defines, InstancedDefine) >= 0;
-			List<Shader> shaders = LoadShaderFromFile(path, defines, properties, out bool includesInstancing);
+			List<Shader> shaders = LoadShaderFromFile(path, defines, properties, renderState, out bool includesInstancing);
 			SupportsInstancing = includesInstancing;
 
 			handle = GL.CreateProgram();
@@ -227,7 +231,7 @@ namespace LELEngine.Shaders
 				string trimmed = line.TrimEnd('\r');
 				if (trimmed == PropertiesTag)
 				{
-					result.AddRange(ShaderProperty.Parse(block, absolutePath));
+					ParsePropertiesBlock(block, absolutePath, result, new ShaderRenderState());
 					break;
 				}
 
@@ -419,7 +423,33 @@ namespace LELEngine.Shaders
 			return asset != null ? AssetDatabase.ToAbsolute(asset) : engine;
 		}
 
-		private static List<Shader> LoadShaderFromFile(string path, string[] defines, List<ShaderProperty> properties, out bool includesInstancing)
+		/// <summary>
+		///     Reads a Properties block: render state keyword lines (Blend, ZWrite, ZTest, Cull, Queue) into
+		///     <paramref name="state" />, every other line as a material parameter (see <see cref="ShaderProperty" />).
+		/// </summary>
+		private static void ParsePropertiesBlock(IEnumerable<string> lines, string source, List<ShaderProperty> properties, ShaderRenderState state)
+		{
+			var propertyLines = new List<string>();
+			foreach (string line in lines)
+			{
+				if (ShaderRenderState.IsStateLine(line))
+				{
+					if (!state.TryApplyLine(line, out string error))
+					{
+						Console.WriteLine("[Shader] Cannot parse the render state line '" + line.Trim() + "' in " + source + ": " + error);
+					}
+				}
+				else
+				{
+					propertyLines.Add(line);
+				}
+			}
+
+			state.Finish();
+			properties.AddRange(ShaderProperty.Parse(propertyLines, source));
+		}
+
+		private static List<Shader> LoadShaderFromFile(string path, string[] defines, List<ShaderProperty> properties, ShaderRenderState state, out bool includesInstancing)
 		{
 			var shaders = new List<Shader>();
 			string fullPath = ResolveShaderPath(path);
@@ -432,8 +462,8 @@ namespace LELEngine.Shaders
 				string line = rawLine.TrimEnd('\r');
 				if (line == PropertiesTag)
 				{
-					// The Properties block is metadata for materials, not GLSL.
-					properties.AddRange(ShaderProperty.Parse(stage, path));
+					// The Properties block is metadata for materials (parameters and render state), not GLSL.
+					ParsePropertiesBlock(stage, path, properties, state);
 					stage.Clear();
 					continue;
 				}

@@ -9,7 +9,9 @@ namespace LELEngine.Rendering
 {
 	/// <summary>
 	///     Owns the frame pipeline: the HDR scene target, engine shaders and an ordered list of passes.
-	///     Default pipeline: Shadows -> DepthPrepass -> Opaque -> PostRender callbacks -> PostProcess.
+	///     Default pipeline: Shadows -> GI -> DepthPrepass -> Opaque -> Skybox -> Transparent -> PostRender callbacks
+	///     -> PostProcess. The frame's renderers are split by their material's queue: the opaque ones feed every
+	///     geometry pass, the transparent ones (<see cref="MeshRenderer.IsTransparent" />) only the transparent pass.
 	/// </summary>
 	public sealed class Renderer
 	{
@@ -31,6 +33,10 @@ namespace LELEngine.Rendering
 		public RenderTexture SceneColor => SceneTarget.ColorAttachments[0];
 		public RenderTexture SceneDepth => SceneTarget.DepthAttachment;
 		public ShaderProgram DepthOnlyProgram { get; private set; }
+
+		/// <summary>Transparent shadow casters: transmittance and depth (Engine/DepthOnly.shader, LEL_SHADOW_TRANSMITTANCE).</summary>
+		public ShaderProgram TransparentShadowProgram { get; private set; }
+
 		public FullscreenQuad Fullscreen { get; private set; }
 		public IReadOnlyList<RenderPass> Passes => passes;
 		public int Width { get; private set; }
@@ -48,6 +54,8 @@ namespace LELEngine.Rendering
 		#region PrivateFields
 
 		private readonly List<RenderPass> passes = new List<RenderPass>();
+		private readonly List<MeshRenderer> opaqueRenderers = new List<MeshRenderer>();
+		private readonly List<MeshRenderer> transparentRenderers = new List<MeshRenderer>();
 		private Framebuffer dumpTarget;
 
 		#endregion
@@ -65,6 +73,7 @@ namespace LELEngine.Rendering
 			SceneTarget.Validate();
 
 			DepthOnlyProgram = BuiltinShaders.CreateDepthOnly();
+			TransparentShadowProgram = new ShaderProgram("Engine/DepthOnly.shader", new[] { "LEL_SHADOW_TRANSMITTANCE" });
 			Fullscreen = new FullscreenQuad();
 			LumenScene = new LumenScene();
 
@@ -90,6 +99,7 @@ namespace LELEngine.Rendering
 			AddPass(new ScreenProbeGatherPass());
 			AddPass(new OpaquePass());
 			AddPass(new SkyboxPass());
+			AddPass(new TransparentPass());
 			AddPass(new PostRenderCallbackPass());
 			AddPass(new DebugDrawPass());
 			AddPass(new VoxelDebugPass());
@@ -184,6 +194,7 @@ namespace LELEngine.Rendering
 					SceneTarget = SceneTarget,
 					OutputTarget = OutputTarget,
 					DepthOnlyProgram = DepthOnlyProgram,
+					TransparentShadowProgram = TransparentShadowProgram,
 					Fullscreen = Fullscreen
 				};
 				foreach (RenderPass pass in passes)
@@ -210,6 +221,7 @@ namespace LELEngine.Rendering
 				OutputTarget = dumpTarget;
 			}
 
+			Partition(renderers);
 			RenderContext context = new RenderContext
 			{
 				Renderer = this,
@@ -221,12 +233,14 @@ namespace LELEngine.Rendering
 				CameraPosition = camera.transform.position,
 				Width = Width,
 				Height = Height,
-				Renderers = renderers,
+				Renderers = opaqueRenderers,
+				TransparentRenderers = transparentRenderers,
 				Behaviours = behaviours,
 				RenderQueue = queue,
 				SceneTarget = SceneTarget,
 				OutputTarget = OutputTarget,
 				DepthOnlyProgram = DepthOnlyProgram,
+				TransparentShadowProgram = TransparentShadowProgram,
 				Fullscreen = Fullscreen
 			};
 
@@ -236,7 +250,7 @@ namespace LELEngine.Rendering
 			// GPU-driven geometry: the instance and material tables for this frame's culling and indirect draws.
 			if (Settings.GpuDriven && GpuScene.IsSupported)
 			{
-				GpuScene.Build(renderers);
+				GpuScene.Build(opaqueRenderers);
 			}
 			else
 			{
@@ -291,9 +305,22 @@ namespace LELEngine.Rendering
 			}
 
 			// Like Unity, the current camera is defined only while a frame renders (and a stale one would keep an
-			// unloaded scene alive); the GPU scene drops its renderer references for the same reason.
+			// unloaded scene alive); the GPU scene and the renderer lists drop their references for the same reason.
 			Camera.current = null;
 			GpuScene.EndFrame();
+			opaqueRenderers.Clear();
+			transparentRenderers.Clear();
+		}
+
+		/// <summary>Splits the frame's renderers by their material's queue (the lists are cleared when the frame ends).</summary>
+		private void Partition(IReadOnlyList<MeshRenderer> renderers)
+		{
+			opaqueRenderers.Clear();
+			transparentRenderers.Clear();
+			foreach (MeshRenderer renderer in renderers)
+			{
+				(renderer.IsTransparent ? transparentRenderers : opaqueRenderers).Add(renderer);
+			}
 		}
 
 		private void EnsureDumpTarget()
@@ -337,6 +364,8 @@ namespace LELEngine.Rendering
 			}
 
 			GpuScene.EndFrame();
+			opaqueRenderers.Clear();
+			transparentRenderers.Clear();
 			Lighting.GI.InvalidateStatic();
 		}
 
@@ -352,6 +381,7 @@ namespace LELEngine.Rendering
 			SceneTarget?.Delete();
 			dumpTarget?.Delete();
 			DepthOnlyProgram?.Delete();
+			TransparentShadowProgram?.Delete();
 			Fullscreen?.Delete();
 			LumenScene?.Delete();
 			Profiler.Dispose();

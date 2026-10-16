@@ -260,7 +260,7 @@ namespace LELEngine.Rendering.Passes
 			lighting.Use();
 			scene.SetUniforms(program);
 			Lighting.SetUniforms(program, false, false);
-			gridShadow.SetUniforms(program);
+			gridShadow.SetUniforms(program, 6);
 			program.SetTexture("CardIndex", TextureTarget.Texture2D, atlas.CardIndex, 0);
 			program.SetTexture("CardAlbedo", TextureTarget.Texture2D, atlas.Albedo, 1);
 			program.SetTexture("CardNormal", TextureTarget.Texture2D, atlas.Normal, 2);
