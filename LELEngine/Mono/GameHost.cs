@@ -93,6 +93,12 @@ namespace LELEngine
 			KeyDown += Input.Input_KeyDown;
 			KeyUp += Input.Input_KeyUp;
 			MouseMove += Input.Input_MouseMove;
+			MouseDown += Input.Input_MouseDown;
+			MouseUp += Input.Input_MouseUp;
+			MouseWheel += Input.Input_MouseWheel;
+			TextInput += Input.Input_TextInput;
+			UIElements.UIRuntime.GetClipboard = () => ClipboardString;
+			UIElements.UIRuntime.SetClipboard = text => ClipboardString = text;
 
 			SceneManager.ActiveScene?.StartLifecycle(true);
 			Loaded = true;
@@ -124,7 +130,26 @@ namespace LELEngine
 			ECSManager?.Execute();
 			SceneManager.ActiveScene?.Update(Time.deltaTime);
 			Input.EndFrame();
+			ApplyUICursor();
 		}
+
+		/// <summary>Shows the cursor the hovered UI element asks for (text caret over fields, ...).</summary>
+		private void ApplyUICursor()
+		{
+			if (Input.cursorLocked)
+			{
+				return;
+			}
+
+			OpenTK.Windowing.Common.Input.MouseCursor wanted = UIElements.UIRuntime.ToWindowCursor(UIElements.UIRuntime.DesiredCursor);
+			if (wanted != appliedCursor)
+			{
+				appliedCursor = wanted;
+				Cursor = wanted;
+			}
+		}
+
+		private OpenTK.Windowing.Common.Input.MouseCursor appliedCursor = OpenTK.Windowing.Common.Input.MouseCursor.Default;
 
 		protected override void OnRenderFrame(FrameEventArgs e)
 		{

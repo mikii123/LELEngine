@@ -11,6 +11,9 @@ namespace LELEngine.Rendering
 		public abstract string Name { get; }
 		public bool Enabled = true;
 
+		/// <summary>The pass also runs when the scene has no camera (screen-space overlays such as the UI).</summary>
+		public virtual bool RunsWithoutCamera => false;
+
 		#endregion
 
 		#region PublicMethods

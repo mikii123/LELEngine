@@ -109,6 +109,56 @@ namespace LELEngine.Editor
 			if (Is("playframe")) editor.EnterPlayMode();
 			if (Is("stopframe")) editor.ExitPlayMode();
 			if (Is("saveframe")) editor.SaveScene();
+			// uibuilder=N;asset opens the UI Builder window at frame N with the asset (uibuilderscreenshot=N;folder dumps its frame N).
+			if (values.TryGetValue("uibuilder", out string builder))
+			{
+				string[] parts = builder.Split(';');
+				if (parts.Length >= 1 && int.TryParse(parts[0], out int at) && at == frame)
+				{
+					editor.OpenUIBuilder(parts.Length > 1 ? parts[1] : null);
+				}
+			}
+
+			// uibuilderscreenshot=f1,f2,...;folder dumps the builder window at each listed frame into folder/fNNNN.
+			if (values.TryGetValue("uibuilderscreenshot", out string builderShot))
+			{
+				string[] parts = builderShot.Split(';');
+				if (parts.Length == 2)
+				{
+					foreach (string item in parts[0].Split(','))
+					{
+						if (int.TryParse(item, out int at) && at == frame)
+						{
+							UIBuilder.BuilderWindow.ScreenshotFolder = System.IO.Path.Combine(parts[1], "f" + at.ToString("0000"));
+						}
+					}
+				}
+			}
+
+			// uibuildercmd=N:cmd|cmd;M:cmd runs builder commands (see UIBuilder.RunTestCommand) at the given frames.
+			if (values.TryGetValue("uibuildercmd", out string builderCommands))
+			{
+				foreach (string entry in builderCommands.Split(';'))
+				{
+					int colon = entry.IndexOf(':');
+					if (colon <= 0 || !int.TryParse(entry.Substring(0, colon), out int at) || at != frame)
+					{
+						continue;
+					}
+
+					UIBuilder.BuilderWindow window = editor.UIBuilderWindow;
+					if (window == null)
+					{
+						Debug.LogWarning("[Test] UI Builder is not open at frame " + frame);
+						continue;
+					}
+
+					foreach (string command in entry.Substring(colon + 1).Split('|'))
+					{
+						window.Builder.RunTestCommand(command);
+					}
+				}
+			}
 			// reportframes=f1,f2,...: how many frames each view rendered so far (on-demand rendering).
 			if (values.TryGetValue("reportframes", out string report) && Array.IndexOf(report.Split(','), frame.ToString()) >= 0)
 			{

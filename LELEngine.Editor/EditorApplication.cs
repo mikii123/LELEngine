@@ -115,6 +115,12 @@ namespace LELEngine.Editor
 			window.KeyDown += OnWindowKeyDown;
 			window.KeyUp += OnWindowKeyUp;
 			window.MouseMove += OnWindowMouseMove;
+			window.MouseDown += OnWindowMouseDown;
+			window.MouseUp += OnWindowMouseUp;
+			window.MouseWheel += OnWindowMouseWheel;
+			window.TextInput += OnWindowTextInput;
+			UIElements.UIRuntime.GetClipboard = () => window.ClipboardString;
+			UIElements.UIRuntime.SetClipboard = text => window.ClipboardString = text;
 
 			// project=folder opens a project directly; newproject=parent;name creates it first when missing.
 			string newProject = GetValue(args, "newproject");
@@ -230,7 +236,7 @@ namespace LELEngine.Editor
 				return;
 			}
 
-			bool continuous = PlayState == PlayState.Playing || SceneView.AlwaysRefresh || EditModeScriptsRunning();
+			bool continuous = PlayState == PlayState.Playing || SceneView.AlwaysRefresh || EditModeScriptsRunning() || UIElements.UIRuntime.AnyPanelAnimating;
 			SceneView.Render(continuous);
 			GameView.Render(continuous);
 			DebugDraw.Clear();
@@ -286,6 +292,8 @@ namespace LELEngine.Editor
 			assetWatcher.Created += (s, e) => OnAssetsChanged();
 			assetWatcher.Deleted += (s, e) => OnAssetsChanged();
 			assetWatcher.Renamed += (s, e) => OnAssetsChanged();
+			// Edited files: UI style sheets and documents reload in place.
+			assetWatcher.Changed += (s, e) => OnAssetsChanged();
 			assetWatcher.EnableRaisingEvents = true;
 
 			Scripts = new ScriptDomain(this, project);
@@ -641,6 +649,54 @@ namespace LELEngine.Editor
 			buildPanel.Open = true;
 		}
 
+		// ---------------------------------------------------------------- UI Builder (own window)
+
+		private UIBuilder.BuilderWindow uiBuilder;
+
+		/// <summary>The UI Builder window when open (test hooks).</summary>
+		public UIBuilder.BuilderWindow UIBuilderWindow => uiBuilder != null && uiBuilder.IsOpen ? uiBuilder : null;
+
+		/// <summary>Opens the UI Builder window (creating it on first use) and loads the asset when given.</summary>
+		public void OpenUIBuilder(string assetPath)
+		{
+			if (Project == null)
+			{
+				return;
+			}
+
+			if (uiBuilder == null || !uiBuilder.IsOpen)
+			{
+				uiBuilder?.Dispose();
+				uiBuilder = new UIBuilder.BuilderWindow(this, Window);
+			}
+
+			if (assetPath != null)
+			{
+				if (assetPath.EndsWith(".uss", StringComparison.OrdinalIgnoreCase)) uiBuilder.Builder.OpenStyleSheet(assetPath);
+				else uiBuilder.Builder.Open(assetPath);
+			}
+
+			uiBuilder.Focus();
+		}
+
+		/// <summary>Runs the frames of the editor's other windows (after the main window's UI was drawn).</summary>
+		public void RenderExtraWindows(float deltaTime)
+		{
+			if (uiBuilder == null)
+			{
+				return;
+			}
+
+			if (!uiBuilder.IsOpen)
+			{
+				uiBuilder.Dispose();
+				uiBuilder = null;
+				return;
+			}
+
+			uiBuilder.Frame(deltaTime);
+		}
+
 		public void NotifyAssetsChanged()
 		{
 			AssetsVersion++;
@@ -657,6 +713,8 @@ namespace LELEngine.Editor
 
 		public void Dispose()
 		{
+			uiBuilder?.Dispose();
+			uiBuilder = null;
 			CloseProject();
 			SceneView.Dispose();
 			GameView.Dispose();
@@ -672,6 +730,10 @@ namespace LELEngine.Editor
 			Window.KeyDown -= OnWindowKeyDown;
 			Window.KeyUp -= OnWindowKeyUp;
 			Window.MouseMove -= OnWindowMouseMove;
+			Window.MouseDown -= OnWindowMouseDown;
+			Window.MouseUp -= OnWindowMouseUp;
+			Window.MouseWheel -= OnWindowMouseWheel;
+			Window.TextInput -= OnWindowTextInput;
 		}
 
 		private void NewSceneNow()
@@ -877,6 +939,12 @@ namespace LELEngine.Editor
 				ImGui.EndMenu();
 			}
 
+			if (ImGui.BeginMenu("Window"))
+			{
+				if (ImGui.MenuItem("UI Builder", "", uiBuilder != null && uiBuilder.IsOpen)) OpenUIBuilder(null);
+				ImGui.EndMenu();
+			}
+
 			DrawPlayControls();
 			DrawStatus();
 			ImGui.EndMainMenuBar();
@@ -1048,6 +1116,8 @@ namespace LELEngine.Editor
 			assetsChanged = false;
 			AssetDatabase.Refresh(true);
 			AssetsVersion++;
+			// Hot reload of .uss / .uxml files: the documents using them rebuild.
+			UIElements.UIAssets.ReloadChanged();
 			NotifySceneChanged();
 		}
 
@@ -1114,9 +1184,45 @@ namespace LELEngine.Editor
 			Input.Input_KeyUp(e);
 		}
 
-		private static void OnWindowMouseMove(MouseMoveEventArgs e)
+		/// <summary>Game mouse coordinates are relative to the game view image, as in a standalone window.</summary>
+		private void OnWindowMouseMove(MouseMoveEventArgs e)
 		{
-			Input.Input_MouseMove(e);
+			System.Numerics.Vector2 origin = GameView.ImageOrigin;
+			Input.Input_MouseMove(new MouseMoveEventArgs(e.X - origin.X, e.Y - origin.Y, e.DeltaX, e.DeltaY));
+		}
+
+		private bool GameReceivesInput => PlayState == PlayState.Playing && GameView.HasInputFocus;
+
+		private void OnWindowMouseDown(MouseButtonEventArgs e)
+		{
+			if (GameReceivesInput && GameView.IsMouseOverImage)
+			{
+				Input.Input_MouseDown(e);
+			}
+		}
+
+		private void OnWindowMouseUp(MouseButtonEventArgs e)
+		{
+			if (GameReceivesInput)
+			{
+				Input.Input_MouseUp(e);
+			}
+		}
+
+		private void OnWindowMouseWheel(MouseWheelEventArgs e)
+		{
+			if (GameReceivesInput && GameView.IsMouseOverImage)
+			{
+				Input.Input_MouseWheel(e);
+			}
+		}
+
+		private void OnWindowTextInput(TextInputEventArgs e)
+		{
+			if (GameReceivesInput)
+			{
+				Input.Input_TextInput(e);
+			}
 		}
 
 		private static string GetValue(string[] args, string name)

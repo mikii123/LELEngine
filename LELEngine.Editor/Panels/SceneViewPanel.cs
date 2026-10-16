@@ -137,6 +137,8 @@ namespace LELEngine.Editor
 			if (refresh.ShouldRender(camera, ViewRenderer.Width, ViewRenderer.Height, editor.SceneVersion, continuous))
 			{
 				ViewRenderer.Renderer.Settings.DebugPrimitives = true;
+				// Game UI belongs to the game view only.
+				ViewRenderer.Renderer.Settings.RenderUI = false;
 				DrawGizmos();
 				ViewRenderer.Render(camera, editor.Scene);
 			}

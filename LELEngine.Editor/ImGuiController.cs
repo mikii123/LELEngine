@@ -111,8 +111,16 @@ void main()
 
 		#region PublicMethods
 
+		/// <summary>Makes this controller's ImGui context the current one (several windows have their own).</summary>
+		public void Activate()
+		{
+			ImGui.SetCurrentContext(Context);
+			ImGuizmo.SetImGuiContext(Context);
+		}
+
 		public void NewFrame(float deltaTime, int width, int height)
 		{
+			Activate();
 			ImGuiIOPtr io = ImGui.GetIO();
 			io.DisplaySize = new NVector2(Math.Max(1, width), Math.Max(1, height));
 			io.DisplayFramebufferScale = new NVector2(1f, 1f);
@@ -126,12 +134,14 @@ void main()
 		/// <summary>Ends the ImGui frame (call before rendering anything the frame's UI shows).</summary>
 		public void EndFrame()
 		{
+			Activate();
 			ImGui.Render();
 		}
 
 		/// <summary>Draws the ended frame into the bound framebuffer.</summary>
 		public void RenderDrawData(int framebufferWidth, int framebufferHeight)
 		{
+			Activate();
 			ImDrawDataPtr data = ImGui.GetDrawData();
 			ImDrawData* raw = data.Handle;
 			if (raw == null)
@@ -269,6 +279,7 @@ void main()
 			window.MouseWheel -= OnMouseWheel;
 			window.FocusedChanged -= OnFocusChanged;
 
+			Activate();
 			ImGuiPlatformIOPtr platform = ImGui.GetPlatformIO();
 			for (int i = 0; i < platform.Textures.Size; i++)
 			{
@@ -423,8 +434,11 @@ void main()
 			}
 		}
 
-		private static void OnKeyDown(KeyboardKeyEventArgs e)
+		// Window events arrive for one window at a time; each handler feeds its own context.
+
+		private void OnKeyDown(KeyboardKeyEventArgs e)
 		{
+			ImGui.SetCurrentContext(Context);
 			UpdateModifiers(e.Modifiers);
 			ImGuiKey key = MapKey(e.Key);
 			if (key != ImGuiKey.None)
@@ -433,8 +447,9 @@ void main()
 			}
 		}
 
-		private static void OnKeyUp(KeyboardKeyEventArgs e)
+		private void OnKeyUp(KeyboardKeyEventArgs e)
 		{
+			ImGui.SetCurrentContext(Context);
 			UpdateModifiers(e.Modifiers);
 			ImGuiKey key = MapKey(e.Key);
 			if (key != ImGuiKey.None)
@@ -452,13 +467,15 @@ void main()
 			io.AddKeyEvent(ImGuiKey.ModSuper, (modifiers & KeyModifiers.Super) != 0);
 		}
 
-		private static void OnTextInput(TextInputEventArgs e)
+		private void OnTextInput(TextInputEventArgs e)
 		{
+			ImGui.SetCurrentContext(Context);
 			ImGui.GetIO().AddInputCharacter((uint)e.Unicode);
 		}
 
-		private static void OnMouseDown(MouseButtonEventArgs e)
+		private void OnMouseDown(MouseButtonEventArgs e)
 		{
+			ImGui.SetCurrentContext(Context);
 			int button = MapMouseButton(e.Button);
 			if (button >= 0)
 			{
@@ -466,8 +483,9 @@ void main()
 			}
 		}
 
-		private static void OnMouseUp(MouseButtonEventArgs e)
+		private void OnMouseUp(MouseButtonEventArgs e)
 		{
+			ImGui.SetCurrentContext(Context);
 			int button = MapMouseButton(e.Button);
 			if (button >= 0)
 			{
@@ -477,6 +495,7 @@ void main()
 
 		private void OnMouseMove(MouseMoveEventArgs e)
 		{
+			ImGui.SetCurrentContext(Context);
 			// A grabbed cursor (game view mouse look) has no meaningful position for the UI.
 			if (window.CursorState != CursorState.Grabbed)
 			{
@@ -484,13 +503,15 @@ void main()
 			}
 		}
 
-		private static void OnMouseWheel(MouseWheelEventArgs e)
+		private void OnMouseWheel(MouseWheelEventArgs e)
 		{
+			ImGui.SetCurrentContext(Context);
 			ImGui.GetIO().AddMouseWheelEvent(e.OffsetX, e.OffsetY);
 		}
 
-		private static void OnFocusChanged(FocusedChangedEventArgs e)
+		private void OnFocusChanged(FocusedChangedEventArgs e)
 		{
+			ImGui.SetCurrentContext(Context);
 			ImGui.GetIO().AddFocusEvent(e.IsFocused);
 		}
 

@@ -14,6 +14,12 @@ namespace LELEngine.Editor
 		/// <summary>The game view is focused: keyboard and mouse go to the game (while it plays).</summary>
 		public bool HasInputFocus { get; private set; }
 
+		/// <summary>Top-left corner of the game image in window coordinates (game mouse positions are relative to it).</summary>
+		public NVector2 ImageOrigin { get; private set; }
+
+		/// <summary>The mouse is over the game image.</summary>
+		public bool IsMouseOverImage { get; private set; }
+
 		#endregion
 
 		#region PrivateFields
@@ -131,6 +137,13 @@ namespace LELEngine.Editor
 			}
 
 			ImGui.Image(EditorGui.Texture(ViewRenderer.Texture), viewSize, new NVector2(0, 1), new NVector2(1, 0));
+			ImageOrigin = ImGui.GetItemRectMin();
+			IsMouseOverImage = ImGui.IsItemHovered();
+			if (Input.Host is GameInputHost host)
+			{
+				host.ViewSize = new OpenTK.Mathematics.Vector2i((int)viewSize.X, (int)viewSize.Y);
+			}
+
 			if (editor.IsPlaying && ImGui.IsItemHovered() && ImGui.IsMouseClicked(ImGuiMouseButton.Left))
 			{
 				ImGui.SetWindowFocus();

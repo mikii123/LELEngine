@@ -123,6 +123,15 @@ namespace TestGame
 				Game.Mono.Renderer.Settings.GpuDriven = options.GpuDriven;
 				GITestScene.InstallHarness(scene, options);
 			}
+			else if (GetBool(args, "ui", false))
+			{
+				// ui=1: the UI toolkit test scene (exitafter=seconds closes the game, for screenshot runs).
+				scene = Game.Mono.LoadEmptyScene();
+				scene.Name = "UITest";
+				UITestScene.Load(scene, options.Animate, GetFloat(args, "exitafter", 0f), GetFloat(args, "uidump", 0f), GetFloat(args, "uiscript", 0f));
+				Game.Mono.Renderer.Settings.GpuDriven = options.GpuDriven;
+				GITestScene.InstallHarness(scene, options);
+			}
 			else
 			{
 				scene = Game.Mono.LoadEmptyScene();

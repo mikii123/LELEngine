@@ -241,6 +241,19 @@ namespace LELEngine
 
 			RunPendingStarts();
 
+			// UI events first: callbacks run before the components read the same input.
+			if (IsPlaying)
+			{
+				try
+				{
+					UIElements.UIRuntime.ProcessInput(this);
+				}
+				catch (Exception e)
+				{
+					Debug.LogException(e);
+				}
+			}
+
 			List<Behaviour> active = ActiveBehaviours as List<Behaviour>;
 			fixedTime += deltaTime;
 			if (fixedTime >= FixedStep)

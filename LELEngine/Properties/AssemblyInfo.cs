@@ -18,6 +18,9 @@ using System.Runtime.InteropServices;
 // COM, set the ComVisible attribute to true on that type.
 [assembly: ComVisible(false)]
 
+// The editor's UI Builder drives panels and the UI renderer directly.
+[assembly: System.Runtime.CompilerServices.InternalsVisibleTo("LELEngine.Editor")]
+
 // The following GUID is for the ID of the typelib if this project is exposed to COM
 [assembly: Guid("dfde3ff3-7d62-4742-8b36-dc2faac0830f")]
 

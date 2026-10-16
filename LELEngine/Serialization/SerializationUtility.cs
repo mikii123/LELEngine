@@ -115,6 +115,7 @@ namespace LELEngine.Serialization
 			}
 
 			BulkListAccess.Clear();
+			UIElements.UxmlRegistry.Clear();
 		}
 
 		public static bool IsSupported(Type type)

@@ -113,6 +113,9 @@ namespace LELEngine.Editor
 			GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
 			imgui.RenderDrawData(ClientSize.X, ClientSize.Y);
 
+			// Other windows of the editor (UI Builder) draw and present themselves now, in their own GL context.
+			editor.RenderExtraWindows((float)e.Time);
+
 			// Testing aid: screenshot=folder screenshotframe=N writes frame N of the window; exitframe=N closes.
 			frame++;
 			if (screenshotFolder != null && frame == screenshotFrame)

@@ -257,6 +257,11 @@ namespace LELEngine
 				return InternalStorage.GetOrCreateMaterial(assetPath);
 			}
 
+			if (UIElements.UIAssets.IsUIAssetType(type))
+			{
+				return UIElements.UIAssets.Load(type, assetPath);
+			}
+
 			Debug.LogWarning($"[Assets] No loader for {type.Name} ({assetPath})");
 			return null;
 		}

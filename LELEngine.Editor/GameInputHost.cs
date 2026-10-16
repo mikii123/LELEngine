@@ -39,7 +39,10 @@ namespace LELEngine.Editor
 			set => window.CursorState = active() || value == CursorState.Normal ? value : CursorState.Normal;
 		}
 
-		public Vector2i ClientSize => window.ClientSize;
+		/// <summary>Size of the game view image (the game's "window"); set by the game view panel every frame.</summary>
+		public Vector2i ViewSize { get; set; }
+
+		public Vector2i ClientSize => ViewSize.X > 0 && ViewSize.Y > 0 ? ViewSize : window.ClientSize;
 
 		public bool IsKeyDown(Keys key)
 		{

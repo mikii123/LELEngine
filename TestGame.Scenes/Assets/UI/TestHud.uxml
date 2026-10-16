@@ -1,0 +1,40 @@
+<ui:UXML xmlns:ui="UnityEngine.UIElements">
+    <Style src="TestHud.uss" />
+    <ui:VisualElement name="hud" class="hud-root" picking-mode="Ignore">
+        <ui:Label name="title" class="hud-title" text="LEL UI Toolkit" />
+        <ui:Label name="subtitle" class="hud-subtitle" text="UXML + USS document; hover the badges and buttons">
+            <Bindings>
+                <ui:DataBinding property="text" data-source-path="subtitle" binding-mode="ToTarget" />
+            </Bindings>
+        </ui:Label>
+
+        <ui:VisualElement class="hud-badges" picking-mode="Ignore">
+            <ui:VisualElement class="hud-badge"><ui:Label text="A" /></ui:VisualElement>
+            <ui:VisualElement class="hud-badge hud-badge--square"><ui:Label text="B" /></ui:VisualElement>
+            <ui:VisualElement class="hud-badge" style="border-color: #5bd36e;"><ui:Label text="C" /></ui:VisualElement>
+        </ui:VisualElement>
+
+        <ui:Label class="hud-notice" text="Rich text: &lt;b&gt;bold&lt;/b&gt;, &lt;i&gt;italic&lt;/i&gt;, &lt;color=#ffd166&gt;colored&lt;/color&gt; and &lt;size=18&gt;bigger&lt;/size&gt; words wrap inside this notice box with a left accent border." />
+
+        <ui:VisualElement name="status" class="hud-status">
+            <ui:Label text="Status" style="-unity-font-style: bold; margin-bottom: 4px;" />
+            <ui:ProgressBar name="health" title="Health" low-value="0" high-value="100" value="72">
+                <Bindings>
+                    <ui:DataBinding property="value" data-source-path="health" binding-mode="ToTarget" />
+                </Bindings>
+            </ui:ProgressBar>
+            <ui:ProgressBar name="stamina" title="Stamina" low-value="0" high-value="100" value="45" />
+            <ui:VisualElement style="flex-direction: row; justify-content: space-between; margin-top: 4px;">
+                <ui:Label text="Level 12" />
+                <ui:Label name="fps" text="-- fps" style="color: #9ec8ff;" />
+            </ui:VisualElement>
+        </ui:VisualElement>
+
+        <ui:VisualElement class="hud-actions" picking-mode="Ignore">
+            <ui:Button name="attack" text="Attack" />
+            <ui:Button name="defend" text="Defend" />
+            <ui:Button name="heal" text="Heal" />
+            <ui:Button name="flee" text="Flee" class="danger" />
+        </ui:VisualElement>
+    </ui:VisualElement>
+</ui:UXML>

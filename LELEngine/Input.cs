@@ -59,6 +59,13 @@ namespace LELEngine
 			}
 
 			lastMousePosition = mousePosition;
+			mouseScrollDelta = Vector2.Zero;
+			// The UI drains the raw events on its next update (events raised during a frame reach it then); a host
+			// without any scene update would let them pile up, so they are capped.
+			if (UIEvents.Count > 4096)
+			{
+				UIEvents.Clear();
+			}
 		}
 
 		public static void BeginFrame()
@@ -129,6 +136,7 @@ namespace LELEngine
 				UnPressed.Add(new KeyController(e.Key));
 			}
 			Pressed.RemoveAll(item => item.key == e.Key);
+			UIEvents.Add(new RawInputEvent { kind = RawInputKind.KeyUp, key = e.Key, modifiers = e.Modifiers, position = mousePosition });
 		}
 
 		public static void Input_KeyDown(KeyboardKeyEventArgs e)
@@ -138,6 +146,8 @@ namespace LELEngine
 				Pressed.Add(new KeyController(e.Key));
 			}
 			UnPressed.RemoveAll(item => item.key == e.Key);
+			// Key repeats reach the UI (text fields), the game sees one press.
+			UIEvents.Add(new RawInputEvent { kind = RawInputKind.KeyDown, key = e.Key, modifiers = e.Modifiers, position = mousePosition });
 		}
 
 		public static void Input_MouseMove(MouseMoveEventArgs e)
@@ -145,6 +155,59 @@ namespace LELEngine
 			Vector2i size = Host != null ? Host.ClientSize : new Vector2i(1, 1);
 			relativeMousePosition = new Vector2(e.X / (float)size.X, e.Y / (float)size.Y);
 			mousePosition = new Vector2(e.X, e.Y);
+		}
+
+		// Raw events for the UI system (consumed once per frame by UIElements.UIRuntime.ProcessInput).
+
+		public static void Input_MouseDown(MouseButtonEventArgs e)
+		{
+			UIEvents.Add(new RawInputEvent { kind = RawInputKind.MouseDown, button = e.Button, modifiers = e.Modifiers, position = mousePosition });
+		}
+
+		public static void Input_MouseUp(MouseButtonEventArgs e)
+		{
+			UIEvents.Add(new RawInputEvent { kind = RawInputKind.MouseUp, button = e.Button, modifiers = e.Modifiers, position = mousePosition });
+		}
+
+		public static void Input_MouseWheel(MouseWheelEventArgs e)
+		{
+			mouseScrollDelta = new Vector2(e.OffsetX, e.OffsetY);
+			UIEvents.Add(new RawInputEvent { kind = RawInputKind.MouseWheel, delta = new Vector2(e.OffsetX, e.OffsetY), position = mousePosition });
+		}
+
+		public static void Input_TextInput(TextInputEventArgs e)
+		{
+			if (e.Unicode >= 0x20 && e.Unicode != 0x7F)
+			{
+				UIEvents.Add(new RawInputEvent { kind = RawInputKind.TextInput, character = e.Unicode <= 0xFFFF ? (char)e.Unicode : '?', position = mousePosition });
+			}
+		}
+
+		/// <summary>Scroll wheel movement of the last frame (positive y = up).</summary>
+		public static Vector2 mouseScrollDelta { get; private set; }
+
+		/// <summary>Raw window events of this frame, in order (the UI drains the list).</summary>
+		public static readonly List<RawInputEvent> UIEvents = new List<RawInputEvent>();
+
+		public enum RawInputKind
+		{
+			MouseDown,
+			MouseUp,
+			MouseWheel,
+			KeyDown,
+			KeyUp,
+			TextInput
+		}
+
+		public struct RawInputEvent
+		{
+			public RawInputKind kind;
+			public MouseButton button;
+			public Keys key;
+			public KeyModifiers modifiers;
+			public Vector2 position;
+			public Vector2 delta;
+			public char character;
 		}
 
 		#endregion

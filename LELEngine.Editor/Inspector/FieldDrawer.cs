@@ -467,6 +467,11 @@ namespace LELEngine.Editor
 				return new[] { ".material" };
 			}
 
+			if (UIElements.UIAssets.IsUIAssetType(type))
+			{
+				return UIElements.UIAssets.ExtensionsOf(type);
+			}
+
 			return new string[0];
 		}
 

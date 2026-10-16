@@ -1,0 +1,154 @@
+/* HUD of the UI test scene: colors through variables, flex layout, hover transitions. */
+:root {
+	--hud-accent: #4fc3f7;
+	--hud-panel: rgba(20, 24, 32, 0.82);
+	--hud-border: rgba(255, 255, 255, 0.12);
+}
+
+.hud-root {
+	position: absolute;
+	left: 0;
+	top: 0;
+	right: 0;
+	bottom: 0;
+}
+
+.hud-title {
+	position: absolute;
+	left: 24px;
+	top: 18px;
+	font-size: 32px;
+	-unity-font-style: bold;
+	color: white;
+	text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.8);
+	letter-spacing: 1px;
+}
+
+.hud-subtitle {
+	position: absolute;
+	left: 26px;
+	top: 60px;
+	font-size: 14px;
+	color: #c0c8d0;
+}
+
+.hud-status {
+	position: absolute;
+	left: 24px;
+	bottom: 24px;
+	width: 320px;
+	background-color: var(--hud-panel);
+	border-color: var(--hud-border);
+	border-width: 1px;
+	border-radius: 10px;
+	padding: 12px 14px;
+}
+
+.hud-status .unity-progress-bar {
+	margin-bottom: 6px;
+}
+
+.hud-status #health .unity-progress-bar__progress {
+	background-color: #e05555;
+}
+
+.hud-status #stamina .unity-progress-bar__progress {
+	background-color: #5bd36e;
+}
+
+.hud-actions {
+	position: absolute;
+	right: 24px;
+	bottom: 24px;
+	flex-direction: row;
+	flex-wrap: wrap;
+	width: 280px;
+	justify-content: flex-end;
+}
+
+.hud-actions .unity-button {
+	width: 120px;
+	height: 40px;
+	margin: 4px;
+	border-radius: 20px;
+	border-width: 2px;
+	border-color: var(--hud-accent);
+	background-color: rgba(79, 195, 247, 0.15);
+	color: white;
+	font-size: 15px;
+	transition: background-color 0.15s ease-out, scale 0.15s ease-out, border-color 0.15s;
+}
+
+.hud-actions .unity-button:hover {
+	background-color: rgba(79, 195, 247, 0.45);
+	scale: 1.06;
+}
+
+.hud-actions .unity-button:active {
+	background-color: var(--hud-accent);
+	color: #102030;
+	scale: 0.97;
+}
+
+.hud-actions .unity-button.danger {
+	border-color: #ff6b6b;
+	background-color: rgba(255, 107, 107, 0.15);
+}
+
+.hud-actions .unity-button.danger:hover {
+	background-color: rgba(255, 107, 107, 0.5);
+}
+
+.hud-badges {
+	position: absolute;
+	left: 50%;
+	top: 18px;
+	translate: -50% 0;
+	flex-direction: row;
+	align-items: center;
+}
+
+.hud-badge {
+	width: 44px;
+	height: 44px;
+	margin: 0 6px;
+	border-radius: 22px;
+	background-color: var(--hud-panel);
+	border-width: 2px;
+	border-color: var(--hud-border);
+	justify-content: center;
+	align-items: center;
+	transition: rotate 0.4s ease-in-out, border-color 0.2s;
+}
+
+.hud-badge:hover {
+	rotate: 180deg;
+	border-color: var(--hud-accent);
+}
+
+.hud-badge > .unity-label {
+	font-size: 18px;
+	-unity-font-style: bold;
+	color: var(--hud-accent);
+}
+
+.hud-badge--square {
+	border-radius: 8px 22px 8px 22px;
+	border-top-color: #ff6b6b;
+	border-right-color: #ffd166;
+	border-bottom-color: #5bd36e;
+	border-left-color: #4fc3f7;
+}
+
+.hud-notice {
+	position: absolute;
+	right: 24px;
+	top: 18px;
+	width: 300px;
+	background-color: var(--hud-panel);
+	border-left-width: 4px;
+	border-left-color: #ffd166;
+	padding: 10px 12px;
+	white-space: normal;
+	font-size: 13px;
+}

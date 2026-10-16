@@ -214,6 +214,8 @@ namespace LELEngine.Editor
 				if (ImGui.MenuItem("Create C# Script")) StartCreate("Script", "NewBehaviour");
 				if (ImGui.MenuItem("Create Material")) StartCreate("Material", "NewMaterial");
 				if (ImGui.MenuItem("Create Scene")) StartCreate("Scene", "NewScene");
+				if (ImGui.MenuItem("Create UI Document (UXML)")) StartCreate("UXML", "NewDocument");
+				if (ImGui.MenuItem("Create Style Sheet (USS)")) StartCreate("USS", "NewStyle");
 				ImGui.Separator();
 				if (ImGui.MenuItem("Show in Explorer")) ShowInExplorer(Absolute(folder));
 				ImGui.EndPopup();
@@ -254,6 +256,10 @@ namespace LELEngine.Editor
 			if (assetPath.EndsWith(SceneSerializer.Extension, StringComparison.OrdinalIgnoreCase))
 			{
 				editor.OpenScene(assetPath);
+			}
+			else if (assetPath.EndsWith(".uxml", StringComparison.OrdinalIgnoreCase) || assetPath.EndsWith(".uss", StringComparison.OrdinalIgnoreCase))
+			{
+				editor.OpenUIBuilder(assetPath);
 			}
 			else
 			{
@@ -354,6 +360,28 @@ namespace LELEngine.Editor
 					target = Absolute(Combine(folder, name + SceneSerializer.Extension));
 					EnsureNew(target);
 					SceneSerializer.Save(DefaultScene.Create(editor.Project), target);
+					break;
+				case "UXML":
+					target = Absolute(Combine(folder, name + ".uxml"));
+					EnsureNew(target);
+					File.WriteAllText(target,
+						"<ui:UXML xmlns:ui=\"UnityEngine.UIElements\">\n" +
+						"    <Style src=\"" + name + ".uss\" />\n" +
+						"    <ui:VisualElement name=\"root\" class=\"root\">\n" +
+						"        <ui:Label text=\"Hello\" />\n" +
+						"    </ui:VisualElement>\n" +
+						"</ui:UXML>\n");
+					string sheet = Absolute(Combine(folder, name + ".uss"));
+					if (!File.Exists(sheet))
+					{
+						File.WriteAllText(sheet, ".root {\n    flex-grow: 1;\n}\n");
+					}
+
+					break;
+				case "USS":
+					target = Absolute(Combine(folder, name + ".uss"));
+					EnsureNew(target);
+					File.WriteAllText(target, ".root {\n    flex-grow: 1;\n}\n");
 					break;
 				default:
 					return;

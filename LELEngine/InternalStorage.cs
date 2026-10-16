@@ -43,6 +43,7 @@ namespace LELEngine
 			Meshes.Clear();
 			Rendering.GeometryPool.Clear();
 			Navigation.NavMeshSurface.ClearCaches();
+			UIElements.UIAssets.Clear();
 		}
 
 		/// <summary>

@@ -43,6 +43,9 @@ namespace LELEngine.Rendering
 		/// <summary>Draw the <see cref="DebugDraw" /> primitives (editor scene view; games use DebugDraw.VisibleInGame).</summary>
 		public bool DebugPrimitives;
 
+		/// <summary>Draw the scene's UI documents over the image (off for the editor's scene view).</summary>
+		public bool RenderUI = true;
+
 		#endregion
 	}
 }

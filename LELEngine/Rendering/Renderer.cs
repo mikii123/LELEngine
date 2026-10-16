@@ -96,6 +96,7 @@ namespace LELEngine.Rendering
 			AddPass(new SurfaceCacheDebugPass());
 			AddPass(new ProbeDebugPass());
 			AddPass(new PostProcessPass());
+			AddPass(new UIRenderPass());
 		}
 
 		public void AddPass(RenderPass pass)
@@ -166,10 +167,33 @@ namespace LELEngine.Rendering
 			Lighting.BeginFrame(Settings);
 			if (camera == null)
 			{
-				// Nothing to render from; present the clear color.
+				// Nothing to render from; present the clear color and the screen-space passes (UI).
 				BindOutput();
 				GL.ClearColor(Settings.ClearColor);
 				GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
+				RenderContext overlayContext = new RenderContext
+				{
+					Renderer = this,
+					Settings = Settings,
+					Width = Width,
+					Height = Height,
+					Renderers = renderers,
+					Behaviours = behaviours,
+					RenderQueue = queue,
+					SceneTarget = SceneTarget,
+					OutputTarget = OutputTarget,
+					DepthOnlyProgram = DepthOnlyProgram,
+					Fullscreen = Fullscreen
+				};
+				foreach (RenderPass pass in passes)
+				{
+					if (pass.Enabled && pass.RunsWithoutCamera)
+					{
+						pass.Execute(overlayContext);
+						GLState.Reset();
+					}
+				}
+
 				return;
 			}
 
