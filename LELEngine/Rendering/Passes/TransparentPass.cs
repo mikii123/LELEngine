@@ -31,11 +31,14 @@ namespace LELEngine.Rendering.Passes
 		private struct Entry
 		{
 			public MeshRenderer Renderer;
+			public VFX.VfxDrawEntry Vfx;
 			public int Queue;
 			public float DistanceSquared;
+			public ulong Order;
 		}
 
 		private readonly List<Entry> entries = new List<Entry>();
+		private readonly List<VFX.VfxDrawEntry> vfxEntries = new List<VFX.VfxDrawEntry>();
 
 		#endregion
 
@@ -45,24 +48,72 @@ namespace LELEngine.Rendering.Passes
 		{
 			IReadOnlyList<MeshRenderer> renderers = context.TransparentRenderers;
 			DrawnCount = 0;
-			if (renderers == null || renderers.Count == 0)
+			Collect(renderers, context.CameraPosition);
+			vfxEntries.Clear();
+			VFX.VfxRuntime.CollectTransparent(context, vfxEntries);
+			if (entries.Count == 0 && vfxEntries.Count == 0)
 			{
 				return;
 			}
 
-			Collect(renderers, context.CameraPosition);
-			if (entries.Count == 0)
+			// Particle outputs sort among the meshes by queue and distance (their bounds centre).
+			foreach (VFX.VfxDrawEntry vfx in vfxEntries)
 			{
-				return;
+				entries.Add(new Entry { Vfx = vfx, Queue = vfx.Queue, DistanceSquared = vfx.DistanceSquared, Order = (ulong)(vfx.System * 64 + vfx.Output) });
+			}
+
+			SortEntries();
+
+			// The view block of the particle draws and the back-to-front sorts of their sorted outputs, in one batch.
+			if (vfxEntries.Count > 0)
+			{
+				context.Renderer.Profiler.Split("Transparent.VfxSort");
+				VFX.VfxRuntime.PrepareDraws(context, vfxEntries);
+				context.Renderer.Profiler.Split("Transparent.Draw");
 			}
 
 			context.SceneTarget.Bind();
+
+			// The scene depth with the opaques for soft particles (and the next simulation's depth collisions).
+			VFX.VfxDepthCapture depth = null;
+			if (vfxEntries.Count > 0 && VFX.VfxRuntime.NeedsDepth)
+			{
+				depth = VFX.VfxRuntime.CaptureDepth(context);
+				context.SceneTarget.Bind();
+			}
+
 			ShaderProgram active = null;
 			bool receiveShadows = false;
 			bool receiveGI = false;
 			bool resend = true;
+			bool afterParticles = false;
+			bool afterMesh = false;
 			foreach (Entry entry in entries)
 			{
+				if (entry.Vfx != null)
+				{
+					// Consecutive particle draws skip the state they share; a mesh drawn in between resets that.
+					if (afterMesh)
+					{
+						VFX.VfxRuntime.InvalidateDrawState();
+						afterMesh = false;
+					}
+
+					entry.Vfx.Instance.Draw(context, entry.Vfx.System, entry.Vfx.Output, false, depth);
+					afterParticles = true;
+					active = null;
+					resend = true;
+					DrawnCount++;
+					continue;
+				}
+
+				if (afterParticles)
+				{
+					GLState.SetDepth(true, false, DepthFunction.Lequal);
+					afterParticles = false;
+				}
+
+				afterMesh = true;
 				MeshRenderer renderer = entry.Renderer;
 				Material material = renderer.Material;
 				ShaderProgram program = material.UsingShader;
@@ -106,6 +157,7 @@ namespace LELEngine.Rendering.Passes
 			}
 
 			entries.Clear();
+			vfxEntries.Clear();
 			GLState.SetBlend(false);
 			GLState.SetDepth(true, true, DepthFunction.Less);
 			GLState.SetCull(true, TriangleFace.Back);
@@ -115,6 +167,7 @@ namespace LELEngine.Rendering.Passes
 		public override void ReleaseSceneReferences()
 		{
 			entries.Clear();
+			vfxEntries.Clear();
 		}
 
 		#endregion
@@ -126,6 +179,11 @@ namespace LELEngine.Rendering.Passes
 		private void Collect(IReadOnlyList<MeshRenderer> renderers, Vector3 cameraPosition)
 		{
 			entries.Clear();
+			if (renderers == null)
+			{
+				return;
+			}
+
 			foreach (MeshRenderer renderer in renderers)
 			{
 				Mesh mesh = renderer.Mesh;
@@ -136,15 +194,18 @@ namespace LELEngine.Rendering.Passes
 				}
 
 				Vector3 center = Vector3.TransformPosition((mesh.BoundsMin + mesh.BoundsMax) * 0.5f, renderer.transform.LocalToWorld);
-				entries.Add(new Entry { Renderer = renderer, Queue = material.renderQueue, DistanceSquared = (center - cameraPosition).LengthSquared });
+				entries.Add(new Entry { Renderer = renderer, Queue = material.renderQueue, DistanceSquared = (center - cameraPosition).LengthSquared, Order = renderer.Id });
 			}
+		}
 
-			// List.Sort is not stable; the index settles ties so the order is the same every frame.
+		private void SortEntries()
+		{
+			// List.Sort is not stable; the order key settles ties so the order is the same every frame.
 			entries.Sort((a, b) =>
 			{
 				if (a.Queue != b.Queue) return a.Queue.CompareTo(b.Queue);
 				int byDistance = b.DistanceSquared.CompareTo(a.DistanceSquared);
-				return byDistance != 0 ? byDistance : a.Renderer.Id.CompareTo(b.Renderer.Id);
+				return byDistance != 0 ? byDistance : a.Order.CompareTo(b.Order);
 			});
 		}
 

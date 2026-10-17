@@ -119,7 +119,9 @@ namespace LELEngine
 			}
 
 			Input.BeginFrame();
+			long updateStart = System.Diagnostics.Stopwatch.GetTimestamp();
 			SceneManager.ActiveScene?.Update(Time.deltaTime);
+			Time.cpuUpdateMs = (System.Diagnostics.Stopwatch.GetTimestamp() - updateStart) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
 			Input.EndFrame();
 			ApplyUICursor();
 		}

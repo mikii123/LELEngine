@@ -31,6 +31,7 @@ namespace LELEngine
 		internal int PoolFirstIndex;
 		internal int PoolIndexCount;
 		internal int PoolBaseVertex;
+		internal int PoolVertexCount;
 
 		#endregion
 

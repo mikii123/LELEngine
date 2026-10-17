@@ -39,6 +39,9 @@
 		/// <summary>CPU time of the last Renderer.RenderFrame (command submission), milliseconds.</summary>
 		public static double cpuRenderMs;
 
+		/// <summary>CPU time of the last scene update (Start, FixedUpdate, Update, LateUpdate), milliseconds.</summary>
+		public static double cpuUpdateMs;
+
 		/// <summary>Time the last SwapBuffers blocked for, milliseconds (GPU / display wait).</summary>
 		public static double swapMs;
 

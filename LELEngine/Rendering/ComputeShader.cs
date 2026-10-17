@@ -42,6 +42,20 @@ namespace LELEngine.Rendering
 			Program = program;
 		}
 
+		/// <summary>Wraps an already linked compute program (generated shaders).</summary>
+		public static ComputeShader FromProgram(ShaderProgram program)
+		{
+			return new ComputeShader(program);
+		}
+
+		/// <summary>Dispatches with the work group counts read from the bound dispatch indirect buffer at an offset (bytes).</summary>
+		public void DispatchIndirect(int buffer, int offsetBytes)
+		{
+			GL.BindBuffer(BufferTarget.DispatchIndirectBuffer, buffer);
+			GL.DispatchComputeIndirect((IntPtr)offsetBytes);
+			GL.BindBuffer(BufferTarget.DispatchIndirectBuffer, 0);
+		}
+
 		#endregion
 
 		#region PublicMethods

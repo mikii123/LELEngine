@@ -142,6 +142,23 @@ namespace TestGame
 				Game.Mono.Renderer.Settings.GpuDriven = options.GpuDriven;
 				GITestScene.InstallHarness(scene, options);
 			}
+			else if (GetBool(args, "vfx", false))
+			{
+				// vfx=1: the GPU particle showcase (four effects built in code).
+				scene = Game.Mono.LoadEmptyScene();
+				scene.Name = "VfxTest";
+				if (GetBool(args, "vfxstress", false))
+				{
+					// vfxstress=1: the load test (vfxbig, vfxsorted, vfxsmall, vfxidle size its parts; 0 leaves one out).
+					VfxStressScene.Load(scene, options, GetInt(args, "vfxbig", 1 << 20), GetInt(args, "vfxsorted", 1 << 17), GetInt(args, "vfxsmall", 200), GetInt(args, "vfxidle", 200), GetInt(args, "vfxbehind", 0));
+				}
+				else
+				{
+					VfxTestScene.Load(scene, options);
+				}
+
+				Game.Mono.Renderer.Settings.GpuDriven = options.GpuDriven;
+			}
 			else if (GetBool(args, "ui", false))
 			{
 				// ui=1: the UI toolkit test scene (exitafter=seconds closes the game, for screenshot runs).
@@ -167,6 +184,22 @@ namespace TestGame
 
 			// Added after saving: the counter is a TestGame type that saved scenes should not reference.
 			scene.CreateGameObject("FrameRateCounter").AddComponent<FrameRateCounter>();
+
+			// exitframe=N closes the window after N frames (automated runs).
+			// exitseconds=S closes it after S seconds of game time.
+			int exitFrame = GetInt(args, "exitframe", 0);
+			float exitSeconds = GetFloat(args, "exitseconds", 0f);
+			if (exitFrame > 0 || exitSeconds > 0f)
+			{
+				int frame = 0;
+				Game.Mono.UpdateFrame += _ =>
+				{
+					if ((exitFrame > 0 && ++frame >= exitFrame) || (exitSeconds > 0f && Time.time >= exitSeconds))
+					{
+						Game.Mono.Close();
+					}
+				};
+			}
 
 			Game.Mono.Run();
 			// Main function is frozen until game window closes

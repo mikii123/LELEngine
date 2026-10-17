@@ -14,6 +14,12 @@ namespace LELEngine.Shaders
 		public int Handle { get; }
 		public ShaderType Type { get; }
 
+		/// <summary>The driver's compile log of the last compiled stage (empty when clean).</summary>
+		public static string LastLog { get; private set; } = "";
+
+		/// <summary>The last compiled stage compiled without errors.</summary>
+		public static bool LastCompiled { get; private set; } = true;
+
 		#endregion
 
 		#region Constructors
@@ -96,6 +102,8 @@ namespace LELEngine.Shaders
 			int status;
 			GL.GetShader(handle, ShaderParameter.CompileStatus, out status);
 			string log = GL.GetShaderInfoLog(handle);
+			LastLog = log ?? "";
+			LastCompiled = status != 0;
 			if (status == 0)
 			{
 				Console.WriteLine($"[Shader] Compile error in {debugName} ({type}):\n{log}");

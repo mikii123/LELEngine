@@ -99,6 +99,13 @@ namespace LELEngine.Rendering.Passes
 			// Transparent casters: what they let through, in the map's transmittance attachment.
 			RenderTexture transmittance = TransparentShadows.Draw(context, shadowTarget, lightView, lightProjection);
 
+			// Particle outputs that cast shadows (alpha tested, depth only).
+			if (VFX.VfxRuntime.Instances.Count > 0)
+			{
+				GLState.SetColorWrite(false);
+				VFX.VfxRuntime.DrawShadowCasters(context, lightView, lightProjection);
+			}
+
 			GL.Disable(EnableCap.PolygonOffsetFill);
 			GLState.SetColorWrite(true);
 

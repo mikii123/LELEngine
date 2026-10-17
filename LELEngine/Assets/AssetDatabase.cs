@@ -534,6 +534,7 @@ namespace LELEngine
 			RegisterAssetType(typeof(UIElements.VisualTreeAsset), UIElements.UIAssets.VisualTreeExtensions, (type, path, sub) => UIElements.UIAssets.Load(type, path));
 			RegisterAssetType(typeof(UIElements.FontAsset), UIElements.UIAssets.FontExtensions, (type, path, sub) => UIElements.UIAssets.Load(type, path));
 			RegisterAssetType(typeof(PhysicsMaterial2D), new[] { PhysicsMaterial2D.Extension }, (type, path, sub) => PhysicsMaterial2D.Load(path));
+			RegisterAssetType(typeof(VFX.VfxGraph), new[] { VFX.VfxGraph.Extension }, (type, path, sub) => VFX.VfxGraph.Load(path));
 		}
 
 		private static AssetTypeInfo FindLoader(Type type, string assetPath)

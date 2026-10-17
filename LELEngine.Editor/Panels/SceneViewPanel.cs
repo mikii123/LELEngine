@@ -134,6 +134,8 @@ namespace LELEngine.Editor
 
 			ViewRenderer.EnsureSize((int)viewSize.X, (int)viewSize.Y);
 			ApplyCamera();
+			// Effects orient and sort for the scene camera when the scene has no camera of its own.
+			LELEngine.VFX.VfxRuntime.FallbackCamera = camera;
 			if (refresh.ShouldRender(camera, ViewRenderer.Width, ViewRenderer.Height, editor.SceneVersion, continuous))
 			{
 				ViewRenderer.Renderer.Settings.DebugPrimitives = true;
@@ -151,6 +153,7 @@ namespace LELEngine.Editor
 			if (selected != null && selected.scene == editor.Scene)
 			{
 				Physics2DGizmos.Draw(selected);
+				VFX.VisualEffectInspector.DrawGizmos(selected);
 			}
 
 			if (!ShowNavigation)

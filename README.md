@@ -1,8 +1,8 @@
 # LELEngine
 
 A C# game engine with a Unity-like workflow: GameObjects and components, an editor with scene/game views and
-play mode, a standalone player for game builds, Lumen-inspired real-time global illumination, a UI Toolkit-style
-UI system and Recast/Detour-style navigation.
+play mode, a standalone player for game builds, Lumen-inspired real-time global illumination, a VFX Graph-style
+GPU particle system with a node editor, a UI Toolkit-style UI system and Recast/Detour-style navigation.
 
 Built on .NET 10, OpenTK 4.9 (GLFW) and OpenGL 4.6 (4.3 minimum), developed and tuned on an Intel integrated GPU.
 
@@ -58,6 +58,53 @@ Built on .NET 10, OpenTK 4.9 (GLFW) and OpenGL 4.6 (4.3 minimum), developed and 
 *Lumen mode GI: color bleeding from the red and green walls and light from emissive objects, with no analytic
 point lights.*
 
+**GPU particles (`LELEngine.VFX`)**
+- A VFX Graph-style system. A `.vfx` asset is a graph of contexts (Event, Spawn, Initialize, Update, Output
+  Quad / Mesh / Point / Line / Strip) that hold blocks, fed by operators and blackboard properties. A
+  `VisualEffect` component plays a graph, overrides its properties per instance, and offers `Play`, `Stop`,
+  `Reinit`, `SendEvent` and typed `Set*` / `Get*` calls.
+- The graph compiles to GLSL: constants are folded, expressions that depend only on properties and time are
+  hoisted to a CPU-evaluated uniform buffer, and only the attributes a later stage reads are stored (structure of
+  arrays). Compute kernels initialize and update the particles with dead and alive lists, and indirect dispatch and
+  draw keep the CPU out of the loop. GPU events let one system spawn into another (sparks when a rocket dies).
+- Spawning on the CPU: constant and variable rates, single and periodic bursts, spawn over distance, loops with
+  delays, start and stop events.
+- Blocks: position on shapes and meshes; velocity by direction, cone, sphere, tangent or random; forces, drag,
+  turbulence, vector fields and attractors; collisions with planes, spheres, boxes, the depth buffer and the
+  global SDF, conforming to an SDF or a sphere; kill volumes and conditions; size, color and alpha over life or by
+  speed; flipbooks; attribute setters with random modes; custom GLSL blocks; GPU-event triggers. Around seventy
+  operators cover math, vectors, noise, curves, gradients, random numbers, sampling, logic and time.
+- Outputs: camera-facing or fixed quads (or triangles, or octagons that skip the transparent corners) with soft
+  particles, instanced meshes, points, lines and position-history strips (ribbons). Unlit or lit (half-Lambert with
+  the shadow maps and the GI probes), alpha, additive or opaque blending, a per-view bitonic sort for alpha
+  blending, shadow casting, flipbook UVs, curves and gradients baked into lookup tables. Bounds are reduced on the
+  GPU for frustum culling, or set by hand.
+- Built for many effects and many particles:
+  - Every effect of the frame simulates together: one bookkeeping dispatch for all systems, then all initialize
+    kernels, then all update kernels, with a handful of memory barriers per frame instead of several per system.
+  - No per-particle atomics on shared counters: the spawned particles' slots are reserved before the initialize
+    kernel runs, and the update gathers its survivors, deaths, GPU events and bounds per work group.
+  - Mostly-full systems update every slot in memory order (coalesced reads and an ordered draw list); sparse ones
+    walk their alive list. Quads and ribbons draw indexed, so shared corners are shaded once.
+  - Empty systems cost nothing, and effects no view sees freeze (Unity's culling flags, per graph).
+  - The sort covers only the particles that can be alive, packs the depth and the particle index into one 32-bit
+    key, sorts 4096-element chunks in shared memory and merges two steps per pass; the sorts of a view run batched.
+  - The CPU side allocates nothing per frame, uploads every effect's parameters in one buffer, re-evaluates
+    property-only expressions only when a property changes, and reads alive counts and bounds back a few frames
+    late without waiting.
+
+| Load test (`vfx=1 vfxstress=1`, RTX 3080 Ti) | First version | Now |
+| --- | --- | --- |
+| One million particles (turbulence, collisions): update | 2.2 ms | 0.15 ms |
+| One million particles: draw | 0.8 ms | 0.2 ms |
+| 200 small sorted effects: simulation and drawing | 16.8 ms | 0.8 ms |
+| 200 idle effects (finished bursts): GPU and CPU | 8.0 ms each | under 0.1 ms |
+| Everything above together (402 effects, about a million particles) | 39 fps, GPU 25 ms | 820 fps, GPU 1.2 ms |
+
+![GPU particles in the test harness](docs/images/vfx-showcase.png)
+*`vfx=1`: lit cubes that cast shadows and collide with the room, fireworks whose rockets spawn sparks through a
+GPU event, ribbons and soft smoke puffs, all simulated and drawn on the GPU.*
+
 **UI (`LELEngine.UIElements`)**
 - A retained UI modelled on Unity UI Toolkit: one `UIDocument` component per document, with no extra GameObjects.
 - UXML and USS: selectors, pseudo-classes, variables, transitions, `@import`. Flexbox layout and SDF text with
@@ -83,6 +130,15 @@ point lights.*
 - Game scripts compile in the background with `dotnet build`, and a full domain reload swaps them in.
 - **UI Builder**: a separate window for editing UXML documents with a live preview, inspector, USS editor and
   canvas picking.
+- **VFX Graph** (Window > VFX Graph, double-click a `.vfx` asset, or Create Visual Effect Graph in the project
+  browser): a node canvas with pan, zoom and a node search, blocks inside contexts, value and flow edges, a
+  blackboard of properties, a node inspector, the compile messages and the generated GLSL. Every edit recompiles
+  the effects playing the graph in the scene; edits are undoable and save to the asset file. The `VisualEffect`
+  inspector overrides properties per component and draws the bounds gizmo.
+
+![The VFX Graph window](docs/images/vfx-graph.png)
+*The VFX Graph window: the default effect with its Spawn, Initialize, Update and Output contexts and two
+blackboard properties wired into the blocks.*
 - Project Settings (Edit > Project Settings...) has tabs for lighting quality (shadow map, GI method and its
   tunables), 2D physics and the build. They are saved to `ProjectSettings/ProjectSettings.asset` and go into
   builds. The Lighting panel keeps what belongs to a scene: its environment, shadow reach and GI volume.
@@ -96,11 +152,11 @@ point lights.*
 
 | Folder | Contents |
 | --- | --- |
-| `LELEngine` | Engine runtime: scene model, rendering, GI, UI, navigation, serialization, assets, input |
-| `LELEngine.Editor` | The editor application (and the UI Builder) |
+| `LELEngine` | Engine runtime: scene model, rendering, GI, GPU particles, UI, navigation, serialization, assets, input |
+| `LELEngine.Editor` | The editor application (and the UI Builder and VFX Graph windows) |
 | `LELEngine.Player` | Generic player executable used by game builds |
 | `TestGame` | Test and measurement harness that runs the scenes below from the command line |
-| `TestGame.Scenes` | Test scenes: GI room, navigation, UI showcase, Box2D physics |
+| `TestGame.Scenes` | Test scenes: GI room, navigation, UI showcase, Box2D physics, GPU particles |
 | `LELEngine.Benchmarks` | Headless benchmarks: `dotnet run --project LELEngine.Benchmarks -c Release -- physics2d [scenario] [workers=N] [nosleep=1] [plane=xz]` (pyramid, pyramids, rain, chains, queries, rays, closest, overlaps; each reports a state checksum that must match between the planes), and `physics2d-scene` runs the Box2D test scene without a window |
 
 ## Building
@@ -131,6 +187,9 @@ dotnet run --project TestGame -c Release -- gi=lumen
 | `ui=1` | UI showcase scene |
 | `nav=1` | Navigation scene with crowd agents |
 | `physics=1` | Box2D scene: stack, ball, pendulum, hinge chain, capsules, spring, moving platform, trigger, queries |
+| `vfx=1` | GPU particle showcase: lit cube rain, fireworks with GPU-event sparks, ribbons and soft puffs (`LEL_VFX_ONLY=puffs\|fireworks\|cubes\|ribbons` shows one, `LEL_VFX_DUMP=1` writes the generated GLSL to `%TEMP%\LELEngine\VFX`) |
+| `vfx=1 vfxstress=1` | GPU particle load test with timings every two seconds: `vfxbig=N` particles in one system, `vfxsorted=N` capacity of a sorted alpha system, `vfxsmall=N` small effects, `vfxidle=N` finished effects, `vfxbehind=N` effects behind the camera (0 leaves a part out) |
+| `exitseconds=S` | Close after S seconds (automated runs; `exitframe=N` counts frames) |
 | `outdoor=1` | Open-sky yard under the procedural skybox (`sky=0` for the flat sky color, `skybox=path` for a cubemap, panorama or material asset) |
 | `sky=1` | Procedural skybox in the GI room: rays that leave the room sample it |
 | `stats=1` | GPU and CPU timings in the console |

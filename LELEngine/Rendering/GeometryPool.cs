@@ -23,6 +23,44 @@ namespace LELEngine.Rendering
 		public static int VertexCount => vertexCount;
 		public static int IndexCount => indexCount;
 
+		/// <summary>GL handle of the shared vertex buffer (readable as a storage buffer: <see cref="Vertex" /> layout, 18 floats per vertex).</summary>
+		public static int VertexBufferHandle
+		{
+			get
+			{
+				EnsureCreated();
+				return vertexBuffer;
+			}
+		}
+
+		/// <summary>GL handle of the shared index buffer.</summary>
+		public static int IndexBufferHandle
+		{
+			get
+			{
+				EnsureCreated();
+				return indexBuffer;
+			}
+		}
+
+		/// <summary>The mesh's range in the pool (after <see cref="Prepare" />): base vertex, vertex count, first index, index count.</summary>
+		public static void GetRange(Mesh mesh, out int baseVertex, out int vertexCount, out int firstIndex, out int indexCount)
+		{
+			if (mesh == null || !Prepare(mesh))
+			{
+				baseVertex = 0;
+				vertexCount = 0;
+				firstIndex = 0;
+				indexCount = 0;
+				return;
+			}
+
+			baseVertex = mesh.PoolBaseVertex;
+			vertexCount = mesh.PoolVertexCount;
+			firstIndex = mesh.PoolFirstIndex;
+			indexCount = mesh.PoolIndexCount;
+		}
+
 		#endregion
 
 		#region PrivateFields
@@ -199,6 +237,7 @@ namespace LELEngine.Rendering
 			mesh.PoolFirstIndex = indexCount;
 			mesh.PoolIndexCount = indices.Length;
 			mesh.PoolBaseVertex = vertexCount;
+			mesh.PoolVertexCount = vertices.Length;
 			vertexCount += vertices.Length;
 			indexCount += indices.Length;
 			MeshCount++;

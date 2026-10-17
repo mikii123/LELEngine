@@ -51,6 +51,9 @@ namespace LELEngine.Shaders
 		/// <summary>Blend, depth, cull and queue state declared in the Properties block (the defaults when it declares none).</summary>
 		public ShaderRenderState RenderState => renderState;
 
+		/// <summary>Compile and link messages of programs built from sources (<see cref="FromSources" />); empty when clean.</summary>
+		public string BuildLog { get; private set; } = "";
+
 		#endregion
 
 		#region PrivateFields
@@ -64,6 +67,7 @@ namespace LELEngine.Shaders
 		private readonly ShaderRenderState renderState = new ShaderRenderState();
 		private ShaderProgram instancedVariant;
 		private bool instancedVariantCreated;
+		private string linkLog = "";
 
 		#endregion
 
@@ -113,6 +117,55 @@ namespace LELEngine.Shaders
 		public void Use()
 		{
 			GL.UseProgram(handle);
+		}
+
+		/// <summary>
+		///     Builds a program from in-memory stage sources (generated shaders): #include lines expand against the
+		///     engine shader library and every stage gets the engine preamble (stage define, variant defines, native
+		///     features), as .shader files do. The compile and link messages end up in <see cref="BuildLog" />.
+		/// </summary>
+		public static ShaderProgram FromSources(string name, IEnumerable<KeyValuePair<ShaderType, string>> stages, params string[] defines)
+		{
+			var shaders = new List<Shader>();
+			var log = new System.Text.StringBuilder();
+			bool compiled = true;
+			string virtualPath = Path.Combine(ShadersRoot, "Generated", name.Replace('/', '_') + ".glsl");
+			foreach (KeyValuePair<ShaderType, string> stage in stages)
+			{
+				var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+				string code = ExpandIncludes(stage.Value.Replace("\r\n", "\n").Split('\n'), virtualPath, visited);
+				var shader = new Shader(InsertPreamble(code, stage.Key, defines ?? Array.Empty<string>()), stage.Key, name);
+				if (!Shader.LastCompiled)
+				{
+					compiled = false;
+				}
+
+				if (!string.IsNullOrWhiteSpace(Shader.LastLog))
+				{
+					log.Append(StageName(stage.Key)).Append(": ").Append(Shader.LastLog.Trim()).Append('\n');
+				}
+
+				shaders.Add(shader);
+			}
+
+			var program = new ShaderProgram(name, shaders.ToArray());
+			foreach (Shader shader in shaders)
+			{
+				shader.Delete();
+			}
+
+			if (!compiled)
+			{
+				program.IsLinked = false;
+			}
+
+			if (!string.IsNullOrWhiteSpace(program.linkLog))
+			{
+				log.Append("link: ").Append(program.linkLog.Trim()).Append('\n');
+			}
+
+			program.BuildLog = log.ToString();
+			return program;
 		}
 
 		/// <summary>
@@ -263,6 +316,13 @@ namespace LELEngine.Shaders
 			if (loc >= 0) GL.Uniform1(loc, value);
 		}
 
+		/// <summary>Sets a uint uniform (an int upload into a uint uniform is a GL error and leaves it unset).</summary>
+		public void SetUint(string name, uint value)
+		{
+			int loc = GetUniformLocation(name);
+			if (loc >= 0) GL.Uniform1(loc, value);
+		}
+
 		public void SetInt2(string name, int x, int y)
 		{
 			int loc = GetUniformLocation(name);
@@ -359,6 +419,7 @@ namespace LELEngine.Shaders
 			GL.GetProgram(handle, GetProgramParameterName.LinkStatus, out status);
 			IsLinked = status != 0;
 			string log = GL.GetProgramInfoLog(handle);
+			linkLog = log ?? "";
 			if (!IsLinked)
 			{
 				Console.WriteLine($"[Shader] Link error in {Name}:\n{log}");

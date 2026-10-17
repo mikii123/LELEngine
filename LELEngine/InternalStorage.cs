@@ -47,6 +47,8 @@ namespace LELEngine
 			Navigation.NavMeshSurface.ClearCaches();
 			UIElements.UIAssets.Clear();
 			Rendering.SkyEnvironment.Clear();
+			VFX.VfxRuntime.Clear();
+			VFX.VfxGraph.ClearCache();
 		}
 
 		/// <summary>

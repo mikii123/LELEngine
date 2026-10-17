@@ -223,6 +223,7 @@ namespace LELEngine.Editor
 				if (ImGui.MenuItem("Create C# Script")) StartCreate("Script", "NewBehaviour");
 				if (ImGui.MenuItem("Create Material")) StartCreate("Material", "NewMaterial");
 				if (ImGui.MenuItem("Create Physics Material 2D")) StartCreate("PhysicsMaterial2D", "NewPhysicsMaterial");
+				if (ImGui.MenuItem("Create Visual Effect Graph")) StartCreate("VFX", "NewVisualEffect");
 				if (ImGui.MenuItem("Create Scene")) StartCreate("Scene", "NewScene");
 				if (ImGui.MenuItem("Create UI Document (UXML)")) StartCreate("UXML", "NewDocument");
 				if (ImGui.MenuItem("Create Style Sheet (USS)")) StartCreate("USS", "NewStyle");
@@ -270,6 +271,10 @@ namespace LELEngine.Editor
 			else if (assetPath.EndsWith(".uxml", StringComparison.OrdinalIgnoreCase) || assetPath.EndsWith(".uss", StringComparison.OrdinalIgnoreCase))
 			{
 				editor.OpenUIBuilder(assetPath);
+			}
+			else if (assetPath.EndsWith(LELEngine.VFX.VfxGraph.Extension, StringComparison.OrdinalIgnoreCase))
+			{
+				editor.OpenVfxGraph(assetPath);
 			}
 			else if (AssetDatabase.GetAssetType(assetPath) != null && !assetPath.EndsWith(".shader", StringComparison.OrdinalIgnoreCase))
 			{
@@ -388,6 +393,14 @@ namespace LELEngine.Editor
 					new PhysicsMaterial2D(name).Save(AssetDatabase.ToAssetPath(target));
 					break;
 				}
+				case "VFX":
+				{
+					target = Absolute(Combine(folder, name + LELEngine.VFX.VfxGraph.Extension));
+					EnsureNew(target);
+					LELEngine.VFX.VfxGraph graph = LELEngine.VFX.VfxGraphBuilder.CreateDefault(name);
+					graph.Save(AssetDatabase.ToAssetPath(target));
+					break;
+				}
 				case "Scene":
 					target = Absolute(Combine(folder, name + SceneSerializer.Extension));
 					EnsureNew(target);
@@ -425,6 +438,10 @@ namespace LELEngine.Editor
 			if (selectedFile != null && File.Exists(target))
 			{
 				editor.SelectAsset(selectedFile);
+				if (kind == "VFX")
+				{
+					editor.OpenVfxGraph(selectedFile);
+				}
 			}
 		}
 

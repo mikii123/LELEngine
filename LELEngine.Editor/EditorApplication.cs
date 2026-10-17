@@ -68,6 +68,7 @@ namespace LELEngine.Editor
 		private readonly ConsolePanel consolePanel;
 		private readonly LightingPanel lightingPanel;
 		private readonly ProjectSettingsWindow projectSettingsWindow;
+		private readonly VFX.VfxGraphWindow vfxGraphWindow;
 		private readonly GameInputHost gameInput;
 		private readonly TestHooks testHooks;
 		private readonly bool layoutFileExisted;
@@ -111,6 +112,7 @@ namespace LELEngine.Editor
 			consolePanel = new ConsolePanel(this);
 			lightingPanel = new LightingPanel(this);
 			projectSettingsWindow = new ProjectSettingsWindow(this);
+			vfxGraphWindow = new VFX.VfxGraphWindow(this);
 
 			gameInput = new GameInputHost(window, () => PlayState == PlayState.Playing && GameView.HasInputFocus);
 			Input.Host = gameInput;
@@ -218,6 +220,7 @@ namespace LELEngine.Editor
 			projectPanel.Draw();
 			consolePanel.Draw();
 			projectSettingsWindow.Draw();
+			vfxGraphWindow.Draw();
 			ObjectPicker.Draw(this);
 			Edits.Flush();
 
@@ -241,7 +244,7 @@ namespace LELEngine.Editor
 				return;
 			}
 
-			bool continuous = PlayState == PlayState.Playing || SceneView.AlwaysRefresh || EditModeScriptsRunning() || UIElements.UIRuntime.AnyPanelAnimating;
+			bool continuous = PlayState == PlayState.Playing || SceneView.AlwaysRefresh || EditModeScriptsRunning() || UIElements.UIRuntime.AnyPanelAnimating || LELEngine.VFX.VfxRuntime.AnyActive;
 			SceneView.Render(continuous);
 			GameView.Render(continuous);
 			DebugDraw.Clear();
@@ -345,6 +348,7 @@ namespace LELEngine.Editor
 			AssetInspectors.Deselected();
 			ObjectPicker.Close();
 			AssetThumbnails.Clear();
+			vfxGraphWindow.Reset();
 			Undo.Clear();
 			Edits.Cancel();
 			InternalStorage.Clear();
@@ -737,6 +741,20 @@ namespace LELEngine.Editor
 		/// <summary>The UI Builder window when open (test hooks).</summary>
 		public UIBuilder.BuilderWindow UIBuilderWindow => uiBuilder != null && uiBuilder.IsOpen ? uiBuilder : null;
 
+		/// <summary>The VFX Graph window (dockable; open or not).</summary>
+		public VFX.VfxGraphWindow VfxGraphWindow => vfxGraphWindow;
+
+		/// <summary>Opens the VFX Graph window on a .vfx asset (null: the graph it last showed).</summary>
+		public void OpenVfxGraph(string assetPath)
+		{
+			if (Project == null)
+			{
+				return;
+			}
+
+			vfxGraphWindow.Show(assetPath);
+		}
+
 		/// <summary>Opens the UI Builder window (creating it on first use) and loads the asset when given.</summary>
 		public void OpenUIBuilder(string assetPath)
 		{
@@ -1026,6 +1044,7 @@ namespace LELEngine.Editor
 			if (ImGui.BeginMenu("Window"))
 			{
 				if (ImGui.MenuItem("UI Builder", "", uiBuilder != null && uiBuilder.IsOpen)) OpenUIBuilder(null);
+				if (ImGui.MenuItem("VFX Graph", "", vfxGraphWindow.Open)) OpenVfxGraph(null);
 				ImGui.EndMenu();
 			}
 
@@ -1154,6 +1173,20 @@ namespace LELEngine.Editor
 			}
 
 			ImGui.Separator();
+			if (ImGui.MenuItem("Visual Effect"))
+			{
+				CreateObject("Visual Effect", go =>
+				{
+					var effect = go.AddComponent<LELEngine.VFX.VisualEffect>();
+					string first = AssetDatabase.FindAssets(typeof(LELEngine.VFX.VfxGraph)).Count > 0 ? AssetDatabase.FindAssets(typeof(LELEngine.VFX.VfxGraph))[0] : null;
+					if (first != null)
+					{
+						effect.visualEffectAsset = LELEngine.VFX.VfxGraph.Load(first);
+					}
+				}, parent);
+			}
+
+			ImGui.Separator();
 			if (ImGui.MenuItem("Camera")) CreateObject("Camera", go => go.AddComponent<Camera>(), parent);
 			if (ImGui.MenuItem("Directional Light"))
 			{
@@ -1215,6 +1248,20 @@ namespace LELEngine.Editor
 
 			bool ctrl = io.KeyCtrl;
 			bool shift = io.KeyShift;
+			if (vfxGraphWindow.IsFocused)
+			{
+				// The graph window handles save, duplicate and delete itself; undo / redo stay global.
+				if (ctrl && ImGui.IsKeyPressed(ImGuiKey.Z, false))
+				{
+					if (shift) RedoLast();
+					else UndoLast();
+				}
+				else if (ctrl && ImGui.IsKeyPressed(ImGuiKey.Y, false)) RedoLast();
+				else if (ctrl && ImGui.IsKeyPressed(ImGuiKey.P, false)) TogglePlay();
+
+				return;
+			}
+
 			if (ctrl && ImGui.IsKeyPressed(ImGuiKey.S, false))
 			{
 				if (shift) SaveSceneAs();

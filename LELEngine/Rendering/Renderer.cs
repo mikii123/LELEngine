@@ -89,6 +89,7 @@ namespace LELEngine.Rendering
 		/// </summary>
 		public void AddDefaultPasses()
 		{
+			AddPass(new VfxSimulationPass());
 			AddPass(new ShadowPass());
 			AddPass(new GlobalDistanceFieldPass());
 			AddPass(new SurfaceCachePass());
@@ -98,6 +99,7 @@ namespace LELEngine.Rendering
 			AddPass(new GIResolvePass());
 			AddPass(new ScreenProbeGatherPass());
 			AddPass(new OpaquePass());
+			AddPass(new VfxOpaquePass());
 			AddPass(new SkyboxPass());
 			AddPass(new TransparentPass());
 			AddPass(new PostRenderCallbackPass());
@@ -377,6 +379,7 @@ namespace LELEngine.Rendering
 			}
 			passes.Clear();
 			GpuScene.Dispose();
+			VFX.VfxRuntime.ReleaseRenderer(this);
 
 			SceneTarget?.Delete();
 			dumpTarget?.Delete();

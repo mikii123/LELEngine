@@ -8,7 +8,8 @@ namespace LELEngine.Editor
 	///     select=ObjectName, addcomponent=ObjectName;Type.Name, playframe=N, stopframe=N, saveframe=N,
 	///     touchscript=N;path (rewrites a script file at frame N to trigger a rebuild), buildgame=N;outputFolder,
 	///     focusscene=N, nudgecamera=N, dumpview=f1,f2,...;folder, reportframes=f1,f2,..., focuswindow=N;Name,
-	///     maximize=N, restore=N, grow=N, slowframes=ms, bakenav=N, projectsettings=N;Tab.
+	///     maximize=N, restore=N, grow=N, slowframes=ms, bakenav=N, projectsettings=N;Tab,
+	///     createvfx=N;asset (writes the default VFX graph and opens it), vfxgraph=N;asset (opens the VFX Graph window).
 	/// </summary>
 	internal sealed class TestHooks
 	{
@@ -181,6 +182,32 @@ namespace LELEngine.Editor
 			if (values.TryGetValue("reportframes", out string report) && Array.IndexOf(report.Split(','), frame.ToString()) >= 0)
 			{
 				Debug.Log($"[Test] Frame {frame}: scene view rendered {editor.SceneView.ViewRenderer?.Renderer.FrameIndex ?? 0}, game view {editor.GameView.ViewRenderer?.Renderer.FrameIndex ?? 0}");
+			}
+
+			// createvfx=N;asset writes the default graph to the asset path at frame N and opens it in the VFX Graph window.
+			if (values.TryGetValue("createvfx", out string createVfx))
+			{
+				string[] parts = createVfx.Split(';');
+				if (parts.Length == 2 && int.TryParse(parts[0], out int at) && at == frame)
+				{
+					LELEngine.VFX.VfxGraph graph = LELEngine.VFX.VfxGraphBuilder.CreateDefault(System.IO.Path.GetFileNameWithoutExtension(parts[1]));
+					graph.Save(parts[1]);
+					AssetDatabase.Refresh(true);
+					editor.NotifyAssetsChanged();
+					editor.OpenVfxGraph(parts[1]);
+					editor.CreateObject("Visual Effect", go => go.AddComponent<LELEngine.VFX.VisualEffect>().visualEffectAsset = LELEngine.VFX.VfxGraph.Load(parts[1]));
+					Debug.Log("[Test] Created " + parts[1]);
+				}
+			}
+
+			// vfxgraph=N;asset opens the VFX Graph window on the asset at frame N (vfxgraph=N alone opens it empty).
+			if (values.TryGetValue("vfxgraph", out string vfxGraph))
+			{
+				string[] parts = vfxGraph.Split(';');
+				if (parts.Length >= 1 && int.TryParse(parts[0], out int at) && at == frame)
+				{
+					editor.OpenVfxGraph(parts.Length > 1 ? parts[1] : null);
+				}
 			}
 
 			// focusscene=N: Scene tab to the front at frame N; nudgecamera=N: turn the scene camera by 20 degrees.

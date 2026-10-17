@@ -76,6 +76,16 @@ namespace LELEngine.Editor
 
 				DrawFileInfo(absolute);
 			}
+			else if (type == typeof(LELEngine.VFX.VfxGraph))
+			{
+				if (ImGui.Button("Open in VFX Graph", new NVector2(-1, 0)))
+				{
+					context.Editor.OpenVfxGraph(assetPath);
+				}
+
+				DrawVfxGraph(assetPath);
+				DrawFileInfo(absolute);
+			}
 			else if (assetPath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
 			{
 				if (ImGui.Button("Open Script", new NVector2(-1, 0)))
@@ -123,6 +133,7 @@ namespace LELEngine.Editor
 		private static string Kind(string assetPath, Type type)
 		{
 			if (type == typeof(ShaderProgram)) return "Shader";
+			if (type == typeof(LELEngine.VFX.VfxGraph)) return "Visual Effect Graph";
 			if (TextureAssets.IsImageFile(assetPath))
 			{
 				var importer = AssetDatabase.GetMeta(assetPath).importer as TextureImporter ?? TextureImporter.CreateDefault(assetPath);
@@ -179,6 +190,33 @@ namespace LELEngine.Editor
 			}
 
 			DrawFileInfo(absolute);
+		}
+
+		private static void DrawVfxGraph(string assetPath)
+		{
+			try
+			{
+				LELEngine.VFX.VfxGraph graph = LELEngine.VFX.VfxGraph.Load(assetPath);
+				int contexts = graph.GetContexts().Count;
+				ImGui.Text($"{contexts} contexts, {graph.Nodes.Count - contexts} blocks and operators, {graph.Properties.Count} properties");
+				foreach (LELEngine.VFX.VfxProperty property in graph.Properties)
+				{
+					if (property.Exposed)
+					{
+						ImGui.BulletText(property.Name + "  (" + property.Value.Type + ")  " + property.Value);
+					}
+				}
+
+				LELEngine.VFX.VfxProgramSet programs = LELEngine.VFX.VfxRuntime.PeekPrograms(graph);
+				if (programs != null)
+				{
+					ImGui.TextDisabled(programs.HasErrors ? "Does not compile (open the graph for the messages)" : "Compiled: " + (programs.Compiled?.Systems.Count ?? 0) + " systems");
+				}
+			}
+			catch (Exception e)
+			{
+				ImGui.TextColored(EditorStyle.Error, "Cannot load: " + e.Message);
+			}
 		}
 
 		private static void DrawMesh(string assetPath)

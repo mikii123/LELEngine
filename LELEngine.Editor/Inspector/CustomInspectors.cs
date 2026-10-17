@@ -17,7 +17,8 @@ namespace LELEngine.Editor
 		private static readonly Dictionary<Type, Func<Behaviour, InspectorContext, bool>> drawers = new Dictionary<Type, Func<Behaviour, InspectorContext, bool>>
 		{
 			{ typeof(NavMeshSurface), (component, context) => NavMeshSurfaceInspector.Draw((NavMeshSurface)component, context) },
-			{ typeof(NavMeshAgent), (component, context) => NavMeshAgentInspector.Draw((NavMeshAgent)component, context) }
+			{ typeof(NavMeshAgent), (component, context) => NavMeshAgentInspector.Draw((NavMeshAgent)component, context) },
+			{ typeof(LELEngine.VFX.VisualEffect), (component, context) => VFX.VisualEffectInspector.Draw((LELEngine.VFX.VisualEffect)component, context) }
 		};
 
 		#endregion
