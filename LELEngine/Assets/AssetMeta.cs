@@ -27,7 +27,7 @@ namespace LELEngine
 		#region PublicFields
 
 		/// <summary>Bumped by the editor on every Apply, so loaded assets can tell their settings changed.</summary>
-		public int version;
+		[HideInInspector] public int version;
 
 		#endregion
 	}

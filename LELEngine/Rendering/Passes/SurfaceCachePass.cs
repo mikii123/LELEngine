@@ -91,7 +91,7 @@ namespace LELEngine.Rendering.Passes
 
 				// Captures are transform independent (scaled-local space) and emission intensity is applied at
 				// lighting time, so a card set is recaptured only when the material inputs it stores change.
-				long key = CaptureKey(o.Renderer.Material);
+				long key = CaptureKey(o.Renderer);
 				if (o.Cards.Captured && o.Cards.CaptureKey == key)
 				{
 					continue;
@@ -109,8 +109,7 @@ namespace LELEngine.Rendering.Passes
 				}
 
 				capture.SetVector3("objectScale", o.Field.Scale);
-				SetMaterialUniforms(o.Renderer.Material);
-
+				MeshRenderer renderer = o.Renderer;
 				for (int i = 0; i < o.Cards.Cards.Length; i++)
 				{
 					SurfaceCard card = o.Cards.Cards[i];
@@ -118,7 +117,19 @@ namespace LELEngine.Rendering.Passes
 					GL.Viewport(card.X, card.Y, card.Width, card.Height);
 					capture.SetMatrix4("cardViewProjection", card.ViewProjection);
 					capture.SetInt("cardIndex", o.Cards.FirstCardIndex + i);
-					o.Renderer.RenderWith(capture);
+
+					// Every opaque sub-mesh with its own material inputs.
+					for (int s = 0; s < renderer.SubMeshCount; s++)
+					{
+						Material material = renderer.GetMaterial(s);
+						if (material == null || material.IsTransparent)
+						{
+							continue;
+						}
+
+						SetMaterialUniforms(material);
+						renderer.RenderSubMeshWith(capture, s);
+					}
 				}
 
 				o.Cards.Captured = true;
@@ -128,6 +139,25 @@ namespace LELEngine.Rendering.Passes
 			{
 				GL.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
 				GLState.SetCull(true);
+			}
+		}
+
+		// Hash of the material inputs of every opaque sub-mesh, baked into the cards.
+		private static long CaptureKey(MeshRenderer renderer)
+		{
+			unchecked
+			{
+				long hash = 17;
+				for (int s = 0; s < renderer.SubMeshCount; s++)
+				{
+					Material material = renderer.GetMaterial(s);
+					if (material != null && !material.IsTransparent)
+					{
+						hash = hash * 31 + CaptureKey(material);
+					}
+				}
+
+				return hash;
 			}
 		}
 

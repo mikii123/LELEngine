@@ -114,11 +114,13 @@ namespace LELEngine.Editor
 
 			// 4. Assets (everything but the scripts; the meta files keep the GUIDs the scenes reference). The editor's
 			//    readable JSON documents (scenes, materials, meta files, physics materials) become binary: the player
-			//    loads them without parsing text, and no type has to be loaded to convert them.
+			//    loads them without parsing text, and no type has to be loaded to convert them. Model files (.obj, .fbx,
+			//    ...) are written as their imported data under their own names.
 			log("Copying assets...");
 			string data = Path.Combine(output, "Data");
 			int copied = 0;
 			int converted = 0;
+			int models = 0;
 			foreach (string file in Directory.GetFiles(project.AssetsPath, "*", SearchOption.AllDirectories))
 			{
 				string relative = Path.GetRelativePath(project.AssetsPath, file);
@@ -128,7 +130,27 @@ namespace LELEngine.Editor
 				}
 
 				string target = Path.Combine(data, relative);
-				if (Documents.IsDocumentFile(file))
+				if (ModelAssets.IsModelFile(file))
+				{
+					// Models ship imported (the binary under the model's own name): the player needs no importer.
+					try
+					{
+						ModelData model = ModelAssets.LoadData(AssetDatabase.ToAssetPath(file));
+						Directory.CreateDirectory(Path.GetDirectoryName(target));
+						using (FileStream stream = File.Create(target))
+						{
+							ModelAssets.Write(stream, model, null);
+						}
+
+						models++;
+					}
+					catch (Exception e)
+					{
+						log("Error: " + relative + " could not be imported (" + e.Message + ").");
+						return false;
+					}
+				}
+				else if (Documents.IsDocumentFile(file))
 				{
 					try
 					{
@@ -149,7 +171,7 @@ namespace LELEngine.Editor
 				copied++;
 			}
 
-			log($"Converted {converted} documents to binary.");
+			log($"Converted {converted} documents to binary, imported {models} models.");
 
 			// 5. Project settings (physics, lighting quality), binary like the assets; the defaults when the project has none.
 			string projectSettingsTarget = Path.Combine(output, ProjectSettings.FileName);

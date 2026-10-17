@@ -1,14 +1,20 @@
+using System.IO;
 using OpenTK.Mathematics;
 
 namespace LELEngine.Editor
 {
-	/// <summary>Content of a new scene and of the GameObject menu's primitives (uses the project's starter assets).</summary>
+	/// <summary>
+	///     Content of a new scene and of the GameObject menu's primitives: instances of the project's starter models
+	///     (<see cref="Model.Instantiate" />, with the import's materials: the default material for the starter meshes).
+	/// </summary>
 	internal static class DefaultScene
 	{
 		#region PublicFields
 
-		public const string DefaultMaterial = "Default.material";
-		public const string GroundMaterial = "Ground.material";
+		public const string CubeModel = "Meshes/Cube.obj";
+		public const string SphereModel = "Meshes/Sphere.obj";
+		public const string QuadModel = "Meshes/Quad.obj";
+		public const string GroundMaterial = "Materials/Ground.material";
 
 		#endregion
 
@@ -48,22 +54,23 @@ namespace LELEngine.Editor
 			sun.Color = new Color4(1f, 0.96f, 0.9f, 1f);
 			sun.Strength = 1.1f;
 
-			GameObject ground = scene.CreateGameObject("Ground");
+			GameObject ground = Instantiate(scene, CubeModel, "Ground");
 			ground.transform.position = new Vector3(0f, -0.1f, 0f);
 			ground.transform.localScale = new Vector3(10f, 0.1f, 10f);
-			// A darker ground than the default material: objects stand out against it.
-			MeshRenderer groundRenderer = AddMesh(ground, "Cube.obj");
-			groundRenderer.IsStatic = true;
-			string groundMaterial = AssetDatabase.Resolve(GroundMaterial, "Materials");
-			if (groundMaterial != null)
+			MeshRenderer groundRenderer = ground.GetComponent<MeshRenderer>();
+			if (groundRenderer != null)
 			{
-				groundRenderer.SetMaterial(groundMaterial);
+				groundRenderer.IsStatic = true;
+				// A darker ground than the default material: objects stand out against it.
+				if (File.Exists(AssetDatabase.ToAbsolute(GroundMaterial)))
+				{
+					groundRenderer.SetMaterials(InternalStorage.GetOrCreateMaterial(GroundMaterial));
+				}
 			}
 
-			GameObject cube = scene.CreateGameObject("Cube");
+			GameObject cube = Instantiate(scene, CubeModel, "Cube");
 			cube.transform.position = new Vector3(0f, 0.5f, 0f);
 			cube.transform.localScale = new Vector3(0.5f, 0.5f, 0.5f);
-			AddMesh(cube, "Cube.obj");
 
 			return scene;
 		}
@@ -72,10 +79,10 @@ namespace LELEngine.Editor
 		public static void CreateAsset(ProjectInfo project, string assetPath)
 		{
 			Scene scene = Create(project);
-			scene.Name = System.IO.Path.GetFileNameWithoutExtension(assetPath);
+			scene.Name = Path.GetFileNameWithoutExtension(assetPath);
 			scene.Path = assetPath;
 			string file = AssetDatabase.ToAbsolute(assetPath);
-			System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(file));
+			Directory.CreateDirectory(Path.GetDirectoryName(file));
 			Serialization.SceneSerializer.Save(scene, file);
 			AssetDatabase.EnsureMeta(assetPath);
 			if (!project.BuildScenes.Contains(assetPath))
@@ -87,27 +94,33 @@ namespace LELEngine.Editor
 			scene.Unload();
 		}
 
-		/// <summary>Adds a MeshRenderer with the given project mesh (file name) and the default material.</summary>
-		public static MeshRenderer AddMesh(GameObject go, string meshFile)
+		/// <summary>
+		///     An instance of a project model named <paramref name="name" /> under <paramref name="parent" />; an empty
+		///     GameObject when the project no longer has the model (starter assets removed).
+		/// </summary>
+		public static GameObject Instantiate(Scene scene, string modelPath, string name, Transform parent = null)
 		{
-			MeshRenderer renderer = go.AddComponent<MeshRenderer>();
-			string mesh = AssetDatabase.Resolve(meshFile, "Meshes");
-			if (mesh != null)
+			GameObject go = null;
+			if (File.Exists(AssetDatabase.ToAbsolute(modelPath)))
 			{
-				renderer.SetMesh(mesh);
+				go = ModelAssets.Load(modelPath).Instantiate(scene, parent);
 			}
 			else
 			{
-				Debug.LogWarning($"[Editor] '{meshFile}' is not in the project (starter assets were removed?)");
+				Debug.LogWarning($"[Editor] '{modelPath}' is not in the project (starter assets were removed?)");
 			}
 
-			string material = AssetDatabase.Resolve(DefaultMaterial, "Materials");
-			if (material != null)
+			if (go == null)
 			{
-				renderer.SetMaterial(material);
+				go = scene.CreateGameObject(name);
+				if (parent != null)
+				{
+					go.transform.SetParent(parent, false);
+				}
 			}
 
-			return renderer;
+			go.Name = name;
+			return go;
 		}
 
 		#endregion

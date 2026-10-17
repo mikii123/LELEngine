@@ -26,6 +26,10 @@ namespace LELEngine.Editor
 		private bool focusRename;
 		private int renameAge;
 
+		// A model file dropped from the project panel this frame, and the object it goes under.
+		private string droppedModel;
+		private Transform droppedModelParent;
+
 		#endregion
 
 		#region Constructors
@@ -102,6 +106,7 @@ namespace LELEngine.Editor
 					deferredParent = null;
 				}
 
+				AcceptModel(null);
 				ImGui.EndDragDropTarget();
 			}
 
@@ -114,6 +119,13 @@ namespace LELEngine.Editor
 			if (deferredReparent != null)
 			{
 				Reparent(deferredReparent, deferredParent);
+			}
+
+			if (droppedModel != null)
+			{
+				editor.InstantiateModel(droppedModel, droppedModelParent);
+				droppedModel = null;
+				droppedModelParent = null;
 			}
 		}
 
@@ -203,6 +215,7 @@ namespace LELEngine.Editor
 					deferredParent = go.transform;
 				}
 
+				AcceptModel(go.transform);
 				ImGui.EndDragDropTarget();
 			}
 
@@ -248,6 +261,16 @@ namespace LELEngine.Editor
 		{
 			ImGuiPayloadPtr payload = ImGui.AcceptDragDropPayload(DragType);
 			return !payload.IsNull;
+		}
+
+		/// <summary>A model file from the project panel: built under <paramref name="parent" /> after the tree is drawn.</summary>
+		private void AcceptModel(Transform parent)
+		{
+			if (!ImGui.AcceptDragDropPayload(ProjectPanel.DragType).IsNull && ModelAssets.IsModelFile(ProjectPanel.DraggedAsset))
+			{
+				droppedModel = ProjectPanel.DraggedAsset;
+				droppedModelParent = parent;
+			}
 		}
 
 		private void Reparent(GameObject child, Transform parent)

@@ -438,12 +438,11 @@ namespace TestGame.Scenes
 
 			Box(scene, "Slab", "LitBlue.material", new Vector3(0f, 0.25f, -3f), new Vector3(2.5f, 0.25f, 1f));
 
-			GameObject sphere = scene.CreateGameObject("Sphere");
+			GameObject sphere = SceneModels.Instantiate(scene, SceneModels.Sphere, "Sphere");
 			sphere.transform.position = new Vector3(0f, 1.75f, 5f);
 			sphere.transform.scale = Vector3.One * 1.25f;
-			MeshRenderer sphereRenderer = sphere.AddComponent<MeshRenderer>();
-			sphereRenderer.SetMaterial("LitYellow.material");
-			sphereRenderer.SetMesh("sphere.obj");
+			MeshRenderer sphereRenderer = sphere.GetComponent<MeshRenderer>();
+			sphereRenderer.SetMaterials(SceneModels.Material("LitYellow.material"));
 			sphereRenderer.IsStatic = markStatic;
 
 			// Pillars under the ceiling edge; long thin shadows are a good test for bias settings.
@@ -476,12 +475,11 @@ namespace TestGame.Scenes
 
 			Box(scene, "GlassTable", "GlassAmber.material", new Vector3(-3.2f, 0.9f, -6.3f), new Vector3(1.2f, 0.02f, 0.7f));
 
-			GameObject sphere = scene.CreateGameObject("GlassSphere");
+			GameObject sphere = SceneModels.Instantiate(scene, SceneModels.Sphere, "GlassSphere");
 			sphere.transform.position = new Vector3(-2.5f, 1.1f, -2.5f);
 			sphere.transform.scale = Vector3.One * 0.9f;
-			MeshRenderer renderer = sphere.AddComponent<MeshRenderer>();
-			renderer.SetMaterial("GlassRed.material");
-			renderer.SetMesh("sphere.obj");
+			MeshRenderer renderer = sphere.GetComponent<MeshRenderer>();
+			renderer.SetMaterials(SceneModels.Material("GlassRed.material"));
 		}
 
 		private static void BuildLight(Scene scene)
@@ -494,12 +492,11 @@ namespace TestGame.Scenes
 			sun.Strength = 1.25f;
 
 			// Visible sun disc far along the opposite of the light direction. Not a shadow caster, not voxelized.
-			GameObject sunDisc = scene.CreateGameObject("SunDisc");
+			GameObject sunDisc = SceneModels.Instantiate(scene, SceneModels.Sphere, "SunDisc");
 			sunDisc.transform.position = -lightDirection * 300f;
 			sunDisc.transform.scale = Vector3.One * 12f;
-			MeshRenderer sunRenderer = sunDisc.AddComponent<MeshRenderer>();
-			sunRenderer.SetMaterial("Sun.material");
-			sunRenderer.SetMesh("sphere.obj");
+			MeshRenderer sunRenderer = sunDisc.GetComponent<MeshRenderer>();
+			sunRenderer.SetMaterials(SceneModels.Material("Sun.material"));
 			sunRenderer.CastShadows = false;
 			sunRenderer.ReceiveShadows = false;
 			sunRenderer.ContributesToGI = false;
@@ -514,7 +511,7 @@ namespace TestGame.Scenes
 			EmissiveOrbiter[] emitters = new EmissiveOrbiter[colors.Length + 2];
 			for (int i = 0; i < colors.Length; i++)
 			{
-				EmissiveOrbiter orbiter = Emitter(scene, "Orb" + i, "sphere.obj", Vector3.One * 0.6f);
+				EmissiveOrbiter orbiter = Emitter(scene, "Orb" + i, SceneModels.Sphere, Vector3.One * 0.6f);
 				orbiter.Center = orbitCenter;
 				orbiter.Radius = 6f;
 				orbiter.Height = 1.4f;
@@ -530,7 +527,7 @@ namespace TestGame.Scenes
 			}
 
 			// Static ceiling lamp panel, slowly breathing.
-			EmissiveOrbiter lamp = Emitter(scene, "CeilingLamp", "cube.obj", new Vector3(2f, 0.08f, 1f));
+			EmissiveOrbiter lamp = Emitter(scene, "CeilingLamp", SceneModels.Cube, new Vector3(2f, 0.08f, 1f));
 			lamp.Center = new Vector3(0f, WallHeight - WallThickness - 0.1f, 5f);
 			lamp.Radius = 0f;
 			lamp.Height = 0f;
@@ -542,7 +539,7 @@ namespace TestGame.Scenes
 			emitters[colors.Length] = lamp;
 
 			// Low wall-washer strip along the back wall.
-			EmissiveOrbiter strip = Emitter(scene, "FloorStrip", "cube.obj", new Vector3(6f, 0.06f, 0.15f));
+			EmissiveOrbiter strip = Emitter(scene, "FloorStrip", SceneModels.Cube, new Vector3(6f, 0.06f, 0.15f));
 			strip.Center = new Vector3(0f, 0.1f, RoomHalfSize - 0.6f);
 			strip.Radius = 0f;
 			strip.Height = 0f;
@@ -595,38 +592,35 @@ namespace TestGame.Scenes
 			float spacing = RoomHalfSize * 1.8f / side;
 			for (int i = 0; i < count; i++)
 			{
-				GameObject go = scene.CreateGameObject("Stress" + i);
+				GameObject go = SceneModels.Instantiate(scene, SceneModels.Cube, "Stress" + i);
 				go.transform.position = new Vector3(-RoomHalfSize * 0.9f + (i % side + 0.5f) * spacing, 0.06f, -RoomHalfSize * 0.9f + (i / side + 0.5f) * spacing);
 				go.transform.scale = new Vector3(0.06f);
 
-				MeshRenderer renderer = go.AddComponent<MeshRenderer>();
-				renderer.SetMaterial("LitGray.material");
-				renderer.SetMesh("cube.obj");
+				MeshRenderer renderer = go.GetComponent<MeshRenderer>();
+				renderer.SetMaterials(SceneModels.Material("LitGray.material"));
 				renderer.ContributesToGI = false;
 			}
 		}
 
 		private static GameObject Box(Scene scene, string name, string material, Vector3 center, Vector3 halfSize)
 		{
-			GameObject go = scene.CreateGameObject(name);
+			GameObject go = SceneModels.Instantiate(scene, SceneModels.Cube, name);
 			go.transform.position = center;
 			go.transform.scale = halfSize;
 
-			MeshRenderer renderer = go.AddComponent<MeshRenderer>();
-			renderer.SetMaterial(material);
-			renderer.SetMesh("cube.obj");
+			MeshRenderer renderer = go.GetComponent<MeshRenderer>();
+			renderer.SetMaterials(SceneModels.Material(material));
 			renderer.IsStatic = markStatic;
 			return go;
 		}
 
-		private static EmissiveOrbiter Emitter(Scene scene, string name, string mesh, Vector3 halfSize)
+		private static EmissiveOrbiter Emitter(Scene scene, string name, string model, Vector3 halfSize)
 		{
-			GameObject go = scene.CreateGameObject(name);
+			GameObject go = SceneModels.Instantiate(scene, model, name);
 			go.transform.scale = halfSize;
 
-			MeshRenderer renderer = go.AddComponent<MeshRenderer>();
-			renderer.SetMaterial("Emitter.material");
-			renderer.SetMesh(mesh);
+			MeshRenderer renderer = go.GetComponent<MeshRenderer>();
+			renderer.SetMaterials(SceneModels.Material("Emitter.material"));
 			renderer.CastShadows = false;
 
 			return go.AddComponent<EmissiveOrbiter>();

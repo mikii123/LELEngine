@@ -1,0 +1,535 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Text;
+using OpenTK.Mathematics;
+using Silk.NET.Assimp;
+using AiMaterial = Silk.NET.Assimp.Material;
+using AiMesh = Silk.NET.Assimp.Mesh;
+using AiNode = Silk.NET.Assimp.Node;
+using AiScene = Silk.NET.Assimp.Scene;
+using AiTexture = Silk.NET.Assimp.Texture;
+using NMatrix4x4 = System.Numerics.Matrix4x4;
+
+namespace LELEngine.Editor
+{
+	/// <summary>
+	///     Imports model files with Assimp (Silk.NET.Assimp): triangulated, identical vertices joined, tangent space
+	///     computed, points and lines dropped. Every node becomes a <see cref="ModelNode" />; the meshes a node holds
+	///     become one mesh with a sub-mesh per Assimp mesh (each has one material). Materials are described from their
+	///     standard keys (base / diffuse color, opacity, emission, roughness or shininess) and their albedo and normal
+	///     maps: project files resolved next to the model, or textures embedded in the file. FBX files report their
+	///     unit (UnitScaleFactor) for the import's unit conversion.
+	/// </summary>
+	internal sealed unsafe class AssimpModelBackend : IModelImportBackend
+	{
+		#region PrivateFields
+
+		private static readonly string[] Formats = { ".fbx", ".gltf", ".glb", ".dae", ".3ds", ".blend", ".ply", ".stl" };
+
+		// aiPrimitiveType_POINT | aiPrimitiveType_LINE, aiComponent_NORMALS, AI_SCENE_FLAGS_INCOMPLETE.
+		private const int PointsAndLines = 0x1 | 0x2;
+		private const int NormalsComponent = 0x2;
+		private const uint IncompleteFlag = 0x1;
+
+		private Assimp assimp;
+
+		#endregion
+
+		#region PublicFields
+
+		public int Version => 1;
+
+		#endregion
+
+		#region PublicMethods
+
+		public bool CanImport(string extension)
+		{
+			return Array.IndexOf(Formats, extension) >= 0;
+		}
+
+		public ModelData Import(string assetPath, ModelImporter settings)
+		{
+			assimp ??= Assimp.GetApi();
+			string file = AssetDatabase.ToAbsolute(assetPath);
+			PostProcessSteps steps = PostProcessSteps.Triangulate | PostProcessSteps.JoinIdenticalVertices | PostProcessSteps.CalculateTangentSpace
+				| PostProcessSteps.SortByPrimitiveType | PostProcessSteps.FindDegenerates | PostProcessSteps.FindInvalidData
+				| PostProcessSteps.ValidateDataStructure | PostProcessSteps.GenerateUVCoords | PostProcessSteps.TransformUVCoords
+				| PostProcessSteps.GenerateSmoothNormals;
+			if (settings.normals == ModelNormals.Calculate)
+			{
+				steps |= PostProcessSteps.RemoveComponent;
+			}
+
+			if (settings.flipV)
+			{
+				steps |= PostProcessSteps.FlipUVs;
+			}
+
+			if (settings.optimizeMesh)
+			{
+				steps |= PostProcessSteps.ImproveCacheLocality;
+			}
+
+			PropertyStore* store = assimp.CreatePropertyStore();
+			AiScene* scene;
+			try
+			{
+				assimp.SetImportPropertyFloat(store, "PP_GSN_MAX_SMOOTHING_ANGLE", settings.smoothingAngle);
+				assimp.SetImportPropertyInteger(store, "PP_SBP_REMOVE", PointsAndLines);
+				assimp.SetImportPropertyInteger(store, "PP_RVC_FLAGS", NormalsComponent);
+				// No $AssimpFbx$ helper nodes for pivots: one node per FBX model.
+				assimp.SetImportPropertyInteger(store, "IMPORT_FBX_PRESERVE_PIVOTS", 0);
+				scene = assimp.ImportFileExWithProperties(file, (uint)steps, null, store);
+			}
+			finally
+			{
+				assimp.ReleasePropertyStore(store);
+			}
+
+			if (scene == null || scene->MRootNode == null || (scene->MFlags & IncompleteFlag) != 0)
+			{
+				string error = assimp.GetErrorStringS();
+				if (scene != null)
+				{
+					assimp.ReleaseImport(scene);
+				}
+
+				throw new InvalidDataException(string.IsNullOrEmpty(error) ? "Assimp could not read the file" : error);
+			}
+
+			try
+			{
+				return new Converter(assimp, scene, file).Convert(Path.GetFileNameWithoutExtension(assetPath));
+			}
+			finally
+			{
+				assimp.ReleaseImport(scene);
+			}
+		}
+
+		#endregion
+
+		#region NestedTypes
+
+		/// <summary>One import: the Assimp scene to <see cref="ModelData" />.</summary>
+		private sealed class Converter
+		{
+			private readonly Assimp assimp;
+			private readonly AiScene* scene;
+			private readonly string file;
+			private readonly ModelData data = new ModelData();
+			private readonly Dictionary<string, int> meshesByContent = new Dictionary<string, int>();
+			private readonly HashSet<string> meshNames = new HashSet<string>(StringComparer.Ordinal);
+
+			public Converter(Assimp assimp, AiScene* scene, string file)
+			{
+				this.assimp = assimp;
+				this.scene = scene;
+				this.file = file;
+			}
+
+			public ModelData Convert(string modelName)
+			{
+				for (uint i = 0; i < scene->MNumMaterials; i++)
+				{
+					data.Materials.Add(ReadMaterial(scene->MMaterials[i], (int)i, modelName));
+				}
+
+				Visit(scene->MRootNode, -1);
+				data.UnitScale = FileUnitScale();
+				return data;
+			}
+
+			// ------------------------------------------------------------ hierarchy
+
+			private void Visit(AiNode* node, int parent)
+			{
+				int index = data.Nodes.Count;
+				string name = node->MName.AsString;
+				var result = new ModelNode { Name = string.IsNullOrEmpty(name) ? "Node " + index : name, Parent = parent };
+				Decompose(node->MTransformation, result);
+				data.Nodes.Add(result);
+				if (node->MNumMeshes > 0)
+				{
+					result.Mesh = MeshOf(node, result.Name);
+				}
+
+				for (uint i = 0; i < node->MNumChildren; i++)
+				{
+					Visit(node->MChildren[i], index);
+				}
+			}
+
+			/// <summary>Assimp stores aiMatrix4x4 row-major with the translation in the 4th column.</summary>
+			private static void Decompose(NMatrix4x4 m, ModelNode node)
+			{
+				NMatrix4x4 rowVector = NMatrix4x4.Transpose(m);
+				if (NMatrix4x4.Decompose(rowVector, out System.Numerics.Vector3 scale, out System.Numerics.Quaternion rotation, out System.Numerics.Vector3 translation))
+				{
+					node.LocalPosition = new Vector3(translation.X, translation.Y, translation.Z);
+					node.LocalRotation = new Quaternion(rotation.X, rotation.Y, rotation.Z, rotation.W);
+					node.LocalScale = new Vector3(scale.X, scale.Y, scale.Z);
+				}
+				else
+				{
+					node.LocalPosition = new Vector3(rowVector.M41, rowVector.M42, rowVector.M43);
+				}
+			}
+
+			// ------------------------------------------------------------ meshes
+
+			/// <summary>The node's Assimp meshes as one mesh (a sub-mesh each); nodes sharing the same meshes share it.</summary>
+			private int MeshOf(AiNode* node, string nodeName)
+			{
+				var sources = new uint[node->MNumMeshes];
+				for (uint i = 0; i < node->MNumMeshes; i++)
+				{
+					sources[i] = node->MMeshes[i];
+				}
+
+				string key = string.Join(",", sources);
+				if (meshesByContent.TryGetValue(key, out int existing))
+				{
+					return existing;
+				}
+
+				var vertices = new List<Vertex>();
+				var indices = new List<uint>();
+				var subMeshes = new List<SubMesh>();
+				var materials = new List<int>();
+				bool hasTangents = true;
+				foreach (uint source in sources)
+				{
+					AiMesh* mesh = scene->MMeshes[source];
+					if (mesh->MNumFaces == 0)
+					{
+						continue;
+					}
+
+					uint baseVertex = (uint)vertices.Count;
+					hasTangents &= mesh->MTangents != null && mesh->MBitangents != null && mesh->MTextureCoords[0] != null;
+					for (uint v = 0; v < mesh->MNumVertices; v++)
+					{
+						vertices.Add(ReadVertex(mesh, v));
+					}
+
+					int first = indices.Count;
+					for (uint f = 0; f < mesh->MNumFaces; f++)
+					{
+						Face face = mesh->MFaces[f];
+						if (face.MNumIndices != 3)
+						{
+							continue;
+						}
+
+						indices.Add(baseVertex + face.MIndices[0]);
+						indices.Add(baseVertex + face.MIndices[1]);
+						indices.Add(baseVertex + face.MIndices[2]);
+					}
+
+					subMeshes.Add(new SubMesh(first, indices.Count - first));
+					materials.Add(mesh->MMaterialIndex < data.Materials.Count ? (int)mesh->MMaterialIndex : -1);
+				}
+
+				if (subMeshes.Count == 0)
+				{
+					meshesByContent[key] = -1;
+					return -1;
+				}
+
+				Vertex[] vertexArray = vertices.ToArray();
+				uint[] indexArray = indices.ToArray();
+				var result = new ModelMeshData
+				{
+					Name = UniqueName(nodeName),
+					Vertices = hasTangents ? vertexArray : LELEngine.Mesh.WithTangents(vertexArray, indexArray),
+					Indices = indexArray,
+					SubMeshes = subMeshes.ToArray(),
+					Materials = materials.ToArray()
+				};
+				data.Meshes.Add(result);
+				meshesByContent[key] = data.Meshes.Count - 1;
+				return data.Meshes.Count - 1;
+			}
+
+			private static Vertex ReadVertex(AiMesh* mesh, uint v)
+			{
+				System.Numerics.Vector3 p = mesh->MVertices[v];
+				Vector3 normal = mesh->MNormals != null ? ToVector(mesh->MNormals[v]) : Vector3.UnitY;
+				Vector3 tangent = mesh->MTangents != null ? ToVector(mesh->MTangents[v]) : Vector3.UnitX;
+				Vector3 bitangent = mesh->MBitangents != null ? ToVector(mesh->MBitangents[v]) : Vector3.UnitZ;
+				System.Numerics.Vector3* uvs = mesh->MTextureCoords[0];
+				Vector2 uv = uvs != null ? new Vector2(uvs[v].X, uvs[v].Y) : Vector2.Zero;
+				System.Numerics.Vector4* colors = mesh->MColors[0];
+				Color4 color = colors != null ? new Color4(colors[v].X, colors[v].Y, colors[v].Z, colors[v].W) : Color4.White;
+				return new Vertex(new Vector3(p.X, p.Y, p.Z), normal, uv, tangent, bitangent, color);
+			}
+
+			private static Vector3 ToVector(System.Numerics.Vector3 v)
+			{
+				return new Vector3(v.X, v.Y, v.Z);
+			}
+
+			private string UniqueName(string name)
+			{
+				string candidate = string.IsNullOrEmpty(name) ? "Mesh" : name;
+				for (int n = 2; !meshNames.Add(candidate); n++)
+				{
+					candidate = name + " " + n;
+				}
+
+				return candidate;
+			}
+
+			// ------------------------------------------------------------ materials
+
+			private ModelMaterial ReadMaterial(AiMaterial* material, int index, string modelName)
+			{
+				var result = new ModelMaterial { Name = MaterialName(material, index, modelName) };
+				System.Numerics.Vector4 color;
+				if (assimp.GetMaterialColor(material, "$clr.base", 0, 0, &color) == Return.Success
+					|| assimp.GetMaterialColor(material, "$clr.diffuse", 0, 0, &color) == Return.Success)
+				{
+					result.Color = new Vector4(color.X, color.Y, color.Z, color.W);
+				}
+
+				// Some exporters write opacity 0 for opaque materials; such a value is ignored.
+				float opacity = Float(material, "$mat.opacity", 1f);
+				if (opacity > 0.001f && opacity < 1f)
+				{
+					result.Color.W *= opacity;
+				}
+
+				if (assimp.GetMaterialColor(material, "$clr.emissive", 0, 0, &color) == Return.Success && (color.X > 0f || color.Y > 0f || color.Z > 0f))
+				{
+					result.Emissive = new Vector4(color.X, color.Y, color.Z, Float(material, "$mat.emissiveIntensity", 1f));
+				}
+
+				float roughness = Float(material, "$mat.roughnessFactor", -1f);
+				if (roughness < 0f)
+				{
+					float shininess = Float(material, "$mat.shininess", -1f);
+					roughness = shininess > 0f ? MathF.Sqrt(2f / (shininess + 2f)) : 0.6f;
+				}
+
+				result.Roughness = Math.Clamp(roughness, 0.02f, 1f);
+				result.AlbedoMap = Texture(material, TextureType.BaseColor) ?? Texture(material, TextureType.Diffuse);
+				result.NormalMap = Texture(material, TextureType.Normals) ?? Texture(material, TextureType.NormalCamera) ?? Texture(material, TextureType.Height);
+				return result;
+			}
+
+			private string MaterialName(AiMaterial* material, int index, string modelName)
+			{
+				AssimpString name;
+				if (assimp.GetMaterialString(material, "?mat.name", 0, 0, &name) == Return.Success && name.Length > 0)
+				{
+					return name.AsString;
+				}
+
+				return modelName + " Material " + index;
+			}
+
+			private float Float(AiMaterial* material, string key, float fallback)
+			{
+				float value;
+				uint count = 1;
+				return assimp.GetMaterialFloatArray(material, key, 0, 0, &value, &count) == Return.Success && count > 0 ? value : fallback;
+			}
+
+			private ModelTexture Texture(AiMaterial* material, TextureType type)
+			{
+				AssimpString path;
+				if (assimp.GetMaterialTexture(material, type, 0, &path, null, null, null, null, null, null) != Return.Success)
+				{
+					return null;
+				}
+
+				string reference = path.AsString;
+				if (string.IsNullOrEmpty(reference))
+				{
+					return null;
+				}
+
+				AiTexture* embedded = Embedded(reference);
+				if (embedded != null)
+				{
+					return EmbeddedTexture(embedded, reference);
+				}
+
+				string assetPath = FindTextureFile(reference);
+				if (assetPath == null)
+				{
+					Debug.LogWarning($"[Model] {Path.GetFileName(file)}: texture '{reference}' not found in the project");
+					return null;
+				}
+
+				return new ModelTexture { AssetPath = assetPath, Name = Path.GetFileNameWithoutExtension(assetPath) };
+			}
+
+			/// <summary>"*n" names the n-th embedded texture; FBX files name embedded textures by their file name.</summary>
+			private AiTexture* Embedded(string reference)
+			{
+				if (reference[0] == '*' && int.TryParse(reference.AsSpan(1), out int index))
+				{
+					return index >= 0 && index < scene->MNumTextures ? scene->MTextures[index] : null;
+				}
+
+				string fileName = Path.GetFileName(reference.Replace('\\', '/'));
+				for (uint i = 0; i < scene->MNumTextures; i++)
+				{
+					AiTexture* texture = scene->MTextures[i];
+					if (string.Equals(Path.GetFileName(texture->MFilename.AsString.Replace('\\', '/')), fileName, StringComparison.OrdinalIgnoreCase))
+					{
+						return texture;
+					}
+				}
+
+				return null;
+			}
+
+			/// <summary>A compressed embedded image as is; raw texels as an uncompressed TGA.</summary>
+			private static ModelTexture EmbeddedTexture(AiTexture* texture, string reference)
+			{
+				string name = Path.GetFileNameWithoutExtension(texture->MFilename.AsString.Replace('\\', '/'));
+				if (string.IsNullOrEmpty(name))
+				{
+					name = "Texture" + reference.TrimStart('*');
+				}
+
+				if (texture->MHeight == 0)
+				{
+					var bytes = new byte[texture->MWidth];
+					new ReadOnlySpan<byte>(texture->PcData, bytes.Length).CopyTo(bytes);
+					string hint = Encoding.ASCII.GetString(new ReadOnlySpan<byte>(texture->AchFormatHint, 9).ToArray()).TrimEnd('\0');
+					string extension = hint.Length > 0 ? "." + hint.ToLowerInvariant() : ".png";
+					return new ModelTexture { Data = bytes, Extension = extension == ".jpeg" ? ".jpg" : extension, Name = name };
+				}
+
+				return new ModelTexture { Data = Tga((byte*)texture->PcData, (int)texture->MWidth, (int)texture->MHeight), Extension = ".tga", Name = name };
+			}
+
+			/// <summary>32-bit uncompressed TGA (BGRA texels, top-left origin), which the texture importer reads.</summary>
+			private static byte[] Tga(byte* bgra, int width, int height)
+			{
+				var bytes = new byte[18 + width * height * 4];
+				bytes[2] = 2;
+				bytes[12] = (byte)(width & 0xFF);
+				bytes[13] = (byte)(width >> 8);
+				bytes[14] = (byte)(height & 0xFF);
+				bytes[15] = (byte)(height >> 8);
+				bytes[16] = 32;
+				bytes[17] = 0x28;
+				new ReadOnlySpan<byte>(bgra, width * height * 4).CopyTo(bytes.AsSpan(18));
+				return bytes;
+			}
+
+			/// <summary>
+			///     The project file a texture reference means: the path relative to the model, then the file name next to
+			///     the model, in a Textures folder beside or above it, and anywhere in the project. Artists' files often
+			///     reference the source image (.psd, .tga) of what the project has as .png or .jpg: where the exact file
+			///     is missing, an image with the same base name counts.
+			/// </summary>
+			private string FindTextureFile(string reference)
+			{
+				string folder = Path.GetDirectoryName(file);
+				string normalized = reference.Replace('\\', Path.DirectorySeparatorChar).Replace('/', Path.DirectorySeparatorChar);
+				string fileName = Path.GetFileName(normalized);
+				var candidates = new List<string>();
+				try
+				{
+					candidates.Add(Path.IsPathRooted(normalized) ? normalized : Path.GetFullPath(Path.Combine(folder, normalized)));
+				}
+				catch (ArgumentException)
+				{
+				}
+
+				candidates.Add(Path.Combine(folder, fileName));
+				candidates.Add(Path.Combine(folder, "Textures", fileName));
+				candidates.Add(Path.Combine(Path.GetDirectoryName(folder) ?? folder, "Textures", fileName));
+				foreach (bool anyExtension in new[] { false, true })
+				{
+					foreach (string candidate in candidates.Distinct())
+					{
+						string found = anyExtension ? WithImageExtension(candidate) : System.IO.File.Exists(candidate) ? candidate : null;
+						string assetPath = found != null ? AssetDatabase.ToAssetPath(found) : null;
+						if (assetPath != null)
+						{
+							return assetPath;
+						}
+					}
+				}
+
+				string exact = AssetDatabase.Resolve(fileName, null);
+				if (exact != null)
+				{
+					return exact;
+				}
+
+				// Anywhere in the project by base name, when only one image has it.
+				string baseName = Path.GetFileNameWithoutExtension(fileName);
+				List<string> matches = AssetDatabase.GetAllAssetPaths(TextureAssets.ImageExtensions)
+					.Where(p => string.Equals(Path.GetFileNameWithoutExtension(p), baseName, StringComparison.OrdinalIgnoreCase)).ToList();
+				return matches.Count == 1 ? matches[0] : null;
+			}
+
+			/// <summary>An existing image file with the candidate's folder and base name (any image extension).</summary>
+			private static string WithImageExtension(string candidate)
+			{
+				string directory = Path.GetDirectoryName(candidate);
+				string baseName = Path.GetFileNameWithoutExtension(candidate);
+				if (string.IsNullOrEmpty(directory) || !Directory.Exists(directory))
+				{
+					return null;
+				}
+
+				foreach (string extension in TextureAssets.ImageExtensions)
+				{
+					string path = Path.Combine(directory, baseName + extension);
+					if (System.IO.File.Exists(path))
+					{
+						return path;
+					}
+				}
+
+				return null;
+			}
+
+			// ------------------------------------------------------------ units
+
+			/// <summary>Meters per file unit: FBX's UnitScaleFactor is in centimeters (1 = cm, 100 = m); others are meters.</summary>
+			private float FileUnitScale()
+			{
+				Metadata* metadata = scene->MMetaData;
+				if (metadata == null)
+				{
+					return 1f;
+				}
+
+				for (uint i = 0; i < metadata->MNumProperties; i++)
+				{
+					if (metadata->MKeys[i].AsString != "UnitScaleFactor")
+					{
+						continue;
+					}
+
+					MetadataEntry entry = metadata->MValues[i];
+					double factor = entry.MType switch
+					{
+						MetadataType.Float => *(float*)entry.MData,
+						MetadataType.Double => *(double*)entry.MData,
+						MetadataType.Int32 => *(int*)entry.MData,
+						_ => 100.0
+					};
+					return factor > 0 ? (float)(factor / 100.0) : 1f;
+				}
+
+				return 1f;
+			}
+		}
+
+		#endregion
+	}
+}

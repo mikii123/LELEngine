@@ -22,6 +22,14 @@ Built on .NET 10, OpenTK 4.9 (GLFW) and OpenGL 4.6 (4.3 minimum), developed and 
 - Textures: 2D, 3D (slice grids), cubemaps (crosses, strips, panoramas, HDR) and sprites (single or sliced sheets),
   configured per file like Unity's texture importer. Materials are documents of typed properties declared by the
   shader's `//Properties` block.
+- Models: `.fbx`, `.gltf` / `.glb`, `.dae`, `.3ds`, `.blend`, `.ply`, `.stl` (imported by the editor with Assimp,
+  through Silk.NET.Assimp) and `.obj` with `.mtl` (a built-in reader). A model file is a `Model` asset: its node
+  hierarchy and meshes, which are sub-assets (`Car.fbx` / `Wheel`). Meshes are indexed with sub-meshes; a
+  `MeshRenderer` has one material per sub-mesh, opaque and transparent ones mixed. Import settings live in the
+  `.meta` file (scale, unit conversion, root rotation, normals and smoothing angle, UV flip, materials). Imports are
+  cached in `Library/ModelCache`; the materials of a model become `.material` assets (`Materials/` next to it,
+  `LitTextured` with its albedo and normal maps; embedded textures go to `Textures/`). Builds ship the imported
+  data under the model's own name, so the player has no importer.
 
 **2D physics (Box2D v3)**
 - Box2D v3 in pure C# (Box2D.NET): soft-step solver with sub-steps, sleeping islands, continuous collision, and
@@ -122,8 +130,11 @@ GPU event, ribbons and soft smoke puffs, all simulated and drawn on the GPU.*
 **Editor (`LELEngine.Editor`)**
 - Project launcher, dockable Dear ImGui interface, hierarchy, inspector, project browser, console, undo/redo and
   gizmos (including 2D collider outlines).
+- Models: drag a model file into the scene view or onto the hierarchy to build its GameObjects; its inspector shows
+  the import settings (Apply reimports and reloads the scene), the size, meshes, materials and node tree. A material
+  dropped on an object goes into the slot of the sub-mesh under the mouse.
 - Asset inspectors: a Unity-style material editor (shader picker, colors, ranges, texture slots with an object
-  picker and drag and drop), texture import settings with previews and Apply/Revert, shader, mesh and physics
+  picker and drag and drop), texture import settings with previews and Apply/Revert, shader, model and physics
   material views. Material edits apply live, are undoable and save to the asset file.
 - Scene and game views render through the same renderer as the game. Play, pause and step restore the scene
   snapshot when you stop.

@@ -91,7 +91,7 @@ namespace LELEngine.Rendering.Passes
 				{
 					if (renderer.CastShadows)
 					{
-						renderer.RenderDepth(context.DepthOnlyProgram);
+						renderer.RenderWith(context.DepthOnlyProgram);
 					}
 				}
 			}

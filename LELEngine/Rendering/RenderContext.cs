@@ -24,10 +24,10 @@ namespace LELEngine.Rendering
 		public int Width;
 		public int Height;
 
-		/// <summary>The frame's opaque renderers (depth prepass, shadows, GI, opaque pass).</summary>
+		/// <summary>The frame's renderers with opaque sub-meshes (depth prepass, shadows, GI, opaque pass draw those).</summary>
 		public IReadOnlyList<MeshRenderer> Renderers;
 
-		/// <summary>The frame's transparent renderers (<see cref="MeshRenderer.IsTransparent" />), drawn by the transparent pass only.</summary>
+		/// <summary>The frame's renderers with transparent sub-meshes (<see cref="MeshRenderer.HasTransparentParts" />), drawn by the transparent pass only.</summary>
 		public IReadOnlyList<MeshRenderer> TransparentRenderers;
 
 		public IReadOnlyList<Behaviour> Behaviours;

@@ -86,12 +86,11 @@ namespace TestGame.Scenes
 
 			// A tall pillar for a long shadow and a sphere for the sky's gradient on a curved surface.
 			Box(scene, "Pillar", "LitGray.material", new Vector3(2f, 2.5f, 1f), new Vector3(0.4f, 2.5f, 0.4f));
-			GameObject sphere = scene.CreateGameObject("Sphere");
+			GameObject sphere = SceneModels.Instantiate(scene, SceneModels.Sphere, "Sphere");
 			sphere.transform.position = new Vector3(0f, 1.25f, 4f);
 			sphere.transform.scale = Vector3.One * 1.25f;
-			MeshRenderer sphereRenderer = sphere.AddComponent<MeshRenderer>();
-			sphereRenderer.SetMaterial("LitYellow.material");
-			sphereRenderer.SetMesh("sphere.obj");
+			MeshRenderer sphereRenderer = sphere.GetComponent<MeshRenderer>();
+			sphereRenderer.SetMaterials(SceneModels.Material("LitYellow.material"));
 			sphereRenderer.IsStatic = isStatic;
 
 			// A thin canopy on two posts near the start: the ground under it sees less of the sky.
@@ -118,12 +117,11 @@ namespace TestGame.Scenes
 			}
 
 			// Visible sun disc far along the sun direction. Not a shadow caster, not voxelized.
-			GameObject sunDisc = scene.CreateGameObject("SunDisc");
+			GameObject sunDisc = SceneModels.Instantiate(scene, SceneModels.Sphere, "SunDisc");
 			sunDisc.transform.position = SunDirection * 300f;
 			sunDisc.transform.scale = Vector3.One * 12f;
-			MeshRenderer sunRenderer = sunDisc.AddComponent<MeshRenderer>();
-			sunRenderer.SetMaterial("Sun.material");
-			sunRenderer.SetMesh("sphere.obj");
+			MeshRenderer sunRenderer = sunDisc.GetComponent<MeshRenderer>();
+			sunRenderer.SetMaterials(SceneModels.Material("Sun.material"));
 			sunRenderer.CastShadows = false;
 			sunRenderer.ReceiveShadows = false;
 			sunRenderer.ContributesToGI = false;
@@ -132,13 +130,12 @@ namespace TestGame.Scenes
 
 		private static GameObject Box(Scene scene, string name, string material, Vector3 center, Vector3 halfSize)
 		{
-			GameObject go = scene.CreateGameObject(name);
+			GameObject go = SceneModels.Instantiate(scene, SceneModels.Cube, name);
 			go.transform.position = center;
 			go.transform.scale = halfSize;
 
-			MeshRenderer renderer = go.AddComponent<MeshRenderer>();
-			renderer.SetMaterial(material);
-			renderer.SetMesh("cube.obj");
+			MeshRenderer renderer = go.GetComponent<MeshRenderer>();
+			renderer.SetMaterials(SceneModels.Material(material));
 			renderer.IsStatic = isStatic;
 			return go;
 		}

@@ -323,7 +323,7 @@ namespace LELEngine.Rendering.Passes
 			dynamicRenderers.Clear();
 			foreach (MeshRenderer renderer in renderers)
 			{
-				if (!renderer.ContributesToGI || renderer.Material == null || renderer.Mesh == null)
+				if (!renderer.ContributesToGI || renderer.Materials.Count == 0 || renderer.Mesh == null)
 				{
 					continue;
 				}
@@ -518,8 +518,17 @@ namespace LELEngine.Rendering.Passes
 
 			foreach (MeshRenderer renderer in renderers)
 			{
-				SetMaterialUniforms(renderer.Material);
-				renderer.RenderWith(voxelize);
+				for (int i = 0; i < renderer.SubMeshCount; i++)
+				{
+					Material material = renderer.GetMaterial(i);
+					if (material == null || material.IsTransparent)
+					{
+						continue;
+					}
+
+					SetMaterialUniforms(material);
+					renderer.RenderSubMeshWith(voxelize, i);
+				}
 			}
 
 			// Geometry is read as images (injection) and block flags as textures (compaction).
@@ -603,7 +612,7 @@ namespace LELEngine.Rendering.Passes
 			{
 				if (renderer.CastShadows)
 				{
-					renderer.RenderDepth(context.DepthOnlyProgram);
+					renderer.RenderWith(context.DepthOnlyProgram);
 				}
 			}
 

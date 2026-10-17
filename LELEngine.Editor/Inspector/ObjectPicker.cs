@@ -359,6 +359,26 @@ namespace LELEngine.Editor
 					continue;
 				}
 
+				if (type == typeof(Mesh))
+				{
+					// Every mesh of a model file (one per node with geometry).
+					try
+					{
+						Model model = ModelAssets.Load(path);
+						foreach (Mesh mesh in model.Meshes)
+						{
+							string label = model.Meshes.Count > 1 ? Path.GetFileName(path) + " / " + mesh.SubAssetName : Path.GetFileName(path);
+							entries.Add(new Entry { Path = path, SubAsset = mesh.SubAssetName, Label = label });
+						}
+					}
+					catch (Exception e)
+					{
+						Debug.LogWarning($"[Editor] Cannot list the meshes of {path}: {e.Message}");
+					}
+
+					continue;
+				}
+
 				entries.Add(new Entry { Path = path, Label = Path.GetFileName(path) });
 			}
 		}

@@ -11,7 +11,7 @@ namespace LELEngine.Editor
 {
 	/// <summary>
 	///     The inspector of a selected project file: a material editor, texture import settings, shader properties,
-	///     mesh statistics, physics material values, scene / script / UI document actions, or the plain file info.
+	///     model import settings, physics material values, scene / script / UI document actions, or the plain file info.
 	/// </summary>
 	internal static class AssetInspectors
 	{
@@ -54,9 +54,9 @@ namespace LELEngine.Editor
 			{
 				DrawShader(assetPath, absolute);
 			}
-			else if (type == typeof(Mesh))
+			else if (type == typeof(Model))
 			{
-				DrawMesh(assetPath);
+				ModelImporterInspector.Draw(assetPath, context);
 			}
 			else if (type == typeof(PhysicsMaterial2D))
 			{
@@ -124,6 +124,7 @@ namespace LELEngine.Editor
 		public static void Deselected()
 		{
 			TextureImporterInspector.Reset();
+			ModelImporterInspector.Reset();
 		}
 
 		#endregion
@@ -219,23 +220,7 @@ namespace LELEngine.Editor
 			}
 		}
 
-		private static void DrawMesh(string assetPath)
-		{
-			try
-			{
-				Mesh mesh = InternalStorage.GetOrCreateMesh(assetPath);
-				ImGui.Text($"{mesh.Verticies.Count} vertices, {mesh.indicies.Count / 3} triangles");
-				ImGui.TextDisabled($"Bounds {mesh.BoundsMin} .. {mesh.BoundsMax}");
-			}
-			catch (Exception e)
-			{
-				ImGui.TextColored(EditorStyle.Error, "Cannot load: " + e.Message);
-			}
-
-			DrawFileInfo(AssetDatabase.ToAbsolute(assetPath));
-		}
-
-		private static void DrawFileInfo(string absolute)
+		public static void DrawFileInfo(string absolute)
 		{
 			try
 			{

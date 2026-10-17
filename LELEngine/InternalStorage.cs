@@ -18,11 +18,6 @@ namespace LELEngine
 		/// </summary>
 		public static Dictionary<string, Material> Materials { get; } = new Dictionary<string, Material>();
 
-		/// <summary>
-		///     Contains all of the loaded meshes (by asset path)
-		/// </summary>
-		public static Dictionary<string, Mesh> Meshes { get; } = new Dictionary<string, Mesh>();
-
 		#endregion
 
 		#region PublicMethods
@@ -40,7 +35,7 @@ namespace LELEngine
 
 			Shaders.Clear();
 			Materials.Clear();
-			Meshes.Clear();
+			ModelAssets.Clear();
 			TextureAssets.Clear();
 			PhysicsMaterial2D.ClearCache();
 			Rendering.GeometryPool.Clear();
@@ -114,24 +109,6 @@ namespace LELEngine
 		public static void ForgetMaterial(string assetPath)
 		{
 			Materials.Remove(assetPath);
-		}
-
-		/// <summary>
-		///     Gets a mesh by asset path or file name. Loads it on first use; meshes are cached by their asset path.
-		/// </summary>
-		/// <param name="name">Asset path or file name of the mesh (with .*)</param>
-		public static Mesh GetOrCreateMesh(string name)
-		{
-			string assetPath = AssetDatabase.Resolve(name, "Meshes") ?? name;
-			Mesh mesh;
-			if (!Meshes.TryGetValue(assetPath, out mesh))
-			{
-				Console.WriteLine("Creating Mesh " + assetPath);
-				mesh = new Mesh(assetPath);
-				Meshes.Add(assetPath, mesh);
-			}
-
-			return mesh;
 		}
 
 		#endregion

@@ -73,20 +73,18 @@ namespace TestGame.Scenes
 
 		private static void BuildGround(Scene scene)
 		{
-			GameObject ground = scene.CreateGameObject("Ground");
+			GameObject ground = SceneModels.Instantiate(scene, SceneModels.Cube, "Ground");
 			ground.transform.position = new Vector3(0f, -0.25f, 0f);
 			ground.transform.localScale = new Vector3(12f, 0.25f, 12f);
-			MeshRenderer renderer = ground.AddComponent<MeshRenderer>();
-			renderer.SetMesh("cube.obj");
-			renderer.SetMaterial("Floor.material");
+			MeshRenderer renderer = ground.GetComponent<MeshRenderer>();
+			renderer.SetMaterials(SceneModels.Material("Floor.material"));
 			renderer.IsStatic = true;
 
-			GameObject wall = scene.CreateGameObject("Wall");
+			GameObject wall = SceneModels.Instantiate(scene, SceneModels.Cube, "Wall");
 			wall.transform.position = new Vector3(0f, 2f, 11f);
 			wall.transform.localScale = new Vector3(12f, 2f, 0.25f);
-			MeshRenderer wallRenderer = wall.AddComponent<MeshRenderer>();
-			wallRenderer.SetMesh("cube.obj");
-			wallRenderer.SetMaterial("LitGray.material");
+			MeshRenderer wallRenderer = wall.GetComponent<MeshRenderer>();
+			wallRenderer.SetMaterials(SceneModels.Material("LitGray.material"));
 			wallRenderer.IsStatic = true;
 		}
 
@@ -212,7 +210,7 @@ namespace TestGame.Scenes
 
 			VfxNodeData output = b.Context(VfxContextNodes.OutputMesh, 0f, 900f);
 			b.Settings(output, ("Blend", "Opaque"), ("Lighting", "Lit"), ("CastShadows", "1"));
-			b.Inputs(output, ("Mesh", VfxValue.FromMesh(InternalStorage.GetOrCreateMesh("cube.obj"))));
+			b.Inputs(output, ("Mesh", VfxValue.FromMesh(ModelAssets.LoadMesh(SceneModels.Cube))));
 
 			b.Flow(spawn, initialize);
 			b.Flow(initialize, update);

@@ -83,12 +83,11 @@ namespace TestGame.Scenes
 			// Capsules falling onto the stack's neighbourhood.
 			for (int i = 0; i < 2; i++)
 			{
-				GameObject capsule = scene.CreateGameObject("Capsule" + i);
+				GameObject capsule = SceneModels.Instantiate(scene, SceneModels.Cube, "Capsule" + i);
 				capsule.transform.position = new Vector3(5.5f + i * 1.2f, 6f + i * 2f, 0f);
 				capsule.transform.localScale = new Vector3(0.25f, 0.5f, 0.25f);
-				MeshRenderer capsuleRenderer = capsule.AddComponent<MeshRenderer>();
-				capsuleRenderer.SetMesh("cube.obj");
-				capsuleRenderer.SetMaterial("LitGreen.material");
+				MeshRenderer capsuleRenderer = capsule.GetComponent<MeshRenderer>();
+				capsuleRenderer.SetMaterials(SceneModels.Material("LitGreen.material"));
 				capsule.AddComponent<Rigidbody2D>();
 				capsule.AddComponent<CapsuleCollider2D>().FitToRenderer();
 			}
@@ -127,13 +126,12 @@ namespace TestGame.Scenes
 
 		private static GameObject StaticBox(Scene scene, string name, Vector2 center, Vector2 size, string material)
 		{
-			GameObject go = scene.CreateGameObject(name);
+			GameObject go = SceneModels.Instantiate(scene, SceneModels.Cube, name);
 			go.transform.position = new Vector3(center.X, center.Y, 0f);
 			// cube.obj spans -1..1: half the size as the scale, and the collider fits the mesh.
 			go.transform.localScale = new Vector3(size.X * 0.5f, size.Y * 0.5f, 0.5f);
-			MeshRenderer renderer = go.AddComponent<MeshRenderer>();
-			renderer.SetMesh("cube.obj");
-			renderer.SetMaterial(material);
+			MeshRenderer renderer = go.GetComponent<MeshRenderer>();
+			renderer.SetMaterials(SceneModels.Material(material));
 			renderer.IsStatic = true;
 			go.AddComponent<BoxCollider2D>().FitToRenderer();
 			return go;
@@ -141,13 +139,12 @@ namespace TestGame.Scenes
 
 		private static GameObject DynamicBox(Scene scene, string name, Vector2 center, Vector2 size, string material)
 		{
-			GameObject go = scene.CreateGameObject(name);
+			GameObject go = SceneModels.Instantiate(scene, SceneModels.Cube, name);
 			go.transform.position = new Vector3(center.X, center.Y, 0f);
 			// cube.obj spans -1..1: half the size as the scale, and the collider fits the mesh.
 			go.transform.localScale = new Vector3(size.X * 0.5f, size.Y * 0.5f, 0.5f);
-			MeshRenderer renderer = go.AddComponent<MeshRenderer>();
-			renderer.SetMesh("cube.obj");
-			renderer.SetMaterial(material);
+			MeshRenderer renderer = go.GetComponent<MeshRenderer>();
+			renderer.SetMaterials(SceneModels.Material(material));
 			go.AddComponent<Rigidbody2D>();
 			go.AddComponent<BoxCollider2D>().FitToRenderer();
 			return go;
@@ -155,13 +152,12 @@ namespace TestGame.Scenes
 
 		private static GameObject DynamicCircle(Scene scene, string name, Vector2 center, float radius, string material)
 		{
-			GameObject go = scene.CreateGameObject(name);
+			GameObject go = SceneModels.Instantiate(scene, SceneModels.Sphere, name);
 			go.transform.position = new Vector3(center.X, center.Y, 0f);
 			// sphere.obj has radius 1.
 			go.transform.localScale = new Vector3(radius, radius, radius);
-			MeshRenderer renderer = go.AddComponent<MeshRenderer>();
-			renderer.SetMesh("sphere.obj");
-			renderer.SetMaterial(material);
+			MeshRenderer renderer = go.GetComponent<MeshRenderer>();
+			renderer.SetMaterials(SceneModels.Material(material));
 			go.AddComponent<Rigidbody2D>();
 			go.AddComponent<CircleCollider2D>().FitToRenderer();
 			return go;

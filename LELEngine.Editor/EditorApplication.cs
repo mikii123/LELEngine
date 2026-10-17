@@ -296,6 +296,7 @@ namespace LELEngine.Editor
 			// Physics and lighting quality of the project; projects from before the file get it with the defaults.
 			project.LoadProjectSettings();
 			AssetDatabase.Initialize(project.AssetsPath, true);
+			ModelAssets.CacheFolder = project.ModelCachePath;
 			RecentProjects.Add(project.RootPath);
 			Debug.Log($"[Editor] Opened project {project.Name} ({project.RootPath})");
 
@@ -360,6 +361,7 @@ namespace LELEngine.Editor
 			Undo.Clear();
 			Edits.Cancel();
 			InternalStorage.Clear();
+			ModelAssets.CacheFolder = null;
 			ProjectSettings.Use(null);
 			Project = null;
 		}
@@ -555,12 +557,73 @@ namespace LELEngine.Editor
 			});
 		}
 
+		/// <summary>
+		///     Rebuilds the scene from its saved state around <paramref name="change" /> (assets were reimported:
+		///     components load their references again). The dirty state and the selection are kept.
+		/// </summary>
+		public void ReloadScene(Action change)
+		{
+			Scene scene = Scene;
+			if (scene == null)
+			{
+				change();
+				return;
+			}
+
+			Edits.Commit();
+			byte[] snapshot = SceneSerializer.SaveToBytes(scene);
+			string path = scene.Path;
+			ulong selected = Selected?.Id ?? 0;
+			change();
+			Scene reloaded = SceneSerializer.LoadFromBytes(snapshot);
+			reloaded.Path = path;
+			ReplaceScene(reloaded, IsPlaying);
+			Selected = selected != 0 ? reloaded.FindObjectById(selected) : null;
+		}
+
+		/// <summary>Builds a model file's hierarchy in the scene as one undo step and selects its root.</summary>
+		public GameObject InstantiateModel(string assetPath, Transform parent = null)
+		{
+			Model model;
+			try
+			{
+				model = ModelAssets.Load(assetPath);
+			}
+			catch (Exception e)
+			{
+				Debug.LogError($"[Editor] Cannot import {assetPath}: {e.Message}");
+				return null;
+			}
+
+			GameObject root = null;
+			RecordStructural("Instantiate " + model.name, () =>
+			{
+				root = model.Instantiate(Scene, parent);
+				if (root != null && parent == null)
+				{
+					root.transform.position = SceneView.DefaultSpawnPoint();
+				}
+
+				Selected = root;
+			});
+			return root;
+		}
+
 		public GameObject CreateObject(string name, Action<GameObject> setup = null, Transform parent = null)
+		{
+			return CreateModelObject(name, null, setup, parent);
+		}
+
+		/// <summary>
+		///     Creates an instance of a project model (<paramref name="modelPath" />, null: an empty GameObject) as one undo
+		///     step, at the scene view's spawn point or under <paramref name="parent" />, and selects it.
+		/// </summary>
+		public GameObject CreateModelObject(string name, string modelPath, Action<GameObject> setup = null, Transform parent = null)
 		{
 			GameObject created = null;
 			RecordStructural("Create " + name, () =>
 			{
-				created = Scene.CreateGameObject(name);
+				created = modelPath != null ? DefaultScene.Instantiate(Scene, modelPath, name, parent) : Scene.CreateGameObject(name);
 				if (parent != null)
 				{
 					created.transform.SetParent(parent, false);
@@ -1080,19 +1143,18 @@ namespace LELEngine.Editor
 		{
 			if (ImGui.MenuItem("Create Empty")) CreateObject("GameObject", null, parent);
 			ImGui.Separator();
-			if (ImGui.MenuItem("Cube")) CreateObject("Cube", go => DefaultScene.AddMesh(go, "Cube.obj"), parent);
-			if (ImGui.MenuItem("Sphere")) CreateObject("Sphere", go => DefaultScene.AddMesh(go, "Sphere.obj"), parent);
-			if (ImGui.MenuItem("Quad")) CreateObject("Quad", go => DefaultScene.AddMesh(go, "Quad.obj"), parent);
+			if (ImGui.MenuItem("Cube")) CreateModelObject("Cube", DefaultScene.CubeModel, null, parent);
+			if (ImGui.MenuItem("Sphere")) CreateModelObject("Sphere", DefaultScene.SphereModel, null, parent);
+			if (ImGui.MenuItem("Quad")) CreateModelObject("Quad", DefaultScene.QuadModel, null, parent);
 			ImGui.Separator();
 			if (ImGui.BeginMenu("Navigation"))
 			{
 				if (ImGui.MenuItem("NavMesh Surface")) CreateObject("NavMesh Surface", go => go.AddComponent<Navigation.NavMeshSurface>(), parent);
 				if (ImGui.MenuItem("NavMesh Agent"))
 				{
-					CreateObject("NavMesh Agent", go =>
+					CreateModelObject("NavMesh Agent", DefaultScene.CubeModel, go =>
 					{
 						go.transform.localScale = new Vector3(0.35f, 0.9f, 0.35f);
-						DefaultScene.AddMesh(go, "Cube.obj");
 						Navigation.NavMeshAgent agent = go.AddComponent<Navigation.NavMeshAgent>();
 						agent.radius = 0.35f;
 						agent.height = 1.8f;
@@ -1102,9 +1164,8 @@ namespace LELEngine.Editor
 
 				if (ImGui.MenuItem("NavMesh Obstacle"))
 				{
-					CreateObject("NavMesh Obstacle", go =>
+					CreateModelObject("NavMesh Obstacle", DefaultScene.CubeModel, go =>
 					{
-						DefaultScene.AddMesh(go, "Cube.obj");
 						Navigation.NavMeshObstacle obstacle = go.AddComponent<Navigation.NavMeshObstacle>();
 						obstacle.size = new Vector3(2f, 2f, 2f);
 					}, parent);
@@ -1117,11 +1178,10 @@ namespace LELEngine.Editor
 			{
 				if (ImGui.MenuItem("Dynamic Box (Rigidbody2D + BoxCollider2D)"))
 				{
-					CreateObject("Box 2D", go =>
+					CreateModelObject("Box 2D", DefaultScene.CubeModel, go =>
 					{
 						// Cube.obj spans -1..1, so the scale is the half size; the colliders fit the mesh like Unity's Reset.
 						go.transform.localScale = Planar(0.5f, 0.5f, 0.25f);
-						DefaultScene.AddMesh(go, "Cube.obj");
 						go.AddComponent<Rigidbody2D>();
 						go.AddComponent<BoxCollider2D>().FitToRenderer();
 					}, parent);
@@ -1129,10 +1189,9 @@ namespace LELEngine.Editor
 
 				if (ImGui.MenuItem("Dynamic Circle (Rigidbody2D + CircleCollider2D)"))
 				{
-					CreateObject("Circle 2D", go =>
+					CreateModelObject("Circle 2D", DefaultScene.SphereModel, go =>
 					{
 						go.transform.localScale = new Vector3(0.5f, 0.5f, 0.5f);
-						DefaultScene.AddMesh(go, "Sphere.obj");
 						go.AddComponent<Rigidbody2D>();
 						go.AddComponent<CircleCollider2D>().FitToRenderer();
 					}, parent);
@@ -1140,21 +1199,23 @@ namespace LELEngine.Editor
 
 				if (ImGui.MenuItem("Static Ground (BoxCollider2D)"))
 				{
-					CreateObject("Ground 2D", go =>
+					CreateModelObject("Ground 2D", DefaultScene.CubeModel, go =>
 					{
 						go.transform.localScale = Planar(5f, 0.25f, 0.25f);
-						MeshRenderer renderer = DefaultScene.AddMesh(go, "Cube.obj");
-						renderer.IsStatic = true;
+						if (go.GetComponent<MeshRenderer>() is MeshRenderer renderer)
+						{
+							renderer.IsStatic = true;
+						}
+
 						go.AddComponent<BoxCollider2D>().FitToRenderer();
 					}, parent);
 				}
 
 				if (ImGui.MenuItem("Dynamic Capsule (Rigidbody2D + CapsuleCollider2D)"))
 				{
-					CreateObject("Capsule 2D", go =>
+					CreateModelObject("Capsule 2D", DefaultScene.CubeModel, go =>
 					{
 						go.transform.localScale = Planar(0.25f, 0.5f, 0.25f);
-						DefaultScene.AddMesh(go, "Cube.obj");
 						go.AddComponent<Rigidbody2D>();
 						go.AddComponent<CapsuleCollider2D>().FitToRenderer();
 					}, parent);
@@ -1175,12 +1236,10 @@ namespace LELEngine.Editor
 						Rigidbody2D previous = anchor;
 						for (int i = 0; i < 3; i++)
 						{
-							GameObject link = Scene.CreateGameObject("Link " + (i + 1));
-							link.transform.SetParent(go.transform, false);
+							GameObject link = DefaultScene.Instantiate(Scene, DefaultScene.CubeModel, "Link " + (i + 1), go.transform);
 							// Links of 0.25 x 0.6 m hanging end to end; the anchor is in unscaled local space (the mesh top).
 							link.transform.localPosition = Planar(0f, -0.3f - 0.6f * i, 0f);
 							link.transform.localScale = Planar(0.125f, 0.3f, 0.125f);
-							DefaultScene.AddMesh(link, "Cube.obj");
 							Rigidbody2D body = link.AddComponent<Rigidbody2D>();
 							link.AddComponent<BoxCollider2D>().FitToRenderer();
 							HingeJoint2D hinge = link.AddComponent<HingeJoint2D>();

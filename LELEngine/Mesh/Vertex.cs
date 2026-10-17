@@ -14,11 +14,16 @@ namespace LELEngine
 		public readonly Vector3 bitangent;
 
 		public Vertex(Vector3 position, Vector3 norm, Vector2 uv, Vector3 tang, Vector3 bitang)
+			: this(position, norm, uv, tang, bitang, Color4.White)
+		{
+		}
+
+		public Vertex(Vector3 position, Vector3 norm, Vector2 uv, Vector3 tang, Vector3 bitang, Color4 color)
 		{
 			this.position = position;
 			texcoord = uv;
 			normal = norm;
-			color = Color4.White;
+			this.color = color;
 			tangent = tang;
 			bitangent = bitang;
 		}

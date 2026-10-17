@@ -1,43 +1,24 @@
+using System.Collections.Generic;
 using LELEngine;
 using LELEngine.Shaders;
 
+/// <summary>
+///     Draws a <see cref="Mesh" /> with one material per sub-mesh: sub-mesh i uses <see cref="Materials" />[i] (the
+///     last material when there are fewer materials than sub-meshes). Opaque sub-meshes draw in the opaque passes,
+///     transparent ones (see <see cref="Material.IsTransparent" />) in the transparent pass; a renderer can have both.
+/// </summary>
 [ExecuteAlways]
 public sealed class MeshRenderer : Behaviour
 {
 	#region PublicFields
 
-	public ShaderProgram UsingShader
-	{
-		get => Material?.UsingShader;
-		internal set
-		{
-			if (Material == null)
-			{
-				return;
-			}
-
-			Material.SetShader(value);
-		}
-	}
-
 	/// <summary>The mesh drawn; it uploads into the shared geometry buffers (Rendering.GeometryPool) on first use.</summary>
-	public Mesh Mesh
-	{
-		get => mesh;
-		private set => mesh = value;
-	}
+	public Mesh Mesh => mesh;
 
-	public Material Material
-	{
-		get => material;
-		private set => material = value;
-	}
+	/// <summary>The material of each sub-mesh.</summary>
+	public IReadOnlyList<Material> Materials => materials;
 
-	/// <summary>Asset path of the material (null for a material created in code).</summary>
-	public string MaterialPath => material?.AssetPath;
-
-	/// <summary>Asset path of the mesh.</summary>
-	public string MeshPath => mesh?.AssetPath;
+	public int SubMeshCount => mesh?.SubMeshCount ?? 0;
 
 	public bool CastShadows = true;
 	public bool ReceiveShadows = true;
@@ -54,134 +35,201 @@ public sealed class MeshRenderer : Behaviour
 	/// </summary>
 	public bool IsStatic;
 
-	/// <summary>The material draws in the transparent pass (see <see cref="LELEngine.Shaders.Material.IsTransparent" />).</summary>
-	public bool IsTransparent => material != null && material.IsTransparent;
+	/// <summary>Some sub-mesh has a transparent material (it draws in the transparent pass).</summary>
+	public bool HasTransparentParts
+	{
+		get
+		{
+			for (int i = 0; i < PartCount; i++)
+			{
+				if (IsSubMeshTransparent(i))
+				{
+					return true;
+				}
+			}
+
+			return false;
+		}
+	}
+
+	/// <summary>Some sub-mesh has an opaque material (or none).</summary>
+	public bool HasOpaqueParts
+	{
+		get
+		{
+			for (int i = 0; i < PartCount; i++)
+			{
+				if (!IsSubMeshTransparent(i))
+				{
+					return true;
+				}
+			}
+
+			return false;
+		}
+	}
 
 	#endregion
 
 	#region PrivateFields
 
 	[SerializeField] private Mesh mesh;
-	[SerializeField] private Material material;
+	[SerializeField] private List<Material> materials = new List<Material>();
+
+	/// <summary>Sub-meshes to consider (a renderer without a mesh still reports its material).</summary>
+	private int PartCount => mesh != null ? mesh.SubMeshCount : 1;
 
 	#endregion
 
 	#region PublicMethods
 
-	/// <summary>
-	///     Set the material by asset path or file name. Automatically set shader.
-	/// </summary>
-	public void SetMaterial(string path)
+	/// <summary>Material of sub-mesh <paramref name="subMesh" />: its slot, else the last material, else null.</summary>
+	public Material GetMaterial(int subMesh)
 	{
-		Material = InternalStorage.GetOrCreateMaterial(path);
-	}
-
-	public void SetMaterial(Material material)
-	{
-		Material = material;
-	}
-
-	/// <summary>
-	///     Set the mesh by asset path or file name.
-	/// </summary>
-	public void SetMesh(string path)
-	{
-		Mesh = InternalStorage.GetOrCreateMesh(path);
-	}
-
-	public void SetMesh(Mesh _mesh)
-	{
-		if (_mesh == null)
+		if (materials.Count == 0)
 		{
-			return;
+			return null;
 		}
 
-		Mesh = _mesh;
+		return materials[subMesh < materials.Count ? subMesh : materials.Count - 1];
 	}
 
-	/// <summary>
-	///     Set the shader. Updates the material.
-	/// </summary>
-	public void SetShader(string path)
+	public bool IsSubMeshTransparent(int subMesh)
 	{
-		Material.SetShader(path);
+		Material m = GetMaterial(subMesh);
+		return m != null && m.IsTransparent;
 	}
 
-	/// <summary>
-	///     Uploads the mesh into the shared geometry buffers now instead of at its first draw. The vertex layout uses
-	///     fixed attribute locations, so it works with any shader program.
-	/// </summary>
-	public void BufferVerticies()
+	/// <summary>Replaces every material slot.</summary>
+	public void SetMaterials(IEnumerable<Material> slots)
 	{
-		LELEngine.Rendering.GeometryPool.Prepare(Mesh);
+		materials.Clear();
+		if (slots != null)
+		{
+			materials.AddRange(slots);
+		}
+	}
+
+	/// <summary>Replaces every material slot.</summary>
+	public void SetMaterials(params Material[] slots)
+	{
+		SetMaterials((IEnumerable<Material>)slots);
+	}
+
+	/// <summary>Sets the material of one slot (the list grows as needed, repeating its last material).</summary>
+	public void SetMaterial(int slot, Material material)
+	{
+		while (materials.Count <= slot)
+		{
+			materials.Add(materials.Count > 0 ? materials[materials.Count - 1] : null);
+		}
+
+		materials[slot] = material;
+	}
+
+	public void SetMesh(Mesh value)
+	{
+		mesh = value;
 	}
 
 	/// <summary>
-	///     Full material draw: sets camera, lighting and material uniforms on the material shader, then draws.
-	///     The material shader must already be active.
+	///     Full material draw of the opaque sub-meshes: per sub-mesh its material shader is activated and gets the
+	///     camera, lighting and material uniforms, then the sub-mesh draws.
 	/// </summary>
 	public override void Render()
 	{
-		if (Mesh == null || UsingShader == null)
+		if (mesh == null)
 		{
 			return;
 		}
 
-		transform.SetModelMatrix(UsingShader);
-		(Camera.current ?? Camera.main)?.SetUniforms(UsingShader);
-		Lighting.SetUniforms(UsingShader, ReceiveShadows, ReceiveGI);
-		Material.SetUniforms();
+		for (int i = 0; i < mesh.SubMeshCount; i++)
+		{
+			Material m = GetMaterial(i);
+			ShaderProgram shader = m?.UsingShader;
+			if (shader == null || m.IsTransparent)
+			{
+				continue;
+			}
 
-		DrawGeometry();
+			shader.Use();
+			shader.RenderState.ApplyCull();
+			transform.SetModelMatrix(shader);
+			(Camera.current ?? Camera.main)?.SetUniforms(shader);
+			Lighting.SetUniforms(shader, ReceiveShadows, ReceiveGI);
+			m.SetUniforms();
+			DrawSubMesh(i);
+		}
 	}
 
 	/// <summary>
-	///     Per-object part of <see cref="Render" />: model matrix and material uniforms, then the draw. The caller
-	///     has already set the camera and lighting uniforms on the (active) material shader for this object's
-	///     ReceiveShadows / ReceiveGI flags, so draws grouped by shader skip re-sending them per object.
+	///     Per-object part of a draw grouped by shader: the model matrix and material uniforms of sub-mesh
+	///     <paramref name="subMesh" />, then its draw. The caller has activated the sub-mesh's material shader and set
+	///     the camera and lighting uniforms on it for this object's ReceiveShadows / ReceiveGI flags.
 	/// </summary>
-	public void RenderObject()
+	public void RenderSubMesh(int subMesh)
 	{
-		if (Mesh == null || UsingShader == null)
+		Material m = GetMaterial(subMesh);
+		if (mesh == null || m?.UsingShader == null)
 		{
 			return;
 		}
 
-		transform.SetModelMatrix(UsingShader);
-		Material.SetUniforms();
-
-		DrawGeometry();
+		transform.SetModelMatrix(m.UsingShader);
+		m.SetUniforms();
+		DrawSubMesh(subMesh);
 	}
 
 	/// <summary>
-	///     Draws geometry with an externally provided program (depth prepass, shadow map, voxelization).
-	///     Only the model matrix is set; the caller sets everything else. The program must be active.
+	///     Draws the opaque geometry with an externally provided program (depth prepass, shadow map, voxelization):
+	///     every sub-mesh, or only the opaque ones when some are transparent. Only the model matrix is set; the
+	///     caller sets everything else. The program must be active.
 	/// </summary>
 	public void RenderWith(ShaderProgram program)
 	{
-		if (Mesh == null)
+		if (mesh == null)
 		{
 			return;
 		}
 
 		transform.SetModelMatrix(program);
-		DrawGeometry();
+		if (!HasTransparentParts)
+		{
+			DrawGeometry();
+			return;
+		}
+
+		for (int i = 0; i < mesh.SubMeshCount; i++)
+		{
+			if (!IsSubMeshTransparent(i))
+			{
+				DrawSubMesh(i);
+			}
+		}
 	}
 
-	/// <summary>
-	///     Alias of <see cref="RenderWith" /> kept for depth-only passes.
-	/// </summary>
-	public void RenderDepth(ShaderProgram program)
+	/// <summary>One sub-mesh with an externally provided program (only the model matrix is set).</summary>
+	public void RenderSubMeshWith(ShaderProgram program, int subMesh)
 	{
-		RenderWith(program);
+		if (mesh == null)
+		{
+			return;
+		}
+
+		transform.SetModelMatrix(program);
+		DrawSubMesh(subMesh);
 	}
 
-	/// <summary>
-	///     Binds the shared geometry and issues the draw call. No uniforms are touched.
-	/// </summary>
+	/// <summary>Binds the shared geometry and draws every sub-mesh in one call. No uniforms are touched.</summary>
 	public void DrawGeometry()
 	{
 		LELEngine.Rendering.GeometryPool.Draw(mesh);
+	}
+
+	/// <summary>Binds the shared geometry and draws one sub-mesh. No uniforms are touched.</summary>
+	public void DrawSubMesh(int subMesh)
+	{
+		LELEngine.Rendering.GeometryPool.DrawSubMesh(mesh, subMesh);
 	}
 
 	#endregion

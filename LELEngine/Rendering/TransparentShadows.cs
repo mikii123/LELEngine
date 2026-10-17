@@ -30,7 +30,7 @@ namespace LELEngine.Rendering
 
 			foreach (MeshRenderer renderer in casters)
 			{
-				if (renderer.CastShadows && renderer.Mesh != null && renderer.Material != null)
+				if (renderer.CastShadows && renderer.Mesh != null)
 				{
 					return true;
 				}
@@ -76,17 +76,25 @@ namespace LELEngine.Rendering
 			program.SetMatrix4("projectionMatrix", lightProjection);
 			foreach (MeshRenderer renderer in context.TransparentRenderers)
 			{
-				Material material = renderer.Material;
-				if (!renderer.CastShadows || renderer.Mesh == null || material == null)
+				if (!renderer.CastShadows || renderer.Mesh == null)
 				{
 					continue;
 				}
 
-				material.GetStandardParameters(out Vector4 color, out Vector4 unusedEmissive, out float unusedRoughness);
-				program.SetVector4("shadowTint", color);
-				// A double-sided pane shadows from both sides; a closed object multiplies its entry and exit.
-				material.RenderState.ApplyCull();
-				renderer.RenderWith(program);
+				for (int i = 0; i < renderer.SubMeshCount; i++)
+				{
+					Material material = renderer.GetMaterial(i);
+					if (material == null || !material.IsTransparent)
+					{
+						continue;
+					}
+
+					material.GetStandardParameters(out Vector4 color, out Vector4 unusedEmissive, out float unusedRoughness);
+					program.SetVector4("shadowTint", color);
+					// A double-sided pane shadows from both sides; a closed object multiplies its entry and exit.
+					material.RenderState.ApplyCull();
+					renderer.RenderSubMeshWith(program, i);
+				}
 			}
 
 			GL.BlendEquation(BlendEquationMode.FuncAdd);

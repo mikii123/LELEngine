@@ -1,6 +1,4 @@
 using System;
-using System.Collections.Generic;
-using System.Runtime.InteropServices;
 using LELEngine.Shaders;
 using OpenTK.Graphics.OpenGL4;
 
@@ -9,8 +7,8 @@ namespace LELEngine.Rendering
 	/// <summary>
 	///     Every mesh's vertices and indices in two shared GPU buffers behind one vertex array, so any set of meshes
 	///     can be drawn by a single multi-draw call, and a mesh used by many renderers is on the GPU once. A mesh
-	///     uploads on first use (identical vertices welded: the .obj loader emits three vertices per triangle) and
-	///     stays until the assets are cleared (<see cref="Clear" />).
+	///     uploads on first use and stays until the assets are cleared (<see cref="Clear" />); its sub-meshes are
+	///     ranges of its index range (<see cref="DrawSubMesh" />).
 	///     Location <see cref="VertexLayout.InstanceIndexLocation" /> is a per-instance attribute reading an identity
 	///     buffer through the draw's base instance: the instance index of GPU-driven draws on contexts without shader
 	///     draw parameters.
@@ -115,6 +113,24 @@ namespace LELEngine.Rendering
 			GL.DrawElementsBaseVertex(PrimitiveType.Triangles, mesh.PoolIndexCount, DrawElementsType.UnsignedInt, (IntPtr)(mesh.PoolFirstIndex * sizeof(uint)), mesh.PoolBaseVertex);
 		}
 
+		/// <summary>Draws one sub-mesh with the bound program (per-object path).</summary>
+		public static void DrawSubMesh(Mesh mesh, int subMesh)
+		{
+			if (!Prepare(mesh) || subMesh < 0 || subMesh >= mesh.SubMeshCount)
+			{
+				return;
+			}
+
+			SubMesh range = mesh.SubMeshes[subMesh];
+			if (range.IndexCount == 0)
+			{
+				return;
+			}
+
+			GL.BindVertexArray(vertexArray);
+			GL.DrawElementsBaseVertex(PrimitiveType.Triangles, range.IndexCount, DrawElementsType.UnsignedInt, (IntPtr)((mesh.PoolFirstIndex + range.FirstIndex) * sizeof(uint)), mesh.PoolBaseVertex);
+		}
+
 		/// <summary>Draws one mesh as instance <paramref name="instance" /> of the GPU scene (instanced variants).</summary>
 		public static void DrawInstance(Mesh mesh, int instance)
 		{
@@ -193,7 +209,8 @@ namespace LELEngine.Rendering
 		private static void Upload(Mesh mesh)
 		{
 			EnsureCreated();
-			Weld(mesh.Verticies, out Vertex[] vertices, out uint[] indices);
+			Vertex[] vertices = mesh.Vertices;
+			uint[] indices = mesh.Indices;
 
 			if (vertexCount + vertices.Length > vertexCapacity || indexCount + indices.Length > indexCapacity)
 			{
@@ -291,56 +308,6 @@ namespace LELEngine.Rendering
 			GL.BindBuffer(BufferTarget.ElementArrayBuffer, indexBuffer);
 			GL.BindVertexArray(0);
 			GL.BindBuffer(BufferTarget.ArrayBuffer, 0);
-		}
-
-		/// <summary>Unique vertices (bitwise equal ones merged, first-occurrence order) and triangle indices.</summary>
-		private static void Weld(List<Vertex> source, out Vertex[] vertices, out uint[] indices)
-		{
-			int triangles = source.Count / 3;
-			indices = new uint[triangles * 3];
-			var unique = new List<Vertex>(source.Count);
-			var lookup = new Dictionary<Vertex, uint>(source.Count, VertexComparer.Instance);
-			for (int i = 0; i < indices.Length; i++)
-			{
-				Vertex vertex = source[i];
-				if (!lookup.TryGetValue(vertex, out uint index))
-				{
-					index = (uint)unique.Count;
-					unique.Add(vertex);
-					lookup.Add(vertex, index);
-				}
-
-				indices[i] = index;
-			}
-
-			vertices = unique.ToArray();
-		}
-
-		#endregion
-
-		#region NestedTypes
-
-		/// <summary>Bitwise equality of vertices (the default struct equality of float fields uses reflection).</summary>
-		private sealed class VertexComparer : IEqualityComparer<Vertex>
-		{
-			public static readonly VertexComparer Instance = new VertexComparer();
-
-			public bool Equals(Vertex a, Vertex b)
-			{
-				return MemoryMarshal.AsBytes(MemoryMarshal.CreateReadOnlySpan(ref a, 1)).SequenceEqual(MemoryMarshal.AsBytes(MemoryMarshal.CreateReadOnlySpan(ref b, 1)));
-			}
-
-			public int GetHashCode(Vertex vertex)
-			{
-				ReadOnlySpan<int> words = MemoryMarshal.Cast<Vertex, int>(MemoryMarshal.CreateReadOnlySpan(ref vertex, 1));
-				var hash = new HashCode();
-				foreach (int word in words)
-				{
-					hash.Add(word);
-				}
-
-				return hash.ToHashCode();
-			}
 		}
 
 		#endregion

@@ -45,14 +45,14 @@ namespace TestGame.Scenes
 		public override void Start()
 		{
 			MeshRenderer renderer = GetComponent<MeshRenderer>();
-			if (renderer?.Material == null)
+			if (renderer?.GetMaterial(0) == null)
 			{
 				return;
 			}
 
 			// Shared materials come from InternalStorage; clone so this emitter has its own parameters.
-			material = renderer.Material.Clone();
-			renderer.SetMaterial(material);
+			material = renderer.GetMaterial(0).Clone();
+			renderer.SetMaterials(material);
 
 			// Emitters are light sources: no self-shadowing, no indirect pickup on their own surface.
 			renderer.ReceiveShadows = false;

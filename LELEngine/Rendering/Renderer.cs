@@ -10,8 +10,8 @@ namespace LELEngine.Rendering
 	/// <summary>
 	///     Owns the frame pipeline: the HDR scene target, engine shaders and an ordered list of passes.
 	///     Default pipeline: Shadows -> GI -> DepthPrepass -> Opaque -> Skybox -> Transparent -> PostRender callbacks
-	///     -> PostProcess. The frame's renderers are split by their material's queue: the opaque ones feed every
-	///     geometry pass, the transparent ones (<see cref="MeshRenderer.IsTransparent" />) only the transparent pass.
+	///     -> PostProcess. The frame's renderers are split by their materials' queues: the opaque sub-meshes feed every
+	///     geometry pass, the transparent ones (<see cref="MeshRenderer.HasTransparentParts" />) only the transparent pass.
 	/// </summary>
 	public sealed class Renderer
 	{
@@ -314,14 +314,25 @@ namespace LELEngine.Rendering
 			transparentRenderers.Clear();
 		}
 
-		/// <summary>Splits the frame's renderers by their material's queue (the lists are cleared when the frame ends).</summary>
+		/// <summary>
+		///     Splits the frame's renderers by their materials' queues (the lists are cleared when the frame ends): a
+		///     renderer with opaque and transparent sub-meshes is in both lists, and each pass draws its own sub-meshes.
+		/// </summary>
 		private void Partition(IReadOnlyList<MeshRenderer> renderers)
 		{
 			opaqueRenderers.Clear();
 			transparentRenderers.Clear();
 			foreach (MeshRenderer renderer in renderers)
 			{
-				(renderer.IsTransparent ? transparentRenderers : opaqueRenderers).Add(renderer);
+				if (renderer.HasOpaqueParts)
+				{
+					opaqueRenderers.Add(renderer);
+				}
+
+				if (renderer.HasTransparentParts)
+				{
+					transparentRenderers.Add(renderer);
+				}
 			}
 		}
 

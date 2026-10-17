@@ -6,7 +6,7 @@ using OpenTK.Mathematics;
 namespace LELEngine.Rendering.Passes
 {
 	/// <summary>
-	///     Forward shading of the transparent renderers (materials in a queue above <see cref="MaterialQueue.GeometryLast" />)
+	///     Forward shading of the transparent sub-meshes (materials in a queue above <see cref="MaterialQueue.GeometryLast" />)
 	///     over the opaque image and the sky: sorted by queue, then back to front by the distance from the camera to
 	///     the object's bounds centre, drawn one by one with the shader's blend, depth and cull state and no depth
 	///     writes unless the shader asks (ZWrite On). Double-sided materials (Cull Off) draw their back faces before
@@ -31,6 +31,7 @@ namespace LELEngine.Rendering.Passes
 		private struct Entry
 		{
 			public MeshRenderer Renderer;
+			public int SubMesh;
 			public VFX.VfxDrawEntry Vfx;
 			public int Queue;
 			public float DistanceSquared;
@@ -115,7 +116,7 @@ namespace LELEngine.Rendering.Passes
 
 				afterMesh = true;
 				MeshRenderer renderer = entry.Renderer;
-				Material material = renderer.Material;
+				Material material = renderer.GetMaterial(entry.SubMesh);
 				ShaderProgram program = material.UsingShader;
 				if (program != active)
 				{
@@ -148,11 +149,11 @@ namespace LELEngine.Rendering.Passes
 				{
 					// Back faces first, then front faces: the inside of a convex object ends up behind its outside.
 					GLState.SetCull(true, TriangleFace.Front);
-					renderer.DrawGeometry();
+					renderer.DrawSubMesh(entry.SubMesh);
 					GLState.SetCull(true, TriangleFace.Back);
 				}
 
-				renderer.DrawGeometry();
+				renderer.DrawSubMesh(entry.SubMesh);
 				DrawnCount++;
 			}
 
@@ -187,14 +188,24 @@ namespace LELEngine.Rendering.Passes
 			foreach (MeshRenderer renderer in renderers)
 			{
 				Mesh mesh = renderer.Mesh;
-				Material material = renderer.Material;
-				if (mesh == null || material?.UsingShader == null || !material.UsingShader.IsLinked)
+				if (mesh == null)
 				{
 					continue;
 				}
 
 				Vector3 center = Vector3.TransformPosition((mesh.BoundsMin + mesh.BoundsMax) * 0.5f, renderer.transform.LocalToWorld);
-				entries.Add(new Entry { Renderer = renderer, Queue = material.renderQueue, DistanceSquared = (center - cameraPosition).LengthSquared, Order = renderer.Id });
+				float distanceSquared = (center - cameraPosition).LengthSquared;
+				for (int i = 0; i < mesh.SubMeshCount; i++)
+				{
+					// Each transparent sub-mesh sorts on its own (same distance: the queue, then the slot, order them).
+					Material material = renderer.GetMaterial(i);
+					if (material?.UsingShader == null || !material.IsTransparent || !material.UsingShader.IsLinked || mesh.SubMeshes[i].IndexCount == 0)
+					{
+						continue;
+					}
+
+					entries.Add(new Entry { Renderer = renderer, SubMesh = i, Queue = material.renderQueue, DistanceSquared = distanceSquared, Order = renderer.Id * 64 + (ulong)i });
+				}
 			}
 		}
 

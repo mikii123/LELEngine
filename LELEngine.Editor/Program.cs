@@ -14,6 +14,10 @@ namespace LELEngine.Editor
 			CommandLine options = CommandLine.Parse(args);
 			bool help = options.Has("help") || options.Has("h");
 
+			// Model import: Assimp for the formats beyond .obj, and the imports' materials as project assets.
+			ModelAssets.RegisterBackend(new AssimpModelBackend());
+			ModelAssets.MaterialExtractor = new ModelMaterialExtractor();
+
 			// -batchmode: no window, no UI, a console (build machines, scripts).
 			if (help || options.Has("batchmode"))
 			{

@@ -368,22 +368,17 @@ namespace LELEngine.Navigation
 			}
 		}
 
-		/// <summary>Triangle vertices of a mesh (three per triangle, as the loader stores them).</summary>
+		/// <summary>Triangle vertices of a mesh (three per triangle).</summary>
 		private static Vector3[] MeshPositions(Mesh mesh)
 		{
 			lock (positionCache)
 			{
-				if (positionCache.TryGetValue(mesh, out Vector3[] cached) && cached.Length == mesh.Verticies.Count)
+				if (positionCache.TryGetValue(mesh, out Vector3[] cached))
 				{
 					return cached;
 				}
 
-				var positions = new Vector3[mesh.Verticies.Count];
-				for (int i = 0; i < positions.Length; i++)
-				{
-					positions[i] = mesh.Verticies[i].position;
-				}
-
+				Vector3[] positions = mesh.GetTrianglePositions();
 				positionCache[mesh] = positions;
 				return positions;
 			}

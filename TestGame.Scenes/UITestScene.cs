@@ -63,12 +63,11 @@ namespace TestGame.Scenes
 
 		private static GameObject Box(Scene scene, string name, string material, Vector3 center, Vector3 halfSize)
 		{
-			GameObject go = scene.CreateGameObject(name);
+			GameObject go = SceneModels.Instantiate(scene, SceneModels.Cube, name);
 			go.transform.position = center;
 			go.transform.localScale = halfSize;
-			MeshRenderer renderer = go.AddComponent<MeshRenderer>();
-			renderer.SetMaterial(material);
-			renderer.SetMesh("cube.obj");
+			MeshRenderer renderer = go.GetComponent<MeshRenderer>();
+			renderer.SetMaterials(SceneModels.Material(material));
 			renderer.ContributesToGI = false;
 			return go;
 		}

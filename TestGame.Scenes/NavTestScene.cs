@@ -82,12 +82,11 @@ namespace TestGame.Scenes
 			var random = new Random(7);
 			for (int i = 0; i < agents; i++)
 			{
-				GameObject go = scene.CreateGameObject("Agent" + i);
+				GameObject go = SceneModels.Instantiate(scene, SceneModels.Cube, "Agent" + i);
 				go.transform.position = new Vector3(-8f + (float)random.NextDouble() * 16f, 0.8f, -8f + (float)random.NextDouble() * 8f);
 				go.transform.scale = new Vector3(0.3f, 0.8f, 0.3f);
-				MeshRenderer renderer = go.AddComponent<MeshRenderer>();
-				renderer.SetMaterial(i % 3 == 0 ? "LitBlue.material" : i % 3 == 1 ? "LitYellow.material" : "LitGreen.material");
-				renderer.SetMesh("cube.obj");
+				MeshRenderer renderer = go.GetComponent<MeshRenderer>();
+				renderer.SetMaterials(SceneModels.Material(i % 3 == 0 ? "LitBlue.material" : i % 3 == 1 ? "LitYellow.material" : "LitGreen.material"));
 				renderer.ContributesToGI = false;
 				NavMeshAgent agent = go.AddComponent<NavMeshAgent>();
 				agent.radius = 0.35f;
@@ -131,7 +130,7 @@ namespace TestGame.Scenes
 
 		private static GameObject Box(Scene scene, string name, string material, Vector3 center, Vector3 halfSize, Transform parent)
 		{
-			GameObject go = scene.CreateGameObject(name);
+			GameObject go = SceneModels.Instantiate(scene, SceneModels.Cube, name);
 			if (parent != null)
 			{
 				go.transform.SetParent(parent, false);
@@ -139,9 +138,8 @@ namespace TestGame.Scenes
 
 			go.transform.position = center;
 			go.transform.localScale = halfSize;
-			MeshRenderer renderer = go.AddComponent<MeshRenderer>();
-			renderer.SetMaterial(material);
-			renderer.SetMesh("cube.obj");
+			MeshRenderer renderer = go.GetComponent<MeshRenderer>();
+			renderer.SetMaterials(SceneModels.Material(material));
 			renderer.ContributesToGI = false;
 			return go;
 		}

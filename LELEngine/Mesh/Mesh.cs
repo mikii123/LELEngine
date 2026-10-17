@@ -1,9 +1,38 @@
-﻿using System.Collections.Generic;
-using System.IO;
+﻿using System;
+using System.Collections.Generic;
 using OpenTK.Mathematics;
 
 namespace LELEngine
 {
+	/// <summary>A range of a mesh's index buffer drawn with one material (Unity's sub-mesh): material slot i of a renderer.</summary>
+	public readonly struct SubMesh
+	{
+		#region Constructors
+
+		public SubMesh(int firstIndex, int indexCount)
+		{
+			FirstIndex = firstIndex;
+			IndexCount = indexCount;
+		}
+
+		#endregion
+
+		#region PublicFields
+
+		/// <summary>First index of the range in <see cref="Mesh.Indices" />.</summary>
+		public int FirstIndex { get; }
+
+		/// <summary>Number of indices (three per triangle).</summary>
+		public int IndexCount { get; }
+
+		#endregion
+	}
+
+	/// <summary>
+	///     Indexed triangle geometry: shared vertices, one index buffer, and sub-meshes (index ranges) drawn with one
+	///     material each. Meshes of asset files are sub-assets of a <see cref="Model" /> (one per node with geometry,
+	///     loaded through <see cref="ModelAssets" />); meshes can also be built in code.
+	/// </summary>
 	public sealed class Mesh : IAsset
 	{
 		#region PublicFields
@@ -11,11 +40,20 @@ namespace LELEngine
 		/// <summary>Root-relative path of the source file (see <see cref="AssetDatabase" />).</summary>
 		public string AssetPath { get; }
 
-		public List<Vector2> UVs = new List<Vector2>();
-		public List<Vector3> Positions = new List<Vector3>();
-		public List<Vector3> Normals = new List<Vector3>();
-		public List<Vertex> Verticies = new List<Vertex>();
-		public List<int> indicies = new List<int>();
+		/// <summary>Name of the mesh inside its model file (null for a mesh built in code).</summary>
+		public string SubAssetName { get; }
+
+		public string name;
+
+		/// <summary>The vertices (shared by the triangles of every sub-mesh).</summary>
+		public Vertex[] Vertices { get; }
+
+		/// <summary>Triangle list indices into <see cref="Vertices" />, sub-mesh after sub-mesh.</summary>
+		public uint[] Indices { get; }
+
+		public IReadOnlyList<SubMesh> SubMeshes => subMeshes;
+		public int SubMeshCount => subMeshes.Length;
+		public int TriangleCount => Indices.Length / 3;
 
 		/// <summary>Local-space axis-aligned bounds of all vertices.</summary>
 		public Vector3 BoundsMin { get; private set; }
@@ -37,127 +75,107 @@ namespace LELEngine
 
 		#region PrivateFields
 
-		private List<VertexTemplate> Templates = new List<VertexTemplate>();
-		private int index = -1;
+		private readonly SubMesh[] subMeshes;
+		private Vector3[] trianglePositions;
 
 		#endregion
 
 		#region Constructors
 
-		/// <summary>
-		///     Obj Deserializer
-		/// </summary>
-		/// <param name="assetPath">Asset path (relative to <see cref="AssetDatabase.Root" />, with *.obj)</param>
-		public Mesh(string assetPath)
+		/// <summary>A mesh from its data; <paramref name="subMeshes" /> null: one sub-mesh with every index.</summary>
+		public Mesh(string name, Vertex[] vertices, uint[] indices, SubMesh[] subMeshes = null)
+			: this(name, vertices, indices, subMeshes, null, null)
 		{
+		}
+
+		/// <summary>A mesh of a model file.</summary>
+		internal Mesh(string name, Vertex[] vertices, uint[] indices, SubMesh[] subMeshes, string assetPath, string subAssetName)
+		{
+			this.name = name;
+			Vertices = vertices ?? Array.Empty<Vertex>();
+			Indices = indices ?? Array.Empty<uint>();
+			this.subMeshes = subMeshes ?? new[] { new SubMesh(0, Indices.Length) };
 			AssetPath = assetPath;
-			string extension = Path.GetExtension(assetPath).ToLowerInvariant();
-			if (extension == ".obj")
-			{
-				using (StreamReader sr = new StreamReader(AssetDatabase.ToAbsolute(assetPath)))
-				{
-					var lines = new List<string>();
-					while (!sr.EndOfStream)
-					{
-						string tmp = sr.ReadLine();
-						lines.Add(tmp);
-					}
-
-					foreach (string ob in lines)
-					{
-						string[] words = ob.Split(' ');
-						switch (words[0].Trim())
-						{
-							case "v":
-								Positions.Add(new Vector3(Extensions.ParseFloat(words[1]), Extensions.ParseFloat(words[2]), Extensions.ParseFloat(words[3])));
-								break;
-							case "vt":
-								UVs.Add(new Vector2(Extensions.ParseFloat(words[1]), Extensions.ParseFloat(words[2])));
-								break;
-							case "vn":
-								Normals.Add(new Vector3(Extensions.ParseFloat(words[1]), Extensions.ParseFloat(words[2]), Extensions.ParseFloat(words[3])));
-								break;
-							case "f":
-								string[] v1 = words[1].Trim().Split('/');
-								string[] v2 = words[2].Trim().Split('/');
-								string[] v3 = words[3].Trim().Split('/');
-
-								int tri1 = int.Parse(v1[0]) - 1;
-								int tri2 = int.Parse(v2[0]) - 1;
-								int tri3 = int.Parse(v3[0]) - 1;
-								int uv1 = int.Parse(v1[1]) - 1;
-								int uv2 = int.Parse(v2[1]) - 1;
-								int uv3 = int.Parse(v3[1]) - 1;
-								int nr1 = int.Parse(v1[2]) - 1;
-								int nr2 = int.Parse(v2[2]) - 1;
-								int nr3 = int.Parse(v3[2]) - 1;
-
-								VertexTemplate temp1 = new VertexTemplate();
-								temp1.position = Positions[tri1];
-								temp1.texcoord = UVs[uv1];
-								temp1.normal = Normals[nr1];
-								Templates.Add(temp1);
-
-								VertexTemplate temp2 = new VertexTemplate();
-								temp2.position = Positions[tri2];
-								temp2.texcoord = UVs[uv2];
-								temp2.normal = Normals[nr2];
-								Templates.Add(temp2);
-
-								VertexTemplate temp3 = new VertexTemplate();
-								temp3.position = Positions[tri3];
-								temp3.texcoord = UVs[uv3];
-								temp3.normal = Normals[nr3];
-								Templates.Add(temp3);
-
-								Vector3 edge1 = temp2.position - temp1.position;
-								Vector3 edge2 = temp3.position - temp1.position;
-								Vector2 deltaUV1 = temp2.texcoord - temp1.texcoord;
-								Vector2 deltaUV2 = temp3.texcoord - temp1.texcoord;
-
-								float f = 1.0f / (deltaUV1.X * deltaUV2.Y - deltaUV2.X * deltaUV1.Y);
-
-								Vector3 tangent1 = Vector3.Zero;
-								tangent1.X = f * (deltaUV2.Y * edge1.X - deltaUV1.Y * edge2.X);
-								tangent1.Y = f * (deltaUV2.Y * edge1.Y - deltaUV1.Y * edge2.Y);
-								tangent1.Z = f * (deltaUV2.Y * edge1.Z - deltaUV1.Y * edge2.Z);
-								tangent1 = tangent1.Normalized();
-
-								Vector3 bitangent1 = Vector3.Zero;
-								bitangent1.X = f * (-deltaUV2.X * edge1.X + deltaUV1.X * edge2.X);
-								bitangent1.Y = f * (-deltaUV2.X * edge1.Y + deltaUV1.X * edge2.Y);
-								bitangent1.Z = f * (-deltaUV2.X * edge1.Z + deltaUV1.X * edge2.Z);
-								bitangent1 = bitangent1.Normalized();
-
-								temp1.tangent = tangent1;
-								temp2.tangent = tangent1;
-								temp3.tangent = tangent1;
-								temp1.bitangent = bitangent1;
-								temp2.bitangent = bitangent1;
-								temp3.bitangent = bitangent1;
-
-								index++;
-								indicies.Add(index);
-								index++;
-								indicies.Add(index);
-								index++;
-								indicies.Add(index);
-								break;
-						}
-					}
-				}
-			}
-			else if (extension == ".fbx")
-			{
-				// To be done
-			}
-
-			foreach (VertexTemplate te in Templates)
-			{
-				Verticies.Add(new Vertex(te.position, te.normal, te.texcoord, te.tangent, te.bitangent));
-			}
-
+			SubAssetName = subAssetName;
 			ComputeBounds();
+		}
+
+		#endregion
+
+		#region PublicMethods
+
+		/// <summary>Positions of every triangle, three per triangle (CPU-side geometry queries: picking, baking).</summary>
+		public Vector3[] GetTrianglePositions()
+		{
+			if (trianglePositions == null)
+			{
+				var positions = new Vector3[Indices.Length / 3 * 3];
+				for (int i = 0; i < positions.Length; i++)
+				{
+					positions[i] = Vertices[Indices[i]].position;
+				}
+
+				trianglePositions = positions;
+			}
+
+			return trianglePositions;
+		}
+
+		/// <summary>
+		///     Vertices with tangents and bitangents from the UV layout (per-vertex sums of the triangle tangents,
+		///     made orthogonal to the normal; the bitangent keeps the UV handedness).
+		/// </summary>
+		public static Vertex[] WithTangents(Vertex[] vertices, uint[] indices)
+		{
+			var tangents = new Vector3[vertices.Length];
+			var bitangents = new Vector3[vertices.Length];
+			for (int i = 0; i + 2 < indices.Length; i += 3)
+			{
+				uint a = indices[i], b = indices[i + 1], c = indices[i + 2];
+				Vector3 edge1 = vertices[b].position - vertices[a].position;
+				Vector3 edge2 = vertices[c].position - vertices[a].position;
+				Vector2 duv1 = vertices[b].texcoord - vertices[a].texcoord;
+				Vector2 duv2 = vertices[c].texcoord - vertices[a].texcoord;
+				float determinant = duv1.X * duv2.Y - duv2.X * duv1.Y;
+				if (Math.Abs(determinant) < 1e-12f)
+				{
+					continue;
+				}
+
+				float f = 1f / determinant;
+				Vector3 tangent = (edge1 * duv2.Y - edge2 * duv1.Y) * f;
+				Vector3 bitangent = (edge2 * duv1.X - edge1 * duv2.X) * f;
+				tangents[a] += tangent;
+				tangents[b] += tangent;
+				tangents[c] += tangent;
+				bitangents[a] += bitangent;
+				bitangents[b] += bitangent;
+				bitangents[c] += bitangent;
+			}
+
+			var result = new Vertex[vertices.Length];
+			for (int i = 0; i < vertices.Length; i++)
+			{
+				Vertex v = vertices[i];
+				Vector3 n = v.normal;
+				Vector3 t = tangents[i] - n * Vector3.Dot(n, tangents[i]);
+				if (t.LengthSquared < 1e-20f)
+				{
+					// No usable UVs: any direction perpendicular to the normal.
+					t = Vector3.Cross(Math.Abs(n.Y) < 0.99f ? Vector3.UnitY : Vector3.UnitX, n);
+				}
+
+				t = t.Normalized();
+				Vector3 bt = Vector3.Cross(n, t);
+				if (Vector3.Dot(bt, bitangents[i]) < 0f)
+				{
+					bt = -bt;
+				}
+
+				result[i] = new Vertex(v.position, n, v.texcoord, t, bt, v.color);
+			}
+
+			return result;
 		}
 
 		#endregion
@@ -166,16 +184,16 @@ namespace LELEngine
 
 		private void ComputeBounds()
 		{
-			if (Verticies.Count == 0)
+			if (Vertices.Length == 0)
 			{
 				BoundsMin = Vector3.Zero;
 				BoundsMax = Vector3.Zero;
 				return;
 			}
 
-			Vector3 min = Verticies[0].position;
+			Vector3 min = Vertices[0].position;
 			Vector3 max = min;
-			foreach (Vertex vertex in Verticies)
+			foreach (Vertex vertex in Vertices)
 			{
 				min = Vector3.ComponentMin(min, vertex.position);
 				max = Vector3.ComponentMax(max, vertex.position);

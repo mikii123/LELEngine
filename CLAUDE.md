@@ -15,6 +15,27 @@
 - The editor compiles a project's scripts with the `dotnet` on PATH: for automated editor runs on a project with
   scripts, put `C:\Users\Admin\.dotnet` first on PATH too, otherwise every script build fails with NETSDK1045.
 
+## Models and meshes
+
+- Every mesh file is a model (`LELEngine/Model`): `ModelAssets.Load(path)` gives a `Model` (node hierarchy, meshes
+  as sub-assets named after their node, material slots), `Model.Instantiate(scene, parent)` builds GameObjects with
+  MeshRenderers. Code-built scenes use it too: `DefaultScene.Instantiate` / `EditorApplication.CreateModelObject` in
+  the editor, `SceneModels` in `TestGame.Scenes` (full asset paths: `Meshes/cube.obj`, `Materials/X.material`).
+- Backends: `ObjModelBackend` (built into the engine, .obj + .mtl, works without the editor, e.g. in TestGame) and
+  `AssimpModelBackend` (editor, Silk.NET.Assimp: fbx, gltf/glb, dae, 3ds, blend, ply, stl), registered in the
+  editor's `Program.Main` with `ModelMaterialExtractor` (writes `Materials/<name>.material` with `LitTextured` /
+  `LitTransparent`, embedded textures into `Textures/`, never overwrites). Imports cache in `Library/ModelCache`
+  (`ModelAssets.CacheFolder`, set when a project opens); player builds write the imported binary (`LELMODEL`
+  magic) under the model's own file name, so the player never needs Assimp.
+- `Mesh` is indexed (`Vertices`, `Indices`, `SubMeshes`); `GetTrianglePositions()` serves CPU queries (picking,
+  navmesh, SDF build). `MeshRenderer` has one material per sub-mesh (`Materials`, `GetMaterial(i)` repeats the last
+  slot); a renderer can be in both the opaque and the transparent list (`HasOpaqueParts` / `HasTransparentParts`),
+  every pass draws its own sub-meshes (`RendererPart` in `GpuScene`: one GPU instance per opaque sub-mesh).
+- FBX units: `UnitScaleFactor` from the scene metadata is applied by the import (Assimp does not); verified with
+  Unity's SkyCar.fbx (2.32 x 1.45 x 4.47 m). Node matrices from Silk.NET are row-major with the translation in the
+  4th column: transpose before `Matrix4x4.Decompose`.
+- Test hook: `addmodel=N;Models/Car.fbx|M;...` instantiates model files at frames N, M.
+
 ## Editor scripts (custom inspectors, editor windows, menu items)
 
 - Public API in `LELEngine.Editor/Extensions`: `Editor` + `[CustomEditor]`, `EditorWindow`, `[MenuItem]`,

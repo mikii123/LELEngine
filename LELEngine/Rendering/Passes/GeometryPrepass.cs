@@ -84,14 +84,23 @@ namespace LELEngine.Rendering.Passes
 			{
 				foreach (MeshRenderer renderer in context.Renderers)
 				{
-					Material.ResetStandardUniforms(program);
-					float roughness;
-					if (renderer.Material != null && renderer.Material.TryGetFloat("Roughness", out roughness))
+					for (int i = 0; i < renderer.SubMeshCount; i++)
 					{
-						program.SetFloat("Roughness", roughness);
-					}
+						Material material = renderer.GetMaterial(i);
+						if (material != null && material.IsTransparent)
+						{
+							continue;
+						}
 
-					renderer.RenderWith(program);
+						Material.ResetStandardUniforms(program);
+						float roughness;
+						if (material != null && material.TryGetFloat("Roughness", out roughness))
+						{
+							program.SetFloat("Roughness", roughness);
+						}
+
+						renderer.RenderSubMeshWith(program, i);
+					}
 				}
 			}
 

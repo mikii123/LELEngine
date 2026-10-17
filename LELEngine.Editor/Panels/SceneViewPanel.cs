@@ -578,6 +578,13 @@ namespace LELEngine.Editor
 		/// <summary>Closest renderer under the mouse (ray against the meshes' triangles).</summary>
 		private GameObject Pick(NVector2 mouse)
 		{
+			return Pick(mouse, out _);
+		}
+
+		/// <summary>Closest renderer under the mouse and the sub-mesh of the triangle hit.</summary>
+		private GameObject Pick(NVector2 mouse, out int subMesh)
+		{
+			subMesh = -1;
 			Scene scene = editor.Scene;
 			if (scene == null)
 			{
@@ -611,13 +618,15 @@ namespace LELEngine.Editor
 					continue;
 				}
 
-				var vertices = mesh.Verticies;
-				for (int i = 0; i + 2 < vertices.Count; i += 3)
+				// Triangle positions follow the index buffer, so a triangle's first index tells its sub-mesh.
+				Vector3[] triangles = mesh.GetTrianglePositions();
+				for (int i = 0; i + 2 < triangles.Length; i += 3)
 				{
-					if (RayTriangle(localOrigin, localDirection, vertices[i].position, vertices[i + 1].position, vertices[i + 2].position, out float t) && t < bestT && t > 0f)
+					if (RayTriangle(localOrigin, localDirection, triangles[i], triangles[i + 1], triangles[i + 2], out float t) && t < bestT && t > 0f)
 					{
 						bestT = t;
 						best = renderer.gameObject;
+						subMesh = SubMeshOf(mesh, i);
 					}
 				}
 			}
@@ -625,6 +634,20 @@ namespace LELEngine.Editor
 			// Selecting a child of a selected object's subtree cycles naturally by clicking again (Unity picks the root
 			// first; here the object hit is selected directly).
 			return best;
+		}
+
+		private static int SubMeshOf(Mesh mesh, int firstIndex)
+		{
+			for (int s = 0; s < mesh.SubMeshCount; s++)
+			{
+				SubMesh range = mesh.SubMeshes[s];
+				if (firstIndex >= range.FirstIndex && firstIndex < range.FirstIndex + range.IndexCount)
+				{
+					return s;
+				}
+			}
+
+			return 0;
 		}
 
 		private static Vector3 Unproject(Vector4 ndc, Matrix4 inverseViewProjection)
@@ -706,23 +729,19 @@ namespace LELEngine.Editor
 
 		private void DropAsset(string assetPath)
 		{
-			if (assetPath.EndsWith(".obj", StringComparison.OrdinalIgnoreCase))
+			if (ModelAssets.IsModelFile(assetPath))
 			{
-				string name = Path.GetFileNameWithoutExtension(assetPath);
-				editor.CreateObject(name, go =>
-				{
-					MeshRenderer renderer = DefaultScene.AddMesh(go, assetPath);
-					renderer.SetMesh(assetPath);
-				});
+				editor.InstantiateModel(assetPath);
 			}
 			else if (assetPath.EndsWith(".material", StringComparison.OrdinalIgnoreCase))
 			{
-				GameObject target = Pick(ImGui.GetMousePos());
+				// The material goes into the slot of the sub-mesh under the mouse.
+				GameObject target = Pick(ImGui.GetMousePos(), out int subMesh);
 				MeshRenderer renderer = target?.GetComponent<MeshRenderer>();
 				if (renderer != null)
 				{
 					editor.Edits.Begin(renderer);
-					renderer.SetMaterial(assetPath);
+					renderer.SetMaterial(Math.Max(0, subMesh), InternalStorage.GetOrCreateMaterial(assetPath));
 					editor.Edits.RequestCommit();
 					editor.Select(target);
 					editor.NotifyChanged(target);

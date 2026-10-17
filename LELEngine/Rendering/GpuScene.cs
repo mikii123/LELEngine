@@ -7,6 +7,54 @@ using OpenTK.Mathematics;
 
 namespace LELEngine.Rendering
 {
+	/// <summary>One sub-mesh of a renderer, drawn with the renderer's material of that slot.</summary>
+	public readonly struct RendererPart
+	{
+		#region Constructors
+
+		public RendererPart(MeshRenderer renderer, int subMesh)
+		{
+			Renderer = renderer;
+			SubMesh = subMesh;
+		}
+
+		#endregion
+
+		#region PublicFields
+
+		public MeshRenderer Renderer { get; }
+		public int SubMesh { get; }
+		public Material Material => Renderer.GetMaterial(SubMesh);
+
+		#endregion
+
+		#region PublicMethods
+
+		/// <summary>The opaque sub-meshes (with indices) of the renderers, in order.</summary>
+		public static void CollectOpaque(IReadOnlyList<MeshRenderer> renderers, List<RendererPart> parts)
+		{
+			parts.Clear();
+			foreach (MeshRenderer renderer in renderers)
+			{
+				Mesh mesh = renderer.Mesh;
+				if (mesh == null)
+				{
+					continue;
+				}
+
+				for (int i = 0; i < mesh.SubMeshCount; i++)
+				{
+					if (mesh.SubMeshes[i].IndexCount > 0 && !renderer.IsSubMeshTransparent(i))
+					{
+						parts.Add(new RendererPart(renderer, i));
+					}
+				}
+			}
+		}
+
+		#endregion
+	}
+
 	/// <summary>One multi-draw call of the opaque pass: the instanced variant of a shader and the uniform state its instances share.</summary>
 	public sealed class OpaqueBucket
 	{
@@ -30,14 +78,14 @@ namespace LELEngine.Rendering
 
 		#region InternalFields
 
-		internal readonly List<MeshRenderer> Members = new List<MeshRenderer>();
+		internal readonly List<RendererPart> Members = new List<RendererPart>();
 
 		#endregion
 	}
 
 	/// <summary>
-	///     The frame's opaque renderers on the GPU (transparent ones draw per object in the transparent pass), for
-	///     GPU-driven rendering: an instance table (world and normal matrices,
+	///     The frame's opaque sub-meshes on the GPU (transparent ones draw per object in the transparent pass), for
+	///     GPU-driven rendering: an instance per renderer and opaque sub-mesh in an instance table (world and normal matrices,
 	///     local bounds, the mesh range in <see cref="GeometryPool" />, material index, flags), a material table (the
 	///     standard parameters Color, Emissive, Roughness) and the opaque buckets (one per shader variant and shared
 	///     uniform state). Rebuilt every frame; each view (camera, shadow map) is culled by Engine/InstanceCull.shader,
@@ -76,8 +124,8 @@ namespace LELEngine.Rendering
 		public int LastInstanceCount { get; private set; }
 		public IReadOnlyList<OpaqueBucket> Buckets => activeBuckets;
 
-		/// <summary>Renderers the opaque pass draws one by one: their shader has no instanced variant.</summary>
-		public IReadOnlyList<MeshRenderer> PerObjectRenderers => perObject;
+		/// <summary>Sub-meshes the opaque pass draws one by one: their material's shader has no instanced variant.</summary>
+		public IReadOnlyList<RendererPart> PerObjectParts => perObject;
 
 		#endregion
 
@@ -87,8 +135,9 @@ namespace LELEngine.Rendering
 
 		private readonly List<OpaqueBucket> bucketPool = new List<OpaqueBucket>();
 		private readonly List<OpaqueBucket> activeBuckets = new List<OpaqueBucket>();
-		private readonly List<MeshRenderer> perObject = new List<MeshRenderer>();
-		private readonly List<MeshRenderer> unbucketed = new List<MeshRenderer>();
+		private readonly List<RendererPart> perObject = new List<RendererPart>();
+		private readonly List<RendererPart> unbucketed = new List<RendererPart>();
+		private readonly List<RendererPart> parts = new List<RendererPart>();
 		private readonly List<Material> materials = new List<Material>();
 		private readonly Dictionary<Material, int> materialIndices = new Dictionary<Material, int>();
 		private readonly CullView cameraView = new CullView();
@@ -123,29 +172,33 @@ namespace LELEngine.Rendering
 		private void BuildTables(IReadOnlyList<MeshRenderer> renderers)
 		{
 			EndFrame();
-			foreach (MeshRenderer renderer in renderers)
+			RendererPart.CollectOpaque(renderers, parts);
+			foreach (RendererPart part in parts)
 			{
+				MeshRenderer renderer = part.Renderer;
 				if (!GeometryPool.Prepare(renderer.Mesh))
 				{
 					continue;
 				}
 
-				Material material = renderer.Material;
+				Material material = part.Material;
 				ShaderProgram instanced = material?.UsingShader?.GetInstancedVariant();
 				if (instanced == null)
 				{
 					// Depth passes still draw it from the tables; the opaque pass draws it per object.
-					unbucketed.Add(renderer);
+					unbucketed.Add(part);
 					if (material?.UsingShader != null)
 					{
-						perObject.Add(renderer);
+						perObject.Add(part);
 					}
 
 					continue;
 				}
 
-				Bucket(instanced, material.HasOnlyStandardUniforms() ? null : material, renderer.ReceiveShadows, renderer.ReceiveGI).Members.Add(renderer);
+				Bucket(instanced, material.HasOnlyStandardUniforms() ? null : material, renderer.ReceiveShadows, renderer.ReceiveGI).Members.Add(part);
 			}
+
+			parts.Clear();
 
 			materials.Add(null); // index 0: no material (the standard defaults)
 			int count = unbucketed.Count;
@@ -165,15 +218,15 @@ namespace LELEngine.Rendering
 				OpaqueBucket bucket = activeBuckets[b];
 				bucket.Start = index;
 				bucket.Count = bucket.Members.Count;
-				foreach (MeshRenderer renderer in bucket.Members)
+				foreach (RendererPart part in bucket.Members)
 				{
-					Write(index++, renderer, b);
+					Write(index++, part, b);
 				}
 			}
 
-			foreach (MeshRenderer renderer in unbucketed)
+			foreach (RendererPart part in unbucketed)
 			{
-				Write(index++, renderer, -1);
+				Write(index++, part, -1);
 			}
 
 			InstanceCount = index;
@@ -302,9 +355,11 @@ namespace LELEngine.Rendering
 			return bucket;
 		}
 
-		private void Write(int index, MeshRenderer renderer, int bucket)
+		private void Write(int index, RendererPart part, int bucket)
 		{
+			MeshRenderer renderer = part.Renderer;
 			Mesh mesh = renderer.Mesh;
+			SubMesh range = mesh.SubMeshes[part.SubMesh];
 			Matrix4 model = renderer.transform.LocalToWorld;
 			instances[index] = new GpuInstance
 			{
@@ -312,11 +367,11 @@ namespace LELEngine.Rendering
 				NormalMatrix = NormalMatrix(model),
 				BoundsMin = new Vector4(mesh.BoundsMin, 0f),
 				BoundsMax = new Vector4(mesh.BoundsMax, 0f),
-				IndexCount = (uint)mesh.PoolIndexCount,
-				FirstIndex = (uint)mesh.PoolFirstIndex,
+				IndexCount = (uint)range.IndexCount,
+				FirstIndex = (uint)(mesh.PoolFirstIndex + range.FirstIndex),
 				BaseVertex = (uint)mesh.PoolBaseVertex,
 				Flags = renderer.CastShadows ? CastsShadowsFlag : 0u,
-				Material = (uint)MaterialIndex(renderer.Material),
+				Material = (uint)MaterialIndex(part.Material),
 				Bucket = bucket < 0 ? uint.MaxValue : (uint)bucket
 			};
 		}

@@ -155,7 +155,7 @@ namespace LELEngine.Rendering.DistanceField
 
 			if (nextZ + size.Z > Depth)
 			{
-				Console.WriteLine("[SDF] Atlas full, cannot build distance field for mesh with " + mesh.Verticies.Count / 3 + " triangles");
+				Console.WriteLine("[SDF] Atlas full, cannot build distance field for mesh with " + mesh.TriangleCount + " triangles");
 				return null;
 			}
 
@@ -177,17 +177,18 @@ namespace LELEngine.Rendering.DistanceField
 			UploadTriangles(mesh, scale);
 			Dispatch(field);
 
-			Console.WriteLine($"[SDF] Built {size.X}x{size.Y}x{size.Z} field ({mesh.Verticies.Count / 3} triangles) at atlas slice {field.AtlasZ}");
+			Console.WriteLine($"[SDF] Built {size.X}x{size.Y}x{size.Z} field ({mesh.TriangleCount} triangles) at atlas slice {field.AtlasZ}");
 			return field;
 		}
 
 		private void UploadTriangles(Mesh mesh, Vector3 scale)
 		{
-			int vertexCount = mesh.Verticies.Count / 3 * 3;
+			Vector3[] triangles = mesh.GetTrianglePositions();
+			int vertexCount = triangles.Length;
 			var data = new Vector4[vertexCount];
 			for (int i = 0; i < vertexCount; i++)
 			{
-				Vector3 p = mesh.Verticies[i].position * scale;
+				Vector3 p = triangles[i] * scale;
 				data[i] = new Vector4(p, 0f);
 			}
 
@@ -206,7 +207,7 @@ namespace LELEngine.Rendering.DistanceField
 			build.Program.SetInt3("sdfSize", field.Size.X, field.Size.Y, field.Size.Z);
 			build.Program.SetVector3("boundsMin", field.BoundsMin);
 			build.Program.SetVector3("sdfTexelSize", field.TexelSize);
-			build.Program.SetInt("triangleCount", field.Mesh.Verticies.Count / 3);
+			build.Program.SetInt("triangleCount", field.Mesh.TriangleCount);
 
 			build.DispatchThreads(field.Size.X, field.Size.Y, field.Size.Z, 4, 4, 4);
 			ComputeShader.Barrier(MemoryBarrierFlags.ShaderImageAccessBarrierBit | MemoryBarrierFlags.TextureFetchBarrierBit);

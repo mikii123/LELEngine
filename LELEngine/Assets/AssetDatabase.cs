@@ -522,7 +522,8 @@ namespace LELEngine
 
 		private static void RegisterBuiltinTypes()
 		{
-			RegisterAssetType(typeof(Mesh), new[] { ".obj", ".fbx" }, (type, path, sub) => InternalStorage.GetOrCreateMesh(path));
+			RegisterAssetType(typeof(Model), ModelAssets.Extensions, (type, path, sub) => ModelAssets.Load(path));
+			RegisterAssetType(typeof(Mesh), ModelAssets.Extensions, (type, path, sub) => ModelAssets.LoadMesh(path, sub));
 			RegisterAssetType(typeof(Shaders.Material), new[] { ".material" }, (type, path, sub) => InternalStorage.GetOrCreateMaterial(path));
 			RegisterAssetType(typeof(Shaders.ShaderProgram), new[] { ".shader" }, (type, path, sub) => InternalStorage.GetOrCreateShader(path));
 			RegisterAssetType(typeof(Texture), TextureAssets.ImageExtensions, TextureAssets.Load);

@@ -17,6 +17,8 @@
     <PackageReference Include="OpenTK" Version="4.9.4" />
     <PackageReference Include="Hexa.NET.ImGui" Version="2.2.9" />
     <PackageReference Include="Hexa.NET.ImGuizmo" Version="2.2.9" />
+    <!-- Model import (FBX, glTF, Collada, ...): the editor only; builds ship the imported data. -->
+    <PackageReference Include="Silk.NET.Assimp" Version="2.22.0" />
   </ItemGroup>
 
   <ItemGroup>
@@ -77,6 +79,9 @@
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
     <Content Include="..\TestGame.Scenes\Assets\Shaders\Lit.shader" Link="Templates\NewProject\Assets\Shaders\Lit.shader">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="..\TestGame.Scenes\Assets\Shaders\LitTextured.shader" Link="Templates\NewProject\Assets\Shaders\LitTextured.shader">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
     <Content Include="..\TestGame.Scenes\Assets\Shaders\LitTransparent.shader" Link="Templates\NewProject\Assets\Shaders\LitTransparent.shader">

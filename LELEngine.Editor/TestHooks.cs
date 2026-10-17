@@ -10,7 +10,8 @@ namespace LELEngine.Editor
 	///     focusscene=N, nudgecamera=N, dumpview=f1,f2,...;folder, reportframes=f1,f2,..., focuswindow=N;Name,
 	///     maximize=N, restore=N, grow=N, slowframes=ms, bakenav=N, projectsettings=N;Tab,
 	///     createvfx=N;asset (writes the default VFX graph and opens it), vfxgraph=N;asset (opens the VFX Graph window),
-	///     menuitem=N;Menu/Item|M;Menu/Other (runs [MenuItem]s of the editor scripts).
+	///     menuitem=N;Menu/Item|M;Menu/Other (runs [MenuItem]s of the editor scripts), addmodel=N;Models/Car.fbx|M;...
+	///     (instantiates model files).
 	/// </summary>
 	internal sealed class TestHooks
 	{
@@ -274,6 +275,20 @@ namespace LELEngine.Editor
 					{
 						bool found = editor.Extensions.ExecuteMenuItem(parts[1]);
 						Debug.Log("[Test] Menu item " + parts[1] + (found ? " run" : " not found"));
+					}
+				}
+			}
+
+			// addmodel=N;Models/Car.fbx|M;Other.obj instantiates model files at frames N, M (importing them first).
+			if (values.TryGetValue("addmodel", out string addModels))
+			{
+				foreach (string addModel in addModels.Split('|'))
+				{
+					string[] parts = addModel.Split(';');
+					if (parts.Length == 2 && int.TryParse(parts[0], out int at) && at == frame)
+					{
+						GameObject root = editor.InstantiateModel(parts[1]);
+						Debug.Log("[Test] Model " + parts[1] + (root != null ? " added as " + root.Name : " not added"));
 					}
 				}
 			}

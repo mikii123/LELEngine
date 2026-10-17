@@ -173,7 +173,7 @@ namespace LELEngine.Rendering.Lumen
 		{
 			foreach (MeshRenderer renderer in renderers)
 			{
-				if (renderer.IsStatic != wantStatic || !renderer.ContributesToGI || renderer.Mesh == null || renderer.Mesh.Verticies.Count < 3 || renderer.Material == null)
+				if (renderer.IsStatic != wantStatic || !renderer.ContributesToGI || renderer.Mesh == null || renderer.Mesh.TriangleCount == 0 || renderer.Materials.Count == 0)
 				{
 					continue;
 				}
@@ -194,6 +194,31 @@ namespace LELEngine.Rendering.Lumen
 					Cards = cards,
 					IsStatic = wantStatic
 				});
+			}
+		}
+
+		/// <summary>
+		///     The lighting inputs of the renderer's opaque materials: colour and emission summed with per-slot weights
+		///     (any change of one changes them), and the strongest emission intensity.
+		/// </summary>
+		private static void MaterialInputs(MeshRenderer renderer, out Vector4 color, out Vector4 emissive, out float emissiveIntensity)
+		{
+			color = Vector4.Zero;
+			emissive = Vector4.Zero;
+			emissiveIntensity = 0f;
+			for (int i = 0; i < renderer.SubMeshCount; i++)
+			{
+				Shaders.Material material = renderer.GetMaterial(i);
+				if (material == null || material.IsTransparent)
+				{
+					continue;
+				}
+
+				if (!material.TryGetVector4("Color", out Vector4 c)) c = Vector4.One;
+				if (!material.TryGetVector4("Emissive", out Vector4 e)) e = Vector4.Zero;
+				color += c * (i + 1);
+				emissive += e * (i + 1);
+				emissiveIntensity = Math.Max(emissiveIntensity, e.W);
 			}
 		}
 
@@ -276,9 +301,7 @@ namespace LELEngine.Rendering.Lumen
 				Vector3 scale = o.Field.Scale;
 
 				// Material state that changes the lighting (colour, emission colour and intensity).
-				Vector4 color, emissiveState;
-				if (o.Renderer.Material == null || !o.Renderer.Material.TryGetVector4("Color", out color)) color = Vector4.One;
-				if (o.Renderer.Material == null || !o.Renderer.Material.TryGetVector4("Emissive", out emissiveState)) emissiveState = Vector4.Zero;
+				MaterialInputs(o.Renderer, out Vector4 color, out Vector4 emissiveState, out float emissiveIntensity);
 				MaterialState last;
 				if (!lastMaterials.TryGetValue(o.Renderer, out last) || last.Color != color || last.Emissive != emissiveState)
 				{
@@ -301,8 +324,6 @@ namespace LELEngine.Rendering.Lumen
 				}
 
 				// Emission intensity travels in the table so pulsing emitters never recapture their cards.
-				Vector4 emissive;
-				float emissiveIntensity = o.Renderer.Material != null && o.Renderer.Material.TryGetVector4("Emissive", out emissive) ? emissive.W : 0f;
 
 				objectData.Add(new SceneObjectData
 				{

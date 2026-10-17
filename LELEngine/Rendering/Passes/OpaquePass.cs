@@ -18,6 +18,12 @@ namespace LELEngine.Rendering.Passes
 
 		#endregion
 
+		#region PrivateFields
+
+		private readonly List<RendererPart> parts = new List<RendererPart>();
+
+		#endregion
+
 		#region PublicMethods
 
 		public override void Execute(RenderContext context)
@@ -43,11 +49,13 @@ namespace LELEngine.Rendering.Passes
 			else if (gpu.Active)
 			{
 				GpuDriven(gpu, context);
-				PerShader(gpu.PerObjectRenderers, context.Camera);
+				PerShader(gpu.PerObjectParts, context.Camera);
 			}
 			else
 			{
-				PerShader(context.Renderers, context.Camera);
+				RendererPart.CollectOpaque(context.Renderers, parts);
+				PerShader(parts, context.Camera);
+				parts.Clear();
 			}
 
 			GLState.SetDepth(true, true, DepthFunction.Less);
@@ -81,13 +89,7 @@ namespace LELEngine.Rendering.Passes
 		{
 			foreach (MeshRenderer renderer in renderers)
 			{
-				if (renderer.UsingShader == null)
-				{
-					continue;
-				}
-
-				renderer.UsingShader.Use();
-				renderer.UsingShader.RenderState.ApplyCull();
+				// Activates the material shader of every opaque sub-mesh itself.
 				renderer.Render();
 			}
 		}
@@ -95,9 +97,9 @@ namespace LELEngine.Rendering.Passes
 		// Groups draws by program to minimise program switches. Camera and lighting uniforms are the same for
 		// every object drawn with a program, so they are sent once per program and again only when an object's
 		// ReceiveShadows / ReceiveGI flags differ from the previous object's or the previous object's material
-		// overrode one of them (Material.OverridesSharedUniforms); each draw then only sends its model matrix
-		// and material uniforms.
-		private static void PerShader(IReadOnlyList<MeshRenderer> renderers, Camera camera)
+		// overrode one of them (Material.OverridesSharedUniforms); each draw (one sub-mesh) then only sends its
+		// model matrix and material uniforms.
+		private static void PerShader(IReadOnlyList<RendererPart> parts, Camera camera)
 		{
 			foreach (KeyValuePair<string, ShaderProgram> shader in InternalStorage.Shaders)
 			{
@@ -105,12 +107,15 @@ namespace LELEngine.Rendering.Passes
 				bool resend = true;
 				bool receiveShadows = false;
 				bool receiveGI = false;
-				foreach (MeshRenderer renderer in renderers)
+				foreach (RendererPart part in parts)
 				{
-					if (renderer.UsingShader != shader.Value)
+					Material material = part.Material;
+					if (material?.UsingShader != shader.Value)
 					{
 						continue;
 					}
+
+					MeshRenderer renderer = part.Renderer;
 
 					if (!used)
 					{
@@ -128,8 +133,8 @@ namespace LELEngine.Rendering.Passes
 						resend = false;
 					}
 
-					renderer.RenderObject();
-					if (renderer.Material != null && renderer.Material.OverridesSharedUniforms())
+					renderer.RenderSubMesh(part.SubMesh);
+					if (material.OverridesSharedUniforms())
 					{
 						resend = true;
 					}
