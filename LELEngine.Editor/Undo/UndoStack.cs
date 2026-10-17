@@ -353,6 +353,7 @@ namespace LELEngine.Editor
 		private readonly EditorApplication editor;
 		private object target;
 		private byte[] before;
+		private string name;
 		private bool commitRequested;
 
 		#endregion
@@ -369,7 +370,8 @@ namespace LELEngine.Editor
 		#region PublicMethods
 
 		/// <summary>Called before the target changes; captures its state once per edit.</summary>
-		public void Begin(object editTarget)
+		/// <param name="editName">Undo menu text of a component edit (null: "Edit &lt;Type&gt;").</param>
+		public void Begin(object editTarget, string editName = null)
 		{
 			if (target == editTarget)
 			{
@@ -382,6 +384,7 @@ namespace LELEngine.Editor
 			}
 
 			target = editTarget;
+			name = editName;
 			before = Capture(editTarget);
 		}
 
@@ -414,7 +417,7 @@ namespace LELEngine.Editor
 				switch (target)
 				{
 					case Behaviour component:
-						editor.Undo.Push(new ComponentStateRecord { Name = "Edit " + component.GetType().Name, ComponentId = component.Id, Before = before, After = after });
+						editor.Undo.Push(new ComponentStateRecord { Name = name ?? "Edit " + component.GetType().Name, ComponentId = component.Id, Before = before, After = after });
 						break;
 					case SceneSettings _:
 						editor.Undo.Push(new SettingsRecord { Name = "Edit scene settings", Before = before, After = after });
@@ -438,6 +441,7 @@ namespace LELEngine.Editor
 
 			target = null;
 			before = null;
+			name = null;
 		}
 
 		private static void SaveAsset(object asset)
@@ -464,6 +468,7 @@ namespace LELEngine.Editor
 		{
 			target = null;
 			before = null;
+			name = null;
 			commitRequested = false;
 		}
 

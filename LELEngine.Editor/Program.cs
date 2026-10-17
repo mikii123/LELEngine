@@ -23,7 +23,7 @@ namespace LELEngine.Editor
 				return code;
 			}
 
-			using (EditorWindow window = EditorWindow.Create(args))
+			using (MainWindow window = MainWindow.Create(args))
 			{
 				window.Run();
 			}

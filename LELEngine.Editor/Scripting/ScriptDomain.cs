@@ -16,6 +16,8 @@ namespace LELEngine.Editor
 	///     into a fresh context and the scene is loaded back from its saved state. Compile errors keep the old
 	///     scripts running. That the old context really went away is checked in the background; when something still
 	///     references it, a warning names the leak.
+	///     Scripts in Editor folders build into Game.Editor.dll (custom inspectors, editor windows, menu items), loaded
+	///     into the same context after Game.dll and handed to <see cref="EditorExtensions" />.
 	/// </summary>
 	internal sealed class ScriptDomain : IDisposable
 	{
@@ -28,6 +30,9 @@ namespace LELEngine.Editor
 		public bool IsBuilding => buildTask != null;
 		public string StatusText { get; private set; } = "";
 		public Assembly GameAssembly { get; private set; }
+
+		/// <summary>The editor scripts (null when the project has none or they did not load).</summary>
+		public Assembly EditorAssembly { get; private set; }
 
 		#endregion
 
@@ -45,6 +50,8 @@ namespace LELEngine.Editor
 		private GameLoadContext context;
 		private byte[] assemblyBytes;
 		private byte[] symbolBytes;
+		private byte[] editorAssemblyBytes;
+		private byte[] editorSymbolBytes;
 		private readonly System.Collections.Generic.List<(WeakReference, string)> trackedComponents = new System.Collections.Generic.List<(WeakReference, string)>();
 
 		#endregion
@@ -79,13 +86,20 @@ namespace LELEngine.Editor
 			watcher.EnableRaisingEvents = true;
 
 			string dll = AssemblyFile(project);
+			bool editorScripts = HasEditorScripts(project);
 			if (File.Exists(dll))
 			{
 				assemblyBytes = File.ReadAllBytes(dll);
-				string pdb = Path.ChangeExtension(dll, ".pdb");
-				symbolBytes = File.Exists(pdb) ? File.ReadAllBytes(pdb) : null;
+				symbolBytes = ReadSymbols(dll);
+				string editorDll = EditorAssemblyFile(project);
+				if (editorScripts && File.Exists(editorDll))
+				{
+					editorAssemblyBytes = File.ReadAllBytes(editorDll);
+					editorSymbolBytes = ReadSymbols(editorDll);
+				}
+
 				LoadDomain();
-				if (!IsAssemblyCurrent(project))
+				if (!IsAssemblyCurrent(project, editorScripts))
 				{
 					RequestBuild();
 				}
@@ -102,26 +116,66 @@ namespace LELEngine.Editor
 			return Path.Combine(project.LibraryPath, "ScriptAssemblies", ProjectGenerator.AssemblyName + ".dll");
 		}
 
+		/// <summary>The editor scripts (Library/ScriptAssemblies/Game.Editor.dll).</summary>
+		public static string EditorAssemblyFile(ProjectInfo project)
+		{
+			return Path.Combine(project.LibraryPath, "ScriptAssemblies", ProjectGenerator.EditorAssemblyName + ".dll");
+		}
+
 		public static bool HasScripts(ProjectInfo project)
 		{
 			return NewestSource(project) != DateTime.MinValue;
 		}
 
-		/// <summary>The editor build exists and is newer than every script and the generated project.</summary>
-		public static bool IsAssemblyCurrent(ProjectInfo project)
+		/// <summary>Some script lies in an Editor folder.</summary>
+		public static bool HasEditorScripts(ProjectInfo project)
 		{
-			string dll = AssemblyFile(project);
+			if (!Directory.Exists(project.AssetsPath))
+			{
+				return false;
+			}
+
+			foreach (string file in Directory.EnumerateFiles(project.AssetsPath, "*.cs", SearchOption.AllDirectories))
+			{
+				if (ProjectGenerator.IsEditorScript(project, file))
+				{
+					return true;
+				}
+			}
+
+			return false;
+		}
+
+		/// <summary>
+		///     The editor build exists and is newer than every script and the generated project (with
+		///     <paramref name="includeEditor" />: Game.Editor.dll too).
+		/// </summary>
+		public static bool IsAssemblyCurrent(ProjectInfo project, bool includeEditor = false)
+		{
+			DateTime newest = NewestSource(project);
+			string projectFile = ProjectGenerator.ProjectFile(project);
+			string packages = Path.ChangeExtension(projectFile, ".packages.props");
+			return IsBuildCurrent(AssemblyFile(project), newest, projectFile, packages)
+				&& (!includeEditor || IsBuildCurrent(EditorAssemblyFile(project), newest, ProjectGenerator.EditorProjectFile(project), packages));
+		}
+
+		private static bool IsBuildCurrent(string dll, DateTime newestSource, string projectFile, string packages)
+		{
 			if (!File.Exists(dll))
 			{
 				return false;
 			}
 
 			DateTime built = File.GetLastWriteTimeUtc(dll);
-			string projectFile = ProjectGenerator.ProjectFile(project);
-			string packages = Path.ChangeExtension(projectFile, ".packages.props");
-			return NewestSource(project) <= built
+			return newestSource <= built
 				&& (!File.Exists(projectFile) || File.GetLastWriteTimeUtc(projectFile) <= built)
 				&& (!File.Exists(packages) || File.GetLastWriteTimeUtc(packages) <= built);
+		}
+
+		private static byte[] ReadSymbols(string dll)
+		{
+			string pdb = Path.ChangeExtension(dll, ".pdb");
+			return File.Exists(pdb) ? File.ReadAllBytes(pdb) : null;
 		}
 
 		/// <summary>Called every frame on the main thread: starts debounced builds, applies finished ones.</summary>
@@ -203,7 +257,8 @@ namespace LELEngine.Editor
 			ProjectGenerator.Generate(project);
 			StatusText = "Compiling scripts...";
 			string file = projectFile;
-			buildTask = Task.Run(() => ScriptBuilder.Build(file, "Debug", null));
+			bool editorScripts = HasEditorScripts(project);
+			buildTask = Task.Run(() => ScriptBuilder.Build(file, "Debug", null, editorScripts));
 		}
 
 		private void OnBuildFinished(BuildResult result)
@@ -237,6 +292,8 @@ namespace LELEngine.Editor
 		{
 			assemblyBytes = result.Assembly;
 			symbolBytes = result.Symbols;
+			editorAssemblyBytes = result.EditorAssembly;
+			editorSymbolBytes = result.EditorSymbols;
 			editor.ReloadSceneAround(SwapDomain);
 		}
 
@@ -259,9 +316,7 @@ namespace LELEngine.Editor
 			context = new GameLoadContext(outputFolder);
 			try
 			{
-				GameAssembly = symbolBytes != null
-					? context.LoadFromStream(new MemoryStream(assemblyBytes), new MemoryStream(symbolBytes))
-					: context.LoadFromStream(new MemoryStream(assemblyBytes));
+				GameAssembly = context.Load(assemblyBytes, symbolBytes);
 				TypeRegistry.Register(GameAssembly);
 			}
 			catch (Exception e)
@@ -270,7 +325,22 @@ namespace LELEngine.Editor
 				GameAssembly = null;
 			}
 
+			// Editor scripts: not registered for serialization (components there could not exist in a player).
+			if (GameAssembly != null && editorAssemblyBytes != null)
+			{
+				try
+				{
+					EditorAssembly = context.Load(editorAssemblyBytes, editorSymbolBytes);
+				}
+				catch (Exception e)
+				{
+					Debug.LogError("[Scripts] Cannot load the editor script assembly: " + e.Message);
+					EditorAssembly = null;
+				}
+			}
+
 			Version++;
+			editor.Extensions.OnDomainLoaded(EditorAssembly);
 		}
 
 		/// <summary>
@@ -307,6 +377,8 @@ namespace LELEngine.Editor
 				TypeRegistry.Unregister(GameAssembly);
 				GameAssembly = null;
 			}
+
+			EditorAssembly = null;
 
 			if (context == null)
 			{
@@ -394,7 +466,8 @@ namespace LELEngine.Editor
 
 		/// <summary>
 		///     Collectible context of the game scripts. Engine and framework assemblies resolve to the editor's copies
-		///     (shared types); other dependencies (NuGet packages of the game) load from the build output.
+		///     (shared types); the assemblies loaded from memory (Game.dll for Game.Editor.dll) resolve to themselves;
+		///     other dependencies (NuGet packages of the game) load from the build output.
 		/// </summary>
 		private sealed class GameLoadContext : AssemblyLoadContext
 		{
@@ -406,8 +479,24 @@ namespace LELEngine.Editor
 				this.folder = folder;
 			}
 
+			/// <summary>Loads an assembly from its bytes (the files stay free for the next build).</summary>
+			public Assembly Load(byte[] assembly, byte[] symbols)
+			{
+				return symbols != null
+					? LoadFromStream(new MemoryStream(assembly), new MemoryStream(symbols))
+					: LoadFromStream(new MemoryStream(assembly));
+			}
+
 			protected override Assembly Load(AssemblyName assemblyName)
 			{
+				foreach (Assembly loaded in Assemblies)
+				{
+					if (string.Equals(loaded.GetName().Name, assemblyName.Name, StringComparison.OrdinalIgnoreCase))
+					{
+						return loaded;
+					}
+				}
+
 				foreach (Assembly loaded in Default.Assemblies)
 				{
 					if (string.Equals(loaded.GetName().Name, assemblyName.Name, StringComparison.OrdinalIgnoreCase))

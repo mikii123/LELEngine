@@ -27,7 +27,7 @@ namespace LELEngine.Editor
 		///     Shows the system folder picker, modal to the editor window, starting in <paramref name="initialFolder" />
 		///     (or its closest existing parent). Returns the chosen folder, or null when cancelled.
 		/// </summary>
-		public static unsafe string PickFolder(EditorWindow owner, string title, string initialFolder)
+		public static unsafe string PickFolder(MainWindow owner, string title, string initialFolder)
 		{
 			if (!CanPickFolder)
 			{

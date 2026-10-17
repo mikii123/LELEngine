@@ -223,6 +223,11 @@ namespace LELEngine.Editor
 				ImGui.TextDisabled("Its data is kept and saved with the scene.");
 				changed = false;
 			}
+			else if (editor.Extensions.GetEditor(component) is Editor custom)
+			{
+				// [CustomEditor] of the project's editor scripts: it draws the whole body.
+				changed = editor.Extensions.DrawInspector(custom, context);
+			}
 			else
 			{
 				changed = FieldDrawer.DrawFields(component, context);

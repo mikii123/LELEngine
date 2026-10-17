@@ -27,7 +27,7 @@ namespace LELEngine.Editor.UIBuilder
 
 		#region PrivateFields
 
-		private readonly EditorWindow owner;
+		private readonly MainWindow owner;
 		private NativeWindow native;
 		private ImGuiController imgui;
 		private bool closeRequested;
@@ -37,7 +37,7 @@ namespace LELEngine.Editor.UIBuilder
 
 		#region Constructors
 
-		public BuilderWindow(EditorApplication editor, EditorWindow owner)
+		public BuilderWindow(EditorApplication editor, MainWindow owner)
 		{
 			this.owner = owner;
 			native = new NativeWindow(new NativeWindowSettings

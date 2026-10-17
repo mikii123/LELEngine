@@ -8,7 +8,7 @@ using OpenTK.Windowing.Common;
 namespace LELEngine.Editor
 {
 	/// <summary>The editor's main window: one GL context shared by the UI and the scene / game view renderers.</summary>
-	internal sealed class EditorWindow : Window
+	internal sealed class MainWindow : Window
 	{
 		#region PrivateFields
 
@@ -25,7 +25,7 @@ namespace LELEngine.Editor
 
 		#region Constructors
 
-		private EditorWindow(Version apiVersion, string[] args)
+		private MainWindow(Version apiVersion, string[] args)
 			: base(1600, 900, "LELEngine Editor", apiVersion)
 		{
 			this.args = args;
@@ -51,7 +51,7 @@ namespace LELEngine.Editor
 		#region PublicMethods
 
 		/// <summary>Creates the window with the newest OpenGL context the driver grants (4.6 down to 4.3).</summary>
-		public static EditorWindow Create(string[] args)
+		public static MainWindow Create(string[] args)
 		{
 			// focus=0: automated runs open the window without taking the keyboard focus.
 			StartFocused = Array.IndexOf(args, "focus=0") < 0;
@@ -60,7 +60,7 @@ namespace LELEngine.Editor
 			{
 				try
 				{
-					return new EditorWindow(version, args);
+					return new MainWindow(version, args);
 				}
 				catch (Exception e) when (version > MinimumApiVersion)
 				{

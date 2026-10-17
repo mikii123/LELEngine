@@ -128,6 +128,9 @@ GPU event, ribbons and soft smoke puffs, all simulated and drawn on the GPU.*
 - Scene and game views render through the same renderer as the game. Play, pause and step restore the scene
   snapshot when you stop.
 - Game scripts compile in the background with `dotnet build`, and a full domain reload swaps them in.
+- Editor scripts (any `Editor` folder under `Assets`) extend the editor with Dear ImGui: custom inspectors
+  (`[CustomEditor]`), dockable editor windows (`EditorWindow`) and main menu items (`[MenuItem]`). See
+  [Editor scripts](#editor-scripts).
 - **UI Builder**: a separate window for editing UXML documents with a live preview, inspector, USS editor and
   canvas picking.
 - **VFX Graph** (Window > VFX Graph, double-click a `.vfx` asset, or Create Visual Effect Graph in the project
@@ -238,3 +241,79 @@ public sealed class Jumper : Behaviour
 	}
 }
 ```
+
+## Editor scripts
+
+Scripts in a folder named `Editor` (at any depth under `Assets`, e.g. `Assets/Editor` or `Assets/Tools/Editor`) build
+into `Game.Editor.dll`, next to `Game.dll`. They can use the game scripts, the editor's public API
+(`LELEngine.Editor`) and Dear ImGui (`Hexa.NET.ImGui`). They load and reload with the game scripts and never reach a
+player build. The generated solution has both projects (`<Name>.csproj`, `<Name>.Editor.csproj`).
+
+A custom inspector replaces the body of a component's section in the inspector:
+
+```csharp
+using Hexa.NET.ImGui;
+using LELEngine;
+using LELEngine.Editor;
+
+[CustomEditor(typeof(Spinner))]
+public class SpinnerEditor : Editor
+{
+	public override void OnInspectorGUI()
+	{
+		var spinner = (Spinner)target;
+		PropertyField("Speed");                 // the inspector's own widget, with undo
+		if (ImGui.Button("Double speed"))
+		{
+			Undo.RecordObject(spinner, "Double speed");   // before changing values by hand
+			spinner.Speed *= 2f;
+		}
+
+		DrawDefaultInspector();                 // every serialized field, as without a custom editor
+	}
+
+	public override void OnSceneGUI()
+	{
+		// Scene view gizmos of the selected object (LELEngine.Rendering.DebugDraw).
+	}
+}
+```
+
+An editor window docks like the editor's panels and opens from a menu item:
+
+```csharp
+public class SceneStatsWindow : EditorWindow
+{
+	public int clicks;   // serialized fields survive script reloads, play mode and editor restarts
+
+	[MenuItem("Tools/Scene Stats")]
+	private static void Open()
+	{
+		GetWindow<SceneStatsWindow>("Scene Stats");
+	}
+
+	protected override void OnGUI()
+	{
+		ImGui.TextUnformatted("Selected: " + (Selection.activeGameObject?.Name ?? "none"));
+		clicks = EditorGUILayout.Field("Clicks", clicks);
+	}
+}
+```
+
+- `Editor`: `target`, `OnInspectorGUI`, `OnSceneGUI`, `OnEnable` / `OnDisable` (while the object stays selected),
+  `DrawDefaultInspector`, `PropertyField`. `[CustomEditor(typeof(T), editorForChildClasses: true)]` covers derived
+  components too.
+- `EditorWindow`: `GetWindow<T>`, `CreateWindow<T>`, `HasOpenInstances<T>`, `Show`, `Focus`, `Close`, `title`,
+  `defaultSize`, `minSize`, `windowFlags`, `hasFocus`, and `OnGUI`, `Update`, `OnEnable`, `OnDisable`, `OnDestroy`,
+  `OnSelectionChange`.
+- `[MenuItem("Menu/Sub/Item", priority)]` on a static method without parameters: `File`, `Edit`, `GameObject` and
+  `Window` get the items appended, other names become menus of their own. A priority gap above 10 adds a separator.
+- `EditorGUILayout`: `Field<T>` (any type the inspector can draw: numbers, vectors, colors, enums, strings, lists,
+  scene references, assets), `PropertyField(target, "field")`, `Slider`, `IntSlider`, `LabelField`, `HelpBox`,
+  `PrefixLabel` (label column for a raw ImGui widget), `labelWidth`.
+- `Undo.RecordObject(component)` before changing a component by hand (one undo step per drag, the scene becomes
+  dirty, `OnValidate` runs), `Undo.RecordSceneChange(name, () => ...)` for creating or deleting objects.
+- `Selection.activeGameObject`, `Selection.activeAssetPath`.
+
+An exception in editor code is logged once and shown in the window or inspector; the ImGui scopes it left open are
+closed, so the rest of the editor keeps working.

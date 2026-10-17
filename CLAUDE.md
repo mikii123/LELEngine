@@ -12,6 +12,30 @@
   frame-count based automation (`exitframe`, `dumpframe`) covers well under a second: prefer `exitseconds=S` and
   `dump=1 dumpafter=S` for anything time dependent.
 - Never run `git commit` or `git push`; the user does that.
+- The editor compiles a project's scripts with the `dotnet` on PATH: for automated editor runs on a project with
+  scripts, put `C:\Users\Admin\.dotnet` first on PATH too, otherwise every script build fails with NETSDK1045.
+
+## Editor scripts (custom inspectors, editor windows, menu items)
+
+- Public API in `LELEngine.Editor/Extensions`: `Editor` + `[CustomEditor]`, `EditorWindow`, `[MenuItem]`,
+  `EditorGUILayout`, `Undo`, `Selection`; the internal host is `EditorExtensions` (`EditorApplication.Extensions`).
+  The editor's own main window class is `MainWindow` (the name `EditorWindow` belongs to the public API).
+- Scripts in any `Editor` folder under `Assets` build into `Game.Editor.dll` through a second generated project
+  (`<Name>.Editor.csproj`, ProjectReference to `<Name>.csproj`, which excludes `Assets\**\Editor\**`). Each project
+  has its own obj folder (`Library/obj/<project>/`). Player builds compile only the game project.
+- `Game.Editor.dll` loads into the same collectible `GameLoadContext` as `Game.dll` and is not registered in
+  `TypeRegistry` (only temporarily while a window state is restored). Everything holding a type of it must be dropped
+  in `EditorExtensions.OnDomainUnloading` (called from `EditorApplication.ClearTypeCaches`). `GameLoadContext` must
+  not keep its own list of the assemblies it loaded: that kept the old context alive (leak warning after every
+  reload); it resolves Game.dll for Game.Editor.dll through its `Assemblies`.
+- Open windows are saved (type, ImGui id, serialized fields) before a reload, before play mode and on close
+  (`Library/EditorWindows.txt`), and restored on the next frame. Their capture runs before the scene unloads, since
+  references to scene objects are only written for objects of the current scene.
+- User callbacks run guarded: an exception is logged once per message, `ImGuiP.ErrorRecoveryTryToRecoverState`
+  (with ImGui's own assert, log and tooltip switched off) closes the scopes left open, and an unbalanced
+  Begin/Push is reported as an error.
+- Test hook: `menuitem=N;Tools/Item|M;Window/Other` runs `[MenuItem]`s at frames N, M (with `touchscript=` for a
+  reload, `playframe=`/`stopframe=` for play mode and `buildgame=` for a player build).
 
 ## GPU particles (VFX)
 

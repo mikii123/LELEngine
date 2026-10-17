@@ -28,7 +28,7 @@ namespace LELEngine.Editor
 
 		public static EditorApplication Instance { get; private set; }
 
-		public EditorWindow Window { get; }
+		public MainWindow Window { get; }
 		public ProjectInfo Project { get; private set; }
 		public Scene Scene => SceneManager.ActiveScene;
 		public GameObject Selected { get; private set; }
@@ -42,6 +42,9 @@ namespace LELEngine.Editor
 		public EditTracker Edits { get; }
 		public ConsoleLog Log { get; }
 		public ScriptDomain Scripts { get; private set; }
+
+		/// <summary>Custom inspectors, windows and menu items of the project's editor scripts.</summary>
+		public EditorExtensions Extensions { get; }
 
 		public SceneViewPanel SceneView { get; }
 		public GameViewPanel GameView { get; }
@@ -95,11 +98,12 @@ namespace LELEngine.Editor
 
 		#region Constructors
 
-		public EditorApplication(EditorWindow window, string layoutFile, string[] args)
+		public EditorApplication(MainWindow window, string layoutFile, string[] args)
 		{
 			Instance = this;
 			Window = window;
 			Edits = new EditTracker(this);
+			Extensions = new EditorExtensions(this);
 			Log = ConsoleLog.Install();
 			layoutFileExisted = File.Exists(layoutFile);
 
@@ -221,7 +225,9 @@ namespace LELEngine.Editor
 			consolePanel.Draw();
 			projectSettingsWindow.Draw();
 			vfxGraphWindow.Draw();
+			Extensions.DrawWindows();
 			ObjectPicker.Draw(this);
+			Extensions.EndFrame();
 			Edits.Flush();
 
 			if (testHooks.PendingFocus != null)
@@ -306,6 +312,7 @@ namespace LELEngine.Editor
 			assetWatcher.Changed += (s, e) => OnAssetsChanged();
 			assetWatcher.EnableRaisingEvents = true;
 
+			Extensions.LoadOpenWindows(project);
 			Scripts = new ScriptDomain(this, project);
 			Scripts.Initialize();
 
@@ -341,6 +348,7 @@ namespace LELEngine.Editor
 			SceneManager.SetActiveScene(null);
 			Scripts?.Dispose();
 			Scripts = null;
+			Extensions.Reset();
 			assetWatcher?.Dispose();
 			assetWatcher = null;
 			Selected = null;
@@ -639,6 +647,12 @@ namespace LELEngine.Editor
 			// Full reload of the game scripts: the play session starts from clean statics.
 			ulong selected = Selected?.Id ?? 0;
 			Scripts?.TrackComponents(Scene);
+			if (Project.ReloadScriptsOnPlay && Scripts != null)
+			{
+				// Editor windows keep their references to scene objects across the reload.
+				Extensions.CaptureWindowStates();
+			}
+
 			Selected = null;
 			Scene.Unload();
 			SceneManager.SetActiveScene(null);
@@ -693,6 +707,7 @@ namespace LELEngine.Editor
 			ulong selected = Selected?.Id ?? 0;
 			bool playing = IsPlaying;
 			Scripts?.TrackComponents(scene);
+			Extensions.CaptureWindowStates();
 			scene.Unload();
 			SceneManager.SetActiveScene(null);
 			Selected = null;
@@ -805,6 +820,7 @@ namespace LELEngine.Editor
 		/// <summary>Drops every editor-side cache that holds script types or scene objects (before a domain unload).</summary>
 		public void ClearTypeCaches()
 		{
+			Extensions.OnDomainUnloading();
 			inspector.ClearTypeCaches();
 			HierarchyPanel.ResetDrag();
 			Edits.Cancel();
@@ -1012,6 +1028,7 @@ namespace LELEngine.Editor
 				ImGui.Separator();
 				if (ImGui.MenuItem("Close Project")) ConfirmDiscard(CloseProject);
 				if (ImGui.MenuItem("Exit")) Window.Close();
+				Extensions.DrawMenuItems("File");
 				ImGui.EndMenu();
 			}
 
@@ -1032,12 +1049,14 @@ namespace LELEngine.Editor
 
 				ImGui.Separator();
 				if (ImGui.MenuItem("Project Settings...")) ShowProjectSettings();
+				Extensions.DrawMenuItems("Edit");
 				ImGui.EndMenu();
 			}
 
 			if (ImGui.BeginMenu("GameObject"))
 			{
 				DrawCreateMenu(null);
+				Extensions.DrawMenuItems("GameObject");
 				ImGui.EndMenu();
 			}
 
@@ -1045,9 +1064,12 @@ namespace LELEngine.Editor
 			{
 				if (ImGui.MenuItem("UI Builder", "", uiBuilder != null && uiBuilder.IsOpen)) OpenUIBuilder(null);
 				if (ImGui.MenuItem("VFX Graph", "", vfxGraphWindow.Open)) OpenVfxGraph(null);
+				Extensions.DrawMenuItems("Window");
 				ImGui.EndMenu();
 			}
 
+			// Menus of the project's editor scripts ([MenuItem("Tools/...")]).
+			Extensions.DrawExtraMenus();
 			DrawPlayControls();
 			DrawStatus();
 			ImGui.EndMainMenuBar();
@@ -1366,6 +1388,7 @@ namespace LELEngine.Editor
 			if (Project != null)
 			{
 				SceneView.SaveState(Project);
+				Extensions.SaveOpenWindows(Project);
 			}
 		}
 

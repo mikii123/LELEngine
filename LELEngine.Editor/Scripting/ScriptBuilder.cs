@@ -29,12 +29,19 @@ namespace LELEngine.Editor
 		public readonly List<BuildDiagnostic> Diagnostics = new List<BuildDiagnostic>();
 		public byte[] Assembly;
 		public byte[] Symbols;
+
+		/// <summary>Game.Editor.dll (builds that included the editor scripts).</summary>
+		public byte[] EditorAssembly;
+		public byte[] EditorSymbols;
 		public double Seconds;
 		public string Output;
 		public int ErrorCount => Diagnostics.FindAll(d => d.IsError).Count;
 	}
 
-	/// <summary>Runs "dotnet build" on the game's script project (in the calling thread) and reads the result.</summary>
+	/// <summary>
+	///     Runs "dotnet build" on the game's script project, or on the editor scripts' project (which builds the game
+	///     project first), in the calling thread and reads the result.
+	/// </summary>
 	internal static class ScriptBuilder
 	{
 		#region PrivateFields
@@ -52,20 +59,23 @@ namespace LELEngine.Editor
 		#region PublicMethods
 
 		/// <param name="outputPath">Folder for the built assembly (null: the project's OutputPath).</param>
-		public static BuildResult Build(string projectFile, string configuration, string outputPath)
+		/// <param name="includeEditor">
+		///     Builds the editor scripts' project instead (it builds the game project first) and reads Game.Editor.dll
+		///     too.
+		/// </param>
+		public static BuildResult Build(string projectFile, string configuration, string outputPath, bool includeEditor = false)
 		{
 			var result = new BuildResult();
 			var watch = Stopwatch.StartNew();
 			string projectFolder = Path.GetDirectoryName(projectFile);
-			// Restore only when the project or its packages changed since the last restore (it costs about a second).
-			string assets = Path.Combine(projectFolder, "Library", "obj", "project.assets.json");
 			string packages = Path.ChangeExtension(projectFile, ".packages.props");
-			bool restored = File.Exists(assets)
-				&& File.GetLastWriteTimeUtc(assets) >= File.GetLastWriteTimeUtc(projectFile)
-				&& (!File.Exists(packages) || File.GetLastWriteTimeUtc(assets) >= File.GetLastWriteTimeUtc(packages));
+			string editorProject = ProjectGenerator.EditorProjectFile(projectFile);
+			string built = includeEditor ? editorProject : projectFile;
+			// Restore only when a project or its packages changed since the last restore (it costs about a second).
+			bool restored = IsRestored(projectFile, packages) && (!includeEditor || IsRestored(editorProject, packages));
 
 			var arguments = new StringBuilder();
-			arguments.Append("build \"").Append(projectFile).Append("\" -c ").Append(configuration).Append(" -nologo -v q -clp:NoSummary");
+			arguments.Append("build \"").Append(built).Append("\" -c ").Append(configuration).Append(" -nologo -v q -clp:NoSummary");
 			if (restored)
 			{
 				arguments.Append(" --no-restore");
@@ -129,12 +139,17 @@ namespace LELEngine.Editor
 
 				string folder = outputPath ?? Path.Combine(projectFolder, "Library", "ScriptAssemblies");
 				string dll = Path.Combine(folder, ProjectGenerator.AssemblyName + ".dll");
-				result.Success = process.ExitCode == 0 && File.Exists(dll);
+				string editorDll = Path.Combine(folder, ProjectGenerator.EditorAssemblyName + ".dll");
+				result.Success = process.ExitCode == 0 && File.Exists(dll) && (!includeEditor || File.Exists(editorDll));
 				if (result.Success)
 				{
 					result.Assembly = File.ReadAllBytes(dll);
-					string pdb = Path.ChangeExtension(dll, ".pdb");
-					result.Symbols = File.Exists(pdb) ? File.ReadAllBytes(pdb) : null;
+					result.Symbols = ReadSymbols(dll);
+					if (includeEditor)
+					{
+						result.EditorAssembly = File.ReadAllBytes(editorDll);
+						result.EditorSymbols = ReadSymbols(editorDll);
+					}
 				}
 				else if (result.ErrorCount == 0)
 				{
@@ -150,6 +165,21 @@ namespace LELEngine.Editor
 		#endregion
 
 		#region PrivateMethods
+
+		/// <summary>The project's restore output (Library/obj/&lt;project&gt;/) is newer than the project and its packages.</summary>
+		private static bool IsRestored(string projectFile, string packages)
+		{
+			string assets = Path.Combine(Path.GetDirectoryName(projectFile), "Library", "obj", Path.GetFileNameWithoutExtension(projectFile), "project.assets.json");
+			return File.Exists(assets)
+				&& File.GetLastWriteTimeUtc(assets) >= File.GetLastWriteTimeUtc(projectFile)
+				&& (!File.Exists(packages) || File.GetLastWriteTimeUtc(assets) >= File.GetLastWriteTimeUtc(packages));
+		}
+
+		private static byte[] ReadSymbols(string dll)
+		{
+			string pdb = Path.ChangeExtension(dll, ".pdb");
+			return File.Exists(pdb) ? File.ReadAllBytes(pdb) : null;
+		}
 
 		private static void ParseDiagnostics(BuildResult result)
 		{

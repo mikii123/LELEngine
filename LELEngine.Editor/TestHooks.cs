@@ -9,7 +9,8 @@ namespace LELEngine.Editor
 	///     touchscript=N;path (rewrites a script file at frame N to trigger a rebuild), buildgame=N;outputFolder,
 	///     focusscene=N, nudgecamera=N, dumpview=f1,f2,...;folder, reportframes=f1,f2,..., focuswindow=N;Name,
 	///     maximize=N, restore=N, grow=N, slowframes=ms, bakenav=N, projectsettings=N;Tab,
-	///     createvfx=N;asset (writes the default VFX graph and opens it), vfxgraph=N;asset (opens the VFX Graph window).
+	///     createvfx=N;asset (writes the default VFX graph and opens it), vfxgraph=N;asset (opens the VFX Graph window),
+	///     menuitem=N;Menu/Item|M;Menu/Other (runs [MenuItem]s of the editor scripts).
 	/// </summary>
 	internal sealed class TestHooks
 	{
@@ -260,6 +261,20 @@ namespace LELEngine.Editor
 					var settings = new BuildSettings { OutputFolder = parts[1], Release = true, StartScene = editor.Project.StartScene, Scenes = new List<string>(editor.Project.BuildScenes) };
 					bool ok = GameBuilder.Build(editor.Project, settings, line => Console.WriteLine("[Build] " + line));
 					Debug.Log("[Test] Game build " + (ok ? "succeeded" : "failed"));
+				}
+			}
+
+			// menuitem=N;Menu/Item|M;Other/Item runs [MenuItem]s of the project's editor scripts at frames N, M.
+			if (values.TryGetValue("menuitem", out string menuItems))
+			{
+				foreach (string menuItem in menuItems.Split('|'))
+				{
+					string[] parts = menuItem.Split(';');
+					if (parts.Length == 2 && int.TryParse(parts[0], out int at) && at == frame)
+					{
+						bool found = editor.Extensions.ExecuteMenuItem(parts[1]);
+						Debug.Log("[Test] Menu item " + parts[1] + (found ? " run" : " not found"));
+					}
 				}
 			}
 
