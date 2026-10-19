@@ -29,6 +29,8 @@ namespace LELEngine.Rendering.Passes
 
 		public override string Name => "RadianceCache";
 
+		public override RenderPassScope Scope => RenderPassScope.Frame;
+
 		public int Atlas => atlas;
 
 		/// <summary>

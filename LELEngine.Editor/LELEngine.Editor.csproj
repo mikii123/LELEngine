@@ -80,15 +80,7 @@
     <Content Include="..\TestGame\Assets\Meshes\quad.obj" Link="Templates\NewProject\Assets\Meshes\Quad.obj">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
-    <Content Include="..\TestGame.Scenes\Assets\Shaders\Lit.shader" Link="Templates\NewProject\Assets\Shaders\Lit.shader">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </Content>
-    <Content Include="..\TestGame.Scenes\Assets\Shaders\LitTextured.shader" Link="Templates\NewProject\Assets\Shaders\LitTextured.shader">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </Content>
-    <Content Include="..\TestGame.Scenes\Assets\Shaders\LitTransparent.shader" Link="Templates\NewProject\Assets\Shaders\LitTransparent.shader">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </Content>
+    <!-- The lit shaders are engine shaders (ShaderLibrary/Engine): the GI depends on them, so projects do not get copies. -->
   </ItemGroup>
 
 </Project>

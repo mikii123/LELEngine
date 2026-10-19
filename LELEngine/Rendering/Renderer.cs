@@ -10,8 +10,10 @@ namespace LELEngine.Rendering
 	/// <summary>
 	///     Owns the frame pipeline: the HDR scene target, engine shaders and an ordered list of passes.
 	///     Default pipeline: Shadows -> GI -> DepthPrepass -> Opaque -> Skybox -> Transparent -> PostRender callbacks
-	///     -> PostProcess. The frame's renderers are split by their materials' queues: the opaque sub-meshes feed every
-	///     geometry pass, the transparent ones (<see cref="MeshRenderer.HasTransparentParts" />) only the transparent pass.
+	///     -> PostProcess. A frame renders a camera stack (<see cref="Camera.Stack" />, one camera without overlays):
+	///     the passes run by their <see cref="RenderPass.Scope" />. The frame's renderers are split per camera by its
+	///     layers and by their materials' queues: the opaque sub-meshes feed every geometry pass, the transparent ones
+	///     (<see cref="MeshRenderer.HasTransparentParts" />) only the transparent pass.
 	/// </summary>
 	public sealed class Renderer
 	{
@@ -54,8 +56,17 @@ namespace LELEngine.Rendering
 		#region PrivateFields
 
 		private readonly List<RenderPass> passes = new List<RenderPass>();
-		private readonly List<MeshRenderer> opaqueRenderers = new List<MeshRenderer>();
-		private readonly List<MeshRenderer> transparentRenderers = new List<MeshRenderer>();
+
+		/// <summary>The cameras of the frame being rendered: the base camera, then its overlays.</summary>
+		private readonly List<Camera> stack = new List<Camera>();
+
+		/// <summary>The renderers of each camera of <see cref="stack" /> (same index), on its layers.</summary>
+		private readonly List<CameraLists> cameraLists = new List<CameraLists>();
+
+		/// <summary>The opaque renderers of every camera of a stack together (the GPU-driven tables), with more than one camera.</summary>
+		private readonly List<MeshRenderer> stackOpaqueRenderers = new List<MeshRenderer>();
+
+		private readonly Dictionary<(string, int), string> profileNames = new Dictionary<(string, int), string>();
 		private Framebuffer dumpTarget;
 
 		#endregion
@@ -175,6 +186,14 @@ namespace LELEngine.Rendering
 			}
 		}
 
+		/// <summary>
+		///     Renders <paramref name="camera" /> and, a base camera, the overlay cameras of its stack into one image: the
+		///     frame passes once with the stack's lighting camera (<see cref="Camera.GetStackLightingCamera" />: shadow
+		///     maps, GI volumes, its layers are the world), then for each camera in order the passes of its scope with its
+		///     view and the renderers on its layers (an overlay camera clears the depth first when it asks to), then the
+		///     final passes (post-processing, UI). The GPU-driven tables are built once from every camera's renderers;
+		///     each camera culls them on the GPU with its frustum and layers.
+		/// </summary>
 		public void RenderFrame(Camera camera, IReadOnlyList<MeshRenderer> renderers, IReadOnlyList<Behaviour> behaviours, RenderQueue queue)
 		{
 			Lighting.BeginFrame(Settings);
@@ -211,8 +230,13 @@ namespace LELEngine.Rendering
 				return;
 			}
 
-			camera.UpdateMatrices(Width / (float)Height);
-			Camera.current = camera;
+			camera.GetRenderStack(stack);
+			int lightingIndex = Math.Max(0, stack.IndexOf(camera.GetStackLightingCamera()));
+			float aspect = Width / (float)Height;
+			foreach (Camera view in stack)
+			{
+				view.UpdateMatrices(aspect);
+			}
 
 			// Frame dumps of a window read an offscreen copy: the window's own pixels are undefined where another
 			// window covers it.
@@ -224,35 +248,16 @@ namespace LELEngine.Rendering
 			}
 
 			Partition(renderers);
-			RenderContext context = new RenderContext
-			{
-				Renderer = this,
-				Settings = Settings,
-				Camera = camera,
-				View = camera.ViewMatrix,
-				Projection = camera.ProjectionMatrix,
-				ViewProjection = camera.ViewProjectionMatrix,
-				CameraPosition = camera.transform.position,
-				Width = Width,
-				Height = Height,
-				Renderers = opaqueRenderers,
-				TransparentRenderers = transparentRenderers,
-				Behaviours = behaviours,
-				RenderQueue = queue,
-				SceneTarget = SceneTarget,
-				OutputTarget = OutputTarget,
-				DepthOnlyProgram = DepthOnlyProgram,
-				TransparentShadowProgram = TransparentShadowProgram,
-				Fullscreen = Fullscreen
-			};
+			RenderContext lightingContext = CreateContext(lightingIndex, lightingIndex, behaviours, queue);
 
 			Profiler.BeginFrame();
 			FrameIndex++;
 
-			// GPU-driven geometry: the instance and material tables for this frame's culling and indirect draws.
+			// GPU-driven geometry: the instance and material tables for this frame's culling and indirect draws (every
+			// camera of the stack culls the same tables with its own frustum and layers).
 			if (Settings.GpuDriven && GpuScene.IsSupported)
 			{
-				GpuScene.Build(opaqueRenderers);
+				GpuScene.Build(stack.Count == 1 ? cameraLists[0].Opaque : stackOpaqueRenderers);
 			}
 			else
 			{
@@ -266,28 +271,31 @@ namespace LELEngine.Rendering
 			GL.ClearColor(Settings.ClearColor);
 			GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
 
+			// Once per frame, seen from the lighting camera: shadow maps, GI volumes (its layers are the world).
 			int executed = 0;
-			foreach (RenderPass pass in passes)
+			Camera.current = stack[lightingIndex];
+			Lighting.ScreenGIView = true;
+			executed = RunScope(RenderPassScope.Frame, lightingContext, executed);
+
+			for (int i = 0; i < stack.Count; i++)
 			{
-				if (!pass.Enabled)
+				RenderContext context = i == lightingIndex ? lightingContext : CreateContext(i, lightingIndex, behaviours, queue);
+				if (i > 0 && stack[i].ClearDepth)
 				{
-					continue;
+					SceneTarget.Bind();
+					GLState.SetDepth(true, true);
+					GL.Clear(ClearBufferMask.DepthBufferBit);
 				}
 
-				Profiler.Begin(pass.Name);
-				pass.Execute(context);
-				GLState.Reset();
-				Profiler.End();
-				executed++;
-
-				// Hand work to the GPU early. The driver otherwise queues the frame's first commands until its
-				// batch fills, leaving the GPU idle for milliseconds at the start of every frame; one flush
-				// after the first pass starts it, flushing after every pass costs more than it gains.
-				if (Settings.FlushBetweenPasses || (Settings.FlushAfterFirstPass && executed == 1))
-				{
-					GL.Flush();
-				}
+				Camera.current = stack[i];
+				// The lighting camera's view has the screen-space GI; the other cameras light from the GI volume.
+				Lighting.ScreenGIView = i == lightingIndex;
+				executed = RunCamera(context, i, executed);
 			}
+
+			Camera.current = stack[lightingIndex];
+			Lighting.ScreenGIView = true;
+			RunScope(RenderPassScope.Final, lightingContext, executed);
 
 			Profiler.EndFrame();
 
@@ -310,30 +318,184 @@ namespace LELEngine.Rendering
 			// unloaded scene alive); the GPU scene and the renderer lists drop their references for the same reason.
 			Camera.current = null;
 			GpuScene.EndFrame();
-			opaqueRenderers.Clear();
-			transparentRenderers.Clear();
+			ClearLists();
+		}
+
+		/// <summary>The passes of one scope (frame, final) in list order.</summary>
+		private int RunScope(RenderPassScope scope, RenderContext context, int executed)
+		{
+			foreach (RenderPass pass in passes)
+			{
+				if (pass.Enabled && pass.Scope == scope)
+				{
+					executed = Execute(pass, context, pass.Name, executed);
+				}
+			}
+
+			return executed;
+		}
+
+		/// <summary>The passes of one camera of the stack in list order: every camera's, the lighting camera's, the base camera's.</summary>
+		private int RunCamera(RenderContext context, int index, int executed)
+		{
+			foreach (RenderPass pass in passes)
+			{
+				if (!pass.Enabled)
+				{
+					continue;
+				}
+
+				bool runs = pass.Scope switch
+				{
+					RenderPassScope.EveryCamera => true,
+					RenderPassScope.LightingCamera => context.IsLightingCamera,
+					RenderPassScope.BaseCamera => context.IsBaseCamera,
+					_ => false
+				};
+
+				if (runs)
+				{
+					executed = Execute(pass, context, ProfileName(pass, index), executed);
+				}
+			}
+
+			return executed;
+		}
+
+		private int Execute(RenderPass pass, RenderContext context, string profileName, int executed)
+		{
+			Profiler.Begin(profileName);
+			pass.Execute(context);
+			GLState.Reset();
+			Profiler.End();
+			executed++;
+
+			// Hand work to the GPU early. The driver otherwise queues the frame's first commands until its
+			// batch fills, leaving the GPU idle for milliseconds at the start of every frame; one flush
+			// after the first pass starts it, flushing after every pass costs more than it gains.
+			if (Settings.FlushBetweenPasses || (Settings.FlushAfterFirstPass && executed == 1))
+			{
+				GL.Flush();
+			}
+
+			return executed;
+		}
+
+		/// <summary>A pass that runs for several cameras is timed under one name per camera (the profiler times a name once a frame).</summary>
+		private string ProfileName(RenderPass pass, int cameraIndex)
+		{
+			if (cameraIndex == 0 || pass.Scope != RenderPassScope.EveryCamera)
+			{
+				return pass.Name;
+			}
+
+			if (!profileNames.TryGetValue((pass.Name, cameraIndex), out string name))
+			{
+				name = pass.Name + " [" + cameraIndex + "]";
+				profileNames[(pass.Name, cameraIndex)] = name;
+			}
+
+			return name;
+		}
+
+		private RenderContext CreateContext(int index, int lightingIndex, IReadOnlyList<Behaviour> behaviours, RenderQueue queue)
+		{
+			Camera camera = stack[index];
+			CameraLists lists = cameraLists[index];
+			return new RenderContext
+			{
+				Renderer = this,
+				Settings = Settings,
+				Camera = camera,
+				CullingMask = lists.Mask,
+				IsLightingCamera = index == lightingIndex,
+				IsBaseCamera = index == 0,
+				View = camera.ViewMatrix,
+				Projection = camera.ProjectionMatrix,
+				ViewProjection = camera.ViewProjectionMatrix,
+				CameraPosition = camera.transform.position,
+				Width = Width,
+				Height = Height,
+				Renderers = lists.Opaque,
+				TransparentRenderers = lists.Transparent,
+				Behaviours = behaviours,
+				RenderQueue = queue,
+				SceneTarget = SceneTarget,
+				OutputTarget = OutputTarget,
+				DepthOnlyProgram = DepthOnlyProgram,
+				TransparentShadowProgram = TransparentShadowProgram,
+				Fullscreen = Fullscreen
+			};
 		}
 
 		/// <summary>
-		///     Splits the frame's renderers by their materials' queues (the lists are cleared when the frame ends): a
-		///     renderer with opaque and transparent sub-meshes is in both lists, and each pass draws its own sub-meshes.
+		///     Splits the frame's renderers per camera of the stack, by the camera's layers and by their materials' queues
+		///     (the lists are cleared when the frame ends): a renderer with opaque and transparent sub-meshes is in both
+		///     lists of a camera, each pass draws its own sub-meshes. One pass over the renderers whatever the number of
+		///     cameras; with more than one, the opaque renderers of all of them also go to the GPU-driven tables.
 		/// </summary>
 		private void Partition(IReadOnlyList<MeshRenderer> renderers)
 		{
-			opaqueRenderers.Clear();
-			transparentRenderers.Clear();
+			while (cameraLists.Count < stack.Count)
+			{
+				cameraLists.Add(new CameraLists());
+			}
+
+			int union = 0;
+			for (int i = 0; i < stack.Count; i++)
+			{
+				cameraLists[i].Clear();
+				cameraLists[i].Mask = stack[i].CullingMask;
+				union |= cameraLists[i].Mask;
+			}
+
+			stackOpaqueRenderers.Clear();
+			bool several = stack.Count > 1;
 			foreach (MeshRenderer renderer in renderers)
 			{
-				if (renderer.HasOpaqueParts)
+				int bit = 1 << (renderer.gameObject.layer & 31);
+				if ((union & bit) == 0)
 				{
-					opaqueRenderers.Add(renderer);
+					continue;
 				}
 
-				if (renderer.HasTransparentParts)
+				bool opaque = renderer.HasOpaqueParts;
+				bool transparent = renderer.HasTransparentParts;
+				for (int i = 0; i < stack.Count; i++)
 				{
-					transparentRenderers.Add(renderer);
+					CameraLists lists = cameraLists[i];
+					if ((lists.Mask & bit) == 0)
+					{
+						continue;
+					}
+
+					if (opaque)
+					{
+						lists.Opaque.Add(renderer);
+					}
+
+					if (transparent)
+					{
+						lists.Transparent.Add(renderer);
+					}
+				}
+
+				if (several && opaque)
+				{
+					stackOpaqueRenderers.Add(renderer);
 				}
 			}
+		}
+
+		private void ClearLists()
+		{
+			foreach (CameraLists lists in cameraLists)
+			{
+				lists.Clear();
+			}
+
+			stackOpaqueRenderers.Clear();
+			stack.Clear();
 		}
 
 		private void EnsureDumpTarget()
@@ -377,8 +539,7 @@ namespace LELEngine.Rendering
 			}
 
 			GpuScene.EndFrame();
-			opaqueRenderers.Clear();
-			transparentRenderers.Clear();
+			ClearLists();
 			Lighting.GI.InvalidateStatic();
 		}
 
@@ -399,6 +560,24 @@ namespace LELEngine.Rendering
 			Fullscreen?.Delete();
 			LumenScene?.Delete();
 			Profiler.Dispose();
+		}
+
+		#endregion
+
+		#region NestedTypes
+
+		/// <summary>One camera's renderers in a frame: on its layers, split by the materials' queues.</summary>
+		private sealed class CameraLists
+		{
+			public readonly List<MeshRenderer> Opaque = new List<MeshRenderer>();
+			public readonly List<MeshRenderer> Transparent = new List<MeshRenderer>();
+			public int Mask = -1;
+
+			public void Clear()
+			{
+				Opaque.Clear();
+				Transparent.Clear();
+			}
 		}
 
 		#endregion

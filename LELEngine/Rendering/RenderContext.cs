@@ -5,7 +5,8 @@ using OpenTK.Mathematics;
 namespace LELEngine.Rendering
 {
 	/// <summary>
-	///     Per-frame data shared by all render passes. Built by <see cref="Renderer" /> at the start of a frame.
+	///     Per-camera data shared by the render passes: one per camera of the stack a frame renders, built by
+	///     <see cref="Renderer" />. The frame and final passes get the lighting camera's.
 	/// </summary>
 	public sealed class RenderContext
 	{
@@ -15,6 +16,15 @@ namespace LELEngine.Rendering
 		public RenderSettings Settings;
 
 		public Camera Camera;
+
+		/// <summary>The layers the camera draws (bit n = layer n): <see cref="Renderers" /> are filtered by it, the GPU culling tests it.</summary>
+		public int CullingMask = -1;
+
+		/// <summary>The camera lights the world: its view has the screen-space GI, the shadow maps and GI volumes follow it.</summary>
+		public bool IsLightingCamera = true;
+
+		/// <summary>The first camera of the stack: it cleared the image, the sky is drawn with it.</summary>
+		public bool IsBaseCamera = true;
 		public Matrix4 View;
 		public Matrix4 Projection;
 		public Matrix4 ViewProjection;
@@ -24,10 +34,13 @@ namespace LELEngine.Rendering
 		public int Width;
 		public int Height;
 
-		/// <summary>The frame's renderers with opaque sub-meshes (depth prepass, shadows, GI, opaque pass draw those).</summary>
+		/// <summary>
+		///     The camera's renderers (on its layers) with opaque sub-meshes: the depth prepass and opaque pass draw them;
+		///     the lighting camera's are the world that casts shadows and makes up the GI.
+		/// </summary>
 		public IReadOnlyList<MeshRenderer> Renderers;
 
-		/// <summary>The frame's renderers with transparent sub-meshes (<see cref="MeshRenderer.HasTransparentParts" />), drawn by the transparent pass only.</summary>
+		/// <summary>The camera's renderers with transparent sub-meshes (<see cref="MeshRenderer.HasTransparentParts" />), drawn by the transparent pass only.</summary>
 		public IReadOnlyList<MeshRenderer> TransparentRenderers;
 
 		public IReadOnlyList<Behaviour> Behaviours;

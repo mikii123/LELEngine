@@ -13,6 +13,8 @@ namespace LELEngine.Rendering.Passes
 
 		public override string Name => "PostProcess";
 
+		public override RenderPassScope Scope => RenderPassScope.Final;
+
 		#endregion
 
 		#region PrivateFields

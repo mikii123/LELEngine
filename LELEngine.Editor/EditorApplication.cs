@@ -60,11 +60,16 @@ namespace LELEngine.Editor
 
 		public static string TemplateAssetsPath => Path.Combine(AppContext.BaseDirectory, "Templates", "NewProject", "Assets");
 
+		/// <summary>Why the last project could not be opened (the project chooser shows it), or null.</summary>
+		public string OpenError { get; private set; }
+
+		/// <summary>A run driven by a script (<see cref="IsAutomatedRun" />): windows open as by default, nothing about them is saved.</summary>
+		public bool IsAutomated => automated;
+
 		#endregion
 
 		#region PrivateFields
 
-		private readonly ProjectLauncher launcher;
 		private readonly HierarchyPanel hierarchy;
 		private readonly InspectorPanel inspector;
 		private readonly ProjectPanel projectPanel;
@@ -94,6 +99,32 @@ namespace LELEngine.Editor
 		private volatile bool assetsChanged;
 		private double assetsChangedAt;
 
+		// Changes made outside the editor (git, Explorer, a text editor): the ProjectSettings folder is watched too, and
+		// the stamps of the files the editor read or wrote last tell its own writes from someone else's.
+		private FileSystemWatcher settingsWatcher;
+		private volatile bool settingsChanged;
+		private double settingsChangedAt;
+		private FileStamp projectSettingsStamp;
+		private FileStamp sceneStamp;
+
+		/// <summary>The open scene's file changed on disk: reloaded when the scene has no unsaved changes, asked otherwise (after play mode).</summary>
+		private bool sceneChangedOnDisk;
+		private bool openSceneChangedPopup;
+
+		/// <summary>
+		///     An automated run (<see cref="IsAutomatedRun" />): nobody is there to choose a project when it has none, and
+		///     the windows open as by default (their saved state is neither read nor written).
+		/// </summary>
+		private readonly bool automated;
+
+		/// <summary>The project just opened: its windows reopen on the next frame (the UI Builder needs a frame loop).</summary>
+		private bool restoreWindowsPending;
+
+		/// <summary>Window > Reset Layout: the default docking is built on the next frame.</summary>
+		private bool resetLayoutRequested;
+
+		private static string WindowStatesFile => Path.Combine(RecentProjects.EditorDataFolder, "windows.json");
+
 		#endregion
 
 		#region Constructors
@@ -102,12 +133,12 @@ namespace LELEngine.Editor
 		{
 			Instance = this;
 			Window = window;
+			automated = IsAutomatedRun(args);
 			Edits = new EditTracker(this);
 			Extensions = new EditorExtensions(this);
 			Log = ConsoleLog.Install();
 			layoutFileExisted = File.Exists(layoutFile);
 
-			launcher = new ProjectLauncher(this);
 			hierarchy = new HierarchyPanel(this);
 			inspector = new InspectorPanel(this);
 			SceneView = new SceneViewPanel(this);
@@ -138,25 +169,45 @@ namespace LELEngine.Editor
 			UIElements.UIRuntime.GetClipboard = () => window.ClipboardString;
 			UIElements.UIRuntime.SetClipboard = text => window.ClipboardString = text;
 
-			// project=folder opens a project directly; newproject=parent;name creates it first when missing.
-			string newProject = GetValue(args, "newproject");
-			if (newProject != null)
+			// The window always edits a project: project=folder (the project chooser passes it) opens it;
+			// newproject=parent;name creates it first when missing (automated runs). Without one the chooser comes back.
+			try
 			{
-				string[] parts = newProject.Split(';');
-				string root = Path.Combine(parts[0], parts.Length > 1 ? parts[1] : "NewProject");
-				if (!ProjectInfo.IsProjectFolder(root))
+				string newProject = GetValue(args, "newproject");
+				if (newProject != null)
 				{
-					Directory.CreateDirectory(parts[0]);
-					ProjectInfo.Create(parts[0], Path.GetFileName(root), TemplateAssetsPath);
+					string[] parts = newProject.Split(';');
+					string root = Path.Combine(parts[0], parts.Length > 1 ? parts[1] : "NewProject");
+					if (!ProjectInfo.IsProjectFolder(root))
+					{
+						Directory.CreateDirectory(parts[0]);
+						ProjectInfo.Create(parts[0], Path.GetFileName(root), TemplateAssetsPath);
+					}
+
+					OpenProject(root);
 				}
 
-				OpenProject(root);
+				string projectArgument = ProjectArgument(args);
+				if (Project == null && projectArgument != null)
+				{
+					if (ProjectInfo.IsProjectFolder(projectArgument))
+					{
+						OpenProject(projectArgument);
+					}
+					else
+					{
+						OpenError = "Not a LELEngine project folder (no ProjectSettings/Project.json): " + projectArgument;
+					}
+				}
 			}
-
-			string projectArgument = GetValue(args, "project") ?? CommandLine.Parse(args).Get("projectpath");
-			if (Project == null && projectArgument != null && ProjectInfo.IsProjectFolder(projectArgument))
+			catch (Exception e)
 			{
-				OpenProject(projectArgument);
+				Debug.LogException(e);
+				OpenError = "Cannot open the project: " + e.Message;
+				if (Project != null)
+				{
+					CloseProject();
+				}
 			}
 
 			testHooks = new TestHooks(this, args);
@@ -172,12 +223,19 @@ namespace LELEngine.Editor
 		{
 			if (Project == null)
 			{
-				launcher.Update();
-				testHooks.Update();
+				ChooseProject();
 				return;
 			}
 
+			if (restoreWindowsPending)
+			{
+				restoreWindowsPending = false;
+				RestoreWindowStates();
+			}
+
 			RefreshAssetsIfChanged();
+			RefreshSettingsIfChanged();
+			ReloadSceneIfChangedOnDisk();
 			Scripts?.Update();
 			testHooks.Update();
 
@@ -207,7 +265,7 @@ namespace LELEngine.Editor
 			UpdateTitle();
 			if (Project == null)
 			{
-				launcher.Draw();
+				// Hidden while the project chooser is up (see ChooseProject).
 				return;
 			}
 
@@ -215,13 +273,15 @@ namespace LELEngine.Editor
 			DrawMainMenu();
 
 			uint dockspace = ImGui.DockSpaceOverViewport();
-			if (!layoutBuilt)
+			if (!layoutBuilt || resetLayoutRequested)
 			{
 				layoutBuilt = true;
-				if (!layoutFileExisted)
+				if (!layoutFileExisted || resetLayoutRequested)
 				{
 					BuildDefaultLayout(dockspace);
 				}
+
+				resetLayoutRequested = false;
 			}
 
 			hierarchy.Draw();
@@ -295,6 +355,54 @@ namespace LELEngine.Editor
 
 		// ---------------------------------------------------------------- projects
 
+		/// <summary>
+		///     No project (File > Close Project, or it could not be opened): the editor's window hides and the project
+		///     chooser shows in its own window until a project opens; then the editor's window comes back with it. Its
+		///     GL context stays, so the engine's caches (shaders, geometry) stay valid. Closing the chooser quits.
+		/// </summary>
+		private void ChooseProject()
+		{
+			if (automated)
+			{
+				Debug.LogError("[Editor] No project to open: " + (OpenError ?? "none given"));
+				closeConfirmed = true;
+				Window.Close();
+				return;
+			}
+
+			Window.IsVisible = false;
+			while (Project == null)
+			{
+				string chosen = LauncherWindow.Choose(OpenError);
+				// The chooser had its own GL and ImGui contexts current.
+				Window.MakeEditorCurrent();
+				if (chosen == null)
+				{
+					closeConfirmed = true;
+					Window.Close();
+					return;
+				}
+
+				OpenError = null;
+				try
+				{
+					OpenProject(chosen);
+				}
+				catch (Exception e)
+				{
+					Debug.LogException(e);
+					OpenError = "Cannot open the project: " + e.Message;
+					if (Project != null)
+					{
+						CloseProject();
+					}
+				}
+			}
+
+			Window.IsVisible = true;
+			Window.Focus();
+		}
+
 		public void OpenProject(string root)
 		{
 			ProjectInfo project = ProjectInfo.Load(root);
@@ -303,6 +411,7 @@ namespace LELEngine.Editor
 			Project = project;
 			// Physics and lighting quality of the project; projects from before the file get it with the defaults.
 			project.LoadProjectSettings();
+			projectSettingsStamp = FileStamp.Of(project.ProjectSettingsFile);
 			AssetDatabase.Initialize(project.AssetsPath, true);
 			ModelAssets.CacheFolder = project.ModelCachePath;
 			RecentProjects.Add(project.RootPath);
@@ -321,9 +430,20 @@ namespace LELEngine.Editor
 			assetWatcher.Changed += (s, e) => OnAssetsChanged();
 			assetWatcher.EnableRaisingEvents = true;
 
+			// Project.json and ProjectSettings.asset (git checkouts, edits in a text editor).
+			Directory.CreateDirectory(project.SettingsPath);
+			settingsWatcher = new FileSystemWatcher(project.SettingsPath);
+			settingsWatcher.Created += (s, e) => OnSettingsChanged();
+			settingsWatcher.Renamed += (s, e) => OnSettingsChanged();
+			settingsWatcher.Changed += (s, e) => OnSettingsChanged();
+			settingsWatcher.EnableRaisingEvents = true;
+
 			Extensions.LoadOpenWindows(project);
 			Scripts = new ScriptDomain(this, project);
 			Scripts.Initialize();
+
+			// The windows as they were (not in automated runs: they get the default ones).
+			restoreWindowsPending = !automated;
 
 			string scenePath = project.LastScene ?? project.StartScene;
 			if (scenePath != null && File.Exists(AssetDatabase.ToAbsolute(scenePath)))
@@ -359,6 +479,10 @@ namespace LELEngine.Editor
 			Extensions.Reset();
 			assetWatcher?.Dispose();
 			assetWatcher = null;
+			settingsWatcher?.Dispose();
+			settingsWatcher = null;
+			settingsChanged = false;
+			sceneChangedOnDisk = false;
 			Selected = null;
 			SelectedAsset = null;
 			AssetInspectors.Deselected();
@@ -840,6 +964,8 @@ namespace LELEngine.Editor
 			try
 			{
 				ProjectSettings.Current.Save(Project.ProjectSettingsFile);
+				// The editor's own write: the settings watcher must not reload it.
+				projectSettingsStamp = FileStamp.Of(Project.ProjectSettingsFile);
 			}
 			catch (Exception e)
 			{
@@ -962,6 +1088,8 @@ namespace LELEngine.Editor
 			ReplaceScene(scene, false);
 			Selected = null;
 			SceneDirty = false;
+			sceneStamp = default;
+			sceneChangedOnDisk = false;
 			Undo.Clear();
 		}
 
@@ -974,11 +1102,15 @@ namespace LELEngine.Editor
 
 			try
 			{
-				Scene scene = SceneSerializer.Load(AssetDatabase.ToAbsolute(assetPath));
+				string file = AssetDatabase.ToAbsolute(assetPath);
+				FileStamp stamp = FileStamp.Of(file);
+				Scene scene = SceneSerializer.Load(file);
 				scene.Path = assetPath;
 				ReplaceScene(scene, false);
 				Selected = null;
 				SceneDirty = false;
+				sceneStamp = stamp;
+				sceneChangedOnDisk = false;
 				Undo.Clear();
 				Project.LastScene = assetPath;
 				Project.Save();
@@ -1002,6 +1134,9 @@ namespace LELEngine.Editor
 			SceneSerializer.Save(Scene, AssetDatabase.ToAbsolute(assetPath));
 			AssetDatabase.EnsureMeta(assetPath);
 			SceneDirty = false;
+			// The editor's own write: the asset watcher must not reload it.
+			sceneStamp = FileStamp.Of(AssetDatabase.ToAbsolute(assetPath));
+			sceneChangedOnDisk = false;
 			Project.LastScene = assetPath;
 			if (!Project.BuildScenes.Contains(assetPath))
 			{
@@ -1041,6 +1176,43 @@ namespace LELEngine.Editor
 			{
 				ImGui.OpenPopup("Save scene as");
 				openSaveAsPopup = false;
+			}
+
+			if (openSceneChangedPopup)
+			{
+				ImGui.OpenPopup("Scene changed on disk");
+				openSceneChangedPopup = false;
+			}
+
+			ImGui.SetNextWindowPos(EditorGui.ViewportCenter(), ImGuiCond.Appearing, new NVector2(0.5f, 0.5f));
+			if (ImGui.BeginPopupModal("Scene changed on disk", ImGuiWindowFlags.AlwaysAutoResize))
+			{
+				ImGui.Text($"The scene '{Scene?.Name}' was changed outside the editor (git, Explorer),");
+				ImGui.Text("and it has unsaved changes here.");
+				ImGui.Spacing();
+				if (ImGui.Button("Reload", new NVector2(110, 0)))
+				{
+					ImGui.CloseCurrentPopup();
+					ReloadSceneFromDisk();
+				}
+
+				if (ImGui.IsItemHovered())
+				{
+					ImGui.SetTooltip("Load the file from disk; the changes made here are lost.");
+				}
+
+				ImGui.SameLine();
+				if (ImGui.Button("Keep mine", new NVector2(110, 0)))
+				{
+					ImGui.CloseCurrentPopup();
+				}
+
+				if (ImGui.IsItemHovered())
+				{
+					ImGui.SetTooltip("Keep the scene as it is here; saving it overwrites the file on disk.");
+				}
+
+				ImGui.EndPopup();
 			}
 
 			ImGui.SetNextWindowPos(EditorGui.ViewportCenter(), ImGuiCond.Appearing, new NVector2(0.5f, 0.5f));
@@ -1161,8 +1333,52 @@ namespace LELEngine.Editor
 
 			if (ImGui.BeginMenu("Window"))
 			{
-				if (ImGui.MenuItem("UI Builder", "", uiBuilder != null && uiBuilder.IsOpen)) OpenUIBuilder(null);
-				if (ImGui.MenuItem("VFX Graph", "", vfxGraphWindow.Open)) OpenVfxGraph(null);
+				// Ticked windows are open; a closed one comes back where it was docked (layout.ini keeps its place).
+				if (ImGui.MenuItem("Scene", "", SceneView.Open))
+				{
+					if (SceneView.Open) SceneView.Open = false;
+					else SceneView.Focus();
+				}
+
+				if (ImGui.MenuItem("Game", "", GameView.Open))
+				{
+					if (GameView.Open) GameView.Open = false;
+					else GameView.Focus();
+				}
+
+				ToggleMenuItem("Hierarchy", ref hierarchy.Open);
+				ToggleMenuItem("Inspector", ref inspector.Open);
+				ToggleMenuItem("Project", ref projectPanel.Open);
+				ToggleMenuItem("Console", ref consolePanel.Open);
+				ToggleMenuItem("Lighting", ref lightingPanel.Open);
+				ImGui.Separator();
+				if (ImGui.MenuItem("Project Settings", "", projectSettingsWindow.Open))
+				{
+					if (projectSettingsWindow.Open) projectSettingsWindow.Open = false;
+					else ShowProjectSettings();
+				}
+
+				if (ImGui.MenuItem("VFX Graph", "", vfxGraphWindow.Open))
+				{
+					if (vfxGraphWindow.Open) vfxGraphWindow.Close();
+					else OpenVfxGraph(null);
+				}
+
+				bool builderOpen = uiBuilder != null && uiBuilder.IsOpen;
+				if (ImGui.MenuItem("UI Builder", "", builderOpen))
+				{
+					if (builderOpen) uiBuilder.Close();
+					else OpenUIBuilder(null);
+				}
+
+				ImGui.Separator();
+				if (ImGui.MenuItem("Reset Layout"))
+				{
+					// Every panel open, docked as by default.
+					SceneView.Open = GameView.Open = hierarchy.Open = inspector.Open = projectPanel.Open = consolePanel.Open = lightingPanel.Open = true;
+					resetLayoutRequested = true;
+				}
+
 				Extensions.DrawMenuItems("Window");
 				ImGui.EndMenu();
 			}
@@ -1172,6 +1388,15 @@ namespace LELEngine.Editor
 			DrawPlayControls();
 			DrawStatus();
 			ImGui.EndMainMenuBar();
+		}
+
+		/// <summary>A Window menu entry: ticked while the window is open, a click opens or closes it.</summary>
+		private static void ToggleMenuItem(string label, ref bool open)
+		{
+			if (ImGui.MenuItem(label, "", open))
+			{
+				open = !open;
+			}
 		}
 
 		/// <summary>Create entries (also used by the hierarchy's context menu).</summary>
@@ -1454,6 +1679,130 @@ namespace LELEngine.Editor
 			// Hot reload of .uss / .uxml files: the documents using them rebuild.
 			UIElements.UIAssets.ReloadChanged();
 			NotifySceneChanged();
+			CheckSceneOnDisk();
+		}
+
+		private void OnSettingsChanged()
+		{
+			settingsChangedAt = Time.timeD;
+			settingsChanged = true;
+		}
+
+		/// <summary>The open scene's file is not the one the editor read or wrote last (git, Explorer): note it for reloading.</summary>
+		private void CheckSceneOnDisk()
+		{
+			// In play mode the scene being played is a copy; the edit scene's file is what matters.
+			string path = IsPlaying ? playScenePath : Scene?.Path;
+			if (string.IsNullOrEmpty(path))
+			{
+				return;
+			}
+
+			string file = AssetDatabase.ToAbsolute(path);
+			if (!File.Exists(file))
+			{
+				return;
+			}
+
+			FileStamp stamp = FileStamp.Of(file);
+			if (stamp != sceneStamp)
+			{
+				sceneStamp = stamp;
+				sceneChangedOnDisk = true;
+			}
+		}
+
+		/// <summary>
+		///     Reloads the open scene changed on disk when it has no unsaved changes (keeping the selection); with
+		///     unsaved changes the user chooses. Waits for play mode to end.
+		/// </summary>
+		private void ReloadSceneIfChangedOnDisk()
+		{
+			if (!sceneChangedOnDisk || IsPlaying)
+			{
+				return;
+			}
+
+			sceneChangedOnDisk = false;
+			if (SceneDirty)
+			{
+				openSceneChangedPopup = true;
+				return;
+			}
+
+			ReloadSceneFromDisk();
+		}
+
+		private void ReloadSceneFromDisk()
+		{
+			string path = Scene?.Path;
+			if (string.IsNullOrEmpty(path))
+			{
+				return;
+			}
+
+			ulong selected = Selected?.Id ?? 0;
+			OpenSceneNow(path);
+			GameObject reselected = selected != 0 ? Scene?.FindObjectById(selected) : null;
+			if (reselected != null)
+			{
+				Select(reselected);
+			}
+
+			Debug.Log("[Editor] Reloaded " + path + " (changed on disk)");
+		}
+
+		/// <summary>Project.json and ProjectSettings.asset changed outside the editor: read them again (debounced).</summary>
+		private void RefreshSettingsIfChanged()
+		{
+			if (!settingsChanged || Time.timeD - settingsChangedAt < 0.5)
+			{
+				return;
+			}
+
+			settingsChanged = false;
+			// Reading it again is harmless when the editor wrote it itself.
+			if (File.Exists(Project.SettingsFile))
+			{
+				Project.ReloadSettingsFile();
+			}
+
+			string file = Project.ProjectSettingsFile;
+			FileStamp stamp = FileStamp.Of(file);
+			if (stamp == projectSettingsStamp || !File.Exists(file))
+			{
+				return;
+			}
+
+			ProjectSettings settings;
+			try
+			{
+				settings = Documents.ReadObject(File.ReadAllBytes(file), typeof(ProjectSettings), new ProjectSettings()) as ProjectSettings;
+			}
+			catch (IOException)
+			{
+				// Still being written (a checkout): try again shortly.
+				OnSettingsChanged();
+				return;
+			}
+			catch (Exception e)
+			{
+				projectSettingsStamp = stamp;
+				Debug.LogError("[Editor] ProjectSettings.asset changed on disk but cannot be read (" + e.Message + "); keeping the current settings");
+				return;
+			}
+
+			projectSettingsStamp = stamp;
+			if (settings == null)
+			{
+				return;
+			}
+
+			// An edit in progress belongs to the settings being replaced.
+			Edits.Cancel();
+			ProjectSettings.Use(settings);
+			NotifySceneChanged();
+			Debug.Log("[Editor] Reloaded the project settings (changed on disk)");
 		}
 
 		/// <summary>Edit mode with an enabled [ExecuteAlways] game component: it may change the scene every frame.</summary>
@@ -1484,6 +1833,126 @@ namespace LELEngine.Editor
 			{
 				SceneView.SaveState(Project);
 				Extensions.SaveOpenWindows(Project);
+				SaveWindowStates();
+			}
+		}
+
+		// ---------------------------------------------------------------- window states
+
+		/// <summary>
+		///     Writes which built-in windows are open (closed ones too) next to the docking layout (layout.ini keeps where
+		///     each one is, also while closed): the panels, Project Settings and its tab, VFX Graph and the graph it shows
+		///     (per project), the UI Builder. The project's scripted windows are saved by <see cref="EditorExtensions" />.
+		/// </summary>
+		private void SaveWindowStates()
+		{
+			if (automated || Project == null)
+			{
+				return;
+			}
+
+			// Read first: the graphs other projects showed stay.
+			WindowStates states = WindowStates.Load(WindowStatesFile) ?? new WindowStates();
+			states.Open["Scene"] = SceneView.Open;
+			states.Open["Game"] = GameView.Open;
+			states.Open["Hierarchy"] = hierarchy.Open;
+			states.Open["Inspector"] = inspector.Open;
+			states.Open["Project"] = projectPanel.Open;
+			states.Open["Console"] = consolePanel.Open;
+			states.Open["Lighting"] = lightingPanel.Open;
+			states.Open["Project Settings"] = projectSettingsWindow.Open;
+			states.ProjectSettingsTab = projectSettingsWindow.CurrentTab.ToString();
+			states.Open["VFX Graph"] = vfxGraphWindow.Open;
+			string graph = vfxGraphWindow.Document?.AssetPath;
+			if (graph != null)
+			{
+				states.VfxGraphs[Project.RootPath] = graph;
+			}
+
+			states.Open["UI Builder"] = uiBuilder != null && uiBuilder.IsOpen;
+			states.Save(WindowStatesFile);
+		}
+
+		/// <summary>Opens and closes the built-in windows as they were saved (the first frame of a project).</summary>
+		private void RestoreWindowStates()
+		{
+			WindowStates states = WindowStates.Load(WindowStatesFile);
+			if (states == null)
+			{
+				return;
+			}
+
+			bool Saved(string name, bool fallback) => states.Open.TryGetValue(name, out bool open) ? open : fallback;
+			SceneView.Open = Saved("Scene", true);
+			GameView.Open = Saved("Game", true);
+			hierarchy.Open = Saved("Hierarchy", true);
+			inspector.Open = Saved("Inspector", true);
+			projectPanel.Open = Saved("Project", true);
+			consolePanel.Open = Saved("Console", true);
+			lightingPanel.Open = Saved("Lighting", true);
+			if (Saved("Project Settings", false))
+			{
+				projectSettingsWindow.Restore(Enum.TryParse(states.ProjectSettingsTab, out ProjectSettingsWindow.Tab tab) ? tab : ProjectSettingsWindow.Tab.Lighting);
+			}
+
+			try
+			{
+				if (Saved("VFX Graph", false))
+				{
+					string graph = states.VfxGraphs.TryGetValue(Project.RootPath, out string path) && File.Exists(AssetDatabase.ToAbsolute(path)) ? path : null;
+					OpenVfxGraph(graph);
+				}
+
+				if (Saved("UI Builder", false))
+				{
+					OpenUIBuilder(null);
+				}
+			}
+			catch (Exception e)
+			{
+				Debug.LogWarning("[Editor] Cannot reopen a window: " + e.Message);
+			}
+		}
+
+		/// <summary>The built-in windows' open state (windows.json in the editor's data folder).</summary>
+		private sealed class WindowStates
+		{
+			public Dictionary<string, bool> Open { get; set; } = new Dictionary<string, bool>();
+			public string ProjectSettingsTab { get; set; }
+
+			/// <summary>Per project folder: the graph the VFX Graph window showed.</summary>
+			public Dictionary<string, string> VfxGraphs { get; set; } = new Dictionary<string, string>();
+
+			public static WindowStates Load(string file)
+			{
+				try
+				{
+					WindowStates states = File.Exists(file) ? System.Text.Json.JsonSerializer.Deserialize<WindowStates>(File.ReadAllText(file)) : null;
+					if (states != null)
+					{
+						states.Open ??= new Dictionary<string, bool>();
+						states.VfxGraphs ??= new Dictionary<string, string>();
+					}
+
+					return states;
+				}
+				catch (Exception e) when (e is IOException || e is System.Text.Json.JsonException || e is UnauthorizedAccessException)
+				{
+					return null;
+				}
+			}
+
+			public void Save(string file)
+			{
+				try
+				{
+					Directory.CreateDirectory(Path.GetDirectoryName(file));
+					File.WriteAllText(file, System.Text.Json.JsonSerializer.Serialize(this, new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+				}
+				catch (Exception e) when (e is IOException || e is UnauthorizedAccessException)
+				{
+					Debug.LogWarning("[Editor] Cannot save the open windows: " + e.Message);
+				}
 			}
 		}
 
@@ -1561,6 +2030,25 @@ namespace LELEngine.Editor
 			}
 		}
 
+		/// <summary>A run driven by a script (focus=0, exitframe=, screenshot=): no saved window state is used or written.</summary>
+		public static bool IsAutomatedRun(string[] args)
+		{
+			return Array.IndexOf(args, "focus=0") >= 0
+				|| Array.Exists(args, a => a.StartsWith("exitframe=", StringComparison.OrdinalIgnoreCase) || a.StartsWith("screenshot=", StringComparison.OrdinalIgnoreCase));
+		}
+
+		/// <summary>The project folder the command line names (project=folder or -projectPath folder), or null.</summary>
+		public static string ProjectArgument(string[] args)
+		{
+			return GetValue(args, "project") ?? CommandLine.Parse(args).Get("projectpath");
+		}
+
+		/// <summary>The command line opens (or creates) a project itself: the project chooser is skipped (automated runs).</summary>
+		public static bool OpensProjectDirectly(string[] args)
+		{
+			return ProjectArgument(args) != null || GetValue(args, "newproject") != null;
+		}
+
 		private static string GetValue(string[] args, string name)
 		{
 			foreach (string arg in args)
@@ -1573,6 +2061,27 @@ namespace LELEngine.Editor
 			}
 
 			return null;
+		}
+
+		#endregion
+
+		#region NestedTypes
+
+		/// <summary>Size and last write time of a file: a different stamp means someone else wrote it since (default: no file).</summary>
+		private readonly record struct FileStamp(long Length, DateTime WrittenUtc)
+		{
+			public static FileStamp Of(string path)
+			{
+				try
+				{
+					var info = new FileInfo(path);
+					return info.Exists ? new FileStamp(info.Length, info.LastWriteTimeUtc) : default;
+				}
+				catch (Exception)
+				{
+					return default;
+				}
+			}
 		}
 
 		#endregion

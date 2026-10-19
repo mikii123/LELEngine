@@ -231,6 +231,9 @@ namespace LELEngine.VFX
 		/// <summary>The component's transform (set before <see cref="Simulate" />).</summary>
 		public Matrix4 LocalToWorld = Matrix4.Identity;
 
+		/// <summary>The component's layer: the cameras whose culling mask has it draw the effect (and its shadows count with the lighting camera's).</summary>
+		public int Layer;
+
 		public bool Playing { get; private set; }
 		public bool Paused;
 		public float PlayRate = 1f;
@@ -504,10 +507,16 @@ namespace LELEngine.VFX
 
 		// ---------------------------------------------------------------- drawing
 
+		/// <summary>The effect's layer is in the view's culling mask.</summary>
+		private bool OnLayers(int layerMask)
+		{
+			return (layerMask & (1 << (Layer & 31))) != 0;
+		}
+
 		/// <summary>The outputs of the given kind visible in the view, for the renderer's passes.</summary>
 		public void CollectDraws(RenderContext renderContext, List<VfxDrawEntry> entries, bool transparent)
 		{
-			if (disposed || !enabled || programs == null || programs.HasErrors)
+			if (disposed || !enabled || programs == null || programs.HasErrors || !OnLayers(renderContext.CullingMask))
 			{
 				return;
 			}
@@ -584,7 +593,7 @@ namespace LELEngine.VFX
 		/// <summary>Draws the shadow-casting outputs into the bound shadow map (the light's view, culled by its frustum).</summary>
 		public void DrawShadows(RenderContext renderContext, Matrix4 lightView, Matrix4 lightProjection)
 		{
-			if (disposed || !enabled || programs == null || programs.HasErrors || !HasShadowCasters)
+			if (disposed || !enabled || programs == null || programs.HasErrors || !HasShadowCasters || !OnLayers(renderContext.CullingMask))
 			{
 				return;
 			}

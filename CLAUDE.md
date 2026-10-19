@@ -12,6 +12,11 @@
   frame-count based automation (`exitframe`, `dumpframe`) covers well under a second: prefer `exitseconds=S` and
   `dump=1 dumpafter=S` for anything time dependent.
 - Never run `git commit` or `git push`; the user does that.
+- The editor starts with the project chooser in its own window (`LauncherWindow`) unless the command line names a
+  project (`project=`, `newproject=`, `-projectPath`): automated runs must pass one. File > Close Project hides the
+  editor's window and shows the chooser (same GL context: engine caches stay valid). The editor window's place and
+  maximized state are in `%APPDATA%\LELEngine\Editor\window.json`, not used by automated runs (`focus=0`,
+  `exitframe=`, `screenshot=`).
 - The editor compiles a project's scripts with the `dotnet` on PATH: for automated editor runs on a project with
   scripts, put `C:\Users\Admin\.dotnet` first on PATH too, otherwise every script build fails with NETSDK1045.
 - The GL context is core forward-compatible: legacy GLSL (`gl_FragColor`, `texture2D`, `attribute` / `varying`)
@@ -26,8 +31,11 @@
   the editor, `SceneModels` in `TestGame.Scenes` (full asset paths: `Meshes/cube.obj`, `Materials/X.material`).
 - Backends: `ObjModelBackend` (built into the engine, .obj + .mtl, works without the editor, e.g. in TestGame) and
   `AssimpModelBackend` (editor, Silk.NET.Assimp: fbx, gltf/glb, dae, 3ds, blend, ply, stl), registered in the
-  editor's `Program.Main` with `ModelMaterialExtractor` (writes `Materials/<name>.material` with `LitTextured` /
-  `LitTransparent`, embedded textures into `Textures/`, never overwrites). Imports cache in `Library/ModelCache`
+  editor's `Program.Main` with `ModelMaterialExtractor` (writes `Materials/<name>.material` with the engine's
+  `Engine/LitTextured.shader` / `Engine/LitTransparent.shader`, embedded textures into `Textures/`, never overwrites).
+- The lit shaders (`Lit`, `LitTextured`, `LitTransparent`) are engine shaders in `LELEngine/ShaderLibrary/Engine`
+  (the GI and shadow contracts live there); new projects get no copies. A material naming a project copy that no
+  longer exists (`Shaders/Lit.shader`) loads `Engine/Lit.shader` (`AssetDatabase.EngineShaderFallback`). Imports cache in `Library/ModelCache`
   (`ModelAssets.CacheFolder`, set when a project opens); player builds write the imported binary (`LELMODEL`
   magic) under the model's own file name, so the player never needs Assimp.
 - `Mesh` is indexed (`Vertices`, `Indices`, `SubMeshes`); `GetTrianglePositions()` serves CPU queries (picking,
@@ -38,6 +46,26 @@
   Unity's SkyCar.fbx (2.32 x 1.45 x 4.47 m). Node matrices from Silk.NET are row-major with the translation in the
   4th column: transpose before `Matrix4x4.Decompose`.
 - Test hook: `addmodel=N;Models/Car.fbx|M;...` instantiates model files at frames N, M.
+
+## Layers and camera stack
+
+- `GameObject.layer` (0..31); `LayerMask` lives in `LELEngine/Mono/Layers.cs`: built-in names 0..7, user names 8..31
+  in `ProjectSettings.Layers` (Project Settings > Layers; `LayerMask.LayerToName` reads the live settings). Fields of
+  type `LayerMask` draw as a mask dropdown (`FieldDrawer`).
+- `Camera`: `RenderType` Base / Overlay, `CullingMask`, `ClearDepth` (overlay), `Stack` and `LightingCamera` (base;
+  drawn by `CameraInspector`). `SceneManager.MainCamera` = first enabled base camera (hosts render it with its stack);
+  `Camera.main` = that stack's lighting camera (null `LightingCamera` = the base camera).
+- `Renderer.RenderFrame` renders the stack: passes by `RenderPass.Scope` (Frame once with the lighting camera's
+  context: VFX simulation, shadows, SDF, surface cache, radiance cache, voxel GI; then per camera EveryCamera:
+  opaque, VFX opaque, transparent; LightingCamera: prepass, screen-space GI, callbacks, debug; BaseCamera: sky; then
+  Final: post-process, UI). One pass over the renderers splits them per camera by mask; `GpuScene` is built once from
+  all cameras' opaque renderers, each instance holds its layer bit (`refs.z`), `InstanceCull.shader` tests the
+  `layerMask` uniform (uint: `SetUint`). `EnsureCameraCulled` re-culls only when view-projection or mask change.
+- GI: only the lighting camera's view reads the screen-space GI (`Lighting.ScreenGIView`); other cameras get
+  `giResolveMode` 0 (voxel cones) or 2 (Lumen radiance cache probes, `GetProbeIndirectLighting` in
+  `VolumeLighting.glsl`, SH sampler on unit 17 `OpaqueProbeSHTextureUnit` so no 2D sampler shares its unit). Shadow
+  casters and GI contributors are the lighting camera's layers. VFX: `VfxInstance.Layer` (set by `VisualEffect`),
+  depth for collisions captured from the lighting camera only.
 
 ## Editor scripts (custom inspectors, editor windows, menu items)
 

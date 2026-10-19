@@ -22,6 +22,9 @@ namespace LELEngine.Shaders
 		/// <summary>Texture units a material may use (the engine binds its own maps on the units above).</summary>
 		public const int MaxTextureUnits = 8;
 
+		/// <summary>The engine's lit shader: new materials and unreadable material files use it.</summary>
+		public const string DefaultShaderPath = "Engine/Lit.shader";
+
 		/// <summary>Root-relative path of the .material file; copies made with <see cref="Clone" /> keep it.</summary>
 		public string AssetPath { get; internal set; }
 
@@ -643,15 +646,14 @@ namespace LELEngine.Shaders
 			ShaderProgram program = null;
 			try
 			{
-				string lit = AssetDatabase.Resolve("Lit.shader", "Shaders");
-				if (lit != null)
+				if (AssetDatabase.IsEngineResource(DefaultShaderPath))
 				{
-					program = InternalStorage.GetOrCreateShader(lit);
+					program = InternalStorage.GetOrCreateShader(DefaultShaderPath);
 				}
 			}
 			catch (Exception)
 			{
-				// No lit shader in this project: an empty material.
+				// No engine shader library next to the binaries: an empty material.
 			}
 
 			var material = new Material(program);

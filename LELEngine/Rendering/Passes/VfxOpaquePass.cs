@@ -13,6 +13,8 @@ namespace LELEngine.Rendering.Passes
 
 		public override string Name => "VfxOpaque";
 
+		public override RenderPassScope Scope => RenderPassScope.EveryCamera;
+
 		#endregion
 
 		#region PublicMethods

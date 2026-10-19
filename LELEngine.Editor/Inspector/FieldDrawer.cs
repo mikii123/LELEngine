@@ -108,6 +108,12 @@ namespace LELEngine.Editor
 				return DrawList(label, type, element, ref value, context, depth);
 			}
 
+			if (type == typeof(LayerMask))
+			{
+				Label(label, info, context);
+				return DrawLayerMask(ref value, context);
+			}
+
 			if (IsNested(type))
 			{
 				return DrawNested(label, type, ref value, context, depth);
@@ -322,6 +328,84 @@ namespace LELEngine.Editor
 			}
 
 			return changed;
+		}
+
+		/// <summary>A layer mask as a dropdown of the named layers to tick, with Nothing / Everything (as Unity draws it).</summary>
+		private static bool DrawLayerMask(ref object value, InspectorContext context)
+		{
+			int mask = ((LayerMask)value).value;
+			bool changed = false;
+			if (ImGui.BeginCombo("##v", LayerMaskPreview(mask)))
+			{
+				if (ImGui.Selectable("Nothing", mask == 0))
+				{
+					mask = 0;
+					changed = true;
+				}
+
+				if (ImGui.Selectable("Everything", mask == -1))
+				{
+					mask = -1;
+					changed = true;
+				}
+
+				ImGui.Separator();
+				for (int layer = 0; layer < LayerMask.LayerCount; layer++)
+				{
+					string name = LayerMask.LayerToName(layer);
+					if (name.Length == 0)
+					{
+						continue;
+					}
+
+					// Checkboxes keep the list open while several layers are ticked.
+					bool on = (mask & (1 << layer)) != 0;
+					if (ImGui.Checkbox(name + "##" + layer, ref on))
+					{
+						mask = on ? mask | (1 << layer) : mask & ~(1 << layer);
+						changed = true;
+					}
+				}
+
+				ImGui.EndCombo();
+			}
+
+			context.Track(changed);
+			if (changed)
+			{
+				value = (LayerMask)mask;
+			}
+
+			return changed;
+		}
+
+		/// <summary>What a closed layer mask field shows: Nothing, Everything, the layer names, or Mixed.</summary>
+		public static string LayerMaskPreview(int mask)
+		{
+			if (mask == 0)
+			{
+				return "Nothing";
+			}
+
+			if (mask == -1)
+			{
+				return "Everything";
+			}
+
+			string names = null;
+			int count = 0;
+			for (int layer = 0; layer < LayerMask.LayerCount; layer++)
+			{
+				if ((mask & (1 << layer)) == 0)
+				{
+					continue;
+				}
+
+				count++;
+				names = names == null ? LayerMask.DisplayName(layer) : names + ", " + LayerMask.DisplayName(layer);
+			}
+
+			return count <= 2 ? names : "Mixed (" + count + " layers)";
 		}
 
 		private static bool DrawIntVector(Type type, ref object value)

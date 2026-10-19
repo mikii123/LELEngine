@@ -5,6 +5,8 @@
 //   giVolumeMode 2  Lumen: the radiance cache probes around the point (irradiance from their spherical harmonics,
 //                   reflections from their maps), the way Lumen lights translucency from a probe volume.
 // Uniforms are set by Lighting.SetVolumeGIUniforms. Include after #version: #include "Engine/VolumeLighting.glsl"
+// GetProbeIndirectLighting also lights the opaque materials of the cameras of a stack other than its lighting camera
+// (Engine/VoxelConeTracing.glsl, giResolveMode 2): their view has no screen-space GI of its own.
 #ifndef LEL_VOLUME_LIGHTING_GLSL
 #define LEL_VOLUME_LIGHTING_GLSL
 
@@ -19,26 +21,10 @@ uniform int giEnabled;
 #endif
 uniform int giVolumeMode; // 0 none, 1 voxel cones, 2 radiance cache probes
 
-// Same contract as GetIndirectLighting:
-//   diffuse   : indirect irradiance / pi, multiply by albedo
-//   occlusion : ambient occlusion factor for the flat ambient term (cones only)
-//   specular  : indirect radiance along the reflection, multiply by the specular color / strength
-void GetVolumeIndirectLighting(vec3 position, vec3 normal, vec3 viewDir, float roughness, out vec3 diffuse, out float occlusion, out vec3 specular)
+// The radiance cache probes around the point (Lumen): irradiance / pi and the radiance along the reflection, both
+// scaled by the GI strengths. Leaves them as they are where the cache has no valid probe.
+void GetProbeIndirectLighting(vec3 position, vec3 normal, vec3 viewDir, float roughness, inout vec3 diffuse, inout vec3 specular)
 {
-	diffuse = vec3(0.0);
-	occlusion = 1.0;
-	specular = vec3(0.0);
-	if (giEnabled == 0 || giVolumeMode == 0) return;
-
-	if (giVolumeMode == 1)
-	{
-		vec4 diffuseCoverage = TraceDiffuseCones(position, normal);
-		diffuse = diffuseCoverage.rgb * giDiffuseStrength;
-		occlusion = clamp(1.0 - diffuseCoverage.a * giOcclusionStrength, 0.0, 1.0);
-		specular = TraceSpecularCone(position, normal, viewDir, roughness) * giSpecularStrength;
-		return;
-	}
-
 	vec3 c[9];
 	if (!SampleRadianceCacheSH(position, c)) return;
 
@@ -62,6 +48,29 @@ void GetVolumeIndirectLighting(vec3 position, vec3 normal, vec3 viewDir, float r
 	}
 
 	specular *= giSpecularStrength;
+}
+
+// Same contract as GetIndirectLighting:
+//   diffuse   : indirect irradiance / pi, multiply by albedo
+//   occlusion : ambient occlusion factor for the flat ambient term (cones only)
+//   specular  : indirect radiance along the reflection, multiply by the specular color / strength
+void GetVolumeIndirectLighting(vec3 position, vec3 normal, vec3 viewDir, float roughness, out vec3 diffuse, out float occlusion, out vec3 specular)
+{
+	diffuse = vec3(0.0);
+	occlusion = 1.0;
+	specular = vec3(0.0);
+	if (giEnabled == 0 || giVolumeMode == 0) return;
+
+	if (giVolumeMode == 1)
+	{
+		vec4 diffuseCoverage = TraceDiffuseCones(position, normal);
+		diffuse = diffuseCoverage.rgb * giDiffuseStrength;
+		occlusion = clamp(1.0 - diffuseCoverage.a * giOcclusionStrength, 0.0, 1.0);
+		specular = TraceSpecularCone(position, normal, viewDir, roughness) * giSpecularStrength;
+		return;
+	}
+
+	GetProbeIndirectLighting(position, normal, viewDir, roughness, diffuse, specular);
 }
 
 #endif

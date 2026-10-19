@@ -8,7 +8,7 @@ namespace LELEngine.Editor
 {
 	/// <summary>
 	///     Turns the materials of an import into project assets: Materials/&lt;material name&gt;.material next to the model
-	///     (LitTextured for opaque materials, LitTransparent below full opacity) and the embedded textures as files in
+	///     (the engine's LitTextured for opaque materials, LitTransparent below full opacity) and the embedded textures as files in
 	///     Textures/. Existing files are never overwritten: a material edited in the editor keeps its edits on reimport,
 	///     and models in one folder share materials of the same name. Normal maps found this way get the Normal Map
 	///     texture type unless their import settings were set already.
@@ -17,8 +17,8 @@ namespace LELEngine.Editor
 	{
 		#region PrivateFields
 
-		private const string OpaqueShader = "LitTextured.shader";
-		private const string TransparentShader = "LitTransparent.shader";
+		private const string OpaqueShader = "Engine/LitTextured.shader";
+		private const string TransparentShader = "Engine/LitTransparent.shader";
 
 		#endregion
 
@@ -64,10 +64,10 @@ namespace LELEngine.Editor
 		private static bool Create(ModelMaterial source, string materialPath, string folder, string modelName)
 		{
 			bool transparent = source.Color.W < 0.999f;
-			string shaderPath = ShaderPath(transparent ? TransparentShader : OpaqueShader);
-			if (shaderPath == null)
+			string shaderPath = transparent ? TransparentShader : OpaqueShader;
+			if (!AssetDatabase.IsEngineResource(shaderPath))
 			{
-				Debug.LogWarning($"[Model] {materialPath}: the project has no {(transparent ? TransparentShader : OpaqueShader)}; the default material is used");
+				Debug.LogWarning($"[Model] {materialPath}: the engine has no {shaderPath}; the default material is used");
 				source.AssetPath = null;
 				return false;
 			}
@@ -96,30 +96,6 @@ namespace LELEngine.Editor
 			AssetDatabase.EnsureMeta(materialPath);
 			InternalStorage.RegisterMaterial(material);
 			return true;
-		}
-
-		/// <summary>The project shader, copied from the editor's template when the project lacks it (older projects).</summary>
-		private static string ShaderPath(string fileName)
-		{
-			string existing = AssetDatabase.Resolve(fileName, "Shaders");
-			if (existing != null)
-			{
-				return existing;
-			}
-
-			string template = Path.Combine(EditorApplication.TemplateAssetsPath, "Shaders", fileName);
-			if (!File.Exists(template))
-			{
-				return null;
-			}
-
-			string assetPath = "Shaders/" + fileName;
-			string target = AssetDatabase.ToAbsolute(assetPath);
-			Directory.CreateDirectory(Path.GetDirectoryName(target));
-			File.Copy(template, target, false);
-			AssetDatabase.EnsureMeta(assetPath);
-			Debug.Log($"[Model] Added {assetPath} to the project (imported materials use it)");
-			return assetPath;
 		}
 
 		/// <summary>A project texture as is; an embedded one written to Textures/ (once).</summary>

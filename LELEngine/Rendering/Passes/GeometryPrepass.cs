@@ -59,7 +59,7 @@ namespace LELEngine.Rendering.Passes
 			bool gpuDriven = gpu.Active && instancedProgram != null;
 			if (gpuDriven)
 			{
-				gpu.EnsureCameraCulled(context.ViewProjection);
+				gpu.EnsureCameraCulled(context.ViewProjection, context.CullingMask);
 			}
 
 			// Depth was already cleared with the scene target (shared texture); clear only our color.

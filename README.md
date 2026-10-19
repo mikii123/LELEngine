@@ -45,6 +45,11 @@ Built on .NET 10, OpenTK 4.9 (GLFW) and OpenGL 4.6 (4.3 minimum), developed and 
 **Rendering**
 - Pass-based renderer: HDR target, depth prepass, cascaded directional shadow maps (tent filtered), post-processing,
   GPU profiler.
+- Layers and camera stacking (as URP): 32 layers (the project names 8..31 in Project Settings > Layers), a culling
+  mask per camera; a base camera clears and renders, the overlay cameras of its stack draw over it in order (optionally
+  clearing the depth). One camera of the stack lights the world (screen-space GI, shadow cascades, GI volume, its
+  layers cast the shadows); the others share the shadow map and light from the GI volume (voxel cones, Lumen's
+  radiance cache probes). All cameras are culled on the GPU from one set of instance tables per frame.
 - GPU-driven geometry: one shared geometry pool, a GPU instance table, compute frustum culling and multi-draw
   indirect. Every hardware feature it relies on has a fallback path.
 - Global illumination:

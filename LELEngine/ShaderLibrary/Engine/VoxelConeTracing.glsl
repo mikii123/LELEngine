@@ -2,8 +2,9 @@
 // Uniforms are set by Lighting.SetGIUniforms.
 // Include after #version: #include "Engine/VoxelConeTracing.glsl"
 //
-// Material shaders call GetIndirectLighting(). Depending on giResolveMode it either traces the
-// cones per pixel or reads the reduced-resolution buffers produced by GIResolvePass.
+// Material shaders call GetIndirectLighting(). Depending on giResolveMode it traces the cones per pixel (0), reads
+// the buffers the view's screen-space GI produced (1: GIResolvePass, ScreenProbeGatherPass), or reads the Lumen
+// radiance cache probes (2: a camera of a stack other than its lighting camera, whose view has no screen-space GI).
 
 #include "Engine/VoxelConeTracingCore.glsl"
 
@@ -11,6 +12,9 @@
 #define LEL_GI_ENABLED_UNIFORM
 uniform int giEnabled;
 #endif
+
+// The radiance cache probe path (GetProbeIndirectLighting).
+#include "Engine/VolumeLighting.glsl"
 
 // Screen-space resolve (GIResolvePass)
 uniform int giResolveMode;
@@ -113,6 +117,12 @@ void GetIndirectLighting(vec3 position, vec3 normal, vec3 viewDir, float roughne
 	specular = vec3(0.0);
 
 	if (giEnabled == 0) return;
+
+	if (giResolveMode == 2)
+	{
+		GetProbeIndirectLighting(position, normal, viewDir, roughness, diffuse, specular);
+		return;
+	}
 
 	vec4 diffuseCoverage;
 	vec3 specularRadiance;

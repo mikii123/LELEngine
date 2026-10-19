@@ -3,8 +3,9 @@
 #version 430
 
 // GPU-driven culling (LELEngine.Rendering.GpuScene). One work group per segment: a contiguous range of the instance
-// table drawn by one multi-draw call. Each instance's world bounds are tested against the view frustum, then the
-// draw commands are written in instance order (a work group prefix sum, so the draw order is deterministic).
+// table drawn by one multi-draw call. Each instance's layer is tested against the view's layer mask and its world
+// bounds against the view frustum, then the draw commands are written in instance order (a work group prefix sum,
+// so the draw order is deterministic).
 // compactCommands = 1 (native, the GPU reads the draw count): visible commands packed at the segment start, their
 // number in drawCounts[segment]. compactCommands = 0 (fallback): one command per instance, culled ones with
 // instance count 0.
@@ -38,6 +39,7 @@ layout(std430, binding = 14) readonly buffer LelCullSegments { LelCullSegment se
 
 uniform vec4 frustumPlanes[6];
 uniform int compactCommands;
+uniform uint layerMask; // the view's layers (bit n = layer n), set with SetUint
 
 // Subgroup totals (native) or the per-thread scan values (fallback).
 shared uint scanValues[GROUP_SIZE];
@@ -48,7 +50,7 @@ shared uint scanTotal;
 bool IsVisible(uint index, uint requiredFlags)
 {
 	LelInstance instance = lelInstances[index];
-	bool flags = (instance.draw.w & requiredFlags) == requiredFlags;
+	bool flags = (instance.draw.w & requiredFlags) == requiredFlags && (instance.refs.z & layerMask) != 0u;
 
 	vec3 localCenter = (instance.boundsMin.xyz + instance.boundsMax.xyz) * 0.5;
 	vec3 localExtent = (instance.boundsMax.xyz - instance.boundsMin.xyz) * 0.5;

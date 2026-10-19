@@ -14,7 +14,7 @@ namespace LELEngine.Editor
 {
 	/// <summary>
 	///     Project Settings (Edit > Project Settings...), one tab each: the project-wide lighting quality (shadow map,
-	///     GI method and its tunables), 2D physics (simulation plane, gravity, solver, queries, layer collision matrix),
+	///     GI method and its tunables), the names of the user layers, 2D physics (simulation plane, gravity, solver, queries, layer collision matrix),
 	///     the splash screen of builds (duration, background, logo, with a preview) and the build (scenes, start scene,
 	///     output folder, configuration; builds in the background). Lighting, physics and splash screen edits are
 	///     undoable and saved to ProjectSettings/ProjectSettings.asset when they end; the lighting of a scene
@@ -27,12 +27,16 @@ namespace LELEngine.Editor
 		public enum Tab
 		{
 			Lighting,
+			Layers,
 			Physics2D,
 			SplashScreen,
 			Build
 		}
 
 		public bool Open;
+
+		/// <summary>The tab shown last (saved with the editor's windows: ImGui does not keep a tab bar's selection).</summary>
+		public Tab CurrentTab { get; private set; } = Tab.Lighting;
 
 		#endregion
 
@@ -65,6 +69,13 @@ namespace LELEngine.Editor
 		#endregion
 
 		#region PublicMethods
+
+		/// <summary>Reopens the window as it was saved (the editor's windows): open on <paramref name="tab" />, without taking the focus.</summary>
+		public void Restore(Tab tab)
+		{
+			Open = true;
+			requestedTab = tab;
+		}
 
 		/// <summary>Opens the window in front, on <paramref name="tab" /> (null: the tab it was on).</summary>
 		public void Show(Tab? tab)
@@ -130,6 +141,12 @@ namespace LELEngine.Editor
 				EndTab();
 			}
 
+			if (BeginTab(Tab.Layers, "Layers"))
+			{
+				changed |= DrawLayers(settings.Layers);
+				EndTab();
+			}
+
 			if (BeginTab(Tab.Physics2D, "Physics 2D"))
 			{
 				changed |= DrawPhysics(settings.Physics2D);
@@ -164,6 +181,8 @@ namespace LELEngine.Editor
 			{
 				return false;
 			}
+
+			CurrentTab = tab;
 
 			ImGui.BeginChild("##content", NVector2.Zero);
 			return true;
@@ -251,6 +270,48 @@ namespace LELEngine.Editor
 			{
 				gi.InvalidateStatic();
 				changed = true;
+			}
+
+			ImGui.PopID();
+			return changed;
+		}
+
+		// ---------------------------------------------------------------- layers
+
+		/// <summary>The layer names: built in for 0..7, the project's for 8..31 (objects keep their layer when it is renamed).</summary>
+		private bool DrawLayers(LayerSettings layers)
+		{
+			ImGui.TextDisabled("Every object is on one layer (Inspector header). Cameras draw the layers of their culling mask,");
+			ImGui.TextDisabled("2D physics collides layers by the matrix in Physics 2D.");
+			ImGui.Spacing();
+
+			bool changed = false;
+			ImGui.PushID("layers");
+			for (int layer = 0; layer < LayerMask.LayerCount; layer++)
+			{
+				ImGui.PushID(layer);
+				bool builtIn = layer < LayerMask.FirstUserLayer;
+				FieldDrawer.Label((builtIn ? "Built-in Layer " : "User Layer ") + layer, null, context);
+				if (builtIn)
+				{
+					string fixedName = LayerMask.LayerToName(layer);
+					ImGui.BeginDisabled();
+					ImGui.InputText("##name", ref fixedName, 64, ImGuiInputTextFlags.ReadOnly);
+					ImGui.EndDisabled();
+				}
+				else
+				{
+					string name = layers.GetName(layer);
+					bool edited = ImGui.InputText("##name", ref name, 64);
+					context.Track(edited);
+					if (edited)
+					{
+						layers.SetName(layer, name);
+						changed = true;
+					}
+				}
+
+				ImGui.PopID();
 			}
 
 			ImGui.PopID();

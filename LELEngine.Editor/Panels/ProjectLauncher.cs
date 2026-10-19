@@ -6,15 +6,23 @@ using NVector2 = System.Numerics.Vector2;
 
 namespace LELEngine.Editor
 {
-	/// <summary>Start screen: recent projects (one click opens), open a project folder, create a new project.</summary>
+	/// <summary>
+	///     The project chooser drawn in <see cref="LauncherWindow" />: recent projects (one click opens), open a project
+	///     folder, create a new project. A chosen project goes to the callback; the editor's window opens it.
+	/// </summary>
 	internal sealed class ProjectLauncher
 	{
 		#region PrivateFields
 
-		private readonly EditorApplication editor;
+		private readonly OpenTK.Windowing.Desktop.NativeWindow owner;
+		private readonly Action<string> open;
 		private List<string> recent;
 		private string newName = "MyGame";
 		private string newLocation;
+
+		/// <summary>The project goes into a new folder named after it inside the location; off: into the location itself.</summary>
+		private bool createFolder = true;
+
 		private string error;
 
 		/// <summary>
@@ -27,9 +35,14 @@ namespace LELEngine.Editor
 
 		#region Constructors
 
-		public ProjectLauncher(EditorApplication editor)
+		/// <param name="owner">The window the system dialogs belong to.</param>
+		/// <param name="open">Called with the folder of the project to open (chosen or just created).</param>
+		/// <param name="error">Shown from the start (why the last project could not be opened), or null.</param>
+		public ProjectLauncher(OpenTK.Windowing.Desktop.NativeWindow owner, Action<string> open, string error)
 		{
-			this.editor = editor;
+			this.owner = owner;
+			this.open = open;
+			this.error = error;
 		}
 
 		#endregion
@@ -61,12 +74,12 @@ namespace LELEngine.Editor
 					: Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments), "LELEngine Projects");
 			}
 
+			// The whole system window (it has the title).
 			ImGuiViewportPtr viewport = ImGui.GetMainViewport();
-			NVector2 size = new NVector2(Math.Min(760, viewport.Size.X - 40), Math.Min(560, viewport.Size.Y - 40));
-			ImGui.SetNextWindowPos(EditorGui.ViewportCenter(), ImGuiCond.Always, new NVector2(0.5f, 0.5f));
-			ImGui.SetNextWindowSize(size, ImGuiCond.Always);
-			ImGuiWindowFlags flags = ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.NoMove | ImGuiWindowFlags.NoResize | ImGuiWindowFlags.NoSavedSettings | ImGuiWindowFlags.NoDocking;
-			if (ImGui.Begin("LELEngine - Projects", flags))
+			ImGui.SetNextWindowPos(viewport.WorkPos, ImGuiCond.Always);
+			ImGui.SetNextWindowSize(viewport.WorkSize, ImGuiCond.Always);
+			ImGuiWindowFlags flags = ImGuiWindowFlags.NoDecoration | ImGuiWindowFlags.NoMove | ImGuiWindowFlags.NoSavedSettings | ImGuiWindowFlags.NoDocking | ImGuiWindowFlags.NoBringToFrontOnFocus;
+			if (ImGui.Begin("##projects", flags))
 			{
 				DrawRecent();
 				ImGui.Spacing();
@@ -102,7 +115,7 @@ namespace LELEngine.Editor
 			}
 
 			// The create section below keeps its height; the list takes the rest.
-			float createHeight = ImGui.GetTextLineHeightWithSpacing() + ImGui.GetFrameHeightWithSpacing() * 3f + style.ItemSpacing.Y * 6f + style.WindowPadding.Y;
+			float createHeight = ImGui.GetTextLineHeightWithSpacing() + ImGui.GetFrameHeightWithSpacing() * 4f + style.ItemSpacing.Y * 6f + style.WindowPadding.Y;
 			if (error != null)
 			{
 				createHeight += ImGui.GetTextLineHeightWithSpacing() * 2f + style.ItemSpacing.Y;
@@ -210,7 +223,15 @@ namespace LELEngine.Editor
 				ImGui.InputText("##location", ref newLocation, 512);
 			}
 
-			string problem = ValidateNew(out string folder);
+			// Under the fields, aligned with them.
+			ImGui.SetCursorPosX(labelWidth);
+			ImGui.Checkbox("Create a folder named after the project", ref createFolder);
+			if (ImGui.IsItemHovered())
+			{
+				ImGui.SetTooltip("On: the project goes into Location/Name.\nOff: the project goes into Location itself (an existing folder keeps its files).");
+			}
+
+			string problem = ValidateNew(out string folder, out bool existing);
 			ImGui.Spacing();
 			ImGui.AlignTextToFramePadding();
 			// The status line is clipped before the Create button.
@@ -223,7 +244,7 @@ namespace LELEngine.Editor
 			}
 			else
 			{
-				ImGui.TextDisabled("Creates " + folder);
+				ImGui.TextDisabled(existing ? "Creates the project in the existing folder " + folder + " (its files are kept)" : "Creates " + folder);
 			}
 
 			ImGui.PopClipRect();
@@ -242,10 +263,14 @@ namespace LELEngine.Editor
 			}
 		}
 
-		/// <summary>Why the new project cannot be created yet, or null (with the folder it will be created in).</summary>
-		private string ValidateNew(out string folder)
+		/// <summary>
+		///     Why the new project cannot be created yet, or null (with the folder it will be created in, and whether that
+		///     folder exists with files in it already).
+		/// </summary>
+		private string ValidateNew(out string folder, out bool existing)
 		{
 			folder = null;
+			existing = false;
 			string name = newName.Trim();
 			if (name.Length == 0)
 			{
@@ -264,18 +289,19 @@ namespace LELEngine.Editor
 
 			try
 			{
-				folder = Path.GetFullPath(Path.Combine(newLocation, name));
+				folder = Path.GetFullPath(createFolder ? Path.Combine(newLocation, name) : newLocation);
 			}
 			catch (Exception)
 			{
 				return "Invalid location.";
 			}
 
-			if (Directory.Exists(folder) && Directory.GetFileSystemEntries(folder).Length > 0)
+			if (ProjectInfo.IsProjectFolder(folder))
 			{
-				return "The folder " + folder + " already exists and is not empty.";
+				return "The folder " + folder + " is a LELEngine project already (use Open project).";
 			}
 
+			existing = Directory.Exists(folder) && Directory.GetFileSystemEntries(folder).Length > 0;
 			return null;
 		}
 
@@ -283,10 +309,14 @@ namespace LELEngine.Editor
 		{
 			try
 			{
-				Directory.CreateDirectory(newLocation);
-				ProjectInfo project = ProjectInfo.Create(newLocation, newName.Trim(), EditorApplication.TemplateAssetsPath);
+				if (ValidateNew(out string folder, out _) != null)
+				{
+					return;
+				}
+
+				ProjectInfo project = ProjectInfo.CreateIn(folder, newName.Trim(), EditorApplication.TemplateAssetsPath);
 				error = null;
-				editor.OpenProject(project.RootPath);
+				open(project.RootPath);
 				recent = null;
 			}
 			catch (Exception e)
@@ -298,7 +328,7 @@ namespace LELEngine.Editor
 		private void BrowseOpen()
 		{
 			string start = recent != null && recent.Count > 0 ? Path.GetDirectoryName(recent[0]) : newLocation;
-			string folder = NativeDialogs.PickFolder(editor.Window, "Open LELEngine project", start);
+			string folder = NativeDialogs.PickFolder(owner, "Open LELEngine project", start);
 			if (folder != null)
 			{
 				Open(folder);
@@ -307,7 +337,7 @@ namespace LELEngine.Editor
 
 		private void BrowseLocation()
 		{
-			string folder = NativeDialogs.PickFolder(editor.Window, "Location of the new project", newLocation);
+			string folder = NativeDialogs.PickFolder(owner, "Location of the new project", newLocation);
 			if (folder != null)
 			{
 				newLocation = folder;
@@ -326,7 +356,7 @@ namespace LELEngine.Editor
 				}
 
 				error = null;
-				editor.OpenProject(path);
+				open(path);
 				recent = null;
 			}
 			catch (Exception e)

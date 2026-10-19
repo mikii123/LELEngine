@@ -19,6 +19,8 @@ namespace LELEngine.Rendering.Passes
 
 		public override string Name => "SurfaceCache";
 
+		public override RenderPassScope Scope => RenderPassScope.Frame;
+
 		#endregion
 
 		#region PrivateFields

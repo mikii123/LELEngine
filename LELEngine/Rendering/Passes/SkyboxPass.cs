@@ -16,6 +16,8 @@ namespace LELEngine.Rendering.Passes
 
 		public override string Name => "Skybox";
 
+		public override RenderPassScope Scope => RenderPassScope.BaseCamera;
+
 		#endregion
 
 		#region PublicMethods

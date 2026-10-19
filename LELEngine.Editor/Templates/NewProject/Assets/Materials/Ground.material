@@ -3,7 +3,7 @@
   "$version": 2,
   "$kind": "Object",
   "$type": "LELEngine.Shaders.Material, LELEngine",
-  "m_Shader": { "path": "Shaders/Lit.shader" },
+  "m_Shader": { "path": "Engine/Lit.shader" },
   "m_Properties": [
     { "$type": "LELEngine.Shaders.ColorProperty, LELEngine", "name": "Color", "value": [0.18, 0.19, 0.21, 1] },
     { "$type": "LELEngine.Shaders.ColorProperty, LELEngine", "name": "Emissive", "value": [0, 0, 0, 0] },

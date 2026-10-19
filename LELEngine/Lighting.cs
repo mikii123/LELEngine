@@ -68,6 +68,22 @@ namespace LELEngine
 		/// </summary>
 		public const int SkyboxTextureUnit = 16;
 
+		/// <summary>
+		///     Texture unit of the radiance cache SH (a 2D array) for opaque materials lit from Lumen's probes (the cameras
+		///     of a stack other than its lighting camera): not one of the resolve buffers' units, whose samplers are 2D (a
+		///     unit must not hold samplers of two types). The atlas, 2D, shares <see cref="VolumeProbeTextureUnit" /> with
+		///     the resolve's diffuse. Used only when the context has the unit.
+		/// </summary>
+		public const int OpaqueProbeSHTextureUnit = 17;
+
+		/// <summary>
+		///     The view being drawn is its stack's lighting camera (<see cref="Camera.GetStackLightingCamera" />): the
+		///     materials read the screen-space GI its view computed (the resolve buffers). The other cameras of a stack
+		///     light from the GI volume: voxel cones per fragment, or Lumen's radiance cache probes. Set by the renderer
+		///     for every camera it draws.
+		/// </summary>
+		public static bool ScreenGIView { get; internal set; } = true;
+
 		/// <summary>The cascades of <see cref="ShadowMap" />. Written by the shadow pass every frame.</summary>
 		public static readonly ShadowCascadeData ShadowCascades = new ShadowCascadeData();
 
@@ -174,10 +190,28 @@ namespace LELEngine
 			SetGIUniforms(program, receiveGI);
 		}
 
+		/// <summary>
+		///     GI of an opaque material (Engine/VoxelConeTracing.glsl) for the view being drawn: the lighting camera reads
+		///     its screen-space resolve (giResolveMode 1); the other cameras of a stack trace the voxel cones per fragment
+		///     (0) or, with Lumen, read the radiance cache probes (2). Off when the GI is (no method produced anything).
+		/// </summary>
 		public static void SetGIUniforms(ShaderProgram program, bool receiveGI)
 		{
-			// Either pipeline must have produced something this frame: a voxel volume or resolved screen buffers.
-			bool enabled = receiveGI && GI.Enabled && (GI.VoxelTexture != 0 || GI.ResolveActive);
+			// The radiance cache SH is a 2D array: in an opaque material its sampler keeps a unit of its own even while
+			// unused, never one a 2D texture is bound to.
+			bool probeUnit = OpaqueProbeSHTextureUnit < GLCapabilities.MaxTextureUnits;
+			bool opaqueMaterial = program.GetUniformLocation("giResolveMode") >= 0;
+			if (probeUnit && opaqueMaterial)
+			{
+				program.SetInt("RadianceCacheSH", OpaqueProbeSHTextureUnit);
+			}
+
+			// What this view can read this frame: its screen-space resolve (the lighting camera), the voxel volume, or
+			// the Lumen probes.
+			bool resolve = ScreenGIView && GI.ResolveActive && GI.ResolvedDiffuse != 0;
+			bool voxels = GI.Mode == GIMode.VoxelConeTracing && GI.VoxelTexture != 0;
+			bool probes = !resolve && GI.Mode == GIMode.Lumen && RadianceCache.Valid && probeUnit && opaqueMaterial;
+			bool enabled = receiveGI && GI.Enabled && (resolve || voxels || probes);
 			program.SetInt("giEnabled", enabled ? 1 : 0);
 			if (!enabled)
 			{
@@ -202,8 +236,7 @@ namespace LELEngine
 				SetSdfUniforms(program);
 			}
 
-			bool resolve = GI.ResolveActive && GI.ResolvedDiffuse != 0;
-			program.SetInt("giResolveMode", resolve ? 1 : 0);
+			program.SetInt("giResolveMode", resolve ? 1 : probes ? 2 : 0);
 			if (resolve)
 			{
 				program.SetVector2("giResolveSize", new Vector2(GI.ResolveWidth, GI.ResolveHeight));
@@ -211,6 +244,11 @@ namespace LELEngine
 				program.SetTexture("IndirectDiffuse", TextureTarget.Texture2D, GI.ResolvedDiffuse, IndirectDiffuseTextureUnit);
 				program.SetTexture("IndirectSpecular", TextureTarget.Texture2D, GI.ResolvedSpecular, IndirectSpecularTextureUnit);
 				program.SetInt("giResolveNormals", GI.ResolvedNormals != 0 ? 1 : 0);				program.SetTexture("GINormalRoughness", TextureTarget.Texture2D, GI.ResolvedNormals, ResolveNormalTextureUnit);
+			}
+			else if (probes)
+			{
+				SetRadianceCacheUniforms(program, VolumeProbeTextureUnit);
+				program.SetTexture("RadianceCacheSH", TextureTarget.Texture2DArray, RadianceCache.SH, OpaqueProbeSHTextureUnit);
 			}
 		}
 

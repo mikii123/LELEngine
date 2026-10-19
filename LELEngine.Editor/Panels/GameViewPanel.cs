@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using Hexa.NET.ImGui;
+using OpenTK.Mathematics;
 using NVector2 = System.Numerics.Vector2;
 
 namespace LELEngine.Editor
@@ -26,6 +28,7 @@ namespace LELEngine.Editor
 
 		private readonly EditorApplication editor;
 		private readonly ViewRefresh refresh = new ViewRefresh();
+		private readonly List<Camera> stack = new List<Camera>();
 		private bool visible;
 		private bool focusRequested;
 		private NVector2 viewSize = new NVector2(640, 360);
@@ -55,11 +58,24 @@ namespace LELEngine.Editor
 
 		public void Focus()
 		{
+			Open = true;
 			focusRequested = true;
 		}
 
+		/// <summary>The window is shown (its close button and the Window menu toggle it; saved with the editor's windows).</summary>
+		public bool Open = true;
+
 		public void Draw()
 		{
+			if (!Open)
+			{
+				// Closed: nothing to render, no game input.
+				visible = false;
+				HasInputFocus = false;
+				IsMouseOverImage = false;
+				return;
+			}
+
 			if (focusRequested)
 			{
 				ImGui.SetNextWindowFocus();
@@ -67,7 +83,7 @@ namespace LELEngine.Editor
 			}
 
 			ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, new NVector2(0, 0));
-			visible = ImGui.Begin("Game");
+			visible = ImGui.Begin("Game", ref Open);
 			ImGui.PopStyleVar();
 			HasInputFocus = visible && ImGui.IsWindowFocused(ImGuiFocusedFlags.RootAndChildWindows);
 			if (visible)
@@ -102,8 +118,19 @@ namespace LELEngine.Editor
 			}
 
 			ViewRenderer.EnsureSize((int)viewSize.X, (int)viewSize.Y);
-			camera.UpdateMatrices(ViewRenderer.Width / (float)ViewRenderer.Height);
-			if (refresh.ShouldRender(camera, ViewRenderer.Width, ViewRenderer.Height, editor.SceneVersion, continuous))
+
+			// The view shows the camera's whole stack: an overlay camera moving changes it too.
+			camera.GetRenderStack(stack);
+			Matrix4 signature = Matrix4.Zero;
+			foreach (Camera view in stack)
+			{
+				view.UpdateMatrices(ViewRenderer.Width / (float)ViewRenderer.Height);
+				signature += view.ViewProjectionMatrix;
+			}
+
+			// No camera kept between frames (it would hold an unloaded scene).
+			stack.Clear();
+			if (refresh.ShouldRender(camera, signature, ViewRenderer.Width, ViewRenderer.Height, editor.SceneVersion, continuous))
 			{
 				ViewRenderer.RenderLoadedScenes(camera);
 			}
@@ -132,7 +159,7 @@ namespace LELEngine.Editor
 			if (SceneManager.MainCamera == null)
 			{
 				ImGui.SetCursorPos(new NVector2(12, 12));
-				ImGui.TextColored(EditorStyle.Warning, "No camera in the scene (add a GameObject with a Camera component).");
+				ImGui.TextColored(EditorStyle.Warning, "No base camera in the scene (add a GameObject with a Camera component, Render Type Base).");
 				return;
 			}
 

@@ -87,6 +87,7 @@ namespace LELEngine.Editor
 		/// <summary>Brings the Scene tab to the front on the next frame.</summary>
 		public void Focus()
 		{
+			Open = true;
 			focusRequested = true;
 		}
 
@@ -97,8 +98,19 @@ namespace LELEngine.Editor
 			ApplyCamera();
 		}
 
+		/// <summary>The window is shown (its close button and the Window menu toggle it; saved with the editor's windows).</summary>
+		public bool Open = true;
+
 		public void Draw()
 		{
+			if (!Open)
+			{
+				// Closed: nothing to render either (see Render).
+				visible = false;
+				IsFocused = false;
+				return;
+			}
+
 			if (focusRequested)
 			{
 				ImGui.SetNextWindowFocus();
@@ -106,7 +118,7 @@ namespace LELEngine.Editor
 			}
 
 			ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, new NVector2(0, 0));
-			visible = ImGui.Begin("Scene");
+			visible = ImGui.Begin("Scene", ref Open);
 			ImGui.PopStyleVar();
 			IsFocused = ImGui.IsWindowFocused(ImGuiFocusedFlags.RootAndChildWindows);
 			if (visible)

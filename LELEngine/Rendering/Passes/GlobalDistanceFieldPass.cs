@@ -22,6 +22,8 @@ namespace LELEngine.Rendering.Passes
 		#region PublicFields
 
 		public override string Name => "GlobalSDF";
+
+		public override RenderPassScope Scope => RenderPassScope.Frame;
 		public int GlobalSdf => globalSdf;
 
 		#endregion

@@ -177,7 +177,14 @@ namespace LELEngine
 				return name;
 			}
 
-			return AssetDatabase.Resolve(name, "Shaders") ?? name.Replace('\\', '/');
+			string asset = AssetDatabase.Resolve(name, "Shaders");
+			if (asset != null || AssetDatabase.IsEngineResource(name))
+			{
+				return asset ?? name.Replace('\\', '/');
+			}
+
+			// Neither a project asset nor an engine path: a project copy of an engine shader that was removed.
+			return AssetDatabase.EngineShaderFallback(name) ?? name.Replace('\\', '/');
 		}
 
 		#endregion

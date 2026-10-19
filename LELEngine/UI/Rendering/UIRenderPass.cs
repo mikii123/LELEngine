@@ -14,6 +14,8 @@ namespace LELEngine.Rendering.Passes
 
 		public override string Name => "UI";
 
+		public override RenderPassScope Scope => RenderPassScope.Final;
+
 		public override bool RunsWithoutCamera => true;
 
 		#endregion

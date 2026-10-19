@@ -48,9 +48,18 @@ namespace LELEngine.Editor
 			Dragged = null;
 		}
 
+		/// <summary>The window is shown (its close button and the Window menu toggle it; saved with the editor's windows).</summary>
+		public bool Open = true;
+
 		public void Draw()
 		{
-			bool visible = ImGui.Begin("Hierarchy");
+			if (!Open)
+			{
+				IsFocused = false;
+				return;
+			}
+
+			bool visible = ImGui.Begin("Hierarchy", ref Open);
 			IsFocused = ImGui.IsWindowFocused(ImGuiFocusedFlags.RootAndChildWindows);
 			if (visible)
 			{

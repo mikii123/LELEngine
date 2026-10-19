@@ -232,6 +232,9 @@ namespace LELEngine.VFX
 		private static readonly List<VfxInstance> queued = new List<VfxInstance>();
 		private static readonly Dictionary<VfxGraph, VfxProgramSet> programs = new Dictionary<VfxGraph, VfxProgramSet>();
 		private static readonly Dictionary<Renderer, VfxDepthCapture> depthCaptures = new Dictionary<Renderer, VfxDepthCapture>();
+
+		/// <summary>The depth of the other cameras of a renderer's stack: soft particles only (collisions use the lighting camera's).</summary>
+		private static readonly Dictionary<Renderer, VfxDepthCapture> stackDepthCaptures = new Dictionary<Renderer, VfxDepthCapture>();
 		private static ComputeShader sort;
 		private static ComputeShader frameKernel;
 		private static int emptyVao;
@@ -640,16 +643,18 @@ namespace LELEngine.VFX
 		// ---------------------------------------------------------------- depth
 
 		/// <summary>
-		///     Copies the view's scene depth (opaques drawn) for this frame's soft particles and the next simulation's
-		///     depth collisions. Called by the transparent pass before any particle draws.
+		///     Copies the view's scene depth (opaques drawn) for this frame's soft particles and, the lighting camera of
+		///     a stack, the next simulation's depth collisions. Called by the transparent pass before any particle draws.
 		/// </summary>
 		public static VfxDepthCapture CaptureDepth(RenderContext context)
 		{
+			// The other cameras of a stack draw only their layers: their depth must not replace the world's.
+			Dictionary<Renderer, VfxDepthCapture> captures = context.IsLightingCamera ? depthCaptures : stackDepthCaptures;
 			VfxDepthCapture capture;
-			if (!depthCaptures.TryGetValue(context.Renderer, out capture))
+			if (!captures.TryGetValue(context.Renderer, out capture))
 			{
 				capture = new VfxDepthCapture();
-				depthCaptures[context.Renderer] = capture;
+				captures[context.Renderer] = capture;
 			}
 
 			RenderTexture source = context.SceneDepth;
@@ -671,7 +676,11 @@ namespace LELEngine.VFX
 			capture.ViewProjection = context.ViewProjection;
 			capture.InverseViewProjection = context.ViewProjection.Inverted();
 			capture.Valid = true;
-			LastDepth = capture;
+			if (context.IsLightingCamera)
+			{
+				LastDepth = capture;
+			}
+
 			return capture;
 		}
 
@@ -712,7 +721,13 @@ namespace LELEngine.VFX
 				capture.Depth?.Delete();
 			}
 
+			foreach (VfxDepthCapture capture in stackDepthCaptures.Values)
+			{
+				capture.Depth?.Delete();
+			}
+
 			depthCaptures.Clear();
+			stackDepthCaptures.Clear();
 			LastDepth = null;
 			foreach (IndexBuffer buffer in indexBuffers.Values)
 			{
@@ -742,7 +757,7 @@ namespace LELEngine.VFX
 			paramsDirty = true;
 		}
 
-		/// <summary>Drops the depth capture of a renderer being disposed.</summary>
+		/// <summary>Drops the depth captures of a renderer being disposed.</summary>
 		public static void ReleaseRenderer(Renderer renderer)
 		{
 			VfxDepthCapture capture;
@@ -754,6 +769,12 @@ namespace LELEngine.VFX
 				{
 					LastDepth = null;
 				}
+			}
+
+			if (stackDepthCaptures.TryGetValue(renderer, out capture))
+			{
+				capture.Depth?.Delete();
+				stackDepthCaptures.Remove(renderer);
 			}
 		}
 

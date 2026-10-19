@@ -27,12 +27,61 @@ namespace LELEngine.Editor
 				return code;
 			}
 
+			return RunEditor(args);
+		}
+
+		/// <summary>
+		///     The project chooser in its own small window first (no editor window exists yet), then the editor's window
+		///     on the chosen project. A command line naming a project (project=, -projectPath, newproject=: automated
+		///     runs) opens the editor directly. File > Close Project shows the chooser again from the editor
+		///     (<see cref="EditorApplication" />): its window, GL context and caches stay for the next project.
+		/// </summary>
+		private static int RunEditor(string[] args)
+		{
+			// focus=0: automated runs open their windows without taking the keyboard focus.
+			Window.StartFocused = Array.IndexOf(args, "focus=0") < 0;
+			if (!EditorApplication.OpensProjectDirectly(args))
+			{
+				string chosen = LauncherWindow.Choose(null);
+				if (chosen == null)
+				{
+					return 0;
+				}
+
+				args = WithProject(args, chosen);
+			}
+
 			using (MainWindow window = MainWindow.Create(args))
 			{
 				window.Run();
 			}
 
 			return 0;
+		}
+
+		/// <summary>The command line with the chosen project instead of any project given before.</summary>
+		private static string[] WithProject(string[] args, string project)
+		{
+			var result = new System.Collections.Generic.List<string>();
+			for (int i = 0; i < args.Length; i++)
+			{
+				string arg = args[i];
+				if (arg.StartsWith("project=", StringComparison.OrdinalIgnoreCase) || arg.StartsWith("newproject=", StringComparison.OrdinalIgnoreCase))
+				{
+					continue;
+				}
+
+				if (string.Equals(arg, "-projectPath", StringComparison.OrdinalIgnoreCase))
+				{
+					i++;
+					continue;
+				}
+
+				result.Add(arg);
+			}
+
+			result.Add("project=" + project);
+			return result.ToArray();
 		}
 
 		private static int ShowHelp()

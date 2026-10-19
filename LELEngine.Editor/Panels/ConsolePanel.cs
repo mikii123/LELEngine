@@ -31,9 +31,17 @@ namespace LELEngine.Editor
 
 		#region PublicMethods
 
+		/// <summary>The window is shown (its close button and the Window menu toggle it; saved with the editor's windows).</summary>
+		public bool Open = true;
+
 		public void Draw()
 		{
-			if (ImGui.Begin("Console"))
+			if (!Open)
+			{
+				return;
+			}
+
+			if (ImGui.Begin("Console", ref Open))
 			{
 				try
 				{

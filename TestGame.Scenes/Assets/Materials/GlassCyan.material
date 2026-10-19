@@ -3,7 +3,7 @@
   "$version": 2,
   "$kind": "Object",
   "$type": "LELEngine.Shaders.Material, LELEngine",
-  "m_Shader": { "guid": "7f3a9c1e5b2d4e8fa6c0d1b2e3f4a5c6", "path": "Shaders/LitTransparent.shader" },
+  "m_Shader": { "path": "Engine/LitTransparent.shader" },
   "m_Properties": [
     { "$type": "LELEngine.Shaders.ColorProperty, LELEngine", "name": "Color", "value": [0.3, 0.8, 1, 0.35] },
     { "$type": "LELEngine.Shaders.FloatProperty, LELEngine", "name": "Roughness", "value": 0.1 }

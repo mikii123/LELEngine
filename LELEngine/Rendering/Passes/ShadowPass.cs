@@ -21,6 +21,8 @@ namespace LELEngine.Rendering.Passes
 		#region PublicFields
 
 		public override string Name => "Shadows";
+
+		public override RenderPassScope Scope => RenderPassScope.Frame;
 		public Framebuffer ShadowTarget => shadowTarget;
 
 		#endregion
@@ -79,8 +81,9 @@ namespace LELEngine.Rendering.Passes
 				SetTileViewport(i, columns, tileSize);
 				if (gpuDriven)
 				{
-					// The culling dispatch binds its own program: the depth program is bound after it.
-					gpu.CullShadows(lightView * projections[i]);
+					// The culling dispatch binds its own program: the depth program is bound after it. The casters are
+					// the lighting camera's layers (the tables hold every camera's renderers).
+					gpu.CullShadows(lightView * projections[i], context.CullingMask);
 				}
 
 				program.Use();

@@ -23,7 +23,10 @@ namespace LELEngine
 
 		public HideFlags hideFlags;
 
-		/// <summary>Layer (0..31) the object belongs to: collision filtering and queries (see <see cref="LayerMask" />).</summary>
+		/// <summary>
+		///     Layer (0..31) the object belongs to: collision filtering and queries, and which cameras draw it
+		///     (<see cref="Camera.CullingMask" />; see <see cref="LayerMask" />).
+		/// </summary>
 		public int layer
 		{
 			get => layerIndex;

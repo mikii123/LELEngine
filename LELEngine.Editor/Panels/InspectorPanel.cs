@@ -41,9 +41,17 @@ namespace LELEngine.Editor
 
 		#region PublicMethods
 
+		/// <summary>The window is shown (its close button and the Window menu toggle it; saved with the editor's windows).</summary>
+		public bool Open = true;
+
 		public void Draw()
 		{
-			if (ImGui.Begin("Inspector"))
+			if (!Open)
+			{
+				return;
+			}
+
+			if (ImGui.Begin("Inspector", ref Open))
 			{
 				try
 				{
@@ -131,7 +139,7 @@ namespace LELEngine.Editor
 				nameBuffer = go.Name;
 			}
 
-			// Layer (collision filtering, queries).
+			// Layer (collision filtering, queries, the cameras' culling masks).
 			ImGui.AlignTextToFramePadding();
 			ImGui.TextDisabled("Layer");
 			ImGui.SameLine();
@@ -152,6 +160,12 @@ namespace LELEngine.Editor
 						editor.RecordStructural("Change layer of " + go.Name, () => go.layer = layer);
 						editor.NotifyChanged(go);
 					}
+				}
+
+				ImGui.Separator();
+				if (ImGui.Selectable("Add Layer..."))
+				{
+					editor.ShowProjectSettings(ProjectSettingsWindow.Tab.Layers);
 				}
 
 				ImGui.EndCombo();

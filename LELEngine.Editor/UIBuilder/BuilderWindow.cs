@@ -33,6 +33,10 @@ namespace LELEngine.Editor.UIBuilder
 		private bool closeRequested;
 		private bool disposed;
 
+		/// <summary>Where the window is, kept between runs (not for automated runs).</summary>
+		private readonly WindowPlacement placement;
+		private readonly bool rememberPlacement;
+
 		#endregion
 
 		#region Constructors
@@ -49,9 +53,15 @@ namespace LELEngine.Editor.UIBuilder
 				Flags = ContextFlags.ForwardCompatible,
 				SharedContext = owner.Context,
 				StartFocused = Window.StartFocused,
-				StartVisible = true
+				// Shown once it is where it was last time.
+				StartVisible = false
 			});
 			native.Closing += OnClosing;
+			rememberPlacement = !editor.IsAutomated;
+			placement = new WindowPlacement(native, "builder-window.json");
+			native.Move += OnMoved;
+			native.Resize += OnResized;
+			placement.Restore(rememberPlacement);
 
 			native.MakeCurrent();
 			// The editor's window swaps with vsync; a second vsync wait per frame would halve the frame rate.
@@ -145,12 +155,22 @@ namespace LELEngine.Editor.UIBuilder
 			disposed = true;
 			if (native != null && native.Exists)
 			{
+				if (rememberPlacement)
+				{
+					placement.Save();
+				}
+
 				native.MakeCurrent();
 				Builder.Dispose();
 				imgui.Dispose();
 			}
 
 			native?.Closing -= OnClosing;
+			if (native != null)
+			{
+				native.Move -= OnMoved;
+				native.Resize -= OnResized;
+			}
 			native?.Dispose();
 			native = null;
 			owner.MakeEditorCurrent();
@@ -159,6 +179,16 @@ namespace LELEngine.Editor.UIBuilder
 		#endregion
 
 		#region PrivateMethods
+
+		private void OnMoved(WindowPositionEventArgs e)
+		{
+			placement.Track();
+		}
+
+		private void OnResized(ResizeEventArgs e)
+		{
+			placement.Track();
+		}
 
 		private void OnClosing(System.ComponentModel.CancelEventArgs e)
 		{
@@ -169,6 +199,11 @@ namespace LELEngine.Editor.UIBuilder
 			}
 
 			closeRequested = true;
+			// Now, while the window still exists (its close button may destroy it before the editor disposes this).
+			if (rememberPlacement)
+			{
+				placement.Save();
+			}
 		}
 
 		#endregion

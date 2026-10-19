@@ -51,9 +51,17 @@ namespace LELEngine.Editor
 
 		#region PublicMethods
 
+		/// <summary>The window is shown (its close button and the Window menu toggle it; saved with the editor's windows).</summary>
+		public bool Open = true;
+
 		public void Draw()
 		{
-			if (ImGui.Begin("Project"))
+			if (!Open)
+			{
+				return;
+			}
+
+			if (ImGui.Begin("Project", ref Open))
 			{
 				try
 				{
@@ -375,8 +383,7 @@ namespace LELEngine.Editor
 				{
 					target = Absolute(Combine(folder, name + Shaders.Material.Extension));
 					EnsureNew(target);
-					string lit = AssetDatabase.Resolve("Lit.shader", "Shaders");
-					var material = new Shaders.Material(lit != null ? InternalStorage.GetOrCreateShader(lit) : null);
+					var material = new Shaders.Material(InternalStorage.GetOrCreateShader(Shaders.Material.DefaultShaderPath));
 					if (!material.HasProperty("Color"))
 					{
 						material.SetColor("Color", new OpenTK.Mathematics.Color4(0.8f, 0.8f, 0.8f, 1f));

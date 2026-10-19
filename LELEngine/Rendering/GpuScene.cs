@@ -88,8 +88,10 @@ namespace LELEngine.Rendering
 	///     GPU-driven rendering: an instance per renderer and opaque sub-mesh in an instance table (world and normal matrices,
 	///     local bounds, the mesh range in <see cref="GeometryPool" />, material index, flags), a material table (the
 	///     standard parameters Color, Emissive, Roughness) and the opaque buckets (one per shader variant and shared
-	///     uniform state). Rebuilt every frame; each view (camera, shadow map) is culled by Engine/InstanceCull.shader,
-	///     which writes the draw commands, and drawn by one multi-draw indirect call per bucket.
+	///     uniform state). Rebuilt every frame from the renderers of every camera of the stack; each view (a camera,
+	///     a shadow map) is culled by Engine/InstanceCull.shader against its frustum and its layer mask (an instance
+	///     holds the bit of its object's layer), which writes the draw commands, and drawn by one multi-draw indirect
+	///     call per bucket.
 	///     Native path: commands compacted in instance order, the draw count read by the GPU
 	///     (glMultiDrawElementsIndirectCount), the instance index from gl_BaseInstance, the culling scan with subgroup
 	///     operations. Fallbacks, each on its own: one command per instance with instance count 0 when culled, a
@@ -148,6 +150,8 @@ namespace LELEngine.Rendering
 		private int materialBuffer;
 		private ComputeShader cull;
 		private bool cameraCulled;
+		private Matrix4 culledViewProjection;
+		private int culledLayerMask;
 		private bool reported;
 
 		#endregion
@@ -247,15 +251,21 @@ namespace LELEngine.Rendering
 			}
 		}
 
-		/// <summary>Culls the camera view once per frame: per-bucket commands (opaque pass) and all instances (depth prepass).</summary>
-		public void EnsureCameraCulled(Matrix4 viewProjection)
+		/// <summary>
+		///     Culls a camera's view (its frustum and layers): per-bucket commands (opaque pass) and all instances (depth
+		///     prepass). Again only when the view changed: the passes of one camera share the result, the next camera
+		///     of a stack culls its own.
+		/// </summary>
+		public void EnsureCameraCulled(Matrix4 viewProjection, int layerMask)
 		{
-			if (!Active || cameraCulled)
+			if (!Active || cameraCulled && viewProjection == culledViewProjection && layerMask == culledLayerMask)
 			{
 				return;
 			}
 
 			cameraCulled = true;
+			culledViewProjection = viewProjection;
+			culledLayerMask = layerMask;
 			cameraView.Segments.Clear();
 			foreach (OpaqueBucket bucket in activeBuckets)
 			{
@@ -263,11 +273,11 @@ namespace LELEngine.Rendering
 			}
 
 			cameraView.Segments.Add(new CullSegment { InstanceStart = 0, InstanceCount = (uint)InstanceCount, CommandOffset = (uint)InstanceCount, RequiredFlags = 0 });
-			Dispatch(cameraView, viewProjection, InstanceCount * 2);
+			Dispatch(cameraView, viewProjection, layerMask, InstanceCount * 2);
 		}
 
-		/// <summary>Culls the shadow casters against the light's view.</summary>
-		public void CullShadows(Matrix4 lightViewProjection)
+		/// <summary>Culls the shadow casters (on the layers of <paramref name="layerMask" />) against the light's view.</summary>
+		public void CullShadows(Matrix4 lightViewProjection, int layerMask)
 		{
 			if (!Active)
 			{
@@ -276,7 +286,7 @@ namespace LELEngine.Rendering
 
 			shadowView.Segments.Clear();
 			shadowView.Segments.Add(new CullSegment { InstanceStart = 0, InstanceCount = (uint)InstanceCount, CommandOffset = 0, RequiredFlags = CastsShadowsFlag });
-			Dispatch(shadowView, lightViewProjection, InstanceCount);
+			Dispatch(shadowView, lightViewProjection, layerMask, InstanceCount);
 		}
 
 		/// <summary>Every visible instance with the bound program (depth prepass). Needs <see cref="EnsureCameraCulled" />.</summary>
@@ -372,7 +382,8 @@ namespace LELEngine.Rendering
 				BaseVertex = (uint)mesh.PoolBaseVertex,
 				Flags = renderer.CastShadows ? CastsShadowsFlag : 0u,
 				Material = (uint)MaterialIndex(part.Material),
-				Bucket = bucket < 0 ? uint.MaxValue : (uint)bucket
+				Bucket = bucket < 0 ? uint.MaxValue : (uint)bucket,
+				LayerBit = 1u << (renderer.gameObject.layer & 31)
 			};
 		}
 
@@ -437,7 +448,7 @@ namespace LELEngine.Rendering
 			GL.BindBufferBase(BufferRangeTarget.ShaderStorageBuffer, MaterialBinding, materialBuffer);
 		}
 
-		private void Dispatch(CullView view, Matrix4 viewProjection, int commandCount)
+		private void Dispatch(CullView view, Matrix4 viewProjection, int layerMask, int commandCount)
 		{
 			cull ??= new ComputeShader("Engine/InstanceCull.shader");
 			view.Upload(commandCount);
@@ -448,6 +459,8 @@ namespace LELEngine.Rendering
 			cull.Use();
 			cull.Program.SetVector4Array("frustumPlanes", FrustumPlanes(viewProjection));
 			cull.Program.SetInt("compactCommands", GLCapabilities.IndirectParameters ? 1 : 0);
+			// A uint uniform: SetInt would leave it 0 (nothing visible).
+			cull.Program.SetUint("layerMask", unchecked((uint)layerMask));
 			cull.Dispatch(view.Segments.Count);
 			// The commands and the counts are read by the following indirect draws.
 			GL.MemoryBarrier(MemoryBarrierFlags.CommandBarrierBit);
@@ -529,7 +542,7 @@ namespace LELEngine.Rendering
 			public uint Flags;
 			public uint Material;
 			public uint Bucket;
-			public uint Unused0;
+			public uint LayerBit;
 			public uint Unused1;
 		}
 

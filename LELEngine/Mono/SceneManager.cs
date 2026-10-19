@@ -80,7 +80,10 @@ namespace LELEngine
 		/// <summary>The active scene changed (previous, new; either may be null).</summary>
 		public static event Action<Scene, Scene> ActiveSceneChanged;
 
-		/// <summary>The first enabled camera of the active scene, or of the other loaded scenes.</summary>
+		/// <summary>
+		///     The first enabled base camera of the active scene, or of the other loaded scenes: the hosts render it with
+		///     its stack (<see cref="Camera.main" /> is the stack's lighting camera).
+		/// </summary>
 		public static Camera MainCamera
 		{
 			get

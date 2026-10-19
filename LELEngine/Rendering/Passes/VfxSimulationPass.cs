@@ -13,6 +13,8 @@ namespace LELEngine.Rendering.Passes
 
 		public override string Name => "VfxSimulate";
 
+		public override RenderPassScope Scope => RenderPassScope.Frame;
+
 		#endregion
 
 		#region PublicMethods

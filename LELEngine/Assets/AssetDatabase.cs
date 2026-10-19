@@ -255,6 +255,22 @@ namespace LELEngine
 			return Normalize(full.Substring(rootFull.Length));
 		}
 
+		/// <summary>
+		///     The engine shader standing in for a project shader that is not there ("Shaders/Lit.shader" ->
+		///     "Engine/Lit.shader"): the lit shaders the GI depends on moved into the engine, and materials of older
+		///     projects still name their project copies. Null when the engine has no shader of that name.
+		/// </summary>
+		public static string EngineShaderFallback(string path)
+		{
+			if (string.IsNullOrEmpty(path) || !path.EndsWith(".shader", StringComparison.OrdinalIgnoreCase))
+			{
+				return null;
+			}
+
+			string engine = "Engine/" + Path.GetFileName(path.Replace('\\', '/'));
+			return IsEngineResource(engine) ? engine : null;
+		}
+
 		/// <summary>True when the path names an engine resource shipped next to the binaries (engine shaders) rather than a project asset.</summary>
 		public static bool IsEngineResource(string path)
 		{
@@ -550,6 +566,11 @@ namespace LELEngine
 				else if (IsEngineResource(pathHint))
 				{
 					path = pathHint;
+				}
+				else
+				{
+					// A project copy of a shader the engine has now.
+					path = EngineShaderFallback(pathHint);
 				}
 			}
 

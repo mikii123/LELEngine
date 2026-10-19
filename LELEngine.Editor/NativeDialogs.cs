@@ -24,10 +24,11 @@ namespace LELEngine.Editor
 		public static bool CanPickFolder => OperatingSystem.IsWindows();
 
 		/// <summary>
-		///     Shows the system folder picker, modal to the editor window, starting in <paramref name="initialFolder" />
-		///     (or its closest existing parent). Returns the chosen folder, or null when cancelled.
+		///     Shows the system folder picker, modal to <paramref name="owner" /> (the editor's or the project launcher's
+		///     window), starting in <paramref name="initialFolder" /> (or its closest existing parent). Returns the chosen
+		///     folder, or null when cancelled.
 		/// </summary>
-		public static unsafe string PickFolder(MainWindow owner, string title, string initialFolder)
+		public static unsafe string PickFolder(OpenTK.Windowing.Desktop.NativeWindow owner, string title, string initialFolder)
 		{
 			if (!CanPickFolder)
 			{

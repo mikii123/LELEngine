@@ -17,7 +17,7 @@ struct LelInstance
 	vec4 boundsMin;    // local-space bounds of the mesh
 	vec4 boundsMax;
 	uvec4 draw;        // index count, first index, base vertex, flags (bit 0: casts shadows)
-	uvec4 refs;        // material index, opaque bucket, unused, unused
+	uvec4 refs;        // material index, opaque bucket, layer bit (1 << the object's layer), unused
 };
 
 struct LelMaterial

@@ -5,8 +5,8 @@ using LELEngine.Serialization;
 namespace LELEngine
 {
 	/// <summary>
-	///     Project-wide settings: 2D physics, the lighting quality (the shadow map and the global illumination method
-	///     with its tunables) and the splash screen of builds. One document: ProjectSettings/ProjectSettings.asset in a
+	///     Project-wide settings: the names of the user layers, 2D physics, the lighting quality (the shadow map and the
+	///     global illumination method with its tunables) and the splash screen of builds. One document: ProjectSettings/ProjectSettings.asset in a
 	///     project (written by the editor's Project Settings window), next to boot.json in a game build. Per-scene
 	///     lighting (environment, shadow reach, the GI volume) stays in <see cref="SceneSettings" />. <see cref="Use" />
 	///     makes a settings object the live one (<see cref="Current" />, <see cref="Lighting.Shadows" />,
@@ -21,6 +21,9 @@ namespace LELEngine
 
 		/// <summary>The live settings (defaults until a project or a build loads its own).</summary>
 		public static ProjectSettings Current { get; private set; } = new ProjectSettings();
+
+		/// <summary>Names of the user layers 8..31 (<see cref="LayerMask.LayerToName" /> reads them from the live settings).</summary>
+		public LayerSettings Layers = new LayerSettings();
 
 		public Physics2DSettings Physics2D = new Physics2DSettings();
 		public ShadowSettings Shadows = new ShadowSettings();

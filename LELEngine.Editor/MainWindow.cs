@@ -3,7 +3,9 @@ using System.ComponentModel;
 using System.IO;
 using LELEngine.Rendering;
 using OpenTK.Graphics.OpenGL4;
+using OpenTK.Mathematics;
 using OpenTK.Windowing.Common;
+using OpenTK.Windowing.Desktop;
 
 namespace LELEngine.Editor
 {
@@ -21,14 +23,22 @@ namespace LELEngine.Editor
 		private readonly int exitFrame;
 		private readonly FrameDumper screenshotDumper = new FrameDumper();
 
+		/// <summary>The window's place is remembered between runs (not for automated runs: they must not move it or depend on it).</summary>
+		private readonly bool rememberPlacement;
+
+		private readonly WindowPlacement placement;
+
 		#endregion
 
 		#region Constructors
 
 		private MainWindow(Version apiVersion, string[] args)
-			: base(1600, 900, "LELEngine Editor", apiVersion)
+			// Hidden until its place is restored (see Create).
+			: base(1600, 900, "LELEngine Editor", apiVersion, false, false)
 		{
 			this.args = args;
+			rememberPlacement = !EditorApplication.IsAutomatedRun(args);
+			placement = new WindowPlacement(this, "window.json");
 			VSync = VSyncMode.On;
 			foreach (string arg in args)
 			{
@@ -60,7 +70,9 @@ namespace LELEngine.Editor
 			{
 				try
 				{
-					return new MainWindow(version, args);
+					var window = new MainWindow(version, args);
+					window.placement.Restore(window.rememberPlacement);
+					return window;
 				}
 				catch (Exception e) when (version > MinimumApiVersion)
 				{
@@ -147,6 +159,23 @@ namespace LELEngine.Editor
 			}
 
 			base.OnClosing(e);
+			if (!e.Cancel && rememberPlacement)
+			{
+				placement.Save();
+			}
+		}
+
+		// The engine's Window does not raise the Resize event: the placement is told here.
+		protected override void OnMove(WindowPositionEventArgs e)
+		{
+			base.OnMove(e);
+			placement?.Track();
+		}
+
+		protected override void OnResize(ResizeEventArgs e)
+		{
+			base.OnResize(e);
+			placement?.Track();
 		}
 
 		protected override void OnUnload()

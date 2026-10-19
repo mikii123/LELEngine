@@ -16,6 +16,8 @@ namespace LELEngine.Rendering.Passes
 
 		public override string Name => "Opaque";
 
+		public override RenderPassScope Scope => RenderPassScope.EveryCamera;
+
 		#endregion
 
 		#region PrivateFields
@@ -49,12 +51,13 @@ namespace LELEngine.Rendering.Passes
 			else if (gpu.Active)
 			{
 				GpuDriven(gpu, context);
-				PerShader(gpu.PerObjectParts, context.Camera);
+				// The tables hold every camera's renderers: this camera draws those on its layers.
+				PerShader(gpu.PerObjectParts, context.Camera, context.CullingMask);
 			}
 			else
 			{
 				RendererPart.CollectOpaque(context.Renderers, parts);
-				PerShader(parts, context.Camera);
+				PerShader(parts, context.Camera, -1);
 				parts.Clear();
 			}
 
@@ -69,7 +72,7 @@ namespace LELEngine.Rendering.Passes
 
 		private static void GpuDriven(GpuScene gpu, RenderContext context)
 		{
-			gpu.EnsureCameraCulled(context.ViewProjection);
+			gpu.EnsureCameraCulled(context.ViewProjection, context.CullingMask);
 			IReadOnlyList<OpaqueBucket> buckets = gpu.Buckets;
 			for (int i = 0; i < buckets.Count; i++)
 			{
@@ -99,7 +102,7 @@ namespace LELEngine.Rendering.Passes
 		// ReceiveShadows / ReceiveGI flags differ from the previous object's or the previous object's material
 		// overrode one of them (Material.OverridesSharedUniforms); each draw (one sub-mesh) then only sends its
 		// model matrix and material uniforms.
-		private static void PerShader(IReadOnlyList<RendererPart> parts, Camera camera)
+		private static void PerShader(IReadOnlyList<RendererPart> parts, Camera camera, int layerMask)
 		{
 			foreach (ShaderProgram program in InternalStorage.ShaderList)
 			{
@@ -116,6 +119,10 @@ namespace LELEngine.Rendering.Passes
 					}
 
 					MeshRenderer renderer = part.Renderer;
+					if ((layerMask & (1 << (renderer.gameObject.layer & 31))) == 0)
+					{
+						continue;
+					}
 
 					if (!used)
 					{

@@ -86,18 +86,28 @@ namespace LELEngine.Editor
 			return project;
 		}
 
-		/// <summary>Creates the folder structure and copies the starter assets of the template.</summary>
+		/// <summary>Creates a project in the folder <paramref name="parentFolder" />/<paramref name="name" /> (see <see cref="CreateIn" />).</summary>
 		public static ProjectInfo Create(string parentFolder, string name, string templateAssets)
+		{
+			return CreateIn(Path.Combine(parentFolder, name), name, templateAssets);
+		}
+
+		/// <summary>
+		///     Creates the folder structure in <paramref name="folder" /> (created when missing) and copies the starter
+		///     assets of the template. An existing folder keeps its files: starter assets and .gitignore are only added
+		///     where nothing has their name. A folder that is a project already is refused.
+		/// </summary>
+		public static ProjectInfo CreateIn(string folder, string name, string templateAssets)
 		{
 			if (string.IsNullOrWhiteSpace(name) || name.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
 			{
 				throw new ArgumentException("Invalid project name: '" + name + "'");
 			}
 
-			string root = Path.GetFullPath(Path.Combine(parentFolder, name));
-			if (Directory.Exists(root) && Directory.GetFileSystemEntries(root).Length > 0)
+			string root = Path.GetFullPath(folder);
+			if (IsProjectFolder(root))
 			{
-				throw new InvalidOperationException("The folder already exists and is not empty: " + root);
+				throw new InvalidOperationException("The folder is a LELEngine project already: " + root);
 			}
 
 			Directory.CreateDirectory(root);
@@ -113,9 +123,45 @@ namespace LELEngine.Editor
 				CopyDirectory(templateAssets, project.AssetsPath);
 			}
 
-			File.WriteAllText(Path.Combine(root, ".gitignore"), "Library/\nBuild/\nbin/\nobj/\n.vs/\n.idea/\n*.user\n");
+			string gitignore = Path.Combine(root, ".gitignore");
+			if (!File.Exists(gitignore))
+			{
+				File.WriteAllText(gitignore, "Library/\nBuild/\nbin/\nobj/\n.vs/\n.idea/\n*.user\n");
+			}
+
 			project.Save();
 			return project;
+		}
+
+		/// <summary>
+		///     Reads Project.json again into this object (changed outside the editor: git, a text editor), so everyone
+		///     holding the project sees the new scenes and options. False, keeping the values, when it cannot be read.
+		/// </summary>
+		public bool ReloadSettingsFile()
+		{
+			ProjectInfo read;
+			try
+			{
+				read = JsonSerializer.Deserialize<ProjectInfo>(File.ReadAllText(SettingsFile), JsonOptions);
+			}
+			catch (Exception e) when (e is IOException || e is JsonException || e is UnauthorizedAccessException)
+			{
+				Debug.LogWarning("[Editor] Project.json changed on disk but cannot be read (" + e.Message + "); keeping the current values");
+				return false;
+			}
+
+			if (read == null)
+			{
+				return false;
+			}
+
+			Name = string.IsNullOrEmpty(read.Name) ? Name : read.Name;
+			StartScene = read.StartScene;
+			BuildScenes = read.BuildScenes ?? new List<string>();
+			LastScene = read.LastScene;
+			ReloadScriptsOnPlay = read.ReloadScriptsOnPlay;
+			RunInBackground = read.RunInBackground;
+			return true;
 		}
 
 		public void Save()
@@ -153,7 +199,12 @@ namespace LELEngine.Editor
 					continue;
 				}
 
-				File.Copy(file, Path.Combine(target, Path.GetRelativePath(source, file)), false);
+				// A project created in an existing folder keeps its own files.
+				string destination = Path.Combine(target, Path.GetRelativePath(source, file));
+				if (!File.Exists(destination))
+				{
+					File.Copy(file, destination, false);
+				}
 			}
 		}
 

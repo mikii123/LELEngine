@@ -29,6 +29,8 @@ namespace LELEngine.Rendering.Passes
 		#region PublicFields
 
 		public override string Name => "VoxelGI";
+
+		public override RenderPassScope Scope => RenderPassScope.Frame;
 		public int VoxelTexture => previousValid ? radiance[current] : 0;
 
 		/// <summary>True on frames where the static geometry cache was (re)built. Useful for stats.</summary>

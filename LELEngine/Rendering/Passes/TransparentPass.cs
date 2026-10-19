@@ -21,6 +21,8 @@ namespace LELEngine.Rendering.Passes
 
 		public override string Name => "Transparent";
 
+		public override RenderPassScope Scope => RenderPassScope.EveryCamera;
+
 		/// <summary>Transparent objects drawn last frame (stats).</summary>
 		public int DrawnCount { get; private set; }
 

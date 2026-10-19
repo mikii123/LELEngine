@@ -53,13 +53,25 @@ namespace LELEngine
 			}
 		}
 
-		/// <summary>First enabled camera on an active object.</summary>
+		/// <summary>
+		///     First enabled base camera on an active object: it renders the scene, with the overlay cameras of its stack
+		///     (<see cref="Camera.main" /> is its stack's lighting camera).
+		/// </summary>
 		public Camera MainCamera
 		{
 			get
 			{
 				RebuildIfDirty();
-				return mainCamera;
+				// Chosen on every call: a camera's render type changes without the scene noticing.
+				foreach (Camera camera in cameras)
+				{
+					if (!camera.destroyed && camera.RenderType == CameraRenderType.Base)
+					{
+						return camera;
+					}
+				}
+
+				return null;
 			}
 		}
 
@@ -94,7 +106,9 @@ namespace LELEngine
 
 		private List<Behaviour> running = new List<Behaviour>();
 		private List<MeshRenderer> renderers = new List<MeshRenderer>();
-		private Camera mainCamera;
+
+		/// <summary>The enabled cameras on active objects, in component order.</summary>
+		private List<Camera> cameras = new List<Camera>();
 		private DirectionalLight mainLight;
 		private bool dirty = true;
 		private double fixedAccumulator;
@@ -801,7 +815,7 @@ namespace LELEngine
 			dirty = false;
 			var newRunning = new List<Behaviour>(components.Count);
 			var newRenderers = new List<MeshRenderer>();
-			Camera camera = null;
+			var newCameras = new List<Camera>();
 			DirectionalLight light = null;
 			foreach (Behaviour component in components)
 			{
@@ -825,8 +839,8 @@ namespace LELEngine
 					case MeshRenderer renderer:
 						newRenderers.Add(renderer);
 						break;
-					case Camera cam when camera == null:
-						camera = cam;
+					case Camera cam:
+						newCameras.Add(cam);
 						break;
 					case DirectionalLight dir when light == null:
 						light = dir;
@@ -837,7 +851,7 @@ namespace LELEngine
 			// New list instances: callers iterating the previous lists (Update loops) stay valid.
 			running = newRunning;
 			renderers = newRenderers;
-			mainCamera = camera;
+			cameras = newCameras;
 			mainLight = light;
 		}
 

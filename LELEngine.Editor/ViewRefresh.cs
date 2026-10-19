@@ -52,13 +52,21 @@ namespace LELEngine.Editor
 		/// </summary>
 		public bool ShouldRender(Camera camera, int width, int height, int sceneVersion, bool continuous)
 		{
+			return ShouldRender(camera, camera.ViewProjectionMatrix, width, height, sceneVersion, continuous);
+		}
+
+		/// <summary>
+		///     As <see cref="ShouldRender(Camera, int, int, int, bool)" />, with what the view shows summed up in
+		///     <paramref name="viewProjection" /> (a camera stack: every camera's matrices together).
+		/// </summary>
+		public bool ShouldRender(Camera camera, Matrix4 viewProjection, int width, int height, int sceneVersion, bool continuous)
+		{
 			if (sceneVersion != lastSceneVersion)
 			{
 				lastSceneVersion = sceneVersion;
 				framesLeft = Math.Max(framesLeft, SceneSettleFrames);
 			}
 
-			Matrix4 viewProjection = camera.ViewProjectionMatrix;
 			if (camera.Id != lastCameraId || viewProjection != lastViewProjection || width != lastWidth || height != lastHeight)
 			{
 				lastCameraId = camera.Id;
