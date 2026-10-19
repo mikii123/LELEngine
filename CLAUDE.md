@@ -14,6 +14,9 @@
 - Never run `git commit` or `git push`; the user does that.
 - The editor compiles a project's scripts with the `dotnet` on PATH: for automated editor runs on a project with
   scripts, put `C:\Users\Admin\.dotnet` first on PATH too, otherwise every script build fails with NETSDK1045.
+- The GL context is core forward-compatible: legacy GLSL (`gl_FragColor`, `texture2D`, `attribute` / `varying`)
+  does not compile. Intel's compiler warns "barrier call inside control flow" for a `barrier()` in a loop
+  (`RadianceCacheSH.shader` unrolls its reduction for that).
 
 ## Models and meshes
 
@@ -57,6 +60,68 @@
   Begin/Push is reported as an error.
 - Test hook: `menuitem=N;Tools/Item|M;Window/Other` runs `[MenuItem]`s at frames N, M (with `touchscript=` for a
   reload, `playframe=`/`stopframe=` for play mode and `buildgame=` for a player build).
+
+## Player startup and splash screen
+
+- `LELEngine.Player/Program.cs`: boot.json (source-generated STJ, `BootConfigJson`), the window opens hidden without
+  its renderer (`GameWindowOptions`), `Window.Show` puts the splash screen up as the first image (cloaked by DWM
+  until presented: a swap on a hidden window is dropped and the window shows white), then `GameLoader` loads on a
+  background thread: asset index, project settings and Game.dll while the window opens, then (the main thread hands
+  over the GL context) renderer, start scene and two offscreen warm-up frames (`GameHost.WarmUp`). The main thread
+  pumps events, takes the context back, waits out `Duration`, then `Run()` (lifecycle on the main thread).
+- Only the context's holder may draw (the splash is redrawn after a resize between loader steps); GLFW size getters
+  (`ClientSize`, `FramebufferSize`) are main-thread only; resize callbacks check `Context.IsCurrent` before GL work.
+- Settings: `ProjectSettings.SplashScreen` (logo stored as GUID), editor tab Project Settings > Splash Screen
+  (`projectsettings=N;SplashScreen`). `GameBuilder` bakes it into boot.json `SplashScreen` and `Splash.bmp` (logo
+  composited over the background, background quantized to 8 bit so no rectangle shows); the player draws it with a
+  clear and a blit, no shader.
+- Player.log has `[Player] Splash screen shown / Loaded in the background (per step) / Start scene's first frame`
+  times. On the Intel iGPU window + GL context take ~450 ms (driver init ~300 ms; a WGL warm-up thread does not help,
+  it serializes), splash ~600 ms after the process start, scene ready ~1 s.
+
+## Scene loading
+
+- `LELEngine/Mono/SceneManager.cs` (+ `SceneLoadOperation.cs`), Unity-like. `LoadScene(path, mode)` loads and
+  activates now. `LoadSceneAsync(path, mode, allowActivation)` reads on a loading thread (the scene document and its
+  assets inside an `AssetLoadScope`, no GL calls), then `SceneManager.Update()` prepares the recorded assets on the
+  main thread (shader compiles, texture and mesh uploads) within `BackgroundLoadingBudget` ms per frame (at least one
+  asset), then activates. With `allowActivation: false` the scene stays loaded but invisible (`IsLoaded`; nothing of
+  it runs or draws) until `AllowActivation = true` / `Activate()`; scenes activate in request order (a held one holds
+  the later ones, which still prepare). Also `Cancel()`, `UnloadScene(scene | path)`, `GetSceneByPath`,
+  `MoveGameObjectToScene`, `DontDestroyOnLoad`, events `SceneLoaded` / `SceneUnloaded` / `ActiveSceneChanged`.
+  Single unloads every loaded scene but DontDestroyOnLoad, Additive adds.
+- Hosts call `SceneManager.Update()` and `UpdateScenes(dt)` every frame (all loaded scenes phase by phase, one
+  fixed-step accumulator; each scene keeps its own Physics2D world), draw `GetRenderLists`, and set `Lifecycle`
+  (`StartLifecycle(true)` in the player, Edit / Play in the editor). `Camera.main` and `DirectionalLight.This` go
+  through `SceneManager.MainCamera` / `MainLight` (active scene first). `UnloadAll` releases no asset.
+- GL work off the GL thread: `GraphicsThread.HasContext`; a `ShaderProgram` created without a context compiles on
+  first use (`EnsureBuilt`), textures and meshes upload on first use (`Texture.Handle`, `GeometryPool.Prepare`);
+  `InternalStorage.Sync` guards the caches. Unloading frees the textures and meshes no loaded or loading scene uses
+  (`ReleaseUnusedAssets`, off in the editor; `GeometryPool` reuses freed ranges).
+- Every load logs `[SceneManager] <path>: read N ms (textures N: N ms, meshes ..., per asset kind), GPU N ms in N
+  frames, activated in N ms` (also `SceneLoadOperation.Summary`).
+
+## Player build output
+
+- `GameBuilder` (`LELEngine.Editor/Building`) ships assets the player uses as they are:
+  - documents (scenes, materials, meta files) as binary LELB, models as their imported binary;
+  - images as KTX 1.1 (`KtxFile`) baked by `TextureBaker`: every mip level (box filter, in linear light for sRGB),
+    BC7 by `Bc7Encoder` (own, mode 6 only, fast) or by BCnEncoder.Net for `TextureImporter.compression =
+    BC7HighQuality` (16-38 s per 1K image), `None` keeps RGBA8; HDR stays RGBA16F, volumes RGBA8. Cached in
+    `Library/TextureCache`. Sprites and the images USS / UXML reference (`url()`, `resource()`) stay PNG: the UI
+    draws images as they are;
+  - `Data/.assetindex` (GUID to path): the player reads it instead of every meta file;
+  - `<model file>.sdf` next to each model: the GI's mesh distance fields at every scale the scenes draw the mesh
+    (scale keys quantized to 0.001) and at scale 1, baked by `DistanceFieldBaker` with the renderer's GPU build
+    (needs the GL context: batch mode bakes on its own thread, the Project Settings window before its build task),
+    cached in `Library/DistanceFieldCache`. Without them a big mesh's field takes seconds when its scene appears; the
+    editor still builds them on first use (then keeps them on the `Mesh`).
+- Batch builds: `LELEngine.Editor.exe -batchmode -projectPath <folder> -build <output> -logFile <file>` (the WinExe
+  opens no console window, `LELEngine.Editor.Console.exe` does). The log has `Baked N textures to KTX ...` and
+  `Distance fields: ...` lines.
+- Reference (heavy test scene, Intel iGPU, warm): scene read 925 -> 47 ms (PNG decode was 898 ms of it), worst frame
+  after activation 2.9 s -> ~100 ms with baked distance fields; the rest is the GI (surface cache, global SDF)
+  catching up.
 
 ## GPU particles (VFX)
 

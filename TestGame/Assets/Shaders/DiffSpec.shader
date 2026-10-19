@@ -45,6 +45,8 @@ in vec3 fNormal;
 in vec3 fPosition;
 in mat3 fTBN;
 
+out vec4 FragColor;
+
 // Directional
 struct Directional {
 	vec4 dirColor;
@@ -97,7 +99,7 @@ void main()
 	vec4 specular = LSpecular.specStrength * spec * LDirectional.dirColor * texSpec;
 
 	//Output
-	gl_FragColor = (ambient + diffuse + specular);
+	FragColor = (ambient + diffuse + specular);
 }
 
 /////Fragment

@@ -18,6 +18,18 @@ namespace LELEngine
 		/// </summary>
 		public static Dictionary<string, Material> Materials { get; } = new Dictionary<string, Material>();
 
+		/// <summary>Guards <see cref="Shaders" /> and <see cref="Materials" /> (scenes load on a background thread too).</summary>
+		public static readonly object Sync = new object();
+
+		/// <summary>The loaded shaders in load order, a snapshot replaced on every change: the renderer iterates it while a scene loads.</summary>
+		public static IReadOnlyList<ShaderProgram> ShaderList => shaderList;
+
+		#endregion
+
+		#region PrivateFields
+
+		private static ShaderProgram[] shaderList = Array.Empty<ShaderProgram>();
+
 		#endregion
 
 		#region PublicMethods
@@ -28,13 +40,18 @@ namespace LELEngine
 		/// </summary>
 		public static void Clear()
 		{
-			foreach (ShaderProgram shader in Shaders.Values)
+			lock (Sync)
 			{
-				shader.Delete();
+				foreach (ShaderProgram shader in Shaders.Values)
+				{
+					shader.Delete();
+				}
+
+				Shaders.Clear();
+				Materials.Clear();
+				shaderList = Array.Empty<ShaderProgram>();
 			}
 
-			Shaders.Clear();
-			Materials.Clear();
 			ModelAssets.Clear();
 			TextureAssets.Clear();
 			PhysicsMaterial2D.ClearCache();
@@ -52,10 +69,13 @@ namespace LELEngine
 		/// <param name="name">Name of the shader (with .*)</param>
 		public static ShaderProgram GetShader(string name)
 		{
-			ShaderProgram sp = null;
-			Shaders.TryGetValue(ShaderKey(name), out sp);
-
-			return sp;
+			string key = ShaderKey(name);
+			lock (Sync)
+			{
+				ShaderProgram sp;
+				Shaders.TryGetValue(key, out sp);
+				return sp;
+			}
 		}
 
 		/// <summary>
@@ -65,16 +85,20 @@ namespace LELEngine
 		public static ShaderProgram GetOrCreateShader(string name)
 		{
 			string key = ShaderKey(name);
-			ShaderProgram sp = null;
-			Shaders.TryGetValue(key, out sp);
-			if (sp == null)
+			lock (Sync)
 			{
-				Console.WriteLine("Creating Shader " + key);
-				sp = new ShaderProgram(key);
-				Shaders.Add(key, sp);
-			}
+				ShaderProgram sp;
+				Shaders.TryGetValue(key, out sp);
+				if (sp == null)
+				{
+					Console.WriteLine("Creating Shader " + key);
+					sp = new ShaderProgram(key);
+					Shaders.Add(key, sp);
+					shaderList = new List<ShaderProgram>(Shaders.Values).ToArray();
+				}
 
-			return sp;
+				return sp;
+			}
 		}
 
 		/// <summary>
@@ -85,15 +109,20 @@ namespace LELEngine
 		public static Material GetOrCreateMaterial(string name)
 		{
 			string assetPath = AssetDatabase.Resolve(name, "Materials") ?? name;
-			Material mat;
-			if (!Materials.TryGetValue(assetPath, out mat))
+			// Held while the material loads (its shader and textures): a scene loading in the background and the game
+			// asking for the same material get one object.
+			lock (Sync)
 			{
-				Console.WriteLine("Creating Material " + assetPath);
-				mat = Material.Load(assetPath);
-				Materials.Add(assetPath, mat);
-			}
+				Material mat;
+				if (!Materials.TryGetValue(assetPath, out mat))
+				{
+					Console.WriteLine("Creating Material " + assetPath);
+					mat = Material.Load(assetPath);
+					Materials.Add(assetPath, mat);
+				}
 
-			return mat;
+				return mat;
+			}
 		}
 
 		/// <summary>Registers a material object under its asset path (a material created and saved by the editor).</summary>
@@ -101,14 +130,40 @@ namespace LELEngine
 		{
 			if (material?.AssetPath != null)
 			{
-				Materials[material.AssetPath] = material;
+				lock (Sync)
+				{
+					Materials[material.AssetPath] = material;
+				}
 			}
 		}
 
 		/// <summary>Drops a cached material (its file was deleted or replaced) so the next use reloads it.</summary>
 		public static void ForgetMaterial(string assetPath)
 		{
-			Materials.Remove(assetPath);
+			lock (Sync)
+			{
+				Materials.Remove(assetPath);
+			}
+		}
+
+		/// <summary>Drops a cached shader program and deletes it (no loaded scene uses it any more).</summary>
+		public static void ForgetShader(ShaderProgram shader)
+		{
+			lock (Sync)
+			{
+				foreach (KeyValuePair<string, ShaderProgram> entry in Shaders)
+				{
+					if (entry.Value == shader)
+					{
+						Shaders.Remove(entry.Key);
+						break;
+					}
+				}
+
+				shaderList = new List<ShaderProgram>(Shaders.Values).ToArray();
+			}
+
+			shader.Delete();
 		}
 
 		#endregion

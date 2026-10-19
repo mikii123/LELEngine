@@ -12,7 +12,7 @@ public sealed class Camera : Behaviour
 {
 	#region PublicFields
 
-	public static Camera main => SceneManager.ActiveScene?.MainCamera;
+	public static Camera main => SceneManager.MainCamera;
 
 	/// <summary>Camera of the frame being rendered (set by the renderer).</summary>
 	public static Camera current { get; internal set; }

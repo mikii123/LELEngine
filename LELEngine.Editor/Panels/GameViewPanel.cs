@@ -94,8 +94,8 @@ namespace LELEngine.Editor
 		/// <summary>Renders when the view shows something new (<see cref="ViewRefresh" />) or every frame when continuous.</summary>
 		public void Render(bool continuous)
 		{
-			Scene scene = editor.Scene;
-			Camera camera = scene?.MainCamera;
+			// Every loaded scene (play mode can load more, additively or kept by DontDestroyOnLoad).
+			Camera camera = SceneManager.MainCamera;
 			if (!visible || ViewRenderer == null || camera == null)
 			{
 				return;
@@ -105,7 +105,7 @@ namespace LELEngine.Editor
 			camera.UpdateMatrices(ViewRenderer.Width / (float)ViewRenderer.Height);
 			if (refresh.ShouldRender(camera, ViewRenderer.Width, ViewRenderer.Height, editor.SceneVersion, continuous))
 			{
-				ViewRenderer.Render(camera, scene);
+				ViewRenderer.RenderLoadedScenes(camera);
 			}
 		}
 
@@ -129,7 +129,7 @@ namespace LELEngine.Editor
 				return;
 			}
 
-			if (scene.MainCamera == null)
+			if (SceneManager.MainCamera == null)
 			{
 				ImGui.SetCursorPos(new NVector2(12, 12));
 				ImGui.TextColored(EditorStyle.Warning, "No camera in the scene (add a GameObject with a Camera component).");

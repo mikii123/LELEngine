@@ -154,22 +154,25 @@ namespace LELEngine.Serialization
 			return roots;
 		}
 
-		/// <summary>Loads a scene file of either format. The returned scene is not active and its lifecycle has not started.</summary>
-		public static Scene Load(string absolutePath)
+		/// <summary>
+		///     Loads a scene file of either format. The returned scene is not active and its lifecycle has not started.
+		///     <paramref name="progress" /> gets the fraction of components whose fields (and the assets they use) are read.
+		/// </summary>
+		public static Scene Load(string absolutePath, Action<float> progress = null)
 		{
 			byte[] data = File.ReadAllBytes(absolutePath);
 			string name = Path.GetFileNameWithoutExtension(absolutePath);
-			Scene scene = LoadFromBytes(data, name);
+			Scene scene = LoadFromBytes(data, name, progress);
 			scene.Path = AssetDatabase.ToAssetPath(absolutePath) ?? absolutePath;
 			return scene;
 		}
 
 		/// <summary>Loads a scene document of either format (snapshots are binary, project files JSON).</summary>
-		public static Scene LoadFromBytes(byte[] data, string fallbackName = null)
+		public static Scene LoadFromBytes(byte[] data, string fallbackName = null, Action<float> progress = null)
 		{
 			if (Documents.IsJson(data))
 			{
-				return LoadFromJson(data, fallbackName);
+				return LoadFromJson(data, fallbackName, progress);
 			}
 
 			var context = new SerializationContext();
@@ -190,7 +193,7 @@ namespace LELEngine.Serialization
 			}
 
 			// Pass 2 and 3: field values (references to any object of the file resolve now), then derived state.
-			ReadPendingFields(reader, pending);
+			ReadPendingFields(reader, pending, progress);
 			return scene;
 		}
 
@@ -409,7 +412,7 @@ namespace LELEngine.Serialization
 			}
 		}
 
-		private static Scene LoadFromJson(byte[] data, string fallbackName)
+		private static Scene LoadFromJson(byte[] data, string fallbackName, Action<float> progress)
 		{
 			var context = new SerializationContext();
 			using (var reader = new JsonDocumentReader(data, context))
@@ -438,10 +441,12 @@ namespace LELEngine.Serialization
 					}
 				}
 
-				foreach (PendingJsonComponent item in pending)
+				for (int i = 0; i < pending.Count; i++)
 				{
+					PendingJsonComponent item = pending[i];
 					context.Location = item.Location;
 					reader.ReadFields(item.Component, item.Element);
+					progress?.Invoke((i + 1f) / pending.Count);
 				}
 
 				foreach (PendingJsonComponent item in pending)
@@ -788,13 +793,15 @@ namespace LELEngine.Serialization
 			return go;
 		}
 
-		private static void ReadPendingFields(BinaryDocumentReader reader, List<PendingComponent> pending)
+		private static void ReadPendingFields(BinaryDocumentReader reader, List<PendingComponent> pending, Action<float> progress = null)
 		{
-			foreach (PendingComponent item in pending)
+			for (int i = 0; i < pending.Count; i++)
 			{
+				PendingComponent item = pending[i];
 				reader.Context.Location = item.Location;
 				reader.Body.Position = item.Position;
 				reader.ReadFieldBlock(item.Component, item.TypeId);
+				progress?.Invoke((i + 1f) / pending.Count);
 			}
 
 			foreach (PendingComponent item in pending)

@@ -122,6 +122,12 @@ namespace LELEngine.Editor
 			Input.Host = gameInput;
 			Navigation.NavMesh.NavMeshChanged += NotifySceneChanged;
 			TextureAssets.TextureReplaced += OnTextureReplaced;
+
+			// The editor keeps its assets loaded across scenes (views, inspectors and thumbnails use them); scripts
+			// loading scenes in play mode change the active scene.
+			SceneManager.Lifecycle = SceneLifecycle.Edit;
+			SceneManager.ReleaseUnusedAssets = false;
+			SceneManager.ActiveSceneChanged += OnActiveSceneChanged;
 			window.KeyDown += OnWindowKeyDown;
 			window.KeyUp += OnWindowKeyUp;
 			window.MouseMove += OnWindowMouseMove;
@@ -183,8 +189,10 @@ namespace LELEngine.Editor
 
 			if (PlayState == PlayState.Playing)
 			{
+				// Background scene loads advance, then every loaded scene runs (scripts may load more).
 				Input.BeginFrame();
-				scene.Update(deltaTime);
+				SceneManager.Update();
+				SceneManager.UpdateScenes(deltaTime);
 				Input.EndFrame();
 			}
 			else
@@ -345,8 +353,7 @@ namespace LELEngine.Editor
 				ExitPlayMode();
 			}
 
-			Scene?.Unload();
-			SceneManager.SetActiveScene(null);
+			SceneManager.UnloadAll(true);
 			Scripts?.Dispose();
 			Scripts = null;
 			Extensions.Reset();
@@ -366,22 +373,49 @@ namespace LELEngine.Editor
 			Project = null;
 		}
 
+		/// <summary>
+		///     A script loaded or unloaded scenes in play mode (the editor's own scene changes come through
+		///     <see cref="ReplaceScene" />): the views drop their GI caches and a selected object that is gone is deselected.
+		/// </summary>
+		private void OnActiveSceneChanged(Scene previous, Scene next)
+		{
+			if (!IsPlaying)
+			{
+				return;
+			}
+
+			SceneView.InvalidateCaches();
+			GameView.InvalidateCaches();
+			if (Selected != null && (Selected.destroyed || Selected.scene == null))
+			{
+				Selected = null;
+			}
+
+			NotifySceneChanged();
+		}
+
 		/// <summary>A reimport replaced a texture object (its shape changed): materials holding the old one take the new one.</summary>
 		private static void OnTextureReplaced(string path, Texture old, Texture replacement)
 		{
-			foreach (Shaders.Material material in InternalStorage.Materials.Values)
+			bool skyCached;
+			Shaders.Material sky = Lighting.Environment?.Skybox;
+			lock (InternalStorage.Sync)
 			{
-				foreach (Shaders.MaterialProperty property in material.Properties)
+				foreach (Shaders.Material material in InternalStorage.Materials.Values)
 				{
-					if (property is Shaders.TextureProperty texture && ReferenceEquals(texture.value, old))
+					foreach (Shaders.MaterialProperty property in material.Properties)
 					{
-						texture.value = replacement;
+						if (property is Shaders.TextureProperty texture && ReferenceEquals(texture.value, old))
+						{
+							texture.value = replacement;
+						}
 					}
 				}
+
+				skyCached = sky != null && InternalStorage.Materials.ContainsValue(sky);
 			}
 
-			Shaders.Material sky = Lighting.Environment?.Skybox;
-			if (sky != null && !InternalStorage.Materials.ContainsValue(sky))
+			if (sky != null && !skyCached)
 			{
 				foreach (Shaders.MaterialProperty property in sky.Properties)
 				{
@@ -436,7 +470,8 @@ namespace LELEngine.Editor
 		{
 			ulong selected = Selected?.Id ?? 0;
 			Edits.Cancel();
-			Scene?.Unload();
+			// Every scene goes: play mode may have loaded more (additively, DontDestroyOnLoad, in the background).
+			SceneManager.UnloadAll(true);
 			SceneManager.SetActiveScene(scene);
 			scene?.StartLifecycle(playing);
 			SceneView.InvalidateCaches();
@@ -717,8 +752,7 @@ namespace LELEngine.Editor
 			}
 
 			Selected = null;
-			Scene.Unload();
-			SceneManager.SetActiveScene(null);
+			SceneManager.UnloadAll(true);
 			if (Project.ReloadScriptsOnPlay && Scripts != null)
 			{
 				Scripts.ReloadNow();
@@ -728,6 +762,7 @@ namespace LELEngine.Editor
 			play.Path = playScenePath;
 			Time.ResetTime();
 			PlayState = PlayState.Playing;
+			SceneManager.Lifecycle = SceneLifecycle.Play;
 			ReplaceScene(play, true);
 			Selected = selected != 0 ? play.FindObjectById(selected) : null;
 			GameView.Focus();
@@ -743,6 +778,7 @@ namespace LELEngine.Editor
 
 			Input.SetCursorLocked(false);
 			PlayState = PlayState.Edit;
+			SceneManager.Lifecycle = SceneLifecycle.Edit;
 			Scene edit = SceneSerializer.LoadFromBytes(playSnapshot);
 			edit.Path = playScenePath;
 			ReplaceScene(edit, false);
@@ -771,8 +807,7 @@ namespace LELEngine.Editor
 			bool playing = IsPlaying;
 			Scripts?.TrackComponents(scene);
 			Extensions.CaptureWindowStates();
-			scene.Unload();
-			SceneManager.SetActiveScene(null);
+			SceneManager.UnloadAll(true);
 			Selected = null;
 
 			reload();
@@ -892,6 +927,7 @@ namespace LELEngine.Editor
 		public void Dispose()
 		{
 			TextureAssets.TextureReplaced -= OnTextureReplaced;
+			SceneManager.ActiveSceneChanged -= OnActiveSceneChanged;
 			uiBuilder?.Dispose();
 			uiBuilder = null;
 			CloseProject();

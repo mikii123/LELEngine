@@ -93,13 +93,13 @@ namespace LELEngine.Rendering.DistanceField
 		#region PublicMethods
 
 		/// <summary>
-		///     Returns the field for a mesh at a scale, building it on first use. Null when the atlas is full.
+		///     Returns the field for a mesh at a scale, building it on first use (or uploading the one a game build baked,
+		///     <see cref="Mesh.BakedDistanceFields" />). Null when the atlas is full.
 		/// </summary>
 		public MeshDistanceField GetOrBuild(Mesh mesh, Vector3 scale)
 		{
 			Vector3 absScale = new Vector3(Math.Abs(scale.X), Math.Abs(scale.Y), Math.Abs(scale.Z));
-			// Quantize so tiny float noise in transforms does not create duplicate fields.
-			Vector3i key = new Vector3i((int)Math.Round(absScale.X * 1000f), (int)Math.Round(absScale.Y * 1000f), (int)Math.Round(absScale.Z * 1000f));
+			Vector3i key = ScaleKey(absScale);
 
 			MeshDistanceField field;
 			if (fields.TryGetValue((mesh, key), out field))
@@ -107,9 +107,42 @@ namespace LELEngine.Rendering.DistanceField
 				return field;
 			}
 
-			field = Build(mesh, absScale);
+			field = Build(mesh, absScale, key);
 			fields[(mesh, key)] = field;
 			return field;
+		}
+
+		/// <summary>A scale quantized to thousandths, so tiny float noise in transforms does not create duplicate fields.</summary>
+		public static Vector3i ScaleKey(Vector3 scale)
+		{
+			return new Vector3i((int)Math.Round(Math.Abs(scale.X) * 1000f), (int)Math.Round(Math.Abs(scale.Y) * 1000f), (int)Math.Round(Math.Abs(scale.Z) * 1000f));
+		}
+
+		/// <summary>The texels of a field as half floats, x fastest (build-time baking; waits for the GPU).</summary>
+		public ushort[] Read(MeshDistanceField field)
+		{
+			var atlas = new ushort[AtlasXY * AtlasXY * Depth];
+			GL.BindTexture(TextureTarget.Texture3D, Texture);
+			GL.GetTexImage(TextureTarget.Texture3D, 0, PixelFormat.Red, PixelType.HalfFloat, atlas);
+			GL.BindTexture(TextureTarget.Texture3D, 0);
+
+			var voxels = new ushort[field.Size.X * field.Size.Y * field.Size.Z];
+			for (int z = 0; z < field.Size.Z; z++)
+			{
+				for (int y = 0; y < field.Size.Y; y++)
+				{
+					Array.Copy(atlas, ((field.AtlasZ + z) * AtlasXY + y) * AtlasXY, voxels, (z * field.Size.Y + y) * field.Size.X, field.Size.X);
+				}
+			}
+
+			return voxels;
+		}
+
+		/// <summary>Forgets every field (the slabs are reused); for build-time baking one field after another.</summary>
+		public void Reset()
+		{
+			fields.Clear();
+			nextZ = 0;
 		}
 
 		public void Delete()
@@ -128,7 +161,7 @@ namespace LELEngine.Rendering.DistanceField
 
 		#region PrivateMethods
 
-		private MeshDistanceField Build(Mesh mesh, Vector3 scale)
+		private MeshDistanceField Build(Mesh mesh, Vector3 scale, Vector3i key)
 		{
 			Vector3 scaledMin = mesh.BoundsMin * scale;
 			Vector3 scaledMax = mesh.BoundsMax * scale;
@@ -174,11 +207,61 @@ namespace LELEngine.Rendering.DistanceField
 			};
 			nextZ += size.Z;
 
+			// A field baked by the game build: an upload instead of the brute-force build (seconds for big meshes).
+			ushort[] baked = FindBaked(mesh, key, size);
+			if (baked != null)
+			{
+				GL.BindTexture(TextureTarget.Texture3D, Texture);
+				GL.PixelStore(PixelStoreParameter.UnpackAlignment, 2);
+				GL.TexSubImage3D(TextureTarget.Texture3D, 0, 0, 0, field.AtlasZ, size.X, size.Y, size.Z, PixelFormat.Red, PixelType.HalfFloat, baked);
+				GL.PixelStore(PixelStoreParameter.UnpackAlignment, 4);
+				GL.BindTexture(TextureTarget.Texture3D, 0);
+				return field;
+			}
+
 			UploadTriangles(mesh, scale);
 			Dispatch(field);
+			KeepOnMesh(mesh, key, field);
 
 			Console.WriteLine($"[SDF] Built {size.X}x{size.Y}x{size.Z} field ({mesh.TriangleCount} triangles) at atlas slice {field.AtlasZ}");
 			return field;
+		}
+
+		/// <summary>
+		///     A field built here is kept with the mesh (read back, GL 4.5): the next atlas that needs it (another view's
+		///     renderer, the atlas after a scene switch) uploads it instead of building it again.
+		/// </summary>
+		private void KeepOnMesh(Mesh mesh, Vector3i key, MeshDistanceField field)
+		{
+			if (!GLCapabilities.DirectStateAccess)
+			{
+				return;
+			}
+
+			var voxels = new ushort[field.Size.X * field.Size.Y * field.Size.Z];
+			GL.PixelStore(PixelStoreParameter.PackAlignment, 2);
+			GL.GetTextureSubImage(Texture, 0, 0, 0, field.AtlasZ, field.Size.X, field.Size.Y, field.Size.Z, PixelFormat.Red, PixelType.HalfFloat, voxels.Length * 2, voxels);
+			GL.PixelStore(PixelStoreParameter.PackAlignment, 4);
+			(mesh.BakedDistanceFields ??= new List<BakedDistanceField>()).Add(new BakedDistanceField { ScaleKey = key, Size = field.Size, Voxels = voxels });
+		}
+
+		private static ushort[] FindBaked(Mesh mesh, Vector3i key, Vector3i size)
+		{
+			List<BakedDistanceField> baked = mesh.BakedDistanceFields;
+			if (baked == null)
+			{
+				return null;
+			}
+
+			foreach (BakedDistanceField field in baked)
+			{
+				if (field.ScaleKey == key && field.Size == size)
+				{
+					return field.Voxels;
+				}
+			}
+
+			return null;
 		}
 
 		private void UploadTriangles(Mesh mesh, Vector3 scale)

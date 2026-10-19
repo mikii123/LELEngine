@@ -35,6 +35,14 @@ int SequenceProbe(int q)
 		: probeList[interiorTotal + (exteriorStart + q - interiorCount) % exteriorTotal];
 }
 
+void ReduceStep(uint thread, uint stride)
+{
+	if (thread < stride)
+	{
+		for (int i = 0; i < 9; i++) partial[thread * 9u + uint(i)] += partial[(thread + stride) * 9u + uint(i)];
+	}
+}
+
 void main()
 {
 	int probeIndex = SequenceProbe(sequenceOffset + int(gl_WorkGroupID.x));
@@ -62,15 +70,19 @@ void main()
 	for (int i = 0; i < 9; i++) partial[thread * 9u + uint(i)] = c[i];
 	barrier();
 
-	// Tree reduction over the 64 threads.
-	for (uint stride = 32u; stride > 0u; stride >>= 1u)
-	{
-		if (thread < stride)
-		{
-			for (int i = 0; i < 9; i++) partial[thread * 9u + uint(i)] += partial[(thread + stride) * 9u + uint(i)];
-		}
-		barrier();
-	}
+	// Tree reduction over the 64 threads, unrolled: GLSL 4.30 compilers warn about barrier() inside a loop.
+	ReduceStep(thread, 32u);
+	barrier();
+	ReduceStep(thread, 16u);
+	barrier();
+	ReduceStep(thread, 8u);
+	barrier();
+	ReduceStep(thread, 4u);
+	barrier();
+	ReduceStep(thread, 2u);
+	barrier();
+	ReduceStep(thread, 1u);
+	barrier();
 
 	if (thread == 0u)
 	{

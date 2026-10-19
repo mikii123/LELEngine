@@ -101,6 +101,8 @@ namespace LELEngine
 		private int activationSuspended;
 		private List<Behaviour> deferredActivation = new List<Behaviour>();
 		private PhysicsScene2D physics2D;
+		private List<Behaviour> frameActive;
+		private readonly Scene[] single = new Scene[1];
 
 		private enum Callback
 		{
@@ -237,7 +239,8 @@ namespace LELEngine
 
 		/// <summary>
 		///     One frame of game logic: pending Start calls, FixedUpdate (fixed step), Update, LateUpdate, then the
-		///     objects destroyed during the frame are removed.
+		///     objects destroyed during the frame are removed. Scenes loaded together run their frame through
+		///     <see cref="UpdateScenes" /> instead (each phase for every scene before the next phase).
 		/// </summary>
 		public void Update(float deltaTime)
 		{
@@ -246,19 +249,22 @@ namespace LELEngine
 				return;
 			}
 
-			RunPendingStarts();
+			single[0] = this;
+			UpdateScenes(single, deltaTime, ref fixedAccumulator);
+			single[0] = null;
+		}
 
-			// UI events first: callbacks run before the components read the same input.
-			if (IsPlaying)
+		/// <summary>
+		///     One frame of game logic for scenes loaded together, phase by phase as in Unity: every scene's pending
+		///     Start calls and UI events, then the fixed steps (each step's FixedUpdate and physics step for every scene,
+		///     the fixed time advancing once), every Update, the navigation step, every LateUpdate, and last the objects
+		///     destroyed during the frame. <paramref name="fixedAccumulator" /> carries the fixed time not stepped yet.
+		/// </summary>
+		public static void UpdateScenes(IReadOnlyList<Scene> scenes, float deltaTime, ref double fixedAccumulator)
+		{
+			foreach (Scene scene in scenes)
 			{
-				try
-				{
-					UIElements.UIRuntime.ProcessInput(this);
-				}
-				catch (Exception e)
-				{
-					Debug.LogException(e);
-				}
+				scene.BeginFrame();
 			}
 
 			// Fixed steps (FixedUpdate, then the physics step and its collision callbacks) catch up with the frame time,
@@ -271,23 +277,9 @@ namespace LELEngine
 				fixedAccumulator -= step;
 				steps++;
 				Time.inFixedTimeStep = true;
-				List<Behaviour> fixedBatch = ActiveBehaviours as List<Behaviour>;
-				foreach (Behaviour component in fixedBatch)
+				foreach (Scene scene in scenes)
 				{
-					if (!component.enableCalled || component.destroyed) continue;
-					try
-					{
-						component.FixedUpdate();
-					}
-					catch (Exception e)
-					{
-						Debug.LogException(e, component);
-					}
-				}
-
-				if (IsPlaying && physics2D != null && global::LELEngine.Physics2D.simulationMode == SimulationMode2D.FixedUpdate)
-				{
-					physics2D.Step((float)step);
+					scene.FixedStep((float)step);
 				}
 
 				Time.fixedTimeD += step;
@@ -299,54 +291,32 @@ namespace LELEngine
 				fixedAccumulator = 0;
 			}
 
-			if (IsPlaying && physics2D != null)
+			float interpolation = (float)(fixedAccumulator / step);
+			foreach (Scene scene in scenes)
 			{
-				if (global::LELEngine.Physics2D.simulationMode == SimulationMode2D.Update)
-				{
-					physics2D.Step(deltaTime);
-				}
-
-				physics2D.ApplyInterpolation((float)(fixedAccumulator / step));
+				scene.AfterFixedSteps(deltaTime, interpolation);
 			}
 
-			List<Behaviour> active = ActiveBehaviours as List<Behaviour>;
-			foreach (Behaviour component in active)
+			foreach (Scene scene in scenes)
 			{
-				if (!component.enableCalled || component.destroyed) continue;
-				try
-				{
-					component.Update();
-				}
-				catch (Exception e)
-				{
-					Debug.LogException(e, component);
-				}
+				scene.UpdatePhase();
 			}
 
 			// Navigation step (agents move, obstacles carve) between Update and LateUpdate, as in Unity.
-			try
+			foreach (Scene scene in scenes)
 			{
-				Navigation.NavMesh.Update(this, deltaTime);
-			}
-			catch (Exception e)
-			{
-				Debug.LogException(e);
+				scene.NavigationPhase(deltaTime);
 			}
 
-			foreach (Behaviour component in active)
+			foreach (Scene scene in scenes)
 			{
-				if (!component.enableCalled || component.destroyed) continue;
-				try
-				{
-					component.LateUpdate();
-				}
-				catch (Exception e)
-				{
-					Debug.LogException(e, component);
-				}
+				scene.LateUpdatePhase();
 			}
 
-			ProcessDestroyQueue();
+			foreach (Scene scene in scenes)
+			{
+				scene.EndFrame();
+			}
 		}
 
 		/// <summary>Destroys every object of the scene now (unloading, reloading).</summary>
@@ -402,6 +372,54 @@ namespace LELEngine
 		public void SuspendActivation()
 		{
 			activationSuspended++;
+		}
+
+		/// <summary>
+		///     Moves a root object with its descendants into <paramref name="target" /> (SceneManager.MoveGameObjectToScene):
+		///     its components get OnDisable here and OnEnable there, so physics bodies and other per-scene registrations
+		///     move with them; Awake does not run again, and a pending Start runs in the target scene.
+		/// </summary>
+		internal void MoveRootTo(GameObject root, Scene target)
+		{
+			var subtree = new List<GameObject>();
+			CollectSubtree(root, subtree);
+			foreach (GameObject node in subtree)
+			{
+				foreach (Behaviour component in node.Components)
+				{
+					TryDeactivate(component);
+				}
+			}
+
+			foreach (GameObject node in subtree)
+			{
+				objects.Remove(node);
+				destroyQueue.Remove(node);
+				foreach (Behaviour component in node.Components)
+				{
+					components.Remove(component);
+					pendingStart.Remove(component);
+					componentDestroyQueue.Remove(component);
+					deferredActivation.Remove(component);
+				}
+
+				node.scene = target;
+				target.objects.Add(node);
+				foreach (Behaviour component in node.Components)
+				{
+					target.components.Add(component);
+				}
+			}
+
+			dirty = true;
+			target.dirty = true;
+			foreach (GameObject node in subtree)
+			{
+				foreach (Behaviour component in node.Components)
+				{
+					target.TryActivate(component);
+				}
+			}
 		}
 
 		public void ResumeActivation()
@@ -536,6 +554,143 @@ namespace LELEngine
 		#endregion
 
 		#region PrivateMethods
+
+		// ---------------------------------------------------------------- frame phases (UpdateScenes)
+
+		private void BeginFrame()
+		{
+			if (!LifecycleStarted)
+			{
+				return;
+			}
+
+			RunPendingStarts();
+
+			// UI events first: callbacks run before the components read the same input.
+			if (IsPlaying)
+			{
+				try
+				{
+					UIElements.UIRuntime.ProcessInput(this);
+				}
+				catch (Exception e)
+				{
+					Debug.LogException(e);
+				}
+			}
+		}
+
+		private void FixedStep(float step)
+		{
+			if (!LifecycleStarted)
+			{
+				return;
+			}
+
+			List<Behaviour> fixedBatch = ActiveBehaviours as List<Behaviour>;
+			foreach (Behaviour component in fixedBatch)
+			{
+				if (!component.enableCalled || component.destroyed) continue;
+				try
+				{
+					component.FixedUpdate();
+				}
+				catch (Exception e)
+				{
+					Debug.LogException(e, component);
+				}
+			}
+
+			if (IsPlaying && physics2D != null && global::LELEngine.Physics2D.simulationMode == SimulationMode2D.FixedUpdate)
+			{
+				physics2D.Step(step);
+			}
+		}
+
+		private void AfterFixedSteps(float deltaTime, float interpolation)
+		{
+			if (!LifecycleStarted || !IsPlaying || physics2D == null)
+			{
+				return;
+			}
+
+			if (global::LELEngine.Physics2D.simulationMode == SimulationMode2D.Update)
+			{
+				physics2D.Step(deltaTime);
+			}
+
+			physics2D.ApplyInterpolation(interpolation);
+		}
+
+		private void UpdatePhase()
+		{
+			// The same components get LateUpdate: one added during Update waits for its Start.
+			frameActive = LifecycleStarted ? ActiveBehaviours as List<Behaviour> : null;
+			if (frameActive == null)
+			{
+				return;
+			}
+
+			foreach (Behaviour component in frameActive)
+			{
+				if (!component.enableCalled || component.destroyed) continue;
+				try
+				{
+					component.Update();
+				}
+				catch (Exception e)
+				{
+					Debug.LogException(e, component);
+				}
+			}
+		}
+
+		private void NavigationPhase(float deltaTime)
+		{
+			if (!LifecycleStarted)
+			{
+				return;
+			}
+
+			try
+			{
+				Navigation.NavMesh.Update(this, deltaTime);
+			}
+			catch (Exception e)
+			{
+				Debug.LogException(e);
+			}
+		}
+
+		private void LateUpdatePhase()
+		{
+			if (frameActive == null)
+			{
+				return;
+			}
+
+			foreach (Behaviour component in frameActive)
+			{
+				if (!component.enableCalled || component.destroyed) continue;
+				try
+				{
+					component.LateUpdate();
+				}
+				catch (Exception e)
+				{
+					Debug.LogException(e, component);
+				}
+			}
+		}
+
+		private void EndFrame()
+		{
+			frameActive = null;
+			if (LifecycleStarted)
+			{
+				ProcessDestroyQueue();
+			}
+		}
 
 		private bool CanRun(Behaviour component)
 		{

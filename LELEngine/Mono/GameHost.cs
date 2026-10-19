@@ -4,9 +4,10 @@ using OpenTK.Windowing.Common;
 namespace LELEngine
 {
 	/// <summary>
-	///     Standalone game host: the window, the renderer and the game loop that updates and renders the active
-	///     scene (<see cref="SceneManager.ActiveScene" />). The scene's component lifecycle starts when the window
-	///     loads, so a scene built in code or loaded from a file before <c>Run()</c> gets its Awake calls then.
+	///     Standalone game host: the window, the renderer and the game loop that updates and renders the loaded
+	///     scenes (<see cref="SceneManager.LoadedScenes" />; background loads advance first each frame, see
+	///     <see cref="SceneManager.Update" />). The scenes' component lifecycle starts when the window loads, so a scene
+	///     built in code or loaded from a file before <c>Run()</c> gets its Awake calls then.
 	/// </summary>
 	public sealed class GameHost : Window
 	{
@@ -32,21 +33,81 @@ namespace LELEngine
 		{ }
 
 		public GameHost(int width, int height, string title, System.Version apiVersion)
-			: base(width, height, title, apiVersion)
+			: this(new GameWindowOptions { Width = width, Height = height, Title = title }, apiVersion)
+		{ }
+
+		public GameHost(GameWindowOptions options, System.Version apiVersion)
+			: base(options.Width, options.Height, options.Title, apiVersion, options.Visible, options.Fullscreen)
 		{
 			RenderQueue = RenderQueue.PerShader;
 			Input.Host = this;
 
-			// The GL context exists as soon as the window does, so the renderer can be created here.
-			// This lets game code configure passes before Run().
-			Renderer = new Renderer(ClientSize.X, ClientSize.Y);
-			Renderer.AddDefaultPasses();
-			Game.Renderer = Renderer;
+			if (options.CreateRenderer)
+			{
+				// The GL context exists as soon as the window does, so the renderer can be created here.
+				// This lets game code configure passes before Run().
+				CreateRenderer(ClientSize.X, ClientSize.Y);
+			}
 		}
 
 		#endregion
 
 		#region PublicMethods
+
+		/// <summary>
+		///     Creates the renderer with the default passes (compiles the engine's shaders). The constructor does it
+		///     unless <see cref="GameWindowOptions.CreateRenderer" /> is off; call it on the thread that holds the GL
+		///     context, with the window's size read on the main thread (a resize meanwhile reaches the renderer when
+		///     <c>Run()</c> starts).
+		/// </summary>
+		public void CreateRenderer(int width, int height)
+		{
+			if (Renderer != null)
+			{
+				return;
+			}
+
+			Renderer = new Renderer(width, height);
+			Renderer.AddDefaultPasses();
+			Game.Renderer = Renderer;
+		}
+
+		/// <summary>
+		///     Renders the active scene <paramref name="frames" /> times into an offscreen target, nothing presented: the
+		///     passes allocate their per-scene resources (GI caches, distance fields) and compile what they build on first
+		///     use, so the first frame the window shows does not wait for that. The player does it on its loading thread
+		///     while the splash screen is up, before the scene's lifecycle starts (as the editor renders a scene in edit
+		///     mode).
+		/// </summary>
+		public void WarmUp(int frames)
+		{
+			Camera camera = SceneManager.MainCamera;
+			if (Renderer == null || camera == null || frames <= 0)
+			{
+				return;
+			}
+
+			var target = new Framebuffer(Renderer.Width, Renderer.Height);
+			target.AddColorAttachment(RenderTextureFormat.RGBA8);
+			target.Validate();
+			Framebuffer output = Renderer.OutputTarget;
+			Renderer.OutputTarget = target;
+			try
+			{
+				for (int i = 0; i < frames; i++)
+				{
+					SceneManager.GetRenderLists(out var renderers, out var behaviours);
+					Renderer.RenderFrame(camera, renderers, behaviours, RenderQueue);
+				}
+			}
+			finally
+			{
+				Renderer.OutputTarget = output;
+				target.Delete();
+				DebugDraw.Clear();
+				GLState.Reset();
+			}
+		}
 
 		/// <summary>
 		///     Creates an empty scene and makes it active.
@@ -92,19 +153,25 @@ namespace LELEngine
 			UIElements.UIRuntime.GetClipboard = () => ClipboardString;
 			UIElements.UIRuntime.SetClipboard = text => ClipboardString = text;
 
-			SceneManager.ActiveScene?.StartLifecycle(true);
+			SceneManager.StartLifecycle(true);
 			Loaded = true;
 		}
 
 		protected override void OnResize(ResizeEventArgs e)
 		{
 			base.OnResize(e);
-			Renderer?.Resize(e.Width, e.Height);
+
+			// Not while another thread holds the context (the player's loading thread may be creating the renderer);
+			// Run() resizes it to the window when it starts. The same size again (that call) keeps the GI history.
+			if (Context.IsCurrent && Renderer != null && (Renderer.Width != System.Math.Max(1, e.Width) || Renderer.Height != System.Math.Max(1, e.Height)))
+			{
+				Renderer.Resize(e.Width, e.Height);
+			}
 		}
 
 		protected override void OnUnload()
 		{
-			SceneManager.ActiveScene?.Unload();
+			SceneManager.UnloadAll();
 			Renderer?.Dispose();
 			Renderer = null;
 			base.OnUnload();
@@ -120,7 +187,8 @@ namespace LELEngine
 
 			Input.BeginFrame();
 			long updateStart = System.Diagnostics.Stopwatch.GetTimestamp();
-			SceneManager.ActiveScene?.Update(Time.deltaTime);
+			SceneManager.Update();
+			SceneManager.UpdateScenes(Time.deltaTime);
 			Time.cpuUpdateMs = (System.Diagnostics.Stopwatch.GetTimestamp() - updateStart) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
 			Input.EndFrame();
 			ApplyUICursor();
@@ -158,15 +226,8 @@ namespace LELEngine
 			renderStopwatch.Reset();
 			renderStopwatch.Start();
 
-			Scene scene = SceneManager.ActiveScene;
-			if (scene != null)
-			{
-				Renderer?.RenderFrame(scene.MainCamera, scene.Renderers, scene.ActiveBehaviours, RenderQueue);
-			}
-			else
-			{
-				Renderer?.RenderFrame(null, System.Array.Empty<MeshRenderer>(), System.Array.Empty<Behaviour>(), RenderQueue);
-			}
+			SceneManager.GetRenderLists(out var renderers, out var behaviours);
+			Renderer?.RenderFrame(SceneManager.MainCamera, renderers, behaviours, RenderQueue);
 			Time.cpuRenderMs = renderStopwatch.Elapsed.TotalMilliseconds;
 			DebugDraw.Clear();
 

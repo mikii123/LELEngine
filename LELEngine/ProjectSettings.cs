@@ -5,11 +5,12 @@ using LELEngine.Serialization;
 namespace LELEngine
 {
 	/// <summary>
-	///     Project-wide settings: 2D physics and the lighting quality (the shadow map and the global illumination
-	///     method with its tunables). One document: ProjectSettings/ProjectSettings.asset in a project (written by the
-	///     editor's Project Settings window), next to boot.json in a game build. Per-scene lighting (environment, shadow
-	///     reach, the GI volume) stays in <see cref="SceneSettings" />. <see cref="Use" /> makes a settings object the
-	///     live one (<see cref="Current" />, <see cref="Lighting.Shadows" />, <see cref="Lighting.GI" />).
+	///     Project-wide settings: 2D physics, the lighting quality (the shadow map and the global illumination method
+	///     with its tunables) and the splash screen of builds. One document: ProjectSettings/ProjectSettings.asset in a
+	///     project (written by the editor's Project Settings window), next to boot.json in a game build. Per-scene
+	///     lighting (environment, shadow reach, the GI volume) stays in <see cref="SceneSettings" />. <see cref="Use" />
+	///     makes a settings object the live one (<see cref="Current" />, <see cref="Lighting.Shadows" />,
+	///     <see cref="Lighting.GI" />).
 	/// </summary>
 	[Serializable]
 	public sealed class ProjectSettings
@@ -24,6 +25,9 @@ namespace LELEngine
 		public Physics2DSettings Physics2D = new Physics2DSettings();
 		public ShadowSettings Shadows = new ShadowSettings();
 		public GlobalIlluminationSettings GI = new GlobalIlluminationSettings();
+
+		/// <summary>What a build shows while its start scene loads (baked into the build's boot.json; the player does not read it from here).</summary>
+		public SplashScreenSettings SplashScreen = new SplashScreenSettings();
 
 		#endregion
 

@@ -98,7 +98,17 @@ namespace LELEngine
 			pixels = rgba;
 			sRGB = srgb;
 			SetMipmaps(mipmaps);
+			ClearKtx();
 			Release();
+		}
+
+		/// <summary>Fills this volume from a build's baked KTX file (uncompressed slices).</summary>
+		internal void SetBaked(KtxFile ktx, bool mipmaps)
+		{
+			pixels = null;
+			depth = ktx.Depth;
+			sRGB = ktx.IsSrgb;
+			SetKtx(ktx, mipmaps);
 		}
 
 		protected override void UploadData()

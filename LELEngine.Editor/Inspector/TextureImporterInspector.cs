@@ -27,6 +27,7 @@ namespace LELEngine.Editor
 		private static readonly string[] SpriteModeNames = { "Single", "Multiple" };
 		private static readonly int[] MaxSizes = { 0, 32, 64, 128, 256, 512, 1024, 2048, 4096, 8192 };
 		private static readonly string[] MaxSizeNames = { "No limit", "32", "64", "128", "256", "512", "1024", "2048", "4096", "8192" };
+		private static readonly string[] CompressionNames = { "BC7 (compressed)", "None", "BC7 High Quality (slow build)" };
 
 		private static string path;
 		private static TextureImporter working;
@@ -91,6 +92,17 @@ namespace LELEngine.Editor
 			{
 				working.maxSize = MaxSizes[sizeIndex];
 				changed = true;
+			}
+
+			if (working.textureType != TextureImporterType.Sprite)
+			{
+				int compression = (int)working.compression;
+				changed |= Combo("Build Compression", ref compression, CompressionNames, context);
+				working.compression = (TextureCompression)compression;
+				if (ImGui.IsItemHovered())
+				{
+					ImGui.SetTooltip("How game builds store the texture (the editor shows the source image).\nBC7: compressed with every mip level baked, loads without decoding, a quarter of the memory.\nNone: uncompressed texels.\nBC7 High Quality: a search over every block mode, a little closer to the source, about 50x slower to build.");
+				}
 			}
 
 			switch (working.shape)

@@ -167,11 +167,33 @@ namespace LELEngine
 		/// <summary>GL binding target of this texture type.</summary>
 		internal abstract TextureTarget Target { get; }
 
+		/// <summary>Texels baked by a game build (every level as the driver takes it): uploaded instead of the pixels.</summary>
+		internal KtxFile Ktx { get; private set; }
+
+		/// <summary>Takes a baked texture's levels (a build's KTX file): no pixels on the CPU unless the data is uncompressed and asked for.</summary>
+		internal void SetKtx(KtxFile ktx, bool mipmaps)
+		{
+			Ktx = ktx;
+			SetSize(ktx.Width, ktx.Height);
+			SetMipmaps(ktx.Levels > 1 || (mipmaps && !ktx.IsCompressed));
+			Release();
+		}
+
+		/// <summary>The texture uploads from its pixels again (they were set or read from the baked data).</summary>
+		protected void ClearKtx()
+		{
+			Ktx = null;
+		}
+
 		/// <summary>Pixels are available for an upload.</summary>
 		protected abstract bool HasData { get; }
 
 		/// <summary>Creates the GL texture from the pixels (the target is already bound by <see cref="TryUpload" />).</summary>
 		protected abstract void UploadData();
+
+		/// <summary>GL state the texture type needs before its data uploads (pixels or baked levels).</summary>
+		protected virtual void BeforeUpload()
+		{ }
 
 		/// <summary>Called when the pixel data changed shape (width / height); subclasses set the fields.</summary>
 		protected void SetSize(int newWidth, int newHeight)
@@ -252,7 +274,7 @@ namespace LELEngine
 
 		private void TryUpload()
 		{
-			if (!HasData)
+			if (!HasData && Ktx == null)
 			{
 				failed = true;
 				return;
@@ -263,10 +285,21 @@ namespace LELEngine
 				handle = GL.GenTexture();
 				GL.BindTexture(Target, handle);
 				GL.PixelStore(PixelStoreParameter.UnpackAlignment, 1);
-				UploadData();
+				BeforeUpload();
+				if (Ktx != null)
+				{
+					Ktx.Upload(Target);
+				}
+				else
+				{
+					UploadData();
+				}
+
 				GL.PixelStore(PixelStoreParameter.UnpackAlignment, 4);
 				ApplyParameters();
-				if (mipmapEnabled)
+
+				// A baked texture brings its mip levels (compressed data cannot generate them); one level only gets them generated.
+				if (mipmapEnabled && (Ktx == null || (Ktx.Levels == 1 && !Ktx.IsCompressed)))
 				{
 					GL.GenerateMipmap((GenerateMipmapTarget)Target);
 				}

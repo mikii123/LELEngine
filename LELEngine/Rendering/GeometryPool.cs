@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using LELEngine.Shaders;
 using OpenTK.Graphics.OpenGL4;
 
@@ -7,8 +8,9 @@ namespace LELEngine.Rendering
 	/// <summary>
 	///     Every mesh's vertices and indices in two shared GPU buffers behind one vertex array, so any set of meshes
 	///     can be drawn by a single multi-draw call, and a mesh used by many renderers is on the GPU once. A mesh
-	///     uploads on first use and stays until the assets are cleared (<see cref="Clear" />); its sub-meshes are
-	///     ranges of its index range (<see cref="DrawSubMesh" />).
+	///     uploads on first use and stays until its asset is unloaded (<see cref="Release" />: later meshes reuse its
+	///     ranges) or the assets are cleared (<see cref="Clear" />); its sub-meshes are ranges of its index range
+	///     (<see cref="DrawSubMesh" />).
 	///     Location <see cref="VertexLayout.InstanceIndexLocation" /> is a per-instance attribute reading an identity
 	///     buffer through the draw's base instance: the instance index of GPU-driven draws on contexts without shader
 	///     draw parameters.
@@ -73,6 +75,10 @@ namespace LELEngine.Rendering
 		private static int vertexCount;
 		private static int indexCount;
 		private static int generation = 1;
+
+		// Ranges given back by released meshes (sorted by start; the end of the used space is vertexCount / indexCount).
+		private static readonly List<(int Start, int Count)> freeVertices = new List<(int Start, int Count)>();
+		private static readonly List<(int Start, int Count)> freeIndices = new List<(int Start, int Count)>();
 
 		#endregion
 
@@ -184,6 +190,25 @@ namespace LELEngine.Rendering
 			vertexCount = 0;
 			indexCount = 0;
 			MeshCount = 0;
+			freeVertices.Clear();
+			freeIndices.Clear();
+		}
+
+		/// <summary>
+		///     Gives a mesh's ranges back for the meshes uploaded later (its asset was unloaded with its last scene). The
+		///     mesh stays usable: drawn again, it uploads again.
+		/// </summary>
+		public static void Release(Mesh mesh)
+		{
+			if (mesh == null || mesh.PoolGeneration != generation)
+			{
+				return;
+			}
+
+			mesh.PoolGeneration = 0;
+			Free(freeVertices, ref vertexCount, mesh.PoolBaseVertex, mesh.PoolVertexCount);
+			Free(freeIndices, ref indexCount, mesh.PoolFirstIndex, mesh.PoolIndexCount);
+			MeshCount--;
 		}
 
 		#endregion
@@ -212,16 +237,33 @@ namespace LELEngine.Rendering
 			Vertex[] vertices = mesh.Vertices;
 			uint[] indices = mesh.Indices;
 
-			if (vertexCount + vertices.Length > vertexCapacity || indexCount + indices.Length > indexCapacity)
+			// Ranges of released meshes first (first fit), the end of the buffers otherwise.
+			int baseVertex = indices.Length > 0 ? Allocate(freeVertices, vertices.Length) : -1;
+			int firstIndex = indices.Length > 0 ? Allocate(freeIndices, indices.Length) : -1;
+			bool appendVertices = baseVertex < 0;
+			bool appendIndices = firstIndex < 0;
+			if (appendVertices)
+			{
+				baseVertex = vertexCount;
+			}
+
+			if (appendIndices)
+			{
+				firstIndex = indexCount;
+			}
+
+			int vertexEnd = appendVertices ? vertexCount + vertices.Length : vertexCount;
+			int indexEnd = appendIndices ? indexCount + indices.Length : indexCount;
+			if (vertexEnd > vertexCapacity || indexEnd > indexCapacity)
 			{
 				int newVertexCapacity = vertexCapacity;
-				while (vertexCount + vertices.Length > newVertexCapacity)
+				while (vertexEnd > newVertexCapacity)
 				{
 					newVertexCapacity *= 2;
 				}
 
 				int newIndexCapacity = indexCapacity;
-				while (indexCount + indices.Length > newIndexCapacity)
+				while (indexEnd > newIndexCapacity)
 				{
 					newIndexCapacity *= 2;
 				}
@@ -244,20 +286,81 @@ namespace LELEngine.Rendering
 			if (indices.Length > 0)
 			{
 				GL.BindBuffer(BufferTarget.CopyWriteBuffer, vertexBuffer);
-				GL.BufferSubData(BufferTarget.CopyWriteBuffer, (IntPtr)(vertexCount * Vertex.Size), vertices.Length * Vertex.Size, vertices);
+				GL.BufferSubData(BufferTarget.CopyWriteBuffer, (IntPtr)(baseVertex * Vertex.Size), vertices.Length * Vertex.Size, vertices);
 				GL.BindBuffer(BufferTarget.CopyWriteBuffer, indexBuffer);
-				GL.BufferSubData(BufferTarget.CopyWriteBuffer, (IntPtr)(indexCount * sizeof(uint)), indices.Length * sizeof(uint), indices);
+				GL.BufferSubData(BufferTarget.CopyWriteBuffer, (IntPtr)(firstIndex * sizeof(uint)), indices.Length * sizeof(uint), indices);
 				GL.BindBuffer(BufferTarget.CopyWriteBuffer, 0);
 			}
 
 			mesh.PoolGeneration = generation;
-			mesh.PoolFirstIndex = indexCount;
+			mesh.PoolFirstIndex = firstIndex;
 			mesh.PoolIndexCount = indices.Length;
-			mesh.PoolBaseVertex = vertexCount;
+			mesh.PoolBaseVertex = baseVertex;
 			mesh.PoolVertexCount = vertices.Length;
-			vertexCount += vertices.Length;
-			indexCount += indices.Length;
+			vertexCount = vertexEnd;
+			indexCount = indexEnd;
 			MeshCount++;
+		}
+
+		/// <summary>The start of a free range of <paramref name="count" /> elements (taken from the list), or -1.</summary>
+		private static int Allocate(List<(int Start, int Count)> free, int count)
+		{
+			for (int i = 0; i < free.Count; i++)
+			{
+				(int start, int available) = free[i];
+				if (available < count)
+				{
+					continue;
+				}
+
+				if (available == count)
+				{
+					free.RemoveAt(i);
+				}
+				else
+				{
+					free[i] = (start + count, available - count);
+				}
+
+				return start;
+			}
+
+			return -1;
+		}
+
+		/// <summary>Adds a range to the sorted free list, merging neighbours; free space at the end lowers the end instead.</summary>
+		private static void Free(List<(int Start, int Count)> free, ref int end, int start, int count)
+		{
+			if (count <= 0)
+			{
+				return;
+			}
+
+			int i = 0;
+			while (i < free.Count && free[i].Start < start)
+			{
+				i++;
+			}
+
+			free.Insert(i, (start, count));
+			if (i + 1 < free.Count && free[i].Start + free[i].Count == free[i + 1].Start)
+			{
+				free[i] = (free[i].Start, free[i].Count + free[i + 1].Count);
+				free.RemoveAt(i + 1);
+			}
+
+			if (i > 0 && free[i - 1].Start + free[i - 1].Count == free[i].Start)
+			{
+				free[i - 1] = (free[i - 1].Start, free[i - 1].Count + free[i].Count);
+				free.RemoveAt(i);
+			}
+
+			(int lastStart, int lastCount) = free[free.Count - 1];
+			if (lastStart + lastCount == end)
+			{
+				end = lastStart;
+				free.RemoveAt(free.Count - 1);
+			}
 		}
 
 		/// <summary>New buffer of the given size holding the first <paramref name="usedBytes" /> of the old one.</summary>

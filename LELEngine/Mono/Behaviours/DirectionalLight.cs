@@ -7,7 +7,7 @@ public sealed class DirectionalLight : Behaviour
 {
 	#region PublicFields
 
-	public static DirectionalLight This => SceneManager.ActiveScene?.MainLight;
+	public static DirectionalLight This => SceneManager.MainLight;
 
 	public Color4 Color = Color4.White;
 

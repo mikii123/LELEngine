@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using LELEngine.Rendering;
 
 namespace LELEngine.Editor
@@ -66,6 +67,13 @@ namespace LELEngine.Editor
 			}
 
 			Renderer.RenderFrame(camera, scene.Renderers, scene.ActiveBehaviours, RenderQueue.PerShader);
+		}
+
+		/// <summary>Every loaded scene from <paramref name="camera" /> (the game view: play mode may load several).</summary>
+		public void RenderLoadedScenes(Camera camera)
+		{
+			SceneManager.GetRenderLists(out IReadOnlyList<MeshRenderer> renderers, out IReadOnlyList<Behaviour> behaviours);
+			Renderer.RenderFrame(camera, renderers, behaviours, RenderQueue.PerShader);
 		}
 
 		public void Dispose()

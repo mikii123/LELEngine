@@ -23,6 +23,22 @@ namespace LELEngine
 		Texture3D
 	}
 
+	/// <summary>How game builds store a texture (the editor always shows the source image).</summary>
+	public enum TextureCompression
+	{
+		/// <summary>
+		///     BC7 blocks with every mip level baked (8 bits per texel, close to the source, quick to build; HDR and 3D
+		///     textures stay uncompressed).
+		/// </summary>
+		BC7,
+
+		/// <summary>Uncompressed texels (exact, four times the memory of BC7).</summary>
+		None,
+
+		/// <summary>BC7 from a search over all block modes: a little closer to the source (sharp color edges), much slower to build.</summary>
+		BC7HighQuality
+	}
+
 	/// <summary>How the faces of a cubemap are arranged in the source image.</summary>
 	public enum CubemapLayout
 	{
@@ -109,6 +125,9 @@ namespace LELEngine
 
 		/// <summary>Largest side after import in texels (0 = the file's size); bigger images are box-filtered down.</summary>
 		public int maxSize;
+
+		/// <summary>How game builds store the texture: KTX files the player uploads without decoding (sprites stay images).</summary>
+		public TextureCompression compression = TextureCompression.BC7;
 
 		// Cube
 		public CubemapLayout cubemapLayout = CubemapLayout.Auto;

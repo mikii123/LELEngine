@@ -286,6 +286,32 @@ namespace LELEngine
 		#endregion
 	}
 
+	/// <summary>An image file imported by its settings, CPU only (<see cref="TextureAssets.Import" />).</summary>
+	internal sealed class ImportedTexture
+	{
+		#region PublicFields
+
+		public TextureImporterShape Shape;
+
+		/// <summary>2D: the image, bottom row first.</summary>
+		public ImageData Image;
+
+		/// <summary>Cube: the faces in GL order, top row first.</summary>
+		public ImageData[] Faces;
+
+		/// <summary>3D: RGBA8 slices, each bottom row first.</summary>
+		public byte[] Voxels;
+
+		public int Width;
+		public int Height;
+		public int Depth;
+		public bool IsHdr;
+		public bool Srgb;
+		public bool Mipmaps;
+
+		#endregion
+	}
+
 	/// <summary>
 	///     Loads image files into texture assets by their import settings (<see cref="TextureImporter" />): 2D textures,
 	///     cubemaps built from crosses, strips or panoramas, volumes from slice grids, and sprites. Loaded assets are
@@ -415,7 +441,16 @@ namespace LELEngine
 			try
 			{
 				string absolute = File.Exists(path) ? path : AssetDatabase.ToAbsolute(path);
-				ImageData image = Decode(absolute, false);
+				byte[] file = File.ReadAllBytes(absolute);
+				if (KtxFile.IsKtx(file))
+				{
+					// Builds keep the images of sprites and UI documents as they are; any other was baked for materials
+					// (rows bottom up, sRGB storage): drawn by the UI it may show flipped and darker.
+					Debug.LogWarning("[UI] " + (assetPath ?? path) + " is a texture baked for materials in this build; set its Texture Type to Sprite to use it in the UI");
+					return LoadTexture(assetPath ?? AssetDatabase.ToAssetPath(absolute)) as Texture2D;
+				}
+
+				ImageData image = Decode(absolute, false, file);
 				var texture = new Texture2D { name = Path.GetFileName(path), AssetPath = assetPath };
 				texture.SetImage(image.IsHdr ? image.ToLdr() : image, false, false, true);
 				texture.SetSamplerState(FilterMode.Trilinear, TextureWrap.Clamp, 1);
@@ -431,6 +466,38 @@ namespace LELEngine
 				Debug.LogWarning("[UI] Cannot load texture " + path + ": " + e.Message);
 				return null;
 			}
+		}
+
+		/// <summary>
+		///     Forgets a loaded texture and frees its GPU memory (its asset was unloaded with the last scene using it).
+		///     The object stays usable: used again, it uploads again; a new load of the file reads it again.
+		/// </summary>
+		public static void Release(Texture texture)
+		{
+			if (texture == null)
+			{
+				return;
+			}
+
+			lock (sync)
+			{
+				string key = null;
+				foreach (KeyValuePair<string, Entry> entry in entries)
+				{
+					if (ReferenceEquals(entry.Value.Texture, texture))
+					{
+						key = entry.Key;
+						break;
+					}
+				}
+
+				if (key != null)
+				{
+					entries.Remove(key);
+				}
+			}
+
+			texture.Release();
 		}
 
 		/// <summary>Rebuilds a loaded image asset from its current import settings (editor Apply); textures keep their identity when the shape is unchanged.</summary>
@@ -485,11 +552,14 @@ namespace LELEngine
 			}
 		}
 
-		/// <summary>Decodes an image file (png / jpg / tga / bmp / gif / psd as RGBA8, hdr as float) with row 0 at the top or, flipped, at the bottom.</summary>
-		internal static ImageData Decode(string absolutePath, bool flipVertical)
+		/// <summary>
+		///     Decodes an image file (png / jpg / tga / bmp / gif / psd as RGBA8, hdr as float) with row 0 at the top or,
+		///     flipped, at the bottom; <paramref name="file" /> holds its bytes when they were read already.
+		/// </summary>
+		internal static ImageData Decode(string absolutePath, bool flipVertical, byte[] file = null)
 		{
 			StbImage.stbi_set_flip_vertically_on_load(flipVertical ? 1 : 0);
-			using (FileStream stream = File.OpenRead(absolutePath))
+			using (Stream stream = file != null ? new MemoryStream(file, false) : File.OpenRead(absolutePath))
 			{
 				if (absolutePath.EndsWith(".hdr", StringComparison.OrdinalIgnoreCase))
 				{
@@ -599,7 +669,10 @@ namespace LELEngine
 			return entry;
 		}
 
-		/// <summary>Imports the file by its settings, reusing <paramref name="previous" />'s texture when the shape is unchanged.</summary>
+		/// <summary>
+		///     Imports the file by its settings (a build's baked KTX file: its levels as they are), reusing
+		///     <paramref name="previous" />'s texture when the shape is unchanged.
+		/// </summary>
 		private static Entry Build(string assetPath, Entry previous)
 		{
 			string absolute = AssetDatabase.ToAbsolute(assetPath);
@@ -614,39 +687,43 @@ namespace LELEngine
 			{
 				var entry = new Entry { Shape = importer.shape };
 				string name = Path.GetFileNameWithoutExtension(assetPath);
-				switch (importer.shape)
+				byte[] file = File.ReadAllBytes(absolute);
+				if (KtxFile.IsKtx(file))
+				{
+					KtxFile ktx = KtxFile.Read(file);
+					Texture baked = CreateBaked(ktx, previous?.Texture, importer);
+					baked.name = name;
+					baked.AssetPath = assetPath;
+					entry.Shape = ktx.Faces == 6 ? TextureImporterShape.Cube : ktx.Depth > 0 ? TextureImporterShape.Texture3D : TextureImporterShape.Texture2D;
+					entry.Texture = baked;
+					if (baked is Texture2D baked2D)
+					{
+						BuildSprites(entry, baked2D, importer, assetPath, name);
+					}
+
+					return entry;
+				}
+
+				ImportedTexture imported = Import(assetPath, importer, file);
+				if (imported == null)
+				{
+					return null;
+				}
+
+				switch (imported.Shape)
 				{
 					case TextureImporterShape.Cube:
 					{
-						ImageData image = Decode(absolute, false);
-						ImageData[] faces = importer.cubemapLayout == CubemapLayout.SixFiles
-							? LoadSixFaces(absolute, image)
-							: ExtractFaces(image, importer.cubemapLayout, importer.cubemapFaceSize);
-						if (faces == null)
-						{
-							Debug.LogWarning($"[Assets] {assetPath}: the image ({image.Width}x{image.Height}) does not fit the {importer.cubemapLayout} cubemap layout");
-							return null;
-						}
-
-						int faceFactor = faces[0].FactorFor(importer.maxSize);
-						if (faceFactor > 1)
-						{
-							for (int i = 0; i < 6; i++)
-							{
-								faces[i] = faces[i].Downscale(faceFactor);
-							}
-						}
-
 						Cubemap cubemap = previous?.Texture as Cubemap ?? new Cubemap();
-						byte[][] rgba = faces[0].IsHdr ? null : new byte[6][];
-						float[][] hdr = faces[0].IsHdr ? new float[6][] : null;
+						byte[][] rgba = imported.IsHdr ? null : new byte[6][];
+						float[][] hdr = imported.IsHdr ? new float[6][] : null;
 						for (int i = 0; i < 6; i++)
 						{
-							if (hdr != null) hdr[i] = faces[i].FloatPixels;
-							else rgba[i] = faces[i].Pixels;
+							if (hdr != null) hdr[i] = imported.Faces[i].FloatPixels;
+							else rgba[i] = imported.Faces[i].Pixels;
 						}
 
-						cubemap.SetFaces(faces[0].Width, rgba, hdr, importer.StoresSrgb && hdr == null, importer.generateMipmaps);
+						cubemap.SetFaces(imported.Faces[0].Width, rgba, hdr, imported.Srgb, imported.Mipmaps);
 						cubemap.SetSamplerState(importer.filterMode, TextureWrap.Clamp, importer.anisoLevel);
 						cubemap.name = name;
 						cubemap.AssetPath = assetPath;
@@ -655,56 +732,8 @@ namespace LELEngine
 					}
 					case TextureImporterShape.Texture3D:
 					{
-						int w;
-						int h;
-						int depth;
-						byte[] voxels;
-						if (importer.volumeSource == Texture3DSource.NumberedFiles)
-						{
-							List<ImageData> slices = LoadNumberedSlices(absolute, importer.maxSize);
-							if (slices == null)
-							{
-								return null;
-							}
-
-							w = slices[0].Width;
-							h = slices[0].Height;
-							depth = slices.Count;
-							voxels = new byte[w * h * depth * 4];
-							for (int z = 0; z < depth; z++)
-							{
-								Array.Copy(slices[z].FlipVertical().Pixels, 0, voxels, z * w * h * 4, w * h * 4);
-							}
-						}
-						else
-						{
-							ImageData image = Decode(absolute, false);
-							if (image.IsHdr)
-							{
-								image = image.ToLdr();
-							}
-
-							int columns = Math.Max(1, importer.columns);
-							int rows = Math.Max(1, importer.rows);
-							w = image.Width / columns;
-							h = image.Height / rows;
-							depth = columns * rows;
-							int sliceFactor = new ImageData(w, h, Array.Empty<byte>()).FactorFor(importer.maxSize);
-							int sw = Math.Max(1, w / sliceFactor);
-							int sh = Math.Max(1, h / sliceFactor);
-							voxels = new byte[sw * sh * depth * 4];
-							for (int z = 0; z < depth; z++)
-							{
-								ImageData slice = image.Crop(z % columns * w, z / columns * h, w, h).Downscale(sliceFactor).FlipVertical();
-								Array.Copy(slice.Pixels, 0, voxels, z * sw * sh * 4, sw * sh * 4);
-							}
-
-							w = sw;
-							h = sh;
-						}
-
 						Texture3D volume = previous?.Texture as Texture3D ?? new Texture3D();
-						volume.SetVolume(w, h, depth, voxels, importer.StoresSrgb, importer.generateMipmaps);
+						volume.SetVolume(imported.Width, imported.Height, imported.Depth, imported.Voxels, imported.Srgb, imported.Mipmaps);
 						volume.SetSamplerState(importer.filterMode, importer.wrapMode, 1);
 						volume.name = name;
 						volume.AssetPath = assetPath;
@@ -713,10 +742,8 @@ namespace LELEngine
 					}
 					default:
 					{
-						ImageData image = Decode(absolute, true);
-						image = image.Downscale(image.FactorFor(importer.maxSize));
 						Texture2D texture = previous?.Texture as Texture2D ?? new Texture2D();
-						texture.SetImage(image, importer.StoresSrgb && !image.IsHdr, true, importer.generateMipmaps);
+						texture.SetImage(imported.Image, imported.Srgb, true, imported.Mipmaps);
 						texture.SetSamplerState(importer.filterMode, importer.wrapMode, importer.anisoLevel);
 						texture.name = name;
 						texture.AssetPath = assetPath;
@@ -735,6 +762,140 @@ namespace LELEngine
 			}
 		}
 
+		/// <summary>
+		///     An image file as its import settings make it, on the CPU only (any thread): the source of a texture and of a
+		///     build's baked KTX file. Null (with a warning) when the image does not fit the settings.
+		/// </summary>
+		internal static ImportedTexture Import(string assetPath, TextureImporter importer, byte[] file = null)
+		{
+			string absolute = AssetDatabase.ToAbsolute(assetPath);
+			var imported = new ImportedTexture { Shape = importer.shape, Mipmaps = importer.generateMipmaps };
+			switch (importer.shape)
+			{
+				case TextureImporterShape.Cube:
+				{
+					ImageData image = Decode(absolute, false, file);
+					ImageData[] faces = importer.cubemapLayout == CubemapLayout.SixFiles
+						? LoadSixFaces(absolute, image)
+						: ExtractFaces(image, importer.cubemapLayout, importer.cubemapFaceSize);
+					if (faces == null)
+					{
+						Debug.LogWarning($"[Assets] {assetPath}: the image ({image.Width}x{image.Height}) does not fit the {importer.cubemapLayout} cubemap layout");
+						return null;
+					}
+
+					int faceFactor = faces[0].FactorFor(importer.maxSize);
+					if (faceFactor > 1)
+					{
+						for (int i = 0; i < 6; i++)
+						{
+							faces[i] = faces[i].Downscale(faceFactor);
+						}
+					}
+
+					imported.Faces = faces;
+					imported.IsHdr = faces[0].IsHdr;
+					imported.Srgb = importer.StoresSrgb && !imported.IsHdr;
+					imported.Width = faces[0].Width;
+					imported.Height = faces[0].Height;
+					return imported;
+				}
+				case TextureImporterShape.Texture3D:
+				{
+					int w;
+					int h;
+					int depth;
+					byte[] voxels;
+					if (importer.volumeSource == Texture3DSource.NumberedFiles)
+					{
+						List<ImageData> slices = LoadNumberedSlices(absolute, importer.maxSize);
+						if (slices == null)
+						{
+							return null;
+						}
+
+						w = slices[0].Width;
+						h = slices[0].Height;
+						depth = slices.Count;
+						voxels = new byte[w * h * depth * 4];
+						for (int z = 0; z < depth; z++)
+						{
+							Array.Copy(slices[z].FlipVertical().Pixels, 0, voxels, z * w * h * 4, w * h * 4);
+						}
+					}
+					else
+					{
+						ImageData image = Decode(absolute, false, file);
+						if (image.IsHdr)
+						{
+							image = image.ToLdr();
+						}
+
+						int columns = Math.Max(1, importer.columns);
+						int rows = Math.Max(1, importer.rows);
+						w = image.Width / columns;
+						h = image.Height / rows;
+						depth = columns * rows;
+						int sliceFactor = new ImageData(w, h, Array.Empty<byte>()).FactorFor(importer.maxSize);
+						int sw = Math.Max(1, w / sliceFactor);
+						int sh = Math.Max(1, h / sliceFactor);
+						voxels = new byte[sw * sh * depth * 4];
+						for (int z = 0; z < depth; z++)
+						{
+							ImageData slice = image.Crop(z % columns * w, z / columns * h, w, h).Downscale(sliceFactor).FlipVertical();
+							Array.Copy(slice.Pixels, 0, voxels, z * sw * sh * 4, sw * sh * 4);
+						}
+
+						w = sw;
+						h = sh;
+					}
+
+					imported.Width = w;
+					imported.Height = h;
+					imported.Depth = depth;
+					imported.Voxels = voxels;
+					imported.Srgb = importer.StoresSrgb;
+					return imported;
+				}
+				default:
+				{
+					ImageData image = Decode(absolute, true, file);
+					image = image.Downscale(image.FactorFor(importer.maxSize));
+					imported.Image = image;
+					imported.IsHdr = image.IsHdr;
+					imported.Srgb = importer.StoresSrgb && !image.IsHdr;
+					imported.Width = image.Width;
+					imported.Height = image.Height;
+					return imported;
+				}
+			}
+		}
+
+		/// <summary>A texture of the baked file's shape filled from its levels (no decoding, no GL work until it is used).</summary>
+		private static Texture CreateBaked(KtxFile ktx, Texture previous, TextureImporter importer)
+		{
+			if (ktx.Faces == 6)
+			{
+				Cubemap cubemap = previous as Cubemap ?? new Cubemap();
+				cubemap.SetBaked(ktx, importer.generateMipmaps);
+				cubemap.SetSamplerState(importer.filterMode, TextureWrap.Clamp, importer.anisoLevel);
+				return cubemap;
+			}
+
+			if (ktx.Depth > 0)
+			{
+				Texture3D volume = previous as Texture3D ?? new Texture3D();
+				volume.SetBaked(ktx, importer.generateMipmaps);
+				volume.SetSamplerState(importer.filterMode, importer.wrapMode, 1);
+				return volume;
+			}
+
+			Texture2D texture = previous as Texture2D ?? new Texture2D();
+			texture.SetBaked(ktx, importer.generateMipmaps);
+			texture.SetSamplerState(importer.filterMode, importer.wrapMode, importer.anisoLevel);
+			return texture;
+		}
+
 		private static void BuildSprites(Entry entry, Texture2D texture, TextureImporter importer, string assetPath, string name)
 		{
 			if (importer.textureType == TextureImporterType.Sprite && importer.spriteMode == SpriteImportMode.Multiple && importer.sprites.Count > 0)
@@ -751,7 +912,8 @@ namespace LELEngine
 			entry.Single = new Sprite(texture, new Rect(0f, 0f, texture.width, texture.height), importer.spritePivot, importer.pixelsPerUnit, importer.spriteBorder, name, assetPath, false);
 		}
 
-		private static TextureImporter GetImporter(string assetPath)
+		/// <summary>The import settings of an image (its meta file's, or defaults guessed from its name).</summary>
+		internal static TextureImporter GetImporter(string assetPath)
 		{
 			AssetMeta meta = AssetDatabase.GetMeta(assetPath);
 			var importer = meta.importer as TextureImporter;

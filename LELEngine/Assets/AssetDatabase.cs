@@ -34,6 +34,12 @@ namespace LELEngine
 
 		public const string MetaExtension = ".meta";
 
+		/// <summary>
+		///     The GUID index a game build writes into its asset root (<see cref="WriteIndex" />): read instead of every
+		///     meta file when the root is indexed (a dot file: never an asset itself).
+		/// </summary>
+		public const string IndexFileName = ".assetindex";
+
 		/// <summary>Absolute path of the asset root.</summary>
 		public static string Root
 		{
@@ -68,6 +74,7 @@ namespace LELEngine
 		private static readonly Dictionary<string, List<string>> pathsByFileName = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
 		private static readonly Dictionary<string, AssetMeta> metaCache = new Dictionary<string, AssetMeta>(StringComparer.OrdinalIgnoreCase);
 		private static readonly List<AssetTypeInfo> assetTypes = new List<AssetTypeInfo>();
+		private static readonly byte[] IndexMagic = System.Text.Encoding.ASCII.GetBytes("LELIDX01");
 
 		#endregion
 
@@ -346,6 +353,37 @@ namespace LELEngine
 			return GetAllAssetPaths(GetExtensions(type));
 		}
 
+		/// <summary>
+		///     Writes the GUID index of the assets <paramref name="include" /> accepts to <paramref name="file" /> (a game
+		///     build's <see cref="IndexFileName" />): the player reads it instead of every meta file.
+		/// </summary>
+		public static void WriteIndex(string file, Func<string, bool> include)
+		{
+			var entries = new List<KeyValuePair<string, string>>();
+			lock (sync)
+			{
+				EnsureInitialized();
+				foreach (KeyValuePair<string, string> entry in pathsByGuid)
+				{
+					if (include == null || include(entry.Value))
+					{
+						entries.Add(entry);
+					}
+				}
+			}
+
+			using (var writer = new BinaryWriter(File.Create(file)))
+			{
+				writer.Write(IndexMagic);
+				writer.Write(entries.Count);
+				foreach (KeyValuePair<string, string> entry in entries)
+				{
+					writer.Write(entry.Key);
+					writer.Write(entry.Value);
+				}
+			}
+		}
+
 		// ---------------------------------------------------------------- meta files
 
 		/// <summary>Creates the meta file of an asset if it is missing; returns the asset's GUID.</summary>
@@ -466,13 +504,17 @@ namespace LELEngine
 				return null;
 			}
 
+			// A scene load records what it uses (AssetLoadScope).
+			AssetLoadScope scope = AssetLoadScope.Current;
+			long start = scope?.BeginLoad() ?? 0;
+			object result = null;
 			try
 			{
-				object result = info.Loader(type, Normalize(assetPath), subAsset);
+				result = info.Loader(type, Normalize(assetPath), subAsset);
 				if (result != null && !type.IsInstanceOfType(result))
 				{
 					Debug.LogWarning($"[Assets] {assetPath} loaded as {result.GetType().Name}, which is not a {type.Name}");
-					return null;
+					result = null;
 				}
 
 				return result;
@@ -481,6 +523,10 @@ namespace LELEngine
 			{
 				Debug.LogError($"[Assets] Cannot load {assetPath} as {type.Name}: {e.Message}");
 				return null;
+			}
+			finally
+			{
+				scope?.EndLoad(start, type, result);
 			}
 		}
 
@@ -620,6 +666,11 @@ namespace LELEngine
 					Console.WriteLine($"[Assets] Created {created} meta files");
 				}
 			}
+			else if (ReadIndex(Path.Combine(root, IndexFileName)))
+			{
+				// A game build: one file instead of reading every meta file (their import settings load on use).
+				return;
+			}
 
 			foreach (string meta in Directory.EnumerateFiles(root, "*" + MetaExtension, SearchOption.AllDirectories))
 			{
@@ -645,6 +696,44 @@ namespace LELEngine
 				}
 
 				Register(assetPath, guid);
+			}
+		}
+
+		/// <summary>Registers the GUIDs of a build's index file; false when there is none (or it is unreadable: the meta files are read instead).</summary>
+		private static bool ReadIndex(string file)
+		{
+			if (!File.Exists(file))
+			{
+				return false;
+			}
+
+			try
+			{
+				using (var reader = new BinaryReader(File.OpenRead(file)))
+				{
+					byte[] magic = reader.ReadBytes(IndexMagic.Length);
+					if (!magic.AsSpan().SequenceEqual(IndexMagic))
+					{
+						return false;
+					}
+
+					int count = reader.ReadInt32();
+					for (int i = 0; i < count; i++)
+					{
+						string guid = reader.ReadString();
+						Register(reader.ReadString(), guid);
+					}
+				}
+
+				return true;
+			}
+			catch (Exception e)
+			{
+				Debug.LogWarning("[Assets] Unreadable asset index " + file + " (" + e.Message + "); reading the meta files");
+				pathsByGuid.Clear();
+				guidsByPath.Clear();
+				pathsByFileName.Clear();
+				return false;
 			}
 		}
 

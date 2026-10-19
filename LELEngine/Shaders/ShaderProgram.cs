@@ -16,6 +16,9 @@ namespace LELEngine.Shaders
 	///     (LEL_BASE_INSTANCE with the draw parameters extension in vertex stages, LEL_SUBGROUPS with the subgroup
 	///     extensions in compute stages). A shader that includes "Engine/Instancing.glsl" also has an instanced
 	///     variant (<see cref="GetInstancedVariant" />) for GPU-driven draws.
+	///     A program loaded from a file on a thread without the GL context (a scene loading in the background) reads
+	///     and prepares its sources there and compiles on first use, or when the scene loader prepares it
+	///     (<see cref="EnsureBuilt" />), on the thread that holds the context.
 	/// </summary>
 	public sealed class ShaderProgram : IAsset
 	{
@@ -27,9 +30,29 @@ namespace LELEngine.Shaders
 		/// <summary>Closing tag of the Properties block of a .shader file (material parameters, see <see cref="ShaderProperty" />).</summary>
 		public const string PropertiesTag = "/////Properties";
 
-		public int Handle => handle;
+		public int Handle
+		{
+			get
+			{
+				EnsureBuilt();
+				return handle;
+			}
+		}
+
 		public string Name { get; }
-		public bool IsLinked { get; private set; }
+
+		public bool IsLinked
+		{
+			get
+			{
+				EnsureBuilt();
+				return linked;
+			}
+			private set => linked = value;
+		}
+
+		/// <summary>Compiled and linked (or failed); false while the sources wait for a thread with the GL context.</summary>
+		public bool IsBuilt => pendingStages == null;
 
 		/// <summary>The .shader file this program was loaded from (null for programs built from sources).</summary>
 		public string SourcePath { get; }
@@ -60,7 +83,9 @@ namespace LELEngine.Shaders
 
 		private const string InstancingInclude = "Engine/Instancing.glsl";
 
-		private readonly int handle;
+		private int handle;
+		private bool linked;
+		private List<KeyValuePair<ShaderType, string>> pendingStages;
 		private readonly Dictionary<string, int> uniformCache = new Dictionary<string, int>();
 		private readonly Dictionary<string, ActiveUniformType> uniformTypes = new Dictionary<string, ActiveUniformType>(StringComparer.Ordinal);
 		private readonly List<ShaderProperty> properties = new List<ShaderProperty>();
@@ -98,15 +123,11 @@ namespace LELEngine.Shaders
 			SourcePath = path;
 			AssetPath = AssetDatabase.Resolve(path, "Shaders") ?? path.Replace('\\', '/');
 			IsInstancedVariant = Array.IndexOf(defines, InstancedDefine) >= 0;
-			List<Shader> shaders = LoadShaderFromFile(path, defines, properties, renderState, out bool includesInstancing);
+			pendingStages = ReadStages(path, defines, properties, renderState, out bool includesInstancing);
 			SupportsInstancing = includesInstancing;
-
-			handle = GL.CreateProgram();
-			Link(shaders.ToArray());
-
-			foreach (Shader shader in shaders)
+			if (GraphicsThread.HasContext)
 			{
-				shader.Delete();
+				Build();
 			}
 		}
 
@@ -114,8 +135,18 @@ namespace LELEngine.Shaders
 
 		#region PublicMethods
 
+		/// <summary>Compiles and links the prepared sources when that has not happened yet and this thread holds the GL context.</summary>
+		public void EnsureBuilt()
+		{
+			if (pendingStages != null && GraphicsThread.HasContext)
+			{
+				Build();
+			}
+		}
+
 		public void Use()
 		{
+			EnsureBuilt();
 			GL.UseProgram(handle);
 		}
 
@@ -201,18 +232,26 @@ namespace LELEngine.Shaders
 
 		public void Delete()
 		{
-			GL.DeleteProgram(handle);
+			pendingStages = null;
+			if (handle != 0)
+			{
+				GL.DeleteProgram(handle);
+				handle = 0;
+			}
+
 			instancedVariant?.Delete();
 			instancedVariant = null;
 		}
 
 		public int GetAttributeLocation(string name)
 		{
+			EnsureBuilt();
 			return GL.GetAttribLocation(handle, name);
 		}
 
 		public int GetUniformLocation(string name)
 		{
+			EnsureBuilt();
 			int location;
 			if (!uniformCache.TryGetValue(name, out location))
 			{
@@ -231,6 +270,7 @@ namespace LELEngine.Shaders
 		/// <summary>GLSL type of an active uniform (<see cref="ActiveUniformType.Float" /> when unknown).</summary>
 		public ActiveUniformType GetUniformType(string name)
 		{
+			EnsureBuilt();
 			ActiveUniformType type;
 			return uniformTypes.TryGetValue(name, out type) ? type : ActiveUniformType.Float;
 		}
@@ -241,6 +281,7 @@ namespace LELEngine.Shaders
 		/// </summary>
 		public List<KeyValuePair<string, ActiveUniformType>> GetMaterialUniforms()
 		{
+			EnsureBuilt();
 			var result = new List<KeyValuePair<string, ActiveUniformType>>();
 			foreach (KeyValuePair<string, ActiveUniformType> uniform in uniformTypes)
 			{
@@ -510,9 +551,29 @@ namespace LELEngine.Shaders
 			properties.AddRange(ShaderProperty.Parse(propertyLines, source));
 		}
 
-		private static List<Shader> LoadShaderFromFile(string path, string[] defines, List<ShaderProperty> properties, ShaderRenderState state, out bool includesInstancing)
+		/// <summary>Compiles and links the stages read by the constructor (on the thread holding the GL context).</summary>
+		private void Build()
 		{
-			var shaders = new List<Shader>();
+			List<KeyValuePair<ShaderType, string>> stages = pendingStages;
+			pendingStages = null;
+			var shaders = new List<Shader>(stages.Count);
+			foreach (KeyValuePair<ShaderType, string> stage in stages)
+			{
+				shaders.Add(new Shader(stage.Value, stage.Key, SourcePath));
+			}
+
+			handle = GL.CreateProgram();
+			Link(shaders.ToArray());
+			foreach (Shader shader in shaders)
+			{
+				shader.Delete();
+			}
+		}
+
+		/// <summary>The stages of a .shader file with their includes expanded and the engine preamble (no GL calls: any thread).</summary>
+		private static List<KeyValuePair<ShaderType, string>> ReadStages(string path, string[] defines, List<ShaderProperty> properties, ShaderRenderState state, out bool includesInstancing)
+		{
+			var shaders = new List<KeyValuePair<ShaderType, string>>();
 			string fullPath = ResolveShaderPath(path);
 			string instancing = Path.GetFullPath(Path.Combine(ShadersRoot, InstancingInclude));
 			includesInstancing = false;
@@ -546,7 +607,7 @@ namespace LELEngine.Shaders
 					Console.WriteLine("[Shader] Warning: stage " + type + " in " + path + " is shorter than 10 characters!");
 				}
 
-				shaders.Add(new Shader(InsertPreamble(code, type, defines), type, path));
+				shaders.Add(new KeyValuePair<ShaderType, string>(type, InsertPreamble(code, type, defines)));
 			}
 
 			return shaders;

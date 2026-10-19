@@ -82,8 +82,7 @@ namespace LELEngine.Editor
 			}
 			finally
 			{
-				SceneManager.ActiveScene?.Unload();
-				SceneManager.SetActiveScene(null);
+				SceneManager.UnloadAll(true);
 				graphics?.Dispose();
 				graphics = null;
 				Console.Out.Flush();
@@ -178,6 +177,8 @@ namespace LELEngine.Editor
 					return 1;
 				}
 
+				// The GL context bakes the meshes' distance fields (and lets model import extract materials).
+				EnsureGraphics();
 				var settings = new BuildSettings { OutputFolder = Path.GetFullPath(output), Release = release, StartScene = project.StartScene, Scenes = new List<string>(project.BuildScenes) };
 				if (!GameBuilder.Build(project, settings, line => Console.WriteLine((line.StartsWith("Error", StringComparison.Ordinal) ? "[Error] " : "") + "[Build] " + line)))
 				{

@@ -171,17 +171,30 @@ namespace LELEngine
 			floatFaces = hdrFaces;
 			sRGB = srgb;
 			SetMipmaps(mipmaps);
+			ClearKtx();
 			Release();
 		}
 
-		protected override void UploadData()
+		/// <summary>Fills this cubemap from a build's baked KTX file (six faces with their mip levels).</summary>
+		internal void SetBaked(KtxFile ktx, bool mipmaps)
+		{
+			faces = null;
+			floatFaces = null;
+			sRGB = ktx.IsSrgb;
+			SetKtx(ktx, mipmaps);
+		}
+
+		protected override void BeforeUpload()
 		{
 			if (!seamlessEnabled)
 			{
 				GL.Enable(EnableCap.TextureCubeMapSeamless);
 				seamlessEnabled = true;
 			}
+		}
 
+		protected override void UploadData()
+		{
 			for (int face = 0; face < 6; face++)
 			{
 				TextureTarget target = TextureTarget.TextureCubeMapPositiveX + face;

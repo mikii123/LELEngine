@@ -20,7 +20,7 @@ namespace LELEngine
 		public bool sRGB { get; private set; }
 
 		/// <summary>Float pixels (HDR source such as .hdr).</summary>
-		public bool isHdr => floatPixels != null;
+		public bool isHdr => floatPixels != null || Ktx?.IsHdr == true;
 
 		/// <summary>Row 0 of the pixel data is the bottom row (GL orientation); false for top-down images (UI).</summary>
 		public bool bottomUp { get; private set; }
@@ -85,6 +85,7 @@ namespace LELEngine
 			SetSize(newWidth, newHeight);
 			pixels = rgba;
 			floatPixels = null;
+			ClearKtx();
 			Release();
 		}
 
@@ -99,17 +100,23 @@ namespace LELEngine
 			SetSize(newWidth, newHeight);
 			floatPixels = rgba;
 			pixels = null;
+			ClearKtx();
 			Release();
 		}
 
-		/// <summary>The RGBA8 pixels as stored (null for HDR textures); call <see cref="Texture.Apply" /> after editing them.</summary>
+		/// <summary>
+		///     The RGBA8 pixels as stored (null for HDR textures, and for the compressed textures of game builds); call
+		///     <see cref="Texture.Apply" /> after editing them.
+		/// </summary>
 		public byte[] GetRawPixels()
 		{
+			EnsureCpuPixels();
 			return pixels;
 		}
 
 		public float[] GetRawFloatPixels()
 		{
+			EnsureCpuPixels();
 			return floatPixels;
 		}
 
@@ -121,6 +128,7 @@ namespace LELEngine
 				return default;
 			}
 
+			EnsureCpuPixels();
 			int row = bottomUp ? y : height - 1 - y;
 			int index = (row * width + x) * 4;
 			if (floatPixels != null)
@@ -139,6 +147,7 @@ namespace LELEngine
 				return;
 			}
 
+			EnsureCpuPixels();
 			int row = bottomUp ? y : height - 1 - y;
 			int index = (row * width + x) * 4;
 			if (floatPixels != null)
@@ -183,6 +192,49 @@ namespace LELEngine
 			sRGB = srgb;
 			bottomUp = bottomUpData;
 			SetMipmaps(mipmaps);
+			ClearKtx();
+			Release();
+		}
+
+		/// <summary>Fills this texture from a build's baked KTX file (rows bottom up; CPU pixels only when asked for and uncompressed).</summary>
+		internal void SetBaked(KtxFile ktx, bool mipmaps)
+		{
+			pixels = null;
+			floatPixels = null;
+			sRGB = ktx.IsSrgb;
+			bottomUp = true;
+			SetKtx(ktx, mipmaps);
+		}
+
+		/// <summary>
+		///     The CPU pixels of a baked texture, from its uncompressed first level (it then uploads from them; compressed
+		///     data stays without CPU pixels).
+		/// </summary>
+		private void EnsureCpuPixels()
+		{
+			KtxFile ktx = Ktx;
+			if (ktx == null || ktx.IsCompressed || pixels != null || floatPixels != null)
+			{
+				return;
+			}
+
+			ReadOnlySpan<byte> level = ktx.GetLevel(0);
+			if (ktx.IsHdr)
+			{
+				ReadOnlySpan<System.Half> halves = System.Runtime.InteropServices.MemoryMarshal.Cast<byte, System.Half>(level);
+				floatPixels = new float[halves.Length];
+				for (int i = 0; i < halves.Length; i++)
+				{
+					floatPixels[i] = (float)halves[i];
+				}
+			}
+			else
+			{
+				pixels = level.ToArray();
+			}
+
+			SetMipmaps(mipmapEnabled || ktx.Levels > 1);
+			ClearKtx();
 			Release();
 		}
 

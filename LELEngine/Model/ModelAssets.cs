@@ -98,12 +98,45 @@ namespace LELEngine
 
 			ModelData data = LoadData(assetPath);
 			var model = new Model(assetPath, data);
+			AttachBakedDistanceFields(model, assetPath);
 			lock (sync)
 			{
 				models[assetPath] = model;
 			}
 
 			return model;
+		}
+
+		/// <summary>The distance fields a game build baked for the model's meshes ("model.ext.sdf" next to it), when there are some.</summary>
+		private static void AttachBakedDistanceFields(Model model, string assetPath)
+		{
+			string file = AssetDatabase.ToAbsolute(assetPath) + Rendering.DistanceField.DistanceFieldFile.Extension;
+			if (!File.Exists(file))
+			{
+				return;
+			}
+
+			try
+			{
+				List<KeyValuePair<string, Rendering.DistanceField.BakedDistanceField>> fields = Rendering.DistanceField.DistanceFieldFile.Read(file, out _);
+				if (fields == null)
+				{
+					return;
+				}
+
+				foreach (KeyValuePair<string, Rendering.DistanceField.BakedDistanceField> entry in fields)
+				{
+					Mesh mesh = model.FindMesh(entry.Key);
+					if (mesh != null)
+					{
+						(mesh.BakedDistanceFields ??= new List<Rendering.DistanceField.BakedDistanceField>()).Add(entry.Value);
+					}
+				}
+			}
+			catch (Exception e)
+			{
+				Debug.LogWarning($"[Model] Cannot read the baked distance fields of {assetPath}: {e.Message}");
+			}
 		}
 
 		/// <summary>

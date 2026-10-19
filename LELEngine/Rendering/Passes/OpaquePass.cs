@@ -101,7 +101,7 @@ namespace LELEngine.Rendering.Passes
 		// model matrix and material uniforms.
 		private static void PerShader(IReadOnlyList<RendererPart> parts, Camera camera)
 		{
-			foreach (KeyValuePair<string, ShaderProgram> shader in InternalStorage.Shaders)
+			foreach (ShaderProgram program in InternalStorage.ShaderList)
 			{
 				bool used = false;
 				bool resend = true;
@@ -110,7 +110,7 @@ namespace LELEngine.Rendering.Passes
 				foreach (RendererPart part in parts)
 				{
 					Material material = part.Material;
-					if (material?.UsingShader != shader.Value)
+					if (material?.UsingShader != program)
 					{
 						continue;
 					}
@@ -119,15 +119,15 @@ namespace LELEngine.Rendering.Passes
 
 					if (!used)
 					{
-						shader.Value.Use();
-						shader.Value.RenderState.ApplyCull();
+						program.Use();
+						program.RenderState.ApplyCull();
 						used = true;
 					}
 
 					if (resend || renderer.ReceiveShadows != receiveShadows || renderer.ReceiveGI != receiveGI)
 					{
-						camera.SetUniforms(shader.Value);
-						Lighting.SetUniforms(shader.Value, renderer.ReceiveShadows, renderer.ReceiveGI);
+						camera.SetUniforms(program);
+						Lighting.SetUniforms(program, renderer.ReceiveShadows, renderer.ReceiveGI);
 						receiveShadows = renderer.ReceiveShadows;
 						receiveGI = renderer.ReceiveGI;
 						resend = false;

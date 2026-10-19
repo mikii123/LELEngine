@@ -5,16 +5,20 @@ using System.IO;
 using System.Threading.Tasks;
 using Hexa.NET.ImGui;
 using LELEngine.Serialization;
+using OpenTK.Mathematics;
 using NVector2 = System.Numerics.Vector2;
+using NVector3 = System.Numerics.Vector3;
+using NVector4 = System.Numerics.Vector4;
 
 namespace LELEngine.Editor
 {
 	/// <summary>
 	///     Project Settings (Edit > Project Settings...), one tab each: the project-wide lighting quality (shadow map,
-	///     GI method and its tunables), 2D physics (simulation plane, gravity, solver, queries, layer collision matrix)
-	///     and the build (scenes, start scene, output folder, configuration; builds in the background). Lighting and
-	///     physics edits are undoable and saved to ProjectSettings/ProjectSettings.asset when they end; the lighting of
-	///     a scene (environment, shadow reach, GI volume) stays in the Lighting panel.
+	///     GI method and its tunables), 2D physics (simulation plane, gravity, solver, queries, layer collision matrix),
+	///     the splash screen of builds (duration, background, logo, with a preview) and the build (scenes, start scene,
+	///     output folder, configuration; builds in the background). Lighting, physics and splash screen edits are
+	///     undoable and saved to ProjectSettings/ProjectSettings.asset when they end; the lighting of a scene
+	///     (environment, shadow reach, GI volume) stays in the Lighting panel.
 	/// </summary>
 	internal sealed class ProjectSettingsWindow
 	{
@@ -24,6 +28,7 @@ namespace LELEngine.Editor
 		{
 			Lighting,
 			Physics2D,
+			SplashScreen,
 			Build
 		}
 
@@ -128,6 +133,12 @@ namespace LELEngine.Editor
 			if (BeginTab(Tab.Physics2D, "Physics 2D"))
 			{
 				changed |= DrawPhysics(settings.Physics2D);
+				EndTab();
+			}
+
+			if (BeginTab(Tab.SplashScreen, "Splash Screen"))
+			{
+				changed |= DrawSplashScreen(settings.SplashScreen ??= new SplashScreenSettings());
 				EndTab();
 			}
 
@@ -310,6 +321,146 @@ namespace LELEngine.Editor
 			return changed;
 		}
 
+		// ---------------------------------------------------------------- splash screen
+
+		/// <summary>On / off, the minimum duration, the background color, the logo (a texture asset; its GUID is stored) and its size, with a preview.</summary>
+		private bool DrawSplashScreen(SplashScreenSettings splash)
+		{
+			ImGui.TextDisabled("The first image of a build: up a moment after its window opens, while the start scene");
+			ImGui.TextDisabled("loads in the background. The start scene replaces it once loaded and the duration is over.");
+			ImGui.Spacing();
+
+			ImGui.PushID("splash");
+			bool changed = false;
+
+			bool enabled = splash.Enabled;
+			FieldDrawer.Label("Show Splash Screen", null, context);
+			bool edited = ImGui.Checkbox("##enabled", ref enabled);
+			Tooltip("Off: the window stays black while the start scene loads, and shows it as soon as it is ready.");
+			context.Track(edited);
+			if (edited)
+			{
+				splash.Enabled = enabled;
+				changed = true;
+			}
+
+			ImGui.BeginDisabled(!splash.Enabled);
+
+			float duration = splash.Duration;
+			FieldDrawer.Label("Duration", null, context);
+			edited = ImGui.SliderFloat("##duration", ref duration, 0f, 10f, "%.1f s");
+			Tooltip("Seconds the splash screen stays at least; longer when the start scene takes longer to load.\n0: only while it loads. Ctrl+click to type a value.");
+			context.Track(edited);
+			if (edited)
+			{
+				splash.Duration = Math.Max(0f, duration);
+				changed = true;
+			}
+
+			Color4 color = splash.BackgroundColor;
+			var rgb = new NVector3(color.R, color.G, color.B);
+			FieldDrawer.Label("Background", null, context);
+			edited = ImGui.ColorEdit3("##background", ref rgb);
+			context.Track(edited);
+			if (edited)
+			{
+				splash.BackgroundColor = new Color4(rgb.X, rgb.Y, rgb.Z, 1f);
+				changed = true;
+			}
+
+			string logoPath = string.IsNullOrEmpty(splash.Logo) ? null : AssetDatabase.GetPath(splash.Logo);
+			object logo = logoPath != null ? LoadLogo(logoPath) : null;
+			FieldDrawer.Label("Logo", null, context);
+			edited = AssetField.Draw(typeof(Texture2D), ref logo, path => MaterialEditor.ShapeMatches(path, typeof(Texture2D)));
+			context.Track(edited);
+			if (edited)
+			{
+				splash.Logo = logo is IAsset asset && asset.AssetPath != null ? AssetDatabase.GetGuid(asset.AssetPath) : null;
+				logoPath = splash.Logo != null ? AssetDatabase.GetPath(splash.Logo) : null;
+				logo = logoPath != null ? LoadLogo(logoPath) : null;
+				changed = true;
+			}
+
+			if (logo == null && !string.IsNullOrEmpty(splash.Logo))
+			{
+				ImGui.TextColored(EditorStyle.Warning, "The logo's asset is missing: builds show the background only.");
+			}
+
+			float size = splash.LogoSize;
+			FieldDrawer.Label("Logo Size", null, context);
+			edited = ImGui.SliderFloat("##logosize", ref size, 0.05f, 1f, "%.2f");
+			Tooltip("The logo fits into this fraction of the window's width and height, keeping its aspect ratio.");
+			context.Track(edited);
+			if (edited)
+			{
+				splash.LogoSize = Math.Clamp(size, 0.01f, 1f);
+				changed = true;
+			}
+
+			ImGui.EndDisabled();
+
+			DrawSplashPreview(splash, logo != null ? logoPath : null);
+			ImGui.PopID();
+			return changed;
+		}
+
+		/// <summary>
+		///     The splash screen at the aspect ratio of a build's window, as the player draws it: the logo's file values
+		///     over the background (the UI copy of the image, gamma storage, the way the build bakes it).
+		/// </summary>
+		private static void DrawSplashPreview(SplashScreenSettings splash, string logoPath)
+		{
+			var window = new BootConfig();
+			float width = Math.Min(ImGui.GetContentRegionAvail().X, 480f);
+			if (width < 16f)
+			{
+				return;
+			}
+
+			float height = width * window.Height / window.Width;
+			ImGui.Spacing();
+			ImGui.SeparatorText("Preview");
+			NVector2 start = ImGui.GetCursorScreenPos();
+			NVector2 extent = new NVector2(width, height);
+			ImDrawListPtr draw = ImGui.GetWindowDrawList();
+			Color4 color = splash.Enabled ? splash.BackgroundColor : Color4.Black;
+			draw.AddRectFilled(start, start + extent, ImGui.GetColorU32(new NVector4(Math.Clamp(color.R, 0f, 1f), Math.Clamp(color.G, 0f, 1f), Math.Clamp(color.B, 0f, 1f), 1f)));
+			Texture2D logo = splash.Enabled && logoPath != null ? TextureAssets.LoadForUI(logoPath, logoPath) : null;
+			if (logo != null && logo.Handle != 0 && logo.width > 0 && logo.height > 0)
+			{
+				float scale = Math.Min(width * splash.LogoSize / logo.width, height * splash.LogoSize / logo.height);
+				var size = new NVector2(logo.width * scale, logo.height * scale);
+				NVector2 min = start + (extent - size) * 0.5f;
+				draw.AddImage(EditorGui.Texture(logo.Handle), min, min + size);
+			}
+
+			draw.AddRect(start, start + extent, ImGui.GetColorU32(ImGuiCol.Border));
+			ImGui.Dummy(extent);
+			ImGui.TextDisabled(splash.Enabled
+				? $"{window.Width} x {window.Height}, the window of builds."
+				: "No splash screen: the window stays black until the start scene is ready.");
+		}
+
+		private static Texture2D LoadLogo(string assetPath)
+		{
+			try
+			{
+				return AssetDatabase.Load(typeof(Texture2D), assetPath) as Texture2D;
+			}
+			catch (Exception)
+			{
+				return null;
+			}
+		}
+
+		private static void Tooltip(string text)
+		{
+			if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+			{
+				ImGui.SetTooltip(text);
+			}
+		}
+
 		// ---------------------------------------------------------------- build
 
 		/// <summary>Scenes in the build, start scene and Run In Background (saved in Project.json), output folder, configuration, Build / Open Folder / Run and the log.</summary>
@@ -447,6 +598,23 @@ namespace LELEngine.Editor
 			lock (lines)
 			{
 				lines.Clear();
+			}
+
+			// The GI distance fields need the GL context, which is this thread's: baked now into the cache the build
+			// thread reads (usually fast: the fields of unchanged meshes are cached).
+			try
+			{
+				var scenes = new List<string>(settings.Scenes);
+				if (!scenes.Contains(settings.StartScene))
+				{
+					scenes.Insert(0, settings.StartScene);
+				}
+
+				DistanceFieldBaker.Collect(project, scenes, Append);
+			}
+			catch (Exception e)
+			{
+				Append("Warning: the distance fields could not be baked (" + e.Message + "); the player builds them.");
 			}
 
 			string output = Path.GetFullPath(outputFolder);

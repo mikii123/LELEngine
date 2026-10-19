@@ -64,6 +64,9 @@ namespace LELEngine
 
 		#region InternalFields
 
+		/// <summary>Distance fields a game build computed for this mesh (at the scales its scenes draw it); null outside builds.</summary>
+		internal List<Rendering.DistanceField.BakedDistanceField> BakedDistanceFields;
+
 		// Range of this mesh in the shared GPU buffers (Rendering.GeometryPool); valid while PoolGeneration matches.
 		internal int PoolGeneration;
 		internal int PoolFirstIndex;
