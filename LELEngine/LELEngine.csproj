@@ -5,6 +5,8 @@
     <RootNamespace>LELEngine</RootNamespace>
     <AssemblyName>LELEngine</AssemblyName>
     <Nullable>disable</Nullable>
+    <!-- OpenTK's GLFW functions take and return Window* (GraphicsThread, Window). -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <ImplicitUsings>disable</ImplicitUsings>
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
   </PropertyGroup>

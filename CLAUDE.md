@@ -12,6 +12,12 @@
   frame-count based automation (`exitframe`, `dumpframe`) covers well under a second: prefer `exitseconds=S` and
   `dump=1 dumpafter=S` for anything time dependent.
 - Never run `git commit` or `git push`; the user does that.
+- `dotnet publish LELEngine.Editor -c Release -r <rid>` gives an editor ready to build games: the player is published
+  into `Player/` by its own `dotnet publish` process (target `PublishPlayer`), for `PlayerRuntimeIdentifier` (default
+  the editor's RID; self-contained when set, `PlayerSelfContained=false` to turn off; none: framework-dependent with
+  every OS's GLFW), plus `LELEngine.Editor.Console.exe` on Windows. `dotnet build` copies the player's build output
+  (`CopyPlayer`). `GameBuilder` renames the player's app host (`LELEngine.Player.exe`, or `LELEngine.Player` for a
+  Linux / macOS player) to the game's name.
 - The editor starts with the project chooser in its own window (`LauncherWindow`) unless the command line names a
   project (`project=`, `newproject=`, `-projectPath`): automated runs must pass one. File > Close Project hides the
   editor's window and shows the chooser (same GL context: engine caches stay valid). The editor window's place and

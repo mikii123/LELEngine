@@ -88,7 +88,10 @@ namespace LELEngine.Editor
 
 			// 2. Player and engine.
 			log("Copying the player...");
-			string executable = ProjectGenerator.ProjectName(project) + ".exe";
+			// The player's app host: LELEngine.Player.exe on Windows, LELEngine.Player (no extension) when it was
+			// published for Linux or macOS (the editor's PlayerRuntimeIdentifier).
+			string host = File.Exists(Path.Combine(playerSource, "LELEngine.Player.exe")) ? "LELEngine.Player.exe" : "LELEngine.Player";
+			string executable = ProjectGenerator.ProjectName(project) + Path.GetExtension(host);
 			foreach (string file in Directory.GetFiles(playerSource, "*", SearchOption.AllDirectories))
 			{
 				string relative = Path.GetRelativePath(playerSource, file);
@@ -98,7 +101,7 @@ namespace LELEngine.Editor
 				}
 
 				// The executable takes the game's name; it still starts LELEngine.Player.dll.
-				string target = string.Equals(relative, "LELEngine.Player.exe", StringComparison.OrdinalIgnoreCase) ? executable : relative;
+				string target = string.Equals(relative, host, StringComparison.Ordinal) ? executable : relative;
 				Copy(file, Path.Combine(output, target));
 			}
 

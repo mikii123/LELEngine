@@ -179,9 +179,9 @@ namespace LELEngine
 		///     blank (white) for a moment, so on Windows the window is cloaked meanwhile (DWM composes it without
 		///     displaying it) until the image is presented and composed. A window already visible (fullscreen) is drawn.
 		/// </summary>
-		public void Show(Action drawFirstImage)
+		public unsafe void Show(Action drawFirstImage)
 		{
-			IntPtr handle = !IsVisible && OperatingSystem.IsWindows() ? GetWin32Window(Context.WindowPtr) : IntPtr.Zero;
+			IntPtr handle = !IsVisible && OperatingSystem.IsWindows() ? GLFW.GetWin32Window(WindowPtr) : IntPtr.Zero;
 			int on = 1;
 			bool cloaked = handle != IntPtr.Zero && DwmSetWindowAttribute(handle, DwmCloak, ref on, sizeof(int)) == 0;
 			IsVisible = true;
@@ -244,10 +244,6 @@ namespace LELEngine
 
 		[DllImport("dwmapi.dll")]
 		private static extern int DwmSetWindowAttribute(IntPtr window, int attribute, ref int value, int size);
-
-		/// <summary>The HWND of a GLFW window (the glfw3 library OpenTK loads; Windows only).</summary>
-		[DllImport("glfw3", EntryPoint = "glfwGetWin32Window")]
-		private static extern IntPtr GetWin32Window(IntPtr window);
 
 		#endregion
 	}

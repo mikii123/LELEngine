@@ -36,6 +36,37 @@
     <Copy SourceFiles="@(PlayerFiles)" DestinationFiles="@(PlayerFiles->'$(OutDir)Player\%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
   </Target>
 
+  <!-- Publish: the player is published into Player/ of the editor's publish folder, so one `dotnet publish` gives an
+       editor ready to build games. PlayerRuntimeIdentifier is the platform of the games (default: the editor's
+       runtime identifier; none: framework-dependent, every OS with .NET). With one the player is self-contained
+       (games run without .NET installed; PlayerSelfContained=false turns that off).
+         dotnet publish LELEngine.Editor -c Release -r win-x64
+         dotnet publish LELEngine.Editor -c Release -r win-x64 -p:PlayerRuntimeIdentifier=linux-x64 -->
+  <PropertyGroup>
+    <PlayerRuntimeIdentifier Condition="'$(PlayerRuntimeIdentifier)' == ''">$(RuntimeIdentifier)</PlayerRuntimeIdentifier>
+    <PlayerSelfContained Condition="'$(PlayerSelfContained)' == '' And '$(PlayerRuntimeIdentifier)' != ''">true</PlayerSelfContained>
+    <PlayerSelfContained Condition="'$(PlayerSelfContained)' == ''">false</PlayerSelfContained>
+  </PropertyGroup>
+
+  <Target Name="PublishPlayer" AfterTargets="Publish">
+    <PropertyGroup>
+      <!-- Absolute, without the trailing separator (a quoted path ending in \ would escape the quote). -->
+      <PlayerPublishDir>$([System.IO.Path]::GetFullPath($([System.IO.Path]::Combine('$(MSBuildProjectDirectory)', '$(PublishDir)', 'Player'))).TrimEnd('\').TrimEnd('/'))</PlayerPublishDir>
+      <PlayerProject>$([System.IO.Path]::GetFullPath('$(MSBuildProjectDirectory)\..\LELEngine.Player\LELEngine.Player.csproj'))</PlayerProject>
+      <!-- The dotnet running this build. -->
+      <PlayerDotnet>$(DOTNET_HOST_PATH)</PlayerDotnet>
+      <PlayerDotnet Condition="'$(PlayerDotnet)' == ''">dotnet</PlayerDotnet>
+      <PlayerArguments>publish "$(PlayerProject)" -c $(Configuration) -o "$(PlayerPublishDir)" --nologo</PlayerArguments>
+      <PlayerArguments Condition="'$(PlayerRuntimeIdentifier)' != ''">$(PlayerArguments) -r $(PlayerRuntimeIdentifier) --self-contained $(PlayerSelfContained)</PlayerArguments>
+      <PlayerDescription>$(PlayerRuntimeIdentifier), self-contained $(PlayerSelfContained)</PlayerDescription>
+      <PlayerDescription Condition="'$(PlayerRuntimeIdentifier)' == ''">framework-dependent, any OS</PlayerDescription>
+    </PropertyGroup>
+    <!-- A process of its own: its restore is for the player's runtime identifier (the editor's restore was for the
+         editor's), and none of the editor's publish options (single file, trimming) reach the player. -->
+    <Exec Command="&quot;$(PlayerDotnet)&quot; $(PlayerArguments)" />
+    <Message Importance="high" Text="Player ($(PlayerDescription)) -> $(PlayerPublishDir)" />
+  </Target>
+
   <!-- Console twin of the launcher: the same app host (it starts LELEngine.Editor.dll) with the PE subsystem set to
        console. -->
   <UsingTask TaskName="WriteConsoleAppHost" TaskFactory="RoslynCodeTaskFactory" AssemblyFile="$(MSBuildToolsPath)\Microsoft.Build.Tasks.Core.dll">
@@ -64,6 +95,11 @@
 
   <Target Name="ConsoleAppHost" AfterTargets="Build" Condition="'$(OS)' == 'Windows_NT' And Exists('$(OutDir)$(AssemblyName).exe')" Inputs="$(OutDir)$(AssemblyName).exe" Outputs="$(OutDir)$(AssemblyName).Console.exe">
     <WriteConsoleAppHost Source="$(OutDir)$(AssemblyName).exe" Destination="$(OutDir)$(AssemblyName).Console.exe" />
+  </Target>
+
+  <!-- The console twin in the publish folder too (build machines run batch mode through it). -->
+  <Target Name="PublishConsoleAppHost" AfterTargets="Publish" Condition="'$(OS)' == 'Windows_NT' And Exists('$(PublishDir)$(AssemblyName).exe')">
+    <WriteConsoleAppHost Source="$(PublishDir)$(AssemblyName).exe" Destination="$(PublishDir)$(AssemblyName).Console.exe" />
   </Target>
 
   <!-- Starter assets copied into every new project (Templates/NewProject/Assets in the editor output). -->
