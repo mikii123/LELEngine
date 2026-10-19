@@ -43,7 +43,8 @@ Built on .NET 10, OpenTK 4.9 (GLFW) and OpenGL 4.6 (4.3 minimum), developed and 
   callbacks on every component; fixed-step simulation with optional transform interpolation.
 
 **Rendering**
-- Pass-based renderer: HDR target, depth prepass, directional shadow maps, post-processing, GPU profiler.
+- Pass-based renderer: HDR target, depth prepass, cascaded directional shadow maps (tent filtered), post-processing,
+  GPU profiler.
 - GPU-driven geometry: one shared geometry pool, a GPU instance table, compute frustum culling and multi-draw
   indirect. Every hardware feature it relies on has a fallback path.
 - Global illumination:

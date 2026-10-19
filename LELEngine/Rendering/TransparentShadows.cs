@@ -41,11 +41,12 @@ namespace LELEngine.Rendering
 
 		/// <summary>
 		///     Draws the frame's transparent casters into the transmittance attachment of <paramref name="target" />
-		///     (the bound shadow map, its opaque casters already drawn): the attachment is added on first use and
-		///     cleared every time. Returns it, or null when nothing was drawn (receivers then ignore it). Leaves the
-		///     colour writes off, as the opaque casters had them.
+		///     (the bound shadow map, its opaque casters already drawn) within the current viewport (a cascade's tile):
+		///     the attachment is added on first use and cleared when <paramref name="clear" /> is set (the first tile).
+		///     Returns it, or null when nothing was drawn (receivers then ignore it). Leaves the colour writes off, as
+		///     the opaque casters had them.
 		/// </summary>
-		public static RenderTexture Draw(RenderContext context, Framebuffer target, Matrix4 lightView, Matrix4 lightProjection)
+		public static RenderTexture Draw(RenderContext context, Framebuffer target, Matrix4 lightView, Matrix4 lightProjection, bool clear = true)
 		{
 			ShaderProgram program = context.TransparentShadowProgram;
 			if (!HasCasters(context) || program == null || !program.IsLinked)
@@ -55,14 +56,22 @@ namespace LELEngine.Rendering
 
 			if (target.ColorAttachments.Count == 0)
 			{
+				// Binding again resets the viewport to the whole target: the tile's is restored.
+				int[] viewport = new int[4];
+				GL.GetInteger(GetPName.Viewport, viewport);
 				target.AddColorAttachment(RenderTextureFormat.RGBA16F);
 				target.Validate();
 				target.Bind();
+				GL.Viewport(viewport[0], viewport[1], viewport[2], viewport[3]);
+				clear = true;
 			}
 
 			RenderTexture transmittance = target.ColorAttachments[0];
 			GLState.SetColorWrite(true);
-			GL.ClearBuffer(ClearBuffer.Color, 0, new[] { 1f, 1f, 1f, 1f });
+			if (clear)
+			{
+				GL.ClearBuffer(ClearBuffer.Color, 0, new[] { 1f, 1f, 1f, 1f });
+			}
 
 			// Behind an opaque caster the light is gone already: depth tested, not written (casters do not hide each other).
 			GL.DepthMask(false);

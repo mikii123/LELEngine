@@ -4,8 +4,9 @@ using Hexa.NET.ImGui;
 namespace LELEngine.Editor
 {
 	/// <summary>
-	///     The active scene's lighting: environment, shadow reach, the GI volume and strengths. How shadows and GI are
-	///     computed is project-wide (<see cref="ProjectSettingsWindow" />).
+	///     The active scene's lighting: environment, shadow reach, the GI volume and strengths (those the selected GI
+	///     method reads). How shadows and GI are computed is project-wide (<see cref="ProjectSettingsWindow" />); the GI
+	///     method can be chosen here too.
 	/// </summary>
 	internal sealed class LightingPanel
 	{
@@ -84,13 +85,25 @@ namespace LELEngine.Editor
 			if (ImGui.CollapsingHeader("Global Illumination"))
 			{
 				ImGui.PushID("gi");
-				if (FieldDrawer.DrawFields(scene.Settings.GI, context))
+
+				// The method is project-wide: choosing it here is a project settings edit (undo, saved with them).
+				context.UndoTarget = ProjectSettings.Current;
+				if (ProjectSettingsWindow.DrawGIMethod(Lighting.GI, context))
+				{
+					editor.NotifySceneChanged();
+				}
+
+				context.UndoTarget = scene.Settings;
+				ImGui.TextDisabled("Its quality settings: Edit > Project Settings > Lighting.");
+				ImGui.Spacing();
+
+				GIMode mode = Lighting.GI.Mode;
+				if (FieldDrawer.DrawFields(scene.Settings.GI, context, filter: field => ProjectSettingsWindow.IsUsedBy(field, mode)))
 				{
 					Lighting.GI.InvalidateStatic();
 					changed = true;
 				}
 
-				ImGui.TextDisabled("Method (" + Lighting.GI.Mode + ") and quality: Edit > Project Settings > Lighting.");
 				ImGui.PopID();
 			}
 

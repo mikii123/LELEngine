@@ -67,13 +67,16 @@ namespace LELEngine.Editor
 	{
 		#region PublicMethods
 
-		/// <summary>Draws every serialized field of <paramref name="target" />; true when one changed.</summary>
-		public static bool DrawFields(object target, InspectorContext context, int depth = 0)
+		/// <summary>
+		///     Draws every serialized field of <paramref name="target" /> (only those <paramref name="filter" /> accepts,
+		///     when given); true when one changed.
+		/// </summary>
+		public static bool DrawFields(object target, InspectorContext context, int depth = 0, Func<SerializedField, bool> filter = null)
 		{
 			bool changed = false;
 			foreach (SerializedField field in SerializationUtility.GetFields(target.GetType()))
 			{
-				if (field.HideInInspector)
+				if (field.HideInInspector || (filter != null && !filter(field)))
 				{
 					continue;
 				}

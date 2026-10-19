@@ -177,32 +177,83 @@ namespace LELEngine.Editor
 
 		// ---------------------------------------------------------------- lighting
 
+		/// <summary>
+		///     The GI method combo (project-wide; the context's undo target must be the project settings). Also drawn at
+		///     the top of the Lighting panel's GI section.
+		/// </summary>
+		internal static bool DrawGIMethod(GlobalIlluminationSettings gi, InspectorContext context)
+		{
+			FieldDrawer.Label("GI Method", null, context);
+			GIMode selected = gi.Mode;
+			if (ImGui.BeginCombo("##gimethod", SerializationUtility.NicifyName(selected.ToString())))
+			{
+				foreach (GIMode mode in Enum.GetValues<GIMode>())
+				{
+					if (ImGui.Selectable(SerializationUtility.NicifyName(mode.ToString()), mode == selected))
+					{
+						selected = mode;
+					}
+				}
+
+				ImGui.EndCombo();
+			}
+
+			bool changed = selected != gi.Mode;
+			context.Track(changed);
+			if (changed)
+			{
+				gi.Mode = selected;
+				gi.InvalidateStatic();
+			}
+
+			return changed;
+		}
+
+		/// <summary>Whether a GI setting is read by <paramref name="mode" /> (settings without [GIMethod] are read by both).</summary>
+		internal static bool IsUsedBy(SerializedField field, GIMode mode)
+		{
+			GIMode? only = GIMethodAttribute.Of(field.Field);
+			return only == null || only == mode;
+		}
+
 		private bool DrawLighting(ProjectSettings settings)
 		{
+			// The method comes first: the GI sections below show only the settings it reads.
+			GlobalIlluminationSettings gi = settings.GI;
+			bool changed = DrawGIMethod(gi, context);
+			ImGui.Spacing();
 			ImGui.TextDisabled("How shadows and global illumination are computed in every scene.");
 			ImGui.TextDisabled("A scene's environment, shadow reach and GI volume are in the Lighting panel.");
 			ImGui.Spacing();
 
-			bool changed = false;
 			if (ImGui.CollapsingHeader("Shadows", ImGuiTreeNodeFlags.DefaultOpen))
 			{
 				ImGui.PushID("shadows");
 				changed |= FieldDrawer.DrawFields(settings.Shadows, context);
+				// Below the cascade count (the last field): the splits, which the fields leave out.
+				changed |= CascadeSplitsEditor.Draw(settings.Shadows, context);
 				ImGui.PopID();
 			}
 
-			if (ImGui.CollapsingHeader("Global Illumination", ImGuiTreeNodeFlags.DefaultOpen))
+			// Settings both methods read, then those of the selected method only (the header keeps its id, and so
+			// its open state, when the method changes).
+			GIMode mode = gi.Mode;
+			ImGui.PushID("gi");
+			if (ImGui.CollapsingHeader("Global Illumination", ImGuiTreeNodeFlags.DefaultOpen)
+				&& FieldDrawer.DrawFields(gi, context, filter: field => field.Name != nameof(GlobalIlluminationSettings.Mode) && GIMethodAttribute.Of(field.Field) == null))
 			{
-				ImGui.PushID("gi");
-				if (FieldDrawer.DrawFields(settings.GI, context))
-				{
-					settings.GI.InvalidateStatic();
-					changed = true;
-				}
-
-				ImGui.PopID();
+				gi.InvalidateStatic();
+				changed = true;
 			}
 
+			if (ImGui.CollapsingHeader(SerializationUtility.NicifyName(mode.ToString()) + "###method", ImGuiTreeNodeFlags.DefaultOpen)
+				&& FieldDrawer.DrawFields(gi, context, filter: field => GIMethodAttribute.Of(field.Field) == mode))
+			{
+				gi.InvalidateStatic();
+				changed = true;
+			}
+
+			ImGui.PopID();
 			return changed;
 		}
 

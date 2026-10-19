@@ -72,16 +72,11 @@ namespace LELEngine.Rendering
 			float extent = gi.GridSize * 0.87f;
 			LightProjection = Matrix4.CreateOrthographicOffCenter(-extent, extent, -extent, extent, 0.01f, gi.GridSize * 2f);
 
-			ShadowSettings shadows = Lighting.Shadows;
-
 			target.Bind();
 			GLState.SetDepth(true, true);
 			GLState.SetCull(true, TriangleFace.Back);
 			GLState.SetColorWrite(false);
 			GL.Clear(ClearBufferMask.DepthBufferBit);
-
-			GL.Enable(EnableCap.PolygonOffsetFill);
-			GL.PolygonOffset(shadows.PolygonOffsetFactor, shadows.PolygonOffsetUnits);
 
 			context.DepthOnlyProgram.Use();
 			context.DepthOnlyProgram.SetMatrix4("viewMatrix", LightView);
@@ -97,7 +92,6 @@ namespace LELEngine.Rendering
 
 			Transmittance = TransparentShadows.Draw(context, target, LightView, LightProjection);
 
-			GL.Disable(EnableCap.PolygonOffsetFill);
 			GLState.SetColorWrite(true);
 			GL.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
 		}
@@ -108,12 +102,7 @@ namespace LELEngine.Rendering
 		/// </summary>
 		public void SetUniforms(ShaderProgram program, int transmittanceUnit)
 		{
-			ShadowSettings shadows = Lighting.Shadows;
-			program.SetInt("shadowsEnabled", shadows.Enabled ? 1 : 0);
-			program.SetMatrix4("lightSpaceMatrix", LightView * LightProjection);
-			program.SetFloat("shadowNormalBias", shadows.NormalBias);
-			program.SetFloat("shadowDepthBias", shadows.DepthBias);
-			program.SetTexture("ShadowMap", TextureTarget.Texture2D, target.DepthAttachment.Handle, Lighting.ShadowMapTextureUnit);
+			Lighting.SetShadowMapUniforms(program, LightView, LightProjection, target.DepthAttachment.Handle, Lighting.ShadowMapTextureUnit);
 			TransparentShadows.SetUniforms(program, Transmittance, transmittanceUnit);
 		}
 

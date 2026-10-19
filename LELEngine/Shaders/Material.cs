@@ -541,7 +541,6 @@ namespace LELEngine.Shaders
 				case "lightPosition":
 				case "CamPosition":
 				case "lightColor":
-				case "lightSpaceMatrix":
 				case "ShadowMap":
 				case "VoxelRadiance":
 				case "IndirectDiffuse":

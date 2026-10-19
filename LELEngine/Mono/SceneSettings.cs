@@ -42,10 +42,10 @@ namespace LELEngine
 	{
 		#region PublicFields
 
-		/// <summary>Half extent of the orthographic shadow frustum around the camera, in world units.</summary>
+		/// <summary>Shadows reach this far from the camera (world units); the cascades split the view up to it.</summary>
 		public float Distance = 60f;
 
-		/// <summary>Half depth range of the shadow frustum along the light direction.</summary>
+		/// <summary>Shadow casters are drawn up to this far toward the light from a cascade's center (and as far behind it).</summary>
 		public float DepthRange = 200f;
 
 		#endregion
@@ -79,7 +79,7 @@ namespace LELEngine
 		///     Weight of indirect light fed back from the previous frame's radiance volume when lighting voxels.
 		///     1 gives multi-bounce lighting converging over a few frames; 0 keeps a single bounce.
 		/// </summary>
-		public float BounceStrength = 1f;
+		[GIMethod(GIMode.VoxelConeTracing)] public float BounceStrength = 1f;
 
 		/// <summary>Radiance from outside the scene seen by cones that escape (linear RGB).</summary>
 		public Vector3 SkyRadiance = Vector3.Zero;

@@ -1,4 +1,5 @@
 using System;
+using System.Reflection;
 using LELEngine.Rendering;
 using LELEngine.Shaders;
 using OpenTK.Graphics.OpenGL4;
@@ -67,10 +68,10 @@ namespace LELEngine
 		/// </summary>
 		public const int SkyboxTextureUnit = 16;
 
-		/// <summary>World -> light clip space. Written by the shadow pass every frame.</summary>
-		public static Matrix4 LightSpaceMatrix = Matrix4.Identity;
+		/// <summary>The cascades of <see cref="ShadowMap" />. Written by the shadow pass every frame.</summary>
+		public static readonly ShadowCascadeData ShadowCascades = new ShadowCascadeData();
 
-		/// <summary>Depth texture of the directional light, or null when shadows are off.</summary>
+		/// <summary>Depth texture of the directional light (an atlas of its cascades), or null when shadows are off.</summary>
 		public static RenderTexture ShadowMap;
 
 		/// <summary>
@@ -85,6 +86,12 @@ namespace LELEngine
 		///     default (invalid) binding while the cache is off.
 		/// </summary>
 		public static RadianceCacheBinding RadianceCache;
+
+		#endregion
+
+		#region PrivateFields
+
+		private static readonly string[] ShadowMatrixNames = { "shadowMatrices[0]", "shadowMatrices[1]", "shadowMatrices[2]", "shadowMatrices[3]" };
 
 		#endregion
 
@@ -275,18 +282,54 @@ namespace LELEngine
 
 		public static void SetShadowUniforms(ShaderProgram program, bool receiveShadows)
 		{
-			bool enabled = receiveShadows && Shadows.Enabled && ShadowMap != null;
+			ShadowCascadeData cascades = ShadowCascades;
+			bool enabled = receiveShadows && Shadows.Enabled && ShadowMap != null && cascades.Count > 0;
 			program.SetInt("shadowsEnabled", enabled ? 1 : 0);
 			if (!enabled)
 			{
 				return;
 			}
 
-			program.SetMatrix4("lightSpaceMatrix", LightSpaceMatrix);
-			program.SetFloat("shadowNormalBias", Shadows.NormalBias);
-			program.SetFloat("shadowDepthBias", Shadows.DepthBias);
+			program.SetInt("shadowCascadeCount", cascades.Count);
+			for (int i = 0; i < cascades.Count; i++)
+			{
+				program.SetMatrix4(ShadowMatrixNames[i], cascades.Matrices[i]);
+			}
+
+			program.SetVector4Array("shadowCascadeSpheres", cascades.Spheres);
+			program.SetVector4("shadowFade", new Vector4(cascades.FadeCenter, cascades.FadeDistance));
+			SetShadowBiasUniforms(program);
 			program.SetTexture("ShadowMap", TextureTarget.Texture2D, ShadowMap.Handle, ShadowMapTextureUnit);
 			TransparentShadows.SetUniforms(program, ShadowTransmittance, ShadowTransmittanceTextureUnit);
+		}
+
+		/// <summary>
+		///     Binds one shadow map that covers a region on its own (the GI passes' grid-covering maps) for
+		///     Engine/Shadows.glsl: a single cascade filling the map, no fade. The transmittance is bound separately.
+		/// </summary>
+		public static void SetShadowMapUniforms(ShaderProgram program, Matrix4 lightView, Matrix4 lightProjection, int depthTexture, int textureUnit)
+		{
+			program.SetInt("shadowsEnabled", Shadows.Enabled ? 1 : 0);
+			program.SetInt("shadowCascadeCount", 1);
+			program.SetMatrix4(ShadowMatrixNames[0], ShadowTextureMatrix(lightView, lightProjection, 0, 1, 1));
+			program.SetVector4("shadowFade", Vector4.Zero);
+			SetShadowBiasUniforms(program);
+			program.SetTexture("ShadowMap", TextureTarget.Texture2D, depthTexture, textureUnit);
+		}
+
+		/// <summary>
+		///     World position to shadow map texture space for Engine/Shadows.glsl: xy inside tile <paramref name="tile" />
+		///     of an atlas of <paramref name="columns" /> x <paramref name="rows" /> tiles (row by row from the bottom
+		///     left), z the depth 0..1.
+		/// </summary>
+		public static Matrix4 ShadowTextureMatrix(Matrix4 lightView, Matrix4 lightProjection, int tile, int columns, int rows)
+		{
+			float sx = 1f / columns;
+			float sy = 1f / rows;
+			float ox = tile % columns * sx;
+			float oy = tile / columns * sy;
+			Matrix4 clipToTexture = Matrix4.CreateScale(0.5f * sx, 0.5f * sy, 0.5f) * Matrix4.CreateTranslation(ox + 0.5f * sx, oy + 0.5f * sy, 0.5f);
+			return lightView * lightProjection * clipToTexture;
 		}
 
 		/// <summary>giTraceMode of Engine/VoxelConeTracingCore.glsl: 0 voxel cones, 1 SDF detail, 2 SDF cones (voxel cones without the field).</summary>
@@ -322,7 +365,40 @@ namespace LELEngine
 
 		#endregion
 
+		#region PrivateMethods
+
+		private static void SetShadowBiasUniforms(ShaderProgram program)
+		{
+			program.SetFloat("shadowDepthBias", Shadows.DepthBiasTexels);
+			program.SetFloat("shadowNormalBias", Shadows.NormalBiasTexels);
+		}
+
+		#endregion
+
 		#region NestedTypes
+
+		/// <summary>
+		///     The camera shadow map's cascades this frame (see <see cref="ShadowCascades" />): each covers a slice of the
+		///     view up to the shadow distance, rendered into its own tile of <see cref="ShadowMap" />.
+		/// </summary>
+		public sealed class ShadowCascadeData
+		{
+			public const int MaxCount = 4;
+
+			/// <summary>Cascades in use, 0 when there is no shadow map this frame.</summary>
+			public int Count;
+
+			/// <summary>World -> the cascade's tile of the map (<see cref="ShadowTextureMatrix" />).</summary>
+			public readonly Matrix4[] Matrices = new Matrix4[MaxCount];
+
+			/// <summary>xyz = center, w = squared radius inside which a receiver uses the cascade (world units).</summary>
+			public readonly Vector4[] Spheres = new Vector4[MaxCount];
+
+			/// <summary>Shadows fade out toward <see cref="FadeDistance" /> from <see cref="FadeCenter" /> (the camera).</summary>
+			public Vector3 FadeCenter;
+
+			public float FadeDistance;
+		}
 
 		/// <summary>GL handles and layout of a frame's radiance cache (see <see cref="RadianceCache" />).</summary>
 		public struct RadianceCacheBinding
@@ -391,7 +467,9 @@ namespace LELEngine
 
 	/// <summary>
 	///     Directional shadow map quality, project-wide (part of <see cref="ProjectSettings" />); its reach comes
-	///     from the active scene (<see cref="Distance" />, <see cref="DepthRange" />).
+	///     from the active scene (<see cref="Distance" />, <see cref="DepthRange" />). The camera's map is split into
+	///     cascades, as in Unity: each covers a slice of the view up to the shadow distance, the near ones small and
+	///     therefore sharp.
 	/// </summary>
 	[Serializable]
 	public sealed class ShadowSettings
@@ -400,33 +478,57 @@ namespace LELEngine
 
 		public bool Enabled = true;
 
-		/// <summary>Shadow map resolution (square).</summary>
+		/// <summary>
+		///     Resolution of the camera shadow map. With cascades it is an atlas: two get half of it each (side by
+		///     side, the map half as tall), four a quarter each (2 x 2).
+		/// </summary>
 		public int MapSize = 2048;
 
-		/// <summary>The active scene's half extent of the orthographic shadow frustum around the camera (<see cref="SceneShadowSettings" />).</summary>
+		/// <summary>
+		///     Receivers move this many shadow-map texels toward the light before the depth comparison, against shadow
+		///     acne (too much detaches the shadows from their casters). Scaled by the soft filter's radius, as in Unity.
+		/// </summary>
+		public float DepthBiasTexels = 1f;
+
+		/// <summary>Receivers move this many texels along their normal, the more the more grazing the light (scaled like the depth bias).</summary>
+		public float NormalBiasTexels = 1f;
+
+		// The cascade count comes last: the editor draws the splits on a bar below it (the split fields are hidden).
+
+		public ShadowCascadeCount Cascades = ShadowCascadeCount.Four;
+
+		/// <summary>With two cascades: where the second begins, as a fraction of the shadow distance.</summary>
+		[HideInInspector] public float TwoCascadeSplit = 0.333f;
+
+		/// <summary>With four cascades: where the second, third and fourth begin, as increasing fractions of the shadow distance.</summary>
+		[HideInInspector] public Vector3 FourCascadeSplits = new Vector3(0.067f, 0.2f, 0.467f);
+
+		/// <summary>
+		///     The active scene's shadow distance (<see cref="SceneShadowSettings" />): shadows reach this far from the
+		///     camera and fade out over the last tenth.
+		/// </summary>
 		public float Distance
 		{
 			get => Lighting.SceneShadows.Distance;
 			set => Lighting.SceneShadows.Distance = value;
 		}
 
-		/// <summary>The active scene's half depth range of the shadow frustum along the light direction.</summary>
+		/// <summary>The active scene's reach of the shadow casters toward the light from a cascade's center (and as far behind it).</summary>
 		public float DepthRange
 		{
 			get => Lighting.SceneShadows.DepthRange;
 			set => Lighting.SceneShadows.DepthRange = value;
 		}
 
-		/// <summary>Offset along the surface normal before projecting into the shadow map (world units).</summary>
-		public float NormalBias = 0.05f;
-
-		/// <summary>Constant depth bias in shadow-map depth units.</summary>
-		public float DepthBias = 0.0005f;
-
-		public float PolygonOffsetFactor = 2f;
-		public float PolygonOffsetUnits = 4f;
-
 		#endregion
+	}
+
+	/// <summary>How many cascades the camera shadow map is split into (<see cref="ShadowSettings.Cascades" />).</summary>
+	public enum ShadowCascadeCount
+	{
+		One = 1,
+		Two = 2,
+		Four = 4
 	}
 
 	/// <summary>
@@ -504,38 +606,41 @@ namespace LELEngine
 
 		// ---- Project-wide ----
 
+		// Fields marked [GIMethod] are read by one method only (the editor shows them while it is selected); the
+		// others by both.
+
 		/// <summary>Voxels per axis. Memory is Resolution^3 * 8 bytes (RGBA16F) plus mips.</summary>
-		public int Resolution = 128;
+		[GIMethod(GIMode.VoxelConeTracing)] public int Resolution = 128;
 
 		/// <summary>Maximum cone length in world units. 0 uses the grid size.</summary>
-		public float ConeMaxDistance;
+		[GIMethod(GIMode.VoxelConeTracing)] public float ConeMaxDistance;
 
 		/// <summary>
 		///     Trace cones once per reduced-resolution pixel (GIResolvePass) instead of per material fragment.
 		///     Requires the geometry prepass. Roughly 1 / ResolveScale^2 fewer cone traces.
 		/// </summary>
-		public bool ScreenSpaceResolve = true;
+		[GIMethod(GIMode.VoxelConeTracing)] public bool ScreenSpaceResolve = true;
 
 		/// <summary>Resolution of the voxel GI resolve relative to the screen (0.5 = half width and height).</summary>
-		public float ResolveScale = 0.5f;
-		/// <summary>
-		///     Resolution of the Lumen screen probe integration relative to the screen. 1 = per pixel, as in Lumen: at
-		///     lower values detail smaller than two pixels (distant small objects) gets the blended lighting of its
-		///     neighbours and turns into mush. Costs about 0.7 ms more than 0.5 on the Intel iGPU at 1280x720.
-		/// </summary>
-		public float ScreenProbeResolveScale = 1f;
+		[GIMethod(GIMode.VoxelConeTracing)] public float ResolveScale = 0.5f;
 
-		/// <summary>Re-voxelize dynamic (non-static) objects every N frames. 1 = every frame.</summary>
+		/// <summary>
+		///     Re-voxelize dynamic (non-static) objects every N frames; Lumen rebuilds the dynamic part of the global
+		///     distance field at the same rate. 1 = every frame.
+		/// </summary>
 		public int DynamicUpdateInterval = 1;
 
 		/// <summary>Recompute voxel lighting (sun, shadows, bounce) every N frames. 1 = every frame.</summary>
-		public int LightingUpdateInterval = 1;
+		[GIMethod(GIMode.VoxelConeTracing)] public int LightingUpdateInterval = 1;
 
-		/// <summary>Resolution of the shadow map covering the whole voxel volume, used when lighting voxels.</summary>
+		/// <summary>
+		///     Resolution of the shadow map covering the whole GI volume, used when lighting voxels (voxel cone
+		///     tracing) or surface cache cards (Lumen).
+		/// </summary>
 		public int GridShadowMapSize = 1024;
 
 		/// <summary>Cones traced per voxel for the bounce: 6 (hemisphere layout) or 1 (single wide cone, cheaper).</summary>
-		public int BounceCones = 6;
+		[GIMethod(GIMode.VoxelConeTracing)] public int BounceCones = 6;
 
 		/// <summary>
 		///     Incremented by <see cref="InvalidateStatic" /> (call it after moving or re-materialing a static
@@ -552,69 +657,72 @@ namespace LELEngine
 
 		// ---- Lumen surface cache (SurfaceCachePass) ----
 
-		public int SurfaceCacheAtlasSize = 1024;
+		[Header("Surface Cache")]
+		[GIMethod(GIMode.Lumen)] public int SurfaceCacheAtlasSize = 1024;
 
 		/// <summary>Card texels per world meter.</summary>
-		public int SurfaceCacheTexelsPerMeter = 6;
+		[GIMethod(GIMode.Lumen)] public int SurfaceCacheTexelsPerMeter = 6;
 
-		public int SurfaceCacheMaxCardSize = 96;
+		[GIMethod(GIMode.Lumen)] public int SurfaceCacheMaxCardSize = 96;
 
 		/// <summary>Kept for command-line compatibility; radiosity now traces 16 rays per 4x4-texel probe per frame.</summary>
-		public int RadiosityRays = 16;
+		[GIMethod(GIMode.Lumen)] public int RadiosityRays = 16;
 
 		/// <summary>Constant history weight of the radiosity probes per update when RadiosityMaxHistorySamples is 0.</summary>
-		public float RadiosityBlend = 0.9f;
+		[GIMethod(GIMode.Lumen)] public float RadiosityBlend = 0.9f;
 
 		/// <summary>
 		///     Sample-count accumulation of the radiosity probes once the scene has been quiet for
 		///     RadianceCacheIdleAfterFrames: the history weight grows with the samples held up to this cap (0 = the
 		///     constant RadiosityBlend instead).
 		/// </summary>
-		public float RadiosityMaxHistorySamples = 64f;
+		[GIMethod(GIMode.Lumen)] public float RadiosityMaxHistorySamples = 64f;
 
 		/// <summary>Cap of the radiosity probe history while the scene is changing or has just changed (short lag).</summary>
-		public float RadiosityMovingHistorySamples = 16f;
+		[GIMethod(GIMode.Lumen)] public float RadiosityMovingHistorySamples = 16f;
 
 		/// <summary>
 		///     While the scene is quiet (see RadianceCacheIdleAfterFrames) only 1 / this of the radiosity probe rows
 		///     is refreshed per frame, round robin. 1 = always refresh everything.
 		/// </summary>
-		public int RadiosityIdleDivisor = 4;
-
-		/// <summary>
-		///     Radiance cache lookups whose target is at least 4 probe spacings away skip the per-probe target
-		///     visibility pass (parallax below a texel): a third fewer atlas fetches for far-field rays.
-		/// </summary>
-		public bool RadianceCacheFarShortcut = true;
+		[GIMethod(GIMode.Lumen)] public int RadiosityIdleDivisor = 4;
 
 		// ---- Lumen screen probe gather (ScreenProbeGatherPass) ----
 
+		/// <summary>
+		///     Resolution of the Lumen screen probe integration relative to the screen. 1 = per pixel, as in Lumen: at
+		///     lower values detail smaller than two pixels (distant small objects) gets the blended lighting of its
+		///     neighbours and turns into mush. Costs about 0.7 ms more than 0.5 on the Intel iGPU at 1280x720.
+		/// </summary>
+		[Header("Screen Probes")]
+		[GIMethod(GIMode.Lumen)] public float ScreenProbeResolveScale = 1f;
+
 		/// <summary>Pixels between screen probes.</summary>
-		public int ProbeSpacing = 16;
+		[GIMethod(GIMode.Lumen)] public int ProbeSpacing = 16;
 
 		/// <summary>
 		///     Adaptive probe placement (Lumen): extra probes where the uniform grid cannot be interpolated (thin
 		///     geometry, silhouettes), placed hierarchically at ProbeSpacing / 2 and / 4 pixel steps.
 		/// </summary>
-		public bool ProbeAdaptivePlacement = true;
+		[GIMethod(GIMode.Lumen)] public bool ProbeAdaptivePlacement = true;
 
 		/// <summary>Capacity of adaptive probes as a fraction of the uniform probe count.</summary>
-		public float ProbeAdaptiveFraction = 0.5f;
+		[GIMethod(GIMode.Lumen)] public float ProbeAdaptiveFraction = 0.5f;
 
 		/// <summary>A candidate pixel gets an adaptive probe when its interpolation weight from existing probes is below this.</summary>
-		public float ProbeAdaptiveMinCoverage = 0.05f;
+		[GIMethod(GIMode.Lumen)] public float ProbeAdaptiveMinCoverage = 0.05f;
 
 		/// <summary>
 		///     The finest adaptive placement level only visits screen tiles the coarser level flagged (a candidate
 		///     below 0.5 coverage, or a finer candidate on another surface). Pays off in views dominated by large flat
 		///     surfaces; in the test scene the flagging costs as much as it saves, so it is off by default.
 		/// </summary>
-		public bool ProbeAdaptiveFlaggedRefine = false;
+		[GIMethod(GIMode.Lumen)] public bool ProbeAdaptiveFlaggedRefine = false;
 
-		public bool ProbeSpatialFilter = true;
+		[GIMethod(GIMode.Lumen)] public bool ProbeSpatialFilter = true;
 
 		/// <summary>Per-frame jitter of probe anchors and ray directions (needed for convergence; off = diagnostics).</summary>
-		public bool ProbeJitter = true;
+		[GIMethod(GIMode.Lumen)] public bool ProbeJitter = true;
 
 		/// <summary>
 		///     How far a probe's anchor pixel moves inside its cell from frame to frame, as a fraction of the cell
@@ -623,77 +731,78 @@ namespace LELEngine
 		///     which measured 2-3x less temporal variation in a static view. Set to 1 to average probe placement
 		///     over time instead (thin geometry gets covered more often, lighting breathes more).
 		/// </summary>
-		public float ProbeAnchorJitter = 0f;
+		[GIMethod(GIMode.Lumen)] public float ProbeAnchorJitter = 0f;
 
 		/// <summary>Jitter ray directions inside their octahedral texel every frame.</summary>
-		public bool ProbeDirectionJitter = true;
+		[GIMethod(GIMode.Lumen)] public bool ProbeDirectionJitter = true;
 
 		/// <summary>
 		///     Structured importance sampling: directions ranked by last frame's radiance times cosine; the 16 most
 		///     important ones get 2x2 rays, the other 48 reuse their history. Ray budget stays 64 per probe.
 		/// </summary>
-		public bool ProbeImportanceSampling = true;
+		[GIMethod(GIMode.Lumen)] public bool ProbeImportanceSampling = true;
 
 		/// <summary>Radius of the spatial probe filter, in probes (1 = 3x3 neighbourhood).</summary>
-		public int ProbeFilterRadius = 1; // the filter kernel is fixed at 3x3 probes; kept for CLI compatibility
+		[GIMethod(GIMode.Lumen)] public int ProbeFilterRadius = 1; // the filter kernel is fixed at 3x3 probes; kept for CLI compatibility
 
 		/// <summary>
 		///     A neighbour probe's sample is reused only when its hit point lies within this many degrees of the
 		///     centre probe's own ray direction (Lumen's angle-error rejection).
 		/// </summary>
-		public float ProbeFilterMaxAngle = 10f;
+		[GIMethod(GIMode.Lumen)] public float ProbeFilterMaxAngle = 10f;
 
 		/// <summary>
 		///     Temporal probe filter (Lumen's TemporalFilterProbes): weight of the reprojected previous radiance when a
 		///     direction is retraced. Reduces the frame-to-frame colour noise of probes that see small bright surfaces.
 		/// </summary>
-		public float ProbeHistoryWeight = 0.5f;
+		[GIMethod(GIMode.Lumen)] public float ProbeHistoryWeight = 0.5f;
 
 		/// <summary>A probe's history is used only when the previous probe lay within this distance (world units).</summary>
-		public float ProbeHistoryDistance = 0.3f;
+		[GIMethod(GIMode.Lumen)] public float ProbeHistoryDistance = 0.3f;
 
 		/// <summary>
 		///     Sample-count accumulation of probe radiance: a texel's history weight is n / (n + 1) up to this many
 		///     samples, so static lighting converges to a noise-free value; 0 falls back to the constant
 		///     <see cref="ProbeHistoryWeight" />. Probes whose lighting changed restart their counts (see below).
 		/// </summary>
-		public float ProbeMaxHistorySamples = 32f;
+		[GIMethod(GIMode.Lumen)] public float ProbeMaxHistorySamples = 32f;
 
 		/// <summary>
 		///     Relative change of a probe's summed traced radiance versus its history that counts as a lighting
 		///     change and restarts its accumulation (the change detector in ProbeCompose.shader).
 		/// </summary>
-		public float ProbeChangeThreshold = 0.5f;
+		[GIMethod(GIMode.Lumen)] public float ProbeChangeThreshold = 0.5f;
 
 		/// <summary>History weight of the per-pixel temporal accumulation (0 = off).</summary>
-		public float ProbeTemporalBlend = 0.9f;
+		[GIMethod(GIMode.Lumen)] public float ProbeTemporalBlend = 0.9f;
 
 		/// <summary>Length of the depth-buffer march at the start of every probe ray (world units, 0 = off).</summary>
-		public float ScreenTraceDistance = 1.5f;
+		[GIMethod(GIMode.Lumen)] public float ScreenTraceDistance = 1.5f;
 
-		public int ScreenTraceSteps = 16;
+		[GIMethod(GIMode.Lumen)] public int ScreenTraceSteps = 16;
 
 		/// <summary>Depth-buffer surfaces are assumed this thick when deciding whether a ray passed behind them.</summary>
-		public float ScreenTraceThickness = 0.3f;
+		[GIMethod(GIMode.Lumen)] public float ScreenTraceThickness = 0.3f;
 
 		/// <summary>Maximum plane distance (world units) for a probe to be used by a pixel or a neighbour.</summary>
-		public float ProbePlaneTolerance = 0.3f;
+		[GIMethod(GIMode.Lumen)] public float ProbePlaneTolerance = 0.3f;
 
 		// ---- Lumen world-space radiance cache (RadianceCachePass) ----
 
-		public bool RadianceCacheEnabled = true;
+		[Header("Radiance Cache")]
+		[GIMethod(GIMode.Lumen)] public bool RadianceCacheEnabled = true;
 
 		/// <summary>Probes per axis over the GI grid; probe spacing is GridSize / (n - 1).</summary>
-		public int RadianceCacheProbesPerAxis = 17;
+		[GIMethod(GIMode.Lumen)] public int RadianceCacheProbesPerAxis = 17;
 
 		/// <summary>Stored octahedral map resolution per probe: 8 or 16 (Lumen stores 16).</summary>
-		public int RadianceCacheProbeResolution = 16;
+		[GIMethod(GIMode.Lumen)] public int RadianceCacheProbeResolution = 16;
 
 		/// <summary>
 		///     Rays per axis traced per probe update, a multiple of 16 and of the stored resolution (Lumen traces
 		///     32x32). The rays are averaged into the stored texels, so 16 -> 8 gives 4 rays per texel per update.
 		/// </summary>
-		public int RadianceCacheTraceResolution = 32;
+		[GIMethod(GIMode.Lumen)] public int RadianceCacheTraceResolution = 32;
 
 		/// <summary>
 		///     Probes inside the static scene bounds re-traced per frame (round robin; all of them when the budget
@@ -701,56 +810,63 @@ namespace LELEngine
 		///     trace resolution squared; for a given ray budget and accumulation time the noise is the same
 		///     however the budget is split, so fewer probes with more rays each is the cheaper option.
 		/// </summary>
-		public int RadianceCacheProbesPerFrame = 160;
+		[GIMethod(GIMode.Lumen)] public int RadianceCacheProbesPerFrame = 160;
 
 		/// <summary>
 		///     Time constant of a probe's accumulation, in frames: an update blends with weight exp(-dt / this), dt
 		///     being the frames since the probe's previous update. Rarely updated probes therefore converge as fast
 		///     as frequently updated ones. 0 = no accumulation.
 		/// </summary>
-		public float RadianceCacheHistoryFrames = 20f;
+		[GIMethod(GIMode.Lumen)] public float RadianceCacheHistoryFrames = 20f;
 
 		/// <summary>
 		///     Sample-count accumulation of the radiance cache probes: the history weight grows with the number of
 		///     updates up to this cap (0 = the time-constant blend of RadianceCacheHistoryFrames instead).
 		/// </summary>
-		public float RadianceCacheMaxHistorySamples = 32f;
+		[GIMethod(GIMode.Lumen)] public float RadianceCacheMaxHistorySamples = 32f;
 
 		/// <summary>
 		///     Cap of the probe history until the grid has been swept RadianceCacheIdleAfterSweeps times since the last
 		///     change: the cache then tracks the surface cache's convergence instead of averaging the transient in.
 		/// </summary>
-		public float RadianceCacheMovingHistorySamples = 4f;
+		[GIMethod(GIMode.Lumen)] public float RadianceCacheMovingHistorySamples = 4f;
 
 		/// <summary>
 		///     Relative change of a probe's summed radiance between its fresh estimate and its history that counts as a
 		///     lighting change and restarts the probe's accumulation.
 		/// </summary>
-		public float RadianceCacheChangeThreshold = 0.25f;
+		[GIMethod(GIMode.Lumen)] public float RadianceCacheChangeThreshold = 0.25f;
 
 		/// <summary>After this many frames without object, material or sun changes the probe budget drops to a trickle.</summary>
-		public int RadianceCacheIdleAfterFrames = 60;
+		[GIMethod(GIMode.Lumen)] public int RadianceCacheIdleAfterFrames = 60;
 
 		/// <summary>Budget divisor while idle (converged probes only need an occasional refresh).</summary>
-		public int RadianceCacheIdleDivisor = 8;
+		[GIMethod(GIMode.Lumen)] public int RadianceCacheIdleDivisor = 8;
 
 		/// <summary>
 		///     Idle also requires this many full passes over the probe grid at the full budget since the last change:
 		///     a quiet scene is not a converged one until the multi-bounce chain (cache -> cards -> cache) has settled.
 		/// </summary>
-		public int RadianceCacheIdleAfterSweeps = 40;
+		[GIMethod(GIMode.Lumen)] public int RadianceCacheIdleAfterSweeps = 40;
 
 		/// <summary>
 		///     Screen probe and radiosity rays trace the distance field this far (world units) and read the
 		///     radiance cache beyond it. 0 traces the whole field.
 		/// </summary>
-		public float RadianceCacheNearDistance = 2f;
+		[GIMethod(GIMode.Lumen)] public float RadianceCacheNearDistance = 2f;
 
 		/// <summary>Let the surface cache radiosity rays read the radiance cache too (off = radiosity traces fully).</summary>
-		public bool RadianceCacheForRadiosity = true;
+		[GIMethod(GIMode.Lumen)] public bool RadianceCacheForRadiosity = true;
+
+		/// <summary>
+		///     Radiance cache lookups whose target is at least 4 probe spacings away skip the per-probe target
+		///     visibility pass (parallax below a texel): a third fewer atlas fetches for far-field rays.
+		/// </summary>
+		[GIMethod(GIMode.Lumen)] public bool RadianceCacheFarShortcut = true;
 
 		// ---- Global distance field (GlobalDistanceFieldPass) ----
 
+		[Header("Distance Field")]
 		public bool DistanceFieldEnabled = true;
 
 		/// <summary>Texels per axis of the global distance field (shares the GI grid extent).</summary>
@@ -773,10 +889,10 @@ namespace LELEngine
 		///     cones leak through walls about one voxel thick and give stepped corners, the SDF detail trace is
 		///     binary per cone (banded corners). Falls back to voxel cones without the distance field.
 		/// </summary>
-		public GITraceMode TraceMode = GITraceMode.SdfCones;
+		[GIMethod(GIMode.VoxelConeTracing)] public GITraceMode TraceMode = GITraceMode.SdfCones;
 
 		/// <summary>Length of the SDF detail trace at the start of every cone (world units).</summary>
-		public float SdfDetailDistance = 1.5f;
+		[GIMethod(GIMode.VoxelConeTracing)] public float SdfDetailDistance = 1.5f;
 
 		// ---- Runtime data written by VoxelGIPass / GIResolvePass ----
 
@@ -844,6 +960,28 @@ namespace LELEngine
 
 		/// <summary>Lumen-style: surface cache cards lit with radiosity, screen probes traced through the global SDF.</summary>
 		Lumen
+	}
+
+	/// <summary>
+	///     A GI setting (<see cref="GlobalIlluminationSettings" />, <see cref="SceneGISettings" />) that only one
+	///     <see cref="GIMode" /> reads: the editor shows it only while that method is selected. Settings without it are
+	///     read by both methods.
+	/// </summary>
+	[AttributeUsage(AttributeTargets.Field)]
+	public sealed class GIMethodAttribute : Attribute
+	{
+		public readonly GIMode Mode;
+
+		public GIMethodAttribute(GIMode mode)
+		{
+			Mode = mode;
+		}
+
+		/// <summary>The method that reads <paramref name="field" />, null when both do.</summary>
+		public static GIMode? Of(FieldInfo field)
+		{
+			return field.GetCustomAttribute<GIMethodAttribute>(false)?.Mode;
+		}
 	}
 
 	public enum GITraceMode

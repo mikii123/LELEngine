@@ -593,16 +593,11 @@ namespace LELEngine.Rendering.Passes
 
 		private void RenderGridShadow(RenderContext context, IReadOnlyList<MeshRenderer> casters, Matrix4 lightView, Matrix4 lightProjection)
 		{
-			ShadowSettings shadows = Lighting.Shadows;
-
 			gridShadow.Bind();
 			GLState.SetDepth(true, true);
 			GLState.SetCull(true, TriangleFace.Back);
 			GLState.SetColorWrite(false);
 			GL.Clear(ClearBufferMask.DepthBufferBit);
-
-			GL.Enable(EnableCap.PolygonOffsetFill);
-			GL.PolygonOffset(shadows.PolygonOffsetFactor, shadows.PolygonOffsetUnits);
 
 			context.DepthOnlyProgram.Use();
 			context.DepthOnlyProgram.SetMatrix4("viewMatrix", lightView);
@@ -618,7 +613,6 @@ namespace LELEngine.Rendering.Passes
 
 			gridShadowTransmittance = TransparentShadows.Draw(context, gridShadow, lightView, lightProjection);
 
-			GL.Disable(EnableCap.PolygonOffsetFill);
 			GLState.SetColorWrite(true);
 			GL.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
 		}
@@ -642,18 +636,13 @@ namespace LELEngine.Rendering.Passes
 
 		private void InjectLighting(int target, GlobalIlluminationSettings gi, Matrix4 lightView, Matrix4 lightProjection)
 		{
-			ShadowSettings shadows = Lighting.Shadows;
 			ShaderProgram program = inject.Program;
 
 			inject.Use();
 
 			// Sun color/direction; shadows come from the grid-covering map, not the camera one.
 			Lighting.SetUniforms(program, false, false);
-			program.SetInt("shadowsEnabled", shadows.Enabled ? 1 : 0);
-			program.SetMatrix4("lightSpaceMatrix", lightView * lightProjection);
-			program.SetFloat("shadowNormalBias", shadows.NormalBias);
-			program.SetFloat("shadowDepthBias", shadows.DepthBias);
-			program.SetTexture("ShadowMap", TextureTarget.Texture2D, gridShadow.DepthAttachment.Handle, 1);
+			Lighting.SetShadowMapUniforms(program, lightView, lightProjection, gridShadow.DepthAttachment.Handle, 1);
 			TransparentShadows.SetUniforms(program, gridShadowTransmittance, 2);
 
 			// Grid and cone parameters for the bounce; the previous frame's radiance is the trace target.
