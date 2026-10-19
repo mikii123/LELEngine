@@ -29,42 +29,59 @@
     <ProjectReference Include="..\LELEngine.Player\LELEngine.Player.csproj" ReferenceOutputAssembly="false" />
   </ItemGroup>
 
+  <!-- A development editor publishes the self-contained player from the sources when a build asks for it
+       (PlayerFiles); published editors carry both players and no source path. -->
+  <ItemGroup Condition="'$(_IsPublishing)' != 'true'">
+    <AssemblyMetadata Include="LELEngine.PlayerProject" Value="$([System.IO.Path]::GetFullPath('$(MSBuildProjectDirectory)\..\LELEngine.Player\LELEngine.Player.csproj'))" />
+    <AssemblyMetadata Include="LELEngine.Configuration" Value="$(Configuration)" />
+  </ItemGroup>
+
   <Target Name="CopyPlayer" AfterTargets="Build">
     <ItemGroup>
-      <PlayerFiles Include="..\LELEngine.Player\bin\$(Configuration)\$(TargetFramework)\**\*" />
+      <!-- Without the outputs of player publishes (bin/<config>/<tfm>/<rid>/ and publish/). -->
+      <PlayerFiles Include="..\LELEngine.Player\bin\$(Configuration)\$(TargetFramework)\**\*" Exclude="..\LELEngine.Player\bin\$(Configuration)\$(TargetFramework)\win-*\**;..\LELEngine.Player\bin\$(Configuration)\$(TargetFramework)\linux-*\**;..\LELEngine.Player\bin\$(Configuration)\$(TargetFramework)\osx-*\**;..\LELEngine.Player\bin\$(Configuration)\$(TargetFramework)\publish\**" />
     </ItemGroup>
     <Copy SourceFiles="@(PlayerFiles)" DestinationFiles="@(PlayerFiles->'$(OutDir)Player\%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
   </Target>
 
-  <!-- Publish: the player is published into Player/ of the editor's publish folder, so one `dotnet publish` gives an
-       editor ready to build games. PlayerRuntimeIdentifier is the platform of the games (default: the editor's
-       runtime identifier; none: framework-dependent, every OS with .NET). With one the player is self-contained
-       (games run without .NET installed; PlayerSelfContained=false turns that off).
+  <!-- Publish: the players are published next to the editor, so one `dotnet publish` gives an editor ready to build
+       games: Player/ framework-dependent (the target machine needs .NET) and PlayerSelfContained/ with the .NET
+       runtime (the Build settings' Self-contained option). PlayerRuntimeIdentifier is the platform of the games
+       (default: the editor's runtime identifier); without one Player/ is portable (every OS with .NET) and there is no
+       self-contained player. PlayerSelfContained=false leaves the self-contained player out.
          dotnet publish LELEngine.Editor -c Release -r win-x64
          dotnet publish LELEngine.Editor -c Release -r win-x64 -p:PlayerRuntimeIdentifier=linux-x64 -->
   <PropertyGroup>
     <PlayerRuntimeIdentifier Condition="'$(PlayerRuntimeIdentifier)' == ''">$(RuntimeIdentifier)</PlayerRuntimeIdentifier>
-    <PlayerSelfContained Condition="'$(PlayerSelfContained)' == '' And '$(PlayerRuntimeIdentifier)' != ''">true</PlayerSelfContained>
-    <PlayerSelfContained Condition="'$(PlayerSelfContained)' == ''">false</PlayerSelfContained>
+    <PlayerSelfContained Condition="'$(PlayerSelfContained)' == ''">true</PlayerSelfContained>
   </PropertyGroup>
 
   <Target Name="PublishPlayer" AfterTargets="Publish">
     <PropertyGroup>
       <!-- Absolute, without the trailing separator (a quoted path ending in \ would escape the quote). -->
       <PlayerPublishDir>$([System.IO.Path]::GetFullPath($([System.IO.Path]::Combine('$(MSBuildProjectDirectory)', '$(PublishDir)', 'Player'))).TrimEnd('\').TrimEnd('/'))</PlayerPublishDir>
+      <PlayerSelfContainedPublishDir>$([System.IO.Path]::GetFullPath($([System.IO.Path]::Combine('$(MSBuildProjectDirectory)', '$(PublishDir)', 'PlayerSelfContained'))).TrimEnd('\').TrimEnd('/'))</PlayerSelfContainedPublishDir>
       <PlayerProject>$([System.IO.Path]::GetFullPath('$(MSBuildProjectDirectory)\..\LELEngine.Player\LELEngine.Player.csproj'))</PlayerProject>
       <!-- The dotnet running this build. -->
       <PlayerDotnet>$(DOTNET_HOST_PATH)</PlayerDotnet>
       <PlayerDotnet Condition="'$(PlayerDotnet)' == ''">dotnet</PlayerDotnet>
-      <PlayerArguments>publish "$(PlayerProject)" -c $(Configuration) -o "$(PlayerPublishDir)" --nologo</PlayerArguments>
-      <PlayerArguments Condition="'$(PlayerRuntimeIdentifier)' != ''">$(PlayerArguments) -r $(PlayerRuntimeIdentifier) --self-contained $(PlayerSelfContained)</PlayerArguments>
-      <PlayerDescription>$(PlayerRuntimeIdentifier), self-contained $(PlayerSelfContained)</PlayerDescription>
+      <PlayerArguments>publish "$(PlayerProject)" -c $(Configuration) --nologo</PlayerArguments>
+      <PlayerFrameworkDependentArguments>$(PlayerArguments)</PlayerFrameworkDependentArguments>
+      <PlayerFrameworkDependentArguments Condition="'$(PlayerRuntimeIdentifier)' != ''">$(PlayerArguments) -r $(PlayerRuntimeIdentifier) --self-contained false</PlayerFrameworkDependentArguments>
+      <PlayerDescription>framework-dependent, $(PlayerRuntimeIdentifier)</PlayerDescription>
       <PlayerDescription Condition="'$(PlayerRuntimeIdentifier)' == ''">framework-dependent, any OS</PlayerDescription>
+      <PublishSelfContainedPlayer>false</PublishSelfContainedPlayer>
+      <PublishSelfContainedPlayer Condition="'$(PlayerRuntimeIdentifier)' != '' And '$(PlayerSelfContained)' != 'false'">true</PublishSelfContainedPlayer>
     </PropertyGroup>
-    <!-- A process of its own: its restore is for the player's runtime identifier (the editor's restore was for the
-         editor's), and none of the editor's publish options (single file, trimming) reach the player. -->
-    <Exec Command="&quot;$(PlayerDotnet)&quot; $(PlayerArguments)" />
+    <!-- Emptied first: an earlier publish (another layout or runtime identifier) must not leave files behind, a
+         self-contained host library in Player/ would make every framework-dependent game start wrong. -->
+    <RemoveDir Directories="$(PlayerPublishDir);$(PlayerSelfContainedPublishDir)" />
+    <!-- Processes of their own: their restore is for the player's runtime identifier (the editor's restore was for
+         the editor's), and none of the editor's publish options (single file, trimming) reach the player. -->
+    <Exec Command="&quot;$(PlayerDotnet)&quot; $(PlayerFrameworkDependentArguments) -o &quot;$(PlayerPublishDir)&quot;" />
     <Message Importance="high" Text="Player ($(PlayerDescription)) -> $(PlayerPublishDir)" />
+    <Exec Condition="'$(PublishSelfContainedPlayer)' == 'true'" Command="&quot;$(PlayerDotnet)&quot; $(PlayerArguments) -r $(PlayerRuntimeIdentifier) --self-contained true -o &quot;$(PlayerSelfContainedPublishDir)&quot;" />
+    <Message Condition="'$(PublishSelfContainedPlayer)' == 'true'" Importance="high" Text="Player (self-contained, $(PlayerRuntimeIdentifier)) -> $(PlayerSelfContainedPublishDir)" />
   </Target>
 
   <!-- Console twin of the launcher: the same app host (it starts LELEngine.Editor.dll) with the PE subsystem set to

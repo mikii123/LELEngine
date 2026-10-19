@@ -575,7 +575,7 @@ namespace LELEngine.Editor
 
 		// ---------------------------------------------------------------- build
 
-		/// <summary>Scenes in the build, start scene and Run In Background (saved in Project.json), output folder, configuration, Build / Open Folder / Run and the log.</summary>
+		/// <summary>Scenes in the build, start scene, Self-contained and Run In Background (saved in Project.json), output folder, configuration, Build / Open Folder / Run and the log.</summary>
 		private void DrawBuild(ProjectInfo project)
 		{
 			outputFolder ??= Path.Combine(project.RootPath, "Build", ProjectGenerator.ProjectName(project));
@@ -629,7 +629,25 @@ namespace LELEngine.Editor
 			if (ImGui.RadioButton("Release", release)) release = true;
 			ImGui.SameLine();
 			if (ImGui.RadioButton("Debug", !release)) release = false;
-			ImGui.TextDisabled("Framework-dependent build: the target machine needs the .NET 10 runtime.");
+
+			bool selfContained = project.BuildSelfContained;
+			if (ImGui.Checkbox("Self-contained", ref selfContained))
+			{
+				project.BuildSelfContained = selfContained;
+				changed = true;
+			}
+
+			if (ImGui.IsItemHovered())
+			{
+				ImGui.SetTooltip("The game ships the .NET runtime and runs on machines without .NET installed (about 70 MB more).\n" +
+					"Off: framework-dependent, smaller; the target machine needs the .NET 10 runtime.");
+			}
+
+			string runtime = PlayerFiles.SelfContainedRuntime;
+			ImGui.SameLine();
+			ImGui.TextDisabled(!selfContained ? "Framework-dependent: the target machine needs the .NET 10 runtime."
+				: runtime != null ? "Includes the .NET runtime for " + runtime + "."
+				: "This editor has no self-contained player (published without a runtime identifier).");
 
 			bool runInBackground = project.RunInBackground;
 			if (ImGui.Checkbox("Run In Background", ref runInBackground))
@@ -706,7 +724,7 @@ namespace LELEngine.Editor
 			editor.Edits.Commit();
 			editor.SaveProjectSettings();
 
-			var settings = new BuildSettings { OutputFolder = outputFolder, Release = release, StartScene = project.StartScene, Scenes = new List<string>(project.BuildScenes) };
+			var settings = new BuildSettings { OutputFolder = outputFolder, Release = release, SelfContained = project.BuildSelfContained, StartScene = project.StartScene, Scenes = new List<string>(project.BuildScenes) };
 			lock (lines)
 			{
 				lines.Clear();

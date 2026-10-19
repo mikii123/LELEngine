@@ -11,7 +11,7 @@ namespace LELEngine.Editor
 	///     <code>
 	///     Project/
 	///       Assets/            everything the game uses (scenes, scripts, meshes, materials, shaders, textures) + .meta
-	///       ProjectSettings/   Project.json (name, scenes in the build, start scene; editor only),
+	///       ProjectSettings/   Project.json (name, scenes in the build, start scene, build options; editor only),
 	///                          ProjectSettings.asset (physics, lighting quality; goes into builds)
 	///       Library/           editor caches (build output of the scripts, editor state); safe to delete
 	///       Project.csproj     generated: open it (or Project.sln) in any IDE to edit the scripts
@@ -37,6 +37,9 @@ namespace LELEngine.Editor
 
 		/// <summary>Builds keep running while their window is not focused.</summary>
 		public bool RunInBackground { get; set; } = true;
+
+		/// <summary>Builds ship the .NET runtime (the self-contained player): they run on machines without .NET installed.</summary>
+		public bool BuildSelfContained { get; set; }
 
 		[JsonIgnore] public string RootPath { get; private set; }
 		[JsonIgnore] public string AssetsPath => Path.Combine(RootPath, "Assets");
@@ -161,6 +164,7 @@ namespace LELEngine.Editor
 			LastScene = read.LastScene;
 			ReloadScriptsOnPlay = read.ReloadScriptsOnPlay;
 			RunInBackground = read.RunInBackground;
+			BuildSelfContained = read.BuildSelfContained;
 			return true;
 		}
 

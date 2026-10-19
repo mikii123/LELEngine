@@ -13,11 +13,16 @@
   `dump=1 dumpafter=S` for anything time dependent.
 - Never run `git commit` or `git push`; the user does that.
 - `dotnet publish LELEngine.Editor -c Release -r <rid>` gives an editor ready to build games: the player is published
-  into `Player/` by its own `dotnet publish` process (target `PublishPlayer`), for `PlayerRuntimeIdentifier` (default
-  the editor's RID; self-contained when set, `PlayerSelfContained=false` to turn off; none: framework-dependent with
-  every OS's GLFW), plus `LELEngine.Editor.Console.exe` on Windows. `dotnet build` copies the player's build output
-  (`CopyPlayer`). `GameBuilder` renames the player's app host (`LELEngine.Player.exe`, or `LELEngine.Player` for a
-  Linux / macOS player) to the game's name.
+  by its own `dotnet publish` processes (target `PublishPlayer`) for `PlayerRuntimeIdentifier` (default the editor's
+  RID) twice: framework-dependent into `Player/`, self-contained into `PlayerSelfContained/`
+  (`PlayerSelfContained=false` leaves it out; no RID: `Player/` portable, no self-contained player), plus
+  `LELEngine.Editor.Console.exe` on Windows. `dotnet build` copies only the framework-dependent build output
+  (`CopyPlayer`, without `bin/.../<rid>/` and `publish/`); a development editor publishes `PlayerSelfContained/` from
+  the sources (path in the `LELEngine.PlayerProject` assembly metadata, absent when publishing) the first time a build
+  asks for it and again when `Player/` changed (`PlayerSelfContained.stamp`). Project setting `BuildSelfContained`
+  (Project.json, Build tab "Self-contained", batch `-selfContained [true|false]`) picks the player (`PlayerFiles`);
+  a build deletes the other player's files from the output first. `GameBuilder` renames the player's app host
+  (`LELEngine.Player.exe`, or `LELEngine.Player` for a Linux / macOS player) to the game's name.
 - The editor starts with the project chooser in its own window (`LauncherWindow`) unless the command line names a
   project (`project=`, `newproject=`, `-projectPath`): automated runs must pass one. File > Close Project hides the
   editor's window and shows the chooser (same GL context: engine caches stay valid). The editor window's place and

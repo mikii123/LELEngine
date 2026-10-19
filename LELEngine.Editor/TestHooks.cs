@@ -259,7 +259,7 @@ namespace LELEngine.Editor
 				string[] parts = build.Split(';');
 				if (parts.Length == 2 && int.TryParse(parts[0], out int at) && at == frame && editor.Project != null)
 				{
-					var settings = new BuildSettings { OutputFolder = parts[1], Release = true, StartScene = editor.Project.StartScene, Scenes = new List<string>(editor.Project.BuildScenes) };
+					var settings = new BuildSettings { OutputFolder = parts[1], Release = true, SelfContained = editor.Project.BuildSelfContained, StartScene = editor.Project.StartScene, Scenes = new List<string>(editor.Project.BuildScenes) };
 					bool ok = GameBuilder.Build(editor.Project, settings, line => Console.WriteLine("[Build] " + line));
 					Debug.Log("[Test] Game build " + (ok ? "succeeded" : "failed"));
 				}

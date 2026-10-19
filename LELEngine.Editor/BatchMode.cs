@@ -40,6 +40,8 @@ namespace LELEngine.Editor
 			"                             or (string[] args) with the whole command line; void, bool or int result\n" +
 			"  -build <folder>            build the game into the folder\n" +
 			"  -buildConfig Release|Debug configuration of the build (default Release)\n" +
+			"  -selfContained [true|false]\n" +
+			"                             ship the .NET runtime with the game (default: the project's Build setting)\n" +
 			"  -logFile <file>            also write the log to the file\n" +
 			"  -quit                      accepted for Unity compatibility (batch mode always quits)\n" +
 			"Exit code: 0 success, 1 failure.";
@@ -171,15 +173,19 @@ namespace LELEngine.Editor
 				string output = options.Get("build");
 				string configuration = options.Get("buildconfig") ?? "Release";
 				bool release = string.Equals(configuration, "Release", StringComparison.OrdinalIgnoreCase);
-				if (string.IsNullOrEmpty(output) || (!release && !string.Equals(configuration, "Debug", StringComparison.OrdinalIgnoreCase)))
+				// -selfContained alone means true.
+				string selfContainedValue = options.Get("selfcontained");
+				bool selfContained = options.Has("selfcontained") ? selfContainedValue == null || string.Equals(selfContainedValue, "true", StringComparison.OrdinalIgnoreCase) : project.BuildSelfContained;
+				bool validSelfContained = selfContainedValue == null || string.Equals(selfContainedValue, "true", StringComparison.OrdinalIgnoreCase) || string.Equals(selfContainedValue, "false", StringComparison.OrdinalIgnoreCase);
+				if (string.IsNullOrEmpty(output) || (!release && !string.Equals(configuration, "Debug", StringComparison.OrdinalIgnoreCase)) || !validSelfContained)
 				{
-					Debug.LogError("[Batch] Usage: -build <folder> [-buildConfig Release|Debug]");
+					Debug.LogError("[Batch] Usage: -build <folder> [-buildConfig Release|Debug] [-selfContained [true|false]]");
 					return 1;
 				}
 
 				// The GL context bakes the meshes' distance fields (and lets model import extract materials).
 				EnsureGraphics();
-				var settings = new BuildSettings { OutputFolder = Path.GetFullPath(output), Release = release, StartScene = project.StartScene, Scenes = new List<string>(project.BuildScenes) };
+				var settings = new BuildSettings { OutputFolder = Path.GetFullPath(output), Release = release, SelfContained = selfContained, StartScene = project.StartScene, Scenes = new List<string>(project.BuildScenes) };
 				if (!GameBuilder.Build(project, settings, line => Console.WriteLine((line.StartsWith("Error", StringComparison.Ordinal) ? "[Error] " : "") + "[Build] " + line)))
 				{
 					return 1;

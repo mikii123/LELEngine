@@ -13,6 +13,10 @@ namespace LELEngine.Editor
 	{
 		public string OutputFolder;
 		public bool Release = true;
+
+		/// <summary>With the .NET runtime (<see cref="PlayerFiles.SelfContainedFolder" />), else framework-dependent.</summary>
+		public bool SelfContained;
+
 		public string StartScene;
 		public List<string> Scenes = new List<string>();
 	}
@@ -21,7 +25,8 @@ namespace LELEngine.Editor
 	///     Produces a runnable game folder:
 	///     <code>
 	///     Output/
-	///       &lt;Name&gt;.exe + LELEngine.Player.dll, engine and OpenTK assemblies, native GLFW (runtimes/)
+	///       &lt;Name&gt;.exe + LELEngine.Player.dll, engine and OpenTK assemblies, native GLFW (runtimes/), and the
+	///                         .NET runtime when the build is self-contained (see <see cref="PlayerFiles" />)
 	///       Shaders/Engine/   engine shader library
 	///       Game.dll          the scripts, compiled in the chosen configuration
 	///       Data/             the project's assets with their .meta files (scripts excluded): documents binary,
@@ -39,13 +44,6 @@ namespace LELEngine.Editor
 		public static bool Build(ProjectInfo project, BuildSettings settings, Action<string> log)
 		{
 			string output = Path.GetFullPath(settings.OutputFolder);
-			string playerSource = Path.Combine(AppContext.BaseDirectory, "Player");
-			if (!File.Exists(Path.Combine(playerSource, "LELEngine.Player.dll")))
-			{
-				log("Error: the player is missing next to the editor (" + playerSource + ").");
-				return false;
-			}
-
 			if (IsInside(output, project.AssetsPath))
 			{
 				log("Error: the build folder must not be inside Assets.");
@@ -61,6 +59,13 @@ namespace LELEngine.Editor
 			if (!File.Exists(Path.Combine(project.AssetsPath, settings.StartScene)))
 			{
 				log("Error: the start scene does not exist: " + settings.StartScene);
+				return false;
+			}
+
+			// The player (a development editor publishes its self-contained one first when it has none).
+			string playerSource = PlayerFiles.Resolve(settings.SelfContained, log);
+			if (playerSource == null)
+			{
 				return false;
 			}
 
@@ -87,10 +92,11 @@ namespace LELEngine.Editor
 			Directory.CreateDirectory(output);
 
 			// 2. Player and engine.
-			log("Copying the player...");
+			log(settings.SelfContained ? $"Copying the player (self-contained, {PlayerFiles.SelfContainedRuntime})..." : "Copying the player (framework-dependent)...");
+			PlayerFiles.RemoveOtherPlayer(output, playerSource, log);
 			// The player's app host: LELEngine.Player.exe on Windows, LELEngine.Player (no extension) when it was
 			// published for Linux or macOS (the editor's PlayerRuntimeIdentifier).
-			string host = File.Exists(Path.Combine(playerSource, "LELEngine.Player.exe")) ? "LELEngine.Player.exe" : "LELEngine.Player";
+			string host = File.Exists(Path.Combine(playerSource, PlayerFiles.AssemblyName + ".exe")) ? PlayerFiles.AssemblyName + ".exe" : PlayerFiles.AssemblyName;
 			string executable = ProjectGenerator.ProjectName(project) + Path.GetExtension(host);
 			foreach (string file in Directory.GetFiles(playerSource, "*", SearchOption.AllDirectories))
 			{
