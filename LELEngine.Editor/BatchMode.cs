@@ -374,6 +374,9 @@ namespace LELEngine.Editor
 				return;
 			}
 
+			// A refused version has to come back as an exception this loop catches: OpenTK's own GLFW error callback
+			// throws inside GLFW and aborts the process (Mesa grants 4.5, so 4.6 is refused there).
+			Window.InitializeGlfw();
 			Version version = Window.PreferredApiVersion;
 			while (true)
 			{

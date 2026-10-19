@@ -6,8 +6,10 @@ using OpenTK.Graphics.OpenGL4;
 using OpenTK.Mathematics;
 using OpenTK.Windowing.Common;
 using OpenTK.Windowing.Desktop;
+using ErrorCode = OpenTK.Windowing.GraphicsLibraryFramework.ErrorCode;
 using GLFW = OpenTK.Windowing.GraphicsLibraryFramework.GLFW;
 using GLFWBindingsContext = OpenTK.Windowing.GraphicsLibraryFramework.GLFWBindingsContext;
+using GLFWCallbacks = OpenTK.Windowing.GraphicsLibraryFramework.GLFWCallbacks;
 using WindowHintBool = OpenTK.Windowing.GraphicsLibraryFramework.WindowHintBool;
 
 namespace LELEngine
@@ -33,6 +35,9 @@ namespace LELEngine
 
 		/// <summary>New windows take the keyboard focus. Automated runs turn it off so they do not interrupt the user.</summary>
 		public static bool StartFocused { get; set; } = true;
+
+		/// <summary>Rooted: GLFW keeps only the native function pointer.</summary>
+		private static readonly GLFWCallbacks.ErrorCallback glfwErrorLog = OnGlfwError;
 
 		public Window(int width, int height, string title)
 			: this(width, height, title, PreferredApiVersion)
@@ -196,15 +201,33 @@ namespace LELEngine
 			}
 		}
 
+		/// <summary>
+		///     Initializes GLFW with an error callback that logs. OpenTK's default one throws from inside the native
+		///     callback, which aborts the process (exit 134 on Linux) before a refused context version reaches the
+		///     callers' fallback to an older one; with this one glfwCreateWindow returns NULL and NativeWindow throws a
+		///     managed exception they catch. Call before creating a window (after GLFWProvider.EnsureInitialized, which
+		///     installs OpenTK's callback right before glfwInit).
+		/// </summary>
+		public static void InitializeGlfw()
+		{
+			GLFWProvider.EnsureInitialized();
+			GLFWProvider.SetErrorCallback(glfwErrorLog);
+		}
+
 		#endregion
 
 		#region PrivateMethods
+
+		private static void OnGlfwError(ErrorCode error, string description)
+		{
+			Console.WriteLine($"[GLFW] {error}: {description}");
+		}
 
 		private static NativeWindowSettings CreateSettings(int width, int height, string title, Version apiVersion, bool visible, bool fullscreen)
 		{
 			// A hidden window takes the focus when it is shown (GLFW's focus-on-show), unless automated runs turned
 			// that off. Window hints stay set for the windows created later, and OpenTK leaves this one alone.
-			GLFWProvider.EnsureInitialized();
+			InitializeGlfw();
 			GLFW.WindowHint(WindowHintBool.FocusOnShow, StartFocused);
 			return new NativeWindowSettings
 			{

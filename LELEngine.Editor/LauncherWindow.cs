@@ -132,6 +132,7 @@ namespace LELEngine.Editor
 		/// <summary>With the newest OpenGL context the driver grants, as the editor's window.</summary>
 		private static LauncherWindow Create(string error)
 		{
+			Window.InitializeGlfw();
 			Version version = Window.PreferredApiVersion;
 			while (true)
 			{
