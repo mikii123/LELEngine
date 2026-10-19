@@ -67,6 +67,12 @@ namespace LELEngine.Rendering
 		/// <summary>World normal (xyz) + roughness (w) per pixel from the geometry prepass; null when it did not run.</summary>
 		public RenderTexture NormalRoughness;
 
+		/// <summary>
+		///     World-space motion of each pixel's surface point since the previous frame (xyz = current - previous, w = 1
+		///     where it moved) from the geometry prepass; null when it did not run. Camera motion is not in it.
+		/// </summary>
+		public RenderTexture Motion;
+
 		#endregion
 	}
 }

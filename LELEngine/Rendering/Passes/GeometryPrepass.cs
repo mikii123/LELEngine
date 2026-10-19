@@ -1,10 +1,13 @@
 using LELEngine.Shaders;
 using OpenTK.Graphics.OpenGL4;
+using OpenTK.Mathematics;
 
 namespace LELEngine.Rendering.Passes
 {
 	/// <summary>
-	///     Thin G-buffer prepass: writes scene depth plus world normal and roughness for all opaque geometry.
+	///     Thin G-buffer prepass: writes scene depth plus world normal and roughness for all opaque geometry, and each
+	///     pixel's world-space motion since the previous frame (the motion vectors the GI's temporal filters reproject
+	///     with; camera motion is not in them, the consumers apply their own previous view).
 	///     The opaque pass then shades with depth test LEQUAL and no depth writes (each pixel shaded once),
 	///     and screen-space passes (GI resolve) get geometry without re-rasterizing the scene.
 	///     Shares the depth texture with the scene target. GPU-driven: every visible instance in one indirect call.
@@ -15,6 +18,7 @@ namespace LELEngine.Rendering.Passes
 
 		public override string Name => "GeometryPrepass";
 		public RenderTexture NormalRoughness => normalRoughness;
+		public RenderTexture Motion => motion;
 
 		#endregion
 
@@ -22,6 +26,7 @@ namespace LELEngine.Rendering.Passes
 
 		private Framebuffer gbuffer;
 		private RenderTexture normalRoughness;
+		private RenderTexture motion;
 		private ShaderProgram program;
 		private ShaderProgram instancedProgram;
 
@@ -36,6 +41,7 @@ namespace LELEngine.Rendering.Passes
 
 			gbuffer = new Framebuffer(renderer.Width, renderer.Height);
 			normalRoughness = gbuffer.AddColorAttachment(RenderTextureFormat.RGBA16F, false);
+			motion = gbuffer.AddColorAttachment(RenderTextureFormat.RGBA16F, false);
 			gbuffer.AttachSharedDepth(renderer.SceneDepth);
 			gbuffer.Validate();
 		}
@@ -52,6 +58,7 @@ namespace LELEngine.Rendering.Passes
 			{
 				context.DepthPrepassDone = false;
 				context.NormalRoughness = null;
+				context.Motion = null;
 				return;
 			}
 
@@ -62,7 +69,7 @@ namespace LELEngine.Rendering.Passes
 				gpu.EnsureCameraCulled(context.ViewProjection, context.CullingMask);
 			}
 
-			// Depth was already cleared with the scene target (shared texture); clear only our color.
+			// Depth was already cleared with the scene target (shared texture); clear only our color (no motion, no normal).
 			gbuffer.Bind();
 			GL.ClearColor(0f, 0f, 0f, 0f);
 			GL.Clear(ClearBufferMask.ColorBufferBit);
@@ -82,8 +89,10 @@ namespace LELEngine.Rendering.Passes
 			}
 			else
 			{
+				ObjectMotion objectMotion = context.Renderer.Motion;
 				foreach (MeshRenderer renderer in context.Renderers)
 				{
+					Matrix4 previousModel = objectMotion.GetPrevious(renderer, renderer.transform.LocalToWorld);
 					for (int i = 0; i < renderer.SubMeshCount; i++)
 					{
 						Material material = renderer.GetMaterial(i);
@@ -99,6 +108,7 @@ namespace LELEngine.Rendering.Passes
 							program.SetFloat("Roughness", roughness);
 						}
 
+						program.SetMatrix4("previousModelMatrix", previousModel);
 						renderer.RenderSubMeshWith(program, i);
 					}
 				}
@@ -106,6 +116,7 @@ namespace LELEngine.Rendering.Passes
 
 			context.DepthPrepassDone = true;
 			context.NormalRoughness = normalRoughness;
+			context.Motion = motion;
 		}
 
 		public override void Dispose()

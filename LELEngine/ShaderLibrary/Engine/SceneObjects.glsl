@@ -15,7 +15,7 @@ struct SceneObject
 	vec4 padding;       // xyz SDF padding ring width per axis, w = emissive intensity (card emission colour x this)
 	vec4 meshBoundsMin; // scaled-local mesh bounds
 	vec4 meshBoundsMax;
-	ivec4 cardInfo;     // x first card index, y card count, z 1 = dynamic
+	ivec4 cardInfo;     // x first card index, y card count, z 1 = dynamic, w 1 = moved this frame or the one before
 };
 
 struct Card
@@ -118,6 +118,12 @@ int SceneObjectAtPoint(vec3 p, float maxDistance, out vec3 localPos)
 	return SceneObjectAtPointSlow(p, maxDistance, localPos);
 }
 #endif
+
+// The object moved recently (LumenScene): lighting seen through it is about to change, histories keep it short.
+bool SceneObjectMoved(int objectIndex)
+{
+	return objectIndex >= 0 && objectIndex < sceneObjectCount && sceneObjects[objectIndex].cardInfo.w != 0;
+}
 
 vec3 SceneObjectWorldToLocalDir(SceneObject o, vec3 worldDir)
 {

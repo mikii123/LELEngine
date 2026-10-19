@@ -32,13 +32,19 @@ uniform int interiorCount;
 uniform int interiorTotal;
 uniform int exteriorStart;
 uniform int exteriorTotal;
+uniform int priorityCount;  // probes around this frame's changes, taken first (RadianceCachePass.BuildPriority)
+uniform int priorityOffset; // where they are in the list (after the interior and exterior lists)
 
 layout(std430, binding = 3) readonly buffer RadianceCacheProbeList
 {
 	int probeList[];
 };
 
-// [probe] = frame of the probe's last update (-1 = never), [rcProbeCount + probe] = updates accumulated.
+// [probe] = frame of the probe's last update (-1 = never), [rcProbeCount + probe] = updates accumulated,
+// [2 * rcProbeCount + probe] = where the probe saw moving objects: a 4x4 grid of cells over its octahedral map, bits
+// 0-15 for its last update and 16-31 for the one before (see RadianceCacheMovingCells in RadianceCache.glsl). Texels in
+// those cells keep no history, and the lookups that would read them trace on instead: the cached view of a moving
+// object is out of date between two updates of its probe.
 layout(std430, binding = 4) buffer RadianceCacheProbeFrames
 {
 	int probeFrames[];
@@ -57,9 +63,13 @@ shared vec4 historyTile[MAX_TILE * MAX_TILE]; // stored map (a = hit distance + 
 shared int freshFixed;                        // probe sums in 24.8 fixed point (luminance capped at 1e4)
 shared int historyFixed;
 shared int comparedCount;
+shared uint movingCells;                      // cells with a moving hit in this update
+shared uint skipCells;                        // cells whose texels keep no history (moving now or the update before)
 
 int SequenceProbe(int q)
 {
+	if (q < priorityCount) return probeList[priorityOffset + q];
+	q -= priorityCount;
 	return q < interiorCount
 		? probeList[(interiorStart + q) % interiorTotal]
 		: probeList[interiorTotal + (exteriorStart + q - interiorCount) % exteriorTotal];
@@ -91,6 +101,26 @@ float RcLuminance(vec3 c)
 	return dot(c, vec3(0.2126, 0.7152, 0.0722));
 }
 
+// The 4x4 cell grid bits, each set cell grown by its neighbours (a bilinear lookup near a cell edge reads the next one).
+uint DilateCells(uint cells)
+{
+	uint result = cells;
+	for (int cell = 0; cell < 16; cell++)
+	{
+		if ((cells & (1u << uint(cell))) == 0u) continue;
+		int cx = cell % 4;
+		int cy = cell / 4;
+		for (int y = max(cy - 1, 0); y <= min(cy + 1, 3); y++)
+		{
+			for (int x = max(cx - 1, 0); x <= min(cx + 1, 3); x++)
+			{
+				result |= 1u << uint(y * 4 + x);
+			}
+		}
+	}
+	return result;
+}
+
 void main()
 {
 	int slot = int(gl_WorkGroupID.x);
@@ -101,15 +131,19 @@ void main()
 	ivec2 tileOrigin = RadianceCacheTileOrigin(probeIndex);
 	ivec2 traceOrigin = ivec2(slot % traceSlotsPerRow, slot / traceSlotsPerRow) * rcTraceResolution;
 
-	bool valid = texelFetch(TraceBuffer, traceOrigin, 0).a >= 0.0;
+	// Invalid probes (inside geometry) write -1 into every ray; moving hits are below -9.
+	bool valid = abs(texelFetch(TraceBuffer, traceOrigin, 0).a + 1.0) > 0.5;
 	int lastFrame = probeFrames[probeIndex];
 	int updateCount = probeFrames[rcProbeCount + probeIndex];
+
+	uint previousCells = uint(probeFrames[2 * rcProbeCount + probeIndex]) & 0xFFFFu;
 
 	if (gl_LocalInvocationIndex == 0u)
 	{
 		freshFixed = 0;
 		historyFixed = 0;
 		comparedCount = 0;
+		movingCells = 0u;
 	}
 	barrier();
 
@@ -131,19 +165,27 @@ void main()
 			ivec2 oct = WrapOctahedral(ivec2(tx, ty) - 1, resolution);
 			vec3 radiance = vec3(0.0);
 			float depth = 0.0;
+			bool moving = false;
 			for (int y = 0; y < factor; y++)
 			{
 				for (int x = 0; x < factor; x++)
 				{
 					vec4 s = texelFetch(TraceBuffer, traceOrigin + oct * factor + ivec2(x, y), 0);
 					radiance += s.rgb;
-					depth += s.a;
+					bool movingHit = s.a < -5.0;
+					moving = moving || movingHit;
+					depth += movingHit ? -s.a - 10.0 : s.a;
 				}
 			}
 			float count = float(factor * factor);
 			radiance /= count;
 			depth /= count;
 			freshTile[index] = vec4(radiance, depth);
+			if (moving)
+			{
+				ivec2 cell = oct * 4 / resolution;
+				atomicOr(movingCells, 1u << uint(cell.y * 4 + cell.x));
+			}
 
 			bool interior = tx >= 1 && tx <= resolution && ty >= 1 && ty <= resolution;
 			if (interior && history.a > 0.5)
@@ -184,7 +226,11 @@ void main()
 	{
 		probeFrames[probeIndex] = frameIndex;
 		probeFrames[rcProbeCount + probeIndex] = newCount;
+		uint cells = valid ? DilateCells(movingCells) : 0u;
+		probeFrames[2 * rcProbeCount + probeIndex] = int(cells | (previousCells << 16u));
+		skipCells = cells | previousCells;
 	}
+	barrier();
 
 	// ---- 3. accumulate and store. Alpha stores hit distance + 1 (0 = no data).
 	for (int ty = int(gl_LocalInvocationID.y); ty < tile; ty += 8)
@@ -202,7 +248,10 @@ void main()
 
 			vec4 fresh = freshTile[index];
 			vec4 history = historyTile[index];
-			float weight = history.a > 0.5 ? historyWeight : 0.0;
+			// No history for a texel that sees, or just saw, a moving object.
+			ivec2 cell = WrapOctahedral(ivec2(tx, ty) - 1, resolution) * 4 / resolution;
+			bool skip = (skipCells & (1u << uint(cell.y * 4 + cell.x))) != 0u;
+			float weight = history.a > 0.5 && !skip ? historyWeight : 0.0;
 			float historyDepth = max(history.a - 1.0, 0.0);
 			vec4 result = vec4(mix(fresh.rgb, history.rgb, weight), mix(fresh.a, historyDepth, weight) + 1.0);
 			imageStore(RadianceCache, atlasTexel, result);

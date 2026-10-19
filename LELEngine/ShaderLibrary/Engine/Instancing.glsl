@@ -50,11 +50,25 @@ void LelVertexSetup()
 	lelInstance = LEL_INSTANCE_INDEX;
 	lelMaterialIndex = lelInstances[LEL_INSTANCE_INDEX].refs.x;
 }
+// Last frame's world matrix (motion vectors): a shader that needs it defines LEL_PREVIOUS_MODELS before the include;
+// LEL_NO_PREVIOUS_MODELS (no free binding on this context) makes it the current one.
+#ifdef LEL_PREVIOUS_MODELS
+#ifdef LEL_NO_PREVIOUS_MODELS
+mat4 LelPreviousModelMatrix() { return lelInstances[LEL_INSTANCE_INDEX].model; }
+#else
+layout(std430, binding = 15) readonly buffer LelPreviousModelBuffer { mat4 lelPreviousModels[]; };
+mat4 LelPreviousModelMatrix() { return lelPreviousModels[LEL_INSTANCE_INDEX]; }
+#endif
+#endif
 #else
 uniform mat4 modelMatrix;
 mat4 LelModelMatrix() { return modelMatrix; }
 mat3 LelNormalMatrix() { return mat3(transpose(inverse(modelMatrix))); }
 void LelVertexSetup() { }
+#ifdef LEL_PREVIOUS_MODELS
+uniform mat4 previousModelMatrix;
+mat4 LelPreviousModelMatrix() { return previousModelMatrix; }
+#endif
 #endif
 #endif
 

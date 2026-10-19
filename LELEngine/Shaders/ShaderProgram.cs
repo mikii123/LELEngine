@@ -645,6 +645,12 @@ namespace LELEngine.Shaders
 				preamble.Append("#extension GL_KHR_shader_subgroup_basic : enable\n#extension GL_KHR_shader_subgroup_arithmetic : enable\n#define LEL_SUBGROUPS 1\n");
 			}
 
+			// No binding left for the previous world matrices (Engine/Instancing.glsl): motion vectors see static objects.
+			if (type == ShaderType.VertexShader && !Rendering.GpuScene.SupportsPreviousModels)
+			{
+				preamble.Append("#define LEL_NO_PREVIOUS_MODELS 1\n");
+			}
+
 			int version = code.IndexOf("#version", StringComparison.Ordinal);
 			if (version < 0)
 			{

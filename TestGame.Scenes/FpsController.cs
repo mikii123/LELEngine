@@ -20,6 +20,10 @@ namespace TestGame.Scenes
 		public float MouseSensitivity = 0.12f;
 
 		public float EyeHeight = 1.7f;
+
+		/// <summary>Pitch of the camera when the controller starts (degrees; positive looks down).</summary>
+		public float StartPitch;
+
 		public float MinPitch = -89f;
 		public float MaxPitch = 89f;
 		public bool Fly;
@@ -60,7 +64,7 @@ namespace TestGame.Scenes
 			// Derive the initial yaw from the current facing so the scene can orient the player.
 			Vector3 forward = transform.forward;
 			yaw = (float)(Math.Atan2(forward.X, forward.Z) * QuaternionHelper.Rad2Deg);
-			pitch = 0f;
+			pitch = Math.Clamp(StartPitch, MinPitch, MaxPitch);
 
 			ApplyRotation();
 			baseYaw = yaw;
@@ -74,7 +78,7 @@ namespace TestGame.Scenes
 			{
 				float phase = Time.time * MathHelper.TwoPi / AutoPilotPeriod;
 				yaw = baseYaw + AutoPilotYawAmplitude * (float)Math.Sin(phase);
-				pitch = 4f * (float)Math.Sin(phase * 0.5f);
+				pitch = StartPitch + 4f * (float)Math.Sin(phase * 0.5f);
 				ApplyRotation();
 				Vector3 right = Vector3.Cross(Vector3.UnitZ, Vector3.UnitY).Normalized();
 				transform.position = basePosition + right * (AutoPilotStrafeAmplitude * (float)Math.Sin(phase * 0.7f));

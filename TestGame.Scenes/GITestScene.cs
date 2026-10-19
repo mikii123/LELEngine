@@ -92,12 +92,21 @@ namespace TestGame.Scenes
 			public int RadiosityRays = 4;
 			public float RadiosityBlend = 0.9f;
 			public float RadiosityMaxHistorySamples = 64f;
+			public float RadiosityMovingHistorySamples = 16f;
 			public float ProbeHistoryWeight = 0.5f;
 			public float ProbeMaxHistorySamples = 32f;
 			public float ProbeChangeThreshold = 0.5f;
+			public float ProbeChangeSigma = 4f;
+			public float ProbeChangeFloor = 0.15f;
+			public float ProbeMovingHistorySamples = 2f;
+			public float ProbeMovingFrames = 4f;
+			public float ProbeImportanceMergeFraction = 0.5f;
+			public float ProbeJumpThreshold = 0.4f;
 			public float ProbeTemporalBlend = 0.9f;
+			public float ProbeTemporalMovingFrames = 3f;
 			public bool ProbeImportanceSampling = true;
 			public bool ProbeSpatialFilter = true;
+			public int ProbeSpatialFilterPasses = 1;
 			public int ProbeFilterRadius = 1;
 			public int SurfaceCacheTexelsPerMeter = 6;
 			public bool RadianceCache = true;
@@ -111,6 +120,8 @@ namespace TestGame.Scenes
 			public float RadianceCacheMaxHistorySamples = 32f;
 			public float RadianceCacheChangeThreshold = 0.25f;
 			public int RadianceCacheProbesPerFrame = 160;
+			public int RadianceCacheChangeProbesPerFrame = 64;
+			public float RadianceCacheChangeRadius = 2f;
 			public int RadianceCacheProbeResolution = 16;
 			public int RadianceCacheTraceResolution = 32;
 
@@ -134,6 +145,43 @@ namespace TestGame.Scenes
 
 			/// <summary>Glass props (transparent materials: sorting, blending, GI from the volume); off for the plain room.</summary>
 			public bool Glass = true;
+
+			/// <summary>Start position of the player's eye (null = the usual spot by the open side of the room).</summary>
+			public Vector3? CameraPosition;
+
+			/// <summary>The point the camera looks at when <see cref="CameraPosition" /> is set (default: straight ahead).</summary>
+			public Vector3? CameraLookAt;
+
+			/// <summary>No sun, no ambient, a black sky: the emitters are the only light, so their GI (and any lag of it) shows plainly.</summary>
+			public bool Night;
+
+			// ---- Ghosting measurements (see GhostTest): scripted events, logged screen regions, a noise window ----
+
+			/// <summary>Frame at which the orb Orb0 jumps half its orbit (0 = never).</summary>
+			public int EmitterStepFrame;
+
+			/// <summary>Frame at which Orb0 goes dark (0 = never).</summary>
+			public int EmitterOffFrame;
+
+			/// <summary>Frame at which a dynamic box starts crossing the room (0 = no box).</summary>
+			public int MoverFrame;
+
+			/// <summary>Depth (world z) of the box's path across the room.</summary>
+			public float MoverZ = -1.6f;
+
+			/// <summary>World points "x,y,z;x,y,z;..." whose screen squares are logged every frame.</summary>
+			public string RegionPoints;
+
+			public int RegionSize = 16;
+			public int RegionStartFrame = 1;
+
+			/// <summary>What the regions and the noise window read: "scene" (HDR scene color) or "gi" (indirect diffuse).</summary>
+			public string RegionSource;
+
+			/// <summary>Frames of per-pixel temporal statistics, starting at <see cref="NoiseStartFrame" /> (0 = none).</summary>
+			public int NoiseFrames;
+
+			public int NoiseStartFrame = 1;
 		}
 
 		#endregion
@@ -167,8 +215,21 @@ namespace TestGame.Scenes
 				scene.Settings.Environment.Skybox = CreateSkybox(options, SunDirection);
 			}
 
+			if (options.Night)
+			{
+				ApplyNight(scene);
+			}
+
 			ApplyHarness(scene, options);
 		}
+
+		/// <summary>
+		///     The view of the ghosting tests (view=ghost): from under the ceiling at the open side, looking down at the
+		///     floor the orbs circle over, the back wall and both coloured walls, past the pillars.
+		/// </summary>
+		public static readonly Vector3 GhostViewPosition = new Vector3(0f, 5.3f, -3.6f);
+
+		public static readonly Vector3 GhostViewLookAt = new Vector3(0f, 0f, 4.5f);
 
 		/// <summary>Adds the frame dump / stats controls to a scene without them (other test scenes), then applies the harness.</summary>
 		public static void InstallHarness(Scene scene, Options options)
@@ -306,6 +367,10 @@ namespace TestGame.Scenes
 			{
 				controller.AutoPilot = options.AutoCamera;
 				controller.MouseLook = options.MouseLook;
+				if (options.CameraPosition.HasValue)
+				{
+					PlaceCamera(controller, options.CameraPosition.Value, options.CameraLookAt ?? options.CameraPosition.Value + Vector3.UnitZ);
+				}
 			}
 
 			GIDebugControls controls = scene.FindObjectOfType<GIDebugControls>();
@@ -317,11 +382,67 @@ namespace TestGame.Scenes
 				controls.DumpAfterSeconds = options.DumpAfterSeconds;
 				controls.DumpAfterFrames = options.DumpAfterFrames;
 			}
+
+			if (options.EmitterStepFrame > 0 || options.EmitterOffFrame > 0 || options.MoverFrame > 0 || !string.IsNullOrWhiteSpace(options.RegionPoints) || options.NoiseFrames > 0)
+			{
+				GhostTest ghost = scene.CreateGameObject("GhostTest").AddComponent<GhostTest>();
+				ghost.EmitterStepFrame = options.EmitterStepFrame;
+				ghost.EmitterOffFrame = options.EmitterOffFrame;
+				ghost.MoverFrame = options.MoverFrame;
+				ghost.MoverStart.Z = options.MoverZ;
+				ghost.MoverEnd.Z = options.MoverZ;
+				ghost.ParseRegionPoints(options.RegionPoints);
+				ghost.RegionSize = Math.Max(1, options.RegionSize);
+				ghost.RegionStartFrame = options.RegionStartFrame;
+				ghost.RegionSource = string.Equals(options.RegionSource, "gi", StringComparison.OrdinalIgnoreCase) ? LELEngine.Rendering.FrameStatistics.Source.IndirectDiffuse
+					: string.Equals(options.RegionSource, "motion", StringComparison.OrdinalIgnoreCase) ? LELEngine.Rendering.FrameStatistics.Source.Motion
+					: LELEngine.Rendering.FrameStatistics.Source.SceneColor;
+				ghost.NoiseFrames = options.NoiseFrames;
+				ghost.NoiseStartFrame = options.NoiseStartFrame;
+			}
 		}
 
 		#endregion
 
 		#region PrivateMethods
+
+		/// <summary>Puts the player's eye at <paramref name="position" />, looking at <paramref name="lookAt" /> (yaw on the player, pitch on the camera).</summary>
+		private static void PlaceCamera(FpsController controller, Vector3 position, Vector3 lookAt)
+		{
+			Vector3 direction = lookAt - position;
+			float horizontal = (float)Math.Sqrt(direction.X * direction.X + direction.Z * direction.Z);
+			float yaw = horizontal > 1e-4f ? (float)(Math.Atan2(direction.X, direction.Z) * QuaternionHelper.Rad2Deg) : 0f;
+			controller.transform.position = position;
+			controller.transform.rotation = QuaternionHelper.Euler(0f, yaw, 0f);
+			controller.EyeHeight = position.Y;
+			controller.StartPitch = (float)(Math.Atan2(-direction.Y, Math.Max(horizontal, 1e-4f)) * QuaternionHelper.Rad2Deg);
+		}
+
+		/// <summary>
+		///     Night (night=1): the sun and the ambient off, the sky black, the fixed lamp and strip dimmed so the moving
+		///     orbs light most of the room; exposure up so the emitters' light reads.
+		/// </summary>
+		private static void ApplyNight(Scene scene)
+		{
+			DirectionalLight sun = scene.FindObjectOfType<DirectionalLight>();
+			if (sun != null)
+			{
+				sun.Strength = 0f;
+			}
+
+			foreach (EmissiveOrbiter emitter in scene.FindObjectsOfType<EmissiveOrbiter>())
+			{
+				if (emitter.Radius <= 0f)
+				{
+					emitter.Intensity *= 0.2f;
+				}
+			}
+
+			Lighting.Environment.AmbientStrength = 0f;
+			Lighting.GI.SkyRadiance = new Vector3(0.004f, 0.005f, 0.008f);
+			Lighting.Environment.BackgroundColor = new Color4(0.004f, 0.005f, 0.008f, 1f);
+			Lighting.Environment.Exposure = 1.6f;
+		}
 
 		/// <summary>Environment, shadow and GI settings of the room (written into the active scene's settings).</summary>
 		internal static void ApplySettings(Options options)
@@ -355,12 +476,21 @@ namespace TestGame.Scenes
 			Lighting.GI.RadiosityRays = options.RadiosityRays;
 			Lighting.GI.RadiosityBlend = options.RadiosityBlend;
 			Lighting.GI.RadiosityMaxHistorySamples = options.RadiosityMaxHistorySamples;
+			Lighting.GI.RadiosityMovingHistorySamples = options.RadiosityMovingHistorySamples;
 			Lighting.GI.ProbeHistoryWeight = options.ProbeHistoryWeight;
 			Lighting.GI.ProbeMaxHistorySamples = options.ProbeMaxHistorySamples;
 			Lighting.GI.ProbeChangeThreshold = options.ProbeChangeThreshold;
+			Lighting.GI.ProbeChangeSigma = options.ProbeChangeSigma;
+			Lighting.GI.ProbeChangeFloor = options.ProbeChangeFloor;
+			Lighting.GI.ProbeMovingHistorySamples = options.ProbeMovingHistorySamples;
+			Lighting.GI.ProbeMovingFrames = options.ProbeMovingFrames;
+			Lighting.GI.ProbeImportanceMergeFraction = options.ProbeImportanceMergeFraction;
+			Lighting.GI.ProbeJumpThreshold = options.ProbeJumpThreshold;
 			Lighting.GI.ProbeTemporalBlend = options.ProbeTemporalBlend;
+			Lighting.GI.ProbeTemporalMovingFrames = options.ProbeTemporalMovingFrames;
 			Lighting.GI.ProbeImportanceSampling = options.ProbeImportanceSampling;
 			Lighting.GI.ProbeSpatialFilter = options.ProbeSpatialFilter;
+			Lighting.GI.ProbeSpatialFilterPasses = options.ProbeSpatialFilterPasses;
 			Lighting.GI.ProbeFilterRadius = options.ProbeFilterRadius;
 			Lighting.GI.RadianceCacheEnabled = options.RadianceCache;
 			Lighting.GI.SdfObjectIdLookup = options.SdfObjectIdLookup;
@@ -373,6 +503,8 @@ namespace TestGame.Scenes
 			Lighting.GI.RadianceCacheMaxHistorySamples = options.RadianceCacheMaxHistorySamples;
 			Lighting.GI.RadianceCacheChangeThreshold = options.RadianceCacheChangeThreshold;
 			Lighting.GI.RadianceCacheProbesPerFrame = options.RadianceCacheProbesPerFrame;
+			Lighting.GI.RadianceCacheChangeProbesPerFrame = options.RadianceCacheChangeProbesPerFrame;
+			Lighting.GI.RadianceCacheChangeRadius = options.RadianceCacheChangeRadius;
 			Lighting.GI.RadianceCacheProbeResolution = options.RadianceCacheProbeResolution;
 			Lighting.GI.RadianceCacheTraceResolution = options.RadianceCacheTraceResolution;
 			Lighting.GI.SurfaceCacheTexelsPerMeter = options.SurfaceCacheTexelsPerMeter;

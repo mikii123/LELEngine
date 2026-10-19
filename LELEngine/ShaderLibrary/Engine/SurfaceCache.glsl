@@ -63,12 +63,12 @@ vec3 SampleSurfaceCache(int objectIndex, vec3 localPos, vec3 localNormal, sample
 	return vec3(0.0);
 }
 
-// Surface cache lighting at a world hit point found by the global distance field.
+// Surface cache lighting at a world hit point found by the global distance field, and the object hit (-1: none).
 // hitNormal is the SDF normal (world). Returns false when no object is close enough.
-bool SampleSurfaceCacheAtHit(vec3 hitPos, vec3 hitNormal, float searchDistance, sampler2D lighting, out vec3 radiance)
+bool SampleSurfaceCacheAtHitObject(vec3 hitPos, vec3 hitNormal, float searchDistance, sampler2D lighting, out vec3 radiance, out int objectIndex)
 {
 	vec3 localPos;
-	int objectIndex = SceneObjectAtPoint(hitPos, searchDistance, localPos);
+	objectIndex = SceneObjectAtPoint(hitPos, searchDistance, localPos);
 	if (objectIndex < 0)
 	{
 		radiance = vec3(0.0);
@@ -78,4 +78,10 @@ bool SampleSurfaceCacheAtHit(vec3 hitPos, vec3 hitNormal, float searchDistance, 
 	vec3 localNormal = SceneObjectWorldToLocalDir(sceneObjects[objectIndex], hitNormal);
 	radiance = SampleSurfaceCache(objectIndex, localPos, localNormal, lighting);
 	return true;
+}
+
+bool SampleSurfaceCacheAtHit(vec3 hitPos, vec3 hitNormal, float searchDistance, sampler2D lighting, out vec3 radiance)
+{
+	int objectIndex;
+	return SampleSurfaceCacheAtHitObject(hitPos, hitNormal, searchDistance, lighting, radiance, objectIndex);
 }

@@ -21,6 +21,8 @@ void main()
 #include "Engine/SceneObjects.glsl"
 #include "Engine/SurfaceCache.glsl"
 #include "Engine/Sampling.glsl"
+// Rays that would read cache texels of a moving object trace on (see RadianceCache.glsl).
+#define RC_MOVING_MASK 1
 #include "Engine/RadianceCache.glsl"
 #include "Engine/ScreenProbes.glsl"
 #include "Engine/Sky.glsl"
@@ -28,17 +30,19 @@ void main()
 // Screen probe ray tracing (Lumen final gather, step 1): one probe per probeSpacing x probeSpacing pixels,
 // anchored at a jittered pixel of its cell, 64 rays per probe, exactly one ray per fragment.
 //
-// With a valid importance selection (Engine/ProbeImportance.shader) the 64 rays are spent as 2x2 on the
-// 16 most important octahedral directions; otherwise one ray per direction. ProbeCompose.shader turns
-// the ray results back into the octahedral map.
+// With a valid ray table (Engine/ProbeImportance.shader) each ray samples the direction its entry says: a whole
+// octahedral texel, a 2x2 block of dim texels or a quadrant of a bright one; otherwise one ray per direction.
+// ProbeCompose.shader turns the ray results back into the octahedral map.
 //
 // Each ray first marches the depth buffer (screen trace: pixel-exact near-field occlusion), then continues
 // through the global distance field up to the near distance; hits read the surface cache, rays that get
-// further read the world-space radiance cache, and without a cache they trace on to the sky.
-out vec4 OutRay; // rgb radiance, a = hit distance (-1 sky / far field, -2 probe on sky / invalid)
+// further read the world-space radiance cache, and without a cache they trace on to the sky. A hit on an object
+// that moved since the previous frame is flagged (see EncodeMovingHit): its direction's history stays short.
+out vec4 OutRay; // rgb radiance, a = hit distance (-1 sky / far field, -2 probe on sky / invalid, moving hits encoded)
 
 uniform sampler2D FinalLighting;
 uniform usampler2D ProbeSelection;
+uniform usampler2D ProbeRayTable;
 uniform mat4 viewProjection;
 uniform vec3 cameraPosition;
 uniform vec3 cameraForward;
@@ -120,11 +124,13 @@ vec4 TraceRay(vec3 position, vec3 normal, vec3 direction, float jitter)
 		if (ScreenTrace(position + normal * 0.02, direction, jitter, hitPos, hitNormal, travelled))
 		{
 			vec3 radiance;
-			if (!SampleSurfaceCacheAtHit(hitPos, hitNormal, voxel * 2.0, FinalLighting, radiance))
+			int objectIndex;
+			if (!SampleSurfaceCacheAtHitObject(hitPos, hitNormal, voxel * 2.0, FinalLighting, radiance, objectIndex))
 			{
 				radiance = vec3(0.0);
 			}
-			return vec4(radiance, length(hitPos - position));
+			float distance = length(hitPos - position);
+			return vec4(radiance, SceneObjectMoved(objectIndex) ? EncodeMovingHit(distance) : distance);
 		}
 		origin += direction * max(travelled - voxel, 0.0);
 	}
@@ -153,11 +159,13 @@ vec4 TraceRay(vec3 position, vec3 normal, vec3 direction, float jitter)
 	{
 		vec3 hitPos = origin + direction * hitT;
 		vec3 radiance;
-		if (!SampleSurfaceCacheAtHit(hitPos, SdfNormal(hitPos), voxel * 2.0, FinalLighting, radiance))
+		int objectIndex;
+		if (!SampleSurfaceCacheAtHitObject(hitPos, SdfNormal(hitPos), voxel * 2.0, FinalLighting, radiance, objectIndex))
 		{
 			radiance = vec3(0.0);
 		}
-		return vec4(radiance, length(hitPos - position));
+		float distance = length(hitPos - position);
+		return vec4(radiance, SceneObjectMoved(objectIndex) ? EncodeMovingHit(distance) : distance);
 	}
 
 	return vec4(SkyRadiance(direction), -1.0);
@@ -184,11 +192,25 @@ void main()
 	vec2 octUV;
 	if (SelectionValid(selection))
 	{
-		int texelIndex = SelectedTexelIndex(selection, ray / 4);
-		int sub = ray % 4;
+		uint entry = texelFetch(ProbeRayTable, texel, 0).r;
+		int texelIndex = RayTexel(entry);
 		vec2 oct = vec2(texelIndex % PROBE_RESOLUTION, texelIndex / PROBE_RESOLUTION);
-		vec2 subOffset = (vec2(sub & 1, sub >> 1) + fract(probeOffset + vec2(0.37, 0.61) * float(sub))) * 0.5;
-		octUV = (oct + subOffset) / float(PROBE_RESOLUTION);
+		uint mode = RayMode(entry);
+		if (mode == RAY_BLOCK)
+		{
+			// One ray anywhere in the 2x2 block of dim directions.
+			octUV = (oct + 2.0 * probeOffset) / float(PROBE_RESOLUTION);
+		}
+		else if (mode == RAY_QUADRANT)
+		{
+			int sub = RayQuadrant(entry);
+			vec2 subOffset = (vec2(sub & 1, sub >> 1) + fract(probeOffset + vec2(0.37, 0.61) * float(sub))) * 0.5;
+			octUV = (oct + subOffset) / float(PROBE_RESOLUTION);
+		}
+		else
+		{
+			octUV = (oct + probeOffset) / float(PROBE_RESOLUTION);
+		}
 	}
 	else
 	{

@@ -62,6 +62,12 @@ namespace LELEngine.Rendering.Lumen
 
 		/// <summary>Radiosity probe atlas (Size / 4 squared, fp32): rgb irradiance / pi accumulated over frames, a = sample count (0 = none).</summary>
 		public int RadiosityProbes { get; private set; }
+
+		/// <summary>
+		///     Per radiosity probe (fp32): x = mean squared luminance of its updates (the change test's spread), y = updates
+		///     since a ray hit a moving object, z = the change test's verdict on the previous update (+1 brighter, -1 darker).
+		/// </summary>
+		public int RadiosityMeta { get; private set; }
 		public int ProbeGridSize => Size / RadiosityBlock;
 		public int FinalLightingCurrent => finalLighting[finalIndex];
 		public int FinalLightingPrevious => finalLighting[1 - finalIndex];
@@ -105,6 +111,7 @@ namespace LELEngine.Rendering.Lumen
 			finalLighting[0] = CreateTexture(PixelInternalFormat.Rgba16f, PixelFormat.Rgba, PixelType.Float);
 			finalLighting[1] = CreateTexture(PixelInternalFormat.Rgba16f, PixelFormat.Rgba, PixelType.Float);
 			RadiosityProbes = CreateTexture(PixelInternalFormat.Rgba32f, PixelFormat.Rgba, PixelType.Float, Size / RadiosityBlock);
+			RadiosityMeta = CreateTexture(PixelInternalFormat.Rgba32f, PixelFormat.Rgba, PixelType.Float, Size / RadiosityBlock);
 
 			// Lighting atlases are filtered when looked up; attributes are fetched by texel.
 			SetFilter(IndirectLighting, true);
@@ -251,6 +258,7 @@ namespace LELEngine.Rendering.Lumen
 				{
 					GL.ClearTexImage(texture, 0, PixelFormat.Rgba, PixelType.Float, IntPtr.Zero);
 				}
+				GL.ClearTexImage(RadiosityMeta, 0, PixelFormat.Rgba, PixelType.Float, IntPtr.Zero);
 				return;
 			}
 
@@ -262,12 +270,14 @@ namespace LELEngine.Rendering.Lumen
 			}
 			GL.BindTexture(TextureTarget.Texture2D, RadiosityProbes);
 			GL.TexSubImage2D(TextureTarget.Texture2D, 0, 0, 0, ProbeGridSize, ProbeGridSize, PixelFormat.Rgba, PixelType.Float, zeros);
+			GL.BindTexture(TextureTarget.Texture2D, RadiosityMeta);
+			GL.TexSubImage2D(TextureTarget.Texture2D, 0, 0, 0, ProbeGridSize, ProbeGridSize, PixelFormat.Rgba, PixelType.Float, zeros);
 			GL.BindTexture(TextureTarget.Texture2D, 0);
 		}
 
 		public void Delete()
 		{
-			foreach (int texture in new[] { CardIndex, Albedo, Normal, Emissive, LocalPosition, IndirectLighting, finalLighting[0], finalLighting[1], RadiosityProbes })
+			foreach (int texture in new[] { CardIndex, Albedo, Normal, Emissive, LocalPosition, IndirectLighting, finalLighting[0], finalLighting[1], RadiosityProbes, RadiosityMeta })
 			{
 				GL.DeleteTexture(texture);
 			}

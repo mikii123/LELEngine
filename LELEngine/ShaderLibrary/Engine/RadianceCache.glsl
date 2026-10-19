@@ -17,6 +17,18 @@ uniform vec2 rcAtlasSize;               // texels
 uniform float rcNearDistance;           // rays trace the distance field this far, then read the cache
 uniform int rcFarShortcut;              // 1: far targets skip the target visibility pass (see SampleRadianceCache)
 
+#ifdef RC_MOVING_MASK
+// Shaders that can trace on (screen probes, radiosity) define RC_MOVING_MASK: the parts of a probe's map that saw a
+// moving object in its last two updates (a 4x4 grid of cells over the octahedral map, RadianceCacheResolve.shader)
+// are out of date, and a lookup that would read one returns false so the ray traces the scene as it is now.
+layout(std430, binding = 4) readonly buffer RadianceCacheProbeMoving
+{
+	int rcProbeFrames[]; // [2 * rcProbeCount + probe] = moving cells, bits 0-15 last update, 16-31 the one before
+};
+uniform int rcProbeCount;
+uniform int rcMovingRecent; // 0 when nothing has moved for longer than any probe keeps its moving cells (no reads)
+#endif
+
 int RadianceCacheTileSize()
 {
 	return rcProbeResolution + 2;
@@ -50,6 +62,26 @@ vec4 RadianceCacheProbeSampleOct(int probeIndex, vec2 oct)
 	return texture(RadianceCacheAtlas, texel / rcAtlasSize);
 }
 
+// The probe's cells that saw a moving object in its last two updates (0 without RC_MOVING_MASK).
+uint RadianceCacheMovingCells(int probeIndex)
+{
+#ifdef RC_MOVING_MASK
+	if (rcMovingRecent == 0) return 0u;
+	uint cells = uint(rcProbeFrames[2 * rcProbeCount + probeIndex]);
+	return (cells | (cells >> 16u)) & 0xFFFFu;
+#else
+	return 0u;
+#endif
+}
+
+// True when the probe's map around this direction saw a moving object recently (the lookup must not use it).
+bool RadianceCacheMovingAt(uint cells, vec2 oct)
+{
+	if (cells == 0u) return false;
+	ivec2 cell = clamp(ivec2(oct * 4.0), ivec2(0), ivec2(3));
+	return (cells & (1u << uint(cell.y * 4 + cell.x))) != 0u;
+}
+
 // Bilinear lookup of one probe's map in the given world direction.
 vec4 RadianceCacheProbeSample(ivec3 coord, vec3 direction)
 {
@@ -74,6 +106,7 @@ bool SampleRadianceCache(vec3 p, vec3 direction, out vec3 radiance)
 
 	float weights[8];
 	vec3 alongRadiance[8];
+	uint movingCells[8];
 	float hitSum = 0.0;
 	float hitMin = 1e9;
 	float hitMax = 0.0;
@@ -82,6 +115,7 @@ bool SampleRadianceCache(vec3 p, vec3 direction, out vec3 radiance)
 	{
 		weights[i] = 0.0;
 		alongRadiance[i] = vec3(0.0);
+		movingCells[i] = 0u;
 		ivec3 corner = ivec3(i & 1, (i >> 1) & 1, (i >> 2) & 1);
 		vec3 w3 = mix(1.0 - f, f, vec3(corner));
 		float w = w3.x * w3.y * w3.z;
@@ -89,6 +123,7 @@ bool SampleRadianceCache(vec3 p, vec3 direction, out vec3 radiance)
 
 		ivec3 coord = base + corner;
 		int probeIndex = RadianceCacheProbeIndex(coord);
+		movingCells[i] = RadianceCacheMovingCells(probeIndex);
 		vec3 probePosition = RadianceCacheProbePosition(coord);
 		vec3 toPoint = p - probePosition;
 		float distanceToPoint = length(toPoint);
@@ -104,6 +139,7 @@ bool SampleRadianceCache(vec3 p, vec3 direction, out vec3 radiance)
 		// Hit distance along the direction as p would measure it (planar geometry assumption).
 		vec4 along = RadianceCacheProbeSampleOct(probeIndex, octAlong);
 		if (along.a < 0.5) continue;
+		if (RadianceCacheMovingAt(movingCells[i], octAlong)) return false;
 		float hitDistance = max((along.a - 1.0) - dot(toPoint, direction), 0.0);
 
 		weights[i] = w;
@@ -142,8 +178,10 @@ bool SampleRadianceCache(vec3 p, vec3 direction, out vec3 radiance)
 		ivec3 coord = base + ivec3(i & 1, (i >> 1) & 1, (i >> 2) & 1);
 		vec3 toTarget = target - RadianceCacheProbePosition(coord);
 		float distanceToTarget = length(toTarget);
-		vec4 s = RadianceCacheProbeSample(coord, toTarget / max(distanceToTarget, 1e-3));
+		vec2 octTarget = DirectionToOctahedral(toTarget / max(distanceToTarget, 1e-3));
+		vec4 s = RadianceCacheProbeSampleOct(RadianceCacheProbeIndex(coord), octTarget);
 		if (s.a < 0.5) continue;
+		if (RadianceCacheMovingAt(movingCells[i], octTarget)) return false;
 
 		float margin = max(occlusionMargin, 0.1 * distanceToTarget);
 		float visibility = clamp(((s.a - 1.0) - (distanceToTarget - margin)) / margin, 0.0, 1.0);

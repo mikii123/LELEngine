@@ -18,6 +18,8 @@ uniform int interiorCount;
 uniform int interiorTotal;
 uniform int exteriorStart;
 uniform int exteriorTotal;
+uniform int priorityCount;  // probes around this frame's changes, taken first (RadianceCachePass.BuildPriority)
+uniform int priorityOffset; // where they are in the list (after the interior and exterior lists)
 
 layout(std430, binding = 3) readonly buffer RadianceCacheProbeList
 {
@@ -30,6 +32,8 @@ shared vec3 partial[64 * 9];
 
 int SequenceProbe(int q)
 {
+	if (q < priorityCount) return probeList[priorityOffset + q];
+	q -= priorityCount;
 	return q < interiorCount
 		? probeList[(interiorStart + q) % interiorTotal]
 		: probeList[interiorTotal + (exteriorStart + q - interiorCount) % exteriorTotal];

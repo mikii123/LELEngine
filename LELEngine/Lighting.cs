@@ -759,6 +759,12 @@ namespace LELEngine
 
 		[GIMethod(GIMode.Lumen)] public bool ProbeSpatialFilter = true;
 
+		/// <summary>
+		///     Passes of the spatial probe filter: each widens its kernel (less noise, no added lag, ~0.2 ms on the Intel
+		///     iGPU) but also softens the GI (measured: two passes flatten the emitters' light pools by a few percent).
+		/// </summary>
+		[GIMethod(GIMode.Lumen)] public int ProbeSpatialFilterPasses = 1;
+
 		/// <summary>Per-frame jitter of probe anchors and ray directions (needed for convergence; off = diagnostics).</summary>
 		[GIMethod(GIMode.Lumen)] public bool ProbeJitter = true;
 
@@ -775,10 +781,14 @@ namespace LELEngine
 		[GIMethod(GIMode.Lumen)] public bool ProbeDirectionJitter = true;
 
 		/// <summary>
-		///     Structured importance sampling: directions ranked by last frame's radiance times cosine; the 16 most
-		///     important ones get 2x2 rays, the other 48 reuse their history. Ray budget stays 64 per probe.
+		///     Structured importance sampling (Lumen's): directions ranked by last frame's radiance times cosine; the
+		///     dimmest 2x2 blocks of directions get one ray per block, and each ray saved supersamples one of the
+		///     brightest directions with four rays. Every direction is traced every frame; the budget stays 64 per probe.
 		/// </summary>
 		[GIMethod(GIMode.Lumen)] public bool ProbeImportanceSampling = true;
+
+		/// <summary>A 2x2 block of directions gets a single ray when its importance is below this fraction of the mean block (at most 12 blocks).</summary>
+		[GIMethod(GIMode.Lumen)] public float ProbeImportanceMergeFraction = 0.5f;
 
 		/// <summary>Radius of the spatial probe filter, in probes (1 = 3x3 neighbourhood).</summary>
 		[GIMethod(GIMode.Lumen)] public int ProbeFilterRadius = 1; // the filter kernel is fixed at 3x3 probes; kept for CLI compatibility
@@ -805,14 +815,43 @@ namespace LELEngine
 		/// </summary>
 		[GIMethod(GIMode.Lumen)] public float ProbeMaxHistorySamples = 32f;
 
-		/// <summary>
-		///     Relative change of a probe's summed traced radiance versus its history that counts as a lighting
-		///     change and restarts its accumulation (the change detector in ProbeCompose.shader).
-		/// </summary>
-		[GIMethod(GIMode.Lumen)] public float ProbeChangeThreshold = 0.5f;
+		/// <summary>No longer read: the probe change test is per direction (<see cref="ProbeChangeSigma" />, <see cref="ProbeChangeFloor" />).</summary>
+		[HideInInspector] public float ProbeChangeThreshold = 0.5f;
 
-		/// <summary>History weight of the per-pixel temporal accumulation (0 = off).</summary>
+		/// <summary>
+		///     Anti-lag of the probe directions (ProbeCompose.shader): besides its long history every direction keeps the
+		///     mean of its last <see cref="ProbeFastHistorySamples" /> samples; when the long history is further from that
+		///     mean than this many of the mean's standard deviations (from the direction's own spread) plus
+		///     <see cref="ProbeChangeFloor" /> of its value, a light appeared or left and the long history restarts from it.
+		/// </summary>
+		[GIMethod(GIMode.Lumen)] public float ProbeChangeSigma = 4f;
+
+		/// <summary>The relative part of the anti-lag threshold.</summary>
+		[GIMethod(GIMode.Lumen)] public float ProbeChangeFloor = 0.15f;
+
+		/// <summary>Samples the fast history of a probe direction averages (the anti-lag reference).</summary>
+		[GIMethod(GIMode.Lumen)] public float ProbeFastHistorySamples = 4f;
+
+		/// <summary>
+		///     A probe restarts every direction when the brightness-weighted mean of its fast histories moved by more than
+		///     this fraction of its long one: the light it mostly sees appeared, left or went out.
+		/// </summary>
+		[GIMethod(GIMode.Lumen)] public float ProbeJumpThreshold = 0.4f;
+
+		/// <summary>History cap (samples) of a probe direction that sees, or saw in the last <see cref="ProbeMovingFrames" />, an object that moved.</summary>
+		[GIMethod(GIMode.Lumen)] public float ProbeMovingHistorySamples = 2f;
+
+		/// <summary>Frames after its last hit on a moving object that a probe direction keeps the short history.</summary>
+		[GIMethod(GIMode.Lumen)] public float ProbeMovingFrames = 4f;
+
+		/// <summary>
+		///     Steady-state history weight of the per-pixel temporal filter (0 = off): a history accumulates up to
+		///     1 / (1 - this) frames (0.9 = 10), each new frame weighted 1 / n, so a new or rejected history converges fast.
+		/// </summary>
 		[GIMethod(GIMode.Lumen)] public float ProbeTemporalBlend = 0.9f;
+
+		/// <summary>Frames the per-pixel history accumulates at most on moving surfaces (their lighting changes as they move).</summary>
+		[GIMethod(GIMode.Lumen)] public float ProbeTemporalMovingFrames = 3f;
 
 		/// <summary>Length of the depth-buffer march at the start of every probe ray (world units, 0 = off).</summary>
 		[GIMethod(GIMode.Lumen)] public float ScreenTraceDistance = 1.5f;
@@ -874,6 +913,16 @@ namespace LELEngine
 		///     lighting change and restarts the probe's accumulation.
 		/// </summary>
 		[GIMethod(GIMode.Lumen)] public float RadianceCacheChangeThreshold = 0.25f;
+
+		/// <summary>
+		///     Probes around what changed this frame (objects that moved, materials that changed) updated before the round
+		///     robin, nearest first, on top of <see cref="RadianceCacheProbesPerFrame" />: the far field follows a moving or
+		///     switched light within a frame or two instead of a full sweep of the grid.
+		/// </summary>
+		[GIMethod(GIMode.Lumen)] public int RadianceCacheChangeProbesPerFrame = 64;
+
+		/// <summary>How far around a change its probes are taken first, in probe spacings.</summary>
+		[GIMethod(GIMode.Lumen)] public float RadianceCacheChangeRadius = 2f;
 
 		/// <summary>After this many frames without object, material or sun changes the probe budget drops to a trickle.</summary>
 		[GIMethod(GIMode.Lumen)] public int RadianceCacheIdleAfterFrames = 60;

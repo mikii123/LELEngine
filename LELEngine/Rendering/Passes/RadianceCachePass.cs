@@ -58,6 +58,10 @@ namespace LELEngine.Rendering.Passes
 		private const int ProbeFramesBinding = 4;
 		private const int TraceGroupSize = 16;
 
+		// Probes updated first each frame because the lighting around them changed (LumenScene.ChangeRegions): stored
+		// after the interior and exterior lists in the probe list buffer.
+		private const int PriorityCapacity = 256;
+
 		private const int SHLayers = 7;
 
 		private ComputeShader trace;
@@ -94,6 +98,17 @@ namespace LELEngine.Rendering.Passes
 		private Vector3 listBoundsMin;
 		private Vector3 listBoundsMax;
 		private bool listValid;
+
+		private int[] listPositions = new int[0]; // probe index -> its position in the interior + exterior list
+		private readonly int[] priorityProbes = new int[PriorityCapacity];
+		private readonly List<(float Distance, int Probe)> priorityCandidates = new List<(float Distance, int Probe)>();
+		private readonly HashSet<int> priorityTaken = new HashSet<int>();
+		private int priorityCount;
+
+		// Frames since a dynamic object last moved: probes keep moving cells for two of their updates, so once this is
+		// longer than two update periods of the slowest probes none is left and the lookups skip reading them.
+		private int framesSinceMove = int.MaxValue / 2;
+		private int movingCellsLifetime;
 
 		#endregion
 
@@ -164,7 +179,13 @@ namespace LELEngine.Rendering.Passes
 			int budget = Math.Max(1, Idle ? gi.RadianceCacheProbesPerFrame / Math.Max(1, gi.RadianceCacheIdleDivisor) : gi.RadianceCacheProbesPerFrame);
 			int interiorCount = Math.Min(budget, interiorTotal);
 			int exteriorCount = Math.Min(Math.Max(1, budget / 8), exteriorTotal);
-			int count = interiorCount + exteriorCount;
+			priorityCount = BuildPriority(scene, gi, interiorCount, exteriorCount);
+			int count = priorityCount + interiorCount + exteriorCount;
+
+			framesSinceMove = scene.DynamicChanged ? 0 : Math.Min(framesSinceMove + 1, int.MaxValue / 2);
+			int interiorPeriod = interiorCount > 0 ? (interiorTotal + interiorCount - 1) / interiorCount : 0;
+			int exteriorPeriod = exteriorCount > 0 ? (exteriorTotal + exteriorCount - 1) / exteriorCount : 0;
+			movingCellsLifetime = 2 * Math.Max(interiorPeriod, exteriorPeriod) + 4;
 			tracedSinceChange += count;
 			Publish();
 			if (count == 0)
@@ -235,7 +256,8 @@ namespace LELEngine.Rendering.Passes
 		}
 
 		/// <summary>
-		///     Binds the cache for the opaque pipeline's Engine/RadianceCache.glsl consumers. When the cache is not
+		///     Binds the cache for the opaque pipeline's Engine/RadianceCache.glsl consumers (shaders that define
+		///     RC_MOVING_MASK also read the probes' moving cells from storage binding 4). When the cache is not
 		///     <see cref="Active" /> the near distance is set to 0 and the shaders trace the whole distance field instead.
 		/// </summary>
 		public void SetUniforms(ShaderProgram program, int textureUnit)
@@ -247,6 +269,7 @@ namespace LELEngine.Rendering.Passes
 			}
 
 			BindCache(program, textureUnit);
+			GL.BindBufferBase(BufferRangeTarget.ShaderStorageBuffer, ProbeFramesBinding, probeFramesBuffer);
 		}
 
 		#endregion
@@ -265,6 +288,8 @@ namespace LELEngine.Rendering.Passes
 			program.SetVector2("rcAtlasSize", new Vector2(atlasWidth, atlasHeight));
 			program.SetFloat("rcNearDistance", Lighting.GI.RadianceCacheNearDistance);
 			program.SetInt("rcFarShortcut", Lighting.GI.RadianceCacheFarShortcut ? 1 : 0);
+			program.SetInt("rcProbeCount", probeCount);
+			program.SetInt("rcMovingRecent", framesSinceMove <= movingCellsLifetime ? 1 : 0);
 		}
 
 		#endregion
@@ -338,6 +363,8 @@ namespace LELEngine.Rendering.Passes
 			program.SetInt("rcTraceResolution", traceResolution);
 			program.SetInt("traceSlotsPerRow", traceSlotsPerRow);
 			program.SetInt("sequenceOffset", 0);
+			program.SetInt("priorityCount", priorityCount);
+			program.SetInt("priorityOffset", probeCount);
 			program.SetInt("interiorStart", interiorNext);
 			program.SetInt("interiorCount", interiorCount);
 			program.SetInt("interiorTotal", Math.Max(1, interiorTotal));
@@ -433,7 +460,7 @@ namespace LELEngine.Rendering.Passes
 			}
 
 			int count = Math.Max(1, probeCount);
-			int[] frames = new int[count * 2]; // [probe] last frame, [count + probe] update count
+			int[] frames = new int[count * 3]; // [probe] last frame, [count + probe] update count, [2 count + probe] moving cells
 			for (int i = 0; i < count; i++)
 			{
 				frames[i] = -1;
@@ -474,6 +501,87 @@ namespace LELEngine.Rendering.Passes
 			Console.WriteLine($"[RadianceCache] trace buffer {traceSlots} probes x {resolution}x{resolution} rays");
 		}
 
+		/// <summary>
+		///     The probes around this frame's change regions (LumenScene.ChangeRegions, padded by
+		///     <see cref="GlobalIlluminationSettings.RadianceCacheChangeRadius" /> probe spacings), nearest first, up to
+		///     <see cref="GlobalIlluminationSettings.RadianceCacheChangeProbesPerFrame" />, minus those the round robin updates
+		///     this frame anyway (a probe traced twice in one frame would have two work groups writing its tile). Uploaded after
+		///     the interior and exterior lists; the shaders take them first (SequenceProbe).
+		/// </summary>
+		private int BuildPriority(LumenScene scene, GlobalIlluminationSettings gi, int interiorCount, int exteriorCount)
+		{
+			IReadOnlyList<LumenScene.ChangeRegion> regions = scene.ChangeRegions;
+			int budget = Math.Min(PriorityCapacity, gi.RadianceCacheChangeProbesPerFrame);
+			if (regions.Count == 0 || budget <= 0 || listPositions.Length < probeCount)
+			{
+				return 0;
+			}
+
+			priorityCandidates.Clear();
+			priorityTaken.Clear();
+			float margin = Math.Max(0f, gi.RadianceCacheChangeRadius) * probeSpacing;
+			foreach (LumenScene.ChangeRegion region in regions)
+			{
+				Vector3 lo = (region.Min - new Vector3(margin) - gridMin) / probeSpacing;
+				Vector3 hi = (region.Max + new Vector3(margin) - gridMin) / probeSpacing;
+				int x0 = Math.Max(0, (int)Math.Ceiling(lo.X)), x1 = Math.Min(probesPerAxis - 1, (int)Math.Floor(hi.X));
+				int y0 = Math.Max(0, (int)Math.Ceiling(lo.Y)), y1 = Math.Min(probesPerAxis - 1, (int)Math.Floor(hi.Y));
+				int z0 = Math.Max(0, (int)Math.Ceiling(lo.Z)), z1 = Math.Min(probesPerAxis - 1, (int)Math.Floor(hi.Z));
+				Vector3 center = region.Center;
+				for (int z = z0; z <= z1; z++)
+				{
+					for (int y = y0; y <= y1; y++)
+					{
+						for (int x = x0; x <= x1; x++)
+						{
+							int probe = x + (y + z * probesPerAxis) * probesPerAxis;
+							Vector3 position = gridMin + new Vector3(x, y, z) * probeSpacing;
+							priorityCandidates.Add(((position - center).LengthSquared, probe));
+						}
+					}
+				}
+			}
+
+			priorityCandidates.Sort((a, b) => a.Distance.CompareTo(b.Distance));
+			int count = 0;
+			foreach ((float _, int probe) in priorityCandidates)
+			{
+				if (count >= budget)
+				{
+					break;
+				}
+
+				if (!priorityTaken.Add(probe) || InRoundRobin(listPositions[probe], interiorCount, exteriorCount))
+				{
+					continue;
+				}
+
+				priorityProbes[count++] = probe;
+			}
+
+			if (count > 0)
+			{
+				GL.BindBuffer(BufferTarget.ShaderStorageBuffer, probeListBuffer);
+				GL.BufferSubData(BufferTarget.ShaderStorageBuffer, (IntPtr)(probeCount * sizeof(int)), count * sizeof(int), priorityProbes);
+				GL.BindBuffer(BufferTarget.ShaderStorageBuffer, 0);
+			}
+
+			return count;
+		}
+
+		/// <summary>The probe at this list position is in this frame's round-robin window.</summary>
+		private bool InRoundRobin(int position, int interiorCount, int exteriorCount)
+		{
+			if (position < interiorTotal)
+			{
+				int offset = (position - interiorNext + interiorTotal) % Math.Max(1, interiorTotal);
+				return offset < interiorCount;
+			}
+
+			int exteriorOffset = (position - interiorTotal - exteriorNext + exteriorTotal) % Math.Max(1, exteriorTotal);
+			return exteriorOffset < exteriorCount;
+		}
+
 		// Splits the probes into those inside the (padded) static scene bounds and the rest, uploaded as one
 		// index list: interior first, exterior after.
 		private void BuildProbeList(Vector3 boundsMin, Vector3 boundsMax)
@@ -497,11 +605,17 @@ namespace LELEngine.Rendering.Passes
 			exteriorNext = 0;
 			tracedSinceChange = 0;
 
-			int[] list = new int[Math.Max(1, probeCount)];
+			// The interior list, the exterior list, then room for the frame's priority probes.
+			int[] list = new int[Math.Max(1, probeCount) + PriorityCapacity];
 			interior.CopyTo(list, 0);
 			exterior.CopyTo(list, interiorTotal);
+			listPositions = new int[Math.Max(1, probeCount)];
+			for (int i = 0; i < interiorTotal + exteriorTotal; i++)
+			{
+				listPositions[list[i]] = i;
+			}
 			GL.BindBuffer(BufferTarget.ShaderStorageBuffer, probeListBuffer);
-			GL.BufferData(BufferTarget.ShaderStorageBuffer, list.Length * sizeof(int), list, BufferUsageHint.StaticDraw);
+			GL.BufferData(BufferTarget.ShaderStorageBuffer, list.Length * sizeof(int), list, BufferUsageHint.DynamicDraw);
 			GL.BindBuffer(BufferTarget.ShaderStorageBuffer, 0);
 
 			listBoundsMin = boundsMin;

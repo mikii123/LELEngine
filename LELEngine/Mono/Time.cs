@@ -33,6 +33,18 @@
 
 		public static float lastFrame => (float)lastFrameD;
 
+		/// <summary>
+		///     When above 0, every frame advances the game clock by exactly this many seconds whatever time really passed
+		///     (Unity's Time.captureDeltaTime): automated runs then move and animate the same way per frame at any frame rate.
+		/// </summary>
+		public static double captureDeltaTimeD;
+
+		public static float captureDeltaTime
+		{
+			get => (float)captureDeltaTimeD;
+			set => captureDeltaTimeD = value;
+		}
+
 		public static double renderDeltaTimeD;
 		public static float renderDeltaTime => (float)renderDeltaTimeD;
 

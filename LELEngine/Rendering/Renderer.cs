@@ -23,11 +23,17 @@ namespace LELEngine.Rendering
 		public GpuProfiler Profiler { get; } = new GpuProfiler();
 		public FrameDumper FrameDumper { get; } = new FrameDumper();
 
+		/// <summary>Region luminance and temporal noise readbacks for automated measurements (see <see cref="FrameStatistics" />).</summary>
+		public FrameStatistics Statistics { get; } = new FrameStatistics();
+
 		/// <summary>GI view of the scene: distance fields, surface cache cards and the per-frame object tables.</summary>
 		public LumenScene LumenScene { get; private set; }
 
 		/// <summary>The frame's renderers on the GPU for GPU-driven drawing (<see cref="RenderSettings.GpuDriven" />).</summary>
 		public GpuScene GpuScene { get; } = new GpuScene();
+
+		/// <summary>Last frame's world matrices of the renderers, for the motion vectors of the geometry prepass.</summary>
+		public ObjectMotion Motion { get; } = new ObjectMotion();
 
 		/// <summary>Frames rendered so far; the one counter the passes share (per-pass counters can drift apart when passes are toggled).</summary>
 		public int FrameIndex { get; private set; }
@@ -252,12 +258,13 @@ namespace LELEngine.Rendering
 
 			Profiler.BeginFrame();
 			FrameIndex++;
+			Motion.BeginFrame();
 
 			// GPU-driven geometry: the instance and material tables for this frame's culling and indirect draws (every
 			// camera of the stack culls the same tables with its own frustum and layers).
 			if (Settings.GpuDriven && GpuScene.IsSupported)
 			{
-				GpuScene.Build(stack.Count == 1 ? cameraLists[0].Opaque : stackOpaqueRenderers);
+				GpuScene.Build(stack.Count == 1 ? cameraLists[0].Opaque : stackOpaqueRenderers, Motion);
 			}
 			else
 			{
@@ -298,6 +305,11 @@ namespace LELEngine.Rendering
 			RunScope(RenderPassScope.Final, lightingContext, executed);
 
 			Profiler.EndFrame();
+
+			if (Statistics.Active)
+			{
+				Statistics.Capture(this);
+			}
 
 			if (FrameDumper.Active)
 			{
@@ -539,6 +551,7 @@ namespace LELEngine.Rendering
 			}
 
 			GpuScene.EndFrame();
+			Motion.Clear();
 			ClearLists();
 			Lighting.GI.InvalidateStatic();
 		}
@@ -560,6 +573,7 @@ namespace LELEngine.Rendering
 			Fullscreen?.Delete();
 			LumenScene?.Delete();
 			Profiler.Dispose();
+			Statistics.Dispose();
 		}
 
 		#endregion

@@ -49,6 +49,12 @@ namespace LELEngine.Rendering.Lumen
 			return QuietFrames >= frames;
 		}
 
+		/// <summary>
+		///     World-space boxes around what changed the lighting this frame: where dynamic objects were and are (when they
+		///     moved), and objects whose material (colour, emission) changed. The radiance cache updates its probes there first.
+		/// </summary>
+		public IReadOnlyList<ChangeRegion> ChangeRegions => changeRegions;
+
 		/// <summary>World-space bounds of the static GI objects (the "scene" the radiance cache concentrates on).</summary>
 		public bool HasStaticBounds { get; private set; }
 
@@ -63,6 +69,14 @@ namespace LELEngine.Rendering.Lumen
 		private readonly List<SceneObjectData> objectData = new List<SceneObjectData>();
 		private readonly Dictionary<MeshRenderer, TransformState> lastTransforms = new Dictionary<MeshRenderer, TransformState>();
 		private readonly Dictionary<MeshRenderer, MaterialState> lastMaterials = new Dictionary<MeshRenderer, MaterialState>();
+
+		// Frame of each dynamic object's last move: the object table flags objects that moved this frame or the one
+		// before (cardInfo.w), so the probes that see them keep a short history.
+		private readonly Dictionary<MeshRenderer, int> lastMoveFrames = new Dictionary<MeshRenderer, int>();
+
+		// Each dynamic object's world bounds last frame (the region a move leaves), and this frame's change regions.
+		private readonly Dictionary<MeshRenderer, ChangeRegion> lastBounds = new Dictionary<MeshRenderer, ChangeRegion>();
+		private readonly List<ChangeRegion> changeRegions = new List<ChangeRegion>();
 		private int lastDynamicCount = -1;
 		private int lastStaticVersion = -1;
 		private Vector3 lastSunDirection;
@@ -107,6 +121,7 @@ namespace LELEngine.Rendering.Lumen
 			}
 
 			objects.Clear();
+			changeRegions.Clear();
 			CollectObjects(renderers, true, gi);
 			StaticObjectCount = objects.Count;
 			CollectObjects(renderers, false, gi);
@@ -253,6 +268,16 @@ namespace LELEngine.Rendering.Lumen
 				{
 					changed = true;
 					lastTransforms[renderer] = new TransformState { Position = t.position, Rotation = t.rotation, Scale = t.scale };
+					lastMoveFrames[renderer] = UpdatedFrame;
+
+					// The lighting changes where the object was and where it is now.
+					ChangeRegion bounds = WorldBounds(objects[i]);
+					if (lastBounds.TryGetValue(renderer, out ChangeRegion previous))
+					{
+						changeRegions.Add(previous);
+					}
+					changeRegions.Add(bounds);
+					lastBounds[renderer] = bounds;
 				}
 				dynamicCount++;
 			}
@@ -276,9 +301,38 @@ namespace LELEngine.Rendering.Lumen
 
 				Prune(lastTransforms, alive);
 				Prune(lastMaterials, alive);
+				Prune(lastMoveFrames, alive);
+				Prune(lastBounds, alive);
 			}
 
 			return changed;
+		}
+
+		/// <summary>The object's world-space bounding box (its scaled mesh bounds through its rotation and position).</summary>
+		private static ChangeRegion WorldBounds(SceneObject o)
+		{
+			Transform t = o.Renderer.transform;
+			Matrix4 localToWorld = Matrix4.CreateFromQuaternion(t.rotation) * Matrix4.CreateTranslation(t.position);
+			Vector3 scale = o.Field.Scale;
+			Vector3 bmin = o.Renderer.Mesh.BoundsMin * scale;
+			Vector3 bmax = o.Renderer.Mesh.BoundsMax * scale;
+			Vector3 min = new Vector3(float.MaxValue);
+			Vector3 max = new Vector3(float.MinValue);
+			for (int corner = 0; corner < 8; corner++)
+			{
+				Vector3 local = new Vector3((corner & 1) != 0 ? bmax.X : bmin.X, (corner & 2) != 0 ? bmax.Y : bmin.Y, (corner & 4) != 0 ? bmax.Z : bmin.Z);
+				Vector3 world = Vector3.TransformPosition(local, localToWorld);
+				min = Vector3.ComponentMin(min, world);
+				max = Vector3.ComponentMax(max, world);
+			}
+
+			return new ChangeRegion(min, max);
+		}
+
+		/// <summary>A dynamic object moved this frame or the one before (the surface cache and the caches lag one frame).</summary>
+		private bool MovedRecently(SceneObject o)
+		{
+			return !o.IsStatic && lastMoveFrames.TryGetValue(o.Renderer, out int frame) && UpdatedFrame - frame <= 1;
 		}
 
 		private void UploadTables()
@@ -307,6 +361,7 @@ namespace LELEngine.Rendering.Lumen
 				{
 					materialChanged = true;
 					lastMaterials[o.Renderer] = new MaterialState { Color = color, Emissive = emissiveState };
+					changeRegions.Add(WorldBounds(o));
 				}
 
 				if (o.IsStatic)
@@ -336,7 +391,7 @@ namespace LELEngine.Rendering.Lumen
 					Padding = new Vector4(o.Field.TexelSize * DistanceFieldAtlas.Padding, emissiveIntensity),
 					MeshBoundsMin = new Vector4(o.Renderer.Mesh.BoundsMin * scale, 0f),
 					MeshBoundsMax = new Vector4(o.Renderer.Mesh.BoundsMax * scale, 0f),
-					CardInfo = new Vector4i(o.Cards?.FirstCardIndex ?? 0, o.Cards?.Cards.Length ?? 0, o.IsStatic ? 0 : 1, 0)
+					CardInfo = new Vector4i(o.Cards?.FirstCardIndex ?? 0, o.Cards?.Cards.Length ?? 0, o.IsStatic ? 0 : 1, MovedRecently(o) ? 1 : 0)
 				});
 
 				if (o.Cards == null)
@@ -405,6 +460,20 @@ namespace LELEngine.Rendering.Lumen
 			public MeshDistanceField Field;
 			public SurfaceCardSet Cards;
 			public bool IsStatic;
+		}
+
+		/// <summary>A world-space box whose lighting changed this frame (see <see cref="ChangeRegions" />).</summary>
+		public readonly struct ChangeRegion
+		{
+			public ChangeRegion(Vector3 min, Vector3 max)
+			{
+				Min = min;
+				Max = max;
+			}
+
+			public Vector3 Min { get; }
+			public Vector3 Max { get; }
+			public Vector3 Center => (Min + Max) * 0.5f;
 		}
 
 		private struct TransformState

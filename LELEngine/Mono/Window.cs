@@ -97,8 +97,9 @@ namespace LELEngine
 		{
 			// Raises the UpdateFrame event (hosts and test hooks subscribe to it).
 			base.OnUpdateFrame(e);
-			Time.deltaTimeD = e.Time;
-			Time.timeD += e.Time;
+			double deltaTime = Time.captureDeltaTimeD > 0 ? Time.captureDeltaTimeD : e.Time;
+			Time.deltaTimeD = deltaTime;
+			Time.timeD += deltaTime;
 
 			if (Input.GetKeyDown(OpenTK.Windowing.GraphicsLibraryFramework.Keys.F12))
 			{

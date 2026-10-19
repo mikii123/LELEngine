@@ -277,9 +277,15 @@ namespace LELEngine.Rendering.Passes
 			// been quiet for a while they accumulate to the long one.
 			bool settled = scene.IsQuiet(Math.Max(1, gi.RadianceCacheIdleAfterFrames));
 			probes.SetFloat("radiosityMaxSamples", settled ? gi.RadiosityMaxHistorySamples : Math.Min(gi.RadiosityMaxHistorySamples, gi.RadiosityMovingHistorySamples));
+			// The screen probes' change test and moving-object history, per radiosity probe.
+			probes.SetFloat("movingSamples", Math.Max(1f, gi.ProbeMovingHistorySamples));
+			probes.SetFloat("movingFrames", gi.ProbeMovingFrames);
+			probes.SetFloat("changeSigma", gi.ProbeChangeSigma);
+			probes.SetFloat("changeFloor", gi.ProbeChangeFloor);
 			probes.SetInt2("probeRegion", atlas.ProbeGridSize, probeRows);
 			probes.SetInt("probeRowStart", rowStart);
 			GL.BindImageTexture(0, atlas.RadiosityProbes, 0, false, 0, TextureAccess.ReadWrite, SizedInternalFormat.Rgba32f);
+			GL.BindImageTexture(1, atlas.RadiosityMeta, 0, false, 0, TextureAccess.ReadWrite, SizedInternalFormat.Rgba32f);
 			if (rowCount > 0)
 			{
 				radiosity.Dispatch(atlas.ProbeGridSize, rowCount, 1);

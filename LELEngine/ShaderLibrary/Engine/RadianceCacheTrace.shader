@@ -31,16 +31,22 @@ uniform int interiorCount;
 uniform int interiorTotal;
 uniform int exteriorStart;
 uniform int exteriorTotal;
+uniform int priorityCount;  // probes around this frame's changes, taken first (RadianceCachePass.BuildPriority)
+uniform int priorityOffset; // where they are in the list (after the interior and exterior lists)
 
 layout(std430, binding = 3) readonly buffer RadianceCacheProbeList
 {
 	int probeList[];
 };
 
-layout(binding = 0, rgba16f) uniform writeonly image2D TraceBuffer; // rgb radiance, a = hit distance (-1: probe invalid)
+// rgb radiance, a = hit distance (-1: probe invalid; a hit on an object that moved: -(distance + 10), see
+// RadianceCacheResolve.shader, which keeps no history for such texels and flags them for the lookups).
+layout(binding = 0, rgba16f) uniform writeonly image2D TraceBuffer;
 
 int SequenceProbe(int q)
 {
+	if (q < priorityCount) return probeList[priorityOffset + q];
+	q -= priorityCount;
 	return q < interiorCount
 		? probeList[(interiorStart + q) % interiorTotal]
 		: probeList[interiorTotal + (exteriorStart + q - interiorCount) % exteriorTotal];
@@ -75,11 +81,12 @@ void main()
 	if (TraceSdf(position, direction, sdfGridSize, hitT))
 	{
 		vec3 hit = position + direction * hitT;
-		if (!SampleSurfaceCacheAtHit(hit, SdfNormal(hit), voxel * 2.0, FinalLighting, radiance))
+		int objectIndex;
+		if (!SampleSurfaceCacheAtHitObject(hit, SdfNormal(hit), voxel * 2.0, FinalLighting, radiance, objectIndex))
 		{
 			radiance = vec3(0.0);
 		}
-		depth = hitT;
+		depth = SceneObjectMoved(objectIndex) ? -(hitT + 10.0) : hitT;
 	}
 
 	imageStore(TraceBuffer, bufferTexel, vec4(radiance, depth));

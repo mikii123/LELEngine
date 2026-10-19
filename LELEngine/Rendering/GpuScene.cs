@@ -108,11 +108,17 @@ namespace LELEngine.Rendering
 		public const int CountBinding = 13;
 		public const int SegmentBinding = 14;
 
+		/// <summary>Last frame's world matrix per instance (same order as the instance table), read by the geometry prepass for motion vectors.</summary>
+		public const int PreviousModelBinding = 15;
+
 		/// <summary>Instance flag: casts shadows.</summary>
 		public const uint CastsShadowsFlag = 1;
 
 		/// <summary>The context can run GPU-driven rendering (shader storage blocks in vertex and fragment shaders, bindings up to 14).</summary>
 		public static bool IsSupported => GLCapabilities.MaxShaderStorageBindings > SegmentBinding && GLCapabilities.VertexShaderStorageBlocks >= 1 && GLCapabilities.FragmentShaderStorageBlocks >= 2;
+
+		/// <summary>The previous world matrices can be bound next to the instance table (one more binding and vertex shader storage block).</summary>
+		public static bool SupportsPreviousModels => GLCapabilities.MaxShaderStorageBindings > PreviousModelBinding && GLCapabilities.VertexShaderStorageBlocks >= 2;
 
 		/// <summary>Built for this frame and not empty: the passes draw GPU-driven.</summary>
 		public bool Active { get; private set; }
@@ -145,9 +151,12 @@ namespace LELEngine.Rendering
 		private readonly CullView cameraView = new CullView();
 		private readonly CullView shadowView = new CullView();
 		private GpuInstance[] instances = new GpuInstance[256];
+		private Matrix4[] previousModels = new Matrix4[256];
 		private GpuMaterial[] materialData = new GpuMaterial[64];
 		private int instanceBuffer;
 		private int materialBuffer;
+		private int previousModelBuffer;
+		private ObjectMotion motion;
 		private ComputeShader cull;
 		private bool cameraCulled;
 		private Matrix4 culledViewProjection;
@@ -158,16 +167,21 @@ namespace LELEngine.Rendering
 
 		#region PublicMethods
 
-		/// <summary>Builds and uploads the instance and material tables from the frame's renderers.</summary>
-		public void Build(IReadOnlyList<MeshRenderer> renderers)
+		/// <summary>
+		///     Builds and uploads the instance and material tables from the frame's renderers, and every instance's world
+		///     matrix of the previous frame from <paramref name="previousFrame" /> (null: as if nothing moved).
+		/// </summary>
+		public void Build(IReadOnlyList<MeshRenderer> renderers, ObjectMotion previousFrame = null)
 		{
 			long started = System.Diagnostics.Stopwatch.GetTimestamp();
+			motion = previousFrame;
 			try
 			{
 				BuildTables(renderers);
 			}
 			finally
 			{
+				motion = null;
 				LastBuildMilliseconds = (System.Diagnostics.Stopwatch.GetTimestamp() - started) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
 				LastInstanceCount = InstanceCount;
 			}
@@ -214,6 +228,7 @@ namespace LELEngine.Rendering
 			if (instances.Length < count)
 			{
 				Array.Resize(ref instances, Math.Max(count, instances.Length * 2));
+				Array.Resize(ref previousModels, instances.Length);
 			}
 
 			int index = 0;
@@ -331,6 +346,7 @@ namespace LELEngine.Rendering
 			EndFrame();
 			DeleteBuffer(ref instanceBuffer);
 			DeleteBuffer(ref materialBuffer);
+			DeleteBuffer(ref previousModelBuffer);
 			cameraView.Delete();
 			shadowView.Delete();
 			cull?.Delete();
@@ -371,6 +387,7 @@ namespace LELEngine.Rendering
 			Mesh mesh = renderer.Mesh;
 			SubMesh range = mesh.SubMeshes[part.SubMesh];
 			Matrix4 model = renderer.transform.LocalToWorld;
+			previousModels[index] = motion != null ? motion.GetPrevious(renderer, model) : model;
 			instances[index] = new GpuInstance
 			{
 				Model = model,
@@ -431,6 +448,7 @@ namespace LELEngine.Rendering
 			{
 				instanceBuffer = GL.GenBuffer();
 				materialBuffer = GL.GenBuffer();
+				previousModelBuffer = GL.GenBuffer();
 			}
 
 			// Re-specified every frame (orphaning): the driver gives a fresh store while the last frame still reads.
@@ -438,6 +456,12 @@ namespace LELEngine.Rendering
 			GL.BufferData(BufferTarget.ShaderStorageBuffer, InstanceCount * Marshal.SizeOf<GpuInstance>(), instances, BufferUsageHint.StreamDraw);
 			GL.BindBuffer(BufferTarget.ShaderStorageBuffer, materialBuffer);
 			GL.BufferData(BufferTarget.ShaderStorageBuffer, materials.Count * Marshal.SizeOf<GpuMaterial>(), materialData, BufferUsageHint.StreamDraw);
+			if (SupportsPreviousModels)
+			{
+				GL.BindBuffer(BufferTarget.ShaderStorageBuffer, previousModelBuffer);
+				GL.BufferData(BufferTarget.ShaderStorageBuffer, InstanceCount * Marshal.SizeOf<Matrix4>(), previousModels, BufferUsageHint.StreamDraw);
+			}
+
 			GL.BindBuffer(BufferTarget.ShaderStorageBuffer, 0);
 			GeometryPool.EnsureInstanceIndices(InstanceCount);
 		}
@@ -446,6 +470,10 @@ namespace LELEngine.Rendering
 		{
 			GL.BindBufferBase(BufferRangeTarget.ShaderStorageBuffer, InstanceBinding, instanceBuffer);
 			GL.BindBufferBase(BufferRangeTarget.ShaderStorageBuffer, MaterialBinding, materialBuffer);
+			if (SupportsPreviousModels)
+			{
+				GL.BindBufferBase(BufferRangeTarget.ShaderStorageBuffer, PreviousModelBinding, previousModelBuffer);
+			}
 		}
 
 		private void Dispatch(CullView view, Matrix4 viewProjection, int layerMask, int commandCount)

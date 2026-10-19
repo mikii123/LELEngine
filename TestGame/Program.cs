@@ -14,11 +14,16 @@ namespace TestGame
 		///     Usage: TestGame [gi=lumen|vct|0] [voxels=0|1] [sdfview=0|1] [cacheview=0|1] [probeview=0|1] [emitters=0|1] [animate=0|1]
 		///            [stats=0|1] [autocam=0|1] [dump=N] [dumpdir=path] [jitter=0|1] [resolve=0|1] [static=0|1]
 		///            [bounce=0|1] [trace=voxel|sdf] [voxres=64|128|256] [sdfres=64|128|256]
-		///            Lumen quality: [spacing=N px] [adaptive=0|1] [radrays=N] [radblend=0..1] [pblend=0..1] [tblend=0..1]
+		///            Lumen quality: [spacing=N px] [adaptive=0|1] [radrays=N] [radblend=0..1] [pblend=0..1] [tblend=0..1] [tmoving=frames]
+		///            [psigma=N] [pfloor=0..1] [pmoving=samples] [pmovingframes=N] [pmerge=0..1]
 		///            [importance=0|1] [pfilter=0|1] [pradius=N probes] [texels=N per meter] [ajitter=0..1] [djitter=0|1]
 		///            [rcache=0|1] [rcradio=0|1] [rcnear=meters] [rchistory=frames] [rcprobes=N per frame] [rcres=8|16] [rctrace=16|32]
 		///            [dumpafter=seconds] [gpudriven=0|1] [stress=N extra cubes] [focus=0|1] [glass=0|1 transparent props]
 		///            Scenes: [outdoor=1 open-sky yard] [sky=0|1 procedural skybox] [skybox=asset path] [physics=1] [nav=1] [ui=1] [scene=path]
+		///            View: [view=ghost from under the ceiling down at the orbs] [camera=x,y,z] [look=x,y,z] [night=1 emitters only]
+		///            Ghosting measurements (GhostTest, frame exact): [capturefps=N fixed time step] [emitterstep=frame] [emitteroff=frame]
+		///            [mover=frame] [moverz=path depth] [regions=x,y,z;x,y,z;...] [regionsize=px] [regionstart=frame] [regionsource=scene|gi]
+		///            [noise=frames] [noisestart=frame]
 		///            Fallback tests: environment LEL_GL_DISABLE=drawparameters,indirectparameters,subgroups
 		///     Loads the GI test room with the FPS controller.
 		/// </summary>
@@ -64,12 +69,21 @@ namespace TestGame
 				RadiosityRays = GetInt(args, "radrays", 4),
 				RadiosityBlend = GetFloat(args, "radblend", 0.9f),
 				RadiosityMaxHistorySamples = GetFloat(args, "radmax", 64f),
+				RadiosityMovingHistorySamples = GetFloat(args, "radmoving", 16f),
 				ProbeHistoryWeight = GetFloat(args, "pblend", 0.5f),
 				ProbeMaxHistorySamples = GetFloat(args, "pmax", 32f),
 				ProbeChangeThreshold = GetFloat(args, "pchange", 0.5f),
+				ProbeChangeSigma = GetFloat(args, "psigma", 4f),
+				ProbeChangeFloor = GetFloat(args, "pfloor", 0.15f),
+				ProbeMovingHistorySamples = GetFloat(args, "pmoving", 2f),
+				ProbeMovingFrames = GetFloat(args, "pmovingframes", 4f),
+				ProbeImportanceMergeFraction = GetFloat(args, "pmerge", 0.5f),
+				ProbeJumpThreshold = GetFloat(args, "pjump", 0.4f),
 				ProbeTemporalBlend = GetFloat(args, "tblend", 0.9f),
+				ProbeTemporalMovingFrames = GetFloat(args, "tmoving", 3f),
 				ProbeImportanceSampling = GetBool(args, "importance", true),
 				ProbeSpatialFilter = GetBool(args, "pfilter", true),
+				ProbeSpatialFilterPasses = GetInt(args, "pfilterpasses", 1),
 				ProbeFilterRadius = GetInt(args, "pradius", 1),
 				SurfaceCacheTexelsPerMeter = GetInt(args, "texels", 6),
 				RadianceCache = GetBool(args, "rcache", true),
@@ -83,6 +97,8 @@ namespace TestGame
 				RadianceCacheMaxHistorySamples = GetFloat(args, "rcmax", 32f),
 				RadianceCacheChangeThreshold = GetFloat(args, "rcchange", 0.25f),
 				RadianceCacheProbesPerFrame = GetInt(args, "rcprobes", 160),
+				RadianceCacheChangeProbesPerFrame = GetInt(args, "rcchangeprobes", 64),
+				RadianceCacheChangeRadius = GetFloat(args, "rcchangeradius", 2f),
 				RadianceCacheProbeResolution = GetInt(args, "rcres", 16),
 				RadianceCacheTraceResolution = GetInt(args, "rctrace", 32),
 				DumpAfterSeconds = GetFloat(args, "dumpafter", 5f),
@@ -93,8 +109,35 @@ namespace TestGame
 				GISpecularStrength = GetFloat(args, "gispec", 1f),
 				ScreenProbeResolveScale = GetFloat(args, "presolve", 1f),
 				ProbeAdaptiveFraction = GetFloat(args, "pfraction", 0.5f),
-				Glass = GetBool(args, "glass", true)
+				Glass = GetBool(args, "glass", true),
+				EmitterStepFrame = GetInt(args, "emitterstep", 0),
+				EmitterOffFrame = GetInt(args, "emitteroff", 0),
+				MoverFrame = GetInt(args, "mover", 0),
+				MoverZ = GetFloat(args, "moverz", -1.6f),
+				RegionPoints = GetValue(args, "regions"),
+				RegionSize = GetInt(args, "regionsize", 16),
+				RegionStartFrame = GetInt(args, "regionstart", 1),
+				RegionSource = GetValue(args, "regionsource"),
+				NoiseFrames = GetInt(args, "noise", 0),
+				NoiseStartFrame = GetInt(args, "noisestart", 1),
+				Night = GetBool(args, "night", false),
+				CameraPosition = GetVector3(args, "camera"),
+				CameraLookAt = GetVector3(args, "look")
 			};
+
+			// view=ghost: the ghosting tests' view (from under the ceiling, down at the floor the orbs circle over).
+			if (string.Equals(GetValue(args, "view"), "ghost", StringComparison.OrdinalIgnoreCase) && !options.CameraPosition.HasValue)
+			{
+				options.CameraPosition = GITestScene.GhostViewPosition;
+				options.CameraLookAt ??= GITestScene.GhostViewLookAt;
+			}
+
+			// capturefps=N: every frame advances the clock by 1/N s (motion per frame independent of the frame rate).
+			float captureFps = GetFloat(args, "capturefps", 0f);
+			if (captureFps > 0f)
+			{
+				Time.captureDeltaTimeD = 1.0 / captureFps;
+			}
 			// genmeta=dir1;dir2 creates missing .meta files for the asset files below the folders, then exits.
 			string genMeta = GetValue(args, "genmeta");
 			if (genMeta != null)
@@ -228,6 +271,22 @@ namespace TestGame
 			string value = GetValue(args, name);
 			float parsed;
 			return value != null && float.TryParse(value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out parsed) ? parsed : defaultValue;
+		}
+
+		/// <summary>"x,y,z" (invariant culture), or null.</summary>
+		private static OpenTK.Mathematics.Vector3? GetVector3(string[] args, string name)
+		{
+			string[] parts = GetValue(args, name)?.Split(',');
+			if (parts == null || parts.Length != 3)
+			{
+				return null;
+			}
+
+			var style = System.Globalization.NumberStyles.Float;
+			var culture = System.Globalization.CultureInfo.InvariantCulture;
+			return float.TryParse(parts[0], style, culture, out float x) && float.TryParse(parts[1], style, culture, out float y) && float.TryParse(parts[2], style, culture, out float z)
+				? new OpenTK.Mathematics.Vector3(x, y, z)
+				: null;
 		}
 
 		private static string GetValue(string[] args, string name)
