@@ -112,7 +112,7 @@ namespace LELEngine.Editor
 
 				ImGui.SameLine();
 				ImGui.AlignTextToFramePadding();
-				if (overlay == null || overlay.destroyed)
+				if (overlay == null || overlay.dead)
 				{
 					ImGui.TextColored(EditorStyle.Warning, "(missing camera)");
 				}
@@ -251,7 +251,7 @@ namespace LELEngine.Editor
 			foreach (GameObject go in context.Scene.GameObjects)
 			{
 				Camera camera = go.GetComponent<Camera>();
-				if (camera != null && !camera.destroyed)
+				if (camera != null && !camera.dead)
 				{
 					yield return camera;
 				}

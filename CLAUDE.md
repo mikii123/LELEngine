@@ -2,9 +2,9 @@
 
 ## Building and running on this machine
 
-- The `dotnet` on PATH is an older SDK that cannot target `net10.0` (error NETSDK1045). Build with the .NET 10 SDK
-  at `C:\Users\Admin\.dotnet\dotnet.exe`, and set `DOTNET_ROOT=C:\Users\Admin\.dotnet` before running a built
-  executable (`TestGame.exe`, `LELEngine.Editor.exe`), otherwise the runtime is not found.
+- Since 2026-10-20 the `dotnet` on PATH is the .NET 10 SDK (10.0.401, `C:\Program Files\dotnet`): plain `dotnet build`
+  works and built executables find the runtime. `C:\Users\Admin\.dotnet` holds no SDK any more. The older notes
+  (NETSDK1045, `DOTNET_ROOT=C:\Users\Admin\.dotnet`) apply only on a machine whose PATH still has an older SDK.
 - Debug outputs land in `<project>/bin/Debug/net10.0/` (Release in `bin/Release/net10.0/`). Shader library files
   are copied to `bin/.../Shaders/Engine/...` at build time. Python is not installed; use PowerShell with
   `System.Drawing` for image work (BMP to PNG, cropping).
@@ -139,6 +139,46 @@
   (`ReleaseUnusedAssets`, off in the editor; `GeometryPool` reuses freed ranges).
 - Every load logs `[SceneManager] <path>: read N ms (textures N: N ms, meshes ..., per asset kind), GPU N ms in N
   frames, activated in N ms` (also `SceneLoadOperation.Summary`).
+
+## Destroying objects and the null-check weaver
+
+- `EngineObject` (`LELEngine/Mono/EngineObject.cs`) is the base of `GameObject` and `Behaviour`. Two flags:
+  - `dead`: Destroy was called; public as `IsDestroyed`. The object gets no callbacks; `GetComponent` (on a living
+    object), `FindObjectOfType`, physics queries and contact begins skip it.
+  - `destroyed`: the end-of-frame finish ran (OnDisable, OnDestroy and `Destroyed` once, guarded by
+    `destroyCallbacksRun`; resources released). Then `ThrowIfDestroyed` makes `GetComponent`, `AddComponent` and
+    `SetActive` throw `ObjectDestroyedException`.
+- Code that decides whether something still takes part in the game reads `dead`: lifecycle loops, renderer lists,
+  serialization and editor selection. Resource bookkeeping reads `destroyed`: navmesh obstacles, rigidbody shapes,
+  `Transform.SetParent` notifications.
+- `Scene.Kill` marks a subtree dead and queues every node. `ProcessDestroyQueue` (`EndFrame`, after
+  `StartTimedDestroys`) re-collects the subtrees (late children go too) and calls `FinishDestroy` in three passes;
+  OnDestroy may destroy more objects, up to 8 rounds per frame. `DestroyImmediate` runs the same `FinishDestroy` at
+  once. `Time.frameCount` counts `UpdateScenes` calls.
+- The editor and batch mode set `EngineObject.RecordDestroyStackTraces` (`Program.Main`): each Destroy captures the
+  caller's stack for the exception message.
+- `NullCheckWeaver` (`LELEngine.Editor/Scripting`, Mono.Cecil) rewrites Game.dll and Game.Editor.dll after every
+  `ScriptBuilder.Build`: editor, batch `-executeMethod`, player builds. It also rewrites before loading an existing
+  build (`ScriptDomain.Initialize`, BatchMode's up-to-date path).
+  - The user chose (2026-10-20) to weave the editor scripts too, so tools see the same null semantics. Editor code
+    that must see a destroyed object uses `EngineObject.IsNullReference` / `IsDestroyed`.
+  - It runs a forward stack-kind analysis per method (`Null` / `Plain` / `Engine` / `Maybe`), because Release IL
+    keeps values on the stack across statements and joins (`dup` chains). A backward walk to the producer failed
+    there.
+  - It rewrites brtrue/brfalse to `IsAlive` / `IsAliveObject`, and ceq / cgt.un against the null constant to
+    `NullCheckEquals` / `NullCheckNotEquals` (two arguments, so the `ldnull` stays).
+  - `NullChecksWovenAttribute(count)` marks a woven assembly.
+  - `ReferenceEquals(x, null)` compiles to `ldnull; ceq` and is woven too; `EngineObject.IsNullReference` is the
+    escape hatch.
+- **Verify** with a probe project. The 2026-10-20 probe (`DestroyProbe` in that session's scratchpad) checked:
+  - every null-check form in Debug and Release IL (Release: build the probe's csproj with `-c Release`, then run
+    batch `-executeMethod`, which takes the up-to-date path and weaves);
+  - callback order, events, the exception, `Destroy(x, delay)`, components added to dying objects, and physics
+    queries;
+  - editor play mode (`addcomponent=`, `playframe=`, `stopframe=`);
+  - the marker in a player build's Game.dll.
+- **Benchmark:** `LELEngine.Benchmarks physics2d-scene` fails because `Meshes/cube.obj` is not copied to its output
+  folder. That asset is unrelated to destroying.
 
 ## Player build output
 

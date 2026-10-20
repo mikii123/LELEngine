@@ -33,6 +33,9 @@ namespace LELEngine.Editor
 		/// <summary>Game.Editor.dll (builds that included the editor scripts).</summary>
 		public byte[] EditorAssembly;
 		public byte[] EditorSymbols;
+
+		/// <summary>Null checks the weaver rewrote in this build (0 when the assemblies were woven before).</summary>
+		public int WovenChecks;
 		public double Seconds;
 		public string Output;
 		public int ErrorCount => Diagnostics.FindAll(d => d.IsError).Count;
@@ -143,6 +146,11 @@ namespace LELEngine.Editor
 				result.Success = process.ExitCode == 0 && File.Exists(dll) && (!includeEditor || File.Exists(editorDll));
 				if (result.Success)
 				{
+					result.Success = Weave(dll, folder, result) && (!includeEditor || Weave(editorDll, folder, result));
+				}
+
+				if (result.Success)
+				{
 					result.Assembly = File.ReadAllBytes(dll);
 					result.Symbols = ReadSymbols(dll);
 					if (includeEditor)
@@ -160,6 +168,29 @@ namespace LELEngine.Editor
 
 			result.Seconds = watch.Elapsed.TotalSeconds;
 			return result;
+		}
+
+		/// <summary>
+		///     Rewrites a built script assembly's null checks so destroyed engine objects read as null
+		///     (<see cref="NullCheckWeaver" />); false, with an error diagnostic, when that fails.
+		/// </summary>
+		public static bool Weave(string dll, string folder, BuildResult result)
+		{
+			try
+			{
+				result.WovenChecks += NullCheckWeaver.WeaveFile(dll, new[] { AppContext.BaseDirectory, folder }).Checks;
+				return true;
+			}
+			catch (Exception e)
+			{
+				result.Diagnostics.Add(new BuildDiagnostic
+				{
+					IsError = true,
+					Code = "LEL0003",
+					Message = "Cannot rewrite the null checks of " + Path.GetFileName(dll) + " (destroyed objects would not read as null): " + e.Message
+				});
+				return false;
+			}
 		}
 
 		#endregion

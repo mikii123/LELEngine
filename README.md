@@ -14,6 +14,8 @@ Built on .NET 10, OpenTK 4.9 (GLFW) and OpenGL 4.6 (4.3 minimum), developed and 
 **Scene model**
 - GameObjects with a Transform hierarchy and `Behaviour` components (`Awake`, `OnEnable`, `Start`, `Update`,
   `LateUpdate`, `OnDisable`, `OnDestroy`, `[ExecuteAlways]`).
+- Destroyed objects are null for game scripts in every form of null check, `?.` and `??` included, through
+  interfaces too (see [Destroying objects](#destroying-objects)); a `Destroyed` event on every object and component.
 - Public and `[SerializeField]` fields are serialized into scenes. One document model, two encodings: the editor
   writes readable JSON (scenes, materials, `.meta` files, physics materials), game builds convert every document
   to the fast binary form (LELB: schema tables, polymorphic values, bulk arrays). The conversion needs no types
@@ -257,6 +259,42 @@ public sealed class Jumper : Behaviour
 		}
 	}
 }
+```
+
+### Destroying objects
+
+`Destroy(gameObject)` (or `Destroy(component)`, `Destroy(target, delaySeconds)`) kills the object and its whole
+subtree for the game at once, and finishes it at the end of the frame:
+
+- **At once:** the objects read as null (below), get no more `Update` / `FixedUpdate` / `LateUpdate` or physics
+  callbacks, start no contacts, and leave physics queries, `GetComponent` and `FindObjectOfType`. Destroying twice does
+  nothing, so two bullets hitting in the same frame cannot kill a ship twice.
+- **At the end of the frame**, for the whole batch: `OnDisable`, then `OnDestroy` (parents first) and the `Destroyed`
+  event of each component and object, while the dying objects can still be used directly; then their engine
+  resources are released. A child created under a dying object goes with it; to keep a child, move it out before
+  calling `Destroy`.
+- **After that**, using a destroyed object (`GetComponent`, `AddComponent`, `SetActive`) throws
+  `ObjectDestroyedException`, which names the frame and, in the editor, the line that called `Destroy`.
+
+Game scripts see a destroyed object as null in **every** null check. The editor rewrites the compiled scripts
+(`NullCheckWeaver`, after each script build and in player builds), so these all treat a destroyed object as null,
+unlike Unity, where only `==` does:
+
+```csharp
+target?.TakeDamage(10);            // skipped when the target was destroyed
+Ship ship = target ?? fallback;
+if (target is null) Retarget();
+if (other is IDamageable damageable) damageable.Hit();   // interfaces and object too
+```
+
+`EngineObject.IsNullReference(x)` is the plain reference test (`ReferenceEquals(x, null)` compiles to the same IL
+as `x == null` and is rewritten too); `IsDestroyed` tells a destroyed object from a missing one. The project's game
+and editor scripts are rewritten; the engine and NuGet packages keep plain reference checks.
+
+Instead of polling, subscribe to the end of an object:
+
+```csharp
+target.gameObject.Destroyed += _ => target = null;
 ```
 
 ## Editor scripts

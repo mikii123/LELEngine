@@ -8,7 +8,7 @@ namespace LELEngine
 	///     (scene null) is detached: it is not updated, rendered or saved (editor-only helpers such as the scene
 	///     view camera).
 	/// </summary>
-	public sealed class GameObject
+	public sealed class GameObject : EngineObject
 	{
 		#region PublicFields
 
@@ -56,7 +56,7 @@ namespace LELEngine
 		{
 			get
 			{
-				if (!activeSelf || destroyed)
+				if (!activeSelf || dead)
 				{
 					return false;
 				}
@@ -72,7 +72,7 @@ namespace LELEngine
 
 		#region InternalFields
 
-		internal bool destroyed;
+		internal override string DisplayName => "'" + Name + "' (GameObject)";
 
 		#endregion
 
@@ -101,12 +101,17 @@ namespace LELEngine
 
 		#region PublicMethods
 
+		/// <summary>
+		///     The first component of type <typeparamref name="T" />. Components destroyed on their own are skipped; on a
+		///     destroyed object (until the end of its frame) its components are still found, but they are destroyed too.
+		/// </summary>
 		public T GetComponent<T>()
 			where T : Behaviour
 		{
+			ThrowIfDestroyed();
 			foreach (Behaviour behaviour in components)
 			{
-				if (behaviour is T typed && !behaviour.destroyed)
+				if (behaviour is T typed && (!behaviour.dead || dead))
 				{
 					return typed;
 				}
@@ -117,9 +122,10 @@ namespace LELEngine
 
 		public Behaviour GetComponent(Type type)
 		{
+			ThrowIfDestroyed();
 			foreach (Behaviour behaviour in components)
 			{
-				if (type.IsInstanceOfType(behaviour) && !behaviour.destroyed)
+				if (type.IsInstanceOfType(behaviour) && (!behaviour.dead || dead))
 				{
 					return behaviour;
 				}
@@ -131,10 +137,11 @@ namespace LELEngine
 		public List<T> GetComponents<T>()
 			where T : Behaviour
 		{
+			ThrowIfDestroyed();
 			var result = new List<T>();
 			foreach (Behaviour behaviour in components)
 			{
-				if (behaviour is T typed && !behaviour.destroyed)
+				if (behaviour is T typed && (!behaviour.dead || dead))
 				{
 					result.Add(typed);
 				}
@@ -146,6 +153,7 @@ namespace LELEngine
 		public T AddComponent<T>()
 			where T : Behaviour
 		{
+			ThrowIfDestroyed();
 			T component = Activator.CreateInstance<T>();
 			LinkComponent(component);
 			return component;
@@ -153,6 +161,7 @@ namespace LELEngine
 
 		public Behaviour AddComponent(Type type)
 		{
+			ThrowIfDestroyed();
 			if (type == null || !typeof(Behaviour).IsAssignableFrom(type) || type.IsAbstract)
 			{
 				return null;
@@ -198,12 +207,19 @@ namespace LELEngine
 			component.gameObject = this;
 			component.Id = id != 0 ? id : SceneIds.Next();
 			component.executeAlways = component.GetType().IsDefined(typeof(ExecuteAlways), true);
+			if (dead)
+			{
+				// Added to a destroyed object (before the end of its frame): it goes with the object.
+				component.Kill(destroyTrace);
+			}
+
 			scene?.AddComponent(component);
 			return component;
 		}
 
 		public void SetActive(bool value)
 		{
+			ThrowIfDestroyed();
 			if (activeSelf == value)
 			{
 				return;
@@ -213,17 +229,21 @@ namespace LELEngine
 			scene?.OnHierarchyActiveChanged(this);
 		}
 
-		/// <summary>Destroys the object, its children and components at the end of the frame.</summary>
+		/// <summary>
+		///     Destroys the object with its children and components: they are gone for the game at once (null in the
+		///     scripts' checks, no more Update or physics callbacks); OnDisable, OnDestroy and the Destroyed events run at
+		///     the end of the frame. Destroying an object twice does nothing.
+		/// </summary>
 		public static void Destroy(GameObject target)
 		{
-			if (target == null || target.destroyed)
+			if (target is null || target.dead)
 			{
 				return;
 			}
 
 			if (target.scene != null)
 			{
-				target.scene.QueueDestroy(target);
+				target.scene.Kill(target, CaptureDestroyTrace());
 			}
 			else
 			{
@@ -231,10 +251,26 @@ namespace LELEngine
 			}
 		}
 
-		/// <summary>Removes a component at the end of the frame. The Transform cannot be removed.</summary>
+		/// <summary>Destroys the object after <paramref name="delay" /> seconds of game time (see <see cref="Destroy(GameObject)" />).</summary>
+		public static void Destroy(GameObject target, float delay)
+		{
+			if (delay <= 0f || target?.scene == null)
+			{
+				Destroy(target);
+			}
+			else if (!target.dead)
+			{
+				target.scene.DestroyLater(target, delay, CaptureDestroyTrace());
+			}
+		}
+
+		/// <summary>
+		///     Removes a component: gone for the game at once, OnDisable and OnDestroy at the end of the frame. The
+		///     Transform cannot be removed.
+		/// </summary>
 		public static void Destroy(Behaviour target)
 		{
-			if (target == null || target.destroyed || target is Transform)
+			if (target is null || target.dead || target is Transform)
 			{
 				return;
 			}
@@ -242,7 +278,7 @@ namespace LELEngine
 			Scene scene = target.gameObject?.scene;
 			if (scene != null)
 			{
-				scene.QueueDestroy(target);
+				scene.Kill(target, CaptureDestroyTrace());
 			}
 			else
 			{
@@ -250,10 +286,24 @@ namespace LELEngine
 			}
 		}
 
-		/// <summary>Destroys the object now (editor tools, scene unloading).</summary>
+		/// <summary>Removes the component after <paramref name="delay" /> seconds of game time.</summary>
+		public static void Destroy(Behaviour target, float delay)
+		{
+			Scene scene = target?.gameObject?.scene;
+			if (delay <= 0f || scene == null)
+			{
+				Destroy(target);
+			}
+			else if (!target.dead && target is not Transform)
+			{
+				scene.DestroyLater(target, delay, CaptureDestroyTrace());
+			}
+		}
+
+		/// <summary>Destroys the object now, OnDestroy included (editor tools, scene unloading).</summary>
 		public static void DestroyImmediate(GameObject target)
 		{
-			if (target == null || target.destroyed)
+			if (target is null || target.destroyed)
 			{
 				return;
 			}
@@ -270,7 +320,7 @@ namespace LELEngine
 
 		public static void DestroyImmediate(Behaviour target)
 		{
-			if (target == null || target.destroyed || target is Transform)
+			if (target is null || target.destroyed || target is Transform)
 			{
 				return;
 			}
@@ -282,6 +332,7 @@ namespace LELEngine
 			}
 			else
 			{
+				target.dead = true;
 				target.destroyed = true;
 				target.ReleaseResources();
 				target.gameObject?.RemoveComponentEntry(target);
@@ -313,9 +364,11 @@ namespace LELEngine
 				transform.SetParent(null, false);
 			}
 
+			dead = true;
 			destroyed = true;
 			foreach (Behaviour component in components)
 			{
+				component.dead = true;
 				component.destroyed = true;
 				component.ReleaseResources();
 			}

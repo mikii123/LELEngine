@@ -79,7 +79,7 @@ namespace LELEngine
 
 			foreach (Behaviour component in go.Components)
 			{
-				if (!component.destroyed && (Of(component.GetType()) & flags) != 0)
+				if (!component.dead && (Of(component.GetType()) & flags) != 0)
 				{
 					return true;
 				}

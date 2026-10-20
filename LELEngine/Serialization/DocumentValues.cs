@@ -333,13 +333,13 @@ namespace LELEngine.Serialization
 			Scene scene = context?.Scene;
 			if (value is GameObject go)
 			{
-				return go.scene == scene && (go.hideFlags & HideFlags.DontSave) == 0 && !go.destroyed ? go.Id : 0;
+				return go.scene == scene && (go.hideFlags & HideFlags.DontSave) == 0 && !go.dead ? go.Id : 0;
 			}
 
 			if (value is Behaviour component)
 			{
 				GameObject owner = component.gameObject;
-				bool saved = owner != null && owner.scene == scene && (owner.hideFlags & HideFlags.DontSave) == 0 && !component.destroyed;
+				bool saved = owner != null && owner.scene == scene && (owner.hideFlags & HideFlags.DontSave) == 0 && !component.dead;
 				return saved ? component.Id : 0;
 			}
 

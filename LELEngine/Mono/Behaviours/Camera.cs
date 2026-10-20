@@ -123,7 +123,7 @@ public sealed class Camera : Behaviour
 	/// <summary>The camera draws as part of a stack: an overlay camera, enabled on an active object.</summary>
 	public static bool RendersInStack(Camera camera)
 	{
-		return camera != null && !camera.destroyed && camera.isActiveAndEnabled && camera.RenderType == CameraRenderType.Overlay;
+		return camera != null && !camera.dead && camera.isActiveAndEnabled && camera.RenderType == CameraRenderType.Overlay;
 	}
 
 	public void SetViewUniform(ShaderProgram shader)

@@ -31,6 +31,9 @@
 
 		public static float time => (float)timeD;
 
+		/// <summary>Game frames run so far (<see cref="Scene.UpdateScenes" /> calls).</summary>
+		public static long frameCount;
+
 		public static float lastFrame => (float)lastFrameD;
 
 		public static double renderDeltaTimeD;

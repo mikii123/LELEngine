@@ -10,7 +10,7 @@ namespace LELEngine
 	///     <see cref="ExecuteAlways" /> receive these callbacks; the scene still registers every component, so
 	///     cameras, lights and renderers work in edit mode. Exceptions thrown by callbacks are logged, not rethrown.
 	/// </summary>
-	public class Behaviour
+	public class Behaviour : EngineObject
 	{
 		#region PublicFields
 
@@ -36,7 +36,7 @@ namespace LELEngine
 			}
 		}
 
-		public bool isActiveAndEnabled => enabledSelf && gameObject != null && gameObject.activeInHierarchy;
+		public bool isActiveAndEnabled => enabledSelf && !dead && gameObject != null && gameObject.activeInHierarchy;
 
 		#endregion
 
@@ -46,8 +46,9 @@ namespace LELEngine
 		internal bool awakeCalled;
 		internal bool enableCalled;
 		internal bool startCalled;
-		internal bool destroyed;
 		internal bool executeAlways;
+
+		internal override string DisplayName => "'" + (gameObject?.Name ?? "?") + "' (" + GetType().Name + ")";
 
 		#endregion
 
@@ -121,17 +122,20 @@ namespace LELEngine
 		public T GetComponent<T>()
 			where T : Behaviour
 		{
+			ThrowIfDestroyed();
 			return gameObject.GetComponent<T>();
 		}
 
 		public T AddComponent<T>()
 			where T : Behaviour
 		{
+			ThrowIfDestroyed();
 			return gameObject.AddComponent<T>();
 		}
 
 		public Behaviour AddComponent(string component)
 		{
+			ThrowIfDestroyed();
 			return gameObject.AddComponent(component);
 		}
 
@@ -160,16 +164,31 @@ namespace LELEngine
 
 		#region ProtectedMethods
 
-		/// <summary>Destroys the GameObject (with its children and components) at the end of the frame.</summary>
+		/// <summary>
+		///     Destroys the GameObject with its children and components: gone for the game at once, OnDestroy at the end
+		///     of the frame (see <see cref="EngineObject" />).
+		/// </summary>
 		protected static void Destroy(GameObject target)
 		{
 			GameObject.Destroy(target);
 		}
 
-		/// <summary>Removes the component at the end of the frame (the Transform cannot be removed).</summary>
+		/// <summary>Destroys the GameObject after <paramref name="delay" /> seconds of game time.</summary>
+		protected static void Destroy(GameObject target, float delay)
+		{
+			GameObject.Destroy(target, delay);
+		}
+
+		/// <summary>Removes the component: gone for the game at once, OnDestroy at the end of the frame (not the Transform).</summary>
 		protected static void Destroy(Behaviour target)
 		{
 			GameObject.Destroy(target);
+		}
+
+		/// <summary>Removes the component after <paramref name="delay" /> seconds of game time.</summary>
+		protected static void Destroy(Behaviour target, float delay)
+		{
+			GameObject.Destroy(target, delay);
 		}
 
 		/// <summary>Engine resources of the component (GPU buffers, ...); released on destroy in every mode.</summary>

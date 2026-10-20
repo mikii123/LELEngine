@@ -510,7 +510,7 @@ namespace LELEngine.Editor
 
 			SceneView.InvalidateCaches();
 			GameView.InvalidateCaches();
-			if (Selected != null && (Selected.destroyed || Selected.scene == null))
+			if (Selected != null && (Selected.dead || Selected.scene == null))
 			{
 				Selected = null;
 			}

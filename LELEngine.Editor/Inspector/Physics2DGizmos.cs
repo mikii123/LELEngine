@@ -49,7 +49,7 @@ namespace LELEngine.Editor
 		{
 			foreach (Behaviour component in go.Components)
 			{
-				if (component.destroyed || !component.enabled)
+				if (component.dead || !component.enabled)
 				{
 					continue;
 				}

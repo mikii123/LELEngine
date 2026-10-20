@@ -18,6 +18,9 @@ namespace LELEngine.Editor
 			ModelAssets.RegisterBackend(new AssimpModelBackend());
 			ModelAssets.MaterialExtractor = new ModelMaterialExtractor();
 
+			// Using a destroyed object names the line that destroyed it (ObjectDestroyedException).
+			EngineObject.RecordDestroyStackTraces = true;
+
 			// -batchmode: no window, no UI, a console (build machines, scripts).
 			if (help || options.Has("batchmode"))
 			{

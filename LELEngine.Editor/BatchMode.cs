@@ -209,6 +209,14 @@ namespace LELEngine.Editor
 			if (ScriptDomain.IsAssemblyCurrent(project))
 			{
 				Debug.Log("[Batch] Scripts are up to date");
+				// Built before the weaver existed (or by an IDE): rewritten before they load.
+				var woven = new BuildResult();
+				if (!ScriptBuilder.Weave(dll, Path.GetDirectoryName(dll), woven))
+				{
+					Debug.LogError("[Scripts] " + woven.Diagnostics[0]);
+					return false;
+				}
+
 				assembly = File.ReadAllBytes(dll);
 				string pdb = Path.ChangeExtension(dll, ".pdb");
 				symbols = File.Exists(pdb) ? File.ReadAllBytes(pdb) : null;
@@ -235,7 +243,7 @@ namespace LELEngine.Editor
 					return false;
 				}
 
-				Debug.Log($"[Batch] Scripts compiled ({result.Seconds:0.0} s)");
+				Debug.Log($"[Batch] Scripts compiled ({result.Seconds:0.0} s), {result.WovenChecks} null checks woven");
 				assembly = result.Assembly;
 				symbols = result.Symbols;
 			}

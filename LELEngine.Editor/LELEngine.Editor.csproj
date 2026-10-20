@@ -21,6 +21,8 @@
     <PackageReference Include="Silk.NET.Assimp" Version="2.22.0" />
     <!-- BC7 texture compression for builds (KTX files the player uploads as they are): the editor only. -->
     <PackageReference Include="BCnEncoder.Net" Version="2.3.0" />
+    <!-- IL rewriting of the compiled game scripts (NullCheckWeaver: destroyed objects are null for ?. ?? == null). -->
+    <PackageReference Include="Mono.Cecil" Version="0.11.6" />
   </ItemGroup>
 
   <ItemGroup>

@@ -65,7 +65,7 @@ namespace LELEngine
 				// Chosen on every call: a camera's render type changes without the scene noticing.
 				foreach (Camera camera in cameras)
 				{
-					if (!camera.destroyed && camera.RenderType == CameraRenderType.Base)
+					if (!camera.dead && camera.RenderType == CameraRenderType.Base)
 					{
 						return camera;
 					}
@@ -101,8 +101,14 @@ namespace LELEngine
 		private readonly List<GameObject> objects = new List<GameObject>();
 		private readonly List<Behaviour> components = new List<Behaviour>();
 		private List<Behaviour> pendingStart = new List<Behaviour>();
+		/// <summary>Objects destroyed this frame (every node of a destroyed subtree), waiting for the end of the frame.</summary>
 		private readonly List<GameObject> destroyQueue = new List<GameObject>();
+
+		/// <summary>Components destroyed on their own this frame.</summary>
 		private readonly List<Behaviour> componentDestroyQueue = new List<Behaviour>();
+
+		/// <summary>Destroy(target, delay) calls waiting for their time (<see cref="Time.timeD" />), with the caller's trace.</summary>
+		private readonly List<(EngineObject Target, double Due, string Trace)> timedDestroys = new List<(EngineObject, double, string)>();
 
 		private List<Behaviour> running = new List<Behaviour>();
 		private List<MeshRenderer> renderers = new List<MeshRenderer>();
@@ -181,7 +187,7 @@ namespace LELEngine
 		{
 			foreach (Behaviour component in components)
 			{
-				if (component is T typed && !component.destroyed)
+				if (component is T typed && !component.dead)
 				{
 					return typed;
 				}
@@ -196,7 +202,7 @@ namespace LELEngine
 			var result = new List<T>();
 			foreach (Behaviour component in components)
 			{
-				if (component is T typed && !component.destroyed)
+				if (component is T typed && !component.dead)
 				{
 					result.Add(typed);
 				}
@@ -276,6 +282,7 @@ namespace LELEngine
 		/// </summary>
 		public static void UpdateScenes(IReadOnlyList<Scene> scenes, float deltaTime, ref double fixedAccumulator)
 		{
+			Time.frameCount++;
 			foreach (Scene scene in scenes)
 			{
 				scene.BeginFrame();
@@ -343,6 +350,7 @@ namespace LELEngine
 
 			destroyQueue.Clear();
 			componentDestroyQueue.Clear();
+			timedDestroys.Clear();
 			pendingStart.Clear();
 			physics2D?.Dispose();
 			physics2D = null;
@@ -489,22 +497,50 @@ namespace LELEngine
 			dirty = true;
 		}
 
-		internal void QueueDestroy(GameObject go)
+		/// <summary>
+		///     Destroy: the object, its descendants and all their components die now (null for the game, no more
+		///     callbacks but OnDisable / OnDestroy); the end of the frame finishes them (<see cref="ProcessDestroyQueue" />).
+		/// </summary>
+		internal void Kill(GameObject go, string trace)
 		{
-			if (!destroyQueue.Contains(go))
+			var subtree = new List<GameObject>();
+			CollectSubtree(go, subtree);
+			foreach (GameObject node in subtree)
 			{
-				destroyQueue.Add(go);
+				if (node.dead)
+				{
+					continue;
+				}
+
+				node.Kill(trace);
+				foreach (Behaviour component in node.Components)
+				{
+					if (!component.dead)
+					{
+						component.Kill(trace);
+					}
+				}
+
+				destroyQueue.Add(node);
 			}
+
+			dirty = true;
 		}
 
-		internal void QueueDestroy(Behaviour component)
+		/// <summary>Destroy of one component (see <see cref="Kill(GameObject, string)" />).</summary>
+		internal void Kill(Behaviour component, string trace)
 		{
-			if (!componentDestroyQueue.Contains(component))
-			{
-				componentDestroyQueue.Add(component);
-			}
+			component.Kill(trace);
+			componentDestroyQueue.Add(component);
+			dirty = true;
 		}
 
+		internal void DestroyLater(EngineObject target, float delay, string trace)
+		{
+			timedDestroys.Add((target, Time.timeD + delay, trace));
+		}
+
+		/// <summary>DestroyImmediate: kills the object and finishes it now.</summary>
 		internal void DestroyNow(GameObject go)
 		{
 			if (go.destroyed)
@@ -512,37 +548,26 @@ namespace LELEngine
 				return;
 			}
 
+			string trace = go.dead ? go.destroyTrace : EngineObject.CaptureDestroyTrace();
 			var subtree = new List<GameObject>();
 			CollectSubtree(go, subtree);
-
 			foreach (GameObject node in subtree)
 			{
-				foreach (Behaviour component in node.Components)
+				if (!node.dead)
 				{
-					TryDeactivate(component);
+					node.Kill(trace);
 				}
-			}
 
-			foreach (GameObject node in subtree)
-			{
 				foreach (Behaviour component in node.Components)
 				{
-					if (component.awakeCalled && !component.destroyed)
+					if (!component.dead)
 					{
-						Call(component, Callback.OnDestroy);
+						component.Kill(trace);
 					}
-
-					component.destroyed = true;
-					component.ReleaseResources();
-					components.Remove(component);
 				}
-
-				node.destroyed = true;
-				objects.Remove(node);
 			}
 
-			go.transform?.SetParent(null, false);
-			dirty = true;
+			FinishDestroy(subtree, null);
 		}
 
 		internal void DestroyComponentNow(Behaviour component)
@@ -552,17 +577,12 @@ namespace LELEngine
 				return;
 			}
 
-			TryDeactivate(component);
-			if (component.awakeCalled)
+			if (!component.dead)
 			{
-				Call(component, Callback.OnDestroy);
+				component.Kill(null);
 			}
 
-			component.destroyed = true;
-			component.ReleaseResources();
-			component.gameObject?.RemoveComponentEntry(component);
-			components.Remove(component);
-			dirty = true;
+			FinishDestroy(null, new List<Behaviour> { component });
 		}
 
 		#endregion
@@ -604,7 +624,7 @@ namespace LELEngine
 			List<Behaviour> fixedBatch = ActiveBehaviours as List<Behaviour>;
 			foreach (Behaviour component in fixedBatch)
 			{
-				if (!component.enableCalled || component.destroyed) continue;
+				if (!component.enableCalled || component.dead) continue;
 				try
 				{
 					component.FixedUpdate();
@@ -647,7 +667,7 @@ namespace LELEngine
 
 			foreach (Behaviour component in frameActive)
 			{
-				if (!component.enableCalled || component.destroyed) continue;
+				if (!component.enableCalled || component.dead) continue;
 				try
 				{
 					component.Update();
@@ -685,7 +705,7 @@ namespace LELEngine
 
 			foreach (Behaviour component in frameActive)
 			{
-				if (!component.enableCalled || component.destroyed) continue;
+				if (!component.enableCalled || component.dead) continue;
 				try
 				{
 					component.LateUpdate();
@@ -702,7 +722,38 @@ namespace LELEngine
 			frameActive = null;
 			if (LifecycleStarted)
 			{
+				StartTimedDestroys();
 				ProcessDestroyQueue();
+			}
+		}
+
+		/// <summary>Destroy(target, delay) calls whose time came: the objects die now and finish below.</summary>
+		private void StartTimedDestroys()
+		{
+			if (timedDestroys.Count == 0)
+			{
+				return;
+			}
+
+			for (int i = timedDestroys.Count - 1; i >= 0; i--)
+			{
+				(EngineObject target, double due, string trace) = timedDestroys[i];
+				if (target.dead)
+				{
+					timedDestroys.RemoveAt(i);
+				}
+				else if (due <= Time.timeD)
+				{
+					timedDestroys.RemoveAt(i);
+					if (target is GameObject go)
+					{
+						go.scene?.Kill(go, trace);
+					}
+					else if (target is Behaviour component)
+					{
+						component.gameObject?.scene?.Kill(component, trace);
+					}
+				}
 			}
 		}
 
@@ -714,7 +765,7 @@ namespace LELEngine
 		private void TryActivate(Behaviour component)
 		{
 			dirty = true;
-			if (component.destroyed || !CanRun(component) || component.gameObject == null || !component.gameObject.activeInHierarchy)
+			if (component.dead || !CanRun(component) || component.gameObject == null || !component.gameObject.activeInHierarchy)
 			{
 				return;
 			}
@@ -725,7 +776,7 @@ namespace LELEngine
 				Call(component, Callback.Awake);
 			}
 
-			if (component.enabledSelf && !component.enableCalled && !component.destroyed && component.gameObject.activeInHierarchy)
+			if (component.enabledSelf && !component.enableCalled && !component.dead && component.gameObject.activeInHierarchy)
 			{
 				component.enableCalled = true;
 				Call(component, Callback.OnEnable);
@@ -757,7 +808,7 @@ namespace LELEngine
 				foreach (Behaviour component in batch)
 				{
 					// Disabled again before its Start: Start runs when it is next enabled.
-					if (component.destroyed || component.startCalled || !component.enableCalled)
+					if (component.dead || component.startCalled || !component.enableCalled)
 					{
 						continue;
 					}
@@ -768,27 +819,167 @@ namespace LELEngine
 			}
 		}
 
+		/// <summary>
+		///     Finishes the objects destroyed during the frame, together. OnDestroy may destroy more: those finish in the
+		///     same frame (a bounded number of rounds).
+		/// </summary>
 		private void ProcessDestroyQueue()
 		{
-			if (componentDestroyQueue.Count > 0)
+			for (int round = 0; round < 8 && (destroyQueue.Count > 0 || componentDestroyQueue.Count > 0); round++)
 			{
-				var batch = new List<Behaviour>(componentDestroyQueue);
-				componentDestroyQueue.Clear();
-				foreach (Behaviour component in batch)
+				// Each dead object with its current descendants: a child created under it after Destroy goes too, a child
+				// moved out of it after Destroy is still in the queue on its own.
+				var nodes = new List<GameObject>();
+				var seen = new HashSet<GameObject>();
+				foreach (GameObject queued in destroyQueue)
 				{
-					DestroyComponentNow(component);
+					if (queued.destroyed || seen.Contains(queued))
+					{
+						continue;
+					}
+
+					int first = nodes.Count;
+					CollectSubtree(queued, nodes);
+					for (int i = nodes.Count - 1; i >= first; i--)
+					{
+						GameObject node = nodes[i];
+						if (node.destroyed || !seen.Add(node))
+						{
+							nodes.RemoveAt(i);
+						}
+						else if (!node.dead)
+						{
+							node.Kill(queued.destroyTrace);
+							foreach (Behaviour component in node.Components)
+							{
+								if (!component.dead)
+								{
+									component.Kill(queued.destroyTrace);
+								}
+							}
+						}
+					}
+				}
+
+				destroyQueue.Clear();
+				var lone = new List<Behaviour>(componentDestroyQueue);
+				componentDestroyQueue.Clear();
+				FinishDestroy(nodes, lone);
+			}
+		}
+
+		/// <summary>
+		///     The end of a destroy, for dead objects (every node of their subtrees, parents first) and dead components of
+		///     living objects, in three passes over the batch: OnDisable; OnDestroy and the Destroyed events (the batch is
+		///     still usable); then the objects become destroyed, release their engine resources and leave the scene.
+		/// </summary>
+		private void FinishDestroy(List<GameObject> nodes, List<Behaviour> lone)
+		{
+			nodes ??= new List<GameObject>();
+			lone ??= new List<Behaviour>();
+
+			foreach (GameObject node in nodes)
+			{
+				foreach (Behaviour component in node.Components)
+				{
+					TryDeactivate(component);
 				}
 			}
 
-			if (destroyQueue.Count > 0)
+			foreach (Behaviour component in lone)
 			{
-				var batch = new List<GameObject>(destroyQueue);
-				destroyQueue.Clear();
-				foreach (GameObject go in batch)
+				TryDeactivate(component);
+			}
+
+			foreach (GameObject node in nodes)
+			{
+				foreach (Behaviour component in new List<Behaviour>(node.Components))
 				{
-					DestroyNow(go);
+					FinishComponentCallbacks(component);
+				}
+
+				if (!node.destroyCallbacksRun)
+				{
+					node.destroyCallbacksRun = true;
+					node.RaiseDestroyed();
 				}
 			}
+
+			foreach (Behaviour component in lone)
+			{
+				FinishComponentCallbacks(component);
+			}
+
+			var roots = new List<GameObject>();
+			var batch = new HashSet<GameObject>(nodes);
+			foreach (GameObject node in nodes)
+			{
+				if (node.destroyed)
+				{
+					continue;
+				}
+
+				foreach (Behaviour component in node.Components)
+				{
+					ReleaseComponent(component);
+				}
+
+				node.destroyed = true;
+				Transform parent = node.transform?.parent;
+				if (parent != null && !batch.Contains(parent.gameObject))
+				{
+					roots.Add(node);
+				}
+			}
+
+			foreach (Behaviour component in lone)
+			{
+				if (ReleaseComponent(component))
+				{
+					component.gameObject?.RemoveComponentEntry(component);
+				}
+			}
+
+			objects.RemoveAll(o => o.destroyed);
+			components.RemoveAll(c => c.destroyed);
+
+			// Out of the living parents' child lists (a destroyed object's Transform no longer notifies the scene).
+			foreach (GameObject root in roots)
+			{
+				root.transform.SetParent(null, false);
+			}
+
+			dirty = true;
+		}
+
+		private static void FinishComponentCallbacks(Behaviour component)
+		{
+			// Once: an OnDestroy may DestroyImmediate an object of the batch it belongs to.
+			if (component.destroyCallbacksRun)
+			{
+				return;
+			}
+
+			component.destroyCallbacksRun = true;
+			if (component.awakeCalled)
+			{
+				Call(component, Callback.OnDestroy);
+			}
+
+			component.RaiseDestroyed();
+		}
+
+		/// <summary>Marks the component destroyed and releases its resources (false when that already happened).</summary>
+		private static bool ReleaseComponent(Behaviour component)
+		{
+			if (component.destroyed)
+			{
+				return false;
+			}
+
+			component.destroyed = true;
+			component.ReleaseResources();
+			return true;
 		}
 
 		private static void CollectSubtree(GameObject go, List<GameObject> result)
@@ -819,7 +1010,7 @@ namespace LELEngine
 			DirectionalLight light = null;
 			foreach (Behaviour component in components)
 			{
-				if (component.destroyed)
+				if (component.dead)
 				{
 					continue;
 				}

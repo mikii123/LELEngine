@@ -290,7 +290,7 @@ namespace LELEngine
 		/// </summary>
 		public static void MoveGameObjectToScene(GameObject go, Scene scene)
 		{
-			if (go == null || scene == null || go.scene == scene || go.destroyed)
+			if (go == null || scene == null || go.scene == scene || go.dead)
 			{
 				return;
 			}

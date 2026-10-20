@@ -89,6 +89,13 @@ namespace LELEngine.Editor
 			bool editorScripts = HasEditorScripts(project);
 			if (File.Exists(dll))
 			{
+				// Scripts built before the weaver existed (or by an IDE): rewritten before they load.
+				var woven = new BuildResult();
+				if (!ScriptBuilder.Weave(dll, outputFolder, woven) || (editorScripts && File.Exists(EditorAssemblyFile(project)) && !ScriptBuilder.Weave(EditorAssemblyFile(project), outputFolder, woven)))
+				{
+					Debug.LogWarning("[Scripts] " + woven.Diagnostics[0].Message);
+				}
+
 				assemblyBytes = File.ReadAllBytes(dll);
 				symbolBytes = ReadSymbols(dll);
 				string editorDll = EditorAssemblyFile(project);
@@ -278,6 +285,10 @@ namespace LELEngine.Editor
 
 			HasErrors = false;
 			StatusText = $"Scripts compiled ({result.Seconds:0.0} s)";
+			if (result.WovenChecks > 0)
+			{
+				Debug.Log($"[Scripts] {result.WovenChecks} null checks treat destroyed objects as null");
+			}
 			if (editor.IsPlaying)
 			{
 				pendingReload = result;

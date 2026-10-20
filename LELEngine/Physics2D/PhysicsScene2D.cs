@@ -1059,6 +1059,12 @@ namespace LELEngine
 						continue;
 					}
 
+					// A destroyed object starts no contact; its exits still reach the living side (Send skips the dead one).
+					if (e.Begin && (e.A.dead || e.B.dead))
+					{
+						continue;
+					}
+
 					if (e.Sensor)
 					{
 						PhysicsCallbacks.Mask flag = e.Begin ? PhysicsCallbacks.Mask.TriggerEnter : PhysicsCallbacks.Mask.TriggerExit;
@@ -1099,7 +1105,7 @@ namespace LELEngine
 			foreach (Collider2D collider in colliders.ToArray())
 			{
 				GameObject go = collider.gameObject;
-				if (go == null || collider.world != this)
+				if (go == null || collider.dead || collider.world != this)
 				{
 					continue;
 				}
@@ -1132,7 +1138,7 @@ namespace LELEngine
 
 						bool selfIsA = B2ShapeEquals(data.shapeIdA, shape);
 						Collider2D other = ColliderOf(selfIsA ? data.shapeIdB : data.shapeIdA);
-						if (other == null || other.gameObject == null)
+						if (other == null || other.dead || other.gameObject == null)
 						{
 							continue;
 						}
@@ -1172,7 +1178,7 @@ namespace LELEngine
 				for (int i = 0; i < count; i++)
 				{
 					Collider2D visitor = ColliderOf(visitorBuffer[i]);
-					if (visitor == null || visitor.gameObject == null || trigger.gameObject == null || !(IsDynamic(trigger) || IsDynamic(visitor)))
+					if (visitor == null || visitor.dead || visitor.gameObject == null || trigger.gameObject == null || !(IsDynamic(trigger) || IsDynamic(visitor)))
 					{
 						continue;
 					}
@@ -1283,7 +1289,7 @@ namespace LELEngine
 			callbackBuffer.Clear();
 			foreach (Behaviour component in go.Components)
 			{
-				if (!component.destroyed && component.enableCalled && PhysicsCallbacks.Has(component, flag))
+				if (!component.dead && component.enableCalled && PhysicsCallbacks.Has(component, flag))
 				{
 					callbackBuffer.Add(component);
 				}
@@ -1419,7 +1425,7 @@ namespace LELEngine
 			private Collider2D Accept(B2ShapeId shape)
 			{
 				Collider2D collider = b2Shape_GetUserData(shape).GetRef<Collider2D>();
-				if (collider == null || collider.destroyed || collider.gameObject == null)
+				if (collider == null || collider.dead || collider.gameObject == null)
 				{
 					return null;
 				}

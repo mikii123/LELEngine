@@ -346,7 +346,7 @@ namespace LELEngine.Serialization
 
 		private static void WriteObjectTree(JsonDocumentWriter writer, GameObject go)
 		{
-			if ((go.hideFlags & HideFlags.DontSave) != 0 || go.destroyed)
+			if ((go.hideFlags & HideFlags.DontSave) != 0 || go.dead)
 			{
 				return;
 			}
@@ -364,7 +364,7 @@ namespace LELEngine.Serialization
 			json.WriteStartArray("components");
 			foreach (Behaviour component in go.Components)
 			{
-				if (component.destroyed)
+				if (component.dead)
 				{
 					continue;
 				}
@@ -615,7 +615,7 @@ namespace LELEngine.Serialization
 		/// <summary>Writes the object and its descendants; returns how many objects were written.</summary>
 		private static int WriteObjectTree(BinaryDocumentWriter writer, GameObject go)
 		{
-			if ((go.hideFlags & HideFlags.DontSave) != 0 || go.destroyed)
+			if ((go.hideFlags & HideFlags.DontSave) != 0 || go.dead)
 			{
 				return 0;
 			}
@@ -633,7 +633,7 @@ namespace LELEngine.Serialization
 			int count = 0;
 			foreach (Behaviour component in go.Components)
 			{
-				if (component.destroyed)
+				if (component.dead)
 				{
 					continue;
 				}
