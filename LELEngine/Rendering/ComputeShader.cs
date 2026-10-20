@@ -26,6 +26,12 @@ namespace LELEngine.Rendering
 			Program = new ShaderProgram(path);
 		}
 
+		/// <summary>A variant of a compute shader file with preprocessor symbols defined.</summary>
+		public ComputeShader(string path, params string[] defines)
+		{
+			Program = new ShaderProgram(path, defines);
+		}
+
 		/// <summary>
 		///     Compiles compute shader source code directly.
 		/// </summary>

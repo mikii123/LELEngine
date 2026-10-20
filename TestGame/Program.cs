@@ -14,6 +14,9 @@ namespace TestGame
 		///     Usage: TestGame [gi=lumen|vct|0] [voxels=0|1] [sdfview=0|1] [cacheview=0|1] [probeview=0|1] [emitters=0|1] [animate=0|1]
 		///            [stats=0|1] [autocam=0|1] [dump=N] [dumpdir=path] [jitter=0|1] [resolve=0|1] [static=0|1]
 		///            [bounce=0|1] [trace=voxel|sdf] [voxres=64|128|256] [sdfres=64|128|256]
+		///            Voxel GI: [bounces=N in-frame bounce iterations] [shadowtaps=1|4] [voxcoverage=0|1] [voxmips=iso|aniso|sh] [anisolevels=N] [bouncecells=0|1]
+		///            [conejitter=0|1 world-anchored cone rotation + step jitter] [jittercell=meters] [gifilter=N a-trous passes over the resolve]
+		///            [bouncecones=6|1] [furnace=1 closed box test] [furnacealbedo=0..1] [furnaceemission=radiance] [furnacewall=half thickness]
 		///            Lumen quality: [spacing=N px] [adaptive=0|1] [radrays=N] [radblend=0..1] [pblend=0..1] [tblend=0..1] [tmoving=frames]
 		///            [psigma=N] [pfloor=0..1] [pmoving=samples] [pmovingframes=N] [pmerge=0..1]
 		///            [importance=0|1] [pfilter=0|1] [pradius=N probes] [texels=N per meter] [ajitter=0..1] [djitter=0|1]
@@ -41,6 +44,7 @@ namespace TestGame
 				GI = !(giValue == "0" || string.Equals(giValue, "off", StringComparison.OrdinalIgnoreCase)),
 				Lumen = !string.Equals(giValue, "vct", StringComparison.OrdinalIgnoreCase),
 				VoxelView = GetBool(args, "voxels", false),
+				VoxelViewMip = GetFloat(args, "voxelmip", 0f),
 				SdfView = GetBool(args, "sdfview", false),
 				SurfaceCacheView = GetBool(args, "cacheview", false),
 				ProbeView = GetBool(args, "probeview", false),
@@ -59,6 +63,16 @@ namespace TestGame
 				Resolve = GetBool(args, "resolve", true),
 				StaticCache = GetBool(args, "static", true),
 				Bounce = GetBool(args, "bounce", true),
+				BounceIterations = GetInt(args, "bounces", 2),
+				BounceCones = GetInt(args, "bouncecones", 6),
+				BounceCells = GetBool(args, "bouncecells", true),
+				ConeJitter = GetBool(args, "conejitter", true),
+				ConeJitterCellSize = GetFloat(args, "jittercell", 0f),
+				ResolveFilterPasses = GetInt(args, "gifilter", 4),
+				InjectShadowTaps = GetInt(args, "shadowtaps", 4),
+				VoxelCoverage = GetBool(args, "voxcoverage", true),
+				VoxelMips = ParseVoxelMips(GetValue(args, "voxmips")),
+				AnisotropicMipLevels = GetInt(args, "anisolevels", 16),
 				TraceMode = ParseTraceMode(GetValue(args, "trace")),
 				VoxelResolution = GetInt(args, "voxres", 128),
 				SdfResolution = GetInt(args, "sdfres", 128),
@@ -160,6 +174,14 @@ namespace TestGame
 				SceneManager.SetActiveScene(scene);
 				GITestScene.ApplyHarness(scene, options);
 			}
+			else if (GetBool(args, "furnace", false))
+			{
+				// furnace=1: a closed box, every wall the same albedo and emission (expected radiance printed at start).
+				scene = Game.Mono.LoadEmptyScene();
+				scene.Name = "Furnace";
+				options.RegionPoints ??= FurnaceScene.RegionPoints;
+				FurnaceScene.Load(scene, options, GetFloat(args, "furnacealbedo", 0.5f), GetFloat(args, "furnaceemission", 0.1f), GetFloat(args, "furnacewall", FurnaceScene.HalfThickness));
+			}
 			else if (outdoor)
 			{
 				// outdoor=1: the open-sky yard (sky=0 for the flat sky color, skybox=path for a project asset).
@@ -256,6 +278,18 @@ namespace TestGame
 				case "voxel": return GITraceMode.VoxelCones;
 				case "sdf": return GITraceMode.SdfDetail;
 				default: return GITraceMode.SdfCones;
+			}
+		}
+
+		/// <summary>voxmips=iso|aniso|sh (default: the engine's default).</summary>
+		private static VoxelMipMode ParseVoxelMips(string value)
+		{
+			switch (value?.ToLowerInvariant())
+			{
+				case "iso": return VoxelMipMode.Isotropic;
+				case "aniso": return VoxelMipMode.Anisotropic;
+				case "sh": return VoxelMipMode.SphericalHarmonics;
+				default: return new GlobalIlluminationSettings().VoxelMips;
 			}
 		}
 

@@ -26,6 +26,7 @@ in vec2 fUV;
 
 layout(location = 0) out vec4 OutDiffuse;   // rgb irradiance, a occlusion (cone coverage)
 layout(location = 1) out vec4 OutSpecular;  // rgb specular radiance, a linear view depth
+layout(location = 2) out vec4 OutGuide;     // the resolve filter's edge data: xyz normal, w linear view depth
 
 uniform sampler2D SceneDepth;
 uniform sampler2D NormalRoughness;
@@ -48,6 +49,7 @@ void main()
 		// Sky: nothing to light, push the depth far so no surface pixel picks it during upsampling.
 		OutDiffuse = vec4(0.0);
 		OutSpecular = vec4(0.0, 0.0, 0.0, 1e9);
+		OutGuide = vec4(0.0, 0.0, 0.0, -1.0);
 		return;
 	}
 
@@ -60,12 +62,21 @@ void main()
 	float roughness = nr.w > 0.0 ? nr.w : 0.6;
 	vec3 V = normalize(cameraPosition - position);
 
-	vec4 diffuse = TraceDiffuseCones(position, N);
+	// Jitter cells of about 3x3 resolve texels on the surface (the texels' footprint from the position's derivatives;
+	// edges between objects make it large, the cell size is capped there).
+	vec2 jitter = vec2(0.0);
+	if (giConeJitter != 0)
+	{
+		float footprint = sqrt(length(dFdx(position)) * length(dFdy(position)));
+		jitter = ConeJitterAtPosition(position, footprint * 3.0);
+	}
+	vec4 diffuse = TraceDiffuseConesJittered(position, N, ConeStartOffset(), jitter);
 	vec3 specular = TraceSpecularCone(position, N, V, roughness);
 	float linearDepth = dot(position - cameraPosition, cameraForward);
 
 	OutDiffuse = diffuse;
 	OutSpecular = vec4(specular, linearDepth);
+	OutGuide = vec4(N, linearDepth);
 }
 
 /////Fragment

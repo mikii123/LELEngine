@@ -43,6 +43,12 @@ namespace LELEngine.Rendering
 			return new VoxelRegion(0, 0, 0, resolution, resolution, resolution);
 		}
 
+		/// <summary>The same box moved by <paramref name="dx" /> voxels along x (into another slab of an atlas).</summary>
+		public VoxelRegion OffsetX(int dx)
+		{
+			return new VoxelRegion(MinX + dx, MinY, MinZ, MaxX + dx, MaxY, MaxZ);
+		}
+
 		/// <summary>Footprint of this level-0 region at a coarser mip level.</summary>
 		public VoxelRegion AtLevel(int level, int levelSize)
 		{

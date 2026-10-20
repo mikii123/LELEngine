@@ -31,6 +31,10 @@ namespace TestGame.Scenes
 			public bool Lumen = true;
 
 			public bool VoxelView;
+
+			/// <summary>Mip level the voxel view shows (0 = the voxels).</summary>
+			public float VoxelViewMip;
+
 			public bool SdfView;
 			public bool SurfaceCacheView;
 			public bool ProbeView;
@@ -75,8 +79,37 @@ namespace TestGame.Scenes
 			/// <summary>Mark room and props static so they are voxelized once.</summary>
 			public bool StaticCache = true;
 
-			/// <summary>Feed the previous frame's radiance back when lighting voxels (multi-bounce).</summary>
+			/// <summary>Indirect bounces in the voxel volume (off = direct light and emission only).</summary>
 			public bool Bounce = true;
+
+			/// <summary>Voxel GI bounce iterations per frame (see GlobalIlluminationSettings.BounceIterations).</summary>
+			public int BounceIterations = 2;
+
+			/// <summary>Cones per voxel for the volume's bounces (6 or 1) when the bounce is not per 2x2x2 voxels.</summary>
+			public int BounceCones = 6;
+
+			/// <summary>Bounces per 2x2x2 voxels instead of cones from every voxel.</summary>
+			public bool BounceCells = true;
+
+			/// <summary>World-anchored rotation and step jitter of the voxel GI cone sets.</summary>
+			public bool ConeJitter = true;
+
+			/// <summary>World size of the resolve's jitter cells (0 = half a voxel).</summary>
+			public float ConeJitterCellSize;
+			/// <summary>Edge-aware a-trous passes over the voxel GI resolve (0 = off).</summary>
+			public int ResolveFilterPasses = 4;
+
+			/// <summary>Sun shadow samples per voxel when lighting the volume (1 or 4).</summary>
+			public int InjectShadowTaps = 4;
+
+			/// <summary>Coverage-weighted, order-independent voxelization (off = one sample per voxel, last writer wins).</summary>
+			public bool VoxelCoverage = true;
+
+			/// <summary>What the voxel radiance mips keep of direction.</summary>
+			public VoxelMipMode VoxelMips = VoxelMipMode.Anisotropic;
+
+			/// <summary>Mip levels above the voxels with directional views (isotropic above; 16 = all).</summary>
+			public int AnisotropicMipLevels = 16;
 
 			/// <summary>How voxel GI cones find geometry (default: visibility from the distance field).</summary>
 			public GITraceMode TraceMode = GITraceMode.SdfCones;
@@ -335,7 +368,9 @@ namespace TestGame.Scenes
 		{
 			if (options.VoxelView)
 			{
-				Game.Mono.Renderer.GetPass<LELEngine.Rendering.Passes.VoxelDebugPass>().Enabled = true;
+				LELEngine.Rendering.Passes.VoxelDebugPass voxelView = Game.Mono.Renderer.GetPass<LELEngine.Rendering.Passes.VoxelDebugPass>();
+				voxelView.Enabled = true;
+				voxelView.Mip = options.VoxelViewMip;
 			}
 			if (options.SdfView)
 			{
@@ -515,7 +550,15 @@ namespace TestGame.Scenes
 			Lighting.GI.DynamicUpdateInterval = 1;
 			Lighting.GI.LightingUpdateInterval = 1;
 			Lighting.GI.BounceStrength = options.Bounce ? 1f : 0f;
-			Lighting.GI.BounceCones = 6;
+			Lighting.GI.BounceIterations = options.Bounce ? Math.Max(0, options.BounceIterations) : 0;
+			Lighting.GI.BounceCones = options.BounceCones;
+			Lighting.GI.BounceCells = options.BounceCells;
+			Lighting.GI.ConeJitter = options.ConeJitter;
+			Lighting.GI.ConeJitterCellSize = options.ConeJitterCellSize;			Lighting.GI.ResolveFilterPasses = options.ResolveFilterPasses;
+			Lighting.GI.InjectShadowTaps = options.InjectShadowTaps;
+			Lighting.GI.VoxelCoverage = options.VoxelCoverage;
+			Lighting.GI.VoxelMips = options.VoxelMips;
+			Lighting.GI.AnisotropicMipLevels = options.AnisotropicMipLevels;
 
 			// Global SDF over the same grid; sky light enters through the open side of the room.
 			Lighting.GI.DistanceFieldEnabled = true;

@@ -77,6 +77,13 @@ namespace LELEngine
 		public const int OpaqueProbeSHTextureUnit = 17;
 
 		/// <summary>
+		///     First texture unit of the voxel radiance's directional mips (<see cref="GlobalIlluminationSettings.VoxelVolume" />):
+		///     one unit for the anisotropic views, this and the next two for the SH gradients. Used only when the context
+		///     has the units; otherwise the voxel GI reads isotropic mips.
+		/// </summary>
+		public const int VoxelDirectionalTextureUnit = 18;
+
+		/// <summary>
 		///     The view being drawn is its stack's lighting camera (<see cref="Camera.GetStackLightingCamera" />): the
 		///     materials read the screen-space GI its view computed (the resolve buffers). The other cameras of a stack
 		///     light from the GI volume: voxel cones per fragment, or Lumen's radiance cache probes. Set by the renderer
@@ -225,7 +232,7 @@ namespace LELEngine
 			program.SetFloat("giSpecularStrength", GI.SpecularStrength);
 			program.SetFloat("giOcclusionStrength", GI.OcclusionStrength);
 			program.SetFloat("giConeMaxDistance", GI.ConeMaxDistance);
-			program.SetTexture("VoxelRadiance", TextureTarget.Texture3D, GI.VoxelTexture, VoxelTextureUnit);
+			SetVoxelRadianceUniforms(program, GI.VoxelVolume, VoxelTextureUnit, VoxelDirectionalTextureUnit);
 
 			SetSkyUniforms(program);
 			bool sdf = GI.DistanceFieldEnabled && GI.GlobalSdf != 0;
@@ -281,7 +288,7 @@ namespace LELEngine
 				program.SetFloat("voxelGridSize", GI.GridSize);
 				program.SetInt("voxelResolution", GI.Resolution);
 				program.SetFloat("giConeMaxDistance", GI.ConeMaxDistance);
-				program.SetTexture("VoxelRadiance", TextureTarget.Texture3D, GI.VoxelTexture, VoxelTextureUnit);
+				SetVoxelRadianceUniforms(program, GI.VoxelVolume, VoxelTextureUnit, VoxelDirectionalTextureUnit);
 				bool sdf = GI.DistanceFieldEnabled && GI.GlobalSdf != 0;
 				program.SetInt("giTraceMode", TraceModeUniform(sdf));
 				program.SetFloat("giSdfDetailDistance", GI.SdfDetailDistance);
@@ -294,6 +301,55 @@ namespace LELEngine
 			{
 				SetRadianceCacheUniforms(program, VolumeProbeTextureUnit);
 				program.SetTexture("RadianceCacheSH", TextureTarget.Texture2DArray, RadianceCache.SH, VolumeProbeSHTextureUnit);
+			}
+		}
+
+		/// <summary>
+		///     Binds a voxel radiance volume for Engine/VoxelRadiance.glsl: the voxels (and their isotropic mips) on
+		///     <paramref name="unit" />, the directional mips on <paramref name="directionalUnit" /> and up (one unit for
+		///     the anisotropic views, three for the SH gradients). Samplers of data the volume does not have share the
+		///     voxels' unit (same sampler type) and go unused. Mode falls back to isotropic when the units are missing.
+		/// </summary>
+		public static void SetVoxelRadianceUniforms(ShaderProgram program, VoxelVolumeTextures volume, int unit, int directionalUnit)
+		{
+			VoxelMipMode mode = EffectiveVoxelMips(volume, directionalUnit);
+			program.SetTexture("VoxelRadiance", TextureTarget.Texture3D, volume.Radiance, unit);
+			program.SetInt("giVoxelMips", (int)mode);
+			if (mode == VoxelMipMode.Anisotropic)
+			{
+				program.SetInt("giVoxelAnisoLevels", volume.AnisoLevels);
+				program.SetTexture("VoxelRadianceAniso", TextureTarget.Texture3D, volume.Aniso, directionalUnit);
+			}
+			else
+			{
+				program.SetInt("VoxelRadianceAniso", unit);
+			}
+
+			if (mode == VoxelMipMode.SphericalHarmonics)
+			{
+				program.SetTexture("VoxelRadianceSHX", TextureTarget.Texture3D, volume.SHX, directionalUnit);
+				program.SetTexture("VoxelRadianceSHY", TextureTarget.Texture3D, volume.SHY, directionalUnit + 1);
+				program.SetTexture("VoxelRadianceSHZ", TextureTarget.Texture3D, volume.SHZ, directionalUnit + 2);
+			}
+			else
+			{
+				program.SetInt("VoxelRadianceSHX", unit);
+				program.SetInt("VoxelRadianceSHY", unit);
+				program.SetInt("VoxelRadianceSHZ", unit);
+			}
+		}
+
+		/// <summary>The mip mode a volume is read with when its directional data starts at <paramref name="directionalUnit" />.</summary>
+		public static VoxelMipMode EffectiveVoxelMips(VoxelVolumeTextures volume, int directionalUnit)
+		{
+			switch (volume.Mode)
+			{
+				case VoxelMipMode.Anisotropic:
+					return volume.Aniso != 0 && directionalUnit < GLCapabilities.MaxTextureUnits ? VoxelMipMode.Anisotropic : VoxelMipMode.Isotropic;
+				case VoxelMipMode.SphericalHarmonics:
+					return volume.SHX != 0 && directionalUnit + 2 < GLCapabilities.MaxTextureUnits ? VoxelMipMode.SphericalHarmonics : VoxelMipMode.Isotropic;
+				default:
+					return VoxelMipMode.Isotropic;
 			}
 		}
 
@@ -628,7 +684,7 @@ namespace LELEngine
 			set => Lighting.SceneGI.OcclusionStrength = value;
 		}
 
-		/// <summary>Weight of the multi-bounce feedback (see <see cref="SceneGISettings.BounceStrength" />).</summary>
+		/// <summary>Weight of the voxel volume's bounces (see <see cref="SceneGISettings.BounceStrength" />).</summary>
 		public float BounceStrength
 		{
 			get => Lighting.SceneGI.BounceStrength;
@@ -663,6 +719,30 @@ namespace LELEngine
 		[GIMethod(GIMode.VoxelConeTracing)] public float ResolveScale = 0.5f;
 
 		/// <summary>
+		///     Turn the six-cone sets around the normal and move their samples along the cones by a hash of the world
+		///     position (the screen-space resolve per <see cref="ConeJitterCellSize" /> cell, the volume's bounces per
+		///     voxel or bounce cell). Six fixed cones print small bright emitters onto nearby surfaces as rings and blobs;
+		///     jittered, the prints become noise the resolve filter (<see cref="ResolveFilterPasses" />) and the mips
+		///     average away. Anchored in the world: the same for every frame of a still scene, carried along by the
+		///     surfaces when the camera moves.
+		/// </summary>
+		[GIMethod(GIMode.VoxelConeTracing)] public bool ConeJitter = true;
+
+		/// <summary>
+		///     World size of the cells sharing one cone jitter in the screen-space resolve; 0 = half a voxel. Smaller cells
+		///     cost more (neighbouring pixels trace different directions: 5 cm +1.2 ms, 10 cm +0.65 ms, 20 cm +0.4 ms on
+		///     the test room), larger ones leave blotches the filter cannot reach.
+		/// </summary>
+		[GIMethod(GIMode.VoxelConeTracing)] public float ConeJitterCellSize;
+
+		/// <summary>
+		///     Passes of the edge-aware a-trous filter over the voxel GI resolve's diffuse (3x3 taps 1, 2, 4, 8, ...
+		///     texels apart, weighted by normal agreement and distance from the centre's plane; spatial only). 0 = off.
+		///     A fifth pass (taps 16 texels apart) copies shadow edges to 16-texel offsets: visible doubled, banded shadows.
+		/// </summary>
+		[GIMethod(GIMode.VoxelConeTracing)] public int ResolveFilterPasses = 4;
+
+		/// <summary>
 		///     Re-voxelize dynamic (non-static) objects every N frames; Lumen rebuilds the dynamic part of the global
 		///     distance field at the same rate. 1 = every frame.
 		/// </summary>
@@ -679,6 +759,52 @@ namespace LELEngine
 
 		/// <summary>Cones traced per voxel for the bounce: 6 (hemisphere layout) or 1 (single wide cone, cheaper).</summary>
 		[GIMethod(GIMode.VoxelConeTracing)] public int BounceCones = 6;
+
+		/// <summary>
+		///     Indirect bounces computed in the voxel volume every frame: the volume is lit (sun and emission), then lit
+		///     again this many times, each pass tracing the one before. Nothing is carried over from earlier frames (no
+		///     lag, no ghosting); every iteration costs one light injection and its mips. 0 = direct light and emission.
+		///     The materials' own cone gather adds one more bounce on top.
+		/// </summary>
+		[GIMethod(GIMode.VoxelConeTracing)] public int BounceIterations = 2;
+
+		/// <summary>
+		///     Bounces per 2x2x2 voxels: the hemisphere cones traced once per group of voxels with geometry, around their
+		///     average normal (exact on flat surfaces, averaged at edges), several times cheaper than
+		///     <see cref="BounceCones" /> cones from every voxel. Off traces from every voxel.
+		/// </summary>
+		[GIMethod(GIMode.VoxelConeTracing)] public bool BounceCells = true;
+
+		/// <summary>
+		///     Sun shadow samples per voxel when lighting the volume: 4 spread over the voxel's surface (a voxel half in
+		///     shadow gets half the light, so GI shadow edges are smooth and do not crawl voxel by voxel) or 1.
+		/// </summary>
+		[GIMethod(GIMode.VoxelConeTracing)] public int InjectShadowTaps = 4;
+
+		/// <summary>
+		///     Coverage voxelization: triangles are rasterized with multisampling and splatted over the two voxels nearest
+		///     along the projection axis, weighted by the covered area; albedo, normal and emission are weighted averages
+		///     (order independent) and the occupancy follows the coverage. Objects then move through the volume smoothly
+		///     instead of jumping voxel by voxel. Off = one sample per voxel column, the last fragment wins.
+		/// </summary>
+		[GIMethod(GIMode.VoxelConeTracing)] public bool VoxelCoverage = true;
+
+		/// <summary>
+		///     What the voxel radiance mips keep of direction (see <see cref="VoxelMipMode" />). Isotropic mips average
+		///     both sides of a wall thinner than a cell: a cone sees half the light of a lit interior wall, and the light
+		///     of a sunlit exterior leaks in.
+		/// </summary>
+		[GIMethod(GIMode.VoxelConeTracing)] public VoxelMipMode VoxelMips = VoxelMipMode.Anisotropic;
+
+		/// <summary>
+		///     <see cref="VoxelMipMode.Anisotropic" />: directional views for this many mip levels above the voxels (each
+		///     twice the size of the last, all of them by default); the cones read isotropic mips above them, blended over
+		///     one level. Most of the light the directional views keep (a room's walls seen without their dark outer side)
+		///     is in the coarse levels, but those also change in steps while objects move (which half of a cell metres
+		///     wide an object is in decides what it hides): a faint pulse of the whole GI every few voxels of motion. 3
+		///     keeps motion as smooth as isotropic mips, at most of the isotropic mips' loss of light.
+		/// </summary>
+		[GIMethod(GIMode.VoxelConeTracing)] public int AnisotropicMipLevels = 16;
 
 		/// <summary>
 		///     Incremented by <see cref="InvalidateStatic" /> (call it after moving or re-materialing a static
@@ -986,6 +1112,12 @@ namespace LELEngine
 		/// <summary>GL handle of the 3D radiance texture, 0 when unavailable.</summary>
 		[NonSerialized] public int VoxelTexture;
 
+		/// <summary>
+		///     The textures of the voxel radiance volume of this frame (<see cref="VoxelTexture" /> and the directional
+		///     data its mips have, see <see cref="VoxelMipMode" />), for <see cref="Lighting.SetVoxelRadianceUniforms" />.
+		/// </summary>
+		[NonSerialized] public VoxelVolumeTextures VoxelVolume;
+
 		/// <summary>World-space minimum corner of the volume for the current frame.</summary>
 		[NonSerialized] public Vector3 GridMin;
 
@@ -1038,6 +1170,51 @@ namespace LELEngine
 		}
 
 		#endregion
+	}
+
+	/// <summary>What the voxel radiance volume's mips keep of the direction its surfaces face.</summary>
+	public enum VoxelMipMode
+	{
+		/// <summary>Box-filtered averages: every direction sees the same (cheapest, one fetch per cone step).</summary>
+		Isotropic,
+
+		/// <summary>
+		///     Six views per mip level, each compositing its children front to back along an axis (two or three fetches
+		///     per cone step): a wall's near side hides its far side. Not linear: the coarse levels change in steps while
+		///     objects move (see <see cref="GlobalIlluminationSettings.AnisotropicMipLevels" />).
+		/// </summary>
+		Anisotropic,
+
+		/// <summary>
+		///     Spherical harmonics L1 per texel: every voxel's radiance and coverage weighted by (1 - n . d) for a cone
+		///     travelling along d (its front side counts twice, its back side not at all), stored as the isotropic volume
+		///     plus a gradient per axis at half resolution (four fetches per cone step). Linear, so the mips are plain
+		///     averages and move smoothly with the objects; facing surfaces are told apart within a cell, not their order.
+		/// </summary>
+		SphericalHarmonics
+	}
+
+	/// <summary>The textures of a voxel radiance volume (published in <see cref="GlobalIlluminationSettings.VoxelVolume" />).</summary>
+	public struct VoxelVolumeTextures
+	{
+		public VoxelMipMode Mode;
+
+		/// <summary>Radiance premultiplied by occupancy (rgb) and occupancy (a), with isotropic mips.</summary>
+		public int Radiance;
+
+		/// <summary><see cref="VoxelMipMode.Anisotropic" />: six views side by side along x, level 0 = the volume's mip 1.</summary>
+		public int Aniso;
+
+		public int AnisoLevels;
+
+		/// <summary>
+		///     <see cref="VoxelMipMode.SphericalHarmonics" />: d.x, d.y, d.z coefficients of radiance (rgb) and coverage (a),
+		///     level 0 = the volume's mip 1.
+		/// </summary>
+		public int SHX;
+
+		public int SHY;
+		public int SHZ;
 	}
 
 	public enum GIMode

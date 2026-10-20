@@ -17,14 +17,15 @@ void main()
 
 #version 430
 
-// Ray-marches the voxel volume from the camera and composites it over the scene (premultiplied alpha).
+// Ray-marches the voxel volume from the camera and composites it over the scene (premultiplied alpha). Mips above 0
+// show what a cone travelling along the view ray reads (the directional views when the mips are anisotropic).
+#include "Engine/VoxelRadiance.glsl"
+
 in vec2 fUV;
 out vec4 FragColor;
 
-uniform sampler3D VoxelRadiance;
 uniform vec3 voxelGridMin;
 uniform float voxelGridSize;
-uniform int voxelResolution;
 uniform mat4 invViewProjection;
 uniform vec3 cameraPosition;
 uniform float debugMip;
@@ -53,14 +54,16 @@ void main()
 
 	float voxelSize = voxelGridSize / float(voxelResolution) * exp2(debugMip);
 	float stepSize = voxelSize * 0.5;
-	float t = max(tmin, 0.0) + stepSize * 0.5;
+	// A camera inside the grid starts two voxels out: next to a wall the first samples would cover the whole screen
+	// with the voxels around the eye.
+	float t = max(tmin, voxelGridSize / float(voxelResolution) * 2.0);
 
 	vec3 color = vec3(0.0);
 	float alpha = 0.0;
 	for (int i = 0; i < 1024 && t < tmax && alpha < 0.98; i++)
 	{
 		vec3 uvw = (cameraPosition + rd * t - voxelGridMin) / voxelGridSize;
-		vec4 s = textureLod(VoxelRadiance, uvw, debugMip);
+		vec4 s = SampleVoxelRadiance(uvw, debugMip, rd);
 		color += (1.0 - alpha) * s.rgb;
 		alpha += (1.0 - alpha) * s.a;
 		t += stepSize;

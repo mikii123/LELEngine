@@ -162,6 +162,38 @@
   after activation 2.9 s -> ~100 ms with baked distance fields; the rest is the GI (surface cache, global SDF)
   catching up.
 
+## Voxel GI (voxel cone tracing)
+
+- `VoxelGIPass` lights the volume from scratch every frame, no state carried between frames: 1 +
+  `BounceIterations` injection passes ping-pong two volumes, each bounce pass tracing the one before
+  (`BounceCells`: the hemisphere cones once per 2x2x2 voxels around their average normal, `VoxelBounceCells.shader`).
+  Coverage voxelization (`VoxelCoverage`): 8x MSAA rasterization splatted over the two nearest voxels along the
+  projection axis into R32UI fixed-point accumulators (`VoxelizeCoverage.shader`, order independent), resolved by
+  `VoxelResolveGeometry.shader` (occupancy = 2 x weight). Mips (`VoxelMips`, `VoxelMipMode`): isotropic; anisotropic
+  (six views per level side by side along x in one atlas, `VoxelAnisoBase` / `VoxelAnisoMip`, `AnisotropicMipLevels`);
+  SH L1 (isotropic volume + three half-resolution gradient textures of (radiance, coverage) x (1 - n . d),
+  `VoxelSHBase.shader`, plain box mips). Sampled through `Engine/VoxelRadiance.glsl`, directional data on texture units
+  18-20 in material shaders (`Lighting.VoxelDirectionalTextureUnit`), 12-14 in the volume's own compute passes.
+- Passes that know the mips' kind compile it in (`LEL_VOXEL_ISO` / `LEL_VOXEL_ANISO` / `LEL_VOXEL_SH` variants of
+  GIResolve, inject, bounce cells): the runtime branch the material shaders keep made the resolve ~50% slower.
+- The coarse anisotropic levels change in steps while objects move (which half of a metres-wide cell an object is in
+  decides what it hides): a faint pulse of the whole GI every few voxels of motion; `anisolevels=3` is smooth but loses
+  most of the light the directional views keep. SH moves smoothly (linear) but keeps less light and shows more wall
+  streaks. 2026-10-20, night ghost view, floor/back/green 8-bit means, far-field per-frame change max under a moving
+  box, GPU ms: iso 80/81/69, 0.038, 5.7; aniso 98/99/86, 0.103, 8.2; SH 91/93/82, 0.048, 8.7; Lumen 123/152/106.
+- Smoothness without history: the resolve turns each pixel's six-cone set around the normal and moves its samples
+  by a world-anchored jitter (`ConeJitter`; 3D ordered dither per cell of ~3x3 resolve texels, 1 cm to half a voxel,
+  bounce cells per cell) and filters the diffuse with edge-aware a-trous passes (`ResolveFilterPasses`,
+  `GIFilter.shader`, guide texture = normal + depth from the resolve). The SDF opacity floor counts only the part of
+  a cone its band covers ((r / R)^2), and half steps use opacity exponent 0.6: the full-disc floor drew sharp bands on
+  the walls. Tilting the cone sets was tried and dropped (side cones dip below the surface, -5% in the furnace).
+- Test hooks (TestGame): `furnace=1` (closed box, every wall albedo `furnacealbedo` and emission `furnaceemission`,
+  `furnacewall` = half thickness; the expected radiance per bounce count is printed, the walls are logged as
+  `[Regions]` of the HDR scene color; Lumen reaches ~98%), `bounces=N`, `bouncecells=0|1`, `bouncecones=6|1`,
+  `voxcoverage=0|1`, `voxmips=iso|aniso|sh`, `anisolevels=N`, `shadowtaps=1|4`, `conejitter=0|1`, `jittercell=m`,
+  `gifilter=N`, `voxels=1 voxelmip=N` (volume view). Scratchpad scripts of 2026-10-20 measured motion with
+  `mover=300 capturefps=60` (object) and `autocam=1 capturefps=60` (camera, mean |second time difference|).
+
 ## GPU particles (VFX)
 
 - Runtime in `LELEngine/VFX` (graph asset, compiler, codegen, runtime, instance), shaders in

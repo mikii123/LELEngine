@@ -1,3 +1,4 @@
+using System;
 using LELEngine.Shaders;
 using OpenTK.Graphics.OpenGL4;
 using OpenTK.Mathematics;
@@ -70,12 +71,22 @@ namespace LELEngine.Rendering.Passes
 			program.SetFloat("voxelGridSize", gi.GridSize);
 			program.SetInt("voxelResolution", gi.Resolution);
 			program.SetFloat("debugMip", Mip);
-			program.SetTexture("VoxelRadiance", TextureTarget.Texture3D, gi.VoxelTexture, Lighting.VoxelTextureUnit);
+			Lighting.SetVoxelRadianceUniforms(program, gi.VoxelVolume, Lighting.VoxelTextureUnit, Lighting.VoxelDirectionalTextureUnit);
+			// The directional units (up to three) the volume may use, where the context has them.
+			int directionalUnits = Math.Clamp(GLCapabilities.MaxTextureUnits - Lighting.VoxelDirectionalTextureUnit, 0, 3);
 			GL.BindSampler(Lighting.VoxelTextureUnit, nearestSampler);
+			for (int i = 0; i < directionalUnits; i++)
+			{
+				GL.BindSampler(Lighting.VoxelDirectionalTextureUnit + i, nearestSampler);
+			}
 
 			context.Fullscreen.Draw();
 
 			GL.BindSampler(Lighting.VoxelTextureUnit, 0);
+			for (int i = 0; i < directionalUnits; i++)
+			{
+				GL.BindSampler(Lighting.VoxelDirectionalTextureUnit + i, 0);
+			}
 			GLState.SetBlend(false);
 			GLState.SetDepth(true, true);
 			GLState.SetCull(true);

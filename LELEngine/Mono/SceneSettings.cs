@@ -76,8 +76,8 @@ namespace LELEngine
 		public float OcclusionStrength = 1f;
 
 		/// <summary>
-		///     Weight of indirect light fed back from the previous frame's radiance volume when lighting voxels.
-		///     1 gives multi-bounce lighting converging over a few frames; 0 keeps a single bounce.
+		///     Weight of the indirect bounces computed in the voxel volume (GlobalIlluminationSettings.BounceIterations).
+		///     1 is physical; 0 lights the volume with direct light and emission only (one bounce, the materials' own).
 		/// </summary>
 		[GIMethod(GIMode.VoxelConeTracing)] public float BounceStrength = 1f;
 

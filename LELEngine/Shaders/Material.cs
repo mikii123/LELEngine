@@ -546,6 +546,10 @@ namespace LELEngine.Shaders
 				case "lightColor":
 				case "ShadowMap":
 				case "VoxelRadiance":
+				case "VoxelRadianceAniso":
+				case "VoxelRadianceSHX":
+				case "VoxelRadianceSHY":
+				case "VoxelRadianceSHZ":
 				case "IndirectDiffuse":
 				case "IndirectSpecular":
 				case "vInstanceIndex":
