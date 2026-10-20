@@ -59,7 +59,9 @@ namespace LELEngine.Rendering
 				// Binding again resets the viewport to the whole target: the tile's is restored.
 				int[] viewport = new int[4];
 				GL.GetInteger(GetPName.Viewport, viewport);
-				target.AddColorAttachment(RenderTextureFormat.RGBA16F);
+				// 32-bit: a holds a depth that receivers compare with their own (half floats round it by ~1/2048, more than
+				// the shadow bias: a transparent receiver then shadows itself in bands along the light's depth).
+				target.AddColorAttachment(RenderTextureFormat.RGBA32F);
 				target.Validate();
 				target.Bind();
 				GL.Viewport(viewport[0], viewport[1], viewport[2], viewport[3]);
