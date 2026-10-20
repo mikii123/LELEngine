@@ -17,8 +17,11 @@ out vec3 fMotion;
 
 void main()
 {
-	vec4 world = LelModelMatrix() * vec4(vPosition, 1.0);
-	gl_Position = projectionMatrix * viewMatrix * world;
+	mat4 model = LelModelMatrix();
+	// Exactly the material shaders' expression: the opaque pass tests LEQUAL against this depth without writing its
+	// own, and invariant only holds for identical expressions (P * V * (M * v) rounds differently, the sky shows through).
+	gl_Position = projectionMatrix * viewMatrix * model * vec4(vPosition, 1.0);
+	vec4 world = model * vec4(vPosition, 1.0);
 	fNormal = LelNormalMatrix() * vNormal;
 	// World-space displacement since last frame: affine over a triangle of a rigid object, so the interpolation is exact.
 	fMotion = world.xyz - (LelPreviousModelMatrix() * vec4(vPosition, 1.0)).xyz;
