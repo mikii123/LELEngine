@@ -16,6 +16,7 @@ namespace TestGame
 		///            [bounce=0|1] [trace=voxel|sdf] [voxres=64|128|256] [sdfres=64|128|256]
 		///            Voxel GI: [bounces=N in-frame bounce iterations] [shadowtaps=1|4] [voxcoverage=0|1] [voxmips=iso|aniso|sh] [anisolevels=N] [bouncecells=0|1]
 		///            [conejitter=0|1 world-anchored cone rotation + step jitter] [jittercell=meters] [gifilter=N a-trous passes over the resolve]
+		///            [occscale=1|2 coverage occupancy scale] [splat=2|3 tent or B-spline coverage splat]
 		///            [bouncecones=6|1] [furnace=1 closed box test] [furnacealbedo=0..1] [furnaceemission=radiance] [furnacewall=half thickness]
 		///            Lumen quality: [spacing=N px] [adaptive=0|1] [radrays=N] [radblend=0..1] [pblend=0..1] [tblend=0..1] [tmoving=frames]
 		///            [psigma=N] [pfloor=0..1] [pmoving=samples] [pmovingframes=N] [pmerge=0..1]
@@ -24,8 +25,8 @@ namespace TestGame
 		///            [dumpafter=seconds] [gpudriven=0|1] [stress=N extra cubes] [focus=0|1] [glass=0|1 transparent props]
 		///            Scenes: [outdoor=1 open-sky yard] [sky=0|1 procedural skybox] [skybox=asset path] [physics=1] [nav=1] [ui=1] [scene=path]
 		///            View: [view=ghost from under the ceiling down at the orbs] [camera=x,y,z] [look=x,y,z] [night=1 emitters only]
-		///            Ghosting measurements (GhostTest, frame exact): [capturefps=N fixed time step] [emitterstep=frame] [emitteroff=frame]
-		///            [mover=frame] [moverz=path depth] [regions=x,y,z;x,y,z;...] [regionsize=px] [regionstart=frame] [regionsource=scene|gi]
+		///            Ghosting measurements (GhostTest): [emitterstep=frame] [emitteroff=frame]
+		///            [mover=frame] [moverz=path depth] [moveremission=intensity] [regions=x,y,z;x,y,z;...] [regionsize=px] [regionstart=frame] [regionsource=scene|gi]
 		///            [noise=frames] [noisestart=frame]
 		///            Fallback tests: environment LEL_GL_DISABLE=drawparameters,indirectparameters,subgroups
 		///     Loads the GI test room with the FPS controller.
@@ -68,6 +69,8 @@ namespace TestGame
 				BounceCells = GetBool(args, "bouncecells", true),
 				ConeJitter = GetBool(args, "conejitter", true),
 				ConeJitterCellSize = GetFloat(args, "jittercell", 0f),
+				CoverageOccupancyScale = GetFloat(args, "occscale", 2f),
+				CoverageSplatWidth = GetInt(args, "splat", 2),
 				ResolveFilterPasses = GetInt(args, "gifilter", 4),
 				InjectShadowTaps = GetInt(args, "shadowtaps", 4),
 				VoxelCoverage = GetBool(args, "voxcoverage", true),
@@ -128,6 +131,7 @@ namespace TestGame
 				EmitterOffFrame = GetInt(args, "emitteroff", 0),
 				MoverFrame = GetInt(args, "mover", 0),
 				MoverZ = GetFloat(args, "moverz", -1.6f),
+				MoverEmission = GetFloat(args, "moveremission", 0f),
 				RegionPoints = GetValue(args, "regions"),
 				RegionSize = GetInt(args, "regionsize", 16),
 				RegionStartFrame = GetInt(args, "regionstart", 1),
@@ -146,12 +150,6 @@ namespace TestGame
 				options.CameraLookAt ??= GITestScene.GhostViewLookAt;
 			}
 
-			// capturefps=N: every frame advances the clock by 1/N s (motion per frame independent of the frame rate).
-			float captureFps = GetFloat(args, "capturefps", 0f);
-			if (captureFps > 0f)
-			{
-				Time.captureDeltaTimeD = 1.0 / captureFps;
-			}
 			// genmeta=dir1;dir2 creates missing .meta files for the asset files below the folders, then exits.
 			string genMeta = GetValue(args, "genmeta");
 			if (genMeta != null)

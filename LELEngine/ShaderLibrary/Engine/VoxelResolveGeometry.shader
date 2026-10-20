@@ -3,10 +3,10 @@
 #version 430
 
 // Turns the coverage voxelization's accumulators (Engine/VoxelizeCoverage.shader) into a geometry volume set for
-// a sub-region: weighted averages of albedo, normal and emission, and the occupancy from the summed weight. A
-// surface splats its weight over the two voxels nearest along its axis, so the occupancy is twice the weight
-// (clamped): wherever the surface sits between two voxel centres, the nearer voxel is opaque and the pair as a whole
-// stops a cone as one opaque layer would.
+// a sub-region: weighted averages of albedo, normal and emission, and the occupancy from the summed weight times
+// occupancyScale (clamped; GlobalIlluminationSettings.CoverageOccupancyScale): 2 makes the nearer of the two voxels a
+// surface sits between opaque, so the pair stops a cone as one opaque layer would; 1 keeps the amount of a moving
+// surface in the volume constant.
 layout(local_size_x = 4, local_size_y = 4, local_size_z = 4) in;
 layout(binding = 0, rgba8) uniform writeonly image3D AlbedoOut;            // rgb albedo, a occupancy
 layout(binding = 1, rgba8) uniform writeonly image3D NormalOut;            // xyz normal * 0.5 + 0.5, a coherence
@@ -20,6 +20,7 @@ uniform usampler3D AccEmission;
 
 uniform ivec3 dstOffset;
 uniform ivec3 dstSize;
+uniform float occupancyScale;
 
 const float FixedPoint = 256.0;
 
@@ -58,7 +59,7 @@ void main()
 
 	vec3 emission = DecodeRGB9E5(texelFetch(AccEmission, coord, 0).r) / weight;
 
-	imageStore(AlbedoOut, coord, vec4(albedo, clamp(weight * 2.0, 0.0, 1.0)));
+	imageStore(AlbedoOut, coord, vec4(albedo, clamp(weight * occupancyScale, 0.0, 1.0)));
 	imageStore(NormalOut, coord, vec4(normal * 0.5 + 0.5, clamp(coherence, 0.0, 1.0)));
 	imageStore(EmissiveOut, coord, vec4(emission, 0.0));
 }

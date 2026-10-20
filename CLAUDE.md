@@ -192,7 +192,8 @@
   `[Regions]` of the HDR scene color; Lumen reaches ~98%), `bounces=N`, `bouncecells=0|1`, `bouncecones=6|1`,
   `voxcoverage=0|1`, `voxmips=iso|aniso|sh`, `anisolevels=N`, `shadowtaps=1|4`, `conejitter=0|1`, `jittercell=m`,
   `gifilter=N`, `voxels=1 voxelmip=N` (volume view). Scratchpad scripts of 2026-10-20 measured motion with
-  `mover=300 capturefps=60` (object) and `autocam=1 capturefps=60` (camera, mean |second time difference|).
+  `mover=300` (object) and `autocam=1` (camera, mean |second time difference|). There is no fixed capture time step
+  (capturefps was removed: it made motion uneven in real time); motion per frame follows the real frame time.
 
 ## GPU particles (VFX)
 

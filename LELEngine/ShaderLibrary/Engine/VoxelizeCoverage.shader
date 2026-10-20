@@ -70,10 +70,11 @@ void main()
 
 // Coverage voxelization into accumulators (Engine/VoxelResolveGeometry.shader turns them into the geometry volume).
 // Rasterized with multisampling: a fragment stands for the covered part of its voxel column (covered samples /
-// samples), split between the two voxels nearest to the surface along the projection axis by distance (a tent of
-// one voxel). The weights of a surface crossing the volume sum to its covered area in voxel faces, so a moving
-// object's occupancy and colour change continuously. Sums are 16-bit fixed point (1/256) added with integer atomics:
-// order independent, the same result every frame. Emission is HDR: summed as RGB9E5 by compare-and-swap.
+// samples), split between the voxels nearest to the surface along the projection axis (a tent over two, or a
+// quadratic B-spline over three). The weights of a surface crossing the volume sum to its covered area in voxel
+// faces, so a moving object's occupancy and colour change continuously. Sums are 16-bit fixed point (1/256) added
+// with integer atomics: order independent, the same result every frame. Emission is HDR: summed as RGB9E5 by
+// compare-and-swap.
 layout(binding = 0, r32ui) uniform uimage3D AccAlbedoRG;   // albedo r, g x weight
 layout(binding = 1, r32ui) uniform uimage3D AccAlbedoBW;   // albedo b x weight, weight
 layout(binding = 2, r32ui) uniform uimage3D AccNormalXY;   // (normal x, y * 0.5 + 0.5) x weight
@@ -84,7 +85,8 @@ layout(binding = 5, r8) uniform writeonly image3D BlocksOut; // 1 where the 8^3 
 uniform vec3 voxelGridMin;
 uniform float voxelGridSize;
 uniform int voxelResolution;
-uniform int voxSamples; // samples per pixel of the rasterization (0 or 1: full coverage)
+uniform int voxSamples;    // samples per pixel of the rasterization (0 or 1: full coverage)
+uniform int voxSplatWidth; // 2: linear tent over the two nearest voxels, 3: quadratic B-spline over three
 
 // Material data injected per draw by VoxelGIPass
 uniform vec4 voxAlbedo;
@@ -176,16 +178,28 @@ void main()
 	vec3 normal01 = normalize(fNormal) * 0.5 + 0.5;
 	vec3 emission = voxEmissive.rgb * voxEmissive.a;
 
-	// The pixel is the voxel column; along the axis the surface sits between two voxel centres.
+	// The pixel is the voxel column; along the axis the surface's depth in voxel centres decides the weights.
 	ivec2 column = ivec2(gl_FragCoord.xy);
 	float depth = uvw[fAxis] * resolution - 0.5;
-	int lower = int(floor(depth));
-	float upperWeight = depth - float(lower);
-
-	ivec3 lowerCoord = fAxis == 0 ? ivec3(lower, column) : fAxis == 1 ? ivec3(column.x, lower, column.y) : ivec3(column, lower);
 	ivec3 axisStep = ivec3(0);
 	axisStep[fAxis] = 1;
 
+	if (voxSplatWidth >= 3)
+	{
+		// Quadratic B-spline around the nearest centre: weights and their slopes change smoothly as the surface moves.
+		int nearest = int(floor(depth + 0.5));
+		float t = depth - float(nearest);
+		ivec3 nearestCoord = fAxis == 0 ? ivec3(nearest, column) : fAxis == 1 ? ivec3(column.x, nearest, column.y) : ivec3(column, nearest);
+		Splat(nearestCoord - axisStep, coverage * 0.5 * (0.5 - t) * (0.5 - t), albedo, normal01, emission);
+		Splat(nearestCoord, coverage * (0.75 - t * t), albedo, normal01, emission);
+		Splat(nearestCoord + axisStep, coverage * 0.5 * (0.5 + t) * (0.5 + t), albedo, normal01, emission);
+		return;
+	}
+
+	// Linear tent between the two centres the surface lies between.
+	int lower = int(floor(depth));
+	float upperWeight = depth - float(lower);
+	ivec3 lowerCoord = fAxis == 0 ? ivec3(lower, column) : fAxis == 1 ? ivec3(column.x, lower, column.y) : ivec3(column, lower);
 	Splat(lowerCoord, coverage * (1.0 - upperWeight), albedo, normal01, emission);
 	Splat(lowerCoord + axisStep, coverage * upperWeight, albedo, normal01, emission);
 }

@@ -9,8 +9,8 @@ namespace TestGame.Scenes
 {
 	/// <summary>
 	///     Scripted events and readbacks for measuring how fast the GI follows a change (ghosting), frame exact. Frame N
-	///     is the N-th rendered frame: an event "at frame N" is first visible in frame N. Combine with capturefps=60 so
-	///     motion per frame does not depend on the frame rate, and with animate=0 for a still scene around the event.
+	///     is the N-th rendered frame: an event "at frame N" is first visible in frame N. Combine with animate=0 for a
+	///     still scene around the event.
 	///     - <see cref="EmitterStepFrame" />: the orb Orb0 jumps half its orbit (to the other side of the room).
 	///     - <see cref="EmitterOffFrame" />: Orb0 goes dark.
 	///     - <see cref="MoverFrame" />: a dynamic box crosses the room in front of the props at <see cref="MoverSpeed" />.
@@ -27,6 +27,9 @@ namespace TestGame.Scenes
 		public float MoverSpeed = 3f;
 		public Vector3 MoverStart = new Vector3(7f, 0.35f, -1.6f);
 		public Vector3 MoverEnd = new Vector3(-7f, 0.35f, -1.6f);
+
+		/// <summary>Emission intensity of the box (0 = a plain grey box): a moving emitter for the GI's stepping tests.</summary>
+		public float MoverEmission;
 		public string EmitterName = "Orb0";
 
 		public readonly List<Vector3> RegionPoints = new List<Vector3>();
@@ -46,6 +49,7 @@ namespace TestGame.Scenes
 
 		private EmissiveOrbiter emitter;
 		private Transform mover;
+		private float moverTravelled;
 		private bool regionsReported;
 
 		#endregion
@@ -68,7 +72,18 @@ namespace TestGame.Scenes
 				box.transform.position = MoverStart;
 				box.transform.scale = new Vector3(MoverStart.Y);
 				MeshRenderer renderer = box.GetComponent<MeshRenderer>();
-				renderer.SetMaterials(SceneModels.Material("LitGray.material"));
+				if (MoverEmission > 0f)
+				{
+					var glowing = new LELEngine.Shaders.Material(InternalStorage.GetOrCreateShader("Engine/Lit.shader")) { name = "Glowing mover" };
+					glowing.SetColor("Color", new Color4(0.8f, 0.8f, 0.8f, 1f));
+					glowing.SetColor("Emissive", new Color4(1f, 0.55f, 0.25f, MoverEmission));
+					renderer.SetMaterials(glowing);
+					renderer.CastShadows = false;
+				}
+				else
+				{
+					renderer.SetMaterials(SceneModels.Material("LitGray.material"));
+				}
 				renderer.IsStatic = false;
 				mover = box.transform;
 			}
@@ -93,11 +108,12 @@ namespace TestGame.Scenes
 				Console.WriteLine($"[GhostTest] frame {frame}: {EmitterName} off");
 			}
 
-			if (mover != null && frame >= MoverFrame)
+			if (mover != null && frame > MoverFrame)
 			{
+				// Speed times the frame's time: even motion in real time.
 				Vector3 path = MoverEnd - MoverStart;
-				float travelled = Math.Min(path.Length, (frame - MoverFrame) * Time.deltaTime * MoverSpeed);
-				mover.position = MoverStart + path.Normalized() * travelled;
+				moverTravelled = Math.Min(path.Length, moverTravelled + Time.deltaTime * MoverSpeed);
+				mover.position = MoverStart + path.Normalized() * moverTravelled;
 			}
 
 			if (NoiseFrames > 0 && frame == NoiseStartFrame)

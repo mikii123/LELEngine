@@ -782,12 +782,26 @@ namespace LELEngine
 		[GIMethod(GIMode.VoxelConeTracing)] public int InjectShadowTaps = 4;
 
 		/// <summary>
-		///     Coverage voxelization: triangles are rasterized with multisampling and splatted over the two voxels nearest
+		///     Coverage voxelization: triangles are rasterized with multisampling and splatted over the voxels nearest
 		///     along the projection axis, weighted by the covered area; albedo, normal and emission are weighted averages
 		///     (order independent) and the occupancy follows the coverage. Objects then move through the volume smoothly
 		///     instead of jumping voxel by voxel. Off = one sample per voxel column, the last fragment wins.
 		/// </summary>
 		[GIMethod(GIMode.VoxelConeTracing)] public bool VoxelCoverage = true;
+
+		/// <summary>
+		///     <see cref="VoxelCoverage" />: a voxel's occupancy is its splatted weight times this (clamped to 1). 2 makes a
+		///     surface between two voxel centres fill both, so a wall always stops a cone like one opaque layer, but the
+		///     amount of a moving object in the volume then swings with its position within a voxel (one to two layers:
+		///     emitters pulse as they cross voxels). 1 keeps that amount constant.
+		/// </summary>
+		[GIMethod(GIMode.VoxelConeTracing)] public float CoverageOccupancyScale = 2f;
+
+		/// <summary>
+		///     <see cref="VoxelCoverage" />: voxels a surface is splatted over along its projection axis: 2 (linear tent) or
+		///     3 (quadratic B-spline, smoother as objects move, a third more atomics).
+		/// </summary>
+		[GIMethod(GIMode.VoxelConeTracing)] public int CoverageSplatWidth = 2;
 
 		/// <summary>
 		///     What the voxel radiance mips keep of direction (see <see cref="VoxelMipMode" />). Isotropic mips average

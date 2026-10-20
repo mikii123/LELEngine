@@ -96,6 +96,12 @@ namespace TestGame.Scenes
 
 			/// <summary>World size of the resolve's jitter cells (0 = half a voxel).</summary>
 			public float ConeJitterCellSize;
+
+			/// <summary>Coverage voxelization: occupancy = splatted weight times this.</summary>
+			public float CoverageOccupancyScale = 2f;
+
+			/// <summary>Coverage voxelization: voxels a surface is splatted over (2 tent, 3 B-spline).</summary>
+			public int CoverageSplatWidth = 2;
 			/// <summary>Edge-aware a-trous passes over the voxel GI resolve (0 = off).</summary>
 			public int ResolveFilterPasses = 4;
 
@@ -201,6 +207,9 @@ namespace TestGame.Scenes
 
 			/// <summary>Depth (world z) of the box's path across the room.</summary>
 			public float MoverZ = -1.6f;
+
+			/// <summary>Emission intensity of the moving box (0 = not emissive).</summary>
+			public float MoverEmission;
 
 			/// <summary>World points "x,y,z;x,y,z;..." whose screen squares are logged every frame.</summary>
 			public string RegionPoints;
@@ -426,6 +435,7 @@ namespace TestGame.Scenes
 				ghost.MoverFrame = options.MoverFrame;
 				ghost.MoverStart.Z = options.MoverZ;
 				ghost.MoverEnd.Z = options.MoverZ;
+				ghost.MoverEmission = options.MoverEmission;
 				ghost.ParseRegionPoints(options.RegionPoints);
 				ghost.RegionSize = Math.Max(1, options.RegionSize);
 				ghost.RegionStartFrame = options.RegionStartFrame;
@@ -554,7 +564,9 @@ namespace TestGame.Scenes
 			Lighting.GI.BounceCones = options.BounceCones;
 			Lighting.GI.BounceCells = options.BounceCells;
 			Lighting.GI.ConeJitter = options.ConeJitter;
-			Lighting.GI.ConeJitterCellSize = options.ConeJitterCellSize;			Lighting.GI.ResolveFilterPasses = options.ResolveFilterPasses;
+			Lighting.GI.ConeJitterCellSize = options.ConeJitterCellSize;
+			Lighting.GI.CoverageOccupancyScale = options.CoverageOccupancyScale;
+			Lighting.GI.CoverageSplatWidth = options.CoverageSplatWidth;			Lighting.GI.ResolveFilterPasses = options.ResolveFilterPasses;
 			Lighting.GI.InjectShadowTaps = options.InjectShadowTaps;
 			Lighting.GI.VoxelCoverage = options.VoxelCoverage;
 			Lighting.GI.VoxelMips = options.VoxelMips;

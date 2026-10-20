@@ -126,6 +126,8 @@ namespace LELEngine.Rendering.Passes
 		private float lastGridSize;
 		private int lastStaticCount = -1;
 		private bool lastCoverage;
+		private float lastOccupancyScale;
+		private int lastSplatWidth;
 		private VoxelMipMode lastMipMode;
 		private int frameIndex;
 
@@ -505,6 +507,8 @@ namespace LELEngine.Rendering.Passes
 				|| Math.Abs(gi.GridSize - lastGridSize) > 1e-5f
 				|| staticRenderers.Count != lastStaticCount
 				|| gi.VoxelCoverage != lastCoverage
+				|| gi.CoverageOccupancyScale != lastOccupancyScale
+				|| gi.CoverageSplatWidth != lastSplatWidth
 				|| mode != lastMipMode;
 
 			if (changed)
@@ -514,6 +518,8 @@ namespace LELEngine.Rendering.Passes
 				lastGridSize = gi.GridSize;
 				lastStaticCount = staticRenderers.Count;
 				lastCoverage = gi.VoxelCoverage;
+				lastOccupancyScale = gi.CoverageOccupancyScale;
+				lastSplatWidth = gi.CoverageSplatWidth;
 				lastMipMode = mode;
 			}
 
@@ -586,10 +592,12 @@ namespace LELEngine.Rendering.Passes
 		private void UpdateDynamicGeometry(GlobalIlluminationSettings gi)
 		{
 			currentRegions.Clear();
+			// The B-spline splat reaches a voxel and a half past a surface.
+			int padding = gi.VoxelCoverage && gi.CoverageSplatWidth >= 3 ? 2 : 1;
 			foreach (MeshRenderer renderer in dynamicRenderers)
 			{
 				VoxelRegion region;
-				if (VoxelRegion.TryFromRenderer(renderer, gi.GridMin, gi.VoxelSize, gi.Resolution, 1, out region))
+				if (VoxelRegion.TryFromRenderer(renderer, gi.GridMin, gi.VoxelSize, gi.Resolution, padding, out region))
 				{
 					currentRegions.Add(region);
 				}
@@ -795,6 +803,7 @@ namespace LELEngine.Rendering.Passes
 			voxelizeCoverage.SetFloat("voxelGridSize", gi.GridSize);
 			voxelizeCoverage.SetInt("voxelResolution", currentResolution);
 			voxelizeCoverage.SetInt("voxSamples", coverageSamples);
+			voxelizeCoverage.SetInt("voxSplatWidth", gi.CoverageSplatWidth);
 			accumulators.BindImages(0, TextureAccess.ReadWrite);
 			GL.BindImageTexture(5, target.Blocks, 0, true, 0, TextureAccess.WriteOnly, SizedInternalFormat.R8);
 			DrawRenderers(voxelizeCoverage, renderers);
@@ -813,6 +822,7 @@ namespace LELEngine.Rendering.Passes
 			program.SetTexture("AccNormalXY", TextureTarget.Texture3D, accumulators.NormalXY, 2);
 			program.SetTexture("AccNormalZ", TextureTarget.Texture3D, accumulators.NormalZ, 3);
 			program.SetTexture("AccEmission", TextureTarget.Texture3D, accumulators.Emission, 4);
+			program.SetFloat("occupancyScale", gi.CoverageOccupancyScale);
 			DispatchRegions(resolveGeometry, regions);
 
 			// Geometry is read as images (injection) and block flags as textures (compaction).
