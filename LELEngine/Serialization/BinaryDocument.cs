@@ -29,10 +29,24 @@ namespace LELEngine.Serialization
 	{
 		public string Name;
 		public ValueTag Tag;
+
+		/// <summary>Arrays: the element encoding; dictionaries: the value encoding.</summary>
 		public ValueTag ElementTag;
+
+		/// <summary>Dictionaries: the key encoding (JSON type tables; binary values carry it themselves).</summary>
+		public ValueTag KeyTag;
 
 		/// <summary>Members of an enum field (or enum element type) when the document records them (JSON); null otherwise.</summary>
 		public KeyValuePair<string, long>[] EnumMembers;
+
+		/// <summary>
+		///     JSON type tables: the spec of an element (a dictionary's value) that is itself a collection or an enum,
+		///     so typeless conversion reads nested collections exactly; null otherwise.
+		/// </summary>
+		public SchemaField Element;
+
+		/// <summary>JSON type tables: the spec of a dictionary's keys.</summary>
+		public SchemaField Key;
 	}
 
 	/// <summary>A type as stored in a document: its name (see <see cref="TypeRegistry.GetName" />) and fields.</summary>
@@ -68,7 +82,9 @@ namespace LELEngine.Serialization
 	/// <summary>
 	///     One value of a <see cref="SerializedNode" />: primitives, strings and math types boxed, enums as long,
 	///     scene references as ulong, assets as <see cref="AssetReference" />, nested objects as
-	///     <see cref="SerializedNode" />, arrays as <see cref="SerializedArray" />.
+	///     <see cref="SerializedNode" />, arrays as <see cref="SerializedArray" />, dictionaries as
+	///     <see cref="SerializedDictionary" />. An Object value holding a reference is a ulong (scene) or an
+	///     <see cref="AssetReference" /> with the Object tag.
 	/// </summary>
 	public sealed class SerializedProperty
 	{
@@ -91,6 +107,14 @@ namespace LELEngine.Serialization
 		public byte[] Bytes;
 
 		public int Count => Bytes != null ? Bytes.Length / Math.Max(1, SerializationUtility.FixedSize(ElementTag)) : Items.Count;
+	}
+
+	/// <summary>Generic dictionary data: keys and values in generic form, with their encodings.</summary>
+	public sealed class SerializedDictionary
+	{
+		public ValueTag KeyTag;
+		public ValueTag ValueTag;
+		public readonly List<KeyValuePair<object, object>> Entries = new List<KeyValuePair<object, object>>();
 	}
 
 	/// <summary>An asset file by GUID and path, plus the name of a sub-asset inside it (a sprite of a sheet); null = none.</summary>
@@ -118,13 +142,22 @@ namespace LELEngine.Serialization
 	///     kind: string-id (version 2+; "Scene" or "Object")
 	///     body: length:int32, bytes
 	///     Object value: typeId:int32 (-1 = null), length:int32, fields in schema order
+	///                   or -2, id:uint64 (a component / GameObject of the scene held by an interface or EngineObject slot)
+	///                   or -3, Asset value (a ScriptableObject asset held by such a slot)
 	///     Array value: count:int32 (-1 = null), elementTag:byte, elements
+	///     Dictionary value: count:int32 (-1 = null), keyTag:byte, valueTag:byte, (key, value) pairs
 	///     Asset value: guid:string-id, path:string-id, name:string-id (version 2+)
 	///     </code>
 	/// </summary>
 	public static class BinaryDocument
 	{
 		public const int Magic = 0x424C454C; // "LELB"
+
+		/// <summary>Object value markers in place of a type id.</summary>
+		public const int NullObject = -1;
+
+		public const int SceneReferenceObject = -2;
+		public const int AssetReferenceObject = -3;
 
 		/// <summary>Version 2: document kind in the header, sub-asset names in asset values, GameObject layers.</summary>
 		public const int Version = 2;
@@ -230,18 +263,47 @@ namespace LELEngine.Serialization
 			}
 		}
 
-		/// <summary>An Object value: the runtime type, the block length and the fields (null: type -1).</summary>
+		/// <summary>
+		///     An Object value: the runtime type, the block length and the fields (null: type -1); a GameObject or
+		///     component (interface / EngineObject slots) as a scene reference, a ScriptableObject as an asset reference.
+		/// </summary>
 		public void WriteObjectValue(object value, int depth)
 		{
-			if (value == null || depth >= SerializationUtility.MaxDepth)
+			if (value == null)
 			{
-				Body.WriteInt32(-1);
+				Body.WriteInt32(BinaryDocument.NullObject);
 				return;
 			}
 
-			if (value is SerializedNode node)
+			switch (value)
 			{
-				WriteGenericObject(node);
+				case SerializedNode node:
+					WriteGenericObject(node);
+					return;
+				case ulong sceneId:
+					WriteObjectReference(sceneId);
+					return;
+				case AssetReference assetReference:
+					WriteObjectReference(assetReference);
+					return;
+				case GameObject _:
+				case Behaviour _:
+					WriteObjectReference(ReferenceId(value));
+					return;
+				case ScriptableObject scriptableObject:
+					WriteObjectReference(DocumentValues.ReferenceOf(scriptableObject, Context));
+					return;
+			}
+
+			WriteInlineObject(value, depth);
+		}
+
+		/// <summary>An Object value written by value whatever its type (a document's root, a ScriptableObject included).</summary>
+		public void WriteInlineObject(object value, int depth)
+		{
+			if (value == null || depth >= SerializationUtility.MaxDepth)
+			{
+				Body.WriteInt32(BinaryDocument.NullObject);
 				return;
 			}
 
@@ -294,6 +356,7 @@ namespace LELEngine.Serialization
 				case ValueTag.Array: WriteArrayValue(value, elementTag, depth); break;
 				case ValueTag.SceneRef: Body.WriteUInt64(ReferenceId(value)); break;
 				case ValueTag.Asset: WriteAsset(value); break;
+				case ValueTag.Dictionary: WriteDictionaryValue(value, depth); break;
 				default: break;
 			}
 		}
@@ -415,6 +478,12 @@ namespace LELEngine.Serialization
 				return;
 			}
 
+			if (elementTag == ValueTag.Null)
+			{
+				// An element of another collection: its own element type decides.
+				elementTag = SerializationUtility.ElementTagOf(value);
+			}
+
 			if (value is SerializedArray generic)
 			{
 				Body.WriteInt32(generic.Count);
@@ -460,6 +529,66 @@ namespace LELEngine.Serialization
 			{
 				WriteValue(item, elementTag, ValueTag.Null, depth + 1);
 			}
+		}
+
+		private void WriteDictionaryValue(object value, int depth)
+		{
+			if (value == null)
+			{
+				Body.WriteInt32(-1);
+				return;
+			}
+
+			if (value is SerializedDictionary generic)
+			{
+				Body.WriteInt32(generic.Entries.Count);
+				Body.WriteByte((byte)generic.KeyTag);
+				Body.WriteByte((byte)generic.ValueTag);
+				foreach (KeyValuePair<object, object> entry in generic.Entries)
+				{
+					WriteValue(entry.Key, generic.KeyTag, ValueTag.Null, depth + 1);
+					WriteValue(entry.Value, generic.ValueTag, ValueTag.Null, depth + 1);
+				}
+
+				return;
+			}
+
+			var dictionary = (IDictionary)value;
+			SerializationUtility.GetDictionaryTypes(value.GetType(), out Type keyType, out Type valueType);
+			ValueTag keyTag = SerializationUtility.TagOf(keyType, out _);
+			ValueTag valueTag = SerializationUtility.TagOf(valueType, out _);
+			Body.WriteInt32(dictionary.Count);
+			Body.WriteByte((byte)keyTag);
+			Body.WriteByte((byte)valueTag);
+			foreach (DictionaryEntry entry in dictionary)
+			{
+				WriteValue(entry.Key, keyTag, ValueTag.Null, depth + 1);
+				WriteValue(entry.Value, valueTag, ValueTag.Null, depth + 1);
+			}
+		}
+
+		private void WriteObjectReference(ulong id)
+		{
+			if (id == 0)
+			{
+				Body.WriteInt32(BinaryDocument.NullObject);
+				return;
+			}
+
+			Body.WriteInt32(BinaryDocument.SceneReferenceObject);
+			Body.WriteUInt64(id);
+		}
+
+		private void WriteObjectReference(AssetReference reference)
+		{
+			if (reference.IsNull)
+			{
+				Body.WriteInt32(BinaryDocument.NullObject);
+				return;
+			}
+
+			Body.WriteInt32(BinaryDocument.AssetReferenceObject);
+			WriteAsset(reference);
 		}
 
 		private ulong ReferenceId(object value)
@@ -657,10 +786,26 @@ namespace LELEngine.Serialization
 			return node;
 		}
 
-		/// <summary>An Object value (type id, length, fields) into <paramref name="current" /> or a new instance.</summary>
+		/// <summary>
+		///     An Object value (type id, length, fields) into <paramref name="current" /> or a new instance; a reference
+		///     (interface / EngineObject slots) resolves to the scene object or loads the asset (generic reads: the id as
+		///     a ulong, the <see cref="AssetReference" />).
+		/// </summary>
 		public object ReadObjectValue(Type declaredType, object current, int depth)
 		{
 			int typeId = Body.ReadInt32();
+			if (typeId == BinaryDocument.SceneReferenceObject)
+			{
+				ulong id = Body.ReadUInt64();
+				return declaredType != null ? ResolveReference(id, declaredType) : id;
+			}
+
+			if (typeId == BinaryDocument.AssetReferenceObject)
+			{
+				AssetReference reference = ReadAssetReference();
+				return declaredType != null ? LoadAsset(reference, declaredType) : reference;
+			}
+
 			if (typeId < 0)
 			{
 				return declaredType != null && declaredType.IsValueType ? current ?? Activator.CreateInstance(declaredType) : null;
@@ -777,6 +922,8 @@ namespace LELEngine.Serialization
 					AssetReference reference = ReadAssetReference();
 					return targetType != null ? LoadAsset(reference, targetType) : reference;
 				}
+				case ValueTag.Dictionary:
+					return ReadDictionaryValue(targetType, current, depth);
 				default:
 					return null;
 			}
@@ -828,6 +975,32 @@ namespace LELEngine.Serialization
 					if (typeId >= 0)
 					{
 						Body.Skip(Body.ReadInt32());
+					}
+					else if (typeId == BinaryDocument.SceneReferenceObject)
+					{
+						Body.Skip(8);
+					}
+					else if (typeId == BinaryDocument.AssetReferenceObject)
+					{
+						Body.Skip(AssetValueSize);
+					}
+
+					return;
+				}
+				case ValueTag.Dictionary:
+				{
+					int count = Body.ReadInt32();
+					if (count < 0)
+					{
+						return;
+					}
+
+					var keyTag = (ValueTag)Body.ReadByte();
+					var valueTag = (ValueTag)Body.ReadByte();
+					for (int i = 0; i < count; i++)
+					{
+						SkipValue(keyTag, ValueTag.Null);
+						SkipValue(valueTag, ValueTag.Null);
 					}
 
 					return;
@@ -927,6 +1100,7 @@ namespace LELEngine.Serialization
 				case ValueTag.Enum: accessor.SetBoxed(target, Enum.ToObject(field.FieldType, Body.ReadInt64())); return;
 				case ValueTag.Object:
 				case ValueTag.Array:
+				case ValueTag.Dictionary:
 				{
 					object current = accessor.GetBoxed(target);
 					object value = ReadBoxed(field.Tag, field.ElementTag, field.FieldType, current, depth);
@@ -1043,6 +1217,70 @@ namespace LELEngine.Serialization
 			}
 
 			return (IList)Activator.CreateInstance(listType, capacity);
+		}
+
+		/// <summary>A Dictionary value into <paramref name="current" /> (cleared) or a new dictionary; keys and values convert when their types changed.</summary>
+		private object ReadDictionaryValue(Type targetType, object current, int depth)
+		{
+			int count = Body.ReadInt32();
+			if (count < 0)
+			{
+				return null;
+			}
+
+			var keyTag = (ValueTag)Body.ReadByte();
+			var valueTag = (ValueTag)Body.ReadByte();
+			if (targetType == null || !SerializationUtility.GetDictionaryTypes(targetType, out Type keyType, out Type valueType))
+			{
+				var generic = new SerializedDictionary { KeyTag = keyTag, ValueTag = valueTag };
+				for (int i = 0; i < count; i++)
+				{
+					object key = ReadBoxed(keyTag, ValueTag.Null, null, null, depth + 1);
+					object value = ReadBoxed(valueTag, ValueTag.Null, null, null, depth + 1);
+					generic.Entries.Add(new KeyValuePair<object, object>(key, value));
+				}
+
+				if (targetType == null)
+				{
+					return generic;
+				}
+
+				object converted;
+				return TryConvert(generic, ValueTag.Dictionary, targetType, out converted) ? converted : current;
+			}
+
+			IDictionary dictionary = DocumentValues.ReuseDictionary(targetType, current);
+			ValueTag wantedKey = SerializationUtility.TagOf(keyType, out _);
+			ValueTag wantedValue = SerializationUtility.TagOf(valueType, out _);
+			for (int i = 0; i < count; i++)
+			{
+				object key = ReadMember(keyTag, wantedKey, keyType, depth);
+				object value = ReadMember(valueTag, wantedValue, valueType, depth);
+				if (DocumentValues.IsUsableKey(key))
+				{
+					dictionary[key] = value;
+				}
+			}
+
+			return dictionary;
+		}
+
+		/// <summary>One key or value of a dictionary, converted when the stored encoding is not the wanted one.</summary>
+		private object ReadMember(ValueTag stored, ValueTag wanted, Type type, int depth)
+		{
+			if (stored == wanted)
+			{
+				return ReadBoxed(stored, ValueTag.Null, type, null, depth + 1);
+			}
+
+			object boxed = ReadBoxed(stored, ValueTag.Null, null, null, depth + 1);
+			object converted;
+			if (TryConvert(boxed, stored, type, out converted))
+			{
+				return converted;
+			}
+
+			return type.IsValueType ? Activator.CreateInstance(type) : null;
 		}
 
 		private SerializedField[] Plan(int typeId, Type type)

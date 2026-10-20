@@ -27,6 +27,12 @@ namespace LELEngine.Editor
 		// equivalent angle sets while dragging.
 		private readonly Dictionary<Transform, (Quaternion rotation, Vector3 euler)> eulerHints = new Dictionary<Transform, (Quaternion, Vector3)>();
 
+		// The lock (as in Unity): the inspector keeps showing this object (by id: it survives scene reloads) or asset
+		// while other things are selected, e.g. to drag several selected assets on to one of its lists.
+		private bool locked;
+		private ulong lockedObjectId;
+		private string lockedAsset;
+
 		#endregion
 
 		#region Constructors
@@ -44,15 +50,39 @@ namespace LELEngine.Editor
 		/// <summary>The window is shown (its close button and the Window menu toggle it; saved with the editor's windows).</summary>
 		public bool Open = true;
 
+		/// <summary>Test runs: the scroll position to set on the next draw (screenshots of long inspectors).</summary>
+		public static float? TestScroll;
+
+		/// <summary>Test runs: locks the inspector on what it shows at the next draw.</summary>
+		public static bool TestLock;
+
+		/// <summary>The GameObject the inspector shows (the selection, or the locked object), null when none.</summary>
+		public GameObject Shown { get; private set; }
+
 		public void Draw()
 		{
 			if (!Open)
 			{
+				Shown = null;
 				return;
 			}
 
+			Shown = null;
 			if (ImGui.Begin("Inspector", ref Open))
 			{
+				if (TestScroll.HasValue)
+				{
+					ImGui.SetScrollY(TestScroll.Value);
+					TestScroll = null;
+				}
+
+				if (TestLock)
+				{
+					TestLock = false;
+					Lock(true);
+				}
+
+				NVector2 topRight = new NVector2(ImGui.GetCursorScreenPos().X + ImGui.GetContentRegionAvail().X, ImGui.GetCursorScreenPos().Y);
 				try
 				{
 					DrawContent();
@@ -65,9 +95,43 @@ namespace LELEngine.Editor
 				{
 					context.Release();
 				}
+
+				// The lock at the top right, over the first line.
+				float size = ImGui.GetFrameHeight();
+				ImGui.SetCursorScreenPos(topRight - new NVector2(size, 0f));
+				if (locked)
+				{
+					ImGui.PushStyleColor(ImGuiCol.Button, EditorStyle.Accent);
+				}
+
+				if (EditorIcons.Button("inspector_lock", locked ? IconKind.Lock : IconKind.Unlock, locked ? "Locked: shows this object whatever is selected (click to unlock)" : "Lock the inspector on this object (select other things, e.g. assets to drag on to its fields)", size))
+				{
+					Lock(!locked);
+				}
+
+				if (locked)
+				{
+					ImGui.PopStyleColor();
+				}
 			}
 
 			ImGui.End();
+		}
+
+		/// <summary>The inspector keeps showing what it shows now (or follows the selection again).</summary>
+		public void Lock(bool value)
+		{
+			locked = value && (editor.Selected != null || editor.SelectedAsset != null || Shown != null);
+			if (!locked)
+			{
+				lockedObjectId = 0;
+				lockedAsset = null;
+				return;
+			}
+
+			GameObject target = Shown ?? editor.Selected;
+			lockedObjectId = target?.Id ?? 0;
+			lockedAsset = target == null ? editor.SelectedAsset : null;
 		}
 
 		#endregion
@@ -77,14 +141,35 @@ namespace LELEngine.Editor
 		private void DrawContent()
 		{
 			GameObject go = editor.Selected;
+			string asset = editor.SelectedAsset;
+			if (locked)
+			{
+				// The locked object of the current scene (found again after reloads), else the locked asset; gone: unlocked.
+				GameObject lockedObject = lockedObjectId != 0 ? editor.Scene?.FindObjectById(lockedObjectId) : null;
+				if (lockedObject != null)
+				{
+					go = lockedObject;
+					asset = null;
+				}
+				else if (lockedAsset != null && System.IO.File.Exists(AssetDatabase.ToAbsolute(lockedAsset)))
+				{
+					go = null;
+					asset = lockedAsset;
+				}
+				else
+				{
+					Lock(false);
+				}
+			}
+
 			if (go == null || go.scene != editor.Scene)
 			{
-				if (editor.SelectedAsset != null)
+				if (asset != null)
 				{
 					context.Scene = editor.Scene;
 					context.LabelWidth = Math.Max(110f, ImGui.GetContentRegionAvail().X * 0.38f);
-					ImGui.PushID(editor.SelectedAsset);
-					AssetInspectors.Draw(editor.SelectedAsset, context);
+					ImGui.PushID(asset);
+					AssetInspectors.Draw(asset, context);
 					ImGui.PopID();
 					return;
 				}
@@ -92,6 +177,8 @@ namespace LELEngine.Editor
 				ImGui.TextDisabled("Nothing selected");
 				return;
 			}
+
+			Shown = go;
 
 			context.Scene = editor.Scene;
 			context.LabelWidth = Math.Max(110f, ImGui.GetContentRegionAvail().X * 0.38f);
@@ -126,7 +213,8 @@ namespace LELEngine.Editor
 			}
 
 			ImGui.SameLine();
-			ImGui.SetNextItemWidth(-1);
+			// Room for the lock button at the end of the line.
+			ImGui.SetNextItemWidth(-(ImGui.GetFrameHeight() + ImGui.GetStyle().ItemSpacing.X));
 			ImGui.InputText("##name", ref nameBuffer, 256);
 			if (ImGui.IsItemDeactivatedAfterEdit() && !string.IsNullOrWhiteSpace(nameBuffer) && nameBuffer != go.Name)
 			{
@@ -182,6 +270,15 @@ namespace LELEngine.Editor
 
 			ImGui.SetNextItemAllowOverlap();
 			bool open = ImGui.CollapsingHeader(title + "##header", ImGuiTreeNodeFlags.DefaultOpen);
+			TestAnchors.RecordItem("component:" + type.Name);
+
+			// The header drags this very component on to object fields (of its type, its GameObject's or an interface it implements).
+			if (!(component is MissingComponent) && ImGui.BeginDragDropSource())
+			{
+				DragAndDrop.SetPayload(DragAndDrop.ReferencePayload, DragItem.FromComponent(component));
+				ImGui.EndDragDropSource();
+			}
+
 			if (ImGui.BeginPopupContextItem("##component_context"))
 			{
 				if (!(component is Transform) && ImGui.MenuItem("Remove Component"))

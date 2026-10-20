@@ -91,6 +91,36 @@ namespace LELEngine.Serialization
 			}
 		}
 
+		/// <summary>
+		///     The type name stored for an Object document's root ("Namespace.Type, Assembly"), read without loading the
+		///     type or the fields; null for scenes and unreadable data.
+		/// </summary>
+		public static string RootTypeName(byte[] data)
+		{
+			try
+			{
+				if (IsBinary(data))
+				{
+					var reader = new BinaryDocumentReader(data, null);
+					if (reader.Kind != BinaryDocument.KindObject || reader.Body.Remaining < 4)
+					{
+						return null;
+					}
+
+					return reader.Schema(reader.Body.ReadInt32())?.Name;
+				}
+
+				using (var reader = new JsonDocumentReader(data, null))
+				{
+					return reader.Kind == BinaryDocument.KindObject ? JsonDocumentReader.TypeNameOf(reader.Root) : null;
+				}
+			}
+			catch (Exception)
+			{
+				return null;
+			}
+		}
+
 		/// <summary>A document holding one root object (its fields with their runtime type).</summary>
 		public static byte[] WriteObject(object root, DocumentFormat format, SerializationContext context = null)
 		{
@@ -103,7 +133,8 @@ namespace LELEngine.Serialization
 			if (format == DocumentFormat.Binary)
 			{
 				var writer = new BinaryDocumentWriter(context) { Kind = BinaryDocument.KindObject };
-				writer.WriteObjectValue(root, 0);
+				// By value whatever the type: a ScriptableObject root is the asset itself, not a reference to it.
+				writer.WriteInlineObject(root, 0);
 				return writer.ToArray();
 			}
 

@@ -204,6 +204,9 @@ namespace LELEngine.UIElements
 			}
 
 			pooled = true;
+			// A pooled event lets go of its targets: kept until its next use, they held the elements of the last play
+			// mode (their panel, document and scene) after the editor left it.
+			Init();
 			lock (pool)
 			{
 				if (pool.Count < 64)

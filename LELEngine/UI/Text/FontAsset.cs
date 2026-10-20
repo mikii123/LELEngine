@@ -29,7 +29,9 @@ namespace LELEngine.UIElements
 	/// <summary>
 	///     A font usable by the UI: a TrueType file plus a dynamically filled signed distance field atlas shared by
 	///     every size the font is drawn at. Glyphs are rasterized on first use. Loaded from a .ttf / .otf asset, or
-	///     from the system fonts for the default font.
+	///     from the system fonts for the default font. Glyph lookups may run on any thread (the loading thread
+	///     rasterizes the glyphs of UI it loads in the background, <see cref="WarmUp" />); the atlas textures upload on
+	///     the GL thread (<see cref="GetPageTexture" />).
 	/// </summary>
 	public sealed class FontAsset : IAsset
 	{
@@ -83,26 +85,37 @@ namespace LELEngine.UIElements
 		{
 			get
 			{
-				if (defaultFont == null)
+				FontAsset loaded = defaultFont;
+				if (loaded != null)
 				{
-					defaultFont = LoadDefault();
+					return loaded;
 				}
 
-				return defaultFont;
+				lock (systemFonts)
+				{
+					return defaultFont ??= LoadDefault();
+				}
 			}
 			set => defaultFont = value;
 		}
+
+		/// <summary>The printable ASCII characters: the glyphs <see cref="WarmUp" /> rasterizes for every font.</summary>
+		public const string BasicCharacters = " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~";
 
 		#endregion
 
 		#region PrivateFields
 
-		private static FontAsset defaultFont;
+		private static volatile FontAsset defaultFont;
 		private static readonly Dictionary<string, FontAsset> systemFonts = new Dictionary<string, FontAsset>(StringComparer.OrdinalIgnoreCase);
+		[ThreadStatic] private static List<GlyphContour> contourBuffer;
 		private TrueTypeFont font;
+
+		// Guards the glyph table, the atlas pages and the TrueType reader's caches. Held briefly: outlines and distance
+		// fields are computed outside it, so the main thread never waits for the loading thread's rasterization.
+		private readonly object sync = new object();
 		private readonly Dictionary<int, GlyphInfo> glyphs = new Dictionary<int, GlyphInfo>();
 		private readonly List<AtlasPage> pageList = new List<AtlasPage>();
-		private readonly List<GlyphContour> contourBuffer = new List<GlyphContour>();
 
 		#endregion
 
@@ -206,7 +219,7 @@ namespace LELEngine.UIElements
 		/// <summary>The glyph for a code point in this font or a fallback; <paramref name="owner" /> is the font that has it.</summary>
 		public bool TryGetGlyph(int codepoint, out GlyphInfo glyph, out FontAsset owner)
 		{
-			int index = font.GetGlyphIndex(codepoint);
+			int index = GlyphIndexOf(codepoint);
 			if (index != 0)
 			{
 				glyph = GetGlyphByIndex(index);
@@ -222,7 +235,7 @@ namespace LELEngine.UIElements
 					continue;
 				}
 
-				int fallbackIndex = fallback.font.GetGlyphIndex(codepoint);
+				int fallbackIndex = fallback.GlyphIndexOf(codepoint);
 				if (fallbackIndex != 0)
 				{
 					glyph = fallback.GetGlyphByIndex(fallbackIndex);
@@ -239,27 +252,102 @@ namespace LELEngine.UIElements
 		public GlyphInfo GetGlyphByIndex(int glyphIndex)
 		{
 			GlyphInfo info;
-			if (glyphs.TryGetValue(glyphIndex, out info))
+			lock (sync)
 			{
-				return info;
+				if (glyphs.TryGetValue(glyphIndex, out info))
+				{
+					return info;
+				}
+
+				info = new GlyphInfo { page = -1, glyphIndex = glyphIndex, advance = font.GetAdvance(glyphIndex) };
 			}
 
-			info = Rasterize(glyphIndex);
-			glyphs[glyphIndex] = info;
-			return info;
+			// The outline and its distance field are computed outside the lock; two threads may both rasterize a
+			// glyph, the first one placed in the atlas is kept.
+			GlyphBitmap bitmap = Rasterize(glyphIndex);
+			lock (sync)
+			{
+				GlyphInfo raced;
+				if (glyphs.TryGetValue(glyphIndex, out raced))
+				{
+					return raced;
+				}
+
+				if (bitmap.pixels != null)
+				{
+					Place(ref info, bitmap);
+				}
+
+				glyphs[glyphIndex] = info;
+				return info;
+			}
 		}
 
+		/// <summary>The kerning tables are read when the font loads and never change: no lock.</summary>
 		public int GetKerning(int leftGlyphIndex, int rightGlyphIndex)
 		{
 			return font.GetKerning(leftGlyphIndex, rightGlyphIndex);
 		}
 
+		/// <summary>
+		///     Rasterizes the glyphs of <paramref name="text" /> (and of the fallbacks that have the characters this font
+		///     lacks) into the atlas: the loading thread does it for UI it loads, so the first frame showing the UI only
+		///     uploads the atlas. Any thread.
+		/// </summary>
+		public void WarmUp(string text)
+		{
+			if (string.IsNullOrEmpty(text))
+			{
+				return;
+			}
+
+			for (int i = 0; i < text.Length; i++)
+			{
+				int codepoint = text[i];
+				if (char.IsHighSurrogate(text[i]) && i + 1 < text.Length && char.IsLowSurrogate(text[i + 1]))
+				{
+					codepoint = char.ConvertToUtf32(text[i], text[i + 1]);
+					i++;
+				}
+				else if (char.IsSurrogate(text[i]) || codepoint < 32)
+				{
+					continue;
+				}
+
+				TryGetGlyph(codepoint, out _, out _);
+			}
+		}
+
+		/// <summary>GL texture of an atlas page, uploading the glyphs added since the last call (GL thread); 0 when the page does not exist.</summary>
+		public int GetPageTexture(int page)
+		{
+			lock (sync)
+			{
+				return page >= 0 && page < pageList.Count ? pageList[page].GetTexture() : 0;
+			}
+		}
+
+		/// <summary>Uploads every atlas page that has glyphs the GPU lacks (GL thread).</summary>
+		public void UploadPages()
+		{
+			lock (sync)
+			{
+				foreach (AtlasPage page in pageList)
+				{
+					page.GetTexture();
+				}
+			}
+		}
+
 		/// <summary>Releases the GL textures (the glyphs are re-uploaded on next use).</summary>
 		public void Release()
 		{
-			foreach (AtlasPage page in pageList)
+			lock (sync)
 			{
-				page.Release();
+				foreach (AtlasPage page in pageList)
+				{
+					page.Release();
+				}
 			}
 		}
 
@@ -272,13 +360,21 @@ namespace LELEngine.UIElements
 
 		#region PrivateMethods
 
-		private GlyphInfo Rasterize(int glyphIndex)
+		/// <summary>A glyph's distance field before it has a place in the atlas (no pixels: nothing to draw).</summary>
+		private struct GlyphBitmap
 		{
-			var info = new GlyphInfo { page = -1, glyphIndex = glyphIndex, advance = font.GetAdvance(glyphIndex) };
+			public byte[] pixels;
+			public int left, top, width, height;
+		}
+
+		/// <summary>The glyph's outline and distance field; reads only the font file's bytes (any thread, no lock).</summary>
+		private GlyphBitmap Rasterize(int glyphIndex)
+		{
+			List<GlyphContour> contours = contourBuffer ??= new List<GlyphContour>();
 			TrueTypeFont.GlyphBox box;
-			if (!font.GetGlyphOutline(glyphIndex, contourBuffer, out box))
+			if (!font.GetGlyphOutline(glyphIndex, contours, out box))
 			{
-				return info;
+				return default;
 			}
 
 			float scale = SdfFontSize / font.UnitsPerEm;
@@ -291,27 +387,45 @@ namespace LELEngine.UIElements
 			int height = top - ((int)Math.Floor(minY) - pad);
 			if (width <= 0 || height <= 0 || width > AtlasSize || height > AtlasSize)
 			{
-				return info;
+				return default;
 			}
 
-			byte[] pixels = GlyphSdf.Render(contourBuffer, scale, left, top, width, height, SdfSpread);
+			return new GlyphBitmap
+			{
+				pixels = GlyphSdf.Render(contours, scale, left, top, width, height, SdfSpread),
+				left = left,
+				top = top,
+				width = width,
+				height = height
+			};
+		}
 
+		/// <summary>Copies a rasterized glyph into the atlas (under <see cref="sync" />).</summary>
+		private void Place(ref GlyphInfo info, GlyphBitmap bitmap)
+		{
 			int x, y;
-			AtlasPage page = Allocate(width, height, out x, out y);
-			page.Write(pixels, x, y, width, height);
+			AtlasPage page = Allocate(bitmap.width, bitmap.height, out x, out y);
+			page.Write(bitmap.pixels, x, y, bitmap.width, bitmap.height);
 			atlasVersion++;
 
 			info.page = pageList.IndexOf(page);
-			info.width = width;
-			info.height = height;
+			info.width = bitmap.width;
+			info.height = bitmap.height;
 			info.u0 = x / (float)AtlasSize;
 			info.v0 = y / (float)AtlasSize;
-			info.u1 = (x + width) / (float)AtlasSize;
-			info.v1 = (y + height) / (float)AtlasSize;
-			info.bearingX = left;
+			info.u1 = (x + bitmap.width) / (float)AtlasSize;
+			info.v1 = (y + bitmap.height) / (float)AtlasSize;
+			info.bearingX = bitmap.left;
 			// Pen y is the baseline; the bitmap top is `top` above it (y up in glyph space).
-			info.bearingY = -top;
-			return info;
+			info.bearingY = -bitmap.top;
+		}
+
+		private int GlyphIndexOf(int codepoint)
+		{
+			lock (sync)
+			{
+				return font.GetGlyphIndex(codepoint);
+			}
 		}
 
 		private AtlasPage Allocate(int width, int height, out int x, out int y)
@@ -533,7 +647,10 @@ namespace LELEngine.UIElements
 				dirtyMaxY = Math.Max(dirtyMaxY, y + height);
 			}
 
-			/// <summary>GL texture of the page, uploading the pixels changed since the last call.</summary>
+			/// <summary>
+			///     GL texture of the page, uploading the pixels changed since the last call. The font's
+			///     <see cref="FontAsset.GetPageTexture" /> calls it under the lock that guards the pixels.
+			/// </summary>
 			public int GetTexture()
 			{
 				if (handle == 0)

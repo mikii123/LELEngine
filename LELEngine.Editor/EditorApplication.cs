@@ -35,6 +35,9 @@ namespace LELEngine.Editor
 
 		/// <summary>Asset path of the project file shown in the inspector (when no GameObject is selected).</summary>
 		public string SelectedAsset { get; private set; }
+
+		/// <summary>The GameObject the inspector shows: the selection, or the object the inspector is locked on.</summary>
+		public GameObject InspectedObject => inspector.Shown ?? Selected;
 		public bool SceneDirty { get; private set; }
 		public PlayState PlayState { get; private set; } = PlayState.Edit;
 		public bool IsPlaying => PlayState != PlayState.Edit;
@@ -238,6 +241,12 @@ namespace LELEngine.Editor
 			ReloadSceneIfChangedOnDisk();
 			Scripts?.Update();
 			testHooks.Update();
+			if (PlayState == PlayState.Edit)
+			{
+				// Resources.LoadAsync requests and code awaiting on the main thread advance in edit mode too (editor
+				// scripts, [ExecuteAlways] components); play mode advances them with the scenes.
+				SceneManager.UpdateResourceLoads();
+			}
 
 			Scene scene = Scene;
 			if (scene == null || PlayState == PlayState.Paused)
@@ -487,10 +496,13 @@ namespace LELEngine.Editor
 			SelectedAsset = null;
 			AssetInspectors.Deselected();
 			ObjectPicker.Close();
+			DragAndDrop.Clear();
+			CollectionDrawers.Reset();
 			AssetThumbnails.Clear();
 			vfxGraphWindow.Reset();
 			Undo.Clear();
 			Edits.Cancel();
+			ScriptableObjectAssets.UnloadAll();
 			InternalStorage.Clear();
 			ModelAssets.CacheFolder = null;
 			ProjectSettings.Use(null);
@@ -594,6 +606,9 @@ namespace LELEngine.Editor
 		{
 			ulong selected = Selected?.Id ?? 0;
 			Edits.Cancel();
+			// Drags and open collection rows may point into the old scene.
+			DragAndDrop.Clear();
+			CollectionDrawers.Reset();
 			// Every scene goes: play mode may have loaded more (additively, DontDestroyOnLoad, in the background).
 			SceneManager.UnloadAll(true);
 			SceneManager.SetActiveScene(scene);
@@ -643,6 +658,49 @@ namespace LELEngine.Editor
 
 			Selected = null;
 			SelectedAsset = assetPath;
+		}
+
+		/// <summary>
+		///     Selects what an object field references: a GameObject (a component's GameObject) in the hierarchy, an
+		///     asset file in the project panel and the inspector.
+		/// </summary>
+		public void SelectObject(object target)
+		{
+			switch (target)
+			{
+				case GameObject go when go.scene == Scene:
+					Select(go);
+					hierarchy.Ping(go);
+					break;
+				case Behaviour component when component.gameObject?.scene == Scene:
+					Select(component.gameObject);
+					hierarchy.Ping(component.gameObject);
+					break;
+				case IAsset asset when asset.AssetPath != null && !AssetDatabase.IsEngineResource(asset.AssetPath):
+					SelectAsset(asset.AssetPath);
+					projectPanel.Ping(asset.AssetPath);
+					break;
+			}
+		}
+
+		/// <summary>Shows where an object field's reference is without selecting it: the hierarchy row or the project file flashes.</summary>
+		public void Ping(object target)
+		{
+			switch (target)
+			{
+				case GameObject go when go.scene == Scene:
+					hierarchy.Ping(go);
+					break;
+				case Behaviour component when component.gameObject?.scene == Scene:
+					hierarchy.Ping(component.gameObject);
+					break;
+				case IAsset asset when asset.AssetPath != null && !AssetDatabase.IsEngineResource(asset.AssetPath):
+					projectPanel.Ping(asset.AssetPath);
+					break;
+				case string assetPath:
+					projectPanel.Ping(assetPath);
+					break;
+			}
 		}
 
 		public void MarkDirty()
@@ -1047,6 +1105,11 @@ namespace LELEngine.Editor
 			Extensions.OnDomainUnloading();
 			inspector.ClearTypeCaches();
 			HierarchyPanel.ResetDrag();
+			hierarchy.ForgetObjects();
+			DragAndDrop.Clear();
+			CollectionDrawers.Reset();
+			TypeSelector.ClearCache();
+			ObjectPicker.Close();
 			Edits.Cancel();
 		}
 
@@ -1678,6 +1741,8 @@ namespace LELEngine.Editor
 			AssetsVersion++;
 			// Hot reload of .uss / .uxml files: the documents using them rebuild.
 			UIElements.UIAssets.ReloadChanged();
+			// ScriptableObject assets changed outside the editor: the loaded instances read their files again.
+			ScriptableObjectAssets.ReloadChanged();
 			NotifySceneChanged();
 			CheckSceneOnDisk();
 		}

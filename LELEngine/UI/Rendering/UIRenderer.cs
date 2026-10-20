@@ -1077,7 +1077,10 @@ namespace LELEngine.UIElements.Rendering
 				}
 
 				case FontPageKey page:
-					return page.page >= 0 && page.page < page.font.pages.Count ? page.font.pages[page.page].GetTexture() : whiteTexture;
+				{
+					int handle = page.font.GetPageTexture(page.page);
+					return handle != 0 ? handle : whiteTexture;
+				}
 				default:
 					return whiteTexture;
 			}

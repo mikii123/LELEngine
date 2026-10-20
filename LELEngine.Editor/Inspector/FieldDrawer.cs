@@ -1,5 +1,4 @@
 using System;
-using System.Collections;
 using System.Collections.Generic;
 using System.Reflection;
 using Hexa.NET.ImGui;
@@ -11,6 +10,28 @@ using NVector4 = System.Numerics.Vector4;
 
 namespace LELEngine.Editor
 {
+	/// <summary>
+	///     Decorations a list or dictionary row adds to the first line of the field it draws (any kind of field: a
+	///     number, an object field, a foldout): a prefix before it (the drag handle), a compact label in place of the
+	///     label column (the element's index) and a suffix at the end of the line (the remove button).
+	/// </summary>
+	internal sealed class RowDecoration
+	{
+		public Action Prefix;
+
+		/// <summary>Replaces the label column: the text (null: the field's own label in the label column; "": none).</summary>
+		public string Label;
+
+		/// <summary>Width the compact label takes (aligned indices).</summary>
+		public float LabelWidth;
+
+		/// <summary>Text of a foldout header in place of <see cref="Label" /> (a dictionary value's class name); null: <see cref="Label" />.</summary>
+		public string HeaderLabel;
+
+		public Action Suffix;
+		public float SuffixWidth;
+	}
+
 	/// <summary>Per-panel state of field drawing: the undo target being edited and the label column width.</summary>
 	internal sealed class InspectorContext
 	{
@@ -23,6 +44,9 @@ namespace LELEngine.Editor
 		public object UndoTarget;
 
 		public float LabelWidth = 130f;
+
+		/// <summary>Decorations of the next field line (list and dictionary rows): the line that draws them takes them.</summary>
+		public RowDecoration PendingRow;
 
 		#endregion
 
@@ -45,6 +69,18 @@ namespace LELEngine.Editor
 			}
 		}
 
+		/// <summary>Before a change that is not a widget's (a button, a drop, a list operation): captures the "before" state.</summary>
+		public void BeginEdit()
+		{
+			Editor?.Edits.Begin(UndoTarget);
+		}
+
+		/// <summary>After such a change: the undo record is committed at the end of the frame.</summary>
+		public void EndEdit()
+		{
+			Editor?.Edits.RequestCommit();
+		}
+
 		/// <summary>
 		///     Drops the scene objects the last draw used. Panels keep their context for the whole session, and a
 		///     panel that stops drawing (hidden tab) must not keep an unloaded scene and its script assembly alive.
@@ -53,6 +89,7 @@ namespace LELEngine.Editor
 		{
 			Scene = null;
 			UndoTarget = null;
+			PendingRow = null;
 		}
 
 		#endregion
@@ -60,8 +97,10 @@ namespace LELEngine.Editor
 
 	/// <summary>
 	///     Inspector widgets for serialized fields (the same fields the scene file stores): numbers, bools, strings,
-	///     enums, vectors, quaternions (as Euler angles), colors, arrays / lists, nested [Serializable] objects,
-	///     references to scene objects (pick or drag from the hierarchy) and assets (pick or drag from the project).
+	///     enums, vectors, quaternions (as Euler angles), colors, nested [Serializable] objects, object fields for
+	///     references (scene objects, assets, ScriptableObjects: drag and drop, picker), Odin-style polymorphic fields
+	///     (interfaces and base classes: a reference, or an instance of a class chosen from the arrow's list), and
+	///     reorderable lists and dictionaries (<see cref="CollectionDrawers" />).
 	/// </summary>
 	internal static class FieldDrawer
 	{
@@ -87,6 +126,8 @@ namespace LELEngine.Editor
 				}
 
 				object value = field.GetValue(target);
+				NVector2 lineStart = ImGui.GetCursorScreenPos();
+				float lineRight = lineStart.X + ImGui.GetContentRegionAvail().X;
 				ImGui.PushID(field.Name);
 				if (DrawValue(field.DisplayName, field.FieldType, ref value, field.Field, context, depth))
 				{
@@ -95,32 +136,73 @@ namespace LELEngine.Editor
 				}
 
 				ImGui.PopID();
+				if (TestAnchors.Enabled && depth == 0)
+				{
+					TestAnchors.Record("field:" + target.GetType().Name + "." + field.Name, lineStart, new NVector2(lineRight, lineStart.Y + ImGui.GetFrameHeight()));
+				}
 			}
 
 			return changed;
 		}
 
+		/// <summary>Test runs: every foldout of the inspector opens (screenshots of nested fields, lists and dictionaries).</summary>
+		public static bool ForceOpen;
+
+		/// <summary>ImGui id of the last foldout <see cref="Header" /> drew (its open state lives in the window's storage under it).</summary>
+		public static uint LastHeaderId { get; private set; }
+
+		/// <summary>Opens the foldout with this id on the next frame (a list after its add button).</summary>
+		public static void OpenHeader(uint headerId)
+		{
+			ImGui.GetStateStorage().SetBool(headerId, true);
+		}
+
 		public static bool DrawValue(string label, Type type, ref object value, FieldInfo info, InspectorContext context, int depth)
 		{
-			Type element = SerializationUtility.GetElementType(type);
-			if (element != null)
+			if (depth > SerializationUtility.MaxDepth)
 			{
-				return DrawList(label, type, element, ref value, context, depth);
+				RowDecoration row = BeginLine(label, info, context);
+				ImGui.TextDisabled("(nested too deep)");
+				EndLine(row);
+				return false;
+			}
+
+			if (SerializationUtility.GetElementType(type) != null)
+			{
+				return CollectionDrawers.DrawList(label, type, ref value, info, context, depth);
+			}
+
+			if (SerializationUtility.IsDictionaryType(type))
+			{
+				return CollectionDrawers.DrawDictionary(label, type, ref value, info, context, depth);
 			}
 
 			if (type == typeof(LayerMask))
 			{
-				Label(label, info, context);
-				return DrawLayerMask(ref value, context);
+				RowDecoration row = BeginLine(label, info, context);
+				bool maskChanged = DrawLayerMask(ref value, context);
+				EndLine(row);
+				return maskChanged;
+			}
+
+			if (SerializationUtility.IsReferenceType(type) || SerializationUtility.IsAssetType(type))
+			{
+				return DrawReference(label, type, ref value, info, context, depth);
+			}
+
+			if (TypeSelector.IsPolymorphic(type))
+			{
+				return DrawPolymorphic(label, type, ref value, info, context, depth);
 			}
 
 			if (IsNested(type))
 			{
-				return DrawNested(label, type, ref value, context, depth);
+				return DrawNested(label, type, ref value, info, context, depth);
 			}
 
-			Label(label, info, context);
+			RowDecoration line = BeginLine(label, info, context);
 			bool changed = DrawLeaf(type, ref value, info, context);
+			EndLine(line);
 			return changed;
 		}
 
@@ -129,12 +211,7 @@ namespace LELEngine.Editor
 		{
 			ImGui.AlignTextToFramePadding();
 			ImGui.TextUnformatted(label);
-			TooltipAttribute tooltip = info?.GetCustomAttribute<TooltipAttribute>(false);
-			if (tooltip != null && ImGui.IsItemHovered())
-			{
-				ImGui.SetTooltip(tooltip.Text);
-			}
-
+			ShowTooltip(info);
 			ImGui.SameLine(context.LabelWidth);
 			ImGui.SetNextItemWidth(-1);
 		}
@@ -171,21 +248,507 @@ namespace LELEngine.Editor
 			return new Vector3((float)(bank * toDegrees), (float)(heading * toDegrees), (float)(attitude * toDegrees));
 		}
 
+		/// <summary>What a closed layer mask field shows: Nothing, Everything, the layer names, or Mixed.</summary>
+		public static string LayerMaskPreview(int mask)
+		{
+			if (mask == 0)
+			{
+				return "Nothing";
+			}
+
+			if (mask == -1)
+			{
+				return "Everything";
+			}
+
+			string names = null;
+			int count = 0;
+			for (int layer = 0; layer < LayerMask.LayerCount; layer++)
+			{
+				if ((mask & (1 << layer)) == 0)
+				{
+					continue;
+				}
+
+				count++;
+				names = names == null ? LayerMask.DisplayName(layer) : names + ", " + LayerMask.DisplayName(layer);
+			}
+
+			return count <= 2 ? names : "Mixed (" + count + " layers)";
+		}
+
+		/// <summary>File extensions of the assets a field of this type accepts.</summary>
+		public static string[] AssetExtensions(Type type)
+		{
+			return AssetDatabase.GetExtensions(type);
+		}
+
+		// ---------------------------------------------------------------- lines (used by the collection drawers)
+
+		/// <summary>
+		///     The start of a one-line field: the label column, or the decorations of a list / dictionary row (prefix,
+		///     compact label); sets the width of the next widget so the row's suffix fits after it.
+		/// </summary>
+		internal static RowDecoration BeginLine(string label, FieldInfo info, InspectorContext context)
+		{
+			RowDecoration row = context.PendingRow;
+			context.PendingRow = null;
+			if (row == null)
+			{
+				Label(label, info, context);
+				return null;
+			}
+
+			float right = ImGui.GetCursorScreenPos().X + ImGui.GetContentRegionAvail().X;
+			if (row.Prefix != null)
+			{
+				row.Prefix();
+				ImGui.SameLine();
+			}
+
+			if (row.Label == null)
+			{
+				ImGui.AlignTextToFramePadding();
+				ImGui.TextUnformatted(label);
+				ShowTooltip(info);
+				ImGui.SameLine(context.LabelWidth);
+			}
+			else if (row.Label.Length > 0)
+			{
+				NVector2 start = ImGui.GetCursorScreenPos();
+				ImGui.AlignTextToFramePadding();
+				ImGui.TextDisabled(row.Label);
+				ImGui.SameLine();
+				if (row.LabelWidth > 0f)
+				{
+					ImGui.SetCursorScreenPos(new NVector2(Math.Max(ImGui.GetCursorScreenPos().X, start.X + row.LabelWidth), ImGui.GetCursorScreenPos().Y));
+				}
+			}
+
+			float suffix = row.Suffix != null ? row.SuffixWidth + ImGui.GetStyle().ItemSpacing.X : 0f;
+			ImGui.SetNextItemWidth(Math.Max(24f, right - ImGui.GetCursorScreenPos().X - suffix));
+			return row;
+		}
+
+		/// <summary>The end of a one-line field: the row's suffix after the widget.</summary>
+		internal static void EndLine(RowDecoration row)
+		{
+			if (row?.Suffix != null)
+			{
+				ImGui.SameLine();
+				row.Suffix();
+			}
+		}
+
+		/// <summary>
+		///     A foldout header line (nested objects, collections, polymorphic instances): the row's prefix, the
+		///     arrow and label, then <paramref name="valueArea" /> from the label column on (given its width; type
+		///     selectors, counts, buttons), then the row's suffix at the end. <paramref name="onHeaderItem" /> runs right
+		///     after the arrow (the header is the last item then: drop targets, context menus). True when open (call
+		///     TreePop after the body).
+		/// </summary>
+		internal static bool Header(string label, FieldInfo info, InspectorContext context, Action<float> valueArea, Action onHeaderItem = null, string tooltip = null)
+		{
+			RowDecoration row = context.PendingRow;
+			context.PendingRow = null;
+			float right = ImGui.GetCursorScreenPos().X + ImGui.GetContentRegionAvail().X;
+			if (row?.Prefix != null)
+			{
+				row.Prefix();
+				ImGui.SameLine();
+			}
+
+			float y = ImGui.GetCursorScreenPos().Y;
+			string text = row != null ? row.HeaderLabel ?? row.Label ?? label : label;
+			if (ForceOpen)
+			{
+				ImGui.SetNextItemOpen(true, ImGuiCond.Always);
+			}
+
+			ImGui.SetNextItemAllowOverlap();
+			LastHeaderId = ImGui.GetID(text + "##header");
+			bool open = ImGui.TreeNodeEx(text + "##header", ImGuiTreeNodeFlags.SpanAvailWidth | ImGuiTreeNodeFlags.FramePadding);
+			NVector2 headerMin = ImGui.GetItemRectMin();
+			if (ImGui.IsItemHovered() && !DragAndDrop.IsDragging)
+			{
+				string hint = tooltip ?? info?.GetCustomAttribute<TooltipAttribute>(false)?.Text;
+				if (hint != null)
+				{
+					ImGui.SetTooltip(hint);
+				}
+			}
+
+			onHeaderItem?.Invoke();
+			float suffixWidth = row?.Suffix != null ? row.SuffixWidth + ImGui.GetStyle().ItemSpacing.X : 0f;
+			if (valueArea != null)
+			{
+				float labelEnd = headerMin.X + ImGui.GetTreeNodeToLabelSpacing() + ImGui.CalcTextSize(text).X + ImGui.GetStyle().ItemSpacing.X;
+				ImGui.SameLine(context.LabelWidth);
+				float start = Math.Max(ImGui.GetCursorScreenPos().X, labelEnd);
+				float width = right - suffixWidth - start;
+				ImGui.SetCursorScreenPos(new NVector2(start, y));
+				if (width > 12f)
+				{
+					valueArea(width);
+				}
+				else
+				{
+					ImGui.Dummy(new NVector2(1f, ImGui.GetFrameHeight()));
+				}
+			}
+
+			if (row?.Suffix != null)
+			{
+				ImGui.SameLine();
+				ImGui.SetCursorScreenPos(new NVector2(right - row.SuffixWidth, y));
+				row.Suffix();
+			}
+
+			return open;
+		}
+
+		/// <summary>A new instance of a class for a field (its fields copied from <paramref name="previous" /> where they match), or null.</summary>
+		internal static object CreateInstance(Type type, object previous)
+		{
+			object instance;
+			try
+			{
+				instance = Activator.CreateInstance(type, true);
+			}
+			catch (Exception e)
+			{
+				Debug.LogError($"[Editor] Cannot create {type.Name}: {e.GetBaseException().Message}");
+				return previous;
+			}
+
+			if (previous != null)
+			{
+				// Fields with the same name and type keep their values across the type change (as far as they fit).
+				foreach (SerializedField target in SerializationUtility.GetFields(type))
+				{
+					foreach (SerializedField source in SerializationUtility.GetFields(previous.GetType()))
+					{
+						if (source.Name == target.Name && target.FieldType.IsAssignableFrom(source.FieldType))
+						{
+							target.SetValue(instance, source.GetValue(previous));
+							break;
+						}
+					}
+				}
+			}
+
+			return instance;
+		}
+
+		/// <summary>A value for a new list element or dictionary entry: the previous value type, "" for strings, a new [Serializable] object.</summary>
+		internal static object DefaultValue(Type element, object previous)
+		{
+			if (element.IsValueType)
+			{
+				return previous ?? Activator.CreateInstance(element);
+			}
+
+			if (element == typeof(string))
+			{
+				return previous ?? "";
+			}
+
+			if (SerializationUtility.GetElementType(element) != null)
+			{
+				return element.IsArray ? Array.CreateInstance(SerializationUtility.GetElementType(element), 0) : Activator.CreateInstance(element);
+			}
+
+			if (SerializationUtility.IsDictionaryType(element))
+			{
+				return Activator.CreateInstance(element);
+			}
+
+			return IsNested(element) && !TypeSelector.IsPolymorphic(element) ? Activator.CreateInstance(element, true) : null;
+		}
+
 		#endregion
 
 		#region PrivateMethods
 
+		private static void ShowTooltip(FieldInfo info)
+		{
+			TooltipAttribute tooltip = info?.GetCustomAttribute<TooltipAttribute>(false);
+			if (tooltip != null && ImGui.IsItemHovered())
+			{
+				ImGui.SetTooltip(tooltip.Text);
+			}
+		}
+
 		private static bool IsNested(Type type)
 		{
-			return !type.IsPrimitive && !type.IsEnum && type != typeof(string) && !IsMath(type)
+			return !type.IsPrimitive && !type.IsEnum && type != typeof(string) && !SerializationUtility.IsMathType(type)
 				&& !SerializationUtility.IsReferenceType(type) && !SerializationUtility.IsAssetType(type)
 				&& type.IsDefined(typeof(SerializableAttribute), false);
 		}
 
-		private static bool IsMath(Type type)
+		/// <summary>
+		///     A reference (GameObject, component, asset, ScriptableObject) as an object field. A ScriptableObject it
+		///     points at can be unfolded and edited in place (the asset changes: its own undo, saved to its file).
+		/// </summary>
+		private static bool DrawReference(string label, Type type, ref object value, FieldInfo info, InspectorContext context, int depth)
 		{
-			return type == typeof(Vector2) || type == typeof(Vector3) || type == typeof(Vector4) || type == typeof(Quaternion)
-				|| type == typeof(Color4) || type == typeof(Vector2i) || type == typeof(Vector3i) || type == typeof(Vector4i);
+			if (value is ScriptableObject scriptableObject && !scriptableObject.IsDestroyed && depth < SerializationUtility.MaxDepth - 1)
+			{
+				object current = value;
+				bool fieldChanged = false;
+				bool open = Header(label, info, context, width =>
+				{
+					ImGui.SetNextItemWidth(width);
+					fieldChanged = ObjectField.Draw(type, ref current, context);
+					context.Track(fieldChanged);
+				}, null, "Unfold to edit the asset here (the asset changes for everything using it)");
+				if (fieldChanged)
+				{
+					value = current;
+				}
+
+				if (open)
+				{
+					if (!fieldChanged)
+					{
+						DrawScriptableObject(scriptableObject, context, depth + 1);
+					}
+
+					ImGui.TreePop();
+				}
+
+				return fieldChanged;
+			}
+
+			RowDecoration row = BeginLine(label, info, context);
+			bool changed = ObjectField.Draw(type, ref value, context);
+			context.Track(changed);
+			EndLine(row);
+			return changed;
+		}
+
+		/// <summary>The fields of a ScriptableObject asset drawn inside another inspector (edits are the asset's: undo, save, OnValidate).</summary>
+		internal static bool DrawScriptableObject(ScriptableObject asset, InspectorContext context, int depth)
+		{
+			object previousTarget = context.UndoTarget;
+			context.UndoTarget = asset;
+			bool changed;
+			try
+			{
+				changed = DrawFields(asset, context, depth);
+			}
+			finally
+			{
+				context.UndoTarget = previousTarget;
+			}
+
+			if (changed)
+			{
+				asset.Validate();
+				context.Editor?.NotifySceneChanged();
+			}
+
+			return changed;
+		}
+
+		/// <summary>
+		///     An interface, abstract class, EngineObject or base class field (Odin-style): a reference (a component, a
+		///     GameObject or a ScriptableObject asset fitting it, dropped or picked) on one line, or an instance of a class
+		///     chosen from the arrow's list, unfolded with its fields. The class of an instance can be changed in place.
+		/// </summary>
+		private static bool DrawPolymorphic(string label, Type declaredType, ref object value, FieldInfo info, InspectorContext context, int depth)
+		{
+			const string popupId = "##type_popup";
+			bool canReference = SerializationUtility.CanHoldReference(declaredType);
+			List<Type> creatable = TypeSelector.ConcreteTypes(declaredType);
+			string hint = PolymorphicHint(declaredType, canReference, creatable.Count);
+			if (value == null || value is EngineObject)
+			{
+				RowDecoration row = BeginLine(label, info, context);
+				float arrow = creatable.Count > 0 ? ImGui.GetFrameHeight() : 0f;
+				float width = ImGui.CalcItemWidth();
+				float fieldWidth = Math.Max(24f, width - (arrow > 0f ? arrow + ImGui.GetStyle().ItemInnerSpacing.X : 0f));
+				bool changed = false;
+				if (canReference)
+				{
+					ImGui.SetNextItemWidth(fieldWidth);
+					changed = ObjectField.Draw(declaredType, ref value, context);
+					context.Track(changed);
+				}
+				else
+				{
+					NVector2 start = ImGui.GetCursorScreenPos();
+					float height = ImGui.GetFrameHeight();
+					ImGui.InvisibleButton("##none", new NVector2(fieldWidth, height));
+					ImGui.GetWindowDrawList().AddRectFilled(start, start + new NVector2(fieldWidth, height), ImGui.GetColorU32(ImGuiCol.FrameBg), ImGui.GetStyle().FrameRounding);
+					ImGui.GetWindowDrawList().AddText(start + new NVector2(5f, (height - ImGui.GetTextLineHeight()) * 0.5f), ImGui.GetColorU32(ImGuiCol.TextDisabled), "None (" + ObjectField.TypeLabel(declaredType) + ")");
+					if (ImGui.IsItemHovered())
+					{
+						ImGui.SetTooltip(hint);
+					}
+
+					if (ImGui.IsItemClicked() && creatable.Count > 0)
+					{
+						ImGui.OpenPopup(popupId);
+					}
+				}
+
+				if (creatable.Count > 0)
+				{
+					ImGui.SameLine(0f, ImGui.GetStyle().ItemInnerSpacing.X);
+					if (EditorIcons.Button("create", IconKind.Dropdown, hint, arrow))
+					{
+						ImGui.OpenPopup(popupId);
+					}
+				}
+
+				Type chosen;
+				if (TypeSelector.Popup(popupId, declaredType, null, value != null, out chosen))
+				{
+					context.BeginEdit();
+					value = chosen != null ? CreateInstance(chosen, null) : null;
+					context.EndEdit();
+					changed = true;
+				}
+
+				EndLine(row);
+				return changed;
+			}
+
+			// An instance held by value: a foldout with its class selector next to the label. A reference dropped on the
+			// header replaces the instance.
+			Type valueType = value.GetType();
+			object instance = value;
+			bool typeChosen = false;
+			Type chosenType = null;
+			object dropped = null;
+			bool open = Header(label, info, context, width =>
+			{
+				if (TypeButton(TypeSelector.DisplayName(valueType), width))
+				{
+					ImGui.OpenPopup(popupId);
+				}
+
+				if (ImGui.IsItemHovered() && !DragAndDrop.IsDragging)
+				{
+					ImGui.SetTooltip(valueType.FullName + "\n" + hint);
+				}
+
+				if (canReference && DragAndDrop.AcceptValue(declaredType, out object droppedOnType))
+				{
+					dropped = droppedOnType;
+				}
+
+				typeChosen = TypeSelector.Popup(popupId, declaredType, valueType, true, out chosenType);
+			}, () =>
+			{
+				if (canReference && DragAndDrop.AcceptValue(declaredType, out object droppedOnHeader))
+				{
+					dropped = droppedOnHeader;
+				}
+			});
+
+			bool result = false;
+			if (dropped != null)
+			{
+				context.BeginEdit();
+				value = dropped;
+				context.EndEdit();
+				result = true;
+			}
+			else if (typeChosen && chosenType != valueType)
+			{
+				context.BeginEdit();
+				value = chosenType != null ? CreateInstance(chosenType, instance) : null;
+				context.EndEdit();
+				result = true;
+			}
+
+			if (open)
+			{
+				if (!result)
+				{
+					result = DrawFields(instance, context, depth + 1);
+				}
+
+				ImGui.TreePop();
+			}
+
+			return result;
+		}
+
+		private static string PolymorphicHint(Type declaredType, bool canReference, int creatable)
+		{
+			string name = ObjectField.TypeLabel(declaredType);
+			string text = "";
+			if (canReference)
+			{
+				text = "Drop a GameObject (its component implementing " + name + "), a component or a ScriptableObject asset here, or pick one with the round button.";
+			}
+
+			if (creatable > 0)
+			{
+				text += (text.Length > 0 ? "\n" : "") + "The arrow creates an instance of a class " + (declaredType.IsInterface ? "implementing " : "deriving from ") + name + ", stored in this field.";
+			}
+
+			return text.Length > 0 ? text : "No class " + (declaredType.IsInterface ? "implements " : "derives from ") + name + " yet.";
+		}
+
+		/// <summary>A combo-like button showing a type name, the arrow at its right; true when clicked.</summary>
+		private static bool TypeButton(string text, float width)
+		{
+			ImGui.PushStyleVar(ImGuiStyleVar.ButtonTextAlign, new NVector2(0f, 0.5f));
+			ImGui.PushStyleColor(ImGuiCol.Button, ImGui.GetStyle().Colors[(int)ImGuiCol.FrameBg]);
+			ImGui.PushStyleColor(ImGuiCol.ButtonHovered, ImGui.GetStyle().Colors[(int)ImGuiCol.FrameBgHovered]);
+			bool pressed = ImGui.Button(text + "##type", new NVector2(width, 0f));
+			ImGui.PopStyleColor(2);
+			ImGui.PopStyleVar();
+			NVector2 max = ImGui.GetItemRectMax();
+			float size = ImGui.GetFrameHeight() * 0.5f;
+			EditorIcons.Draw(ImGui.GetWindowDrawList(), new NVector2(max.X - size * 1.5f, max.Y - ImGui.GetFrameHeight() * 0.5f - size * 0.5f), size, IconKind.Dropdown, ImGui.GetColorU32(ImGuiCol.Text));
+			return pressed;
+		}
+
+		/// <summary>A [Serializable] class or struct: a foldout with its fields (a null class value can be created).</summary>
+		private static bool DrawNested(string label, Type type, ref object value, FieldInfo info, InspectorContext context, int depth)
+		{
+			bool create = false;
+			Action<float> valueArea = null;
+			if (value == null && !type.IsValueType)
+			{
+				valueArea = width =>
+				{
+					ImGui.AlignTextToFramePadding();
+					ImGui.TextDisabled("None");
+					ImGui.SameLine();
+					if (ImGui.SmallButton("Create##create"))
+					{
+						create = true;
+					}
+				};
+			}
+
+			bool open = Header(label, info, context, valueArea);
+			bool changed = false;
+			if (create)
+			{
+				context.BeginEdit();
+				value = CreateInstance(type, null);
+				context.EndEdit();
+				changed = true;
+			}
+
+			if (open)
+			{
+				if (value != null && !create)
+				{
+					changed |= DrawFields(value, context, depth + 1);
+				}
+
+				ImGui.TreePop();
+			}
+
+			return changed;
 		}
 
 		private static bool DrawLeaf(Type type, ref object value, FieldInfo info, InspectorContext context)
@@ -195,7 +758,7 @@ namespace LELEngine.Editor
 
 			if (type == typeof(bool))
 			{
-				bool b = (bool)value;
+				bool b = value is bool flag && flag;
 				changed = ImGui.Checkbox("##v", ref b);
 				context.Track(changed);
 				value = b;
@@ -275,16 +838,6 @@ namespace LELEngine.Editor
 			else if (type == typeof(Vector2i) || type == typeof(Vector3i) || type == typeof(Vector4i))
 			{
 				changed = DrawIntVector(type, ref value);
-				context.Track(changed);
-			}
-			else if (SerializationUtility.IsReferenceType(type))
-			{
-				changed = DrawReference(type, ref value, context);
-				context.Track(changed);
-			}
-			else if (SerializationUtility.IsAssetType(type))
-			{
-				changed = DrawAsset(type, ref value);
 				context.Track(changed);
 			}
 			else
@@ -379,43 +932,13 @@ namespace LELEngine.Editor
 			return changed;
 		}
 
-		/// <summary>What a closed layer mask field shows: Nothing, Everything, the layer names, or Mixed.</summary>
-		public static string LayerMaskPreview(int mask)
-		{
-			if (mask == 0)
-			{
-				return "Nothing";
-			}
-
-			if (mask == -1)
-			{
-				return "Everything";
-			}
-
-			string names = null;
-			int count = 0;
-			for (int layer = 0; layer < LayerMask.LayerCount; layer++)
-			{
-				if ((mask & (1 << layer)) == 0)
-				{
-					continue;
-				}
-
-				count++;
-				names = names == null ? LayerMask.DisplayName(layer) : names + ", " + LayerMask.DisplayName(layer);
-			}
-
-			return count <= 2 ? names : "Mixed (" + count + " layers)";
-		}
-
 		private static bool DrawIntVector(Type type, ref object value)
 		{
 			bool changed;
 			if (type == typeof(Vector2i))
 			{
 				Vector2i v = (Vector2i)value;
-				int x = v.X, y = v.Y;
-				int[] values = { x, y };
+				int[] values = { v.X, v.Y };
 				changed = ImGui.DragInt2("##v", ref values[0], 0.2f);
 				value = new Vector2i(values[0], values[1]);
 			}
@@ -432,200 +955,6 @@ namespace LELEngine.Editor
 				int[] values = { v.X, v.Y, v.Z, v.W };
 				changed = ImGui.DragInt4("##v", ref values[0], 0.2f);
 				value = new Vector4i(values[0], values[1], values[2], values[3]);
-			}
-
-			return changed;
-		}
-
-		private static bool DrawReference(Type type, ref object value, InspectorContext context)
-		{
-			bool changed = false;
-			string preview = value switch
-			{
-				null => "None",
-				GameObject go => go.Name,
-				Behaviour component => component.gameObject?.Name + " (" + component.GetType().Name + ")",
-				_ => value.ToString()
-			};
-
-			if (ImGui.BeginCombo("##v", preview + "  [" + type.Name + "]"))
-			{
-				if (ImGui.Selectable("None", value == null))
-				{
-					value = null;
-					changed = true;
-				}
-
-				if (context.Scene != null)
-				{
-					foreach (GameObject go in context.Scene.GameObjects)
-					{
-						object candidate = type == typeof(GameObject) ? go : go.GetComponent(type);
-						if (candidate == null)
-						{
-							continue;
-						}
-
-						if (ImGui.Selectable(go.Name + "##" + go.Id, candidate == value))
-						{
-							value = candidate;
-							changed = true;
-						}
-					}
-				}
-
-				ImGui.EndCombo();
-			}
-
-			if (ImGui.BeginDragDropTarget())
-			{
-				if (!ImGui.AcceptDragDropPayload(HierarchyPanel.DragType).IsNull && HierarchyPanel.Dragged != null)
-				{
-					object candidate = type == typeof(GameObject) ? HierarchyPanel.Dragged : HierarchyPanel.Dragged.GetComponent(type);
-					if (candidate != null)
-					{
-						value = candidate;
-						changed = true;
-					}
-				}
-
-				ImGui.EndDragDropTarget();
-			}
-
-			return changed;
-		}
-
-		private static bool DrawAsset(Type type, ref object value)
-		{
-			// Image files import as one texture kind: only files of the field's kind are offered.
-			Func<string, bool> filter = null;
-			if (type == typeof(Texture2D) || type == typeof(Cubemap) || type == typeof(Texture3D) || type == typeof(Sprite))
-			{
-				Type textureType = type;
-				filter = path => MaterialEditor.ShapeMatches(path, textureType);
-			}
-
-			return AssetField.Draw(type, ref value, filter);
-		}
-
-		/// <summary>File extensions of the assets a field of this type accepts.</summary>
-		public static string[] AssetExtensions(Type type)
-		{
-			return AssetDatabase.GetExtensions(type);
-		}
-
-		private static bool DrawList(string label, Type type, Type element, ref object value, InspectorContext context, int depth)
-		{
-			IList list = value as IList ?? (type.IsArray ? Array.CreateInstance(element, 0) : (IList)Activator.CreateInstance(type));
-			bool changed = false;
-			bool open = ImGui.TreeNodeEx(label + "  [" + list.Count + "]", ImGuiTreeNodeFlags.SpanAvailWidth);
-			if (open)
-			{
-				int count = list.Count;
-				Label("Size", null, context);
-				if (ImGui.InputInt("##size", ref count) && count >= 0 && count != list.Count)
-				{
-					// Lists are edited in place: capture the state before resizing.
-					context.Editor.Edits.Begin(context.UndoTarget);
-					list = Resize(list, type, element, Math.Min(count, 4096));
-					context.Editor.Edits.RequestCommit();
-					changed = true;
-				}
-
-				for (int i = 0; i < list.Count; i++)
-				{
-					ImGui.PushID(i);
-					object item = list[i];
-					if (DrawValue("Element " + i, element, ref item, null, context, depth + 1))
-					{
-						list[i] = item;
-						changed = true;
-					}
-
-					ImGui.PopID();
-				}
-
-				ImGui.TreePop();
-			}
-
-			value = list;
-			return changed;
-		}
-
-		private static IList Resize(IList list, Type type, Type element, int count)
-		{
-			if (type.IsArray)
-			{
-				Array array = Array.CreateInstance(element, count);
-				for (int i = 0; i < Math.Min(count, list.Count); i++)
-				{
-					array.SetValue(list[i], i);
-				}
-
-				for (int i = list.Count; i < count; i++)
-				{
-					array.SetValue(DefaultValue(element, i > 0 ? list[list.Count - 1] : null), i);
-				}
-
-				return array;
-			}
-
-			while (list.Count > count)
-			{
-				list.RemoveAt(list.Count - 1);
-			}
-
-			while (list.Count < count)
-			{
-				list.Add(DefaultValue(element, list.Count > 0 ? list[list.Count - 1] : null));
-			}
-
-			return list;
-		}
-
-		// New elements copy the previous value types (as Unity does); objects start fresh.
-		private static object DefaultValue(Type element, object previous)
-		{
-			if (element.IsValueType)
-			{
-				return previous ?? Activator.CreateInstance(element);
-			}
-
-			if (element == typeof(string))
-			{
-				return previous ?? "";
-			}
-
-			return IsNested(element) ? Activator.CreateInstance(element) : null;
-		}
-
-		private static bool DrawNested(string label, Type type, ref object value, InspectorContext context, int depth)
-		{
-			if (depth >= SerializationUtility.MaxDepth)
-			{
-				return false;
-			}
-
-			bool changed = false;
-			bool open = ImGui.TreeNodeEx(label, ImGuiTreeNodeFlags.SpanAvailWidth);
-			if (open)
-			{
-				if (value == null)
-				{
-					if (ImGui.Button("Create " + type.Name))
-					{
-						context.Editor.Edits.Begin(context.UndoTarget);
-						value = Activator.CreateInstance(type);
-						context.Editor.Edits.RequestCommit();
-						changed = true;
-					}
-				}
-				else
-				{
-					changed = DrawFields(value, context, depth + 1);
-				}
-
-				ImGui.TreePop();
 			}
 
 			return changed;

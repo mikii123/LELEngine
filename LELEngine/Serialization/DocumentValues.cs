@@ -28,15 +28,25 @@ namespace LELEngine.Serialization
 				return null;
 			}
 
-			// A component field may point at the GameObject's component of that type.
-			if (target is GameObject go && type != typeof(GameObject))
+			// A component (or interface) field may point at the GameObject's component of that type.
+			if (target is GameObject go && !type.IsInstanceOfType(go))
 			{
 				return go.GetComponent(type);
+			}
+
+			// A GameObject field pointing at a component (written as an interface or EngineObject slot before).
+			if (target is Behaviour component && type == typeof(GameObject))
+			{
+				return component.gameObject;
 			}
 
 			return type.IsInstanceOfType(target) ? target : null;
 		}
 
+		/// <summary>
+		///     Loads a referenced asset as <paramref name="type" />. An interface or EngineObject slot loads the file as
+		///     what it is (a ScriptableObject asset) and keeps it when it fits the slot.
+		/// </summary>
 		public static object LoadAsset(AssetReference reference, Type type)
 		{
 			if (reference.Guid == null && reference.Path == null)
@@ -51,6 +61,24 @@ namespace LELEngine.Serialization
 
 			// Path only: a project asset without a meta file or an engine resource (engine shaders).
 			return AssetDatabase.Load(type, AssetDatabase.Resolve(reference.Path, null) ?? reference.Path, reference.Name);
+		}
+
+		/// <summary>The dictionary to read into: <paramref name="current" /> cleared when it has the type, else a new one.</summary>
+		public static IDictionary ReuseDictionary(Type dictionaryType, object current)
+		{
+			if (current is IDictionary dictionary && current.GetType() == dictionaryType)
+			{
+				dictionary.Clear();
+				return dictionary;
+			}
+
+			return (IDictionary)Activator.CreateInstance(dictionaryType);
+		}
+
+		/// <summary>A read key can go into a dictionary: not null (a missing reference or asset), not a destroyed object.</summary>
+		public static bool IsUsableKey(object key)
+		{
+			return key != null && !(key is EngineObject engineObject && engineObject.dead);
 		}
 
 		/// <summary>The reference written for an asset: GUID and path of its file, plus the sub-asset name.</summary>
@@ -164,12 +192,13 @@ namespace LELEngine.Serialization
 
 				if (wanted == ValueTag.Array && value is SerializedArray items)
 				{
+					List<object> elements = ExpandItems(items);
 					Type elementType = SerializationUtility.GetElementType(targetType);
-					IList list = targetType.IsArray ? Array.CreateInstance(elementType, items.Items.Count) : (IList)Activator.CreateInstance(targetType);
-					for (int i = 0; i < items.Items.Count; i++)
+					IList list = targetType.IsArray ? Array.CreateInstance(elementType, elements.Count) : (IList)Activator.CreateInstance(targetType);
+					for (int i = 0; i < elements.Count; i++)
 					{
 						object item;
-						if (!TryConvert(items.Items[i], items.ElementTag, elementType, context, out item))
+						if (!TryConvert(elements[i], items.ElementTag, elementType, context, out item))
 						{
 							return false;
 						}
@@ -188,6 +217,11 @@ namespace LELEngine.Serialization
 					return true;
 				}
 
+				if (wanted == ValueTag.Dictionary)
+				{
+					return TryConvertDictionary(value, targetType, context, out result);
+				}
+
 				if (wanted == ValueTag.SceneRef && value is ulong id)
 				{
 					result = ResolveReference(id, targetType, context);
@@ -197,6 +231,19 @@ namespace LELEngine.Serialization
 				if (wanted == ValueTag.Asset && value is AssetReference asset)
 				{
 					result = LoadAsset(asset, targetType);
+					return true;
+				}
+
+				// Interface / EngineObject slots: references of either kind (also a field that was a component or asset type before).
+				if (wanted == ValueTag.Object && value is ulong objectId && (storedTag == ValueTag.SceneRef || storedTag == ValueTag.Object))
+				{
+					result = ResolveReference(objectId, targetType, context);
+					return true;
+				}
+
+				if (wanted == ValueTag.Object && value is AssetReference objectAsset)
+				{
+					result = LoadAsset(objectAsset, targetType);
 					return true;
 				}
 
@@ -218,6 +265,91 @@ namespace LELEngine.Serialization
 			}
 
 			return false;
+		}
+
+		/// <summary>
+		///     A dictionary of <paramref name="targetType" /> from generic data: a <see cref="SerializedDictionary" />, or
+		///     what a JSON dictionary reads as without a type table (an object: keys are its property names; an array of
+		///     { "key", "value" } objects).
+		/// </summary>
+		private static bool TryConvertDictionary(object value, Type targetType, SerializationContext context, out object result)
+		{
+			result = null;
+			if (!SerializationUtility.GetDictionaryTypes(targetType, out Type keyType, out Type valueType))
+			{
+				return false;
+			}
+
+			var dictionary = (IDictionary)Activator.CreateInstance(targetType);
+			switch (value)
+			{
+				case SerializedDictionary entries:
+					foreach (KeyValuePair<object, object> entry in entries.Entries)
+					{
+						AddConverted(dictionary, entry.Key, entries.KeyTag, entry.Value, entries.ValueTag, keyType, valueType, context);
+					}
+
+					break;
+				case SerializedNode properties:
+					foreach (SerializedProperty property in properties.Properties)
+					{
+						AddConverted(dictionary, property.Name, ValueTag.String, property.Value, property.Tag, keyType, valueType, context);
+					}
+
+					break;
+				case SerializedArray pairs:
+					foreach (object item in pairs.Items)
+					{
+						SerializedProperty key = (item as SerializedNode)?.Find("key");
+						SerializedProperty entryValue = (item as SerializedNode)?.Find("value");
+						if (key != null)
+						{
+							AddConverted(dictionary, key.Value, key.Tag, entryValue?.Value, entryValue?.Tag ?? ValueTag.Null, keyType, valueType, context);
+						}
+					}
+
+					break;
+				default:
+					return false;
+			}
+
+			result = dictionary;
+			return true;
+		}
+
+		private static void AddConverted(IDictionary dictionary, object key, ValueTag keyTag, object value, ValueTag valueTag, Type keyType, Type valueType, SerializationContext context)
+		{
+			object convertedKey;
+			if (!TryConvert(key, keyTag, keyType, context, out convertedKey) || !IsUsableKey(convertedKey))
+			{
+				return;
+			}
+
+			object convertedValue;
+			if (!TryConvert(value, valueTag, valueType, context, out convertedValue))
+			{
+				convertedValue = valueType.IsValueType ? Activator.CreateInstance(valueType) : null;
+			}
+
+			dictionary[convertedKey] = convertedValue;
+		}
+
+		/// <summary>The boxed elements of generic array data (bulk bytes expanded).</summary>
+		public static List<object> ExpandItems(SerializedArray array)
+		{
+			if (array.Bytes == null)
+			{
+				return array.Items;
+			}
+
+			var items = new List<object>(array.Count);
+			var reader = new ByteReader(array.Bytes);
+			for (int i = 0; i < array.Count; i++)
+			{
+				items.Add(JsonDocumentWriter.ReadBlittable(reader, array.ElementTag));
+			}
+
+			return items;
 		}
 
 		/// <summary>Instantiates a live object from generic data (a script that came back with a changed field layout).</summary>
@@ -302,16 +434,39 @@ namespace LELEngine.Serialization
 				case ValueTag.Enum:
 					return Convert.ToInt64(value);
 				case ValueTag.Object:
+					switch (value)
+					{
+						case ulong _:
+						case AssetReference _:
+							return value;
+						case GameObject _:
+						case Behaviour _:
+						{
+							ulong id = SceneReferenceId(value, context);
+							return id != 0 ? (object)id : null;
+						}
+						case ScriptableObject scriptableObject:
+						{
+							AssetReference reference = ReferenceOf(scriptableObject, context);
+							return reference.IsNull ? null : (object)reference;
+						}
+					}
+
 					return depth >= SerializationUtility.MaxDepth ? null : ToNode(value, context, depth + 1);
 				case ValueTag.SceneRef:
 					return SceneReferenceId(value, context);
 				case ValueTag.Asset:
-					return ReferenceOf(value as IAsset, context);
+					return value is AssetReference ? value : ReferenceOf(value as IAsset, context);
 				case ValueTag.Array:
 				{
 					if (value is SerializedArray generic)
 					{
 						return generic;
+					}
+
+					if (elementTag == ValueTag.Null)
+					{
+						elementTag = SerializationUtility.ElementTagOf(value);
 					}
 
 					var array = new SerializedArray { ElementTag = elementTag };
@@ -321,6 +476,24 @@ namespace LELEngine.Serialization
 					}
 
 					return array;
+				}
+				case ValueTag.Dictionary:
+				{
+					if (value is SerializedDictionary generic)
+					{
+						return generic;
+					}
+
+					SerializationUtility.GetDictionaryTypes(value.GetType(), out Type keyType, out Type valueType);
+					var dictionary = new SerializedDictionary { KeyTag = SerializationUtility.TagOf(keyType, out _), ValueTag = SerializationUtility.TagOf(valueType, out _) };
+					foreach (DictionaryEntry entry in (IDictionary)value)
+					{
+						dictionary.Entries.Add(new KeyValuePair<object, object>(
+							ToGeneric(entry.Key, dictionary.KeyTag, ValueTag.Null, context, depth + 1),
+							ToGeneric(entry.Value, dictionary.ValueTag, ValueTag.Null, context, depth + 1)));
+					}
+
+					return dictionary;
 				}
 				default:
 					return value;

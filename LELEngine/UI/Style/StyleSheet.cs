@@ -179,8 +179,8 @@ namespace LELEngine.UIElements
 		/// <summary>Bumped whenever the rules change (rebuilt from a file or edited): panels drop their caches.</summary>
 		public int version;
 
-		/// <summary>Sequential id for cache keys.</summary>
-		internal readonly int id = ++nextId;
+		/// <summary>Sequential id for cache keys (sheets are parsed on the loading thread too).</summary>
+		internal readonly int id = System.Threading.Interlocked.Increment(ref nextId);
 
 		#endregion
 
@@ -236,6 +236,43 @@ namespace LELEngine.UIElements
 		public override string ToString()
 		{
 			return "StyleSheet(" + name + ", " + rules.Count + " rules)";
+		}
+
+		#endregion
+
+		#region InternalMethods
+
+		/// <summary>The sheets it imports and the assets its declarations reference (url(), resource(): textures, fonts).</summary>
+		internal void CollectReferencedAssets(Action<object> found)
+		{
+			foreach (StyleSheet import in imports)
+			{
+				found(import);
+			}
+
+			foreach (StyleRule rule in rules)
+			{
+				if (rule.declarations == null)
+				{
+					continue;
+				}
+
+				foreach (StyleDeclaration declaration in rule.declarations)
+				{
+					if (declaration.values == null)
+					{
+						continue;
+					}
+
+					foreach (StyleValue value in declaration.values)
+					{
+						if (value.reference != null)
+						{
+							found(value.reference);
+						}
+					}
+				}
+			}
 		}
 
 		#endregion

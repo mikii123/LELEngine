@@ -91,6 +91,16 @@
   in `EditorExtensions.OnDomainUnloading` (called from `EditorApplication.ClearTypeCaches`). `GameLoadContext` must
   not keep its own list of the assemblies it loaded: that kept the old context alive (leak warning after every
   reload); it resolves Game.dll for Game.Editor.dll through its `Assemblies`.
+- Leak report: a context that survives its unload check (`ScriptDomain.VerifyUnload`, 40 GC passes in the
+  background) is traced on the main thread (`ScriptDomain.Update` -> `LeakTracer`, `LELEngine.Editor/Scripting`):
+  breadth-first from the static fields of the engine and the assemblies referencing it (closed generic base classes
+  of their types included, so per-type pools like `EventBase<T>.pool` are seen), the editor instance and the
+  runtime's hooks (AppContext events / data store, AppDomain, AssemblyLoadContext events, TimerQueue, thread pool
+  queues, Console, the main thread), stopping at objects, types, members and delegates of the old assembly; a reverse
+  walk gives every root its own shortest path. One warning entry (`ConsoleLog.Add`, all lines colored), e.g.
+  `UIRuntime.frameDocuments[0] (UIDocument on 'Async').gameObject (GameObject 'Async').components[1] -> AsyncProbe`.
+  Not visible to it: thread stacks (a script's running thread), GC handles, native callbacks, libraries' statics (not
+  read: their static constructors could fail when run early); the warning then says so. ~60 ms on the probe project.
 - Open windows are saved (type, ImGui id, serialized fields) before a reload, before play mode and on close
   (`Library/EditorWindows.txt`), and restored on the next frame. Their capture runs before the scene unloads, since
   references to scene objects are only written for objects of the current scene.
@@ -140,6 +150,42 @@
 - Every load logs `[SceneManager] <path>: read N ms (textures N: N ms, meshes ..., per asset kind), GPU N ms in N
   frames, activated in N ms` (also `SceneLoadOperation.Summary`).
 
+## Background resource loading (Resources.LoadAsync)
+
+- `Resources.LoadAsync<T>(path)` / `LoadAsync(path, type)` / `LoadAsync(path)` return a `ResourceRequest`
+  (`LELEngine/Assets/ResourceRequest.cs`; `Asset`, `IsDone`, `Progress`, `Error`, `Summary`, `Completed`, awaitable,
+  `ResourceRequest<T>` typed). Requests and `LoadSceneAsync` share one loading thread ("Scene loader", queue of
+  `IBackgroundLoad`, read in request order; `ReadNext` keeps no reference to a load while it waits). The main thread
+  prepares them within `BackgroundLoadingBudget` (scenes first, then requests, at least one asset each per frame) and
+  completes them in `SceneManager.Update()` (the editor calls `UpdateResourceLoads()` in edit mode); each logs
+  `[Resources] <path>: read ... GPU ...`. A resource path shared by two files (Menu.uss and Menu.uxml) needs the type.
+- `SceneManager` installs `MainThreadContext` (a `SynchronizationContext`) on the main thread at its first update and
+  pumps it every update: awaiting code continues on the main thread, an exception escaping an async void method is
+  logged instead of ending the process. `UnloadAll` drops pending requests and posted continuations (they never run).
+- `AssetLoadScope.Begin(background: true)` holds back the Awake / OnEnable of ScriptableObjects it loads
+  (`ScriptableObject.heldBack`, `TakeDeferred`, `RunDeferred`, `ScriptableObjectAssets.EnableHeld`): requests run them
+  when they complete, async scene loads once prepared (before the scene's components wake); a load on the main thread
+  that meets a held asset runs them at once. Synchronous loads run them on the loading thread as before (the
+  player's start scene loads on `GameLoader`'s thread).
+- UI on the loading thread: `UIAssets` parses outside its cache locks (first result stored wins; a [ThreadStatic]
+  `parsing` set stops @import / template cycles), `TextureAssets.Decode` flips rows itself (stb's flip switch is one
+  global for all threads), `FontAsset` has a lock (`sync`; outlines and distance fields computed outside it, the atlas
+  through `GetPageTexture` on the GL thread), `StyleSheet.id` is interlocked. Dependencies of sheets and documents are
+  recorded (`CollectReferencedAssets`: imports, url() / resource(), templates, inline styles, attribute files);
+  `UIAssets.WarmUp` (background loads only) rasterizes printable ASCII plus every character of the documents'
+  attribute values into the fonts used and the default font (bold / italic faces only when a sheet, style attribute
+  or rich text asks), resolves the documents' element types (`UxmlRegistry` reflection), and adds the fonts so
+  `PrepareAsset` uploads their pages.
+- Measured 2026-10-20 (Debug, Intel iGPU, probe menu: UXML + 2 USS + template + Georgia + 2048^2 PNG): synchronous
+  load + show = 456 ms main-thread update; LoadAsync = 79 ms (first UI document init ~15 ms and first style / layout
+  are one-offs; a second document of the same asset: AddComponent 0.4 ms, tree 0.3 ms). A warm 2048^2 RGBA8 upload
+  costs ~2 ms (GenerateMipmap is asynchronous); the first mipmap generation of the process costs ~11 ms.
+- Leak fixes found with play-mode + reload runs: `UIRuntime.frameDocuments` cleared after input, pooled UI events
+  reset on `Dispose`, the hover chain buffers cleared, `SceneManager.combinedRenderers/Behaviours` cleared in
+  `UnloadAll` (several loaded scenes, DontDestroyOnLoad). Verify play-mode work with a reload afterwards
+  (`touchscript=N;file` with a `/*v1*/` file), not only with the startup reload; the leak warning lists what holds
+  the old scripts (see "Leak report" above).
+
 ## Destroying objects and the null-check weaver
 
 - `EngineObject` (`LELEngine/Mono/EngineObject.cs`) is the base of `GameObject` and `Behaviour`. Two flags:
@@ -180,8 +226,49 @@
 - **Benchmark:** `LELEngine.Benchmarks physics2d-scene` fails because `Meshes/cube.obj` is not copied to its output
   folder. That asset is unrelated to destroying.
 
+## Inspector fields, drag and drop, polymorphism, ScriptableObjects
+
+- Serialization (`LELEngine/Serialization`): an `Object` slot declared as an interface or `EngineObject`
+  (`SerializationUtility.CanHoldReference`) holds an inline instance, a scene reference or a ScriptableObject asset.
+  Binary: type id `-2` + uint64 id / `-3` + asset value in place of the Object's type id; JSON: `{"$ref": id}` /
+  `{"guid", "path"}`; generic data keeps the Object tag with a `ulong` / `AssetReference` value. `ValueTag.Dictionary`
+  (appended to the enum: values are bytes in files) stores count, key tag, value tag per value; JSON writes string /
+  enum / integer / bool / char keys as an object, other keys as `[{"key", "value"}]`. Collections may nest
+  (`List<List<T>>`, `Dictionary<K, List<T>>`): binary values carry their element tags; the JSON `$types` spec is
+  recursive (`Dictionary<Int32,Array<Vector3>>`, `SchemaField.Element` / `Key`) so typeless conversion stays exact.
+  `Documents.WriteObject` writes the root inline (`WriteInlineObject`): a ScriptableObject root is not a reference.
+- `ScriptableObject` (`LELEngine/Assets`, an `EngineObject`): ".asset" Object documents loaded by
+  `ScriptableObjectAssets` (type peeked with `Documents.RootTypeName`, instance cached before its fields are read,
+  then Awake / OnEnable; `UnloadAll` on script reload and project close; `ReloadChanged` after outside edits; `Save`
+  creates the meta file at once). `AssetDatabase.FindAssets` / `AcceptsFile` filter ".asset" files by stored class;
+  interface / EngineObject requests load the file's natural type (`LoadMainAsset`). `Resources.Load` /
+  `LoadAll` by path inside any folder named Resources.
+- Editor (`LELEngine.Editor/Inspector`): `DragAndDrop` (payloads: hierarchy `LEL_GAMEOBJECT`, project `LEL_ASSET`,
+  component headers and object fields `LEL_REFERENCE`; `TryResolve` maps a GameObject to its component of the slot's
+  type, interfaces included), `ObjectField` (drop with green / red outline, click pings, double click selects, picker
+  with Scene / Assets tabs), `FieldDrawer` (polymorphic fields: `TypeSelector` lists concrete types, [Serializable] not
+  required), `CollectionDrawers` (lists: grip reorder, index, remove, count, add, drop to append; dictionaries: table,
+  new-key row). Rows decorate any field kind through `InspectorContext.PendingRow` (taken by `BeginLine` / `Header`).
+  The hierarchy selects on mouse release (a drag keeps the selection); the inspector has a lock (top right).
+- Test hooks (TestHooks / TestAnchors): `drag=N;from;to|...` (press N, hover N+10, drop N+12), `click=`,
+  `doubleclick=`, `rclick=`, `ctrlclick=` (N;anchor|...), anchors `hierarchy:Name`, `project:Folder/File.ext`,
+  `project:(empty)`, `component:Type`, `field:Type.field[@fraction]`, `row:Label/i[/row]`, `button:AddEntry`;
+  `logfield=N;Object;Component.field|...`, `pingasset=N;path|...`, `lockinspector=N`, `undo=N|M`, `redo=`,
+  `expandinspector=1`, `inspectorscroll=N;px`, `screenshotframe=a,b,c` (folder/fNNNN). Each hook name holds one
+  value (repeat with `|`), and `Start-Process` splits arguments at spaces: no spaces in anchors.
+- Verified 2026-10-20 with a probe project (scratchpad `Probe`: interface / abstract / EngineObject fields,
+  dictionaries, nested lists, ScriptableObjects, Resources): batch `-executeMethod ProbeTests.Setup` / `Verify`
+  (JSON, typeless JSON <-> binary, snapshot, duplicate remap), a game build and the player's log, scripted drags.
+
 ## Player build output
 
+- `GameBuilder` ships only what the build uses (`BuildDependencies`): the build scenes, every file under a folder
+  named Resources, and what those use, transitively: asset references anywhere in documents (read typeless with
+  `DocumentReferences`, nested and polymorphic values, lists, dictionaries included), a model's imported materials
+  (and `Materials/Default.material`), a project shader's #include files, USS / UXML url() / resource() / src. The
+  rest is left out; `Library/BuildReport.txt` lists each shipped file with its reason and the files left out. Stored
+  type names are checked against the engine and the player's scripts (Mono.Cecil): types of Editor scripts or missing
+  classes are reported. `Data/` is deleted before it is written.
 - `GameBuilder` (`LELEngine.Editor/Building`) ships assets the player uses as they are:
   - documents (scenes, materials, meta files) as binary LELB, models as their imported binary;
   - images as KTX 1.1 (`KtxFile`) baked by `TextureBaker`: every mip level (box filter, in linear light for sRGB),

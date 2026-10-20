@@ -9,6 +9,16 @@ using LELEngine.Shaders;
 
 namespace LELEngine
 {
+	/// <summary>Work of the loading thread: a scene (<see cref="SceneLoadOperation" />) or an asset (<see cref="ResourceRequest" />) to read.</summary>
+	internal interface IBackgroundLoad
+	{
+		/// <summary>Dropped before its read started: the loading thread skips it.</summary>
+		bool CancelRequested { get; }
+
+		/// <summary>Loading thread: reads the files and records the assets; the main thread prepares and completes it.</summary>
+		void Read();
+	}
+
 	/// <summary>When an activated scene starts its component lifecycle; set by the host.</summary>
 	public enum SceneLifecycle
 	{
@@ -41,9 +51,10 @@ namespace LELEngine
 	///             DontDestroyOnLoad scene (<see cref="DontDestroyOnLoad" />); <see cref="LoadSceneMode.Additive" /> adds.
 	///         </item>
 	///     </list>
-	///     Hosts call <see cref="Update" /> once per frame (background loads, activation) and <see cref="UpdateScenes" />
-	///     for the game logic of the loaded scenes. Call it all from the main thread. Each scene keeps its own 2D physics
-	///     world; queries go to the active scene's.
+	///     Hosts call <see cref="Update" /> once per frame (background loads of scenes and of resources,
+	///     <see cref="Resources.LoadAsync{T}" />, activation, code awaiting on the main thread) and
+	///     <see cref="UpdateScenes" /> for the game logic of the loaded scenes. Call it all from the main thread. Each
+	///     scene keeps its own 2D physics world; queries go to the active scene's.
 	/// </summary>
 	public static class SceneManager
 	{
@@ -61,7 +72,10 @@ namespace LELEngine
 		/// <summary>When activated scenes start their lifecycle (set by the host: the player when its game loop starts, the editor's play mode).</summary>
 		public static SceneLifecycle Lifecycle { get; set; }
 
-		/// <summary>Milliseconds of main-thread work per frame for background loads (GPU preparation: shader compiles, uploads); at least one asset per frame.</summary>
+		/// <summary>
+		///     Milliseconds of main-thread work per frame for background loads, scenes first, then resources (GPU
+		///     preparation: shader compiles, uploads); at least one asset per frame for each kind.
+		/// </summary>
 		public static float BackgroundLoadingBudget { get; set; } = 4f;
 
 		/// <summary>
@@ -159,10 +173,16 @@ namespace LELEngine
 		private static Scene dontDestroyScene;
 		private static double fixedAccumulator;
 
-		// The loading thread reads the requested scenes in order.
-		private static readonly BlockingCollection<SceneLoadOperation> readQueue = new BlockingCollection<SceneLoadOperation>();
+		// The loading thread reads the requested scenes and resources in order.
+		private static readonly BlockingCollection<IBackgroundLoad> readQueue = new BlockingCollection<IBackgroundLoad>();
 		private static Thread loadingThread;
-		private static volatile SceneLoadOperation reading;
+		private static volatile IBackgroundLoad reading;
+
+		// Resources.LoadAsync requests not done yet, in request order (main thread).
+		private static readonly List<ResourceRequest> requests = new List<ResourceRequest>();
+
+		// Continuations of code awaiting on the main thread (installed there by the first update).
+		private static MainThreadContext mainContext;
 
 		#endregion
 
@@ -196,7 +216,7 @@ namespace LELEngine
 		/// </summary>
 		public static Scene LoadScene(string path, LoadSceneMode mode = LoadSceneMode.Single)
 		{
-			SceneLoadOperation operation = CreateOperation(path, mode, true);
+			SceneLoadOperation operation = CreateOperation(path, mode, true, false);
 			operation.Read();
 			if (operation.State == SceneLoadOperation.LoadState.Failed)
 			{
@@ -222,7 +242,7 @@ namespace LELEngine
 		/// </summary>
 		public static SceneLoadOperation LoadSceneAsync(string path, LoadSceneMode mode = LoadSceneMode.Single, bool allowActivation = true)
 		{
-			SceneLoadOperation operation = CreateOperation(path, mode, allowActivation);
+			SceneLoadOperation operation = CreateOperation(path, mode, allowActivation, true);
 			operations.Add(operation);
 			EnsureLoadingThread();
 			readQueue.Add(operation);
@@ -320,18 +340,234 @@ namespace LELEngine
 		// ---------------------------------------------------------------- hosts
 
 		/// <summary>
-		///     Once per frame on the main thread, before the game logic: prepares the scenes read in the background for
-		///     the GPU (within <see cref="BackgroundLoadingBudget" />) and activates the loaded ones that may activate, in
-		///     request order.
+		///     Once per frame on the main thread, before the game logic: prepares the scenes and resources read in the
+		///     background for the GPU (within <see cref="BackgroundLoadingBudget" />), activates the loaded scenes that may
+		///     activate, in request order, completes the prepared resource requests, and runs the code awaiting on the
+		///     main thread (async methods continuing after an await).
 		/// </summary>
 		public static void Update()
+		{
+			InstallMainThreadContext();
+			long deadline = Deadline();
+			UpdateOperations(deadline);
+			UpdateRequests(deadline);
+			mainContext.Pump();
+		}
+
+		/// <summary>
+		///     Once per frame on the main thread of a host that does not call <see cref="Update" /> (the editor's edit
+		///     mode): advances <see cref="Resources.LoadAsync{T}" /> requests and runs the code awaiting on the main thread.
+		/// </summary>
+		public static void UpdateResourceLoads()
+		{
+			InstallMainThreadContext();
+			UpdateRequests(Deadline());
+			mainContext.Pump();
+		}
+
+		/// <summary>One frame of game logic for every loaded scene, phase by phase (<see cref="Scene.UpdateScenes" />).</summary>
+		public static void UpdateScenes(float deltaTime)
+		{
+			Scene.UpdateScenes(loadedSnapshot, deltaTime, ref fixedAccumulator);
+		}
+
+		/// <summary>The host starts running: the loaded scenes start their lifecycle (play mode, or the editor's edit mode).</summary>
+		public static void StartLifecycle(bool playing)
+		{
+			Lifecycle = playing ? SceneLifecycle.Play : SceneLifecycle.Edit;
+			foreach (Scene scene in loadedSnapshot)
+			{
+				scene.StartLifecycle(playing);
+			}
+		}
+
+		/// <summary>
+		///     What the loaded scenes draw this frame: the renderers and behaviours of every loaded scene (one scene's own
+		///     lists when only one is loaded). The lists are valid until the next call.
+		/// </summary>
+		public static void GetRenderLists(out IReadOnlyList<MeshRenderer> renderers, out IReadOnlyList<Behaviour> behaviours)
+		{
+			if (loadedSnapshot.Length == 1)
+			{
+				renderers = loadedSnapshot[0].Renderers;
+				behaviours = loadedSnapshot[0].ActiveBehaviours;
+				return;
+			}
+
+			combinedRenderers.Clear();
+			combinedBehaviours.Clear();
+			foreach (Scene scene in loadedSnapshot)
+			{
+				combinedRenderers.AddRange(scene.Renderers);
+				combinedBehaviours.AddRange(scene.ActiveBehaviours);
+			}
+
+			renderers = combinedRenderers;
+			behaviours = combinedBehaviours;
+		}
+
+		/// <summary>
+		///     Unloads every scene, loaded or loading (the editor replacing its scene, the end of play mode, the host
+		///     quitting); no asset is released. Resource requests not done are dropped and so is the code waiting for the
+		///     main thread (neither their handlers nor the awaiting code run). <paramref name="waitForReading" />: a scene
+		///     or resource being read on the loading thread is waited for (the editor before it reloads the game scripts
+		///     its objects belong to).
+		/// </summary>
+		public static void UnloadAll(bool waitForReading = false)
+		{
+			foreach (SceneLoadOperation operation in operations)
+			{
+				operation.Cancel();
+				if (operation.State == SceneLoadOperation.LoadState.Preparing || operation.State == SceneLoadOperation.LoadState.Loaded)
+				{
+					DiscardPending(operation);
+				}
+			}
+
+			foreach (ResourceRequest request in requests)
+			{
+				request.Cancel();
+			}
+
+			if (waitForReading)
+			{
+				while (reading != null)
+				{
+					Thread.Sleep(1);
+				}
+			}
+
+			foreach (SceneLoadOperation operation in operations)
+			{
+				if (operation.State == SceneLoadOperation.LoadState.Preparing || operation.State == SceneLoadOperation.LoadState.Loaded)
+				{
+					DiscardPending(operation);
+				}
+			}
+
+			foreach (ResourceRequest request in requests)
+			{
+				request.MarkCancelled();
+			}
+
+			operations.Clear();
+			requests.Clear();
+			mainContext?.Clear();
+			foreach (Scene scene in loadedSnapshot)
+			{
+				scene.Unload();
+				sceneAssets.Remove(scene);
+				SceneUnloaded?.Invoke(scene);
+			}
+
+			loaded.Clear();
+			loadedSnapshot = Array.Empty<Scene>();
+			dontDestroyScene = null;
+			sceneAssets.Clear();
+			releaseCandidates.Clear();
+			// Filled while several scenes were loaded (additive, DontDestroyOnLoad): kept, they held the last play
+			// mode's components (and the game scripts behind them) after the editor left it.
+			combinedRenderers.Clear();
+			combinedBehaviours.Clear();
+			fixedAccumulator = 0;
+			SetActive(null);
+		}
+
+		#endregion
+
+		#region InternalMethods
+
+		/// <summary>Starts a <see cref="Resources.LoadAsync{T}" /> request (main thread).</summary>
+		internal static void QueueResourceRequest(ResourceRequest request)
+		{
+			requests.Add(request);
+			EnsureLoadingThread();
+			readQueue.Add(request);
+		}
+
+		/// <summary>Runs the action on the main thread at its next update (at once when there is no main-thread context yet).</summary>
+		internal static void PostToMainThread(Action action)
+		{
+			MainThreadContext context = mainContext;
+			if (context == null)
+			{
+				action();
+				return;
+			}
+
+			context.Post(state => ((Action)state)(), action);
+		}
+
+		/// <summary>The GPU work of one asset of a scene or resource being prepared (main thread).</summary>
+		internal static void PrepareAsset(object asset, bool gpuDriven)
+		{
+			try
+			{
+				switch (asset)
+				{
+					case ShaderProgram program:
+						program.EnsureBuilt();
+						if (gpuDriven && program.SupportsInstancing && program.IsLinked)
+						{
+							program.GetInstancedVariant();
+						}
+
+						break;
+					case Texture texture:
+						_ = texture.Handle;
+						break;
+					case Sprite sprite:
+						_ = sprite.texture?.Handle;
+						break;
+					case Mesh mesh:
+						GeometryPool.Prepare(mesh);
+						break;
+					case Model model:
+						foreach (Mesh mesh in model.Meshes)
+						{
+							GeometryPool.Prepare(mesh);
+						}
+
+						break;
+					case UIElements.FontAsset font:
+						// The glyphs the loading thread rasterized.
+						font.UploadPages();
+						break;
+				}
+			}
+			catch (Exception e)
+			{
+				Debug.LogWarning($"[SceneManager] Cannot prepare {asset}: {e.Message}");
+			}
+		}
+
+		#endregion
+
+		#region PrivateMethods
+
+		private static long Deadline()
+		{
+			return Stopwatch.GetTimestamp() + (long)(Math.Max(0f, BackgroundLoadingBudget) * Stopwatch.Frequency / 1000.0);
+		}
+
+		/// <summary>The main thread's synchronization context, set on this (the main) thread the first time.</summary>
+		private static void InstallMainThreadContext()
+		{
+			mainContext ??= new MainThreadContext(Environment.CurrentManagedThreadId);
+			if (SynchronizationContext.Current != mainContext && Environment.CurrentManagedThreadId == mainContext.ThreadId)
+			{
+				SynchronizationContext.SetSynchronizationContext(mainContext);
+			}
+		}
+
+		/// <summary>Prepares the scenes read in the background and activates the loaded ones that may activate, in request order.</summary>
+		private static void UpdateOperations(long deadline)
 		{
 			if (operations.Count == 0)
 			{
 				return;
 			}
 
-			long deadline = Stopwatch.GetTimestamp() + (long)(Math.Max(0f, BackgroundLoadingBudget) * Stopwatch.Frequency / 1000.0);
 			bool gpuDriven = IsGpuDriven();
 			bool blocked = false;
 			for (int i = 0; i < operations.Count; i++)
@@ -387,147 +623,50 @@ namespace LELEngine
 			}
 		}
 
-		/// <summary>One frame of game logic for every loaded scene, phase by phase (<see cref="Scene.UpdateScenes" />).</summary>
-		public static void UpdateScenes(float deltaTime)
-		{
-			Scene.UpdateScenes(loadedSnapshot, deltaTime, ref fixedAccumulator);
-		}
-
-		/// <summary>The host starts running: the loaded scenes start their lifecycle (play mode, or the editor's edit mode).</summary>
-		public static void StartLifecycle(bool playing)
-		{
-			Lifecycle = playing ? SceneLifecycle.Play : SceneLifecycle.Edit;
-			foreach (Scene scene in loadedSnapshot)
-			{
-				scene.StartLifecycle(playing);
-			}
-		}
-
 		/// <summary>
-		///     What the loaded scenes draw this frame: the renderers and behaviours of every loaded scene (one scene's own
-		///     lists when only one is loaded). The lists are valid until the next call.
+		///     Prepares the resource requests read in the background (the first one at least one asset per frame, the
+		///     others while the budget lasts) and completes the prepared and the failed ones.
 		/// </summary>
-		public static void GetRenderLists(out IReadOnlyList<MeshRenderer> renderers, out IReadOnlyList<Behaviour> behaviours)
+		private static void UpdateRequests(long deadline)
 		{
-			if (loadedSnapshot.Length == 1)
+			if (requests.Count == 0)
 			{
-				renderers = loadedSnapshot[0].Renderers;
-				behaviours = loadedSnapshot[0].ActiveBehaviours;
 				return;
 			}
 
-			combinedRenderers.Clear();
-			combinedBehaviours.Clear();
-			foreach (Scene scene in loadedSnapshot)
+			bool gpuDriven = IsGpuDriven();
+			bool first = true;
+			for (int i = 0; i < requests.Count; i++)
 			{
-				combinedRenderers.AddRange(scene.Renderers);
-				combinedBehaviours.AddRange(scene.ActiveBehaviours);
-			}
-
-			renderers = combinedRenderers;
-			behaviours = combinedBehaviours;
-		}
-
-		/// <summary>
-		///     Unloads every scene, loaded or loading (the editor replacing its scene, the end of play mode, the host
-		///     quitting); no asset is released. <paramref name="waitForReading" />: a scene being read on the loading
-		///     thread is waited for (the editor before it reloads the game scripts the scene's components belong to).
-		/// </summary>
-		public static void UnloadAll(bool waitForReading = false)
-		{
-			foreach (SceneLoadOperation operation in operations)
-			{
-				operation.Cancel();
-				if (operation.State == SceneLoadOperation.LoadState.Preparing || operation.State == SceneLoadOperation.LoadState.Loaded)
+				ResourceRequest request = requests[i];
+				switch (request.State)
 				{
-					DiscardPending(operation);
-				}
-			}
-
-			if (waitForReading)
-			{
-				while (reading != null)
-				{
-					Thread.Sleep(1);
-				}
-			}
-
-			foreach (SceneLoadOperation operation in operations)
-			{
-				if (operation.State == SceneLoadOperation.LoadState.Preparing || operation.State == SceneLoadOperation.LoadState.Loaded)
-				{
-					DiscardPending(operation);
-				}
-			}
-
-			operations.Clear();
-			foreach (Scene scene in loadedSnapshot)
-			{
-				scene.Unload();
-				sceneAssets.Remove(scene);
-				SceneUnloaded?.Invoke(scene);
-			}
-
-			loaded.Clear();
-			loadedSnapshot = Array.Empty<Scene>();
-			dontDestroyScene = null;
-			sceneAssets.Clear();
-			releaseCandidates.Clear();
-			fixedAccumulator = 0;
-			SetActive(null);
-		}
-
-		#endregion
-
-		#region InternalMethods
-
-		/// <summary>The GPU work of one asset of a scene being prepared (main thread).</summary>
-		internal static void PrepareAsset(object asset, bool gpuDriven)
-		{
-			try
-			{
-				switch (asset)
-				{
-					case ShaderProgram program:
-						program.EnsureBuilt();
-						if (gpuDriven && program.SupportsInstancing && program.IsLinked)
+					case ResourceRequest.RequestState.ReadFailed:
+						requests.RemoveAt(i--);
+						request.Complete();
+						Debug.LogError($"[Resources] Cannot load {request.Path}: {request.Error?.Message}");
+						continue;
+					case ResourceRequest.RequestState.Preparing:
+						if (Stopwatch.GetTimestamp() < deadline || first)
 						{
-							program.GetInstancedVariant();
-						}
-
-						break;
-					case Texture texture:
-						_ = texture.Handle;
-						break;
-					case Sprite sprite:
-						_ = sprite.texture?.Handle;
-						break;
-					case Mesh mesh:
-						GeometryPool.Prepare(mesh);
-						break;
-					case Model model:
-						foreach (Mesh mesh in model.Meshes)
-						{
-							GeometryPool.Prepare(mesh);
+							first = false;
+							if (request.Prepare(deadline, gpuDriven))
+							{
+								requests.RemoveAt(i--);
+								request.Complete();
+								Console.WriteLine($"[Resources] {request.Path}: {request.Summary}");
+							}
 						}
 
 						break;
 				}
 			}
-			catch (Exception e)
-			{
-				Debug.LogWarning($"[SceneManager] Cannot prepare {asset}: {e.Message}");
-			}
 		}
 
-		#endregion
-
-		#region PrivateMethods
-
-		private static SceneLoadOperation CreateOperation(string path, LoadSceneMode mode, bool allowActivation)
+		private static SceneLoadOperation CreateOperation(string path, LoadSceneMode mode, bool allowActivation, bool background)
 		{
 			string absolute = Path.IsPathRooted(path) ? path : AssetDatabase.ToAbsolute(ResolvePath(path));
-			return new SceneLoadOperation(path, absolute, mode, allowActivation);
+			return new SceneLoadOperation(path, absolute, mode, allowActivation, background);
 		}
 
 		private static string ResolvePath(string path)
@@ -554,22 +693,37 @@ namespace LELEngine
 
 		private static void ReadLoop()
 		{
-			foreach (SceneLoadOperation operation in readQueue.GetConsumingEnumerable())
+			while (true)
 			{
-				if (operation.CancelRequested)
-				{
-					continue;
-				}
+				ReadNext();
+			}
+		}
 
-				reading = operation;
-				try
-				{
-					operation.Read();
-				}
-				finally
-				{
-					reading = null;
-				}
+		/// <summary>
+		///     Waits for the next load and reads it. Its own frame: the thread keeps no reference to a load while it
+		///     waits (an enumerator's current item kept the last scene or asset, and the game scripts behind them, alive).
+		/// </summary>
+		private static void ReadNext()
+		{
+			IBackgroundLoad load = readQueue.Take();
+			if (load.CancelRequested)
+			{
+				return;
+			}
+
+			reading = load;
+			try
+			{
+				load.Read();
+			}
+			catch (Exception e)
+			{
+				// Reads catch their own failures; this keeps the thread alive for the next load all the same.
+				Debug.LogException(e);
+			}
+			finally
+			{
+				reading = null;
 			}
 		}
 
@@ -710,6 +864,15 @@ namespace LELEngine
 				if (operation.State >= SceneLoadOperation.LoadState.Preparing && operation.State <= SceneLoadOperation.LoadState.Loaded)
 				{
 					used.UnionWith(operation.Assets);
+				}
+			}
+
+			// A resource request being prepared keeps what it loaded (a texture an unloading scene shared with it).
+			foreach (ResourceRequest request in requests)
+			{
+				if (request.State == ResourceRequest.RequestState.Preparing)
+				{
+					used.UnionWith(request.Assets);
 				}
 			}
 

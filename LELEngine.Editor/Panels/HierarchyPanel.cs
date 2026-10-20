@@ -30,6 +30,15 @@ namespace LELEngine.Editor
 		private string droppedModel;
 		private Transform droppedModelParent;
 
+		// The row the left button went down on (it is selected when the button comes up without a drag).
+		private GameObject pressed;
+
+		// The object an object field pinged: its parents unfold, the row scrolls into view and flashes.
+		private GameObject pinged;
+		private double pingTime;
+		private bool revealPinged;
+		private const double PingSeconds = 1.6;
+
 		#endregion
 
 		#region Constructors
@@ -46,6 +55,22 @@ namespace LELEngine.Editor
 		public static void ResetDrag()
 		{
 			Dragged = null;
+		}
+
+		/// <summary>Drops the scene objects the panel remembers (before the scene or the scripts unload).</summary>
+		public void ForgetObjects()
+		{
+			pinged = null;
+			pressed = null;
+			renaming = null;
+		}
+
+		/// <summary>Shows the object: its parents unfold, its row scrolls into view and flashes for a moment.</summary>
+		public void Ping(GameObject go)
+		{
+			pinged = go;
+			pingTime = ImGui.GetTime();
+			revealPinged = true;
 		}
 
 		/// <summary>The window is shown (its close button and the Window menu toggle it; saved with the editor's windows).</summary>
@@ -157,6 +182,11 @@ namespace LELEngine.Editor
 				flags |= ImGuiTreeNodeFlags.Selected;
 			}
 
+			if (revealPinged && pinged != null && pinged != go && !pinged.dead && pinged.transform.IsChildOf(go.transform))
+			{
+				ImGui.SetNextItemOpen(true);
+			}
+
 			bool open;
 			if (renaming == go)
 			{
@@ -188,14 +218,27 @@ namespace LELEngine.Editor
 				}
 
 				open = ImGui.TreeNodeEx(go.Name, flags);
+				TestAnchors.RecordItem("hierarchy:" + go.Name);
 				if (!go.activeInHierarchy)
 				{
 					ImGui.PopStyleColor();
 				}
 
+				// Selected when the click ends without a drag (as in Unity): dragging an object on to a field of the
+				// selected object keeps the selection, so the inspector showing the field stays.
 				if (ImGui.IsItemClicked(ImGuiMouseButton.Left) && !ImGui.IsItemToggledOpen())
 				{
-					editor.Select(go);
+					pressed = go;
+				}
+
+				if (pressed == go && ImGui.IsMouseReleased(ImGuiMouseButton.Left))
+				{
+					if (ImGui.IsItemHovered() && !ImGuiP.IsMouseDragPastThreshold(ImGuiMouseButton.Left))
+					{
+						editor.Select(go);
+					}
+
+					pressed = null;
 				}
 
 				if (ImGui.IsItemHovered() && ImGui.IsMouseDoubleClicked(ImGuiMouseButton.Left) && go.transform.childCount == 0)
@@ -204,15 +247,16 @@ namespace LELEngine.Editor
 				}
 			}
 
+			if (go == pinged)
+			{
+				FlashPinged();
+			}
+
 			if (ImGui.BeginDragDropSource())
 			{
 				Dragged = go;
-				unsafe
-				{
-					ImGui.SetDragDropPayload(DragType, null, 0);
-				}
-
-				ImGui.Text(go.Name);
+				// Re-parents in the hierarchy; object fields take the object or its component of their type.
+				DragAndDrop.SetPayload(DragType, DragItem.FromGameObject(go));
 				ImGui.EndDragDropSource();
 			}
 
@@ -264,6 +308,28 @@ namespace LELEngine.Editor
 			}
 
 			ImGui.PopID();
+		}
+
+		/// <summary>The pinged row (the last item): scrolled into view once, outlined while the ping lasts.</summary>
+		private void FlashPinged()
+		{
+			if (revealPinged)
+			{
+				ImGui.SetScrollHereY(0.5f);
+				revealPinged = false;
+			}
+
+			double age = ImGui.GetTime() - pingTime;
+			if (age > PingSeconds)
+			{
+				pinged = null;
+				return;
+			}
+
+			float alpha = (float)(1.0 - age / PingSeconds);
+			System.Numerics.Vector4 color = EditorStyle.Selection;
+			color.W = alpha;
+			ImGui.GetWindowDrawList().AddRect(ImGui.GetItemRectMin() - new NVector2(2f, 1f), ImGui.GetItemRectMax() + new NVector2(2f, 1f), ImGui.GetColorU32(color), 3f, ImDrawFlags.None, 2f);
 		}
 
 		private static unsafe bool AcceptObject()

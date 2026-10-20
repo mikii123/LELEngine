@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Reflection;
 using Hexa.NET.ImGui;
 using LELEngine.Serialization;
 using NVector2 = System.Numerics.Vector2;
@@ -31,10 +32,26 @@ namespace LELEngine.Editor
 		private string listedFolder;
 		private readonly List<string> listedDirectories = new List<string>();
 		private readonly List<string> listedFiles = new List<string>();
+
+		// The class stored by each listed ScriptableObject asset, by name (no script types: they would outlive a reload),
+		// and whether the scripts have it; read when the folder is listed, not every frame.
+		private readonly Dictionary<string, (string name, bool found)> listedAssetTypes = new Dictionary<string, (string, bool)>(StringComparer.OrdinalIgnoreCase);
+		private int listedScriptsVersion = -1;
 		private string selectedFile;
+
+		// Ctrl / Shift click selection (dragged together, e.g. on to a list); the last clicked file is the inspector's.
+		private readonly HashSet<string> selection = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+		private string selectionAnchor;
+
+		// The file an object field pinged: its folder opens, the row scrolls into view and flashes.
+		private string pinged;
+		private double pingTime;
+		private bool revealPinged;
+		private const double PingSeconds = 1.6;
 
 		private string createKind;
 		private string createName = "";
+		private Type createType;
 		private bool openCreatePopup;
 		private string error;
 
@@ -74,6 +91,22 @@ namespace LELEngine.Editor
 			}
 
 			ImGui.End();
+		}
+
+		/// <summary>Shows a file: its folder opens, its row scrolls into view and flashes for a moment.</summary>
+		public void Ping(string assetPath)
+		{
+			if (string.IsNullOrEmpty(assetPath) || editor.Project == null)
+			{
+				return;
+			}
+
+			assetPath = assetPath.Replace('\\', '/');
+			int slash = assetPath.LastIndexOf('/');
+			folder = slash >= 0 ? assetPath.Substring(0, slash) : "";
+			pinged = assetPath;
+			pingTime = ImGui.GetTime();
+			revealPinged = true;
 		}
 
 		#endregion
@@ -180,29 +213,61 @@ namespace LELEngine.Editor
 				}
 			}
 
-			foreach (string file in listedFiles)
+			float iconSize = ImGui.GetTextLineHeight();
+			for (int index = 0; index < listedFiles.Count; index++)
 			{
+				string file = listedFiles[index];
 				string assetPath = Combine(folder, file);
-				bool selected = string.Equals(selectedFile, assetPath, StringComparison.OrdinalIgnoreCase);
-				if (ImGui.Selectable(file, selected, ImGuiSelectableFlags.AllowDoubleClick))
+				bool selected = selection.Contains(assetPath) || string.Equals(selectedFile, assetPath, StringComparison.OrdinalIgnoreCase);
+				NVector2 rowStart = ImGui.GetCursorScreenPos();
+				if (ImGui.Selectable("##file" + file, selected, ImGuiSelectableFlags.AllowDoubleClick))
 				{
-					selectedFile = assetPath;
-					editor.SelectAsset(assetPath);
+					Click(assetPath, index);
 					if (ImGui.IsMouseDoubleClicked(ImGuiMouseButton.Left))
 					{
 						OpenAsset(assetPath);
 					}
 				}
 
+				TestAnchors.RecordItem("project:" + assetPath);
+
+				// Icon and name over the row (ScriptableObject assets with their class).
+				ImDrawListPtr draw = ImGui.GetWindowDrawList();
+				EditorIcons.Draw(draw, rowStart + new NVector2(1f, 0f), iconSize, ScriptableObjectAssets.IsAssetFile(assetPath) ? IconKind.ScriptableObject : IconKind.Asset, ImGui.GetColorU32(ImGuiCol.Text, 0.7f));
+				draw.AddText(rowStart + new NVector2(iconSize + 6f, 0f), ImGui.GetColorU32(ImGuiCol.Text), file);
+				if (listedAssetTypes.TryGetValue(assetPath, out (string name, bool found) stored))
+				{
+					string kind = stored.found ? "  " + stored.name : "  " + (stored.name ?? "?") + " (missing script)";
+					draw.AddText(rowStart + new NVector2(iconSize + 6f + ImGui.CalcTextSize(file).X, 0f), ImGui.GetColorU32(stored.found ? ImGui.GetStyle().Colors[(int)ImGuiCol.TextDisabled] : EditorStyle.Warning), kind);
+				}
+
+				if (string.Equals(assetPath, pinged, StringComparison.OrdinalIgnoreCase))
+				{
+					FlashPinged();
+				}
+
 				if (ImGui.BeginDragDropSource())
 				{
 					DraggedAsset = assetPath;
-					unsafe
+					// Dragging one of several selected files drags them all (on to a list: every one that fits is added).
+					var dragged = new List<DragItem>();
+					if (selection.Contains(assetPath) && selection.Count > 1)
 					{
-						ImGui.SetDragDropPayload(DragType, null, 0);
+						foreach (string listed in listedFiles)
+						{
+							string path = Combine(folder, listed);
+							if (selection.Contains(path))
+							{
+								dragged.Add(DragItem.FromFile(path));
+							}
+						}
+					}
+					else
+					{
+						dragged.Add(DragItem.FromFile(assetPath));
 					}
 
-					ImGui.Text(file);
+					DragAndDrop.SetPayload(DragType, dragged);
 					ImGui.EndDragDropSource();
 				}
 
@@ -225,10 +290,24 @@ namespace LELEngine.Editor
 
 			NVector2 rest = ImGui.GetContentRegionAvail();
 			ImGui.InvisibleButton("##files_empty", new NVector2(Math.Max(1, rest.X), Math.Max(30, rest.Y)));
+			TestAnchors.RecordItem("project:(empty)");
+			if (ImGui.IsItemClicked(ImGuiMouseButton.Left))
+			{
+				selection.Clear();
+			}
+
 			if (ImGui.BeginPopupContextItem("##files_context"))
 			{
 				if (ImGui.MenuItem("Create Folder")) StartCreate("Folder", "New Folder");
 				if (ImGui.MenuItem("Create C# Script")) StartCreate("Script", "NewBehaviour");
+				if (ImGui.MenuItem("Create C# ScriptableObject Script")) StartCreate("ScriptableObjectScript", "NewData");
+				if (ImGui.BeginMenu("Create ScriptableObject"))
+				{
+					DrawScriptableObjectMenu();
+					ImGui.EndMenu();
+				}
+
+				ImGui.Separator();
 				if (ImGui.MenuItem("Create Material")) StartCreate("Material", "NewMaterial");
 				if (ImGui.MenuItem("Create Physics Material 2D")) StartCreate("PhysicsMaterial2D", "NewPhysicsMaterial");
 				if (ImGui.MenuItem("Create Visual Effect Graph")) StartCreate("VFX", "NewVisualEffect");
@@ -241,11 +320,180 @@ namespace LELEngine.Editor
 			}
 		}
 
+		/// <summary>A click on a file: Ctrl toggles it in the selection, Shift selects the range from the last click, else it alone.</summary>
+		private void Click(string assetPath, int index)
+		{
+			ImGuiIOPtr io = ImGui.GetIO();
+			if (io.KeyCtrl)
+			{
+				if (!selection.Remove(assetPath))
+				{
+					selection.Add(assetPath);
+				}
+
+				if (selectedFile != null && selection.Count == 1 && !selection.Contains(selectedFile) && selectedFile != assetPath)
+				{
+					selection.Add(selectedFile);
+				}
+			}
+			else if (io.KeyShift && selectionAnchor != null)
+			{
+				int anchor = listedFiles.FindIndex(file => string.Equals(Combine(folder, file), selectionAnchor, StringComparison.OrdinalIgnoreCase));
+				selection.Clear();
+				if (anchor < 0)
+				{
+					anchor = index;
+				}
+
+				for (int i = Math.Min(anchor, index); i <= Math.Max(anchor, index); i++)
+				{
+					selection.Add(Combine(folder, listedFiles[i]));
+				}
+			}
+			else
+			{
+				selection.Clear();
+				selection.Add(assetPath);
+				selectionAnchor = assetPath;
+			}
+
+			if (!io.KeyShift)
+			{
+				selectionAnchor = assetPath;
+			}
+
+			selectedFile = assetPath;
+			editor.SelectAsset(assetPath);
+		}
+
+		/// <summary>The pinged file's row (the last item): scrolled into view once, outlined while the ping lasts.</summary>
+		private void FlashPinged()
+		{
+			if (revealPinged)
+			{
+				ImGui.SetScrollHereY(0.5f);
+				revealPinged = false;
+			}
+
+			double age = ImGui.GetTime() - pingTime;
+			if (age > PingSeconds)
+			{
+				pinged = null;
+				return;
+			}
+
+			System.Numerics.Vector4 color = EditorStyle.Selection;
+			color.W = (float)(1.0 - age / PingSeconds);
+			ImGui.GetWindowDrawList().AddRect(ImGui.GetItemRectMin() - new NVector2(2f, 1f), ImGui.GetItemRectMax() + new NVector2(2f, 1f), ImGui.GetColorU32(color), 3f, ImDrawFlags.None, 2f);
+		}
+
+		/// <summary>
+		///     The Create ScriptableObject menu: the classes marked [CreateAssetMenu] at their menu paths, then every
+		///     ScriptableObject class of the scripts.
+		/// </summary>
+		private void DrawScriptableObjectMenu()
+		{
+			List<Type> types = TypeSelector.ScriptableObjectTypes();
+			if (types.Count == 0)
+			{
+				ImGui.TextDisabled("No ScriptableObject class yet: create one with");
+				ImGui.TextDisabled("Create C# ScriptableObject Script.");
+				return;
+			}
+
+			var marked = new List<(string[] path, int order, Type type, string fileName)>();
+			foreach (Type type in types)
+			{
+				CreateAssetMenuAttribute menu = type.GetCustomAttribute<CreateAssetMenuAttribute>(false);
+				if (menu != null)
+				{
+					string path = string.IsNullOrWhiteSpace(menu.menuName) ? type.Name : menu.menuName;
+					marked.Add((path.Split('/', StringSplitOptions.RemoveEmptyEntries), menu.order, type, menu.fileName));
+				}
+			}
+
+			marked.Sort((a, b) => a.order != b.order ? a.order.CompareTo(b.order) : string.Compare(string.Join("/", a.path), string.Join("/", b.path), StringComparison.OrdinalIgnoreCase));
+			DrawMenuLevel(marked, 0, 0, marked.Count);
+			if (marked.Count > 0)
+			{
+				ImGui.Separator();
+			}
+
+			if (ImGui.BeginMenu("All ScriptableObject Classes"))
+			{
+				foreach (Type type in types)
+				{
+					if (ImGui.MenuItem(type.FullName))
+					{
+						StartCreateAsset(type, null);
+					}
+				}
+
+				ImGui.EndMenu();
+			}
+		}
+
+		/// <summary>Menu items of a sorted range of entries at one depth of their paths (shared prefixes become sub-menus).</summary>
+		private void DrawMenuLevel(List<(string[] path, int order, Type type, string fileName)> entries, int depth, int from, int to)
+		{
+			int i = from;
+			while (i < to)
+			{
+				(string[] path, int order, Type type, string fileName) entry = entries[i];
+				if (entry.path.Length <= depth)
+				{
+					i++;
+					continue;
+				}
+
+				if (entry.path.Length == depth + 1)
+				{
+					if (ImGui.MenuItem(entry.path[depth] + "##" + entry.type.FullName))
+					{
+						StartCreateAsset(entry.type, entry.fileName);
+					}
+
+					i++;
+					continue;
+				}
+
+				// Every following entry with the same folder at this depth goes into one sub-menu.
+				string name = entry.path[depth];
+				int end = i + 1;
+				while (end < to && entries[end].path.Length > depth + 1 && string.Equals(entries[end].path[depth], name, StringComparison.Ordinal))
+				{
+					end++;
+				}
+
+				if (ImGui.BeginMenu(name + "##" + depth))
+				{
+					DrawMenuLevel(entries, depth + 1, i, end);
+					ImGui.EndMenu();
+				}
+
+				i = end;
+			}
+		}
+
+		private void StartCreateAsset(Type type, string fileName)
+		{
+			createType = type;
+			StartCreate("ScriptableObject", string.IsNullOrWhiteSpace(fileName) ? "New " + type.Name : fileName);
+		}
+
 		private void RefreshListing()
 		{
-			if (listedVersion == editor.AssetsVersion && listedFolder == folder)
+			int scriptsVersion = editor.Scripts?.Version ?? 0;
+			if (listedVersion == editor.AssetsVersion && listedFolder == folder && listedScriptsVersion == scriptsVersion)
 			{
 				return;
+			}
+
+			listedScriptsVersion = scriptsVersion;
+
+			if (!string.Equals(listedFolder, folder, StringComparison.OrdinalIgnoreCase))
+			{
+				selection.Clear();
 			}
 
 			listedVersion = editor.AssetsVersion;
@@ -268,6 +516,19 @@ namespace LELEngine.Editor
 
 			listedDirectories.Sort(StringComparer.OrdinalIgnoreCase);
 			listedFiles.Sort(StringComparer.OrdinalIgnoreCase);
+			listedAssetTypes.Clear();
+			foreach (string file in listedFiles)
+			{
+				string assetPath = Combine(folder, file);
+				if (ScriptableObjectAssets.IsAssetFile(assetPath))
+				{
+					string typeName = ScriptableObjectAssets.GetTypeName(assetPath);
+					int comma = typeName?.IndexOf(',') ?? -1;
+					string fullName = comma > 0 ? typeName.Substring(0, comma) : typeName;
+					string shortName = fullName?.Substring(Math.Max(fullName.LastIndexOf('.'), fullName.LastIndexOf('+')) + 1);
+					listedAssetTypes[assetPath] = (shortName, ScriptableObjectAssets.GetStoredType(assetPath) != null);
+				}
+			}
 		}
 
 		private void OpenAsset(string assetPath)
@@ -324,7 +585,7 @@ namespace LELEngine.Editor
 				return;
 			}
 
-			ImGui.Text("New " + createKind + " in Assets/" + folder);
+			ImGui.Text("New " + (createKind == "ScriptableObject" && createType != null ? createType.Name + " asset" : createKind) + " in Assets/" + folder);
 			if (ImGui.IsWindowAppearing())
 			{
 				ImGui.SetKeyboardFocusHere();
@@ -379,6 +640,36 @@ namespace LELEngine.Editor
 					EnsureNew(target);
 					File.WriteAllText(target, ScriptTemplate(className));
 					break;
+				case "ScriptableObjectScript":
+				{
+					string dataClass = ScriptClassName(name);
+					target = Absolute(Combine(folder, dataClass + ".cs"));
+					EnsureNew(target);
+					File.WriteAllText(target, ScriptableObjectTemplate(dataClass));
+					break;
+				}
+				case "ScriptableObject":
+				{
+					if (createType == null)
+					{
+						return;
+					}
+
+					target = Absolute(Combine(folder, name + ScriptableObjectAssets.Extension));
+					EnsureNew(target);
+					ScriptableObject asset = ScriptableObject.CreateInstance(createType);
+					try
+					{
+						asset.Reset();
+					}
+					catch (Exception e)
+					{
+						Debug.LogException(e);
+					}
+
+					ScriptableObjectAssets.Save(asset, AssetDatabase.ToAssetPath(target));
+					break;
+				}
 				case "Material":
 				{
 					target = Absolute(Combine(folder, name + Shaders.Material.Extension));
@@ -482,6 +773,16 @@ namespace LELEngine.Editor
 				"\t[SerializeField] private Vector3 offset;\n\n" +
 				"\tpublic override void Start()\n\t{\n\t}\n\n" +
 				"\tpublic override void Update()\n\t{\n\t}\n}\n";
+		}
+
+		private static string ScriptableObjectTemplate(string className)
+		{
+			return "using System.Collections.Generic;\nusing LELEngine;\nusing OpenTK.Mathematics;\n\n" +
+				"[CreateAssetMenu(fileName = \"New" + className + "\", menuName = \"Data/" + className + "\")]\n" +
+				"public class " + className + " : ScriptableObject\n{\n" +
+				"\tpublic string displayName = \"\";\n\n" +
+				"\tpublic float value = 1f;\n\n" +
+				"\tpublic List<string> tags = new List<string>();\n}\n";
 		}
 
 		private static void ShowInExplorer(string path)

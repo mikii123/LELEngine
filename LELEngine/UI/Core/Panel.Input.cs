@@ -389,6 +389,9 @@ namespace LELEngine.UIElements
 				}
 			}
 
+			// Shared by every panel: emptied, so they do not keep this panel's elements alive.
+			chainBuffer.Clear();
+			chainBuffer2.Clear();
 			cursor = newTop != null ? newTop.computedStyle.inherited.cursor.type : CursorType.Arrow;
 		}
 

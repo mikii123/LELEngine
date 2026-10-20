@@ -15,7 +15,8 @@ namespace LELEngine.Editor
 	///     types is dropped, the collectible load context of the old assembly is unloaded, the new assembly is loaded
 	///     into a fresh context and the scene is loaded back from its saved state. Compile errors keep the old
 	///     scripts running. That the old context really went away is checked in the background; when something still
-	///     references it, a warning names the leak.
+	///     references it, <see cref="LeakTracer" /> finds the paths from static fields to it on the main thread and a
+	///     warning lists them.
 	///     Scripts in Editor folders build into Game.Editor.dll (custom inspectors, editor windows, menu items), loaded
 	///     into the same context after Game.dll and handed to <see cref="EditorExtensions" />.
 	/// </summary>
@@ -53,6 +54,12 @@ namespace LELEngine.Editor
 		private byte[] editorAssemblyBytes;
 		private byte[] editorSymbolBytes;
 		private readonly System.Collections.Generic.List<(WeakReference, string)> trackedComponents = new System.Collections.Generic.List<(WeakReference, string)>();
+
+		// Contexts that outlived their unload check (weak), with the scene components still alive: traced in Update.
+		private readonly System.Collections.Concurrent.ConcurrentQueue<(WeakReference context, System.Collections.Generic.List<string> components)> survivors =
+			new System.Collections.Concurrent.ConcurrentQueue<(WeakReference, System.Collections.Generic.List<string>)>();
+
+		private volatile bool disposed;
 
 		#endregion
 
@@ -208,6 +215,11 @@ namespace LELEngine.Editor
 				pendingReload = null;
 				Apply(result);
 			}
+
+			while (survivors.TryDequeue(out (WeakReference context, System.Collections.Generic.List<string> components) survivor))
+			{
+				ReportLeak(survivor.context, survivor.components);
+			}
 		}
 
 		public void RequestBuild()
@@ -243,6 +255,7 @@ namespace LELEngine.Editor
 
 		public void Dispose()
 		{
+			disposed = true;
 			watcher?.Dispose();
 			watcher = null;
 			WeakReference unloaded = UnloadDomain();
@@ -382,6 +395,8 @@ namespace LELEngine.Editor
 		private WeakReference UnloadDomain()
 		{
 			editor.ClearTypeCaches();
+			// ScriptableObject assets are instances of script classes: OnDisable, then they load again on their next use.
+			ScriptableObjectAssets.UnloadAll();
 			SerializationUtility.ClearCache();
 			if (GameAssembly != null)
 			{
@@ -438,10 +453,62 @@ namespace LELEngine.Editor
 					}
 				}
 
-				Console.WriteLine("[Warning] [Scripts] The previous script assembly is still referenced after the reload: something (a static " +
-					"field, an event subscription, a running thread or timer started by a script) keeps it alive. " +
-					(alive.Count > 0 ? "Script objects still reachable: " + string.Join(", ", alive) : "No script object is reachable (a type or delegate is held)."));
+				if (disposed)
+				{
+					// The editor is closing: no frame left to trace in.
+					Console.WriteLine("[Warning] [Scripts] The previous script assembly is still referenced after the reload.");
+					return;
+				}
+
+				survivors.Enqueue((unloaded, alive));
 			});
+		}
+
+		/// <summary>
+		///     Main thread: the warning for a context that outlived its unload check, with the paths
+		///     <see cref="LeakTracer" /> finds from the engine's and the editor's static fields, the editor and the runtime's
+		///     hooks to what is left of the old scripts.
+		/// </summary>
+		private void ReportLeak(WeakReference unloaded, System.Collections.Generic.List<string> aliveComponents)
+		{
+			if (!(unloaded.Target is AssemblyLoadContext old))
+			{
+				Console.WriteLine("[Scripts] Previous script assembly unloaded (late)");
+				return;
+			}
+
+			LeakTracer.Report report = LeakTracer.Trace(old, new[] { new System.Collections.Generic.KeyValuePair<string, object>("editor", editor) });
+			old = null;
+			var text = new System.Text.StringBuilder("[Warning] [Scripts] The previous script assembly is still referenced after the reload (it stays in memory with its static state).");
+			string searched = report.Visited.ToString("N0", System.Globalization.CultureInfo.InvariantCulture) + $" objects searched in {report.Milliseconds:0} ms{(report.Stopped ? ", stopped early" : "")}";
+			if (report.Paths.Count > 0)
+			{
+				text.Append($" Shortest paths from what holds it ({searched}):");
+				foreach (string path in report.Paths)
+				{
+					text.Append("\n  ").Append(path);
+				}
+
+				if (report.Roots > report.Paths.Count)
+				{
+					text.Append($"\n  ... and {report.Roots - report.Paths.Count} more roots");
+				}
+
+				text.Append($"\n  {report.Found} object{(report.Found == 1 ? "" : "s")} of the old scripts reached in all (each path stops at the first one).");
+			}
+			else
+			{
+				text.Append($" Nothing reachable from the static fields of the engine and the editor, the editor itself or the runtime's events, timers and queued work holds it ({searched}): " +
+					"look for a thread a script started that still runs, a library's static field or event, or a GC handle / native callback (a delegate passed to native code).");
+			}
+
+			if (aliveComponents.Count > 0)
+			{
+				text.Append("\n  Components of the scene unloaded at the reload still alive: ").Append(string.Join(", ", aliveComponents));
+			}
+
+			// One console entry for every line (written line by line, the paths would be plain log entries without the warning's color).
+			editor.Log.Add(text.ToString(), LogType.Warning);
 		}
 
 		private static DateTime NewestSource(ProjectInfo project)

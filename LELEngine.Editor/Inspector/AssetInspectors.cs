@@ -67,6 +67,10 @@ namespace LELEngine.Editor
 					context.Editor.NotifySceneChanged();
 				}
 			}
+			else if (type == typeof(ScriptableObject))
+			{
+				ScriptableObjectInspector.Draw(assetPath, context);
+			}
 			else if (assetPath.EndsWith(SceneSerializer.Extension, StringComparison.OrdinalIgnoreCase))
 			{
 				if (ImGui.Button("Open Scene", new NVector2(-1, 0)))
@@ -135,6 +139,7 @@ namespace LELEngine.Editor
 		{
 			if (type == typeof(ShaderProgram)) return "Shader";
 			if (type == typeof(LELEngine.VFX.VfxGraph)) return "Visual Effect Graph";
+			if (type == typeof(ScriptableObject)) return (ScriptableObjectAssets.GetStoredType(assetPath)?.Name ?? "missing script") + " asset";
 			if (TextureAssets.IsImageFile(assetPath))
 			{
 				var importer = AssetDatabase.GetMeta(assetPath).importer as TextureImporter ?? TextureImporter.CreateDefault(assetPath);

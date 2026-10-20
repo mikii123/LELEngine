@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Hexa.NET.ImGui;
 
 namespace LELEngine.Editor
 {
@@ -12,6 +13,10 @@ namespace LELEngine.Editor
 	///     createvfx=N;asset (writes the default VFX graph and opens it), vfxgraph=N;asset (opens the VFX Graph window),
 	///     menuitem=N;Menu/Item|M;Menu/Other (runs [MenuItem]s of the editor scripts), addmodel=N;Models/Car.fbx|M;...
 	///     (instantiates model files).
+	///     Scripted mouse input (real ImGui drag and drop, aimed at <see cref="TestAnchors" />):
+	///     drag=N;fromAnchor;toAnchor|M;... (press at N, move, hover at N+10, release at N+12),
+	///     click=N;anchor|..., doubleclick=N;anchor|...; expandinspector=1 opens every inspector foldout;
+	///     logfield=N;Object;Component.field|... logs a field's value; pingasset=N;path shows a file in the project panel.
 	/// </summary>
 	internal sealed class TestHooks
 	{
@@ -24,6 +29,8 @@ namespace LELEngine.Editor
 		private bool componentAdded;
 		private readonly System.Diagnostics.Stopwatch frameClock = System.Diagnostics.Stopwatch.StartNew();
 		private double lastFrameMs;
+		private readonly List<(int start, string from, string to)> drags = new List<(int, string, string)>();
+		private readonly List<(int at, string anchor, bool twice, int button)> clicks = new List<(int, string, bool, int)>();
 
 		#endregion
 
@@ -40,6 +47,37 @@ namespace LELEngine.Editor
 					values[arg.Substring(0, eq)] = arg.Substring(eq + 1).Trim('"');
 				}
 			}
+
+			if (values.TryGetValue("drag", out string dragList))
+			{
+				foreach (string entry in dragList.Split('|'))
+				{
+					string[] parts = entry.Split(';');
+					if (parts.Length == 3 && int.TryParse(parts[0], out int at))
+					{
+						drags.Add((at, parts[1], parts[2]));
+					}
+				}
+			}
+
+			foreach (string name in new[] { "click", "doubleclick", "rclick", "ctrlclick" })
+			{
+				if (values.TryGetValue(name, out string clickList))
+				{
+					foreach (string entry in clickList.Split('|'))
+					{
+						string[] parts = entry.Split(';');
+						if (parts.Length == 2 && int.TryParse(parts[0], out int at))
+						{
+							// Button 0 left, 1 right; -1: left with Ctrl held.
+							clicks.Add((at, parts[1], name == "doubleclick", name == "rclick" ? 1 : name == "ctrlclick" ? -1 : 0));
+						}
+					}
+				}
+			}
+
+			TestAnchors.Enabled = drags.Count > 0 || clicks.Count > 0;
+			FieldDrawer.ForceOpen = values.TryGetValue("expandinspector", out string expand) && expand == "1";
 		}
 
 		#endregion
@@ -303,15 +341,225 @@ namespace LELEngine.Editor
 					Debug.Log("[Test] Touched " + parts[1]);
 				}
 			}
+
+			// pingasset=N;path|M;path: the project panel shows the file (its folder opens: its row can be dragged then).
+			if (values.TryGetValue("pingasset", out string pingAssets))
+			{
+				foreach (string entry in pingAssets.Split('|'))
+				{
+					string[] parts = entry.Split(';');
+					if (parts.Length == 2 && int.TryParse(parts[0], out int at) && at == frame)
+					{
+						editor.Ping(parts[1]);
+						Debug.Log("[Test] Pinged " + parts[1]);
+					}
+				}
+			}
+
+			// inspectorscroll=N;pixels|M;pixels: scrolls the inspector (screenshots of long inspectors).
+			if (values.TryGetValue("inspectorscroll", out string scrolls))
+			{
+				foreach (string entry in scrolls.Split('|'))
+				{
+					string[] parts = entry.Split(';');
+					if (parts.Length == 2 && int.TryParse(parts[0], out int at) && at == frame && float.TryParse(parts[1], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float pixels))
+					{
+						InspectorPanel.TestScroll = pixels;
+					}
+				}
+			}
+
+			// lockinspector=N: the inspector locks on what it shows.
+			if (Is("lockinspector"))
+			{
+				InspectorPanel.TestLock = true;
+			}
+
+			// undo=N|M / redo=N: the editor's Undo / Redo at those frames.
+			if (IsListed("undo"))
+			{
+				editor.UndoLast();
+				Debug.Log("[Test] Undo");
+			}
+
+			if (IsListed("redo"))
+			{
+				editor.RedoLast();
+				Debug.Log("[Test] Redo");
+			}
+
+			RunScriptedMouse();
+
+			// logfield=N;Object;Component.field|...: the field's value as the inspector names it.
+			if (values.TryGetValue("logfield", out string logFields))
+			{
+				foreach (string entry in logFields.Split('|'))
+				{
+					string[] parts = entry.Split(';');
+					if (parts.Length == 3 && int.TryParse(parts[0], out int at) && at == frame)
+					{
+						Debug.Log("[Test] " + parts[1] + "/" + parts[2] + " = " + DescribeField(scene, parts[1], parts[2]));
+					}
+				}
+			}
 		}
 
 		#endregion
 
 		#region PrivateMethods
 
+		/// <summary>Feeds the scripted drags and clicks to ImGui as mouse events (aimed at the anchors recorded last frame).</summary>
+		private void RunScriptedMouse()
+		{
+			ImGuiIOPtr io = ImGui.GetIO();
+			foreach ((int start, string from, string to) in drags)
+			{
+				int step = frame - start;
+				if (step < 0 || step > 13)
+				{
+					continue;
+				}
+
+				if (!TestAnchors.TryGetPoint(from, out System.Numerics.Vector2 a) || !TestAnchors.TryGetPoint(to, out System.Numerics.Vector2 b))
+				{
+					if (step == 0)
+					{
+						Debug.LogWarning("[Test] Drag " + from + " -> " + to + ": an anchor was not drawn");
+					}
+
+					continue;
+				}
+
+				if (step == 0)
+				{
+					io.AddMousePosEvent(a.X, a.Y);
+				}
+				else if (step == 1)
+				{
+					io.AddMouseButtonEvent(0, true);
+				}
+				else if (step <= 9)
+				{
+					// Past the drag threshold first, then on to the target.
+					float t = (step - 1) / 8f;
+					System.Numerics.Vector2 p = step == 2 ? a + new System.Numerics.Vector2(10f, 10f) : System.Numerics.Vector2.Lerp(a, b, t);
+					io.AddMousePosEvent(p.X, p.Y);
+				}
+				else if (step <= 11)
+				{
+					io.AddMousePosEvent(b.X, b.Y);
+				}
+				else if (step == 12)
+				{
+					io.AddMouseButtonEvent(0, false);
+					Debug.Log("[Test] Dropped " + from + " on " + to);
+				}
+			}
+
+			foreach ((int at, string anchor, bool twice, int button) in clicks)
+			{
+				int step = frame - at;
+				if (step < 0 || step > 5 || !TestAnchors.TryGetPoint(anchor, out System.Numerics.Vector2 point))
+				{
+					continue;
+				}
+
+				int mouseButton = Math.Max(0, button);
+				if (step == 0) io.AddMousePosEvent(point.X, point.Y);
+				else if (step == 1 || (twice && step == 3))
+				{
+					if (button < 0) io.AddKeyEvent(ImGuiKey.ModCtrl, true);
+					io.AddMouseButtonEvent(mouseButton, true);
+				}
+				else if (step == 2 || (twice && step == 4)) io.AddMouseButtonEvent(mouseButton, false);
+				else if (step == 3 && button < 0) io.AddKeyEvent(ImGuiKey.ModCtrl, false);
+			}
+		}
+
+		private static string DescribeField(Scene scene, string objectName, string fieldPath)
+		{
+			GameObject go = Find(scene, objectName);
+			int dot = fieldPath.IndexOf('.');
+			if (go == null || dot <= 0)
+			{
+				return "(object not found)";
+			}
+
+			foreach (Behaviour component in go.Components)
+			{
+				if (component.GetType().Name != fieldPath.Substring(0, dot))
+				{
+					continue;
+				}
+
+				foreach (Serialization.SerializedField field in Serialization.SerializationUtility.GetFields(component.GetType()))
+				{
+					if (field.Name == fieldPath.Substring(dot + 1))
+					{
+						return Describe(field.GetValue(component));
+					}
+				}
+			}
+
+			return "(field not found)";
+		}
+
+		private static string Describe(object value)
+		{
+			switch (value)
+			{
+				case null:
+					return "null";
+				case System.Collections.IDictionary dictionary:
+				{
+					var parts = new List<string>();
+					foreach (System.Collections.DictionaryEntry entry in dictionary)
+					{
+						parts.Add(Describe(entry.Key) + ": " + Describe(entry.Value));
+					}
+
+					return "{" + string.Join(", ", parts) + "}";
+				}
+				case System.Collections.IList list when !(value is string):
+				{
+					var parts = new List<string>();
+					foreach (object item in list)
+					{
+						parts.Add(Describe(item));
+					}
+
+					return "[" + string.Join(", ", parts) + "]";
+				}
+				case EngineObject _:
+				case IAsset _:
+					return ObjectField.NameOf(value);
+				default:
+					return value.GetType().IsPrimitive || value is string ? value.ToString() : value.GetType().Name + "(" + value + ")";
+			}
+		}
+
 		private bool Is(string name)
 		{
 			return values.TryGetValue(name, out string value) && int.TryParse(value, out int at) && at == frame;
+		}
+
+		/// <summary>name=N|M|...: true at each listed frame.</summary>
+		private bool IsListed(string name)
+		{
+			if (!values.TryGetValue(name, out string value))
+			{
+				return false;
+			}
+
+			foreach (string item in value.Split('|'))
+			{
+				if (int.TryParse(item, out int at) && at == frame)
+				{
+					return true;
+				}
+			}
+
+			return false;
 		}
 
 		private static GameObject Find(Scene scene, string name)

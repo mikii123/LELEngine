@@ -103,6 +103,32 @@ namespace LELEngine
 			return new ImageData(Width, Height, bytes);
 		}
 
+		/// <summary>Swaps the rows top to bottom in this image's own pixels.</summary>
+		public void FlipVerticalInPlace()
+		{
+			int stride = Width * 4;
+			if (IsHdr)
+			{
+				var row = new float[stride];
+				for (int top = 0, bottom = Height - 1; top < bottom; top++, bottom--)
+				{
+					Array.Copy(FloatPixels, top * stride, row, 0, stride);
+					Array.Copy(FloatPixels, bottom * stride, FloatPixels, top * stride, stride);
+					Array.Copy(row, 0, FloatPixels, bottom * stride, stride);
+				}
+
+				return;
+			}
+
+			var bytes = new byte[stride];
+			for (int top = 0, bottom = Height - 1; top < bottom; top++, bottom--)
+			{
+				Array.Copy(Pixels, top * stride, bytes, 0, stride);
+				Array.Copy(Pixels, bottom * stride, Pixels, top * stride, stride);
+				Array.Copy(bytes, 0, Pixels, bottom * stride, stride);
+			}
+		}
+
 		public ImageData Rotate180()
 		{
 			int count = Width * Height;
@@ -456,6 +482,13 @@ namespace LELEngine
 				texture.SetSamplerState(FilterMode.Trilinear, TextureWrap.Clamp, 1);
 				lock (sync)
 				{
+					// The loading thread and the main thread may both have read the file: the first one kept wins.
+					Texture2D raced;
+					if (uiTextures.TryGetValue(key, out raced))
+					{
+						return raced;
+					}
+
 					uiTextures[key] = texture;
 				}
 
@@ -558,18 +591,29 @@ namespace LELEngine
 		/// </summary>
 		internal static ImageData Decode(string absolutePath, bool flipVertical, byte[] file = null)
 		{
-			StbImage.stbi_set_flip_vertically_on_load(flipVertical ? 1 : 0);
+			// stb's flip switch is one global for every thread (scenes and resources decode on the loading thread while
+			// the main thread decodes too): it stays off and the rows are flipped here.
+			ImageData decoded;
 			using (Stream stream = file != null ? new MemoryStream(file, false) : File.OpenRead(absolutePath))
 			{
 				if (absolutePath.EndsWith(".hdr", StringComparison.OrdinalIgnoreCase))
 				{
 					ImageResultFloat hdr = ImageResultFloat.FromStream(stream, ColorComponents.RedGreenBlueAlpha);
-					return new ImageData(hdr.Width, hdr.Height, hdr.Data);
+					decoded = new ImageData(hdr.Width, hdr.Height, hdr.Data);
 				}
-
-				ImageResult image = ImageResult.FromStream(stream, ColorComponents.RedGreenBlueAlpha);
-				return new ImageData(image.Width, image.Height, image.Data);
+				else
+				{
+					ImageResult image = ImageResult.FromStream(stream, ColorComponents.RedGreenBlueAlpha);
+					decoded = new ImageData(image.Width, image.Height, image.Data);
+				}
 			}
+
+			if (flipVertical)
+			{
+				decoded.FlipVerticalInPlace();
+			}
+
+			return decoded;
 		}
 
 		/// <summary>The faces of a cubemap image in GL order, each with its top row first; null when the layout does not fit the image.</summary>
@@ -935,6 +979,68 @@ namespace LELEngine
 			new[] { "_pz", "_posz", "_front" },
 			new[] { "_nz", "_negz", "_back" }
 		};
+
+		/// <summary>
+		///     The image files an image asset is built from (root-relative): the file itself, plus the other faces of a
+		///     six-file cubemap or the other slices of a numbered-files volume.
+		/// </summary>
+		public static List<string> GetSourceFiles(string assetPath)
+		{
+			var files = new List<string> { assetPath };
+			TextureImporter importer = GetImporter(assetPath);
+			string absolute = AssetDatabase.ToAbsolute(assetPath);
+			string folder = Path.GetDirectoryName(absolute) ?? "";
+			string extension = Path.GetExtension(absolute);
+			string stem = Path.GetFileNameWithoutExtension(absolute);
+			if (importer.shape == TextureImporterShape.Cube && importer.cubemapLayout == CubemapLayout.SixFiles)
+			{
+				string baseName = stem;
+				foreach (string[] suffixes in FaceSuffixes)
+				{
+					foreach (string suffix in suffixes)
+					{
+						if (stem.EndsWith(suffix, StringComparison.OrdinalIgnoreCase))
+						{
+							baseName = stem.Substring(0, stem.Length - suffix.Length);
+						}
+					}
+				}
+
+				foreach (string[] suffixes in FaceSuffixes)
+				{
+					foreach (string suffix in suffixes)
+					{
+						string candidate = Path.Combine(folder, baseName + suffix + extension);
+						if (File.Exists(candidate))
+						{
+							files.Add(AssetDatabase.ToAssetPath(candidate));
+						}
+					}
+				}
+			}
+			else if (importer.shape == TextureImporterShape.Texture3D && importer.volumeSource == Texture3DSource.NumberedFiles)
+			{
+				int digits = stem.Length;
+				while (digits > 0 && char.IsDigit(stem[digits - 1]))
+				{
+					digits--;
+				}
+
+				string baseName = stem.Substring(0, digits).TrimEnd('_', '-', '.');
+				foreach (string file in Directory.GetFiles(folder, "*" + extension))
+				{
+					string otherStem = Path.GetFileNameWithoutExtension(file);
+					if (otherStem.StartsWith(baseName, StringComparison.OrdinalIgnoreCase) && int.TryParse(otherStem.Substring(baseName.Length).TrimStart('_', '-', '.'), out _))
+					{
+						files.Add(AssetDatabase.ToAssetPath(file));
+					}
+				}
+			}
+
+			var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+			files.RemoveAll(path => path == null || !seen.Add(path));
+			return files;
+		}
 
 		/// <summary>
 		///     The six faces from files next to <paramref name="absolute" /> that share its base name plus a face suffix;

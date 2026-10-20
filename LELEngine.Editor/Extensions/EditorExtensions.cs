@@ -328,7 +328,8 @@ namespace LELEngine.Editor
 				changedComponents.Clear();
 			}
 
-			GameObject selected = editor.Selected;
+			// The inspector may be locked on another object than the selection: its editors stay.
+			GameObject selected = editor.InspectedObject;
 			if (liveEditors.Count > 0)
 			{
 				DisposeEditors(component => selected == null || component.gameObject != selected || !selected.Components.Contains(component));

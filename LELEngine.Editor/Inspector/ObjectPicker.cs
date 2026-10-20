@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using Hexa.NET.ImGui;
+using LELEngine.Serialization;
 using NVector2 = System.Numerics.Vector2;
 
 namespace LELEngine.Editor
@@ -124,8 +125,10 @@ namespace LELEngine.Editor
 	}
 
 	/// <summary>
-	///     The "Select Asset" window of object fields (Unity's object picker): lists the project's assets of the
-	///     field's type with a search box and thumbnails; a click assigns, a double click also closes.
+	///     The "Select" window of object fields (Unity's object picker): the scene objects (Scene tab) and the project
+	///     assets (Assets tab) that fit the field's type, with a search box and thumbnails. An interface field lists
+	///     the components implementing it and the ScriptableObject assets implementing it. A click assigns, a double
+	///     click also closes.
 	/// </summary>
 	internal static class ObjectPicker
 	{
@@ -136,38 +139,49 @@ namespace LELEngine.Editor
 			public string Path;
 			public string SubAsset;
 			public string Label;
+			public string Detail;
+			public IconKind Icon;
+
+			/// <summary>Scene entries: the GameObject or component.</summary>
+			public object Object;
 		}
 
 		private static bool open;
 		private static bool focusSearch;
 		private static uint ownerKey;
 		private static Type type;
-		private static Func<string, bool> filter;
+		private static Scene scene;
 		private static string search = "";
-		private static List<Entry> entries;
+		private static List<Entry> assetEntries;
+		private static List<Entry> sceneEntries;
 		private static int listedVersion = -1;
+		private static int listedSceneVersion = -1;
+		private static bool showScene;
+		private static bool selectSceneTab;
 		private static object result;
 		private static bool hasResult;
-		private static string currentPath;
-		private static string currentSubAsset;
+		private static object current;
 
 		#endregion
 
 		#region PublicMethods
 
 		/// <summary>Opens the picker for an object field; results are collected with <see cref="TakeResult" />.</summary>
-		public static void Open(uint key, Type assetType, object current, Func<string, bool> pathFilter)
+		public static void Open(uint key, Type declaredType, object currentValue, Scene currentScene)
 		{
 			ownerKey = key;
-			type = assetType;
-			filter = pathFilter;
+			type = declaredType;
+			scene = currentScene;
+			current = currentValue;
 			open = true;
 			focusSearch = true;
 			search = "";
-			entries = null;
+			assetEntries = null;
+			sceneEntries = null;
 			hasResult = false;
-			currentPath = (current as IAsset)?.AssetPath;
-			currentSubAsset = (current as IAsset)?.SubAssetName;
+			// Scene objects first for fields of scene types (and for references already pointing into the scene).
+			showScene = !ShowsAssets(declaredType) || currentValue is GameObject || currentValue is Behaviour;
+			selectSceneTab = showScene;
 		}
 
 		/// <summary>True once per selection made for the field with this key (the value may be null: "None").</summary>
@@ -193,7 +207,14 @@ namespace LELEngine.Editor
 				return;
 			}
 
-			ImGui.SetNextWindowSize(new NVector2(420, 480), ImGuiCond.FirstUseEver);
+			if (scene != null && scene != editor.Scene)
+			{
+				// The scene was replaced (play mode, a reload): its objects are not offered any more.
+				Close();
+				return;
+			}
+
+			ImGui.SetNextWindowSize(new NVector2(440, 500), ImGuiCond.FirstUseEver);
 			ImGui.SetNextWindowPos(EditorGui.ViewportCenter(), ImGuiCond.FirstUseEver, new NVector2(0.5f, 0.5f));
 			bool stillOpen = open;
 			if (ImGui.Begin("Select " + TypeLabel(type) + "###object_picker", ref stillOpen))
@@ -211,176 +232,22 @@ namespace LELEngine.Editor
 			ImGui.End();
 			if (!stillOpen)
 			{
-				open = false;
+				Close();
 			}
 		}
 
 		public static void Close()
 		{
 			open = false;
+			scene = null;
+			current = null;
+			sceneEntries = null;
+			assetEntries = null;
 		}
 
 		public static string TypeLabel(Type assetType)
 		{
-			if (assetType == null)
-			{
-				return "Asset";
-			}
-
-			return assetType == typeof(Shaders.ShaderProgram) ? "Shader" : assetType.Name;
-		}
-
-		#endregion
-
-		#region PrivateMethods
-
-		private static void DrawContent(EditorApplication editor)
-		{
-			if (focusSearch)
-			{
-				ImGui.SetKeyboardFocusHere();
-				focusSearch = false;
-			}
-
-			ImGui.SetNextItemWidth(-1);
-			ImGui.InputTextWithHint("##search", "Search", ref search, 128);
-			if (ImGui.IsKeyPressed(ImGuiKey.Escape, false))
-			{
-				open = false;
-			}
-
-			if (entries == null || listedVersion != editor.AssetsVersion)
-			{
-				BuildEntries();
-				listedVersion = editor.AssetsVersion;
-			}
-
-			ImGui.Separator();
-			if (ImGui.BeginChild("##list", new NVector2(0, -ImGui.GetFrameHeightWithSpacing())))
-			{
-				float row = 36f;
-				if (ImGui.Selectable("None", currentPath == null, ImGuiSelectableFlags.AllowDoubleClick, new NVector2(0, row)))
-				{
-					Pick(null, null, null);
-					if (ImGui.IsMouseDoubleClicked(ImGuiMouseButton.Left))
-					{
-						open = false;
-					}
-				}
-
-				foreach (Entry entry in entries)
-				{
-					if (search.Length > 0 && entry.Label.IndexOf(search, StringComparison.OrdinalIgnoreCase) < 0)
-					{
-						continue;
-					}
-
-					bool selected = string.Equals(entry.Path, currentPath, StringComparison.OrdinalIgnoreCase) && entry.SubAsset == currentSubAsset;
-					NVector2 start = ImGui.GetCursorScreenPos();
-					if (ImGui.Selectable("##" + entry.Label, selected, ImGuiSelectableFlags.AllowDoubleClick, new NVector2(0, row)))
-					{
-						Pick(entry.Path, entry.SubAsset, entry.Label);
-						if (ImGui.IsMouseDoubleClicked(ImGuiMouseButton.Left))
-						{
-							open = false;
-						}
-					}
-
-					if (ImGui.IsItemHovered())
-					{
-						ImGui.SetTooltip(entry.Path + (entry.SubAsset != null ? " / " + entry.SubAsset : ""));
-					}
-
-					// Thumbnail and label drawn over the selectable.
-					NVector2 end = ImGui.GetCursorScreenPos();
-					ImGui.SetCursorScreenPos(start + new NVector2(4f, 2f));
-					int handle;
-					NVector2 uv0;
-					NVector2 uv1;
-					if (AssetThumbnails.TryGet(entry.Path, out handle, out uv0, out uv1))
-					{
-						ImGui.Image(EditorGui.Texture(handle), new NVector2(row - 4f, row - 4f), uv0, uv1);
-						ImGui.SameLine();
-					}
-					else
-					{
-						ImGui.Dummy(new NVector2(row - 4f, row - 4f));
-						ImGui.SameLine();
-					}
-
-					ImGui.SetCursorPosY(ImGui.GetCursorPosY() + (row - 4f - ImGui.GetTextLineHeight()) * 0.5f);
-					ImGui.TextUnformatted(entry.Label);
-					ImGui.SetCursorScreenPos(end);
-				}
-			}
-
-			ImGui.EndChild();
-			ImGui.TextDisabled(entries.Count + " assets; click assigns, double click closes");
-		}
-
-		private static void BuildEntries()
-		{
-			entries = new List<Entry>();
-			if (type == null)
-			{
-				return;
-			}
-
-			if (type == typeof(Shaders.ShaderProgram))
-			{
-				foreach (string path in AssetDatabase.FindAssets(type))
-				{
-					entries.Add(new Entry { Path = path, Label = Path.GetFileName(path) });
-				}
-
-				foreach (string engine in EngineShaders())
-				{
-					entries.Add(new Entry { Path = engine, Label = engine });
-				}
-
-				return;
-			}
-
-			foreach (string path in AssetDatabase.FindAssets(type))
-			{
-				if (filter != null && !filter(path))
-				{
-					continue;
-				}
-
-				if (type == typeof(Sprite))
-				{
-					IReadOnlyList<Sprite> sprites = TextureAssets.LoadSprites(path);
-					foreach (Sprite sprite in sprites)
-					{
-						entries.Add(new Entry { Path = path, SubAsset = sprite.SubAssetName, Label = Path.GetFileName(path) + (sprite.SubAssetName != null ? " / " + sprite.SubAssetName : "") });
-					}
-
-					continue;
-				}
-
-				if (type == typeof(Mesh))
-				{
-					// Every mesh of a model file (one per node with geometry).
-					try
-					{
-						Model model = ModelAssets.Load(path);
-						foreach (Mesh mesh in model.Meshes)
-						{
-							string label = model.Meshes.Count > 1 ? Path.GetFileName(path) + " / " + mesh.SubAssetName : Path.GetFileName(path);
-							entries.Add(new Entry { Path = path, SubAsset = mesh.SubAssetName, Label = label });
-						}
-					}
-					catch (Exception e)
-					{
-						Debug.LogWarning($"[Editor] Cannot list the meshes of {path}: {e.Message}");
-					}
-
-					continue;
-				}
-
-				entries.Add(new Entry { Path = path, Label = Path.GetFileName(path) });
-			}
+			return ObjectField.TypeLabel(assetType);
 		}
 
 		/// <summary>Engine shaders a material can use (those declaring material properties), as engine-relative paths.</summary>
@@ -410,17 +277,302 @@ namespace LELEngine.Editor
 			return result;
 		}
 
-		private static void Pick(string path, string subAsset, string label)
+		#endregion
+
+		#region PrivateMethods
+
+		/// <summary>Fields of this type take project assets (asset types, ScriptableObjects, interfaces).</summary>
+		private static bool ShowsAssets(Type declaredType)
 		{
-			currentPath = path;
-			currentSubAsset = subAsset;
-			result = path != null ? AssetDatabase.Load(type, path, subAsset) : null;
-			if (path != null && result == null)
+			return declaredType != null && (SerializationUtility.IsAssetType(declaredType) || SerializationUtility.CanHoldReference(declaredType));
+		}
+
+		/// <summary>Fields of this type take scene objects (GameObjects, components, interfaces, EngineObject).</summary>
+		private static bool ShowsScene(Type declaredType)
+		{
+			return declaredType != null && (SerializationUtility.IsReferenceType(declaredType) || SerializationUtility.CanHoldReference(declaredType));
+		}
+
+		private static void DrawContent(EditorApplication editor)
+		{
+			bool assets = ShowsAssets(type);
+			bool sceneObjects = ShowsScene(type) && scene != null;
+			if (assets && sceneObjects)
 			{
-				Debug.LogWarning("[Editor] Cannot load " + label + " as " + TypeLabel(type));
+				if (ImGui.BeginTabBar("##picker_tabs"))
+				{
+					if (ImGui.BeginTabItem("Assets", ImGuiTabItemFlags.None))
+					{
+						showScene = false;
+						ImGui.EndTabItem();
+					}
+
+					if (ImGui.BeginTabItem("Scene", selectSceneTab ? ImGuiTabItemFlags.SetSelected : ImGuiTabItemFlags.None))
+					{
+						showScene = true;
+						ImGui.EndTabItem();
+					}
+
+					selectSceneTab = false;
+					ImGui.EndTabBar();
+				}
+			}
+			else
+			{
+				showScene = sceneObjects;
+			}
+
+			if (focusSearch)
+			{
+				ImGui.SetKeyboardFocusHere();
+				focusSearch = false;
+			}
+
+			ImGui.SetNextItemWidth(-1);
+			ImGui.InputTextWithHint("##search", "Search", ref search, 128);
+			if (ImGui.IsKeyPressed(ImGuiKey.Escape, false))
+			{
+				Close();
 				return;
 			}
 
+			List<Entry> entries;
+			if (showScene)
+			{
+				if (sceneEntries == null || listedSceneVersion != editor.SceneVersion)
+				{
+					sceneEntries = BuildSceneEntries();
+					listedSceneVersion = editor.SceneVersion;
+				}
+
+				entries = sceneEntries;
+			}
+			else
+			{
+				if (assetEntries == null || listedVersion != editor.AssetsVersion)
+				{
+					assetEntries = BuildAssetEntries();
+					listedVersion = editor.AssetsVersion;
+				}
+
+				entries = assetEntries;
+			}
+
+			ImGui.Separator();
+			if (ImGui.BeginChild("##list", new NVector2(0, -ImGui.GetFrameHeightWithSpacing())))
+			{
+				float row = showScene ? ImGui.GetFrameHeight() + 4f : 36f;
+				if (ImGui.Selectable("None", current == null, ImGuiSelectableFlags.AllowDoubleClick, new NVector2(0, row)))
+				{
+					Pick(default);
+					if (ImGui.IsMouseDoubleClicked(ImGuiMouseButton.Left))
+					{
+						Close();
+						return;
+					}
+				}
+
+				for (int i = 0; i < entries.Count; i++)
+				{
+					Entry entry = entries[i];
+					if (search.Length > 0 && entry.Label.IndexOf(search, StringComparison.OrdinalIgnoreCase) < 0)
+					{
+						continue;
+					}
+
+					bool selected = entry.Object != null ? ReferenceEquals(entry.Object, current) : current is IAsset asset && string.Equals(entry.Path, asset.AssetPath, StringComparison.OrdinalIgnoreCase) && entry.SubAsset == asset.SubAssetName;
+					NVector2 start = ImGui.GetCursorScreenPos();
+					if (ImGui.Selectable("##entry" + i, selected, ImGuiSelectableFlags.AllowDoubleClick, new NVector2(0, row)))
+					{
+						bool doubleClick = ImGui.IsMouseDoubleClicked(ImGuiMouseButton.Left);
+						Pick(entry);
+						if (doubleClick)
+						{
+							Close();
+							return;
+						}
+					}
+
+					if (ImGui.IsItemHovered() && entry.Detail != null)
+					{
+						ImGui.SetTooltip(entry.Detail);
+					}
+
+					// Thumbnail or icon, then the label, drawn over the selectable (no items: the layout stays the selectable's).
+					float iconSize = row - 4f;
+					int handle;
+					NVector2 uv0;
+					NVector2 uv1;
+					ImDrawListPtr draw = ImGui.GetWindowDrawList();
+					if (!showScene && AssetThumbnails.TryGet(entry.Path, out handle, out uv0, out uv1))
+					{
+						draw.AddImage(EditorGui.Texture(handle), start + new NVector2(4f, 2f), start + new NVector2(4f + iconSize, 2f + iconSize), uv0, uv1);
+					}
+					else
+					{
+						float small = Math.Min(iconSize, ImGui.GetTextLineHeight() + 2f);
+						EditorIcons.Draw(draw, start + new NVector2(4f + (iconSize - small) * 0.5f, 2f + (iconSize - small) * 0.5f), small, entry.Icon, ImGui.GetColorU32(ImGuiCol.Text, 0.8f));
+					}
+
+					float textY = start.Y + (row - ImGui.GetTextLineHeight()) * 0.5f;
+					draw.AddText(new NVector2(start.X + iconSize + 12f, textY), ImGui.GetColorU32(ImGuiCol.Text), entry.Label);
+				}
+			}
+
+			ImGui.EndChild();
+			ImGui.TextDisabled(entries.Count + (showScene ? " objects" : " assets") + "; click assigns, double click closes");
+		}
+
+		/// <summary>The scene's objects or components fitting the type, in hierarchy order.</summary>
+		private static List<Entry> BuildSceneEntries()
+		{
+			var entries = new List<Entry>();
+			if (scene == null || type == null)
+			{
+				return entries;
+			}
+
+			foreach (GameObject root in scene.GetRootGameObjects())
+			{
+				AddSceneEntries(root, entries);
+			}
+
+			return entries;
+		}
+
+		private static void AddSceneEntries(GameObject go, List<Entry> entries)
+		{
+			if (go.dead || (go.hideFlags & HideFlags.HideInHierarchy) != 0)
+			{
+				return;
+			}
+
+			string path = ObjectField.HierarchyPath(go);
+			if (type.IsInstanceOfType(go))
+			{
+				entries.Add(new Entry { Object = go, Label = go.Name, Detail = path, Icon = IconKind.GameObject });
+			}
+			else
+			{
+				foreach (Behaviour component in go.Components)
+				{
+					if (!component.dead && type.IsInstanceOfType(component))
+					{
+						entries.Add(new Entry { Object = component, Label = go.Name + " (" + component.GetType().Name + ")", Detail = component.GetType().Name + " on " + path, Icon = IconKind.Component });
+					}
+				}
+			}
+
+			foreach (Transform child in go.transform.Children)
+			{
+				AddSceneEntries(child.gameObject, entries);
+			}
+		}
+
+		/// <summary>The project's assets fitting the type (sub-assets listed one by one: sprites of sheets, meshes of models).</summary>
+		private static List<Entry> BuildAssetEntries()
+		{
+			var entries = new List<Entry>();
+			if (type == null || !ShowsAssets(type))
+			{
+				return entries;
+			}
+
+			if (type == typeof(Shaders.ShaderProgram))
+			{
+				foreach (string path in AssetDatabase.FindAssets(type))
+				{
+					entries.Add(new Entry { Path = path, Label = Path.GetFileName(path), Detail = path, Icon = IconKind.Asset });
+				}
+
+				foreach (string engine in EngineShaders())
+				{
+					entries.Add(new Entry { Path = engine, Label = engine, Detail = "Engine shader " + engine, Icon = IconKind.Asset });
+				}
+
+				return entries;
+			}
+
+			foreach (string path in AssetDatabase.FindAssets(type))
+			{
+				if (!DragAndDrop.AcceptsAssetFile(type, path))
+				{
+					continue;
+				}
+
+				if (type == typeof(Sprite))
+				{
+					IReadOnlyList<Sprite> sprites = TextureAssets.LoadSprites(path);
+					foreach (Sprite sprite in sprites)
+					{
+						entries.Add(new Entry { Path = path, SubAsset = sprite.SubAssetName, Label = Path.GetFileName(path) + (sprite.SubAssetName != null ? " / " + sprite.SubAssetName : ""), Detail = path, Icon = IconKind.Asset });
+					}
+
+					continue;
+				}
+
+				if (type == typeof(Mesh))
+				{
+					// Every mesh of a model file (one per node with geometry).
+					try
+					{
+						Model model = ModelAssets.Load(path);
+						foreach (Mesh mesh in model.Meshes)
+						{
+							string label = model.Meshes.Count > 1 ? Path.GetFileName(path) + " / " + mesh.SubAssetName : Path.GetFileName(path);
+							entries.Add(new Entry { Path = path, SubAsset = mesh.SubAssetName, Label = label, Detail = path, Icon = IconKind.Asset });
+						}
+					}
+					catch (Exception e)
+					{
+						Debug.LogWarning($"[Editor] Cannot list the meshes of {path}: {e.Message}");
+					}
+
+					continue;
+				}
+
+				if (ScriptableObjectAssets.IsAssetFile(path))
+				{
+					string stored = ScriptableObjectAssets.GetStoredType(path)?.Name ?? "?";
+					entries.Add(new Entry { Path = path, Label = Path.GetFileNameWithoutExtension(path) + "  (" + stored + ")", Detail = path, Icon = IconKind.ScriptableObject });
+					continue;
+				}
+
+				entries.Add(new Entry { Path = path, Label = Path.GetFileName(path), Detail = path, Icon = IconKind.Asset });
+			}
+
+			return entries;
+		}
+
+		private static void Pick(Entry entry)
+		{
+			if (entry.Object != null)
+			{
+				current = entry.Object;
+				result = entry.Object;
+				hasResult = true;
+				return;
+			}
+
+			if (entry.Path == null)
+			{
+				current = null;
+				result = null;
+				hasResult = true;
+				return;
+			}
+
+			object loaded = SerializationUtility.CanHoldReference(type)
+				? AssetDatabase.LoadMainAsset(entry.Path, entry.SubAsset)
+				: AssetDatabase.Load(type, entry.Path, entry.SubAsset);
+			if (loaded == null || !type.IsInstanceOfType(loaded))
+			{
+				Debug.LogWarning("[Editor] Cannot load " + entry.Label + " as " + TypeLabel(type));
+				return;
+			}
+
+			current = loaded;
+			result = loaded;
 			hasResult = true;
 		}
 
@@ -428,8 +580,9 @@ namespace LELEngine.Editor
 	}
 
 	/// <summary>
-	///     Unity-style object field: thumbnail and name of the referenced asset, a picker button and a drop target
-	///     for files dragged from the project panel.
+	///     Asset reference field of the editor's own inspectors (material textures, VFX properties, the splash logo):
+	///     an <see cref="ObjectField" /> (drag and drop, picker, ping); image files are offered for the field's texture
+	///     kind only.
 	/// </summary>
 	internal static class AssetField
 	{
@@ -438,93 +591,7 @@ namespace LELEngine.Editor
 		/// <summary>Draws the field in the current line (fills the available width); true when the value changed.</summary>
 		public static bool Draw(Type type, ref object value, Func<string, bool> pathFilter = null)
 		{
-			bool changed = false;
-			uint key = ImGui.GetID("##asset_field");
-			float height = ImGui.GetFrameHeight();
-			float buttonWidth = height * 1.4f;
-			float width = ImGui.CalcItemWidth();
-			if (width <= 0f)
-			{
-				width = ImGui.GetContentRegionAvail().X;
-			}
-
-			var asset = value as IAsset;
-			string label = asset != null ? Path.GetFileName(asset.AssetPath ?? "runtime") + (asset.SubAssetName != null ? " / " + asset.SubAssetName : "") : "None (" + ObjectPicker.TypeLabel(type) + ")";
-
-			// Framed label (looks like an input field).
-			NVector2 start = ImGui.GetCursorScreenPos();
-			float labelWidth = Math.Max(10f, width - buttonWidth - ImGui.GetStyle().ItemSpacing.X);
-			ImDrawListPtr draw = ImGui.GetWindowDrawList();
-			draw.AddRectFilled(start, start + new NVector2(labelWidth, height), ImGui.GetColorU32(ImGuiCol.FrameBg), ImGui.GetStyle().FrameRounding);
-			ImGui.InvisibleButton("##asset_label", new NVector2(labelWidth, height));
-			bool hovered = ImGui.IsItemHovered();
-			if (hovered && asset?.AssetPath != null)
-			{
-				ImGui.SetTooltip(asset.AssetPath);
-			}
-
-			float textX = start.X + 6f;
-			int handle;
-			NVector2 uv0;
-			NVector2 uv1;
-			if (value is Texture texture && AssetThumbnails.TryGet(texture, out handle, out uv0, out uv1))
-			{
-				float size = height - 4f;
-				draw.AddImage(EditorGui.Texture(handle), start + new NVector2(2f, 2f), start + new NVector2(2f + size, 2f + size), uv0, uv1);
-				textX += size + 2f;
-			}
-			else if (value is Sprite sprite && AssetThumbnails.TryGet(sprite.texture, out handle, out uv0, out uv1))
-			{
-				float size = height - 4f;
-				OpenTK.Mathematics.Vector4 uv = sprite.uv;
-				draw.AddImage(EditorGui.Texture(handle), start + new NVector2(2f, 2f), start + new NVector2(2f + size, 2f + size), new NVector2(uv.X, uv.W), new NVector2(uv.Z, uv.Y));
-				textX += size + 2f;
-			}
-
-			uint textColor = ImGui.GetColorU32(asset != null ? ImGuiCol.Text : ImGuiCol.TextDisabled);
-			draw.PushClipRect(start, start + new NVector2(labelWidth - 4f, height), true);
-			draw.AddText(new NVector2(textX, start.Y + (height - ImGui.GetTextLineHeight()) * 0.5f), textColor, label);
-			draw.PopClipRect();
-
-			// Drop target: files from the project panel.
-			if (ImGui.BeginDragDropTarget())
-			{
-				if (!ImGui.AcceptDragDropPayload(ProjectPanel.DragType).IsNull && ProjectPanel.DraggedAsset != null)
-				{
-					string path = ProjectPanel.DraggedAsset;
-					if (AssetDatabase.AcceptsFile(type, path) && (pathFilter == null || pathFilter(path)))
-					{
-						object loaded = AssetDatabase.Load(type, path);
-						if (loaded != null)
-						{
-							value = loaded;
-							changed = true;
-						}
-					}
-				}
-
-				ImGui.EndDragDropTarget();
-			}
-
-			ImGui.SameLine();
-			if (ImGui.Button("...##pick", new NVector2(buttonWidth, height)))
-			{
-				ObjectPicker.Open(key, type, value, pathFilter);
-			}
-
-			if (ImGui.IsItemHovered())
-			{
-				ImGui.SetTooltip("Select " + ObjectPicker.TypeLabel(type));
-			}
-
-			object picked;
-			if (ObjectPicker.TakeResult(key, out picked))
-			{
-				value = picked;
-				changed = true;
-			}
-
-			return changed;
+			return ObjectField.Draw(type, ref value, null);
 		}
 
 		#endregion

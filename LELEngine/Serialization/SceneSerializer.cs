@@ -197,6 +197,82 @@ namespace LELEngine.Serialization
 			return scene;
 		}
 
+		/// <summary>
+		///     The scene's data without resolving any type: the settings and every component as generic nodes (build
+		///     dependency scans read the asset references and type names in them).
+		/// </summary>
+		public static List<SerializedNode> ReadGenericNodes(byte[] data)
+		{
+			var nodes = new List<SerializedNode>();
+			if (Documents.IsJson(data))
+			{
+				using (var reader = new JsonDocumentReader(data, null))
+				{
+					JsonElement root = reader.Root;
+					JsonElement value;
+					if (root.TryGetProperty("settings", out value) && value.ValueKind == JsonValueKind.Object)
+					{
+						nodes.Add(reader.ReadGenericObject(value));
+					}
+
+					if (root.TryGetProperty("gameObjects", out value) && value.ValueKind == JsonValueKind.Array)
+					{
+						foreach (JsonElement entry in value.EnumerateArray())
+						{
+							JsonElement components;
+							if (entry.ValueKind != JsonValueKind.Object || !entry.TryGetProperty("components", out components) || components.ValueKind != JsonValueKind.Array)
+							{
+								continue;
+							}
+
+							foreach (JsonElement component in components.EnumerateArray())
+							{
+								if (component.ValueKind == JsonValueKind.Object)
+								{
+									nodes.Add(reader.ReadGenericObject(component));
+								}
+							}
+						}
+					}
+				}
+
+				return nodes;
+			}
+
+			var binary = new BinaryDocumentReader(data, null);
+			ByteReader body = binary.Body;
+			body.ReadInt32();
+			if (binary.ReadBoxed(ValueTag.Object, ValueTag.Null, null, null, 0) is SerializedNode settings)
+			{
+				nodes.Add(settings);
+			}
+
+			int count = body.ReadInt32();
+			for (int i = 0; i < count; i++)
+			{
+				body.ReadUInt64();
+				body.ReadInt32();
+				body.ReadBool();
+				body.ReadUInt64();
+				body.ReadInt32();
+				if (binary.Version >= 2)
+				{
+					body.ReadInt32();
+				}
+
+				int componentCount = body.ReadInt32();
+				for (int c = 0; c < componentCount; c++)
+				{
+					int typeId = body.ReadInt32();
+					body.ReadUInt64();
+					body.ReadBool();
+					nodes.Add(binary.ReadGenericBlock(typeId));
+				}
+			}
+
+			return nodes;
+		}
+
 		// ---------------------------------------------------------------- generic conversion (no types)
 
 		/// <summary>Re-encodes a JSON scene as binary without resolving any type (game builds).</summary>

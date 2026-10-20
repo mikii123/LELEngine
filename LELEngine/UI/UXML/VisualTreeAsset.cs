@@ -190,7 +190,108 @@ namespace LELEngine.UIElements
 
 		#endregion
 
+		#region InternalMethods
+
+		/// <summary>
+		///     The style sheets and templates the document uses, and the assets instantiating it loads: url() / resource()
+		///     of style attributes and attribute values naming UI asset files (loaded here, so a document read on the
+		///     loading thread instantiates from the caches).
+		/// </summary>
+		internal void CollectReferencedAssets(Action<object> found)
+		{
+			foreach (StyleSheet sheet in stylesheets)
+			{
+				found(sheet);
+			}
+
+			foreach (VisualTreeAsset template in templates.Values)
+			{
+				found(template);
+			}
+
+			foreach (UxmlNode root in roots)
+			{
+				CollectNodeAssets(root, found);
+			}
+		}
+
+		/// <summary>
+		///     Loading thread: every attribute value of the document and of its templates goes to <paramref name="text" />
+		///     (the characters its UI shows: texts, labels; the font styles of style attributes), and their element types
+		///     are resolved (the registry's reflection runs here, not when the main thread instantiates the document).
+		/// </summary>
+		internal void WarmUp(Action<string> text, HashSet<VisualTreeAsset> visited)
+		{
+			if (!visited.Add(this))
+			{
+				return;
+			}
+
+			foreach (UxmlNode root in roots)
+			{
+				WarmUpNode(root, text);
+			}
+
+			foreach (VisualTreeAsset template in templates.Values)
+			{
+				template.WarmUp(text, visited);
+			}
+		}
+
+		#endregion
+
 		#region PrivateMethods
+
+		private void CollectNodeAssets(UxmlNode node, Action<object> found)
+		{
+			foreach (StyleSheet sheet in node.styleSheets)
+			{
+				found(sheet);
+			}
+
+			foreach (KeyValuePair<string, string> pair in node.attributes)
+			{
+				if (pair.Key == "style")
+				{
+					StyleSheetParser.CollectResources(pair.Value, AssetPath, found);
+				}
+				else if (UIAssets.IsResourceFile(pair.Value))
+				{
+					object asset = UIAssets.LoadResource(ResolveSourcePath(pair.Value, AssetPath));
+					if (asset != null)
+					{
+						found(asset);
+					}
+				}
+			}
+
+			foreach (UxmlNode child in node.children)
+			{
+				CollectNodeAssets(child, found);
+			}
+		}
+
+		private static void WarmUpNode(UxmlNode node, Action<string> text)
+		{
+			if (!string.Equals(node.typeName, "Instance", StringComparison.Ordinal))
+			{
+				Type type = UxmlRegistry.Resolve(node.typeName);
+				if (type != null)
+				{
+					UxmlRegistry.GetInfo(type);
+				}
+			}
+
+			foreach (KeyValuePair<string, string> pair in node.attributes)
+			{
+				text(pair.Value);
+			}
+
+			foreach (UxmlNode child in node.children)
+			{
+				WarmUpNode(child, text);
+			}
+		}
 
 		// ------------------------------------------------------------------ parsing
 

@@ -47,27 +47,39 @@ namespace LELEngine.Serialization
 
 		/// <summary>
 		///     [Serializable] class or struct, stored by value with its runtime type: a field declared as a base class or
-		///     interface holds any serializable subtype.
+		///     interface holds any serializable subtype. A slot declared as an interface or <see cref="EngineObject" />
+		///     may instead hold a reference: a component or GameObject of the same scene, or a ScriptableObject asset
+		///     (see <see cref="BinaryDocument" /> for the encodings).
 		/// </summary>
 		Object,
 
-		/// <summary>One-dimensional array or List&lt;T&gt; (element tag follows).</summary>
+		/// <summary>One-dimensional array or List&lt;T&gt; (element tag follows; elements may be collections themselves).</summary>
 		Array,
 
 		/// <summary>GameObject or component of the same scene, by id.</summary>
 		SceneRef,
 
 		/// <summary>Asset file (<see cref="IAsset" />) by GUID and path.</summary>
-		Asset
+		Asset,
+
+		/// <summary>Dictionary&lt;K, V&gt;: the key and value encodings are stored with every value (the schema records the value's).</summary>
+		Dictionary
 	}
 
 	/// <summary>
 	///     Which fields are serialized (Unity rules): instance fields that are public or marked
 	///     <see cref="SerializeField" />, not <see cref="NonSerializedAttribute" />, not readonly, of a supported type.
 	///     Supported: primitives, string, enums, OpenTK vectors / quaternion / Color4, one-dimensional arrays and
-	///     List&lt;T&gt; of supported element types, [Serializable] classes and structs (nested; a field may be declared
-	///     as an abstract class or interface and holds any [Serializable] subtype), references to GameObjects and
-	///     components of the same scene, and assets (<see cref="IAsset" />).
+	///     List&lt;T&gt; of supported element types (collections of collections too), Dictionary&lt;K, V&gt; with keys of
+	///     a primitive, string, enum, vector, reference or asset type and any supported value type, [Serializable]
+	///     classes and structs (nested), references to GameObjects and components of the same scene, and assets
+	///     (<see cref="IAsset" />, ScriptableObjects included).
+	///     <para>
+	///         Polymorphism: a field declared as an abstract class or an interface holds an instance of any class that
+	///         derives from or implements it, stored by value with its runtime type. A field declared as an interface (or
+	///         as <see cref="EngineObject" />) may also hold a reference: a component or GameObject of the same scene, or
+	///         a ScriptableObject asset implementing it.
+	///     </para>
 	///
 	///     The per-type field cache (with compiled field accessors) holds game types; <see cref="ClearCache" /> must
 	///     run before a game assembly is unloaded.
@@ -134,10 +146,20 @@ namespace LELEngine.Serialization
 			return typeof(IAsset).IsAssignableFrom(type);
 		}
 
-		/// <summary>A [Serializable] class or struct stored by value (nested object).</summary>
+		/// <summary>A [Serializable] class or struct stored by value (nested object), or a polymorphic slot.</summary>
 		public static bool IsObjectType(Type type)
 		{
 			return TagOf(type, out _) == ValueTag.Object;
+		}
+
+		/// <summary>
+		///     An Object slot that may hold a reference instead of an inline instance: an interface (a component or a
+		///     ScriptableObject implementing it) or <see cref="EngineObject" /> itself (any GameObject, component or
+		///     ScriptableObject).
+		/// </summary>
+		public static bool CanHoldReference(Type declaredType)
+		{
+			return declaredType != null && (declaredType.IsInterface || declaredType == typeof(EngineObject));
 		}
 
 		/// <summary>Element type of an array or List&lt;T&gt;, else null.</summary>
@@ -154,6 +176,69 @@ namespace LELEngine.Serialization
 			}
 
 			return null;
+		}
+
+		/// <summary>Key and value types of a Dictionary&lt;K, V&gt;; false for other types.</summary>
+		public static bool GetDictionaryTypes(Type type, out Type keyType, out Type valueType)
+		{
+			if (type != null && type.IsGenericType && type.GetGenericTypeDefinition() == typeof(Dictionary<,>))
+			{
+				Type[] arguments = type.GetGenericArguments();
+				keyType = arguments[0];
+				valueType = arguments[1];
+				return true;
+			}
+
+			keyType = null;
+			valueType = null;
+			return false;
+		}
+
+		public static bool IsDictionaryType(Type type)
+		{
+			return GetDictionaryTypes(type, out _, out _);
+		}
+
+		/// <summary>
+		///     Types a dictionary key may have: primitives, strings, enums, vectors, references and assets (values
+		///     with a stable identity; inline objects and collections are left out).
+		/// </summary>
+		public static bool IsSupportedKey(Type type)
+		{
+			if (type.IsPrimitive || type == typeof(string) || type.IsEnum)
+			{
+				return type != typeof(IntPtr) && type != typeof(UIntPtr);
+			}
+
+			return IsMathType(type) || IsReferenceType(type) || IsAssetType(type);
+		}
+
+		/// <summary>OpenTK vectors, quaternion and Color4 (stored as fixed-size values).</summary>
+		public static bool IsMathType(Type type)
+		{
+			return type == typeof(Vector2) || type == typeof(Vector3) || type == typeof(Vector4) || type == typeof(Quaternion)
+				|| type == typeof(Color4) || type == typeof(Vector2i) || type == typeof(Vector3i) || type == typeof(Vector4i);
+		}
+
+		/// <summary>The encoding of a dictionary type's keys (Null for other types).</summary>
+		public static ValueTag KeyTagOf(Type dictionaryType)
+		{
+			return GetDictionaryTypes(dictionaryType, out Type keyType, out _) ? TagOf(keyType, out _) : ValueTag.Null;
+		}
+
+		/// <summary>
+		///     The encoding to write a collection's elements with when the caller does not know it (an element that is
+		///     itself a collection): taken from the runtime type of the collection.
+		/// </summary>
+		public static ValueTag ElementTagOf(object collection)
+		{
+			if (collection is SerializedArray generic)
+			{
+				return generic.ElementTag;
+			}
+
+			Type element = collection != null ? GetElementType(collection.GetType()) : null;
+			return element != null ? TagOf(element, out _) : ValueTag.Null;
 		}
 
 		/// <summary>The encoding of values of a type; for arrays and lists also the element encoding.</summary>
@@ -208,6 +293,12 @@ namespace LELEngine.Serialization
 				return ValueTag.Array;
 			}
 
+			if (GetDictionaryTypes(type, out _, out Type valueType))
+			{
+				element = TagOf(valueType, out _);
+				return ValueTag.Dictionary;
+			}
+
 			return ValueTag.Object;
 		}
 
@@ -257,32 +348,226 @@ namespace LELEngine.Serialization
 
 		/// <summary>
 		///     The encoding of a field as written in a JSON type table: "Single", "Array&lt;Vector3&gt;",
-		///     "Enum(Standard=0,Lumen=2)", "Array&lt;Enum(A=1,B=2)&gt;".
+		///     "Enum(Standard=0,Lumen=2)", "Array&lt;Enum(A=1,B=2)&gt;", "Dictionary&lt;String,Array&lt;Int32&gt;&gt;".
 		/// </summary>
 		public static string TagSpec(ValueTag tag, ValueTag elementTag, KeyValuePair<string, long>[] enumMembers)
 		{
-			return tag == ValueTag.Array ? "Array<" + SingleTagSpec(elementTag, enumMembers) + ">" : SingleTagSpec(tag, enumMembers);
+			return TagSpec(new SchemaField { Tag = tag, ElementTag = elementTag, EnumMembers = enumMembers });
 		}
 
-		/// <summary>Parses a <see cref="TagSpec" /> string.</summary>
+		/// <summary>The type-table text of a schema field, nested specs of collections included.</summary>
+		public static string TagSpec(SchemaField field)
+		{
+			var builder = new System.Text.StringBuilder();
+			AppendTagSpec(builder, field);
+			return builder.ToString();
+		}
+
+		/// <summary>Parses a <see cref="TagSpec(ValueTag, ValueTag, KeyValuePair{string, long}[])" /> string (the outer level).</summary>
 		public static bool TryParseTagSpec(string spec, out ValueTag tag, out ValueTag elementTag, out KeyValuePair<string, long>[] enumMembers)
 		{
-			tag = ValueTag.Null;
-			elementTag = ValueTag.Null;
-			enumMembers = null;
+			bool parsed = TryParseTagSpec(spec, out SchemaField field);
+			tag = parsed ? field.Tag : ValueTag.Null;
+			elementTag = parsed ? field.ElementTag : ValueTag.Null;
+			enumMembers = parsed ? field.EnumMembers : null;
+			return parsed;
+		}
+
+		/// <summary>Parses a type-table spec with its nested collection specs ("Dictionary&lt;Enum(A=0),Array&lt;Vector3&gt;&gt;").</summary>
+		public static bool TryParseTagSpec(string spec, out SchemaField field)
+		{
+			field = null;
 			if (string.IsNullOrWhiteSpace(spec))
 			{
 				return false;
 			}
 
-			spec = spec.Trim();
-			if (spec.StartsWith("Array<", StringComparison.Ordinal) && spec.EndsWith(">", StringComparison.Ordinal))
+			int position = 0;
+			field = ParseTagSpec(spec, ref position, 0);
+			return field != null;
+		}
+
+		/// <summary>The spec of a collection's elements (a dictionary's values): the nested spec when recorded, else the element tag.</summary>
+		public static SchemaField ElementSpec(SchemaField field)
+		{
+			return field.Element ?? new SchemaField { Tag = field.ElementTag, EnumMembers = field.ElementTag == ValueTag.Enum ? field.EnumMembers : null };
+		}
+
+		/// <summary>The spec of a dictionary's keys.</summary>
+		public static SchemaField KeySpec(SchemaField field)
+		{
+			return field.Key ?? new SchemaField { Tag = field.KeyTag };
+		}
+
+		/// <summary>The schema entry of a field of this type, with nested specs of collections and enum members.</summary>
+		public static SchemaField SchemaOf(string name, Type type, int depth = 0)
+		{
+			var field = new SchemaField { Name = name, Tag = TagOf(type, out ValueTag element), ElementTag = element };
+			if (depth > MaxDepth)
 			{
-				tag = ValueTag.Array;
-				return TryParseSingleTagSpec(spec.Substring(6, spec.Length - 7), out elementTag, out enumMembers);
+				return field;
 			}
 
-			return TryParseSingleTagSpec(spec, out tag, out enumMembers);
+			switch (field.Tag)
+			{
+				case ValueTag.Enum:
+					field.EnumMembers = DocumentValues.EnumMembers(type);
+					break;
+				case ValueTag.Array:
+					SetElementSpec(field, SchemaOf(null, GetElementType(type), depth + 1));
+					break;
+				case ValueTag.Dictionary:
+					GetDictionaryTypes(type, out Type keyType, out Type valueType);
+					field.Key = SchemaOf(null, keyType, depth + 1);
+					field.KeyTag = field.Key.Tag;
+					SetElementSpec(field, SchemaOf(null, valueType, depth + 1));
+					break;
+			}
+
+			return field;
+		}
+
+		/// <summary>
+		///     Sets a collection's element spec: the element tag always, the nested spec when it says more than the tag
+		///     (a collection, enum members); an enum element's members also on the field (the format before nesting).
+		/// </summary>
+		public static void SetElementSpec(SchemaField field, SchemaField element)
+		{
+			field.ElementTag = element.Tag;
+			if (element.Tag == ValueTag.Enum && field.EnumMembers == null)
+			{
+				field.EnumMembers = element.EnumMembers;
+			}
+
+			if (element.Tag == ValueTag.Array || element.Tag == ValueTag.Dictionary || element.EnumMembers != null)
+			{
+				field.Element = element;
+			}
+		}
+
+		private static void AppendTagSpec(System.Text.StringBuilder builder, SchemaField field)
+		{
+			switch (field.Tag)
+			{
+				case ValueTag.Array:
+					builder.Append("Array<");
+					AppendTagSpec(builder, ElementSpec(field));
+					builder.Append('>');
+					return;
+				case ValueTag.Dictionary:
+					builder.Append("Dictionary<");
+					AppendTagSpec(builder, KeySpec(field));
+					builder.Append(',');
+					AppendTagSpec(builder, ElementSpec(field));
+					builder.Append('>');
+					return;
+				default:
+					builder.Append(SingleTagSpec(field.Tag, field.Tag == ValueTag.Enum ? field.EnumMembers : null));
+					return;
+			}
+		}
+
+		private static SchemaField ParseTagSpec(string spec, ref int position, int depth)
+		{
+			if (depth > MaxDepth)
+			{
+				return null;
+			}
+
+			SkipSpaces(spec, ref position);
+			int start = position;
+			while (position < spec.Length && char.IsLetterOrDigit(spec[position]))
+			{
+				position++;
+			}
+
+			ValueTag tag;
+			if (position == start || !Enum.TryParse(spec.Substring(start, position - start), true, out tag))
+			{
+				return null;
+			}
+
+			var field = new SchemaField { Tag = tag };
+			SkipSpaces(spec, ref position);
+			if (position < spec.Length && spec[position] == '(')
+			{
+				int close = spec.IndexOf(')', position);
+				if (close < 0)
+				{
+					return null;
+				}
+
+				field.EnumMembers = ParseEnumMembers(spec.Substring(position + 1, close - position - 1));
+				position = close + 1;
+				SkipSpaces(spec, ref position);
+			}
+
+			if (position < spec.Length && spec[position] == '<')
+			{
+				position++;
+				SchemaField first = ParseTagSpec(spec, ref position, depth + 1);
+				if (first == null)
+				{
+					return null;
+				}
+
+				SchemaField second = null;
+				SkipSpaces(spec, ref position);
+				if (position < spec.Length && spec[position] == ',')
+				{
+					position++;
+					second = ParseTagSpec(spec, ref position, depth + 1);
+					if (second == null)
+					{
+						return null;
+					}
+
+					SkipSpaces(spec, ref position);
+				}
+
+				if (position >= spec.Length || spec[position] != '>')
+				{
+					return null;
+				}
+
+				position++;
+				if (tag == ValueTag.Dictionary && second != null)
+				{
+					field.Key = first;
+					field.KeyTag = first.Tag;
+					SetElementSpec(field, second);
+				}
+				else
+				{
+					SetElementSpec(field, first);
+				}
+			}
+
+			return field;
+		}
+
+		private static void SkipSpaces(string text, ref int position)
+		{
+			while (position < text.Length && char.IsWhiteSpace(text[position]))
+			{
+				position++;
+			}
+		}
+
+		private static KeyValuePair<string, long>[] ParseEnumMembers(string list)
+		{
+			var members = new List<KeyValuePair<string, long>>();
+			foreach (string entry in list.Split(','))
+			{
+				int eq = entry.IndexOf('=');
+				long value;
+				if (eq > 0 && long.TryParse(entry.Substring(eq + 1).Trim(), System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out value))
+				{
+					members.Add(new KeyValuePair<string, long>(entry.Substring(0, eq).Trim(), value));
+				}
+			}
+
+			return members.Count > 0 ? members.ToArray() : null;
 		}
 
 		private static string SingleTagSpec(ValueTag tag, KeyValuePair<string, long>[] enumMembers)
@@ -304,37 +589,6 @@ namespace LELEngine.Serialization
 			}
 
 			return builder.Append(')').ToString();
-		}
-
-		private static bool TryParseSingleTagSpec(string spec, out ValueTag tag, out KeyValuePair<string, long>[] enumMembers)
-		{
-			enumMembers = null;
-			int open = spec.IndexOf('(');
-			string name = open >= 0 ? spec.Substring(0, open) : spec;
-			if (!Enum.TryParse(name.Trim(), true, out tag))
-			{
-				tag = ValueTag.Null;
-				return false;
-			}
-
-			if (open < 0 || !spec.EndsWith(")", StringComparison.Ordinal))
-			{
-				return true;
-			}
-
-			var members = new List<KeyValuePair<string, long>>();
-			foreach (string entry in spec.Substring(open + 1, spec.Length - open - 2).Split(','))
-			{
-				int eq = entry.IndexOf('=');
-				long value;
-				if (eq > 0 && long.TryParse(entry.Substring(eq + 1).Trim(), System.Globalization.NumberStyles.Integer, System.Globalization.CultureInfo.InvariantCulture, out value))
-				{
-					members.Add(new KeyValuePair<string, long>(entry.Substring(0, eq).Trim(), value));
-				}
-			}
-
-			enumMembers = members.Count > 0 ? members.ToArray() : null;
-			return true;
 		}
 
 		/// <summary>Name shown in the inspector: "m_LocalPosition" -> "Local Position", "moveSpeed" -> "Move Speed".</summary>
@@ -372,8 +626,10 @@ namespace LELEngine.Serialization
 		}
 
 		/// <summary>
-		///     Concrete [Serializable] types assignable to <paramref name="baseType" /> in the registered assemblies
-		///     (inspector choice for abstract / interface fields).
+		///     The classes and structs an inspector can create for a slot of <paramref name="baseType" /> (Odin-style
+		///     polymorphic fields): concrete public types of the registered assemblies that derive from or implement it
+		///     and have a parameterless constructor. Engine objects are left out (components and ScriptableObjects are
+		///     referenced, not created inline), and so are assets, delegates and compiler-generated types.
 		/// </summary>
 		public static List<Type> GetConcreteTypes(Type baseType)
 		{
@@ -392,8 +648,7 @@ namespace LELEngine.Serialization
 
 				foreach (Type type in types)
 				{
-					if (type != null && !type.IsAbstract && !type.IsInterface && !type.IsGenericTypeDefinition && baseType.IsAssignableFrom(type)
-						&& type.IsDefined(typeof(SerializableAttribute), false) && (type.IsValueType || type.GetConstructor(Type.EmptyTypes) != null))
+					if (type != null && IsInlineCreatable(type) && baseType.IsAssignableFrom(type))
 					{
 						result.Add(type);
 					}
@@ -402,6 +657,20 @@ namespace LELEngine.Serialization
 
 			result.Sort((a, b) => string.Compare(a.FullName, b.FullName, StringComparison.Ordinal));
 			return result;
+		}
+
+		/// <summary>A type an Object slot can hold by value and the inspector can create (see <see cref="GetConcreteTypes" />).</summary>
+		public static bool IsInlineCreatable(Type type)
+		{
+			if (type.IsAbstract || type.IsInterface || type.ContainsGenericParameters || type.IsPointer || type.IsArray || type.IsPrimitive || type.IsEnum
+				|| !(type.IsPublic || type.IsNestedPublic) || type == typeof(string)
+				|| typeof(EngineObject).IsAssignableFrom(type) || typeof(IAsset).IsAssignableFrom(type) || typeof(Delegate).IsAssignableFrom(type)
+				|| type.IsDefined(typeof(System.Runtime.CompilerServices.CompilerGeneratedAttribute), false))
+			{
+				return false;
+			}
+
+			return type.IsValueType || type.GetConstructor(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic, null, Type.EmptyTypes, null) != null;
 		}
 
 		#endregion
@@ -420,8 +689,7 @@ namespace LELEngine.Serialization
 				return type != typeof(IntPtr) && type != typeof(UIntPtr);
 			}
 
-			if (type == typeof(Vector2) || type == typeof(Vector3) || type == typeof(Vector4) || type == typeof(Quaternion)
-				|| type == typeof(Color4) || type == typeof(Vector2i) || type == typeof(Vector3i) || type == typeof(Vector4i))
+			if (IsMathType(type))
 			{
 				return true;
 			}
@@ -431,10 +699,16 @@ namespace LELEngine.Serialization
 				return true;
 			}
 
+			// Collections of collections are fine: every array and dictionary value records its own encodings.
 			Type element = GetElementType(type);
 			if (element != null)
 			{
-				return GetElementType(element) == null && IsSupported(element, depth + 1);
+				return IsSupported(element, depth + 1);
+			}
+
+			if (GetDictionaryTypes(type, out Type keyType, out Type valueType))
+			{
+				return IsSupportedKey(keyType) && IsSupported(valueType, depth + 1);
 			}
 
 			if (type.IsArray || type.IsGenericType || type.IsPointer || typeof(Delegate).IsAssignableFrom(type))
@@ -454,8 +728,9 @@ namespace LELEngine.Serialization
 
 		private static SerializedField[] Collect(Type type)
 		{
+			// The engine bases (components, ScriptableObjects) hold no serialized fields of their own.
 			var chain = new List<Type>();
-			for (Type t = type; t != null && t != typeof(object) && t != typeof(Behaviour); t = t.BaseType)
+			for (Type t = type; t != null && t != typeof(object) && t != typeof(Behaviour) && t != typeof(ScriptableObject) && t != typeof(EngineObject); t = t.BaseType)
 			{
 				chain.Add(t);
 			}
@@ -511,7 +786,13 @@ namespace LELEngine.Serialization
 		public readonly string Name;
 		public readonly string DisplayName;
 		public readonly ValueTag Tag;
+
+		/// <summary>Arrays: the element encoding; dictionaries: the value encoding.</summary>
 		public readonly ValueTag ElementTag;
+
+		/// <summary>Dictionaries: the key encoding (Null otherwise).</summary>
+		public readonly ValueTag KeyTag;
+
 		public Type FieldType => Field.FieldType;
 		public bool HideInInspector => Field.IsDefined(typeof(LELEngine.HideInInspector), false);
 
@@ -545,6 +826,7 @@ namespace LELEngine.Serialization
 			Name = name;
 			DisplayName = SerializationUtility.NicifyName(name);
 			Tag = SerializationUtility.TagOf(field.FieldType, out ElementTag);
+			KeyTag = Tag == ValueTag.Dictionary ? SerializationUtility.KeyTagOf(field.FieldType) : ValueTag.Null;
 		}
 
 		#endregion

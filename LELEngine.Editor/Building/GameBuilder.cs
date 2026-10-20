@@ -29,8 +29,10 @@ namespace LELEngine.Editor
 	///                         .NET runtime when the build is self-contained (see <see cref="PlayerFiles" />)
 	///       Shaders/Engine/   engine shader library
 	///       Game.dll          the scripts, compiled in the chosen configuration
-	///       Data/             the project's assets with their .meta files (scripts excluded): documents binary,
-	///                         models imported, images baked to KTX, models' GI distance fields next to them (.sdf)
+	///       Data/             the assets the build uses, with their .meta files: the scenes, everything in Resources
+	///                         folders and what those use (<see cref="BuildDependencies" />; Library/BuildReport.txt
+	///                         lists what went in and what was left out). Documents binary, models imported, images
+	///                         baked to KTX, models' GI distance fields next to them (.sdf)
 	///       ProjectSettings.asset  physics and lighting quality (binary)
 	///       Splash.bmp        the splash screen's logo baked over its background color (when it has one)
 	///       boot.json         start scene, window title, splash screen
@@ -127,41 +129,88 @@ namespace LELEngine.Editor
 				}
 			}
 
-			// 4. Assets (everything but the scripts; the meta files keep the GUIDs the scenes reference). The editor's
-			//    readable JSON documents (scenes, materials, meta files, physics materials) become binary: the player
-			//    loads them without parsing text, and no type has to be loaded to convert them. Model files (.obj, .fbx,
-			//    ...) are written as their imported data under their own names, images as baked KTX textures (BC7 with
-			//    their mip levels: nothing to decode) but for sprites and the images of UI documents (the UI draws
+			// 4. Assets: the scenes, everything in Resources folders and what those use, transitively (the meta files keep
+			//    the GUIDs the scenes reference); the rest of the project is left out. The editor's readable JSON
+			//    documents (scenes, materials, meta files, physics materials, ScriptableObjects) become binary: the
+			//    player loads them without parsing text, and no type has to be loaded to convert them. Model files (.obj,
+			//    .fbx, ...) are written as their imported data under their own names, images as baked KTX textures (BC7
+			//    with their mip levels: nothing to decode) but for sprites and the images of UI documents (the UI draws
 			//    images as they are).
+			var buildScenes = new List<string>(settings.Scenes);
+			if (!buildScenes.Contains(settings.StartScene))
+			{
+				buildScenes.Insert(0, settings.StartScene);
+			}
+
+			log("Collecting the assets the build uses...");
+			BuildDependencies dependencies = BuildDependencies.Collect(project, buildScenes);
+			foreach (string warning in dependencies.Warnings)
+			{
+				log("Warning: " + warning);
+			}
+
+			// The stored types (components, ScriptableObjects, objects of polymorphic fields) must exist in the player.
+			foreach (string problem in dependencies.CheckTypes(hasScripts ? scriptsOutput : null))
+			{
+				log("Warning: " + problem);
+			}
+
+			string reportFile = Path.Combine(project.LibraryPath, "BuildReport.txt");
+			try
+			{
+				Directory.CreateDirectory(project.LibraryPath);
+				File.WriteAllText(reportFile, dependencies.Report(project));
+			}
+			catch (Exception e)
+			{
+				log("Warning: the build report could not be written (" + e.Message + ").");
+			}
+
+			log($"Assets: {dependencies.Included.Count} files ({dependencies.SceneCount} scenes, {dependencies.ResourceCount} in Resources folders, the rest used by them); report: {reportFile}");
+
 			log("Copying assets...");
 			string data = Path.Combine(output, "Data");
+			if (Directory.Exists(data))
+			{
+				// Files of an earlier build the scenes no longer use must not stay loadable.
+				Directory.Delete(data, true);
+			}
+
 			int copied = 0;
 			int converted = 0;
 			int models = 0;
 			var textures = new TextureBakeStats();
-			HashSet<string> uiImages = CollectUiImageNames(project.AssetsPath);
-			foreach (string file in Directory.GetFiles(project.AssetsPath, "*", SearchOption.AllDirectories))
+			var assets = new List<string>(dependencies.Included);
+			assets.Sort(StringComparer.OrdinalIgnoreCase);
+			HashSet<string> uiImages = CollectUiImageNames(assets);
+			foreach (string assetPath in assets)
 			{
-				string relative = Path.GetRelativePath(project.AssetsPath, file);
-				if (relative.EndsWith(".cs", StringComparison.OrdinalIgnoreCase) || relative.EndsWith(".cs.meta", StringComparison.OrdinalIgnoreCase))
+				string file = AssetDatabase.ToAbsolute(assetPath);
+				string relative = assetPath.Replace('/', Path.DirectorySeparatorChar);
+				string target = Path.Combine(data, relative);
+				string meta = file + AssetDatabase.MetaExtension;
+				if (File.Exists(meta) && ConvertDocument(meta, target + AssetDatabase.MetaExtension, relative + AssetDatabase.MetaExtension, log))
 				{
-					continue;
+					converted++;
 				}
 
-				string target = Path.Combine(data, relative);
-				if (TextureAssets.IsImageFile(file) && IsBakedTexture(AssetDatabase.ToAssetPath(file), uiImages))
+				if (TextureAssets.IsImageFile(file) && IsBakedTexture(assetPath, uiImages))
 				{
 					try
 					{
-						byte[] ktx = TextureBaker.Bake(project, AssetDatabase.ToAssetPath(file), out bool fromCache);
+						byte[] ktx = TextureBaker.Bake(project, assetPath, out bool fromCache);
 						Directory.CreateDirectory(Path.GetDirectoryName(target));
 						File.WriteAllBytes(target, ktx);
 						textures.Add(new FileInfo(file).Length, ktx.Length, fromCache, KtxFile.Read(ktx).IsCompressed);
 					}
 					catch (Exception e)
 					{
+						// The player reads the source images then: six-file cubemaps and numbered volumes need their siblings.
 						log("Warning: " + relative + " could not be baked (" + e.Message + "); copied as is.");
-						Copy(file, target);
+						foreach (string source in TextureAssets.GetSourceFiles(assetPath))
+						{
+							Copy(AssetDatabase.ToAbsolute(source), Path.Combine(data, source.Replace('/', Path.DirectorySeparatorChar)));
+						}
 					}
 				}
 				else if (ModelAssets.IsModelFile(file))
@@ -186,15 +235,9 @@ namespace LELEngine.Editor
 				}
 				else if (Documents.IsDocumentFile(file))
 				{
-					try
+					if (ConvertDocument(file, target, relative, log))
 					{
-						Documents.ConvertFile(file, target, DocumentFormat.Binary);
 						converted++;
-					}
-					catch (Exception e)
-					{
-						log("Warning: " + relative + " could not be converted to binary (" + e.Message + "); copied as is.");
-						Copy(file, target);
 					}
 				}
 				else
@@ -211,20 +254,13 @@ namespace LELEngine.Editor
 				log(textures.ToString());
 			}
 
-			// The GUID index: the player reads one file instead of every meta file.
-			AssetDatabase.WriteIndex(Path.Combine(data, AssetDatabase.IndexFileName),
-				path => !path.EndsWith(".cs", StringComparison.OrdinalIgnoreCase));
+			// The GUID index of the shipped assets: the player reads one file instead of every meta file.
+			AssetDatabase.WriteIndex(Path.Combine(data, AssetDatabase.IndexFileName), path => dependencies.Included.Contains(path));
 
 			// 4b. The GI's mesh distance fields at the scales the scenes draw the meshes ("model.ext.sdf" next to each
 			//     model): baked here when this thread has the GL context (batch mode), by the editor before the build
 			//     otherwise; cached in Library.
-			var scenes = new List<string>(settings.Scenes);
-			if (!scenes.Contains(settings.StartScene))
-			{
-				scenes.Insert(0, settings.StartScene);
-			}
-
-			DistanceFieldBaker.Result fields = DistanceFieldBaker.Collect(project, scenes, log);
+			DistanceFieldBaker.Result fields = DistanceFieldBaker.Collect(project, buildScenes, log);
 			foreach (KeyValuePair<string, List<KeyValuePair<string, BakedDistanceField>>> model in fields.Models)
 			{
 				DistanceFieldFile.Write(Path.Combine(data, model.Key) + DistanceFieldFile.Extension, null, model.Value);
@@ -280,25 +316,41 @@ namespace LELEngine.Editor
 			return TextureAssets.GetImporter(assetPath).textureType != TextureImporterType.Sprite;
 		}
 
-		/// <summary>File names of the images referenced by the project's style sheets and UXML documents.</summary>
-		private static HashSet<string> CollectUiImageNames(string assetsPath)
+		/// <summary>File names of the images referenced by the shipped style sheets and UXML documents.</summary>
+		private static HashSet<string> CollectUiImageNames(IEnumerable<string> assetPaths)
 		{
 			var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 			var reference = new Regex(@"(?:url|resource)\(\s*['""]?([^'""\)]+)['""]?\s*\)", RegexOptions.IgnoreCase);
-			foreach (string file in Directory.EnumerateFiles(assetsPath, "*", SearchOption.AllDirectories))
+			foreach (string assetPath in assetPaths)
 			{
-				if (!file.EndsWith(".uss", StringComparison.OrdinalIgnoreCase) && !file.EndsWith(".uxml", StringComparison.OrdinalIgnoreCase))
+				if (!assetPath.EndsWith(".uss", StringComparison.OrdinalIgnoreCase) && !assetPath.EndsWith(".uxml", StringComparison.OrdinalIgnoreCase))
 				{
 					continue;
 				}
 
-				foreach (Match match in reference.Matches(File.ReadAllText(file)))
+				foreach (Match match in reference.Matches(File.ReadAllText(AssetDatabase.ToAbsolute(assetPath))))
 				{
 					names.Add(Path.GetFileName(match.Groups[1].Value.Trim()));
 				}
 			}
 
 			return names;
+		}
+
+		/// <summary>A document converted to binary into the build (copied as is when it cannot be); false when it was copied.</summary>
+		private static bool ConvertDocument(string source, string target, string relative, Action<string> log)
+		{
+			try
+			{
+				Documents.ConvertFile(source, target, DocumentFormat.Binary);
+				return true;
+			}
+			catch (Exception e)
+			{
+				log("Warning: " + relative + " could not be converted to binary (" + e.Message + "); copied as is.");
+				Copy(source, target);
+				return false;
+			}
 		}
 
 		/// <summary>Counts and sizes of the baked textures, for the build log.</summary>

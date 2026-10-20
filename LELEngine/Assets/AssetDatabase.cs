@@ -131,7 +131,11 @@ namespace LELEngine
 			}
 		}
 
-		/// <summary>File extensions of the assets a field of this type accepts (empty when the type is not an asset type).</summary>
+		/// <summary>
+		///     File extensions of the assets a field of this type accepts (empty when the type is not an asset type). A
+		///     ScriptableObject type, an interface or <see cref="EngineObject" /> accepts ".asset" files: which of them fit
+		///     depends on the type each one stores (<see cref="AcceptsFile" />, <see cref="FindAssets" /> check it).
+		/// </summary>
 		public static string[] GetExtensions(Type type)
 		{
 			lock (sync)
@@ -158,6 +162,12 @@ namespace LELEngine
 							}
 						}
 					}
+				}
+
+				// A ScriptableObject class, or a slot a ScriptableObject may fill.
+				if ((typeof(ScriptableObject).IsAssignableFrom(type) || Serialization.SerializationUtility.CanHoldReference(type)) && !union.Contains(ScriptableObjectAssets.Extension))
+				{
+					union.Add(ScriptableObjectAssets.Extension);
 				}
 
 				return union.ToArray();
@@ -189,18 +199,36 @@ namespace LELEngine
 			return null;
 		}
 
-		/// <summary>True when a file with this extension loads as the given type (or a type assignable to it).</summary>
+		/// <summary>
+		///     True when the file loads as the given type (or a type assignable to it): by its extension, and for
+		///     ScriptableObject assets by the type the file stores.
+		/// </summary>
 		public static bool AcceptsFile(Type type, string assetPath)
 		{
+			if (type == null || string.IsNullOrEmpty(assetPath))
+			{
+				return false;
+			}
+
 			foreach (string extension in GetExtensions(type))
 			{
 				if (assetPath.EndsWith(extension, StringComparison.OrdinalIgnoreCase))
 				{
-					return true;
+					return ContentMatches(type, assetPath);
 				}
 			}
 
 			return false;
+		}
+
+		/// <summary>
+		///     Loads the file as what it is: its registered asset type (a ScriptableObject asset as its stored class), or
+		///     a sub-asset of it by name. Null for files that are no asset (scripts, unknown files).
+		/// </summary>
+		public static object LoadMainAsset(string assetPath, string subAsset = null)
+		{
+			Type type = GetAssetType(assetPath);
+			return type != null ? Load(type, assetPath, subAsset) : null;
 		}
 
 		// ---------------------------------------------------------------- identity
@@ -363,10 +391,24 @@ namespace LELEngine
 			}
 		}
 
-		/// <summary>Indexed asset paths of files loadable as the type.</summary>
+		/// <summary>Indexed asset paths of files loadable as the type (ScriptableObject assets: those storing a fitting type).</summary>
 		public static List<string> FindAssets(Type type)
 		{
-			return GetAllAssetPaths(GetExtensions(type));
+			string[] extensions = GetExtensions(type);
+			if (extensions.Length == 0)
+			{
+				return new List<string>();
+			}
+
+			List<string> paths = GetAllAssetPaths(extensions);
+			paths.RemoveAll(path => !ContentMatches(type, path));
+			return paths;
+		}
+
+		/// <summary>A ScriptableObject asset fits a type when the class it stores does; other files fit by their extension.</summary>
+		private static bool ContentMatches(Type type, string assetPath)
+		{
+			return !ScriptableObjectAssets.IsAssetFile(assetPath) || ScriptableObjectAssets.IsOfType(assetPath, type);
 		}
 
 		/// <summary>
@@ -514,6 +556,12 @@ namespace LELEngine
 			}
 
 			AssetTypeInfo info = FindLoader(type, assetPath);
+			if (info == null && (type.IsInterface || type == typeof(EngineObject)))
+			{
+				// An interface / EngineObject slot: the file loads as what it is and must implement the slot's type.
+				info = FindLoader(GetAssetType(assetPath), assetPath);
+			}
+
 			if (info == null)
 			{
 				Debug.LogWarning($"[Assets] No loader for {type.Name} ({assetPath})");
@@ -603,10 +651,16 @@ namespace LELEngine
 			RegisterAssetType(typeof(UIElements.FontAsset), UIElements.UIAssets.FontExtensions, (type, path, sub) => UIElements.UIAssets.Load(type, path));
 			RegisterAssetType(typeof(PhysicsMaterial2D), new[] { PhysicsMaterial2D.Extension }, (type, path, sub) => PhysicsMaterial2D.Load(path));
 			RegisterAssetType(typeof(VFX.VfxGraph), new[] { VFX.VfxGraph.Extension }, (type, path, sub) => VFX.VfxGraph.Load(path));
+			RegisterAssetType(typeof(ScriptableObject), new[] { ScriptableObjectAssets.Extension }, (type, path, sub) => ScriptableObjectAssets.Load(path));
 		}
 
 		private static AssetTypeInfo FindLoader(Type type, string assetPath)
 		{
+			if (type == null)
+			{
+				return null;
+			}
+
 			lock (sync)
 			{
 				// The exact type first (Texture2D), then a registered subtype matching the file (Texture -> images), then a base.

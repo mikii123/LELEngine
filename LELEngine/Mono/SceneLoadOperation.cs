@@ -21,9 +21,10 @@ namespace LELEngine
 	///     meshes uploaded: <see cref="SceneManager.BackgroundLoadingBudget" />), and activated: it joins the loaded
 	///     scenes (Single: in place of them) and its lifecycle starts. With <see cref="AllowActivation" /> off it stays
 	///     loaded but not activated, nothing of it running or drawn, until activation is allowed (<see cref="Activate" />).
-	///     Scenes activate in the order they were requested.
+	///     Scenes activate in the order they were requested. The ScriptableObjects it loads get Awake and OnEnable on the
+	///     main thread once it is prepared; the glyphs of its UI are rasterized while it is read.
 	/// </summary>
-	public sealed class SceneLoadOperation
+	public sealed class SceneLoadOperation : IBackgroundLoad
 	{
 		#region PublicFields
 
@@ -92,6 +93,7 @@ namespace LELEngine
 
 		internal LoadState State => state;
 		internal bool CancelRequested => cancelRequested;
+		bool IBackgroundLoad.CancelRequested => cancelRequested;
 		internal readonly string AbsolutePath;
 
 		#endregion
@@ -101,7 +103,9 @@ namespace LELEngine
 		private volatile LoadState state = LoadState.Queued;
 		private volatile bool cancelRequested;
 		private volatile float readProgress;
+		private readonly bool background;
 		private List<object> assets = new List<object>();
+		private List<ScriptableObject> held;
 		private int prepared;
 		private string readSummary = "";
 		private long readTicks;
@@ -112,12 +116,14 @@ namespace LELEngine
 
 		#region Constructors
 
-		internal SceneLoadOperation(string path, string absolutePath, LoadSceneMode mode, bool allowActivation)
+		/// <param name="background">Read on the loading thread (not by the caller of a synchronous load).</param>
+		internal SceneLoadOperation(string path, string absolutePath, LoadSceneMode mode, bool allowActivation, bool background)
 		{
 			Path = path;
 			AbsolutePath = absolutePath;
 			Mode = mode;
 			AllowActivation = allowActivation;
+			this.background = background;
 		}
 
 		#endregion
@@ -145,30 +151,44 @@ namespace LELEngine
 
 		#region InternalMethods
 
-		/// <summary>Loading thread (or the caller of a synchronous load): reads the scene and records the assets it uses.</summary>
+		/// <summary>
+		///     Loading thread (or the caller of a synchronous load): reads the scene and records the assets it uses; a
+		///     background read holds back the callbacks of the ScriptableObjects it loads and rasterizes the glyphs of its UI.
+		/// </summary>
 		internal void Read()
 		{
 			state = LoadState.Reading;
 			long start = Stopwatch.GetTimestamp();
-			try
+			LoadState next;
+			using (AssetLoadScope scope = AssetLoadScope.Begin(background))
 			{
-				using (AssetLoadScope scope = AssetLoadScope.Begin())
+				try
 				{
 					Scene = Serialization.SceneSerializer.Load(AbsolutePath, progress => readProgress = progress);
-					assets = new List<object>(scope.Assets);
-					readSummary = scope.Summary();
+					var recorded = new List<object>(scope.Assets);
+					int fonts = background ? UIElements.UIAssets.WarmUp(recorded) : 0;
+					assets = recorded;
+					readSummary = scope.Summary() + (fonts > 0 ? $", glyphs of {fonts} font{(fonts == 1 ? "" : "s")}" : "");
+					next = LoadState.Preparing;
+				}
+				catch (Exception e)
+				{
+					Error = e;
+					Scene = null;
+					next = LoadState.Failed;
 				}
 
-				readTicks = Stopwatch.GetTimestamp() - start;
-				state = LoadState.Preparing;
+				// Published with the state: the main thread runs them once the scene is prepared.
+				held = scope.TakeDeferred();
 			}
-			catch (Exception e)
-			{
-				Error = e;
-				Scene = null;
-				readTicks = Stopwatch.GetTimestamp() - start;
-				state = LoadState.Failed;
-			}
+
+			readTicks = Stopwatch.GetTimestamp() - start;
+			state = next;
+		}
+
+		void IBackgroundLoad.Read()
+		{
+			Read();
 		}
 
 		/// <summary>The assets the scene uses (recorded while it was read).</summary>
@@ -198,6 +218,8 @@ namespace LELEngine
 				return false;
 			}
 
+			// The scene's ScriptableObjects are enabled before any of its components wake up.
+			AssetLoadScope.RunDeferred(held);
 			state = LoadState.Loaded;
 			return true;
 		}
@@ -211,6 +233,7 @@ namespace LELEngine
 
 		internal void MarkFailed()
 		{
+			AssetLoadScope.RunDeferred(held);
 			Summary = $"failed after {Milliseconds(readTicks)} ms: {Error?.Message}";
 			Completed?.Invoke(this);
 		}

@@ -10,6 +10,8 @@ namespace LELEngine
 	///     scope is open: a scene load opens one, so the scene manager knows which assets the scene uses (prepared for
 	///     the GPU before the scene activates, released when no loaded scene uses them any more) and how long each kind
 	///     of asset took to load (each load without the assets it loaded in turn: a material without its textures).
+	///     A background load's scope (<see cref="Begin(bool)" />) also holds back the callbacks of the ScriptableObjects
+	///     it loads: they run on the main thread when the load completes (<see cref="TakeDeferred" />).
 	/// </summary>
 	public sealed class AssetLoadScope : IDisposable
 	{
@@ -20,6 +22,9 @@ namespace LELEngine
 
 		/// <summary>Every asset loaded or looked up in the scope, in load order (nested assets before the asset that loaded them finished).</summary>
 		public IReadOnlyList<object> Assets => assets;
+
+		/// <summary>A background load's scope: ScriptableObjects loaded in it get Awake and OnEnable later, on the main thread.</summary>
+		public bool DefersCallbacks { get; }
 
 		#endregion
 
@@ -38,24 +43,29 @@ namespace LELEngine
 		private readonly HashSet<object> seen = new HashSet<object>(ReferenceEqualityComparer.Instance);
 		private readonly Dictionary<string, Category> categories = new Dictionary<string, Category>();
 		private readonly Stack<long> nested = new Stack<long>();
+		private List<ScriptableObject> deferred;
 
 		#endregion
 
 		#region Constructors
 
-		private AssetLoadScope(AssetLoadScope parent)
+		private AssetLoadScope(AssetLoadScope parent, bool defersCallbacks)
 		{
 			this.parent = parent;
+			DefersCallbacks = defersCallbacks;
 		}
 
 		#endregion
 
 		#region PublicMethods
 
-		/// <summary>Opens a scope on this thread; dispose it to close it.</summary>
-		public static AssetLoadScope Begin()
+		/// <summary>
+		///     Opens a scope on this thread; dispose it to close it. <paramref name="background" />: a load off the main
+		///     thread (a scope nested in such a scope is one too).
+		/// </summary>
+		public static AssetLoadScope Begin(bool background = false)
 		{
-			current = new AssetLoadScope(current);
+			current = new AssetLoadScope(current, background || (current != null && current.DefersCallbacks));
 			return current;
 		}
 
@@ -65,6 +75,47 @@ namespace LELEngine
 			{
 				current = parent;
 			}
+
+			// A nested scope's held-back callbacks belong to the load around it.
+			if (parent != null && deferred != null)
+			{
+				foreach (ScriptableObject asset in deferred)
+				{
+					parent.Defer(asset);
+				}
+
+				deferred = null;
+			}
+		}
+
+		/// <summary>
+		///     The ScriptableObjects whose Awake and OnEnable this scope held back (empty when none); the scope forgets
+		///     them. Run them on the main thread with <see cref="RunDeferred" />.
+		/// </summary>
+		public List<ScriptableObject> TakeDeferred()
+		{
+			List<ScriptableObject> taken = deferred ?? new List<ScriptableObject>();
+			deferred = null;
+			return taken;
+		}
+
+		/// <summary>
+		///     Main thread: Awake and OnEnable of ScriptableObjects a background load held back (those that ran meanwhile,
+		///     through a load on the main thread, and unloaded ones are skipped).
+		/// </summary>
+		public static void RunDeferred(List<ScriptableObject> held)
+		{
+			if (held == null)
+			{
+				return;
+			}
+
+			foreach (ScriptableObject asset in held)
+			{
+				ScriptableObjectAssets.EnableHeld(asset);
+			}
+
+			held.Clear();
 		}
 
 		/// <summary>"textures 12: 770 ms, materials 9: 15 ms, ..." (slowest kind first).</summary>
@@ -127,6 +178,16 @@ namespace LELEngine
 			category.Ticks += Math.Max(0, elapsed - inner);
 		}
 
+		/// <summary>Holds back the Awake and OnEnable of a ScriptableObject this background load read (or found still held back).</summary>
+		internal void Defer(ScriptableObject asset)
+		{
+			deferred ??= new List<ScriptableObject>();
+			if (!deferred.Contains(asset))
+			{
+				deferred.Add(asset);
+			}
+		}
+
 		#endregion
 
 		#region PrivateMethods
@@ -148,6 +209,18 @@ namespace LELEngine
 					break;
 				case Sprite sprite:
 					Record(sprite.texture);
+					break;
+				case ScriptableObject scriptableObject:
+					// Its textures, meshes and other assets (loaded once, when the asset itself was).
+					ScriptableObjectAssets.CollectReferencedAssets(scriptableObject, Record);
+					break;
+				case UIElements.StyleSheet sheet:
+					// Imported sheets, url() / resource() textures and fonts.
+					sheet.CollectReferencedAssets(Record);
+					break;
+				case UIElements.VisualTreeAsset tree:
+					// Its sheets and templates, and what its elements' attributes and inline styles load.
+					tree.CollectReferencedAssets(Record);
 					break;
 			}
 		}
@@ -175,6 +248,12 @@ namespace LELEngine
 					return "materials";
 				case Shaders.ShaderProgram _:
 					return "shaders";
+				case ScriptableObject _:
+					return "scriptable objects";
+				case UIElements.StyleSheet _:
+				case UIElements.VisualTreeAsset _:
+				case UIElements.FontAsset _:
+					return "UI";
 				default:
 					return (requested ?? asset.GetType()).Name;
 			}

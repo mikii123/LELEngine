@@ -20,6 +20,9 @@ namespace LELEngine.UIElements
 		private int line = 1;
 		private readonly List<StyleValue> valueBuffer = new List<StyleValue>();
 
+		// Problems go to the sheet only, not to the log (a parse the main thread does again later reports them).
+		private bool quiet;
+
 		#endregion
 
 		#region Constructors
@@ -83,6 +86,30 @@ namespace LELEngine.UIElements
 			var parser = new StyleSheetParser(new StyleSheet { AssetPath = assetPath }, valueText);
 			bool usesVariables;
 			return parser.ParseValues(valueText.Length, out usesVariables);
+		}
+
+		/// <summary>
+		///     Loads the assets the url() / resource() values of a declaration list name (a UXML style attribute read on the
+		///     loading thread: instantiating the document finds them cached) and reports them; problems are not logged.
+		/// </summary>
+		public static void CollectResources(string declarations, string assetPath, Action<object> found)
+		{
+			var parser = new StyleSheetParser(new StyleSheet { AssetPath = assetPath, name = "inline" }, declarations) { quiet = true };
+			foreach (StyleDeclaration declaration in parser.ParseDeclarationList())
+			{
+				if (declaration.values == null)
+				{
+					continue;
+				}
+
+				foreach (StyleValue value in declaration.values)
+				{
+					if (value.reference != null)
+					{
+						found(value.reference);
+					}
+				}
+			}
 		}
 
 		#endregion
@@ -960,7 +987,10 @@ namespace LELEngine.UIElements
 		private void Error(string message, int atLine)
 		{
 			sheet.errors.Add(sheet.name + ":" + atLine + ": " + message);
-			Debug.LogWarning("[USS] " + sheet.name + ":" + atLine + ": " + message);
+			if (!quiet)
+			{
+				Debug.LogWarning("[USS] " + sheet.name + ":" + atLine + ": " + message);
+			}
 		}
 
 		#endregion

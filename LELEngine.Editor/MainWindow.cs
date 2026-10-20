@@ -19,7 +19,7 @@ namespace LELEngine.Editor
 		private EditorApplication editor;
 		private int frame;
 		private readonly string screenshotFolder;
-		private readonly int screenshotFrame = 120;
+		private readonly int[] screenshotFrames = { 120 };
 		private readonly int exitFrame;
 		private readonly FrameDumper screenshotDumper = new FrameDumper();
 
@@ -51,7 +51,7 @@ namespace LELEngine.Editor
 				string name = arg.Substring(0, eq);
 				string value = arg.Substring(eq + 1).Trim('"');
 				if (name == "screenshot") screenshotFolder = value;
-				else if (name == "screenshotframe") int.TryParse(value, out screenshotFrame);
+				else if (name == "screenshotframe") screenshotFrames = Array.ConvertAll(value.Split(',', StringSplitOptions.RemoveEmptyEntries), item => int.TryParse(item, out int at) ? at : -1);
 				else if (name == "exitframe") int.TryParse(value, out exitFrame);
 			}
 		}
@@ -135,11 +135,12 @@ namespace LELEngine.Editor
 			// Other windows of the editor (UI Builder) draw and present themselves now, in their own GL context.
 			editor.RenderExtraWindows((float)e.Time);
 
-			// Testing aid: screenshot=folder screenshotframe=N writes frame N of the window; exitframe=N closes.
+			// Testing aid: screenshot=folder screenshotframe=N writes frame N of the window (screenshotframe=a,b,c: each
+			// into folder/fNNNN); exitframe=N closes.
 			frame++;
-			if (screenshotFolder != null && frame == screenshotFrame)
+			if (screenshotFolder != null && Array.IndexOf(screenshotFrames, frame) >= 0)
 			{
-				screenshotDumper.Start(screenshotFolder, 1);
+				screenshotDumper.Start(screenshotFrames.Length > 1 ? Path.Combine(screenshotFolder, "f" + frame.ToString("0000")) : screenshotFolder, 1);
 				screenshotDumper.Capture(ClientSize.X, ClientSize.Y);
 			}
 

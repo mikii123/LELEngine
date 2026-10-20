@@ -231,6 +231,17 @@ namespace LELEngine.Editor
 				material.Save();
 				editor.NotifySceneChanged();
 			}
+			else if (type == typeof(ScriptableObject))
+			{
+				ScriptableObject asset = ScriptableObjectAssets.Load(assetPath);
+				if (asset != null)
+				{
+					ScriptableObjectAssets.Apply(asset, data);
+					ScriptableObjectAssets.Save(asset);
+					asset.Validate();
+					editor.NotifySceneChanged();
+				}
+			}
 		}
 
 		#endregion
@@ -436,6 +447,10 @@ namespace LELEngine.Editor
 						editor.Undo.Push(new AssetStateRecord { Name = "Edit " + physicsMaterial.name, AssetPath = physicsMaterial.AssetPath, Before = before, After = after });
 						SaveAsset(physicsMaterial);
 						break;
+					case ScriptableObject scriptableObject:
+						editor.Undo.Push(new AssetStateRecord { Name = name ?? "Edit " + scriptableObject.name, AssetPath = scriptableObject.AssetPath, Before = before, After = after });
+						SaveAsset(scriptableObject);
+						break;
 				}
 			}
 
@@ -455,6 +470,9 @@ namespace LELEngine.Editor
 						break;
 					case PhysicsMaterial2D physicsMaterial when physicsMaterial.AssetPath != null:
 						physicsMaterial.Save();
+						break;
+					case ScriptableObject scriptableObject when scriptableObject.AssetPath != null:
+						ScriptableObjectAssets.Save(scriptableObject);
 						break;
 				}
 			}
@@ -490,6 +508,8 @@ namespace LELEngine.Editor
 					return material.ToBytes();
 				case PhysicsMaterial2D physicsMaterial:
 					return Serialization.Documents.WriteObject(physicsMaterial, Serialization.DocumentFormat.Binary);
+				case ScriptableObject scriptableObject:
+					return Serialization.Documents.WriteObject(scriptableObject, Serialization.DocumentFormat.Binary);
 				default:
 					return null;
 			}

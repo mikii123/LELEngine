@@ -22,10 +22,13 @@ namespace LELEngine.Serialization
 	///       ...body laid out by the caller...
 	///       "$types": { "Namespace.Type, Assembly": { "field": "Single" | "Array&lt;Vector3&gt;" | "Enum(A=0,B=1)" | ... } }
 	///     }
-	///     Object value:  { "$type": "Namespace.Type, Assembly", "field": value, ... } or null
+	///     Object value:  { "$type": "Namespace.Type, Assembly", "field": value, ... } or null; an interface / EngineObject
+	///                    slot holding a reference: a scene ref or an asset value as below
 	///     Vectors:       [x, y, z]; colors [r, g, b, a]; quaternions [x, y, z, w]
 	///     Enums:         "Name" (flags: "A, B")
 	///     Arrays:        [ ... ] or, for long arrays of fixed-size elements, { "$bytes": "base64 of the element bytes" }
+	///     Dictionaries:  { "key": value, ... } for string, enum, integer, bool and char keys,
+	///                    [ { "key": k, "value": v }, ... ] for the other key types
 	///     Scene refs:    { "$ref": id } or null;  assets: { "guid": "...", "path": "...", "name": "sub-asset" } or null
 	///     </code>
 	/// </summary>
@@ -298,9 +301,8 @@ namespace LELEngine.Serialization
 			schema = new SchemaType { Name = TypeRegistry.GetName(type), Fields = new SchemaField[fields.Length] };
 			for (int i = 0; i < fields.Length; i++)
 			{
-				SerializedField field = fields[i];
-				Type enumType = field.Tag == ValueTag.Enum ? field.FieldType : field.ElementTag == ValueTag.Enum ? SerializationUtility.GetElementType(field.FieldType) : null;
-				schema.Fields[i] = new SchemaField { Name = field.Name, Tag = field.Tag, ElementTag = field.ElementTag, EnumMembers = DocumentValues.EnumMembers(enumType) };
+				// With the nested specs of collections and the members of enums (typeless conversion reads exactly).
+				schema.Fields[i] = SerializationUtility.SchemaOf(fields[i].Name, fields[i].FieldType);
 			}
 
 			schemasByType[type] = schema;
@@ -323,10 +325,55 @@ namespace LELEngine.Serialization
 			for (int i = 0; i < node.Properties.Count; i++)
 			{
 				SerializedProperty property = node.Properties[i];
-				schema.Fields[i] = new SchemaField { Name = property.Name, Tag = property.Tag, ElementTag = property.ElementTag };
+				schema.Fields[i] = GenericSpec(property.Name, property.Tag, property.ElementTag, property.Value, 0);
 			}
 
 			AddSchema(schema);
+		}
+
+		/// <summary>
+		///     The spec of generic data (no live type): the stored encodings, and for collections of collections the
+		///     nested encodings the data itself carries (taken from its first element).
+		/// </summary>
+		private static SchemaField GenericSpec(string name, ValueTag tag, ValueTag elementTag, object value, int depth)
+		{
+			var field = new SchemaField { Name = name, Tag = tag, ElementTag = elementTag };
+			if (depth > SerializationUtility.MaxDepth)
+			{
+				return field;
+			}
+
+			if (tag == ValueTag.Array && value is SerializedArray array)
+			{
+				field.ElementTag = array.ElementTag;
+				if (array.ElementTag == ValueTag.Array || array.ElementTag == ValueTag.Dictionary)
+				{
+					object first = array.Bytes == null ? array.Items.Find(item => item != null) : null;
+					field.Element = GenericSpec(null, array.ElementTag, ValueTag.Null, first, depth + 1);
+				}
+			}
+			else if (tag == ValueTag.Dictionary && value is SerializedDictionary dictionary)
+			{
+				field.KeyTag = dictionary.KeyTag;
+				field.ElementTag = dictionary.ValueTag;
+				field.Key = new SchemaField { Tag = dictionary.KeyTag };
+				if (dictionary.ValueTag == ValueTag.Array || dictionary.ValueTag == ValueTag.Dictionary)
+				{
+					object first = null;
+					foreach (KeyValuePair<object, object> entry in dictionary.Entries)
+					{
+						if (entry.Value != null)
+						{
+							first = entry.Value;
+							break;
+						}
+					}
+
+					field.Element = GenericSpec(null, dictionary.ValueTag, ValueTag.Null, first, depth + 1);
+				}
+			}
+
+			return field;
 		}
 
 		/// <summary>Writes the serialized fields of <paramref name="target" /> into the JSON object being written.</summary>
@@ -348,18 +395,38 @@ namespace LELEngine.Serialization
 			WriteObjectValue(value, depth);
 		}
 
-		/// <summary>An Object value: null, or an object with "$type" and the fields of the runtime type.</summary>
+		/// <summary>
+		///     An Object value: null, or an object with "$type" and the fields of the runtime type; a GameObject or
+		///     component (interface / EngineObject slots) as { "$ref": id }, a ScriptableObject as its asset reference.
+		/// </summary>
 		public void WriteObjectValue(object value, int depth)
 		{
-			if (value == null || depth >= SerializationUtility.MaxDepth)
+			switch (value)
 			{
-				Json.WriteNullValue();
-				return;
+				case null:
+					Json.WriteNullValue();
+					return;
+				case SerializedNode node:
+					WriteGenericObject(node);
+					return;
+				case ulong sceneId:
+					WriteReference(sceneId);
+					return;
+				case AssetReference assetReference:
+					WriteAsset(assetReference);
+					return;
+				case GameObject _:
+				case Behaviour _:
+					WriteReference(DocumentValues.SceneReferenceId(value, Context));
+					return;
+				case ScriptableObject scriptableObject:
+					WriteAsset(DocumentValues.ReferenceOf(scriptableObject, Context));
+					return;
 			}
 
-			if (value is SerializedNode node)
+			if (depth >= SerializationUtility.MaxDepth)
 			{
-				WriteGenericObject(node);
+				Json.WriteNullValue();
 				return;
 			}
 
@@ -410,7 +477,7 @@ namespace LELEngine.Serialization
 		/// <summary>Writes a value of a known encoding at the current position.</summary>
 		public void WriteValue(object value, ValueTag tag, ValueTag elementTag, int depth)
 		{
-			if (value == null && tag != ValueTag.Object && tag != ValueTag.Array && tag != ValueTag.SceneRef && tag != ValueTag.Asset && tag != ValueTag.String)
+			if (value == null && tag != ValueTag.Object && tag != ValueTag.Array && tag != ValueTag.SceneRef && tag != ValueTag.Asset && tag != ValueTag.String && tag != ValueTag.Dictionary)
 			{
 				// Missing primitive: its default.
 				value = DefaultOf(tag);
@@ -447,7 +514,31 @@ namespace LELEngine.Serialization
 				case ValueTag.Array: WriteArrayValue(value, elementTag, depth); break;
 				case ValueTag.SceneRef: WriteReference(DocumentValues.SceneReferenceId(value, Context)); break;
 				case ValueTag.Asset: WriteAsset(value is AssetReference stored ? stored : DocumentValues.ReferenceOf(value as IAsset, Context)); break;
+				case ValueTag.Dictionary: WriteDictionaryValue(value, depth); break;
 				default: Json.WriteNullValue(); break;
+			}
+		}
+
+		/// <summary>True when keys of this encoding are written as JSON property names (the dictionary is a JSON object).</summary>
+		public static bool IsNameKey(ValueTag keyTag)
+		{
+			switch (keyTag)
+			{
+				case ValueTag.String:
+				case ValueTag.Enum:
+				case ValueTag.Bool:
+				case ValueTag.Char:
+				case ValueTag.SByte:
+				case ValueTag.Byte:
+				case ValueTag.Int16:
+				case ValueTag.UInt16:
+				case ValueTag.Int32:
+				case ValueTag.UInt32:
+				case ValueTag.Int64:
+				case ValueTag.UInt64:
+					return true;
+				default:
+					return false;
 			}
 		}
 
@@ -485,6 +576,16 @@ namespace LELEngine.Serialization
 							present.EnumMembers = field.EnumMembers;
 						}
 
+						if (present.Tag == field.Tag)
+						{
+							present.Element ??= field.Element;
+							present.Key ??= field.Key;
+							if (present.KeyTag == ValueTag.Null)
+							{
+								present.KeyTag = field.KeyTag;
+							}
+						}
+
 						break;
 					}
 				}
@@ -506,7 +607,7 @@ namespace LELEngine.Serialization
 				Json.WriteStartObject(schema.Name);
 				foreach (SchemaField field in schema.Fields)
 				{
-					Json.WriteString(field.Name, SerializationUtility.TagSpec(field.Tag, field.ElementTag, field.EnumMembers));
+					Json.WriteString(field.Name, SerializationUtility.TagSpec(field));
 				}
 
 				Json.WriteEndObject();
@@ -691,6 +792,12 @@ namespace LELEngine.Serialization
 				return;
 			}
 
+			if (elementTag == ValueTag.Null)
+			{
+				// An element of another collection: its own element type decides.
+				elementTag = SerializationUtility.ElementTagOf(value);
+			}
+
 			if (value is SerializedArray generic)
 			{
 				if (generic.Bytes != null)
@@ -748,6 +855,81 @@ namespace LELEngine.Serialization
 			}
 
 			Json.WriteEndArray();
+		}
+
+		private void WriteDictionaryValue(object value, int depth)
+		{
+			if (value == null)
+			{
+				Json.WriteNullValue();
+				return;
+			}
+
+			ValueTag keyTag;
+			ValueTag valueTag;
+			var entries = new List<KeyValuePair<object, object>>();
+			if (value is SerializedDictionary generic)
+			{
+				keyTag = generic.KeyTag;
+				valueTag = generic.ValueTag;
+				entries.AddRange(generic.Entries);
+			}
+			else
+			{
+				SerializationUtility.GetDictionaryTypes(value.GetType(), out Type keyType, out Type valueType);
+				keyTag = SerializationUtility.TagOf(keyType, out _);
+				valueTag = SerializationUtility.TagOf(valueType, out _);
+				foreach (DictionaryEntry entry in (IDictionary)value)
+				{
+					entries.Add(new KeyValuePair<object, object>(entry.Key, entry.Value));
+				}
+			}
+
+			if (IsNameKey(keyTag))
+			{
+				Json.WriteStartObject();
+				foreach (KeyValuePair<object, object> entry in entries)
+				{
+					Json.WritePropertyName(KeyName(entry.Key));
+					WriteValue(entry.Value, valueTag, ValueTag.Null, depth + 1);
+				}
+
+				Json.WriteEndObject();
+				return;
+			}
+
+			Json.WriteStartArray();
+			foreach (KeyValuePair<object, object> entry in entries)
+			{
+				Json.WriteStartObject();
+				Json.WritePropertyName("key");
+				WriteValue(entry.Key, keyTag, ValueTag.Null, depth + 1);
+				Json.WritePropertyName("value");
+				WriteValue(entry.Value, valueTag, ValueTag.Null, depth + 1);
+				Json.WriteEndObject();
+			}
+
+			Json.WriteEndArray();
+		}
+
+		/// <summary>A dictionary key as a JSON property name: strings as they are, enums by name, numbers, bools and chars as text.</summary>
+		private static string KeyName(object key)
+		{
+			switch (key)
+			{
+				case null:
+					return "";
+				case string text:
+					return text;
+				case bool flag:
+					return flag ? "true" : "false";
+				case char c:
+					return c.ToString();
+				case Enum named:
+					return named.ToString();
+				default:
+					return Convert.ToString(key, CultureInfo.InvariantCulture);
+			}
 		}
 
 		private void WriteBulk(ReadOnlySpan<byte> bytes)
@@ -865,12 +1047,11 @@ namespace LELEngine.Serialization
 					{
 						foreach (JsonProperty field in type.Value.EnumerateObject())
 						{
-							ValueTag tag;
-							ValueTag elementTag;
-							KeyValuePair<string, long>[] members;
-							if (field.Value.ValueKind == JsonValueKind.String && SerializationUtility.TryParseTagSpec(field.Value.GetString(), out tag, out elementTag, out members))
+							SchemaField parsed;
+							if (field.Value.ValueKind == JsonValueKind.String && SerializationUtility.TryParseTagSpec(field.Value.GetString(), out parsed))
 							{
-								fields.Add(new SchemaField { Name = field.Name, Tag = tag, ElementTag = elementTag, EnumMembers = members });
+								parsed.Name = field.Name;
+								fields.Add(parsed);
 							}
 						}
 					}
@@ -927,7 +1108,7 @@ namespace LELEngine.Serialization
 
 				try
 				{
-					object current = field.Tag == ValueTag.Object || field.Tag == ValueTag.Array ? field.Accessor.GetBoxed(target) : null;
+					object current = field.Tag == ValueTag.Object || field.Tag == ValueTag.Array || field.Tag == ValueTag.Dictionary ? field.Accessor.GetBoxed(target) : null;
 					object read = ReadBoxed(field.Tag, field.ElementTag, field.FieldType, current, value, depth);
 					if (!ReferenceEquals(read, current) || field.FieldType.IsValueType || read == null)
 					{
@@ -1085,9 +1266,33 @@ namespace LELEngine.Serialization
 
 					break;
 				case ValueTag.Object:
-					if (e.ValueKind == JsonValueKind.Object && !e.TryGetProperty(JsonDocumentFormat.RefKey, out _) && !e.TryGetProperty(JsonDocumentFormat.BytesKey, out _))
+					if (e.ValueKind == JsonValueKind.Object)
 					{
-						return ReadObjectValue(targetType, current, e, depth);
+						// Interface / EngineObject slots hold references too: a scene object or a ScriptableObject asset.
+						JsonElement id;
+						if (e.TryGetProperty(JsonDocumentFormat.RefKey, out id) && id.ValueKind == JsonValueKind.Number)
+						{
+							ulong value = id.TryGetUInt64(out ulong unsigned) ? unsigned : 0;
+							return targetType != null ? DocumentValues.ResolveReference(value, targetType, Context) : value;
+						}
+
+						if ((targetType == null || SerializationUtility.CanHoldReference(targetType)) && IsAssetElement(e))
+						{
+							AssetReference reference = ReadAssetReference(e);
+							return targetType != null ? DocumentValues.LoadAsset(reference, targetType) : reference;
+						}
+
+						if (!e.TryGetProperty(JsonDocumentFormat.BytesKey, out _))
+						{
+							return ReadObjectValue(targetType, current, e, depth);
+						}
+					}
+
+					break;
+				case ValueTag.Dictionary:
+					if (e.ValueKind == JsonValueKind.Object || e.ValueKind == JsonValueKind.Array)
+					{
+						return ReadDictionaryValue(targetType, current, e, depth);
 					}
 
 					break;
@@ -1164,6 +1369,14 @@ namespace LELEngine.Serialization
 		public object ReadGenericValue(JsonElement e, SchemaField hint, out ValueTag tag, out ValueTag elementTag)
 		{
 			elementTag = hint != null ? hint.ElementTag : ValueTag.Null;
+			if (hint != null && hint.Tag == ValueTag.Dictionary && (e.ValueKind == JsonValueKind.Object || e.ValueKind == JsonValueKind.Array))
+			{
+				tag = ValueTag.Dictionary;
+				SerializedDictionary dictionary = ReadGenericDictionary(e, hint);
+				elementTag = dictionary.ValueTag;
+				return dictionary;
+			}
+
 			switch (e.ValueKind)
 			{
 				case JsonValueKind.True:
@@ -1261,7 +1474,10 @@ namespace LELEngine.Serialization
 					}
 
 					array.ElementTag = element;
-					var elementHint = new SchemaField { Tag = element, EnumMembers = hint?.EnumMembers };
+					// The recorded element spec reads nested collections and enum names exactly.
+					SchemaField elementHint = hint != null && hint.Tag == ValueTag.Array && hint.ElementTag == element
+						? SerializationUtility.ElementSpec(hint)
+						: new SchemaField { Tag = element, EnumMembers = hint?.EnumMembers };
 					foreach (JsonElement item in e.EnumerateArray())
 					{
 						ValueTag itemTag;
@@ -1285,11 +1501,13 @@ namespace LELEngine.Serialization
 				}
 				case JsonValueKind.Object:
 				{
+					// A reference in an interface / EngineObject slot keeps the slot's Object encoding (ulong / AssetReference value).
+					bool objectSlot = hint?.Tag == ValueTag.Object;
 					JsonElement inner;
 					if (e.TryGetProperty(JsonDocumentFormat.RefKey, out inner) && inner.ValueKind == JsonValueKind.Number)
 					{
-						tag = ValueTag.SceneRef;
-						return inner.GetUInt64();
+						tag = objectSlot ? ValueTag.Object : ValueTag.SceneRef;
+						return inner.TryGetUInt64(out ulong id) ? id : 0UL;
 					}
 
 					if (e.TryGetProperty(JsonDocumentFormat.BytesKey, out inner) && inner.ValueKind == JsonValueKind.String)
@@ -1303,9 +1521,9 @@ namespace LELEngine.Serialization
 						return new SerializedArray { ElementTag = elementTag, Bytes = inner.GetBytesFromBase64() };
 					}
 
-					if (TypeNameOf(e) == null && (hint?.Tag == ValueTag.Asset || e.TryGetProperty("guid", out _) || e.TryGetProperty("path", out _)))
+					if (TypeNameOf(e) == null && (hint?.Tag == ValueTag.Asset || IsAssetElement(e)))
 					{
-						tag = ValueTag.Asset;
+						tag = objectSlot ? ValueTag.Object : ValueTag.Asset;
 						return ReadAssetReference(e);
 					}
 
@@ -1330,9 +1548,229 @@ namespace LELEngine.Serialization
 			};
 		}
 
+		/// <summary>An object element shaped like an asset reference: no "$type", a "guid" or "path" string.</summary>
+		public static bool IsAssetElement(JsonElement e)
+		{
+			JsonElement value;
+			return e.ValueKind == JsonValueKind.Object && TypeNameOf(e) == null
+				&& ((e.TryGetProperty("guid", out value) && value.ValueKind == JsonValueKind.String) || (e.TryGetProperty("path", out value) && value.ValueKind == JsonValueKind.String));
+		}
+
 		#endregion
 
 		#region PrivateMethods
+
+		/// <summary>A dictionary (object form or { "key", "value" } pairs) into <paramref name="current" /> (cleared) or a new dictionary.</summary>
+		private object ReadDictionaryValue(Type targetType, object current, JsonElement e, int depth)
+		{
+			if (targetType == null || !SerializationUtility.GetDictionaryTypes(targetType, out Type keyType, out Type valueType))
+			{
+				return ReadGenericValue(e, new SchemaField { Tag = ValueTag.Dictionary }, out _, out _);
+			}
+
+			IDictionary dictionary = DocumentValues.ReuseDictionary(targetType, current);
+			ValueTag keyTag = SerializationUtility.TagOf(keyType, out ValueTag keyElementTag);
+			ValueTag valueTag = SerializationUtility.TagOf(valueType, out ValueTag valueElementTag);
+			if (e.ValueKind == JsonValueKind.Object)
+			{
+				foreach (JsonProperty property in e.EnumerateObject())
+				{
+					object key;
+					if (!TryParseKey(property.Name, keyType, out key))
+					{
+						Debug.LogWarning($"[Serialization] {Context?.Location}: dictionary key '{property.Name}' is not a {keyType.Name}; entry dropped");
+						continue;
+					}
+
+					dictionary[key] = ReadBoxed(valueTag, valueElementTag, valueType, null, property.Value, depth + 1);
+				}
+
+				return dictionary;
+			}
+
+			foreach (JsonElement item in e.EnumerateArray())
+			{
+				JsonElement keyJson;
+				if (item.ValueKind != JsonValueKind.Object || !item.TryGetProperty("key", out keyJson))
+				{
+					continue;
+				}
+
+				object key = ReadBoxed(keyTag, keyElementTag, keyType, null, keyJson, depth + 1);
+				if (!DocumentValues.IsUsableKey(key))
+				{
+					continue;
+				}
+
+				JsonElement valueJson;
+				object value = item.TryGetProperty("value", out valueJson)
+					? ReadBoxed(valueTag, valueElementTag, valueType, null, valueJson, depth + 1)
+					: valueType.IsValueType ? Activator.CreateInstance(valueType) : null;
+				dictionary[key] = value;
+			}
+
+			return dictionary;
+		}
+
+		/// <summary>A dictionary key from a JSON property name (the object form): strings, enums (names or numbers), numbers, bools, chars.</summary>
+		private static bool TryParseKey(string name, Type keyType, out object key)
+		{
+			key = null;
+			try
+			{
+				if (keyType == typeof(string))
+				{
+					key = name;
+					return true;
+				}
+
+				if (keyType.IsEnum)
+				{
+					object parsed;
+					if (Enum.TryParse(keyType, name, true, out parsed))
+					{
+						key = parsed;
+						return true;
+					}
+
+					return false;
+				}
+
+				if (keyType == typeof(char))
+				{
+					key = name.Length > 0 ? name[0] : '\0';
+					return true;
+				}
+
+				if (keyType == typeof(bool))
+				{
+					bool flag;
+					if (bool.TryParse(name, out flag))
+					{
+						key = flag;
+						return true;
+					}
+
+					return false;
+				}
+
+				key = Convert.ChangeType(name, keyType, CultureInfo.InvariantCulture);
+				return true;
+			}
+			catch (Exception)
+			{
+				return false;
+			}
+		}
+
+		/// <summary>Generic dictionary data with the recorded key and value specs (typeless conversion).</summary>
+		private SerializedDictionary ReadGenericDictionary(JsonElement e, SchemaField hint)
+		{
+			SchemaField keySpec = SerializationUtility.KeySpec(hint);
+			SchemaField valueSpec = SerializationUtility.ElementSpec(hint);
+			var result = new SerializedDictionary { KeyTag = keySpec.Tag, ValueTag = valueSpec.Tag };
+			if (e.ValueKind == JsonValueKind.Object)
+			{
+				if (result.KeyTag == ValueTag.Null)
+				{
+					result.KeyTag = ValueTag.String;
+				}
+
+				foreach (JsonProperty property in e.EnumerateObject())
+				{
+					object key;
+					if (!TryGenericKey(property.Name, result.KeyTag, keySpec.EnumMembers, out key))
+					{
+						continue;
+					}
+
+					result.Entries.Add(new KeyValuePair<object, object>(key, ReadGenericMember(property.Value, valueSpec, ref result.ValueTag)));
+				}
+
+				return result;
+			}
+
+			foreach (JsonElement item in e.EnumerateArray())
+			{
+				JsonElement keyElement;
+				if (item.ValueKind != JsonValueKind.Object || !item.TryGetProperty("key", out keyElement))
+				{
+					continue;
+				}
+
+				object key = ReadGenericMember(keyElement, keySpec, ref result.KeyTag);
+				if (key == null)
+				{
+					continue;
+				}
+
+				JsonElement valueElement;
+				object value = item.TryGetProperty("value", out valueElement) ? ReadGenericMember(valueElement, valueSpec, ref result.ValueTag) : null;
+				result.Entries.Add(new KeyValuePair<object, object>(key, value));
+			}
+
+			return result;
+		}
+
+		/// <summary>A key or value of generic dictionary data in the dictionary's encoding (the first one decides when none is recorded).</summary>
+		private object ReadGenericMember(JsonElement e, SchemaField spec, ref ValueTag expected)
+		{
+			ValueTag tag;
+			object value = ReadGenericValue(e, spec.Tag != ValueTag.Null ? spec : null, out tag, out _);
+			if (expected == ValueTag.Null)
+			{
+				expected = tag;
+				return value;
+			}
+
+			if (value == null || tag == expected)
+			{
+				return value;
+			}
+
+			object converted;
+			return ConvertGeneric(value, tag, expected, out converted) ? converted : null;
+		}
+
+		/// <summary>A key of generic dictionary data from a property name, boxed in its encoding's type.</summary>
+		private static bool TryGenericKey(string name, ValueTag keyTag, KeyValuePair<string, long>[] enumMembers, out object key)
+		{
+			key = null;
+			switch (keyTag)
+			{
+				case ValueTag.String:
+					key = name;
+					return true;
+				case ValueTag.Char:
+					key = name.Length > 0 ? name[0] : '\0';
+					return true;
+				case ValueTag.Bool:
+				{
+					bool flag;
+					if (!bool.TryParse(name, out flag))
+					{
+						return false;
+					}
+
+					key = flag;
+					return true;
+				}
+				case ValueTag.Enum:
+				{
+					long value;
+					if (TryMapEnum(name, enumMembers, out value) || long.TryParse(name, NumberStyles.Integer, CultureInfo.InvariantCulture, out value))
+					{
+						key = value;
+						return true;
+					}
+
+					// A member name the type table does not list: the value is unknown without the type.
+					return false;
+				}
+				default:
+					return ConvertGeneric(name, ValueTag.String, keyTag, out key);
+			}
+		}
 
 		private static SchemaField FindField(SchemaType schema, string name)
 		{

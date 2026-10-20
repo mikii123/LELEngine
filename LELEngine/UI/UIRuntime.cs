@@ -185,6 +185,10 @@ namespace LELEngine.UIElements
 			RuntimePanel hovered = PanelForPointer(mouse);
 			IsPointerOverUI = hovered != null;
 			DesiredCursor = hovered?.cursor ?? CursorType.Arrow;
+
+			// A scratch list of this call: kept, it held the documents of the last play mode (their scenes and the
+			// game scripts' types) after the editor left it.
+			frameDocuments.Clear();
 		}
 
 		/// <summary>Maps the UI cursor to a window cursor (hosts call it with the panel's desired cursor).</summary>
