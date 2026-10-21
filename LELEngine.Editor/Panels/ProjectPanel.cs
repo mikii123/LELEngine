@@ -311,6 +311,7 @@ namespace LELEngine.Editor
 				if (ImGui.MenuItem("Create Material")) StartCreate("Material", "NewMaterial");
 				if (ImGui.MenuItem("Create Physics Material 2D")) StartCreate("PhysicsMaterial2D", "NewPhysicsMaterial");
 				if (ImGui.MenuItem("Create Visual Effect Graph")) StartCreate("VFX", "NewVisualEffect");
+				if (ImGui.MenuItem("Create Audio Project")) StartCreate("AudioProject", "Audio");
 				if (ImGui.MenuItem("Create Scene")) StartCreate("Scene", "NewScene");
 				if (ImGui.MenuItem("Create UI Document (UXML)")) StartCreate("UXML", "NewDocument");
 				if (ImGui.MenuItem("Create Style Sheet (USS)")) StartCreate("USS", "NewStyle");
@@ -545,6 +546,10 @@ namespace LELEngine.Editor
 			{
 				editor.OpenVfxGraph(assetPath);
 			}
+			else if (assetPath.EndsWith(LELEngine.Audio.AudioProject.Extension, StringComparison.OrdinalIgnoreCase))
+			{
+				editor.OpenAudioStudio(assetPath, null);
+			}
 			else if (AssetDatabase.GetAssetType(assetPath) != null && !assetPath.EndsWith(".shader", StringComparison.OrdinalIgnoreCase))
 			{
 				// Materials, textures, meshes, physics materials: edited in the inspector.
@@ -699,6 +704,15 @@ namespace LELEngine.Editor
 					graph.Save(AssetDatabase.ToAssetPath(target));
 					break;
 				}
+				case "AudioProject":
+				{
+					target = Absolute(Combine(folder, name + LELEngine.Audio.AudioProject.Extension));
+					EnsureNew(target);
+					LELEngine.Audio.AudioProject audioProject = LELEngine.Audio.AudioProject.CreateDefault(name);
+					audioProject.CreateEvent("New Event");
+					audioProject.Save(AssetDatabase.ToAssetPath(target));
+					break;
+				}
 				case "Scene":
 					target = Absolute(Combine(folder, name + SceneSerializer.Extension));
 					EnsureNew(target);
@@ -739,6 +753,10 @@ namespace LELEngine.Editor
 				if (kind == "VFX")
 				{
 					editor.OpenVfxGraph(selectedFile);
+				}
+				else if (kind == "AudioProject")
+				{
+					editor.OpenAudioStudio(selectedFile, null);
 				}
 			}
 		}

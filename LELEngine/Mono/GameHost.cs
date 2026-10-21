@@ -172,6 +172,7 @@ namespace LELEngine
 		protected override void OnUnload()
 		{
 			SceneManager.UnloadAll();
+			Audio.AudioSystem.Shutdown();
 			Renderer?.Dispose();
 			Renderer = null;
 			base.OnUnload();
@@ -189,6 +190,7 @@ namespace LELEngine
 			long updateStart = System.Diagnostics.Stopwatch.GetTimestamp();
 			SceneManager.Update();
 			SceneManager.UpdateScenes(Time.deltaTime);
+			Audio.AudioSystem.Update();
 			Time.cpuUpdateMs = (System.Diagnostics.Stopwatch.GetTimestamp() - updateStart) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
 			Input.EndFrame();
 			ApplyUICursor();

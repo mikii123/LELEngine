@@ -185,6 +185,16 @@ namespace LELEngine.Editor
 				return maskChanged;
 			}
 
+			if (type == typeof(LELEngine.Audio.AudioEventReference))
+			{
+				// An event of the audio project, picked from a list.
+				RowDecoration row = BeginLine(label, info, context);
+				bool eventChanged = Audio.AudioInspectors.DrawEventReferenceCombo(ref value, context);
+				context.Track(eventChanged);
+				EndLine(row);
+				return eventChanged;
+			}
+
 			if (SerializationUtility.IsReferenceType(type) || SerializationUtility.IsAssetType(type))
 			{
 				return DrawReference(label, type, ref value, info, context, depth);

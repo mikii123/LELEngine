@@ -26,7 +26,7 @@ namespace LELEngine.Serialization
 		public static DocumentFormat FileFormat = DocumentFormat.Json;
 
 		/// <summary>Extensions of the files that are documents (converted to binary in builds).</summary>
-		public static readonly string[] Extensions = { ".scene", ".material", ".meta", ".physicsMaterial2D", ".asset", ".vfx" };
+		public static readonly string[] Extensions = { ".scene", ".material", ".meta", ".physicsMaterial2D", ".asset", ".vfx", ".lelaudio" };
 
 		#endregion
 

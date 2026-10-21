@@ -151,6 +151,18 @@ namespace LELEngine.Player
 					Step("scripts", LoadScripts);
 				}
 
+				// The audio system and the banks marked for loading at start (no GL, no device wait: the device opens
+				// on the audio thread).
+				Step("audio", () =>
+				{
+					LELEngine.Audio.AudioSystem.BanksFolder = Path.Combine(dataFolder, LELEngine.Audio.AudioSystem.BanksSubfolder.Replace('/', Path.DirectorySeparatorChar));
+					LELEngine.Audio.AudioSystem.Initialize(ProjectSettings.Current.Audio);
+					if (Directory.Exists(LELEngine.Audio.AudioSystem.BanksFolder))
+					{
+						LELEngine.Audio.AudioSystem.LoadStartupBanks();
+					}
+				});
+
 				// The rest needs the window's GL context: the main thread hands it over once the splash screen is up.
 				wantsContext = true;
 				contextGiven.Wait();

@@ -140,6 +140,8 @@ namespace LELEngine.Editor
 			Edits = new EditTracker(this);
 			Extensions = new EditorExtensions(this);
 			Log = ConsoleLog.Install();
+			// The audio device opens on its own thread; the project's audio project and banks follow when it opens.
+			LELEngine.Audio.AudioSystem.Initialize(new LELEngine.Audio.AudioSettings());
 			layoutFileExisted = File.Exists(layoutFile);
 
 			hierarchy = new HierarchyPanel(this);
@@ -272,6 +274,7 @@ namespace LELEngine.Editor
 		public void DrawUI()
 		{
 			UpdateTitle();
+			UpdateAudio();
 			if (Project == null)
 			{
 				// Hidden while the project chooser is up (see ChooseProject).
@@ -423,6 +426,7 @@ namespace LELEngine.Editor
 			projectSettingsStamp = FileStamp.Of(project.ProjectSettingsFile);
 			AssetDatabase.Initialize(project.AssetsPath, true);
 			ModelAssets.CacheFolder = project.ModelCachePath;
+			OpenAudioProjectForEditor();
 			RecentProjects.Add(project.RootPath);
 			Debug.Log($"[Editor] Opened project {project.Name} ({project.RootPath})");
 
@@ -505,8 +509,64 @@ namespace LELEngine.Editor
 			ScriptableObjectAssets.UnloadAll();
 			InternalStorage.Clear();
 			ModelAssets.CacheFolder = null;
+			// Audio: the studio closes with the project, every bank and clip goes.
+			audioStudio?.Dispose();
+			audioStudio = null;
+			LELEngine.Audio.AudioSystem.StopAll();
+			foreach (LELEngine.Audio.LoadedBank bank in new List<LELEngine.Audio.LoadedBank>(LELEngine.Audio.AudioSystem.LoadedBanks))
+			{
+				LELEngine.Audio.AudioSystem.UnloadBank(bank.Name);
+			}
+
+			LELEngine.Audio.AudioSystem.UseProject(null);
+			LELEngine.Audio.AudioProject.ClearCache();
+			LELEngine.Audio.AudioClip.ClearCache();
 			ProjectSettings.Use(null);
 			Project = null;
+		}
+
+		/// <summary>
+		///     Makes the game's audio project (Project Settings > Audio, or the only .lelaudio file) the audio system's
+		///     source and loads every bank of it, so events play in the editor (play mode, inspector previews, the studio).
+		/// </summary>
+		private void OpenAudioProjectForEditor()
+		{
+			string path = LELEngine.Audio.AudioProject.FindProjectPath();
+			LELEngine.Audio.AudioProject project = path != null ? LELEngine.Audio.AudioProject.Load(path) : null;
+			if (LELEngine.Audio.AudioSystem.SourceProject != project)
+			{
+				foreach (LELEngine.Audio.LoadedBank bank in new List<LELEngine.Audio.LoadedBank>(LELEngine.Audio.AudioSystem.LoadedBanks))
+				{
+					LELEngine.Audio.AudioSystem.UnloadBank(bank.Name);
+				}
+
+				LELEngine.Audio.AudioSystem.UseProject(project);
+				if (project != null)
+				{
+					foreach (LELEngine.Audio.AudioBank bank in project.Banks)
+					{
+						LELEngine.Audio.AudioSystem.LoadBank(bank.Name);
+					}
+				}
+			}
+
+			LELEngine.Audio.AudioSystem.ApplySettings(ProjectSettings.Current.Audio);
+		}
+
+		/// <summary>Per frame: the listener (the scene camera outside play mode) and the audio system's callbacks.</summary>
+		private void UpdateAudio()
+		{
+			if (!LELEngine.Audio.AudioSystem.IsInitialized)
+			{
+				return;
+			}
+
+			if (Project != null && PlayState != PlayState.Playing)
+			{
+				LELEngine.Audio.AudioSystem.SetListener(SceneView.CameraPosition, SceneView.CameraForward, Vector3.UnitY, Vector3.Zero);
+			}
+
+			LELEngine.Audio.AudioSystem.Update();
 		}
 
 		/// <summary>
@@ -892,6 +952,8 @@ namespace LELEngine.Editor
 			{
 				PlayState = PlayState.Playing;
 			}
+
+			LELEngine.Audio.AudioSystem.PauseAll(PlayState == PlayState.Paused);
 		}
 
 		/// <summary>One frame of game logic while paused.</summary>
@@ -920,6 +982,8 @@ namespace LELEngine.Editor
 			}
 
 			Edits.Commit();
+			// Previews of the studio and the inspectors stop; the game starts with silence.
+			LELEngine.Audio.AudioSystem.StopAll();
 			playSnapshot = SceneSerializer.SaveToBytes(Scene);
 			playScenePath = Scene.Path;
 			playSceneDirty = SceneDirty;
@@ -961,6 +1025,8 @@ namespace LELEngine.Editor
 			Input.SetCursorLocked(false);
 			PlayState = PlayState.Edit;
 			SceneManager.Lifecycle = SceneLifecycle.Edit;
+			LELEngine.Audio.AudioSystem.StopAll();
+			LELEngine.Audio.AudioSystem.PauseAll(false);
 			Scene edit = SceneSerializer.LoadFromBytes(playSnapshot);
 			edit.Path = playScenePath;
 			ReplaceScene(edit, false);
@@ -1031,12 +1097,47 @@ namespace LELEngine.Editor
 			}
 		}
 
-		// ---------------------------------------------------------------- UI Builder (own window)
+		// ---------------------------------------------------------------- UI Builder and Audio Studio (own windows)
 
 		private UIBuilder.BuilderWindow uiBuilder;
+		private Audio.AudioStudioWindow audioStudio;
 
 		/// <summary>The UI Builder window when open (test hooks).</summary>
 		public UIBuilder.BuilderWindow UIBuilderWindow => uiBuilder != null && uiBuilder.IsOpen ? uiBuilder : null;
+
+		/// <summary>The Audio Studio window when open (test hooks).</summary>
+		public Audio.AudioStudioWindow AudioStudioWindow => audioStudio != null && audioStudio.IsOpen ? audioStudio : null;
+
+		/// <summary>
+		///     Opens the Audio Studio window (creating it on first use) on an audio project (null: the game's audio
+		///     project) and shows an event of it when given.
+		/// </summary>
+		public void OpenAudioStudio(string assetPath, string eventId)
+		{
+			if (Project == null)
+			{
+				return;
+			}
+
+			if (audioStudio == null || !audioStudio.IsOpen)
+			{
+				audioStudio?.Dispose();
+				audioStudio = new Audio.AudioStudioWindow(this, Window);
+			}
+
+			string path = assetPath ?? LELEngine.Audio.AudioProject.FindProjectPath();
+			if (path != null && (audioStudio.Studio.Project == null || !string.Equals(audioStudio.Studio.AssetPath, path, StringComparison.OrdinalIgnoreCase)))
+			{
+				audioStudio.Studio.Open(path);
+			}
+
+			if (eventId != null)
+			{
+				audioStudio.Studio.ShowEvent(eventId);
+			}
+
+			audioStudio.Focus();
+		}
 
 		/// <summary>The VFX Graph window (dockable; open or not).</summary>
 		public VFX.VfxGraphWindow VfxGraphWindow => vfxGraphWindow;
@@ -1078,19 +1179,31 @@ namespace LELEngine.Editor
 		/// <summary>Runs the frames of the editor's other windows (after the main window's UI was drawn).</summary>
 		public void RenderExtraWindows(float deltaTime)
 		{
-			if (uiBuilder == null)
+			if (uiBuilder != null)
 			{
-				return;
+				if (!uiBuilder.IsOpen)
+				{
+					uiBuilder.Dispose();
+					uiBuilder = null;
+				}
+				else
+				{
+					uiBuilder.Frame(deltaTime);
+				}
 			}
 
-			if (!uiBuilder.IsOpen)
+			if (audioStudio != null)
 			{
-				uiBuilder.Dispose();
-				uiBuilder = null;
-				return;
+				if (!audioStudio.IsOpen)
+				{
+					audioStudio.Dispose();
+					audioStudio = null;
+				}
+				else
+				{
+					audioStudio.Frame(deltaTime);
+				}
 			}
-
-			uiBuilder.Frame(deltaTime);
 		}
 
 		public void NotifyAssetsChanged()
@@ -1119,7 +1232,10 @@ namespace LELEngine.Editor
 			SceneManager.ActiveSceneChanged -= OnActiveSceneChanged;
 			uiBuilder?.Dispose();
 			uiBuilder = null;
+			audioStudio?.Dispose();
+			audioStudio = null;
 			CloseProject();
+			LELEngine.Audio.AudioSystem.Shutdown();
 			SceneView.Dispose();
 			GameView.Dispose();
 			UnsubscribeWindow();
@@ -1147,6 +1263,8 @@ namespace LELEngine.Editor
 				ExitPlayMode();
 			}
 
+			// Sounds the old scene's objects started in edit mode (inspector previews) end with it.
+			LELEngine.Audio.AudioSystem.StopAll();
 			Scene scene = DefaultScene.Create(Project);
 			ReplaceScene(scene, false);
 			Selected = null;
@@ -1169,6 +1287,7 @@ namespace LELEngine.Editor
 				FileStamp stamp = FileStamp.Of(file);
 				Scene scene = SceneSerializer.Load(file);
 				scene.Path = assetPath;
+				LELEngine.Audio.AudioSystem.StopAll();
 				ReplaceScene(scene, false);
 				Selected = null;
 				SceneDirty = false;
@@ -1434,6 +1553,13 @@ namespace LELEngine.Editor
 					else OpenUIBuilder(null);
 				}
 
+				bool studioOpen = audioStudio != null && audioStudio.IsOpen;
+				if (ImGui.MenuItem("Audio Studio", "", studioOpen))
+				{
+					if (studioOpen) audioStudio.Close();
+					else OpenAudioStudio(null, null);
+				}
+
 				ImGui.Separator();
 				if (ImGui.MenuItem("Reset Layout"))
 				{
@@ -1591,6 +1717,15 @@ namespace LELEngine.Editor
 				}, parent);
 			}
 
+			if (ImGui.BeginMenu("Audio"))
+			{
+				if (ImGui.MenuItem("Audio Listener")) CreateObject("Audio Listener", go => go.AddComponent<LELEngine.Audio.AudioListener>(), parent);
+				if (ImGui.MenuItem("Audio Event Emitter")) CreateObject("Audio Emitter", go => go.AddComponent<LELEngine.Audio.AudioEventEmitter>(), parent);
+				if (ImGui.MenuItem("Audio Bank Loader")) CreateObject("Audio Bank Loader", go => go.AddComponent<LELEngine.Audio.AudioBankLoader>(), parent);
+				if (ImGui.MenuItem("Audio Snapshot Trigger")) CreateObject("Audio Snapshot Trigger", go => go.AddComponent<LELEngine.Audio.AudioSnapshotTrigger>(), parent);
+				ImGui.EndMenu();
+			}
+
 			ImGui.Separator();
 			if (ImGui.MenuItem("Camera")) CreateObject("Camera", go => go.AddComponent<Camera>(), parent);
 			if (ImGui.MenuItem("Directional Light"))
@@ -1743,6 +1878,27 @@ namespace LELEngine.Editor
 			UIElements.UIAssets.ReloadChanged();
 			// ScriptableObject assets changed outside the editor: the loaded instances read their files again.
 			ScriptableObjectAssets.ReloadChanged();
+			// Audio files and the audio project changed outside: clips re-read on use, the project reloaded (not while the
+			// Audio Studio holds unsaved edits of it), the banks rebuilt.
+			List<string> changedClips = LELEngine.Audio.AudioClip.ReloadChanged();
+			List<LELEngine.Audio.AudioProject> reloadedAudio = LELEngine.Audio.AudioProject.ReloadChanged(p => audioStudio != null && audioStudio.IsOpen && audioStudio.Studio.Project == p && audioStudio.Studio.Dirty);
+			foreach (LELEngine.Audio.AudioProject reloaded in reloadedAudio)
+			{
+				if (audioStudio != null && audioStudio.IsOpen && audioStudio.Studio.Project == reloaded)
+				{
+					audioStudio.Studio.OnProjectReloaded();
+				}
+			}
+
+			if (LELEngine.Audio.AudioSystem.SourceProject == null || !string.Equals(LELEngine.Audio.AudioSystem.SourceProject.AssetPath, LELEngine.Audio.AudioProject.FindProjectPath(), StringComparison.OrdinalIgnoreCase))
+			{
+				OpenAudioProjectForEditor();
+			}
+			else if (changedClips.Count > 0 || reloadedAudio.Count > 0)
+			{
+				LELEngine.Audio.AudioSystem.ReloadFromProject();
+			}
+
 			NotifySceneChanged();
 			CheckSceneOnDisk();
 		}
@@ -1866,6 +2022,7 @@ namespace LELEngine.Editor
 			// An edit in progress belongs to the settings being replaced.
 			Edits.Cancel();
 			ProjectSettings.Use(settings);
+			OpenAudioProjectForEditor();
 			NotifySceneChanged();
 			Debug.Log("[Editor] Reloaded the project settings (changed on disk)");
 		}
@@ -1935,6 +2092,7 @@ namespace LELEngine.Editor
 			}
 
 			states.Open["UI Builder"] = uiBuilder != null && uiBuilder.IsOpen;
+			states.Open["Audio Studio"] = audioStudio != null && audioStudio.IsOpen;
 			states.Save(WindowStatesFile);
 		}
 
@@ -1971,6 +2129,11 @@ namespace LELEngine.Editor
 				if (Saved("UI Builder", false))
 				{
 					OpenUIBuilder(null);
+				}
+
+				if (Saved("Audio Studio", false))
+				{
+					OpenAudioStudio(null, null);
 				}
 			}
 			catch (Exception e)

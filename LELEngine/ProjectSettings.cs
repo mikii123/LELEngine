@@ -32,6 +32,9 @@ namespace LELEngine
 		/// <summary>What a build shows while its start scene loads (baked into the build's boot.json; the player does not read it from here).</summary>
 		public SplashScreenSettings SplashScreen = new SplashScreenSettings();
 
+		/// <summary>The audio system: the audio project, master volume, voice count, device buffer, banks loaded at start.</summary>
+		public LELEngine.Audio.AudioSettings Audio = new LELEngine.Audio.AudioSettings();
+
 		#endregion
 
 		#region PublicMethods

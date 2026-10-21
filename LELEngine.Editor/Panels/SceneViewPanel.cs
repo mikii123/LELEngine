@@ -24,6 +24,11 @@ namespace LELEngine.Editor
 		public bool IsFocused { get; private set; }
 		public ViewRenderer ViewRenderer { get; private set; }
 
+		/// <summary>The scene camera's position and view direction (the audio listener in edit mode).</summary>
+		public Vector3 CameraPosition => position;
+
+		public Vector3 CameraForward => Forward();
+
 		/// <summary>Views render every frame, not only on changes (animated shaders, time-based effects).</summary>
 		public bool AlwaysRefresh { get; private set; }
 

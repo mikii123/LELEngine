@@ -651,6 +651,8 @@ namespace LELEngine
 			RegisterAssetType(typeof(UIElements.FontAsset), UIElements.UIAssets.FontExtensions, (type, path, sub) => UIElements.UIAssets.Load(type, path));
 			RegisterAssetType(typeof(PhysicsMaterial2D), new[] { PhysicsMaterial2D.Extension }, (type, path, sub) => PhysicsMaterial2D.Load(path));
 			RegisterAssetType(typeof(VFX.VfxGraph), new[] { VFX.VfxGraph.Extension }, (type, path, sub) => VFX.VfxGraph.Load(path));
+			RegisterAssetType(typeof(Audio.AudioProject), new[] { Audio.AudioProject.Extension }, (type, path, sub) => Audio.AudioProject.Load(path));
+			RegisterAssetType(typeof(Audio.AudioClip), Audio.AudioClip.Extensions, (type, path, sub) => Audio.AudioClip.Load(path));
 			RegisterAssetType(typeof(ScriptableObject), new[] { ScriptableObjectAssets.Extension }, (type, path, sub) => ScriptableObjectAssets.Load(path));
 		}
 

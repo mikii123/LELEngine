@@ -240,6 +240,57 @@ namespace LELEngine.Editor
 				}
 			}
 
+			// audiostudio=N;asset opens the Audio Studio window at frame N (on the .lelaudio asset when given).
+			if (values.TryGetValue("audiostudio", out string audioStudio))
+			{
+				string[] parts = audioStudio.Split(';');
+				if (parts.Length >= 1 && int.TryParse(parts[0], out int at) && at == frame)
+				{
+					editor.OpenAudioStudio(parts.Length > 1 ? parts[1] : null, null);
+				}
+			}
+
+			// audiostudioscreenshot=f1,f2,...;folder dumps the Audio Studio window at each listed frame into folder/fNNNN.
+			if (values.TryGetValue("audiostudioscreenshot", out string audioShot))
+			{
+				string[] parts = audioShot.Split(';');
+				if (parts.Length == 2)
+				{
+					foreach (string item in parts[0].Split(','))
+					{
+						if (int.TryParse(item, out int at) && at == frame)
+						{
+							Audio.AudioStudioWindow.ScreenshotFolder = System.IO.Path.Combine(parts[1], "f" + at.ToString("0000"));
+						}
+					}
+				}
+			}
+
+			// audiocmd=N:cmd|cmd;M:cmd runs Audio Studio commands (see AudioStudio.RunTestCommand) at the given frames.
+			if (values.TryGetValue("audiocmd", out string audioCommands))
+			{
+				foreach (string entry in audioCommands.Split(';'))
+				{
+					int colon = entry.IndexOf(':');
+					if (colon <= 0 || !int.TryParse(entry.Substring(0, colon), out int at) || at != frame)
+					{
+						continue;
+					}
+
+					Audio.AudioStudioWindow window = editor.AudioStudioWindow;
+					if (window == null)
+					{
+						Debug.LogWarning("[Test] The Audio Studio is not open at frame " + frame);
+						continue;
+					}
+
+					foreach (string command in entry.Substring(colon + 1).Split('|'))
+					{
+						window.Studio.RunTestCommand(command);
+					}
+				}
+			}
+
 			// vfxgraph=N;asset opens the VFX Graph window on the asset at frame N (vfxgraph=N alone opens it empty).
 			if (values.TryGetValue("vfxgraph", out string vfxGraph))
 			{

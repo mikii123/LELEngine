@@ -19,7 +19,9 @@ namespace LELEngine.Editor
 			{ typeof(NavMeshSurface), (component, context) => NavMeshSurfaceInspector.Draw((NavMeshSurface)component, context) },
 			{ typeof(NavMeshAgent), (component, context) => NavMeshAgentInspector.Draw((NavMeshAgent)component, context) },
 			{ typeof(LELEngine.VFX.VisualEffect), (component, context) => VFX.VisualEffectInspector.Draw((LELEngine.VFX.VisualEffect)component, context) },
-			{ typeof(Camera), (component, context) => CameraInspector.Draw((Camera)component, context) }
+			{ typeof(Camera), (component, context) => CameraInspector.Draw((Camera)component, context) },
+			{ typeof(LELEngine.Audio.AudioEventEmitter), (component, context) => Audio.AudioInspectors.DrawEmitter((LELEngine.Audio.AudioEventEmitter)component, context) },
+			{ typeof(LELEngine.Audio.AudioSnapshotTrigger), (component, context) => Audio.AudioInspectors.DrawSnapshotTrigger((LELEngine.Audio.AudioSnapshotTrigger)component, context) }
 		};
 
 		#endregion

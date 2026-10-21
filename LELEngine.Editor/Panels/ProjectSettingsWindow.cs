@@ -30,6 +30,7 @@ namespace LELEngine.Editor
 			Layers,
 			Physics2D,
 			SplashScreen,
+			Audio,
 			Build
 		}
 
@@ -156,6 +157,12 @@ namespace LELEngine.Editor
 			if (BeginTab(Tab.SplashScreen, "Splash Screen"))
 			{
 				changed |= DrawSplashScreen(settings.SplashScreen ??= new SplashScreenSettings());
+				EndTab();
+			}
+
+			if (BeginTab(Tab.Audio, "Audio"))
+			{
+				changed |= Audio.AudioInspectors.DrawSettings(settings.Audio ??= new LELEngine.Audio.AudioSettings(), context);
 				EndTab();
 			}
 

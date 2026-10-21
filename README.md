@@ -74,6 +74,34 @@ Built on .NET 10, OpenTK 4.9 (GLFW) and OpenGL 4.6 (4.3 minimum), developed and 
 *Lumen mode GI: color bleeding from the red and green walls and light from emissive objects, with no analytic
 point lights.*
 
+**Audio (`LELEngine.Audio`)**
+- An FMOD Studio-style event system: an audio project asset (`.lelaudio`) holds events in folders, each with tracks
+  of instruments on a timeline and on parameter sheets (single sounds, multi-sound playlists with random / shuffle /
+  sequential picks, scatterers, nested events), logic markers (loop regions with conditions, transitions and
+  transition regions quantized to the beat grid of tempo markers, sustain points, destination markers with callbacks),
+  local and global parameters (seek speed, built-in distance / direction / elevation / speed), automation curves
+  (volume, pitch, pan, effect parameters), AHDSR envelopes, per-trigger pitch and volume randomization,
+  probability and conditions, polyphony limits with stealing, 3D spatialization (rolloff curves, spread, Doppler), a
+  bus tree with effects (low pass, high pass, reverb, delay), mixer snapshots (overriding or blending bus volumes and
+  effect values with fades and priorities, started from code, from a component or from a snapshot instrument) and
+  banks. Transitions can carry their own timeline: the sounds playing at the transition keep going for a chosen
+  length while the destination's sounds start early, joined by drawn fades, with extra sounds on the transition.
+- The Audio Studio (Window > Audio Studio, its own window), styled after FMOD Studio: a transport with stop / play /
+  pause, a time display (time or bars and beats) and a knob per parameter; a timeline with a bar / beat grid, a
+  logic track (transition regions, transition and destination markers, loop regions, tempo and sustain markers),
+  tracks with SOLO, MUTE, volume knobs and meters, overlapping instruments stacked in their lane, and an overview
+  strip; transition timelines edited inline (the source's sounds extended and faded out, the destination's started
+  early and faded in, extra sounds on the transition, all with the mouse); parameter sheets with a value cursor; a
+  deck of knobs; live preview of the game's instances in play mode (playheads, parameter values, meters); mixer with
+  faders and meters (and a snapshot scope mode), snapshots, banks, assets. Edits are undoable and apply live to
+  playing instances.
+- Runtime: a software mixer on its own thread (sample-accurate timeline, 48 kHz, Hermite resampling, voice
+  virtualization, streaming from disk) output through WASAPI; `AudioSystem` (banks, instances, snapshots, global
+  parameters, buses, listener), `EventInstance` / `SnapshotInstance` handles with callbacks, components
+  `AudioListener`, `AudioEventEmitter`, `AudioBankLoader`, `AudioParameterTrigger`, `AudioSnapshotTrigger`. Sounds:
+  WAV, Ogg Vorbis and MP3. Game builds compile the project into bank files (`Data/Audio/Banks`) that load with one
+  read.
+
 **GPU particles (`LELEngine.VFX`)**
 - A VFX Graph-style system. A `.vfx` asset is a graph of contexts (Event, Spawn, Initialize, Update, Output
   Quad / Mesh / Point / Line / Strip) that hold blocks, fed by operators and blackboard properties. A

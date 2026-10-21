@@ -322,6 +322,128 @@
   `mover=300` (object) and `autocam=1` (camera, mean |second time difference|). There is no fixed capture time step
   (capturefps was removed: it made motion uneven in real time); motion per frame follows the real frame time.
 
+## Audio (FMOD-like events, banks, Audio Studio)
+
+- Runtime in `LELEngine/Audio`: `AudioModel.cs` (the data model: `AudioEvent`, `AudioTrack`, instruments Single /
+  Multi / Scatterer / Event / Snapshot, markers Destination / Transition / TransitionRegion / Loop / Tempo /
+  SustainPoint, `TransitionTimeline` (on a transition: `Length`, `SourceLength`, `DestinationStart`, `AudioFade`s),
+  `AudioSnapshot` (mixer snapshot: `SnapshotBusValue`s with a volume and effect values, `Intensity` envelope),
+  `AudioParameter`, `AudioBus`, `AudioBank`, effects LowPass / HighPass / Reverb / Delay, automation curves, AHDSR
+  envelopes, `BeatGrid`), `AudioProject.cs` (the ".lelaudio" asset: JSON document, one per game, cached by path;
+  `AudioImporter` meta settings of audio files; `AudioSettings` in `ProjectSettings.Audio`), `AudioClip.cs` (wav / ogg
+  / mp3 assets, decoded on first use), `AudioDecoders.cs` (WAV built in, NVorbis, NLayer), `AudioDsp.cs` (biquad,
+  Freeverb, delay), `AudioOutput.cs` (WASAPI shared mode on its own thread through COM interop, event driven,
+  AUTOCONVERTPCM to 48 kHz float stereo; device loss / default device change reopens; no device = silent real-time
+  pacing), `AudioMixer.cs` (`Mixer`: commands in, notifications out, voices, buses, limiter), `EventPlayback.cs` (the
+  audio-thread instance: timeline cursor in output samples, boundaries handled at the exact sample, parameter
+  sheets, quantized transitions, loops, scatterers, nested events, live replace), `AudioCompiled.cs` (immutable
+  `CompiledEvent` per event, `EventCompiler`), `AudioBankFile.cs` (bank file + `AudioBankCompiler`: in-memory banks
+  from the project for the editor, bank files for builds), `AudioSystem.cs` (the facade: `Initialize`, `Update`,
+  `LoadBank(Async)`, `CreateInstance`, `PlayOneShot`, global parameters, buses, listener, `RenderOffline` for tests),
+  `EventInstance.cs` (the game's handle, callbacks on the main thread), `SnapshotInstance.cs` (a started snapshot:
+  `Stop`, `SetIntensity`), `AudioComponents.cs` (`AudioListener`, `AudioEventEmitter`, `AudioBankLoader`,
+  `AudioParameterTrigger`, `AudioSnapshotTrigger`; `AudioEventReference` fields get an event picker).
+- Threads: the game thread only posts `MixerCommand`s (parameters by id strings, so indices never go stale) and
+  reads volatile fields; the audio thread owns every `EventPlayback`; "Audio streaming" fills `StreamingReader` ring
+  buffers (prefetched when an instance is created). The mixer renders sub-blocks of 256 frames; inside a sub-block the
+  instance splits at every boundary (instrument start / end, marker, loop end, quantization point), so loops and
+  bar-quantized transitions are sample accurate. Voices beyond `MaxVoices` go virtual (quietest first). Every stop or
+  retrigger has at least a 4 ms fade (no clicks); `Stop(Immediate)` fades over 2 ms.
+- Semantics (as FMOD): timelocked (sync) instruments start at the offset the cursor enters at and stop when it
+  leaves; async ones play whole from their start; parameter sheet instruments trigger when the parameter enters
+  their range; a transition region jumps at the next grid point while its conditions hold; an event ends when the
+  cursor passed its content and nothing plays (unless Persistent); `MaxInstances` + stealing; built-in parameters
+  Distance / Direction / Elevation / Speed; global parameters live in the mixer; automation replaces the automated
+  value (volume dB, pitch st, pan, effect parameters).
+- Snapshots: the project's `Snapshots` list is the priority (first wins); `Mixer.AdvanceSnapshots` applies the active
+  ones per block on top of `BusState.BaseVolumeDb` / `BaseEffects` (`EffectiveVolumeDb`): Overriding moves the scoped
+  bus volume / effect value towards the snapshot's by its intensity, Blending adds dB x intensity; the `Intensity`
+  envelope's attack / release fade it in and out. Started by `AudioSystem.StartSnapshot(name, intensity)` (a
+  `SnapshotInstance`), by `AudioSnapshotTrigger`, or owned by a `SnapshotInstrument` region (ends with it);
+  `StopAllSnapshots`, `ActiveSnapshots`. Doppler: `AudioSpatializer.DopplerScale` x `AudioSettings.DopplerScale` with
+  `SpeedOfSound`; `EventPlayback.UpdateSpatial` takes (c + listener velocity . dir) / (c + source velocity . dir)
+  from the velocities `SetListener` / `Set3DAttributes` carry, clamped 0.25..4 and smoothed per block into the voice
+  step. Transition timelines: a `TransitionMarker` / `TransitionRegion` with a `Timeline` compiles to a
+  `CompiledTransition`; on the jump `EventPlayback.BeginTransition` moves the timelocked voices playing at the marker
+  to `SourceVoices` (they keep playing, fading out, until `SourceLength`), `ActivateDestination` triggers the
+  destination's instruments at `DestinationStart` with the fade in, instruments with `Sheet == "transition:<id>"`
+  play on the transition's own timeline (`TransitionTimeline.SheetId`), `EndTransition` continues on the
+  destination at destination + (Length - DestinationStart). A seek or a live replace aborts a running transition
+  (playback continues on the destination). `ActiveTransitionIndex` / `TransitionSeconds` are published for the editor.
+- Banks: `Data/Audio/Banks/<Bank>.bank` written by `GameBuilder` (step 4c) through `AudioBankBuilder` (editor):
+  header + binary document (`BankDocument`: events, globals, buses, snapshots, sample table, the bank list) + 16-byte aligned
+  sample data, in-memory sounds first; the player reads up to the in-memory end in one read (PCM16 slices without
+  copies), streamed sounds open the file on demand. Load type per audio file: Decompress On Load (PCM16), Compressed
+  In Memory (encoded file decoded at load), Streaming. The player loads the master bank, then the banks marked
+  AutoLoad (`GameLoader` step "audio"); the editor loads every bank of the project in memory from the clips.
+- Editor in `LELEngine.Editor/Audio`: `AudioStudioWindow` (own OS window like the UI Builder), `AudioStudio` partials
+  (core: undo snapshots, live update through `AudioSystem.ReloadFromProject` after each edit; Browser: Events /
+  Banks / Parameters / Snapshots / Assets panels; Timeline: Event Editor with ruler, logic lane, track lanes, drag /
+  trim / drop / context menus; Deck: property editors incl. playlists, conditions, envelopes, effects, automation
+  curve editor; Mixer: strips with faders and meters), `AudioInspectors` (event picker for `AudioEventReference`
+  fields, emitter Play / Stop, snapshot trigger picker, audio file importer, audio project asset, Project Settings >
+  Audio), `AudioBankBuilder`. In edit mode the scene view camera is the listener; play mode uses `AudioListener` /
+  `Camera.main`.
+- The studio looks like FMOD Studio (2026-10-21): `StudioUi` (palette, `ApplyStyle` on the studio's own ImGui
+  context, widgets: `Knob` (drag up / down, Shift fine, double click resets; scales Linear / Logarithmic / Volume /
+  Quadratic; a drag accumulates in normalized units, so stepped values move; `ImGuiP.MarkItemEdited` so `Track`
+  sees one undo step), `TransportButton`, `IconToggle`, `TimeDisplay` (the LCD; ImGui 1.92 font sizes are line
+  heights, the digits use `PushFont(GetFont(), 36)`), `TextToggle` (SOLO / MUTE), `Meter`, `Chevrons`, `FlagLabel`,
+  `Fade`, `Handle`). `AudioStudio.Transport.cs`: stop / play / pause, LCD (TIME or BEATS bar.beat.sixteenth, state),
+  loop playback and follow toggles, the GAME selector and a knob per parameter; snap / zoom sit on the sheet tabs'
+  row. Live preview: `UpdateLive` collects `AudioSystem.Instances` of the selected event (not the studio's preview);
+  `Shown` = the preview, else the followed game instance (newest by default): its playhead (cyan), parameter values
+  (read-only knobs), LCD state "LIVE", track meters (`EventPlayback.TrackPeaks`); other game instances draw thin
+  cyan playheads; the Events panel marks events the game plays. Deck and Overview use knob rows (`DeckKnob`,
+  `KnobRow`): instrument volume / pitch / randomization, AHDSR, track volume / pan / pitch, spread, Doppler, effect
+  parameters (reset = a new effect's value).
+- Timeline (`AudioStudio.Timeline.cs`): ruler (time or bars, `+n` inside a transition timeline), logic track in three
+  rows (transition regions with chevrons, quantization and timeline badges / transition flags; destination, tempo
+  and sustain flags; loop regions), marker lines through the lanes, track headers (name, SOLO, MUTE, volume knob,
+  meter), lanes built from `Piece`s (`LayoutPieces`: overlapping pieces of a lane share it in rows per overlap
+  cluster, `StackPieces`), the overview strip (`DrawMinimap`, click / drag scrolls). Transition timelines open inline
+  (`expandedTransitionId`; the badge, a double click on the marker, the Deck or the menu; Esc closes): `TransitionView`
+  maps display time in three `Segment`s: event time before the transition point P (a region's end), transition time
+  [P, P + Length], destination time after (display = P + DestinationStart + (t - D)). Pieces: `Normal` (cut at P),
+  `Source` (timelocked instruments playing at P, extended to SourceLength, fade-out drawn, end edge = SourceLength,
+  fade handle), `Destination` (from D on, the fade-in drawn, the start edge of pieces at D = DestinationStart, fade
+  handle), `TransitionClip` (sheet `transition:<id>`, moved / trimmed in transition time). The logic rows inside show
+  the timeline header (end handle), the source and destination regions with their handles. Instruments dropped or
+  added inside go on the transition timeline (`PlacementAt`). Snapshots panel (list order = priority), snapshot Deck,
+  the Mixer in snapshot scope while a snapshot is selected. `AudioStudio.LayoutVersion`
+  (`audio-studio-layout.ini.version`): bump it when the default layout gains a panel.
+- Track Solo (`AudioTrack.Solo`, compiled `CompiledTrack.Silent` = muted or another track soloed) is for auditioning:
+  `AudioBankCompiler.WriteFile` clears it in the bank document, builds play every track. `EventInstance.GetTrackPeak`
+  reads the last block's peak of a track.
+- Test hooks: `audiostudio=N;asset`, `audiostudioscreenshot=f1,f2;folder`, `audiocmd=N:cmd|cmd;M:cmd` (commands in
+  `AudioStudio.RunTestCommand`: newproject=, open=, newevent=, addsingle=Clip,Start,Length,
+  addsingleto=Track,Clip,Start,Length[,loop], addtransitionclip=Track,Clip,Start,Length, addloop=, addtempo=,
+  adddest=Name,Pos, addtransition=Pos,DestName, addregion=Start,Length,DestName[,Quantization],
+  addtransitiontimeline[=MarkerName] (opens it inline), closetransition, transition=Length,Source,Dest,FadeOut,FadeIn,
+  selectmarker=Name, selecttrack=Name, addeffect=lowpass|highpass|reverb|delay, solo=Track, beats=0|1, snap=0|1,
+  loop=0|1, addparam=, sheet=, param=Name:Value, newsnapshot=, selectsnapshot=, snapshotbus=Bus,dB, snapshotstart,
+  snapshotstop, addsnapshotinstrument=Name,Start,Length, play, stop, undo, redo, save, buildbanks=, zoom=, scroll=,
+  report (also the open transition timeline, pieces, live instances), mouse= / click= / drag=x1,y1,x2,y2 (injected
+  mouse, window pixels)). ImGui's Text* and SetTooltip treat `%` as a printf format: escape it as `%%` (the knob
+  tooltip escapes its own text; draw-list text is literal).
+- Decoders (`AudioDecoders.cs`): MP3 does not go through `NLayer.MpegFile` (1.16 drops frames after a seek without
+  advancing its position and mis-sizes MPEG-2 Layer III frames): the decoder indexes the frames itself (ID3v2, Xing /
+  VBRI / LAME tag, gapless trim) and feeds `MpegFrameDecoder`; Vorbis seeks are not NVorbis's `SamplePosition`
+  (64 / 448 frames late in 0.10.5) but a fresh reader on a page window with the granule derived from the pages.
+  Both give sample-exact `Seek(x)` + `Read` (verified against linear decodes); keep that when touching them.
+- Verification (2026-10-21): an offline harness (`AudioSystem.Initialize(offline: true)` + `RenderOffline`, scratchpad
+  `AudioTest`) checked 114 properties by measuring the rendered signal (RMS, zero-crossing frequency, burst counts):
+  loop gaps at exact seconds, a bar-quantized transition at 1.500 s, parameter sheets, scatterer spawns, streaming
+  with seeks, fades, polyphony, callbacks (8 beats in the test song), nested events, automation + low pass, 3D
+  rolloff and pan, global parameter conditions, sustain points, bank file round trip (2 ms load, snapshots included),
+  Doppler (440 Hz -> 489 / 400 / 484 Hz), snapshots (overriding, blending, intensity, priority, effect value,
+  instrument), transition timelines (source extension, crossfade midpoint, fill on the transition sheet, continuation
+  on the destination, transition to End), solo and track peaks (and the bank file dropping the solo). A probe project
+  (scratchpad `AudioProbe`, its `[ExecuteAlways]` script plays Music/Loop: a live instance in edit and play mode) ran
+  the scripted studio (screenshots; injected drags of a destination piece's start and the source fade handle, undo),
+  a build and the player (snapshot from the bank).
+  Offline rendering outruns the streaming thread (render in paced chunks when testing streams).
+
 ## GPU particles (VFX)
 
 - Runtime in `LELEngine/VFX` (graph asset, compiler, codegen, runtime, instance), shaders in

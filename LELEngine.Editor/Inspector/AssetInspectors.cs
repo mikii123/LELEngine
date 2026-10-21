@@ -90,6 +90,14 @@ namespace LELEngine.Editor
 				DrawVfxGraph(assetPath);
 				DrawFileInfo(absolute);
 			}
+			else if (type == typeof(LELEngine.Audio.AudioProject))
+			{
+				Audio.AudioInspectors.DrawProject(assetPath, context);
+			}
+			else if (type == typeof(LELEngine.Audio.AudioClip))
+			{
+				Audio.AudioInspectors.DrawClip(assetPath, context);
+			}
 			else if (assetPath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
 			{
 				if (ImGui.Button("Open Script", new NVector2(-1, 0)))
@@ -139,6 +147,8 @@ namespace LELEngine.Editor
 		{
 			if (type == typeof(ShaderProgram)) return "Shader";
 			if (type == typeof(LELEngine.VFX.VfxGraph)) return "Visual Effect Graph";
+			if (type == typeof(LELEngine.Audio.AudioProject)) return "Audio Project";
+			if (type == typeof(LELEngine.Audio.AudioClip)) return "Audio Clip";
 			if (type == typeof(ScriptableObject)) return (ScriptableObjectAssets.GetStoredType(assetPath)?.Name ?? "missing script") + " asset";
 			if (TextureAssets.IsImageFile(assetPath))
 			{

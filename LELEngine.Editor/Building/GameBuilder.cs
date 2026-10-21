@@ -268,6 +268,20 @@ namespace LELEngine.Editor
 
 			log(fields.ToString());
 
+			// 4c. Audio: the audio project compiled into bank files (Data/Audio/Banks/<Bank>.bank): the events with their
+			//     sounds stored as their import settings say. The player loads the master bank at start; the .lelaudio
+			//     asset and the source audio files do not ship.
+			LELEngine.Audio.AudioProject audioProject = Audio.AudioBankBuilder.FindProject();
+			if (audioProject != null)
+			{
+				log("Building audio banks from " + audioProject.AssetPath + "...");
+				if (!Audio.AudioBankBuilder.BuildAll(audioProject, Path.Combine(data, "Audio", "Banks"), log))
+				{
+					log("Error: the audio banks could not be built.");
+					return false;
+				}
+			}
+
 			// 5. Project settings (physics, lighting quality), binary like the assets; the defaults when the project has none.
 			string projectSettingsTarget = Path.Combine(output, ProjectSettings.FileName);
 			if (File.Exists(project.ProjectSettingsFile))
