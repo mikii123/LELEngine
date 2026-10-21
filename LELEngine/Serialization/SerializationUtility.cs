@@ -127,6 +127,7 @@ namespace LELEngine.Serialization
 			}
 
 			BulkListAccess.Clear();
+			GenericValues.ClearCache();
 			UIElements.UxmlRegistry.Clear();
 			PhysicsCallbacks.ClearCache();
 		}

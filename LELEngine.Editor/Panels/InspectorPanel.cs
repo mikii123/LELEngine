@@ -182,8 +182,11 @@ namespace LELEngine.Editor
 
 			context.Scene = editor.Scene;
 			context.LabelWidth = Math.Max(110f, ImGui.GetContentRegionAvail().X * 0.38f);
+			// A prefab instance's object: its overrides are marked (bold, the bar) and can be applied or reverted.
+			context.Overrides = PrefabInspector.OverridesOf(go.prefabInstance, editor.SceneVersion);
 			DrawObjectHeader(go);
 			ImGui.Separator();
+			PrefabInspector.DrawPrefabBar(editor, go, context);
 
 			foreach (Behaviour component in new List<Behaviour>(go.Components))
 			{
@@ -192,6 +195,7 @@ namespace LELEngine.Editor
 				ImGui.PopID();
 			}
 
+			PrefabInspector.DrawRemovedComponents(editor, go, context);
 			ImGui.Spacing();
 			DrawAddComponent(go);
 		}
@@ -212,10 +216,12 @@ namespace LELEngine.Editor
 				editor.NotifyChanged(go);
 			}
 
+			PrefabInspector.MarkHeaderProperty(context, go, LELEngine.Serialization.PropertyModification.ActiveProperty);
 			ImGui.SameLine();
 			// Room for the lock button at the end of the line.
 			ImGui.SetNextItemWidth(-(ImGui.GetFrameHeight() + ImGui.GetStyle().ItemSpacing.X));
 			ImGui.InputText("##name", ref nameBuffer, 256);
+			PrefabInspector.MarkHeaderProperty(context, go, LELEngine.Serialization.PropertyModification.NameProperty);
 			if (ImGui.IsItemDeactivatedAfterEdit() && !string.IsNullOrWhiteSpace(nameBuffer) && nameBuffer != go.Name)
 			{
 				editor.Undo.Push(new GameObjectStateRecord { Name = "Rename " + go.Name, ObjectId = go.Id, NameBefore = go.Name, NameAfter = nameBuffer, ActiveBefore = go.activeSelf, ActiveAfter = go.activeSelf });
@@ -258,19 +264,29 @@ namespace LELEngine.Editor
 
 				ImGui.EndCombo();
 			}
+
+			PrefabInspector.MarkHeaderProperty(context, go, LELEngine.Serialization.PropertyModification.LayerProperty);
 		}
 
 		private void DrawComponent(GameObject go, Behaviour component)
 		{
 			context.UndoTarget = component;
+			// Overrides of this component (its id in the prefab); none for components added to the instance.
+			context.OverrideTarget = component.prefabInstance != null ? component.prefabSourceId : 0;
+			context.Path = "";
 			Type type = component.GetType();
 			string title = component is MissingComponent missing
 				? "Missing script: " + missing.TypeName
 				: SerializationUtility.NicifyName(type.Name);
 
+			bool added = PrefabUtility.IsAddedComponent(component);
+			bool overridden = added || HasOverrides(component);
 			ImGui.SetNextItemAllowOverlap();
-			bool open = ImGui.CollapsingHeader(title + "##header", ImGuiTreeNodeFlags.DefaultOpen);
+			bool bold = overridden && EditorFonts.PushBold();
+			bool open = ImGui.CollapsingHeader((added ? PrefabInspector.AddedTitlePadding() : "") + title + "##header", ImGuiTreeNodeFlags.DefaultOpen);
+			EditorFonts.Pop(bold);
 			TestAnchors.RecordItem("component:" + type.Name);
+			PrefabInspector.DecorateComponentHeader(editor, component, context);
 
 			// The header drags this very component on to object fields (of its type, its GameObject's or an interface it implements).
 			if (!(component is MissingComponent) && ImGui.BeginDragDropSource())
@@ -296,6 +312,7 @@ namespace LELEngine.Editor
 					editor.NotifyChanged(go);
 				}
 
+				PrefabInspector.DrawComponentMenu(editor, component, context);
 				ImGui.EndPopup();
 			}
 
@@ -361,6 +378,8 @@ namespace LELEngine.Editor
 
 			Vector3 position = transform.localPosition;
 			NVector3 p = new NVector3(position.X, position.Y, position.Z);
+			// The serialized fields' paths: prefab overrides of the transform are marked like other fields.
+			context.Path = "m_LocalPosition";
 			FieldDrawer.Label("Position", null, context);
 			bool changed = ImGui.DragFloat3("##position", ref p, 0.05f);
 			context.Track(changed);
@@ -383,6 +402,7 @@ namespace LELEngine.Editor
 			}
 
 			NVector3 r = new NVector3(euler.X, euler.Y, euler.Z);
+			context.Path = "m_LocalRotation";
 			FieldDrawer.Label("Rotation", null, context);
 			changed = ImGui.DragFloat3("##rotation", ref r, 0.5f);
 			context.Track(changed);
@@ -394,9 +414,11 @@ namespace LELEngine.Editor
 			}
 
 			eulerHints[transform] = (transform.localRotation, euler);
+			context.Path = "";
 
 			Vector3 scale = transform.localScale;
 			NVector3 s = new NVector3(scale.X, scale.Y, scale.Z);
+			context.Path = "m_LocalScale";
 			FieldDrawer.Label("Scale", null, context);
 			changed = ImGui.DragFloat3("##scale", ref s, 0.02f);
 			context.Track(changed);
@@ -492,9 +514,26 @@ namespace LELEngine.Editor
 		/// <summary>Drops all cached types (before the script assembly is unloaded).</summary>
 		public void ClearTypeCaches()
 		{
+			PrefabInspector.Forget();
 			componentTypes = null;
 			eulerHints.Clear();
 			nameOwner = null;
+		}
+
+		/// <summary>The prefab instance overrides values of this component.</summary>
+		private bool HasOverrides(Behaviour component)
+		{
+			if (context.Overrides == null || component.prefabInstance == null)
+			{
+				return false;
+			}
+
+			foreach (LELEngine.Serialization.PropertyModification modification in context.Overrides.Of(component.prefabSourceId))
+			{
+				return true;
+			}
+
+			return false;
 		}
 
 		private static void ResetFields(Behaviour component)

@@ -179,7 +179,7 @@ namespace LELEngine.Editor
 			}
 			else if (value != null && !missing)
 			{
-				EditorIcons.Draw(draw, start + new NVector2(4f, 3f), icon, EditorIcons.KindOf(value), ImGui.GetColorU32(ImGuiCol.Text, 0.85f));
+				EditorIcons.Draw(draw, start + new NVector2(4f, 3f), icon, EditorIcons.KindOf(value), value is Prefab ? ImGui.GetColorU32(EditorStyle.Prefab) : ImGui.GetColorU32(ImGuiCol.Text, 0.85f));
 				textX = start.X + icon + 9f;
 			}
 

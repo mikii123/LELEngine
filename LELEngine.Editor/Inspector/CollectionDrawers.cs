@@ -317,10 +317,19 @@ namespace LELEngine.Editor
 				};
 
 				object item = list[i];
-				if (FieldDrawer.DrawValue("Element " + i, element, ref item, null, context, depth + 1))
+				string listPath = context.Path;
+				context.Path = PropertyPath.Element(listPath, i);
+				try
 				{
-					list[i] = item;
-					changed = true;
+					if (FieldDrawer.DrawValue("Element " + i, element, ref item, null, context, depth + 1))
+					{
+						list[i] = item;
+						changed = true;
+					}
+				}
+				finally
+				{
+					context.Path = listPath;
 				}
 
 				context.PendingRow = null;
@@ -571,11 +580,16 @@ namespace LELEngine.Editor
 				ImGui.TableSetupColumn("Key", ImGuiTableColumnFlags.WidthStretch, 0.38f);
 				ImGui.TableSetupColumn("Value", ImGuiTableColumnFlags.WidthStretch, 0.62f);
 				ImGui.TableHeadersRow();
+				string dictionaryPath = context.Path;
 				for (int i = 0; i < keys.Count; i++)
 				{
 					object key = keys[i];
 					ImGui.TableNextRow();
 					ImGui.PushID(i);
+					// The entry's path names its key as the prefab overrides do ("loot{gold}").
+					context.Path = context.Overrides != null
+						? PropertyPath.WithKey(dictionaryPath, GenericValues.KeyString(DocumentValues.ToGeneric(key, SerializationUtility.TagOf(keyType, out _), ValueTag.Null, new SerializationContext { Scene = context.Scene }, 0), SerializationUtility.TagOf(keyType, out _)))
+						: dictionaryPath;
 
 					// Key: changed in place when the new key is free (an entry keeps its place in the dictionary).
 					ImGui.TableSetColumnIndex(0);
@@ -630,6 +644,7 @@ namespace LELEngine.Editor
 					ImGui.PopID();
 				}
 
+				context.Path = dictionaryPath;
 				ImGui.EndTable();
 			}
 

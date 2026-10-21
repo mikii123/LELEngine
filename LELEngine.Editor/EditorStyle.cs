@@ -17,6 +17,18 @@ namespace LELEngine.Editor
 		/// <summary>Highlight of active toggle buttons (play mode running).</summary>
 		public static readonly NVector4 Accent = new NVector4(0.2f, 0.45f, 0.75f, 1f);
 
+		/// <summary>Names of prefab instances' objects (hierarchy), prefab icons, the override bar (Unity's prefab blue).</summary>
+		public static readonly NVector4 Prefab = new NVector4(0.48f, 0.71f, 1f, 1f);
+
+		/// <summary>Prefab instance objects that are inactive.</summary>
+		public static readonly NVector4 PrefabDim = new NVector4(0.36f, 0.49f, 0.66f, 1f);
+
+		/// <summary>Instances whose prefab file is missing.</summary>
+		public static readonly NVector4 PrefabMissing = new NVector4(1f, 0.42f, 0.38f, 1f);
+
+		/// <summary>Objects and components added to an instance (the "+" badge).</summary>
+		public static readonly NVector4 Added = new NVector4(0.38f, 0.82f, 0.45f, 1f);
+
 		#endregion
 
 		#region PublicMethods

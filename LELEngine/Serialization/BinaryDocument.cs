@@ -21,6 +21,41 @@ namespace LELEngine.Serialization
 		/// <summary>Where the value being read or written lives, for messages ("Floor/MeshRenderer.mesh").</summary>
 		public string Location;
 
+		/// <summary>
+		///     Reading the data of a prefab instance's object: a reference id not found in <see cref="Objects" /> is an
+		///     id of the prefab's own space and resolves to <c>id ^ InstanceId</c> (the instance's copy of that object,
+		///     see <see cref="PrefabIds" />). 0 for everything else.
+		/// </summary>
+		public ulong InstanceId;
+
+		/// <summary>
+		///     Writing: the id written for a reference to a scene object (a prefab saved from scene objects writes the
+		///     ids of the prefab's space, 0 for objects outside it). Null: the object's own id when it belongs to
+		///     <see cref="Scene" />.
+		/// </summary>
+		public Func<object, ulong> MapReference;
+
+		#endregion
+
+		#region PublicMethods
+
+		/// <summary>The object or component with this id in the document being read (see <see cref="InstanceId" />), or null.</summary>
+		public object Find(ulong id)
+		{
+			if (id == 0)
+			{
+				return null;
+			}
+
+			object target;
+			if (Objects.TryGetValue(id, out target))
+			{
+				return target;
+			}
+
+			return InstanceId != 0 && Objects.TryGetValue(id ^ InstanceId, out target) ? target : null;
+		}
+
 		#endregion
 	}
 
@@ -159,11 +194,21 @@ namespace LELEngine.Serialization
 		public const int SceneReferenceObject = -2;
 		public const int AssetReferenceObject = -3;
 
-		/// <summary>Version 2: document kind in the header, sub-asset names in asset values, GameObject layers.</summary>
-		public const int Version = 2;
+		/// <summary>
+		///     Version 2: document kind in the header, sub-asset names in asset values, GameObject layers. Version 3: the
+		///     entries of scene and prefab bodies start with a kind byte (<see cref="EntryObject" /> or
+		///     <see cref="EntryPrefabInstance" />).
+		/// </summary>
+		public const int Version = 3;
+
+		public const byte EntryObject = 0;
+		public const byte EntryPrefabInstance = 1;
 
 		/// <summary>Body of a scene file (see <see cref="SceneSerializer" />).</summary>
 		public const string KindScene = "Scene";
+
+		/// <summary>Body of a prefab file: a scene body whose objects have one root, without settings (see <see cref="Prefab" />).</summary>
+		public const string KindPrefab = "Prefab";
 
 		/// <summary>Body of a single root object (assets such as materials, meta files, settings).</summary>
 		public const string KindObject = "Object";

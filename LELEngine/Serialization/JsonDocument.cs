@@ -335,7 +335,7 @@ namespace LELEngine.Serialization
 		///     The spec of generic data (no live type): the stored encodings, and for collections of collections the
 		///     nested encodings the data itself carries (taken from its first element).
 		/// </summary>
-		private static SchemaField GenericSpec(string name, ValueTag tag, ValueTag elementTag, object value, int depth)
+		internal static SchemaField GenericSpec(string name, ValueTag tag, ValueTag elementTag, object value, int depth)
 		{
 			var field = new SchemaField { Name = name, Tag = tag, ElementTag = elementTag };
 			if (depth > SerializationUtility.MaxDepth)

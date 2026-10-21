@@ -1,10 +1,16 @@
 using System;
 using Hexa.NET.ImGui;
 using NVector2 = System.Numerics.Vector2;
+using NVector4 = System.Numerics.Vector4;
 
 namespace LELEngine.Editor
 {
-	/// <summary>Scene object tree: selection, drag and drop re-parenting, create / rename / duplicate / delete.</summary>
+	/// <summary>
+	///     Scene object tree: selection, drag and drop re-parenting, create / rename / duplicate / delete. Prefab
+	///     instances show as in Unity: their objects' names in blue (red when the prefab is missing), a prefab icon on
+	///     instance roots and the roots of nested prefabs (variants marked), a "+" on objects added to an instance, and
+	///     an arrow at the end of a root's row that opens its prefab. In prefab mode a breadcrumb leads back.
+	/// </summary>
 	internal sealed class HierarchyPanel
 	{
 		#region PublicFields
@@ -26,9 +32,9 @@ namespace LELEngine.Editor
 		private bool focusRename;
 		private int renameAge;
 
-		// A model file dropped from the project panel this frame, and the object it goes under.
-		private string droppedModel;
-		private Transform droppedModelParent;
+		// A model or prefab file dropped from the project panel this frame, and the object it goes under.
+		private string droppedAsset;
+		private Transform droppedAssetParent;
 
 		// The row the left button went down on (it is selected when the button comes up without a drag).
 		private GameObject pressed;
@@ -38,6 +44,13 @@ namespace LELEngine.Editor
 		private double pingTime;
 		private bool revealPinged;
 		private const double PingSeconds = 1.6;
+
+		// A prefab to open after the tree is drawn (the arrow at the end of a row).
+		private string openPrefab;
+
+		// Leading spaces of a row's label: room for its icon.
+		private string iconPadding = "";
+		private float iconPaddingFont;
 
 		#endregion
 
@@ -114,8 +127,23 @@ namespace LELEngine.Editor
 				return;
 			}
 
-			ImGui.TextDisabled(scene.Name + (editor.SceneDirty ? " *" : ""));
+			if (editor.Stage != null)
+			{
+				DrawStageHeader();
+			}
+			else
+			{
+				ImGui.TextDisabled(scene.Name + (editor.SceneDirty ? " *" : ""));
+			}
+
 			ImGui.Separator();
+
+			float space = ImGui.CalcTextSize(" ").X;
+			if (iconPaddingFont != ImGui.GetFontSize())
+			{
+				iconPaddingFont = ImGui.GetFontSize();
+				iconPadding = new string(' ', (int)Math.Ceiling((ImGui.GetTextLineHeight() + 5f) / Math.Max(1f, space)));
+			}
 
 			GameObject deferredReparent = null;
 			Transform deferredParent = null;
@@ -140,7 +168,7 @@ namespace LELEngine.Editor
 					deferredParent = null;
 				}
 
-				AcceptModel(null);
+				AcceptAsset(null);
 				ImGui.EndDragDropTarget();
 			}
 
@@ -155,11 +183,90 @@ namespace LELEngine.Editor
 				Reparent(deferredReparent, deferredParent);
 			}
 
-			if (droppedModel != null)
+			if (droppedAsset != null)
 			{
-				editor.InstantiateModel(droppedModel, droppedModelParent);
-				droppedModel = null;
-				droppedModelParent = null;
+				if (droppedAsset.EndsWith(Prefab.Extension, StringComparison.OrdinalIgnoreCase))
+				{
+					editor.InstantiatePrefab(droppedAsset, droppedAssetParent);
+				}
+				else
+				{
+					editor.InstantiateModel(droppedAsset, droppedAssetParent);
+				}
+
+				droppedAsset = null;
+				droppedAssetParent = null;
+			}
+
+			if (openPrefab != null)
+			{
+				string path = openPrefab;
+				openPrefab = null;
+				editor.OpenPrefab(path);
+			}
+		}
+
+		/// <summary>Prefab mode: the way back (the scene, then each prefab opened), saving, and automatic saving.</summary>
+		private void DrawStageHeader()
+		{
+			PrefabStage stage = editor.Stage;
+			var frames = editor.StageFrames;
+			if (ImGui.SmallButton("<##stage_back"))
+			{
+				editor.ClosePrefabStage();
+				return;
+			}
+
+			if (ImGui.IsItemHovered())
+			{
+				ImGui.SetTooltip("Back to " + frames[frames.Count - 1].Name);
+			}
+
+			ImGui.SameLine();
+			for (int i = 0; i <= frames.Count; i++)
+			{
+				string name = i == 0 ? frames[0].Name : frames[i - 1].Stage.Name;
+				bool current = i == frames.Count;
+				if (i > 0)
+				{
+					ImGui.SameLine(0f, 2f);
+					ImGui.TextDisabled(">");
+					ImGui.SameLine(0f, 2f);
+				}
+
+				if (current)
+				{
+					NVector2 start = ImGui.GetCursorScreenPos();
+					float icon = ImGui.GetTextLineHeight();
+					EditorIcons.Draw(ImGui.GetWindowDrawList(), start, icon, Prefab.Load(stage.AssetPath)?.IsVariant == true ? IconKind.PrefabVariant : IconKind.Prefab, ImGui.GetColorU32(EditorStyle.Prefab));
+					ImGui.Dummy(new NVector2(icon, icon));
+					ImGui.SameLine(0f, 3f);
+					ImGui.TextUnformatted(name + (editor.SceneDirty ? " *" : ""));
+				}
+				else if (ImGui.SmallButton(name + "##crumb" + i))
+				{
+					editor.GoToStage(i - 1);
+					return;
+				}
+			}
+
+			bool autoSave = stage.AutoSave;
+			ImGui.BeginDisabled(autoSave || !editor.SceneDirty);
+			if (ImGui.SmallButton("Save##stage_save"))
+			{
+				editor.SavePrefabStage();
+			}
+
+			ImGui.EndDisabled();
+			ImGui.SameLine();
+			if (ImGui.Checkbox("Auto Save", ref autoSave))
+			{
+				stage.AutoSave = autoSave;
+			}
+
+			if (ImGui.IsItemHovered())
+			{
+				ImGui.SetTooltip("Write every change to the prefab file as it is made");
 			}
 		}
 
@@ -187,10 +294,14 @@ namespace LELEngine.Editor
 				ImGui.SetNextItemOpen(true);
 			}
 
+			PrefabInstance instance = go.prefabInstance;
+			Prefab openTarget = instance == null ? null : PrefabUtility.IsPrefabInstanceRoot(go) ? instance.Prefab : PrefabUtility.GetNestedPrefab(go);
 			bool open;
+			ImGui.SetNextItemAllowOverlap();
 			if (renaming == go)
 			{
-				open = ImGui.TreeNodeEx("##node", flags);
+				open = ImGui.TreeNodeEx(iconPadding + "###node", flags);
+				DrawIcon(go, instance);
 				ImGui.SameLine();
 				if (focusRename)
 				{
@@ -212,16 +323,23 @@ namespace LELEngine.Editor
 			}
 			else
 			{
-				if (!go.activeInHierarchy)
+				NVector4? color = TextColor(go, instance);
+				if (color.HasValue)
 				{
-					ImGui.PushStyleColor(ImGuiCol.Text, EditorStyle.Dim);
+					ImGui.PushStyleColor(ImGuiCol.Text, color.Value);
 				}
 
-				open = ImGui.TreeNodeEx(go.Name, flags);
+				open = ImGui.TreeNodeEx(iconPadding + go.Name + "###node", flags);
 				TestAnchors.RecordItem("hierarchy:" + go.Name);
-				if (!go.activeInHierarchy)
+				if (color.HasValue)
 				{
 					ImGui.PopStyleColor();
+				}
+
+				DrawIcon(go, instance);
+				if (ImGui.IsItemHovered() && instance != null && !DragAndDrop.IsDragging)
+				{
+					ImGui.SetTooltip(RowTooltip(go, instance));
 				}
 
 				// Selected when the click ends without a drag (as in Unity): dragging an object on to a field of the
@@ -255,7 +373,7 @@ namespace LELEngine.Editor
 			if (ImGui.BeginDragDropSource())
 			{
 				Dragged = go;
-				// Re-parents in the hierarchy; object fields take the object or its component of their type.
+				// Re-parents in the hierarchy; object fields take the object or its component of their type; the project panel makes a prefab of it.
 				DragAndDrop.SetPayload(DragType, DragItem.FromGameObject(go));
 				ImGui.EndDragDropSource();
 			}
@@ -268,7 +386,7 @@ namespace LELEngine.Editor
 					deferredParent = go.transform;
 				}
 
-				AcceptModel(go.transform);
+				AcceptAsset(go.transform);
 				ImGui.EndDragDropTarget();
 			}
 
@@ -289,12 +407,29 @@ namespace LELEngine.Editor
 					ImGui.EndMenu();
 				}
 
+				if ((instance == null || PrefabUtility.IsPrefabInstanceRoot(go)) && go != editor.StageRoot && ImGui.MenuItem("Save as Prefab", "", false, !editor.IsPlaying))
+				{
+					string folder = editor.ProjectFolder;
+					editor.Defer(() => editor.CreatePrefab(go, folder));
+				}
+
+				if (ImGui.IsItemHovered())
+				{
+					ImGui.SetTooltip("Saves the object as a prefab in the project panel's folder (or drag it there)");
+				}
+
+				PrefabMenus.DrawObjectMenu(editor, go);
 				ImGui.EndPopup();
 			}
 
 			if (editor.Selected == go && IsFocused && renaming == null && ImGui.IsKeyPressed(ImGuiKey.F2, false))
 			{
 				StartRename(go);
+			}
+
+			if (openTarget != null)
+			{
+				DrawOpenArrow(openTarget);
 			}
 
 			if (open)
@@ -308,6 +443,89 @@ namespace LELEngine.Editor
 			}
 
 			ImGui.PopID();
+		}
+
+		/// <summary>Unity's colors: prefab instances blue (dimmed when inactive), a missing prefab's instance red, inactive objects grey.</summary>
+		private static NVector4? TextColor(GameObject go, PrefabInstance instance)
+		{
+			if (instance != null)
+			{
+				return instance.IsMissing ? EditorStyle.PrefabMissing : go.activeInHierarchy ? EditorStyle.Prefab : EditorStyle.PrefabDim;
+			}
+
+			return go.activeInHierarchy ? (NVector4?)null : EditorStyle.Dim;
+		}
+
+		/// <summary>The row's icon (the last item is its tree node): a cube; a solid prefab cube on instance roots and nested prefab roots; "+" on added objects.</summary>
+		private static void DrawIcon(GameObject go, PrefabInstance instance)
+		{
+			NVector2 min = ImGui.GetItemRectMin();
+			float height = ImGui.GetItemRectSize().Y;
+			float size = ImGui.GetTextLineHeight();
+			var at = new NVector2(min.X + ImGui.GetTreeNodeToLabelSpacing() + 1f, min.Y + (height - size) * 0.5f);
+			ImDrawListPtr draw = ImGui.GetWindowDrawList();
+			IconKind kind = IconKind.GameObject;
+			NVector4 color = go.activeInHierarchy ? new NVector4(0.75f, 0.75f, 0.78f, 1f) : EditorStyle.Dim;
+			if (instance != null)
+			{
+				color = instance.IsMissing ? EditorStyle.PrefabMissing : go.activeInHierarchy ? EditorStyle.Prefab : EditorStyle.PrefabDim;
+				Prefab prefab = PrefabUtility.IsPrefabInstanceRoot(go) ? instance.Prefab : PrefabUtility.GetNestedPrefab(go);
+				if (prefab != null || (instance.IsMissing && instance.Root == go))
+				{
+					kind = prefab != null && prefab.IsVariant ? IconKind.PrefabVariant : IconKind.Prefab;
+				}
+			}
+
+			EditorIcons.Draw(draw, at, size, kind, ImGui.GetColorU32(color));
+			if (PrefabUtility.IsAddedGameObject(go))
+			{
+				float badge = size * 0.62f;
+				EditorIcons.Draw(draw, at + new NVector2(-badge * 0.35f, size - badge * 0.75f), badge, IconKind.AddedBadge, ImGui.GetColorU32(EditorStyle.Added));
+			}
+		}
+
+		/// <summary>The arrow at the end of a prefab root's row: opens the prefab for editing.</summary>
+		private void DrawOpenArrow(Prefab prefab)
+		{
+			NVector2 rowMin = ImGui.GetItemRectMin();
+			NVector2 rowMax = ImGui.GetItemRectMax();
+			float height = rowMax.Y - rowMin.Y;
+			float width = height;
+			ImGui.SameLine();
+			ImGui.SetCursorScreenPos(new NVector2(rowMax.X - width, rowMin.Y));
+			ImGui.InvisibleButton("##open_prefab", new NVector2(width, height));
+			bool hovered = ImGui.IsItemHovered();
+			if (hovered)
+			{
+				ImGui.GetWindowDrawList().AddRectFilled(ImGui.GetItemRectMin(), ImGui.GetItemRectMax(), ImGui.GetColorU32(ImGuiCol.ButtonHovered), 2f);
+				ImGui.SetTooltip("Open the prefab '" + prefab.name + "'");
+			}
+
+			float icon = height * 0.7f;
+			EditorIcons.Draw(ImGui.GetWindowDrawList(), ImGui.GetItemRectMin() + new NVector2((width - icon) * 0.5f, (height - icon) * 0.5f), icon, IconKind.Open, ImGui.GetColorU32(hovered ? ImGuiCol.Text : ImGuiCol.TextDisabled));
+			if (ImGui.IsItemClicked(ImGuiMouseButton.Left) && !editor.IsPlaying)
+			{
+				openPrefab = prefab.AssetPath;
+			}
+		}
+
+		private static string RowTooltip(GameObject go, PrefabInstance instance)
+		{
+			if (instance.IsMissing)
+			{
+				return "Missing prefab: " + instance.PrefabPath;
+			}
+
+			if (PrefabUtility.IsPrefabInstanceRoot(go))
+			{
+				Prefab prefab = instance.Prefab;
+				return "Instance of the prefab '" + prefab?.name + "'" + (prefab?.BasePrefab != null ? " (variant of '" + prefab.BasePrefab.name + "')" : "");
+			}
+
+			Prefab nested = PrefabUtility.GetNestedPrefab(go);
+			return nested != null
+				? "Nested prefab '" + nested.name + "' in the instance of '" + instance.Prefab?.name + "'"
+				: "Part of the instance of '" + instance.Prefab?.name + "'";
 		}
 
 		/// <summary>The pinged row (the last item): scrolled into view once, outlined while the ping lasts.</summary>
@@ -327,7 +545,7 @@ namespace LELEngine.Editor
 			}
 
 			float alpha = (float)(1.0 - age / PingSeconds);
-			System.Numerics.Vector4 color = EditorStyle.Selection;
+			NVector4 color = EditorStyle.Selection;
 			color.W = alpha;
 			ImGui.GetWindowDrawList().AddRect(ImGui.GetItemRectMin() - new NVector2(2f, 1f), ImGui.GetItemRectMax() + new NVector2(2f, 1f), ImGui.GetColorU32(color), 3f, ImDrawFlags.None, 2f);
 		}
@@ -338,13 +556,15 @@ namespace LELEngine.Editor
 			return !payload.IsNull;
 		}
 
-		/// <summary>A model file from the project panel: built under <paramref name="parent" /> after the tree is drawn.</summary>
-		private void AcceptModel(Transform parent)
+		/// <summary>A model or prefab file from the project panel: instantiated under <paramref name="parent" /> after the tree is drawn.</summary>
+		private void AcceptAsset(Transform parent)
 		{
-			if (!ImGui.AcceptDragDropPayload(ProjectPanel.DragType).IsNull && ModelAssets.IsModelFile(ProjectPanel.DraggedAsset))
+			string path = ProjectPanel.DraggedAsset;
+			if (!ImGui.AcceptDragDropPayload(ProjectPanel.DragType).IsNull && path != null
+				&& (ModelAssets.IsModelFile(path) || path.EndsWith(Prefab.Extension, StringComparison.OrdinalIgnoreCase)))
 			{
-				droppedModel = ProjectPanel.DraggedAsset;
-				droppedModelParent = parent;
+				droppedAsset = path;
+				droppedAssetParent = parent;
 			}
 		}
 
@@ -353,6 +573,25 @@ namespace LELEngine.Editor
 			if (parent != null && (parent == child.transform || parent.IsChildOf(child.transform)))
 			{
 				return;
+			}
+
+			if (child.prefabInstance != null && child.prefabInstance.Root != child)
+			{
+				Debug.LogWarning($"[Editor] '{child.Name}' is part of the prefab instance '{child.prefabInstance.Root?.Name}': its objects stay where the prefab has them (move the instance's root, or unpack it).");
+				return;
+			}
+
+			if (editor.Stage != null)
+			{
+				GameObject root = editor.StageRoot;
+				if (child == root)
+				{
+					Debug.LogWarning("[Editor] The root of the edited prefab stays the root.");
+					return;
+				}
+
+				// A prefab has one root: what is dropped on the empty area goes under it.
+				parent ??= root?.transform;
 			}
 
 			if (child.transform.parent == parent)

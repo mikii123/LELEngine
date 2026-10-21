@@ -654,6 +654,7 @@ namespace LELEngine
 			RegisterAssetType(typeof(Audio.AudioProject), new[] { Audio.AudioProject.Extension }, (type, path, sub) => Audio.AudioProject.Load(path));
 			RegisterAssetType(typeof(Audio.AudioClip), Audio.AudioClip.Extensions, (type, path, sub) => Audio.AudioClip.Load(path));
 			RegisterAssetType(typeof(ScriptableObject), new[] { ScriptableObjectAssets.Extension }, (type, path, sub) => ScriptableObjectAssets.Load(path));
+			RegisterAssetType(typeof(Prefab), new[] { Prefab.Extension }, (type, path, sub) => Prefab.Load(path, AssetLoadScope.Current != null));
 		}
 
 		private static AssetTypeInfo FindLoader(Type type, string assetPath)

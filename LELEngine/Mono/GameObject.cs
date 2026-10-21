@@ -48,6 +48,12 @@ namespace LELEngine
 
 		private int layerIndex;
 
+		/// <summary>
+		///     The parent id the file gave this object when no object of the file had it (an object added under the
+		///     objects of a prefab instance whose prefab is missing): written back while the object stays where it was put.
+		/// </summary>
+		internal ulong unresolvedParent;
+
 		/// <summary>The object's own active flag.</summary>
 		public bool activeSelf { get; private set; } = true;
 
@@ -300,6 +306,34 @@ namespace LELEngine
 			}
 		}
 
+		/// <summary>
+		///     A copy of <paramref name="original" /> with its children and components (Unity's Instantiate): references
+		///     between the copied objects point at the copies, others stay; a prefab instance's copy is an instance of the
+		///     same prefab with the same overrides. The copy goes into the scene of <paramref name="parent" /> (else the
+		///     original's); its components' Awake sees the copied values.
+		/// </summary>
+		public static GameObject Instantiate(GameObject original, Transform parent = null)
+		{
+			return Clone(original, parent, null, null);
+		}
+
+		/// <summary>A copy of <paramref name="original" /> with its root at a world position and rotation.</summary>
+		public static GameObject Instantiate(GameObject original, OpenTK.Mathematics.Vector3 position, OpenTK.Mathematics.Quaternion rotation, Transform parent = null)
+		{
+			return Clone(original, parent, position, rotation);
+		}
+
+		/// <summary>An instance of a prefab (see <see cref="Prefab.Instantiate(Transform)" />).</summary>
+		public static GameObject Instantiate(Prefab prefab, Transform parent = null)
+		{
+			return prefab?.Instantiate(parent);
+		}
+
+		public static GameObject Instantiate(Prefab prefab, OpenTK.Mathematics.Vector3 position, OpenTK.Mathematics.Quaternion rotation, Transform parent = null)
+		{
+			return prefab?.Instantiate(position, rotation, parent);
+		}
+
 		/// <summary>Destroys the object now, OnDestroy included (editor tools, scene unloading).</summary>
 		public static void DestroyImmediate(GameObject target)
 		{
@@ -351,6 +385,40 @@ namespace LELEngine
 		internal void RemoveComponentEntry(Behaviour component)
 		{
 			components.Remove(component);
+		}
+
+		private static GameObject Clone(GameObject original, Transform parent, OpenTK.Mathematics.Vector3? position, OpenTK.Mathematics.Quaternion? rotation)
+		{
+			if (!IsAlive(original))
+			{
+				throw new ArgumentException("Instantiate: the original is null or destroyed.", nameof(original));
+			}
+
+			Scene scene = parent?.gameObject.scene ?? original.scene ?? SceneManager.ActiveScene;
+			if (scene == null)
+			{
+				throw new InvalidOperationException("Instantiate: there is no scene to put the copy into.");
+			}
+
+			byte[] data = Serialization.SceneSerializer.SerializeObjects(original.scene, new[] { original });
+			List<GameObject> copies = Serialization.SceneSerializer.InstantiateObjects(data, scene, parent, true, roots =>
+			{
+				if (roots.Count == 0)
+				{
+					return;
+				}
+
+				if (position.HasValue)
+				{
+					roots[0].transform.position = position.Value;
+				}
+
+				if (rotation.HasValue)
+				{
+					roots[0].transform.rotation = rotation.Value;
+				}
+			});
+			return copies.Count > 0 ? copies[0] : null;
 		}
 
 		private void DestroyDetached()

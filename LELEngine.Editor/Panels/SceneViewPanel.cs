@@ -318,7 +318,7 @@ namespace LELEngine.Editor
 				pressCanPick = false;
 				if (NVector2.DistanceSquared(pressPosition, ImGui.GetMousePos()) < 16f && !gizmoUsed)
 				{
-					editor.Select(Pick(ImGui.GetMousePos()));
+					editor.Select(PickSelection(Pick(ImGui.GetMousePos())));
 				}
 			}
 		}
@@ -595,13 +595,36 @@ namespace LELEngine.Editor
 		/// <summary>Closest renderer under the mouse (ray against the meshes' triangles).</summary>
 		private GameObject Pick(NVector2 mouse)
 		{
-			return Pick(mouse, out _);
+			return Pick(mouse, out _, out _);
 		}
 
-		/// <summary>Closest renderer under the mouse and the sub-mesh of the triangle hit.</summary>
+		/// <summary>
+		///     What a click on <paramref name="hit" /> selects (as in Unity): the root of the prefab instance it is part of,
+		///     unless the selection is in that instance already (then the object itself, so a second click goes deeper).
+		/// </summary>
+		private GameObject PickSelection(GameObject hit)
+		{
+			GameObject root = hit?.prefabInstance?.Root;
+			if (root == null || root == hit || root.dead)
+			{
+				return hit;
+			}
+
+			GameObject selected = editor.Selected;
+			bool insideInstance = selected != null && !selected.dead && (selected == root || selected.transform.IsChildOf(root.transform));
+			return insideInstance ? hit : root;
+		}
+
+		/// <summary>Closest renderer under the mouse, the sub-mesh of the triangle hit and the world point hit.</summary>
 		private GameObject Pick(NVector2 mouse, out int subMesh)
 		{
+			return Pick(mouse, out subMesh, out _);
+		}
+
+		private GameObject Pick(NVector2 mouse, out int subMesh, out Vector3? point)
+		{
 			subMesh = -1;
+			point = null;
 			Scene scene = editor.Scene;
 			if (scene == null)
 			{
@@ -648,8 +671,16 @@ namespace LELEngine.Editor
 				}
 			}
 
-			// Selecting a child of a selected object's subtree cycles naturally by clicking again (Unity picks the root
-			// first; here the object hit is selected directly).
+			if (best != null)
+			{
+				point = origin + direction * bestT;
+			}
+			else if (Math.Abs(direction.Y) > 1e-6f && -origin.Y / direction.Y > 0f)
+			{
+				// Nothing hit: the ground plane.
+				point = origin + direction * (-origin.Y / direction.Y);
+			}
+
 			return best;
 		}
 
@@ -749,6 +780,12 @@ namespace LELEngine.Editor
 			if (ModelAssets.IsModelFile(assetPath))
 			{
 				editor.InstantiateModel(assetPath);
+			}
+			else if (assetPath.EndsWith(Prefab.Extension, StringComparison.OrdinalIgnoreCase))
+			{
+				// The instance goes where the mouse points (on the surface under it, else on the ground plane).
+				Pick(ImGui.GetMousePos(), out _, out Vector3? point);
+				editor.InstantiatePrefab(assetPath, null, point);
 			}
 			else if (assetPath.EndsWith(".material", StringComparison.OrdinalIgnoreCase))
 			{

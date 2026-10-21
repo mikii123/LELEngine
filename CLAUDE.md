@@ -260,6 +260,60 @@
   dictionaries, nested lists, ScriptableObjects, Resources): batch `-executeMethod ProbeTests.Setup` / `Verify`
   (JSON, typeless JSON <-> binary, snapshot, duplicate remap), a game build and the player's log, scripted drags.
 
+## Prefabs (variants, nested prefabs, overrides)
+
+- `.prefab` files are scene documents of kind "Prefab" (one root, no settings): `SceneSerializer` (partials
+  `.Document` generic model, `.Instances` instantiation). Scene and prefab entries are GameObjects or prefab instance
+  records (`PrefabInstanceRecord`: prefab ref, parent, `PropertyModification`s, removed objects / components, added
+  components; objects added under instance objects are ordinary entries after it). Binary documents are version 3:
+  every entry starts with a kind byte. A variant is a prefab whose root is an instance of its base; nested prefabs
+  are instance records inside a prefab. `Documents.Convert` handles both kinds typelessly (`ReadDocument` /
+  `WriteDocument`), `DocumentReferences` sees prefab refs, builds ship prefabs used by scenes / Resources.
+- Ids: an instance's object id is `instanceId ^ sourceId` (`PrefabIds`, XOR as Unity: associative, so nested
+  prefabs, unpacking one level and connecting objects to a new prefab keep ids). References inside a prefab are in
+  its own space; reading an instance's data resolves them through `SerializationContext.InstanceId` (`Find`:
+  id, else id ^ InstanceId). Modification values hold ids of the document containing the instance.
+- `PrefabResolver` / `PrefabCache` (engine, `Serialization/PrefabResolver.cs`): a `ResolvedPrefab` is the prefab
+  with nested instances and variant bases expanded and their modifications applied, as generic data (typeless, any
+  thread, shared and immutable); `Origin` / `OriginId` per object give the nested chain; cycles are detected
+  ([ThreadStatic] resolving set). Instantiation (`SceneSerializer.BuildInstance`) reads unmodified components from the
+  resolved prefab's cached binary and modified ones from a per-instance patch (generic node + modifications), both
+  with the typed reader. `Prefab.Instantiate` / `GameObject.Instantiate(GameObject | Prefab)` / `Behaviour`'s
+  protected `Instantiate` overloads are the runtime API.
+- Live link: `EngineObject.prefabInstance` + `prefabSourceId` (`PrefabInstance`: Id, Prefab, Root, `Source` = the
+  resolved data the instance was built from). Overrides are never recorded while editing: `PrefabOverrides.Compute`
+  diffs the live objects (generic `ToNode`) against `Source` when a document is written (fields per path, a
+  polymorphic object of the same class per field, another class / null / a reference as the whole value, list
+  elements + `#size` (more than 32 element overrides and half the list: the whole list), dictionary entries by key
+  incl. removed keys; root name / position / rotation are always written "default overrides", hidden in the UI).
+  So a prefab change reaches instances by saving the scene to bytes and loading it again (`ReloadScene`,
+  `PrefabUtility.ReloadScene`). Unused modifications (target gone) are kept and written back. A missing prefab's
+  instance is a placeholder holding its record verbatim (`MissingRecord`); orphaned children keep
+  `GameObject.unresolvedParent`.
+- `PrefabUtility` (engine, public): queries, `SaveAsPrefabAsset` (an instance root becomes a variant; unpack first
+  for an original), `CreateVariant`, `UnpackPrefabInstance` (OutermostRoot relinks nested instances), revert (live)
+  and apply (load the target prefab as a scene with `EditPrefab`, set the value through a mapping context, save) of
+  properties / added and removed components and objects / everything; `GetApplyTargets` lists the prefab chain
+  (instance's prefab, then nested prefabs or bases down to the defining one; mask = scene id ^ stage id).
+- Editor: `EditorApplication.Prefabs.cs` (prefab mode: `OpenPrefab` stacks `StageFrame`s with the replaced scene's
+  snapshot, undo history and dirty flag; Auto Save (default) writes when an edit settles; leaving restores the
+  snapshot, so instances rebuild; play / open scene / close leave stages first; `RecordPrefabFiles` = undo record
+  of prefab files + meta files and scene snapshots, then reload; `Defer` runs scene-replacing actions after the
+  frame's panels). `Prefabs/PrefabMenus.cs` (apply / revert as undoable, deferred actions), `PrefabInspector.cs`
+  (prefab bar Open / Select / Overrides list, bold labels + blue margin bar via `InspectorContext.Overrides` /
+  `OverrideTarget` / `Path` kept by `FieldDrawer` / `CollectionDrawers`, right-click Apply / Revert, "+" added and
+  greyed removed components), `PrefabAssetInspector.cs`. Hierarchy: blue names (red missing), prefab icons on
+  instance and nested roots (variant marker), "+" on added objects, ">" opens the prefab, breadcrumb in prefab mode;
+  dragging a hierarchy object on a project folder creates a prefab (an instance root asks Original / Variant).
+  Scene view: a click selects the instance root first, prefabs drop where the mouse points. Bold font:
+  `EditorFonts.PushBold` (segoeuib.ttf per ImGui context).
+- Verified 2026-10-21 with a probe project (scratchpad `PrefabProbe`, batch `-executeMethod ProbeTests.Run`, 67
+  checks: overrides of every kind incl. polymorphic lists / dictionaries / interface references, JSON / binary /
+  typeless conversion, base changes reaching variants, nested apply to outer / inner prefab, structure overrides,
+  unpack, runtime instantiate, missing prefab round trip, cycles, Resources.Load), scripted editor runs (hooks
+  `instantiateprefab=`, `openprefab=`, `createprefab=`, `setfield=`, `applyprefab=`, `undoat=`, `replacetext=`, ...;
+  screenshots), a game build and the player's log.
+
 ## Player build output
 
 - `GameBuilder` ships only what the build uses (`BuildDependencies`): the build scenes, every file under a folder

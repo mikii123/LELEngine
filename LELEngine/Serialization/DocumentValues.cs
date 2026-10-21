@@ -21,10 +21,15 @@ namespace LELEngine.Serialization
 				return null;
 			}
 
-			object target;
-			if (!context.Objects.TryGetValue(id, out target))
+			object target = context.Find(id);
+			if (target == null)
 			{
-				Debug.LogWarning($"[Serialization] {context.Location}: reference to missing object {id}");
+				// Inside a prefab instance a reference to an object the instance removed is null, as expected.
+				if (context.InstanceId == 0)
+				{
+					Debug.LogWarning($"[Serialization] {context.Location}: reference to missing object {id}");
+				}
+
 				return null;
 			}
 
@@ -503,6 +508,11 @@ namespace LELEngine.Serialization
 		/// <summary>Id written for a scene reference: the object or component id when it belongs to the context's scene and is saved, else 0.</summary>
 		public static ulong SceneReferenceId(object value, SerializationContext context)
 		{
+			if (context?.MapReference != null && (value is GameObject || value is Behaviour))
+			{
+				return ((EngineObject)value).dead ? 0 : context.MapReference(value);
+			}
+
 			Scene scene = context?.Scene;
 			if (value is GameObject go)
 			{

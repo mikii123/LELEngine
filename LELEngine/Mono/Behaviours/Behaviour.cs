@@ -191,6 +191,47 @@ namespace LELEngine
 			GameObject.Destroy(target, delay);
 		}
 
+		/// <summary>An instance of a prefab (under <paramref name="parent" />, else in the active scene).</summary>
+		protected static GameObject Instantiate(Prefab prefab, Transform parent = null)
+		{
+			return GameObject.Instantiate(prefab, parent);
+		}
+
+		protected static GameObject Instantiate(Prefab prefab, OpenTK.Mathematics.Vector3 position, OpenTK.Mathematics.Quaternion rotation, Transform parent = null)
+		{
+			return GameObject.Instantiate(prefab, position, rotation, parent);
+		}
+
+		/// <summary>A copy of a GameObject with its children and components (see <see cref="GameObject.Instantiate(GameObject, Transform)" />).</summary>
+		protected static GameObject Instantiate(GameObject original, Transform parent = null)
+		{
+			return GameObject.Instantiate(original, parent);
+		}
+
+		protected static GameObject Instantiate(GameObject original, OpenTK.Mathematics.Vector3 position, OpenTK.Mathematics.Quaternion rotation, Transform parent = null)
+		{
+			return GameObject.Instantiate(original, position, rotation, parent);
+		}
+
+		/// <summary>A copy of a component's GameObject; returns the copy's component that corresponds to <paramref name="original" />.</summary>
+		protected static T Instantiate<T>(T original, Transform parent = null)
+			where T : Behaviour
+		{
+			GameObject copy = GameObject.Instantiate(original.gameObject, parent);
+			int index = 0;
+			foreach (Behaviour component in original.gameObject.Components)
+			{
+				if (component == original)
+				{
+					break;
+				}
+
+				index++;
+			}
+
+			return copy != null && index < copy.Components.Count ? copy.Components[index] as T : null;
+		}
+
 		/// <summary>Engine resources of the component (GPU buffers, ...); released on destroy in every mode.</summary>
 		protected internal virtual void ReleaseResources()
 		{ }

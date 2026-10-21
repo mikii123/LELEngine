@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.IO;
 using System.Security.Cryptography;
 using System.Text;
-using System.Text.Json;
 using LELEngine.Rendering;
 using LELEngine.Rendering.DistanceField;
 using LELEngine.Serialization;
@@ -57,20 +56,58 @@ namespace LELEngine.Editor
 
 		#region PublicMethods
 
-		/// <summary>The fields of the meshes the scenes (asset paths) draw: baked now when this thread has the GL context, else from the cache.</summary>
+		/// <summary>
+		///     The fields of the meshes the scenes (asset paths) draw, their prefab instances included, and of the prefabs
+		///     the game may instantiate (those the scenes reference, those in Resources folders, at the scales inside them):
+		///     baked now when this thread has the GL context, else from the cache.
+		/// </summary>
 		public static Result Collect(ProjectInfo project, IEnumerable<string> scenes, Action<string> log)
 		{
 			var result = new Result();
 			var requests = new Dictionary<string, Request>(StringComparer.OrdinalIgnoreCase);
+			var prefabs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 			foreach (string scene in scenes)
 			{
 				try
 				{
-					CollectRequests(scene, requests);
+					CollectRequests(File.ReadAllBytes(AssetDatabase.ToAbsolute(scene)), requests, prefabs);
 				}
 				catch (Exception e)
 				{
 					log("Warning: the distance fields of " + scene + " could not be listed (" + e.Message + ").");
+				}
+			}
+
+			foreach (string path in AssetDatabase.GetAllAssetPaths(Prefab.Extension))
+			{
+				if (Resources.IsInResources(path))
+				{
+					prefabs.Add(path);
+				}
+			}
+
+			var done = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+			var queue = new Queue<string>(prefabs);
+			while (queue.Count > 0)
+			{
+				string path = queue.Dequeue();
+				if (!done.Add(path))
+				{
+					continue;
+				}
+
+				try
+				{
+					var referenced = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+					CollectPrefabRequests(path, requests, referenced);
+					foreach (string other in referenced)
+					{
+						queue.Enqueue(other);
+					}
+				}
+				catch (Exception e)
+				{
+					log("Warning: the distance fields of " + path + " could not be listed (" + e.Message + ").");
 				}
 			}
 
@@ -134,66 +171,191 @@ namespace LELEngine.Editor
 
 		#region PrivateMethods
 
-		/// <summary>
-		///     The GI meshes of a scene file and their renderers' world scales (the product of the local scales up the
-		///     hierarchy, as <see cref="Transform.lossyScale" /> computes it), plus scale 1 for each mesh.
-		/// </summary>
-		private static void CollectRequests(string scenePath, Dictionary<string, Request> requests)
+		/// <summary>The hierarchy of a document as far as the fields need it: parents, local scales, GI renderers' meshes.</summary>
+		private sealed class ScaleTree
 		{
-			byte[] data = File.ReadAllBytes(AssetDatabase.ToAbsolute(scenePath));
-			if (!Documents.IsJson(data))
+			public readonly Dictionary<ulong, ulong> Parents = new Dictionary<ulong, ulong>();
+			public readonly Dictionary<ulong, Vector3> LocalScales = new Dictionary<ulong, Vector3>();
+			public readonly List<(ulong Owner, string ModelPath, string MeshName)> Renderers = new List<(ulong, string, string)>();
+
+			/// <summary>Prefab files the components reference (prefab fields: what scripts may instantiate).</summary>
+			public HashSet<string> Prefabs;
+
+			public void AddObject(ulong id, ulong parent)
 			{
-				return;
+				Parents[id] = parent;
 			}
 
-			using (JsonDocument document = JsonDocument.Parse(data))
+			/// <summary>A component's generic data: a Transform's scale, a MeshRenderer's mesh, prefab references anywhere.</summary>
+			public void AddComponent(ulong owner, SerializedNode data)
 			{
-				if (!document.RootElement.TryGetProperty("gameObjects", out JsonElement objects) || objects.ValueKind != JsonValueKind.Array)
+				string type = data?.TypeName ?? "";
+				if (type.StartsWith("Transform,", StringComparison.Ordinal) && data.Find("m_LocalScale")?.Value is Vector3 scale)
+				{
+					LocalScales[owner] = scale;
+				}
+				else if (type.StartsWith("MeshRenderer,", StringComparison.Ordinal) && !(data.Find("ContributesToGI")?.Value is bool gi && !gi)
+					&& data.Find("mesh")?.Value is AssetReference mesh && !mesh.IsNull)
+				{
+					string modelPath = AssetDatabase.GetPath(mesh.Guid) ?? mesh.Path;
+					if (modelPath != null && ModelAssets.IsModelFile(modelPath))
+					{
+						Renderers.Add((owner, modelPath, mesh.Name));
+					}
+				}
+
+				CollectPrefabReferences(data, 0);
+			}
+
+			/// <summary>The objects of a prefab instance (its resolved prefab with the instance's changes) in the document's ids.</summary>
+			public void AddInstance(PrefabInstanceRecord record)
+			{
+				string path = PrefabCache.PathOf(record.Prefab);
+				ResolvedPrefab prefab = path != null ? PrefabCache.Get(path) : null;
+				if (prefab?.Root == null)
 				{
 					return;
 				}
 
-				var parents = new Dictionary<ulong, ulong>();
-				var localScales = new Dictionary<ulong, Vector3>();
-				var renderers = new List<(ulong Owner, string ModelPath, string MeshName)>();
-				foreach (JsonElement entry in objects.EnumerateArray())
+				Prefabs?.Add(path);
+				var removedObjects = new HashSet<ulong>(record.RemovedObjects);
+				var removedComponents = new HashSet<ulong>(record.RemovedComponents);
+				Dictionary<ulong, List<PropertyModification>> modifications = PrefabResolver.GroupByTarget(record.Modifications);
+				var skipped = new HashSet<ulong>();
+				foreach (PrefabObject obj in prefab.Objects)
 				{
-					ulong id = entry.TryGetProperty("id", out JsonElement idValue) && idValue.TryGetUInt64(out ulong parsed) ? parsed : 0;
-					parents[id] = entry.TryGetProperty("parent", out JsonElement parentValue) && parentValue.TryGetUInt64(out ulong parent) ? parent : 0;
-					if (!entry.TryGetProperty("components", out JsonElement components) || components.ValueKind != JsonValueKind.Array)
+					if (removedObjects.Contains(obj.Id) || (obj.Parent != 0 && skipped.Contains(obj.Parent)))
 					{
+						skipped.Add(obj.Id);
 						continue;
 					}
 
-					foreach (JsonElement component in components.EnumerateArray())
+					ulong id = record.Id ^ obj.Id;
+					AddObject(id, obj.Parent != 0 ? record.Id ^ obj.Parent : record.Parent);
+					foreach (PrefabComponent component in obj.Components)
 					{
-						string type = component.TryGetProperty("$type", out JsonElement typeValue) ? typeValue.GetString() ?? "" : "";
-						if (type.StartsWith("Transform,", StringComparison.Ordinal) && component.TryGetProperty("m_LocalScale", out JsonElement scale) && scale.GetArrayLength() == 3)
+						if (removedComponents.Contains(component.Id))
 						{
-							localScales[id] = new Vector3(scale[0].GetSingle(), scale[1].GetSingle(), scale[2].GetSingle());
+							continue;
 						}
-						else if (type.StartsWith("MeshRenderer,", StringComparison.Ordinal)
-							&& !(component.TryGetProperty("ContributesToGI", out JsonElement gi) && gi.ValueKind == JsonValueKind.False)
-							&& component.TryGetProperty("mesh", out JsonElement mesh) && mesh.ValueKind == JsonValueKind.Object)
+
+						SerializedNode data = component.Data;
+						if (modifications.TryGetValue(component.Id, out List<PropertyModification> changes))
 						{
-							string guid = mesh.TryGetProperty("guid", out JsonElement g) ? g.GetString() : null;
-							string path = mesh.TryGetProperty("path", out JsonElement p) ? p.GetString() : null;
-							string name = mesh.TryGetProperty("name", out JsonElement n) ? n.GetString() : null;
-							string modelPath = AssetDatabase.GetPath(guid) ?? path;
-							if (modelPath != null && ModelAssets.IsModelFile(modelPath))
+							data = GenericValues.CloneNode(data);
+							foreach (PropertyModification change in changes)
 							{
-								renderers.Add((id, modelPath, name));
+								GenericValues.Apply(data, change);
 							}
 						}
+
+						AddComponent(id, data);
 					}
 				}
 
-				foreach ((ulong owner, string modelPath, string meshName) in renderers)
+				foreach (DocumentComponent added in record.AddedComponents)
 				{
-					Add(requests, modelPath, meshName, WorldScale(owner, parents, localScales, 0));
+					AddComponent(record.Id ^ added.GameObject, added.Data);
+				}
+			}
+
+			public void Request(Dictionary<string, Request> requests)
+			{
+				foreach ((ulong owner, string modelPath, string meshName) in Renderers)
+				{
+					Add(requests, modelPath, meshName, WorldScale(owner, Parents, LocalScales, 0));
 					Add(requests, modelPath, meshName, Vector3.One);
 				}
 			}
+
+			private void CollectPrefabReferences(object value, int depth)
+			{
+				if (Prefabs == null || depth > 16)
+				{
+					return;
+				}
+
+				switch (value)
+				{
+					case SerializedNode node:
+						foreach (SerializedProperty property in node.Properties)
+						{
+							CollectPrefabReferences(property.Value, depth + 1);
+						}
+
+						break;
+					case SerializedArray array when array.Bytes == null:
+						foreach (object item in array.Items)
+						{
+							CollectPrefabReferences(item, depth + 1);
+						}
+
+						break;
+					case SerializedDictionary dictionary:
+						foreach (KeyValuePair<object, object> entry in dictionary.Entries)
+						{
+							CollectPrefabReferences(entry.Value, depth + 1);
+						}
+
+						break;
+					case AssetReference reference when !reference.IsNull:
+						string path = PrefabCache.PathOf(reference);
+						if (path != null && path.EndsWith(Prefab.Extension, StringComparison.OrdinalIgnoreCase))
+						{
+							Prefabs.Add(path);
+						}
+
+						break;
+				}
+			}
+		}
+
+		/// <summary>
+		///     The GI meshes of a scene document (its prefab instances' too) and their renderers' world scales (the product
+		///     of the local scales up the hierarchy, as <see cref="Transform.lossyScale" /> computes it), plus scale 1 for
+		///     each mesh; the prefab files the scene uses go into <paramref name="prefabs" />.
+		/// </summary>
+		private static void CollectRequests(byte[] data, Dictionary<string, Request> requests, HashSet<string> prefabs)
+		{
+			var tree = new ScaleTree { Prefabs = prefabs };
+			foreach (DocumentEntry entry in SceneSerializer.ReadDocument(data).Entries)
+			{
+				if (entry.Instance != null)
+				{
+					tree.AddInstance(entry.Instance);
+					continue;
+				}
+
+				tree.AddObject(entry.Object.Id, entry.Object.Parent);
+				foreach (DocumentComponent component in entry.Object.Components)
+				{
+					tree.AddComponent(entry.Object.Id, component.Data);
+				}
+			}
+
+			tree.Request(requests);
+		}
+
+		/// <summary>The GI meshes of a prefab at the scales inside it (an instance made at runtime keeps the prefab's root scale).</summary>
+		private static void CollectPrefabRequests(string prefabPath, Dictionary<string, Request> requests, HashSet<string> prefabs)
+		{
+			ResolvedPrefab prefab = PrefabCache.Get(prefabPath);
+			if (prefab?.Root == null)
+			{
+				return;
+			}
+
+			var tree = new ScaleTree { Prefabs = prefabs };
+			foreach (PrefabObject obj in prefab.Objects)
+			{
+				tree.AddObject(obj.Id, obj.Parent);
+				foreach (PrefabComponent component in obj.Components)
+				{
+					tree.AddComponent(obj.Id, component.Data);
+				}
+			}
+
+			tree.Request(requests);
 		}
 
 		private static Vector3 WorldScale(ulong id, Dictionary<ulong, ulong> parents, Dictionary<ulong, Vector3> localScales, int depth)

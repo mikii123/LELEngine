@@ -22,7 +22,7 @@ namespace LELEngine.Editor
 	///     Everything runs on the main (GL) thread; script builds run in the background (see
 	///     <see cref="ScriptDomain" />).
 	/// </summary>
-	internal sealed class EditorApplication : IDisposable
+	internal sealed partial class EditorApplication : IDisposable
 	{
 		#region PublicFields
 
@@ -243,6 +243,7 @@ namespace LELEngine.Editor
 			ReloadSceneIfChangedOnDisk();
 			Scripts?.Update();
 			testHooks.Update();
+			UpdatePrefabStage();
 			if (PlayState == PlayState.Edit)
 			{
 				// Resources.LoadAsync requests and code awaiting on the main thread advance in edit mode too (editor
@@ -309,6 +310,7 @@ namespace LELEngine.Editor
 			ObjectPicker.Draw(this);
 			Extensions.EndFrame();
 			Edits.Flush();
+			RunDeferred();
 
 			if (testHooks.PendingFocus != null)
 			{
@@ -351,6 +353,22 @@ namespace LELEngine.Editor
 		/// <summary>Window close request: false while unsaved changes wait for an answer.</summary>
 		public bool RequestClose()
 		{
+			if (!closeConfirmed && Stage != null && !IsPlaying)
+			{
+				if (SceneDirty && !Stage.AutoSave)
+				{
+					ConfirmLeaveStage(() =>
+					{
+						LeaveAllStages(null);
+						Window.Close();
+					});
+					return false;
+				}
+
+				// Saved (automatically) and back to the scene, whose own changes are asked about below.
+				LeaveAllStages(null);
+			}
+
 			if (closeConfirmed || Project == null || !SceneDirty || IsPlaying)
 			{
 				SaveEditorState();
@@ -486,7 +504,9 @@ namespace LELEngine.Editor
 				ExitPlayMode();
 			}
 
+			stageFrames.Clear();
 			SceneManager.UnloadAll(true);
+			PrefabCache.Clear();
 			Scripts?.Dispose();
 			Scripts = null;
 			Extensions.Reset();
@@ -627,12 +647,12 @@ namespace LELEngine.Editor
 
 		public void NewScene()
 		{
-			ConfirmDiscard(NewSceneNow);
+			LeaveAllStages(() => ConfirmDiscard(NewSceneNow));
 		}
 
 		public void OpenScene(string assetPath)
 		{
-			ConfirmDiscard(() => OpenSceneNow(assetPath));
+			LeaveAllStages(() => ConfirmDiscard(() => OpenSceneNow(assetPath)));
 		}
 
 		public void SaveScene()
@@ -640,6 +660,13 @@ namespace LELEngine.Editor
 			if (IsPlaying)
 			{
 				Debug.LogWarning("[Editor] Exit play mode to save the scene.");
+				return;
+			}
+
+			if (Stage != null)
+			{
+				// Prefab mode: Ctrl+S saves the prefab.
+				SavePrefabStage();
 				return;
 			}
 
@@ -654,7 +681,7 @@ namespace LELEngine.Editor
 
 		public void SaveSceneAs()
 		{
-			if (Scene != null)
+			if (Scene != null && Stage == null)
 			{
 				saveAsPath = Scene.Path ?? "Scenes/" + Scene.Name + SceneSerializer.Extension;
 				openSaveAsPopup = true;
@@ -766,6 +793,7 @@ namespace LELEngine.Editor
 		public void MarkDirty()
 		{
 			NotifySceneChanged();
+			lastEditTime = Time.timeD;
 			if (!IsPlaying)
 			{
 				SceneDirty = true;
@@ -805,6 +833,12 @@ namespace LELEngine.Editor
 			GameObject target = Selected;
 			if (target == null)
 			{
+				return;
+			}
+
+			if (Stage != null && target == StageRoot)
+			{
+				Debug.LogWarning("[Editor] The root of the edited prefab cannot be deleted.");
 				return;
 			}
 
@@ -873,6 +907,7 @@ namespace LELEngine.Editor
 			}
 
 			GameObject root = null;
+			parent ??= StageRoot?.transform;
 			RecordStructural("Instantiate " + model.name, () =>
 			{
 				root = model.Instantiate(Scene, parent);
@@ -898,6 +933,8 @@ namespace LELEngine.Editor
 		public GameObject CreateModelObject(string name, string modelPath, Action<GameObject> setup = null, Transform parent = null)
 		{
 			GameObject created = null;
+			// Prefab mode: everything goes under the prefab's root (a prefab has one).
+			parent ??= StageRoot?.transform;
 			RecordStructural("Create " + name, () =>
 			{
 				created = modelPath != null ? DefaultScene.Instantiate(Scene, modelPath, name, parent) : Scene.CreateGameObject(name);
@@ -978,6 +1015,13 @@ namespace LELEngine.Editor
 			if (Scripts != null && Scripts.HasErrors)
 			{
 				Debug.LogError("[Editor] Fix the script compile errors before entering play mode.");
+				return;
+			}
+
+			if (Stage != null)
+			{
+				// Play mode plays the scene: prefab mode closes first.
+				LeaveAllStages(EnterPlayMode);
 				return;
 			}
 
@@ -1348,6 +1392,7 @@ namespace LELEngine.Editor
 
 		private void DrawModals()
 		{
+			DrawPrefabModals();
 			if (openUnsavedPopup)
 			{
 				ImGui.OpenPopup("Unsaved changes");
@@ -1471,15 +1516,15 @@ namespace LELEngine.Editor
 			if (ImGui.BeginMenu("File"))
 			{
 				if (ImGui.MenuItem("New Scene", "Ctrl+N")) NewScene();
-				if (ImGui.MenuItem("Save Scene", "Ctrl+S", false, !IsPlaying)) SaveScene();
-				if (ImGui.MenuItem("Save Scene As...", "Ctrl+Shift+S", false, !IsPlaying)) SaveSceneAs();
+				if (ImGui.MenuItem(Stage != null ? "Save Prefab" : "Save Scene", "Ctrl+S", false, !IsPlaying)) SaveScene();
+				if (ImGui.MenuItem("Save Scene As...", "Ctrl+Shift+S", false, !IsPlaying && Stage == null)) SaveSceneAs();
 				ImGui.Separator();
 				if (ImGui.MenuItem("Open Script Project", "", false, Scripts != null)) Scripts.OpenInIde();
 				if (ImGui.MenuItem("Rebuild Scripts", "", false, Scripts != null && !IsPlaying)) Scripts.RequestBuild();
 				ImGui.Separator();
 				if (ImGui.MenuItem("Build Settings...", "Ctrl+Shift+B")) ShowBuildWindow();
 				ImGui.Separator();
-				if (ImGui.MenuItem("Close Project")) ConfirmDiscard(CloseProject);
+				if (ImGui.MenuItem("Close Project")) LeaveAllStages(() => ConfirmDiscard(CloseProject));
 				if (ImGui.MenuItem("Exit")) Window.Close();
 				Extensions.DrawMenuItems("File");
 				ImGui.EndMenu();
@@ -1849,7 +1894,9 @@ namespace LELEngine.Editor
 		{
 			string title = Project == null
 				? "LELEngine Editor"
-				: $"LELEngine Editor - {Project.Name} - {Scene?.Name ?? "no scene"}{(SceneDirty ? " *" : "")}{(IsPlaying ? " [Playing]" : "")}";
+				: Stage != null
+					? $"LELEngine Editor - {Project.Name} - Prefab: {Stage.Name}{(SceneDirty ? " *" : "")}"
+					: $"LELEngine Editor - {Project.Name} - {Scene?.Name ?? "no scene"}{(SceneDirty ? " *" : "")}{(IsPlaying ? " [Playing]" : "")}";
 			if (title != lastTitle)
 			{
 				lastTitle = title;
@@ -1878,6 +1925,8 @@ namespace LELEngine.Editor
 			UIElements.UIAssets.ReloadChanged();
 			// ScriptableObject assets changed outside the editor: the loaded instances read their files again.
 			ScriptableObjectAssets.ReloadChanged();
+			// Prefab files changed outside the editor: the scene's instances of them are rebuilt.
+			RefreshPrefabsIfChanged();
 			// Audio files and the audio project changed outside: clips re-read on use, the project reloaded (not while the
 			// Audio Studio holds unsaved edits of it), the banks rebuilt.
 			List<string> changedClips = LELEngine.Audio.AudioClip.ReloadChanged();

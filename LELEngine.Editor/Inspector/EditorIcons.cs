@@ -19,7 +19,22 @@ namespace LELEngine.Editor
 		Plus,
 		Dropdown,
 		Lock,
-		Unlock
+		Unlock,
+
+		/// <summary>A solid cube: prefab assets and prefab instance roots.</summary>
+		Prefab,
+
+		/// <summary>A solid cube with a marker: prefab variants.</summary>
+		PrefabVariant,
+
+		/// <summary>A "+" in a disc: objects and components added to a prefab instance.</summary>
+		AddedBadge,
+
+		/// <summary>A "-" in a disc: things a prefab instance removed.</summary>
+		RemovedBadge,
+
+		/// <summary>A right-pointing arrow head (open a prefab).</summary>
+		Open
 	}
 
 	internal static class EditorIcons
@@ -44,6 +59,8 @@ namespace LELEngine.Editor
 					return IconKind.Component;
 				case ScriptableObject _:
 					return IconKind.ScriptableObject;
+				case Prefab prefab:
+					return prefab.IsVariant ? IconKind.PrefabVariant : IconKind.Prefab;
 				case IAsset _:
 					return IconKind.Asset;
 				default:
@@ -158,6 +175,48 @@ namespace LELEngine.Editor
 
 					break;
 				}
+				case IconKind.Prefab:
+				case IconKind.PrefabVariant:
+				{
+					// A solid isometric cube: the top lit, the sides shaded.
+					var top = center + new NVector2(0f, -s * 0.85f);
+					var left = center + new NVector2(-s * 0.78f, -s * 0.42f);
+					var right = center + new NVector2(s * 0.78f, -s * 0.42f);
+					var middle = center + new NVector2(0f, 0f);
+					var bottomLeft = center + new NVector2(-s * 0.78f, s * 0.45f);
+					var bottomRight = center + new NVector2(s * 0.78f, s * 0.45f);
+					var bottom = center + new NVector2(0f, s * 0.88f);
+					NVector4 c = ImGui.ColorConvertU32ToFloat4(color);
+					draw.AddQuadFilled(top, right, middle, left, color);
+					draw.AddQuadFilled(left, middle, bottom, bottomLeft, ImGui.ColorConvertFloat4ToU32(new NVector4(c.X * 0.62f, c.Y * 0.62f, c.Z * 0.62f, c.W)));
+					draw.AddQuadFilled(middle, right, bottomRight, bottom, ImGui.ColorConvertFloat4ToU32(new NVector4(c.X * 0.8f, c.Y * 0.8f, c.Z * 0.8f, c.W)));
+					if (kind == IconKind.PrefabVariant)
+					{
+						// A small dark diamond on the top face marks a variant.
+						uint mark = ImGui.ColorConvertFloat4ToU32(new NVector4(c.X * 0.25f, c.Y * 0.25f, c.Z * 0.3f, c.W));
+						var markCenter = center + new NVector2(0f, -s * 0.42f);
+						float m = s * 0.2f;
+						draw.AddQuadFilled(markCenter + new NVector2(0f, -m), markCenter + new NVector2(m * 1.6f, 0f), markCenter + new NVector2(0f, m), markCenter + new NVector2(-m * 1.6f, 0f), mark);
+					}
+
+					break;
+				}
+				case IconKind.AddedBadge:
+				case IconKind.RemovedBadge:
+				{
+					draw.AddCircleFilled(center, s * 0.62f, color, 14);
+					uint ink = ImGui.GetColorU32(new NVector4(0.08f, 0.08f, 0.09f, 1f));
+					draw.AddLine(center + new NVector2(-s * 0.34f, 0f), center + new NVector2(s * 0.34f, 0f), ink, thickness * 1.5f);
+					if (kind == IconKind.AddedBadge)
+					{
+						draw.AddLine(center + new NVector2(0f, -s * 0.34f), center + new NVector2(0f, s * 0.34f), ink, thickness * 1.5f);
+					}
+
+					break;
+				}
+				case IconKind.Open:
+					draw.AddTriangleFilled(center + new NVector2(-s * 0.25f, -s * 0.45f), center + new NVector2(s * 0.35f, 0f), center + new NVector2(-s * 0.25f, s * 0.45f), color);
+					break;
 			}
 		}
 

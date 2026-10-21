@@ -17,6 +17,9 @@ namespace LELEngine.Editor
 	///     drag=N;fromAnchor;toAnchor|M;... (press at N, move, hover at N+10, release at N+12),
 	///     click=N;anchor|..., doubleclick=N;anchor|...; expandinspector=1 opens every inspector foldout;
 	///     logfield=N;Object;Component.field|... logs a field's value; pingasset=N;path shows a file in the project panel.
+	///     Prefabs: selectframe=, instantiateprefab=, openprefab=, closeprefab=, saveprefab=, createprefab=, createvariant=,
+	///     unpackprefab=, applyprefab=, revertprefab=, setfield=, addcomponentat=, removecomponent=, destroyobject=,
+	///     reparent=, undoat=, replacetext=, logprefab= (see <see cref="UpdatePrefabHooks" />).
 	/// </summary>
 	internal sealed class TestHooks
 	{
@@ -393,6 +396,8 @@ namespace LELEngine.Editor
 				}
 			}
 
+			UpdatePrefabHooks(scene);
+
 			// pingasset=N;path|M;path: the project panel shows the file (its folder opens: its row can be dragged then).
 			if (values.TryGetValue("pingasset", out string pingAssets))
 			{
@@ -617,13 +622,187 @@ namespace LELEngine.Editor
 		{
 			foreach (GameObject go in scene.GameObjects)
 			{
-				if (go.Name == name)
+				if (go.Name == name && !go.IsDestroyed)
 				{
 					return go;
 				}
 			}
 
 			return null;
+		}
+
+		/// <summary>Runs <paramref name="action" /> with the ';'-separated arguments of each '|'-separated entry of name=N;args|M;args listed for this frame.</summary>
+		private void At(string name, Action<string[]> action)
+		{
+			if (!values.TryGetValue(name, out string list))
+			{
+				return;
+			}
+
+			foreach (string entry in list.Split('|'))
+			{
+				string[] parts = entry.Split(';');
+				if (parts.Length >= 1 && int.TryParse(parts[0], out int at) && at == frame)
+				{
+					try
+					{
+						action(parts);
+					}
+					catch (Exception e)
+					{
+						Debug.LogError("[Test] " + name + " at frame " + frame + " failed: " + e.Message);
+					}
+				}
+			}
+		}
+
+		/// <summary>
+		///     Prefab hooks (entries N;args, several with '|'): selectframe=N;Object, instantiateprefab=N;path,
+		///     openprefab=N;path, closeprefab=N, saveprefab=N, createprefab=N;Object;folder[;original|variant],
+		///     createvariant=N;path, unpackprefab=N;Object[;completely], applyprefab=N;Object, revertprefab=N;Object,
+		///     setfield=N;Object;Component.field[.sub];value (value: number, true/false, enum name, x,y,z, new:Class, null),
+		///     addcomponentat=N;Object;Type, removecomponent=N;Object;Type, destroyobject=N;Object, reparent=N;Object;Parent,
+		///     undoat=N, logprefab=N;Object (logs the instance's overrides).
+		/// </summary>
+		private void UpdatePrefabHooks(Scene scene)
+		{
+			At("selectframe", parts => editor.Select(Find(scene, parts[1])));
+			At("instantiateprefab", parts => Debug.Log("[Test] Instantiated " + editor.InstantiatePrefab(parts[1])?.Name));
+			At("openprefab", parts => editor.OpenPrefab(parts[1]));
+			At("closeprefab", parts => editor.ClosePrefabStage());
+			At("saveprefab", parts => editor.SavePrefabStage());
+			At("createprefab", parts => editor.CreatePrefab(Find(scene, parts[1]), parts.Length > 2 ? parts[2] : "", parts.Length > 3 ? parts[3] == "variant" : (bool?)null));
+			At("createvariant", parts => Debug.Log("[Test] Variant " + editor.CreatePrefabVariant(parts[1])));
+			At("unpackprefab", parts => editor.UnpackPrefab(Find(scene, parts[1]), parts.Length > 2 && parts[2] == "completely" ? PrefabUnpackMode.Completely : PrefabUnpackMode.OutermostRoot));
+			At("applyprefab", parts => PrefabMenus.ApplyAll(editor, Find(scene, parts[1]).prefabInstance));
+			At("revertprefab", parts => PrefabMenus.RevertAll(editor, Find(scene, parts[1]).prefabInstance));
+			At("undoat", parts => editor.UndoLast());
+			// replacetext=N;assetPath;old;new: an edit of a file outside the editor (the file watcher notices it).
+			At("replacetext", parts =>
+			{
+				string file = AssetDatabase.ToAbsolute(parts[1]);
+				string text = System.IO.File.ReadAllText(file);
+				System.IO.File.WriteAllText(file, text.Replace(parts[2], parts[3]));
+				Debug.Log($"[Test] Replaced '{parts[2]}' with '{parts[3]}' in {parts[1]} ({(text.Contains(parts[2]) ? "found" : "not found")})");
+			});
+			At("destroyobject", parts =>
+			{
+				GameObject go = Find(scene, parts[1]);
+				editor.RecordStructural("Delete " + go.Name, () => GameObject.DestroyImmediate(go));
+			});
+			At("addcomponentat", parts =>
+			{
+				GameObject go = Find(scene, parts[1]);
+				Type type = TypeRegistry.Resolve(parts[2]);
+				editor.RecordStructural("Add " + type.Name, () => go.AddComponent(type));
+			});
+			At("removecomponent", parts =>
+			{
+				GameObject go = Find(scene, parts[1]);
+				Behaviour component = go.GetComponent(TypeRegistry.Resolve(parts[2]));
+				editor.RecordStructural("Remove " + parts[2], () => GameObject.DestroyImmediate(component));
+			});
+			At("reparent", parts =>
+			{
+				GameObject go = Find(scene, parts[1]);
+				GameObject parent = Find(scene, parts[2]);
+				editor.RecordStructural("Re-parent " + go.Name, () => go.transform.SetParent(parent?.transform, true));
+			});
+			At("setfield", parts =>
+			{
+				GameObject go = Find(scene, parts[1]);
+				string[] path = parts[2].Split('.');
+				Behaviour component = go.GetComponent(TypeRegistry.Resolve(path[0])) ?? FindComponentByName(go, path[0]);
+				editor.Edits.Begin(component);
+				SetPath(component, path, 1, parts[3]);
+				editor.Edits.RequestCommit();
+				editor.NotifyChanged(go);
+				Debug.Log($"[Test] {go.Name}.{parts[2]} = {parts[3]}");
+			});
+			At("logprefab", parts =>
+			{
+				PrefabInstance instance = Find(scene, parts[1])?.prefabInstance;
+				PrefabInstanceOverrides overrides = PrefabUtility.GetOverrides(instance);
+				Debug.Log($"[Test] {parts[1]}: {overrides.Modifications.Count} overrides ({string.Join("; ", overrides.Modifications.ConvertAll(m => m.ToString()))}), added {overrides.AddedComponents.Count} components / {overrides.AddedObjects.Count} objects, removed {overrides.RemovedComponents.Count} components / {overrides.RemovedObjects.Count} objects");
+			});
+		}
+
+		private static Behaviour FindComponentByName(GameObject go, string name)
+		{
+			foreach (Behaviour component in go.Components)
+			{
+				if (component.GetType().Name == name)
+				{
+					return component;
+				}
+			}
+
+			return null;
+		}
+
+		/// <summary>Sets a field (through nested fields) from text.</summary>
+		private static void SetPath(object target, string[] path, int index, string text)
+		{
+			System.Reflection.FieldInfo field = target.GetType().GetField(path[index], System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic);
+			if (field == null)
+			{
+				throw new InvalidOperationException("no field " + path[index] + " in " + target.GetType().Name);
+			}
+
+			if (index < path.Length - 1)
+			{
+				object inner = field.GetValue(target);
+				SetPath(inner, path, index + 1, text);
+				if (field.FieldType.IsValueType)
+				{
+					field.SetValue(target, inner);
+				}
+
+				return;
+			}
+
+			field.SetValue(target, ParseValue(field.FieldType, text));
+		}
+
+		private static object ParseValue(Type type, string text)
+		{
+			var culture = System.Globalization.CultureInfo.InvariantCulture;
+			if (text == "null")
+			{
+				return null;
+			}
+
+			if (text.StartsWith("new:", StringComparison.Ordinal))
+			{
+				string name = text.Substring(4);
+				foreach (Type candidate in Serialization.SerializationUtility.GetConcreteTypes(type))
+				{
+					if (candidate.Name == name || candidate.FullName == name)
+					{
+						return Activator.CreateInstance(candidate);
+					}
+				}
+
+				throw new InvalidOperationException("no class " + name + " for " + type.Name);
+			}
+
+			if (type.IsEnum)
+			{
+				return Enum.Parse(type, text, true);
+			}
+
+			if (type == typeof(Prefab))
+			{
+				return Prefab.Load(text);
+			}
+
+			if (type == typeof(OpenTK.Mathematics.Vector3))
+			{
+				string[] c = text.Split(',');
+				return new OpenTK.Mathematics.Vector3(float.Parse(c[0], culture), float.Parse(c[1], culture), float.Parse(c[2], culture));
+			}
+
+			return Convert.ChangeType(text, type, culture);
 		}
 
 		#endregion

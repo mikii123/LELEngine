@@ -95,6 +95,13 @@ void main()
 				io.Fonts.AddFontDefault();
 			}
 
+			// The bold face marks overridden prefab values in the inspector (EditorFonts.PushBold).
+			string bold = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Fonts), "segoeuib.ttf");
+			if (File.Exists(bold))
+			{
+				EditorFonts.Register((nint)Context.Handle, io.Fonts.AddFontFromFileTTF(bold, 17f));
+			}
+
 			CreateDeviceObjects();
 
 			window.KeyDown += OnKeyDown;

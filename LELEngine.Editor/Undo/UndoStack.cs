@@ -350,6 +350,89 @@ namespace LELEngine.Editor
 			redo.Clear();
 		}
 
+		/// <summary>Takes the records out (the stack is empty afterwards): a prefab editing stage has its own history.</summary>
+		public (List<UndoRecord> undo, List<UndoRecord> redo) Take()
+		{
+			var taken = (new List<UndoRecord>(undo), new List<UndoRecord>(redo));
+			Clear();
+			return taken;
+		}
+
+		/// <summary>Puts back records taken with <see cref="Take" /> (replacing the current ones).</summary>
+		public void Restore((List<UndoRecord> undo, List<UndoRecord> redo) records)
+		{
+			Clear();
+			undo.AddRange(records.undo ?? new List<UndoRecord>());
+			redo.AddRange(records.redo ?? new List<UndoRecord>());
+		}
+
+		#endregion
+	}
+
+	/// <summary>
+	///     Prefab files written by an operation (apply to prefab, create prefab), with the scene before and after it:
+	///     undo writes the files back and reloads the scene's state from before.
+	/// </summary>
+	internal sealed class PrefabFilesRecord : UndoRecord
+	{
+		#region PublicFields
+
+		public readonly List<(string path, byte[] before, byte[] after)> Files = new List<(string, byte[], byte[])>();
+		public byte[] SceneBefore;
+		public byte[] SceneAfter;
+		public ulong SelectionBefore;
+		public ulong SelectionAfter;
+
+		#endregion
+
+		#region PublicMethods
+
+		public override void Undo(EditorApplication editor)
+		{
+			Apply(editor, false);
+		}
+
+		public override void Redo(EditorApplication editor)
+		{
+			Apply(editor, true);
+		}
+
+		#endregion
+
+		#region PrivateMethods
+
+		private void Apply(EditorApplication editor, bool after)
+		{
+			var prefabs = new List<string>();
+			foreach ((string path, byte[] before, byte[] afterBytes) in Files)
+			{
+				byte[] bytes = after ? afterBytes : before;
+				string file = AssetDatabase.ToAbsolute(path);
+				if (bytes == null)
+				{
+					if (System.IO.File.Exists(file))
+					{
+						System.IO.File.Delete(file);
+					}
+				}
+				else
+				{
+					System.IO.Directory.CreateDirectory(System.IO.Path.GetDirectoryName(file));
+					System.IO.File.WriteAllBytes(file, bytes);
+				}
+
+				if (!path.EndsWith(AssetDatabase.MetaExtension, StringComparison.OrdinalIgnoreCase))
+				{
+					prefabs.Add(path);
+				}
+			}
+
+			AssetDatabase.Refresh(true);
+			Serialization.PrefabCache.Invalidate(prefabs);
+			editor.RestoreSnapshot(after ? SceneAfter : SceneBefore, after ? SelectionAfter : SelectionBefore);
+			editor.NotifyAssetsChanged();
+		}
+
 		#endregion
 	}
 

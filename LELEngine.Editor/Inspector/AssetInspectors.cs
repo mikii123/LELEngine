@@ -71,6 +71,10 @@ namespace LELEngine.Editor
 			{
 				ScriptableObjectInspector.Draw(assetPath, context);
 			}
+			else if (type == typeof(Prefab))
+			{
+				PrefabAssetInspector.Draw(assetPath, context);
+			}
 			else if (assetPath.EndsWith(SceneSerializer.Extension, StringComparison.OrdinalIgnoreCase))
 			{
 				if (ImGui.Button("Open Scene", new NVector2(-1, 0)))
@@ -146,6 +150,7 @@ namespace LELEngine.Editor
 		private static string Kind(string assetPath, Type type)
 		{
 			if (type == typeof(ShaderProgram)) return "Shader";
+			if (type == typeof(Prefab)) return Prefab.Load(assetPath)?.IsVariant == true ? "Prefab Variant" : "Prefab";
 			if (type == typeof(LELEngine.VFX.VfxGraph)) return "Visual Effect Graph";
 			if (type == typeof(LELEngine.Audio.AudioProject)) return "Audio Project";
 			if (type == typeof(LELEngine.Audio.AudioClip)) return "Audio Clip";

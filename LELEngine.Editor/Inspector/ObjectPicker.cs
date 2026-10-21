@@ -538,7 +538,7 @@ namespace LELEngine.Editor
 					continue;
 				}
 
-				entries.Add(new Entry { Path = path, Label = Path.GetFileName(path), Detail = path, Icon = IconKind.Asset });
+				entries.Add(new Entry { Path = path, Label = Path.GetFileName(path), Detail = path, Icon = path.EndsWith(Prefab.Extension, StringComparison.OrdinalIgnoreCase) ? IconKind.Prefab : IconKind.Asset });
 			}
 
 			return entries;

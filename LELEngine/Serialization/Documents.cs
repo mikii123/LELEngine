@@ -26,7 +26,7 @@ namespace LELEngine.Serialization
 		public static DocumentFormat FileFormat = DocumentFormat.Json;
 
 		/// <summary>Extensions of the files that are documents (converted to binary in builds).</summary>
-		public static readonly string[] Extensions = { ".scene", ".material", ".meta", ".physicsMaterial2D", ".asset", ".vfx", ".lelaudio" };
+		public static readonly string[] Extensions = { ".scene", ".prefab", ".material", ".meta", ".physicsMaterial2D", ".asset", ".vfx", ".lelaudio" };
 
 		#endregion
 
@@ -222,20 +222,18 @@ namespace LELEngine.Serialization
 				return data;
 			}
 
+			if (SceneSerializer.IsSceneKind(KindOf(data)))
+			{
+				// Scenes and prefabs: entries (objects, prefab instances) as generic data.
+				return SceneSerializer.WriteDocument(SceneSerializer.ReadDocument(data), target);
+			}
+
 			if (target == DocumentFormat.Binary)
 			{
 				using (var reader = new JsonDocumentReader(data, null))
 				{
 					var writer = new BinaryDocumentWriter(null) { Kind = reader.Kind };
-					if (reader.Kind == BinaryDocument.KindScene)
-					{
-						SceneSerializer.ConvertToBinary(reader, writer);
-					}
-					else
-					{
-						writer.WriteObjectValue(reader.ReadGenericObject(reader.Root), 0);
-					}
-
+					writer.WriteObjectValue(reader.ReadGenericObject(reader.Root), 0);
 					return writer.ToArray();
 				}
 			}
@@ -243,11 +241,6 @@ namespace LELEngine.Serialization
 			var binary = new BinaryDocumentReader(data, null);
 			using (var writer = new JsonDocumentWriter(null, binary.Kind))
 			{
-				if (binary.Kind == BinaryDocument.KindScene)
-				{
-					SceneSerializer.ConvertToJson(binary, writer);
-				}
-				else
 				{
 					var node = binary.ReadBoxed(ValueTag.Object, ValueTag.Null, null, null, 0) as SerializedNode;
 					if (node != null)

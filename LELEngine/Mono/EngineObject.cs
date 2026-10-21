@@ -59,6 +59,14 @@ namespace LELEngine
 		/// <summary>Where Destroy was called (when <see cref="RecordDestroyStackTraces" />).</summary>
 		internal string destroyTrace;
 
+		/// <summary>
+		///     The prefab instance this GameObject or component is part of (null: not part of one, or added to an
+		///     instance); <see cref="prefabSourceId" /> is its id in the prefab (its own id is the instance's id XOR that).
+		/// </summary>
+		internal PrefabInstance prefabInstance;
+
+		internal ulong prefabSourceId;
+
 		#endregion
 
 		#region PrivateFields

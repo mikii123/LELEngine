@@ -98,6 +98,7 @@ namespace LELEngine.Editor
 				if (Component != null) return IconKind.Component;
 				if (GameObject != null) return IconKind.GameObject;
 				if (Asset is ScriptableObject || ScriptableObjectAssets.IsAssetFile(AssetPath)) return IconKind.ScriptableObject;
+				if (Asset is Prefab || (AssetPath != null && AssetPath.EndsWith(Prefab.Extension, StringComparison.OrdinalIgnoreCase))) return IconKind.Prefab;
 				return IconKind.Asset;
 			}
 		}
@@ -215,6 +216,13 @@ namespace LELEngine.Editor
 				if (go.dead)
 				{
 					return false;
+				}
+
+				// A prefab field takes a prefab instance's root as its prefab.
+				if (declaredType == typeof(Prefab))
+				{
+					value = item.Component == null && PrefabUtility.IsPrefabInstanceRoot(go) ? go.prefabInstance.Prefab : null;
+					return value != null;
 				}
 
 				if (item.Component != null && declaredType.IsInstanceOfType(item.Component))

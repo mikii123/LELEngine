@@ -28,7 +28,7 @@ namespace LELEngine.Serialization
 		public static DocumentReferences Collect(byte[] data)
 		{
 			var result = new DocumentReferences();
-			if (BinaryDocument.IsBinary(data) ? new BinaryDocumentReader(data, null).Kind == BinaryDocument.KindScene : Documents.KindOf(data) == BinaryDocument.KindScene)
+			if (SceneSerializer.IsSceneKind(Documents.KindOf(data)))
 			{
 				foreach (SerializedNode node in SceneSerializer.ReadGenericNodes(data))
 				{

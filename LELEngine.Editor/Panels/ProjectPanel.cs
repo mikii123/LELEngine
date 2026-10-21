@@ -36,6 +36,13 @@ namespace LELEngine.Editor
 		// The class stored by each listed ScriptableObject asset, by name (no script types: they would outlive a reload),
 		// and whether the scripts have it; read when the folder is listed, not every frame.
 		private readonly Dictionary<string, (string name, bool found)> listedAssetTypes = new Dictionary<string, (string, bool)>(StringComparer.OrdinalIgnoreCase);
+
+		// Listed prefab variants with the name of their base.
+		private readonly Dictionary<string, string> listedVariants = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+		// A hierarchy object dropped on a folder this frame: saved as a prefab after the panel is drawn.
+		private GameObject droppedObject;
+		private string droppedObjectFolder;
 		private int listedScriptsVersion = -1;
 		private string selectedFile;
 
@@ -71,6 +78,9 @@ namespace LELEngine.Editor
 		/// <summary>The window is shown (its close button and the Window menu toggle it; saved with the editor's windows).</summary>
 		public bool Open = true;
 
+		/// <summary>The folder shown (asset path, "" for Assets).</summary>
+		public string Folder => folder;
+
 		public void Draw()
 		{
 			if (!Open)
@@ -91,6 +101,12 @@ namespace LELEngine.Editor
 			}
 
 			ImGui.End();
+			if (droppedObject != null)
+			{
+				GameObject dropped = droppedObject;
+				droppedObject = null;
+				editor.CreatePrefab(dropped, droppedObjectFolder);
+			}
 		}
 
 		/// <summary>Shows a file: its folder opens, its row scrolls into view and flashes for a moment.</summary>
@@ -178,6 +194,8 @@ namespace LELEngine.Editor
 				folder = relative;
 			}
 
+			AcceptSceneObject(relative);
+
 			if (open)
 			{
 				Array.Sort(children, StringComparer.OrdinalIgnoreCase);
@@ -211,6 +229,8 @@ namespace LELEngine.Editor
 					folder = Combine(folder, directory);
 					return;
 				}
+
+				AcceptSceneObject(Combine(folder, directory));
 			}
 
 			float iconSize = ImGui.GetTextLineHeight();
@@ -231,10 +251,17 @@ namespace LELEngine.Editor
 
 				TestAnchors.RecordItem("project:" + assetPath);
 
-				// Icon and name over the row (ScriptableObject assets with their class).
+				// Icon and name over the row (ScriptableObject assets with their class, prefabs as blue cubes, variants with their base).
 				ImDrawListPtr draw = ImGui.GetWindowDrawList();
-				EditorIcons.Draw(draw, rowStart + new NVector2(1f, 0f), iconSize, ScriptableObjectAssets.IsAssetFile(assetPath) ? IconKind.ScriptableObject : IconKind.Asset, ImGui.GetColorU32(ImGuiCol.Text, 0.7f));
+				bool isPrefab = assetPath.EndsWith(Prefab.Extension, StringComparison.OrdinalIgnoreCase);
+				listedVariants.TryGetValue(assetPath, out string variantOf);
+				IconKind iconKind = isPrefab ? variantOf != null ? IconKind.PrefabVariant : IconKind.Prefab : ScriptableObjectAssets.IsAssetFile(assetPath) ? IconKind.ScriptableObject : IconKind.Asset;
+				EditorIcons.Draw(draw, rowStart + new NVector2(1f, 0f), iconSize, iconKind, isPrefab ? ImGui.GetColorU32(EditorStyle.Prefab) : ImGui.GetColorU32(ImGuiCol.Text, 0.7f));
 				draw.AddText(rowStart + new NVector2(iconSize + 6f, 0f), ImGui.GetColorU32(ImGuiCol.Text), file);
+				if (variantOf != null)
+				{
+					draw.AddText(rowStart + new NVector2(iconSize + 6f + ImGui.CalcTextSize(file).X, 0f), ImGui.GetColorU32(ImGuiCol.TextDisabled), "  variant of " + variantOf);
+				}
 				if (listedAssetTypes.TryGetValue(assetPath, out (string name, bool found) stored))
 				{
 					string kind = stored.found ? "  " + stored.name : "  " + (stored.name ?? "?") + " (missing script)";
@@ -275,7 +302,13 @@ namespace LELEngine.Editor
 				{
 					selectedFile = assetPath;
 					editor.SelectAsset(assetPath);
-					if (ImGui.MenuItem("Open")) OpenAsset(assetPath);
+					if (ImGui.MenuItem(isPrefab ? "Open Prefab" : "Open")) OpenAsset(assetPath);
+					if (isPrefab)
+					{
+						if (ImGui.MenuItem("Create Prefab Variant")) editor.CreatePrefabVariant(assetPath);
+						if (ImGui.MenuItem("Instantiate in Scene", "", false, editor.Scene != null)) editor.InstantiatePrefab(assetPath);
+					}
+
 					if (TextureAssets.IsImageFile(assetPath) && ImGui.MenuItem("Reimport"))
 					{
 						TextureAssets.Reimport(assetPath);
@@ -296,6 +329,9 @@ namespace LELEngine.Editor
 				selection.Clear();
 			}
 
+			// A scene object dropped here becomes a prefab in this folder.
+			AcceptSceneObject(folder);
+
 			if (ImGui.BeginPopupContextItem("##files_context"))
 			{
 				if (ImGui.MenuItem("Create Folder")) StartCreate("Folder", "New Folder");
@@ -308,6 +344,7 @@ namespace LELEngine.Editor
 				}
 
 				ImGui.Separator();
+				if (ImGui.MenuItem("Create Prefab")) StartCreate("Prefab", "NewPrefab");
 				if (ImGui.MenuItem("Create Material")) StartCreate("Material", "NewMaterial");
 				if (ImGui.MenuItem("Create Physics Material 2D")) StartCreate("PhysicsMaterial2D", "NewPhysicsMaterial");
 				if (ImGui.MenuItem("Create Visual Effect Graph")) StartCreate("VFX", "NewVisualEffect");
@@ -518,9 +555,21 @@ namespace LELEngine.Editor
 			listedDirectories.Sort(StringComparer.OrdinalIgnoreCase);
 			listedFiles.Sort(StringComparer.OrdinalIgnoreCase);
 			listedAssetTypes.Clear();
+			listedVariants.Clear();
 			foreach (string file in listedFiles)
 			{
 				string assetPath = Combine(folder, file);
+				if (assetPath.EndsWith(Prefab.Extension, StringComparison.OrdinalIgnoreCase))
+				{
+					Prefab basePrefab = Prefab.Load(assetPath)?.BasePrefab;
+					if (basePrefab != null)
+					{
+						listedVariants[assetPath] = basePrefab.name;
+					}
+
+					continue;
+				}
+
 				if (ScriptableObjectAssets.IsAssetFile(assetPath))
 				{
 					string typeName = ScriptableObjectAssets.GetTypeName(assetPath);
@@ -537,6 +586,10 @@ namespace LELEngine.Editor
 			if (assetPath.EndsWith(SceneSerializer.Extension, StringComparison.OrdinalIgnoreCase))
 			{
 				editor.OpenScene(assetPath);
+			}
+			else if (assetPath.EndsWith(Prefab.Extension, StringComparison.OrdinalIgnoreCase))
+			{
+				editor.OpenPrefab(assetPath);
 			}
 			else if (assetPath.EndsWith(".uxml", StringComparison.OrdinalIgnoreCase) || assetPath.EndsWith(".uss", StringComparison.OrdinalIgnoreCase))
 			{
@@ -718,6 +771,11 @@ namespace LELEngine.Editor
 					EnsureNew(target);
 					SceneSerializer.Save(DefaultScene.Create(editor.Project), target);
 					break;
+				case "Prefab":
+					target = Absolute(Combine(folder, name + Prefab.Extension));
+					EnsureNew(target);
+					target = Absolute(editor.CreateEmptyPrefab(folder, name));
+					break;
 				case "UXML":
 					target = Absolute(Combine(folder, name + ".uxml"));
 					EnsureNew(target);
@@ -759,6 +817,43 @@ namespace LELEngine.Editor
 					editor.OpenAudioStudio(selectedFile, null);
 				}
 			}
+		}
+
+		/// <summary>Drop target on the last item for hierarchy objects: the dropped object is saved as a prefab in <paramref name="targetFolder" />.</summary>
+		private void AcceptSceneObject(string targetFolder)
+		{
+			if (!ImGui.BeginDragDropTarget())
+			{
+				return;
+			}
+
+			ImGuiPayloadPtr payload = ImGui.AcceptDragDropPayload(HierarchyPanel.DragType, ImGuiDragDropFlags.AcceptBeforeDelivery);
+			if (!payload.IsNull)
+			{
+				GameObject dragged = HierarchyPanel.Dragged;
+				bool fits = dragged != null && !dragged.IsDestroyed && (dragged.prefabInstance == null || dragged.prefabInstance.Root == dragged) && !editor.IsPlaying;
+				if (!fits)
+				{
+					ImGui.SetMouseCursor(ImGuiMouseCursor.NotAllowed);
+				}
+				else if (dragged != null)
+				{
+					ImGui.SetTooltip("Create a prefab of '" + dragged.Name + "' in Assets/" + targetFolder);
+				}
+
+				if (payload.IsDelivery() && fits)
+				{
+					// Made after the panel is drawn (the scene reloads).
+					droppedObject = dragged;
+					droppedObjectFolder = targetFolder;
+				}
+				else if (payload.IsDelivery() && dragged != null && dragged.prefabInstance != null)
+				{
+					Debug.LogWarning($"[Editor] '{dragged.Name}' is part of a prefab instance: drag its root, or unpack it first.");
+				}
+			}
+
+			ImGui.EndDragDropTarget();
 		}
 
 		private static void EnsureNew(string path)

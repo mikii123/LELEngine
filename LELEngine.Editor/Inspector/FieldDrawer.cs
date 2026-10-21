@@ -48,6 +48,15 @@ namespace LELEngine.Editor
 		/// <summary>Decorations of the next field line (list and dictionary rows): the line that draws them takes them.</summary>
 		public RowDecoration PendingRow;
 
+		/// <summary>The prefab overrides of the object shown (null: not part of a prefab instance).</summary>
+		public PrefabInstanceOverrides Overrides;
+
+		/// <summary>Id in the prefab of the component (or GameObject) whose fields are drawn: the target of their overrides (0: none).</summary>
+		public ulong OverrideTarget;
+
+		/// <summary>Property path of the field being drawn ("weapon.damage", "drops[2]", "loot{gold}"): kept by the drawers.</summary>
+		public string Path = "";
+
 		#endregion
 
 		#region PublicMethods
@@ -90,6 +99,18 @@ namespace LELEngine.Editor
 			Scene = null;
 			UndoTarget = null;
 			PendingRow = null;
+			Overrides = null;
+			OverrideTarget = 0;
+			Path = "";
+		}
+
+		/// <summary>
+		///     The field being drawn is a prefab override (a value of its own, or part of a whole value replaced); with
+		///     <paramref name="within" /> also when something inside it is (foldouts of objects and collections).
+		/// </summary>
+		public bool IsOverridden(bool within)
+		{
+			return Overrides != null && OverrideTarget != 0 && !string.IsNullOrEmpty(Path) && Overrides.IsOverridden(OverrideTarget, Path, within);
 		}
 
 		#endregion
@@ -128,11 +149,20 @@ namespace LELEngine.Editor
 				object value = field.GetValue(target);
 				NVector2 lineStart = ImGui.GetCursorScreenPos();
 				float lineRight = lineStart.X + ImGui.GetContentRegionAvail().X;
+				string parentPath = context.Path;
+				context.Path = LELEngine.Serialization.PropertyPath.Field(parentPath, field.Name);
 				ImGui.PushID(field.Name);
-				if (DrawValue(field.DisplayName, field.FieldType, ref value, field.Field, context, depth))
+				try
 				{
-					field.SetValue(target, value);
-					changed = true;
+					if (DrawValue(field.DisplayName, field.FieldType, ref value, field.Field, context, depth))
+					{
+						field.SetValue(target, value);
+						changed = true;
+					}
+				}
+				finally
+				{
+					context.Path = parentPath;
 				}
 
 				ImGui.PopID();
@@ -220,10 +250,31 @@ namespace LELEngine.Editor
 		public static void Label(string label, FieldInfo info, InspectorContext context)
 		{
 			ImGui.AlignTextToFramePadding();
-			ImGui.TextUnformatted(label);
+			OverrideLabel(label, context, false, false);
 			ShowTooltip(info);
 			ImGui.SameLine(context.LabelWidth);
 			ImGui.SetNextItemWidth(-1);
+		}
+
+		/// <summary>A field's label text; a prefab override's in bold with the override bar and its Apply / Revert menu (right click).</summary>
+		private static void OverrideLabel(string label, InspectorContext context, bool disabled, bool within)
+		{
+			bool overridden = context.IsOverridden(within);
+			bool bold = overridden && EditorFonts.PushBold();
+			if (disabled && !overridden)
+			{
+				ImGui.TextDisabled(label);
+			}
+			else
+			{
+				ImGui.TextUnformatted(label);
+			}
+
+			EditorFonts.Pop(bold);
+			if (overridden)
+			{
+				PrefabInspector.MarkOverride(context);
+			}
 		}
 
 		/// <summary>Euler angles in degrees (x = bank, y = heading, z = attitude) matching <see cref="QuaternionHelper.Euler(float, float, float)" />.</summary>
@@ -319,7 +370,7 @@ namespace LELEngine.Editor
 			if (row.Label == null)
 			{
 				ImGui.AlignTextToFramePadding();
-				ImGui.TextUnformatted(label);
+				OverrideLabel(label, context, false, false);
 				ShowTooltip(info);
 				ImGui.SameLine(context.LabelWidth);
 			}
@@ -327,12 +378,17 @@ namespace LELEngine.Editor
 			{
 				NVector2 start = ImGui.GetCursorScreenPos();
 				ImGui.AlignTextToFramePadding();
-				ImGui.TextDisabled(row.Label);
+				OverrideLabel(row.Label, context, true, false);
 				ImGui.SameLine();
 				if (row.LabelWidth > 0f)
 				{
 					ImGui.SetCursorScreenPos(new NVector2(Math.Max(ImGui.GetCursorScreenPos().X, start.X + row.LabelWidth), ImGui.GetCursorScreenPos().Y));
 				}
+			}
+			else if (context.IsOverridden(false))
+			{
+				// A dictionary cell has no label: the bar alone marks it.
+				PrefabInspector.Bar(ImGui.GetCursorScreenPos().Y, ImGui.GetCursorScreenPos().Y + ImGui.GetFrameHeight());
 			}
 
 			float suffix = row.Suffix != null ? row.SuffixWidth + ImGui.GetStyle().ItemSpacing.X : 0f;
@@ -377,7 +433,11 @@ namespace LELEngine.Editor
 
 			ImGui.SetNextItemAllowOverlap();
 			LastHeaderId = ImGui.GetID(text + "##header");
+			// Prefab overrides inside (or of) the value: the foldout's label in bold, with the bar and the Apply / Revert menu.
+			bool overridden = context.IsOverridden(true);
+			bool bold = overridden && EditorFonts.PushBold();
 			bool open = ImGui.TreeNodeEx(text + "##header", ImGuiTreeNodeFlags.SpanAvailWidth | ImGuiTreeNodeFlags.FramePadding);
+			EditorFonts.Pop(bold);
 			NVector2 headerMin = ImGui.GetItemRectMin();
 			if (ImGui.IsItemHovered() && !DragAndDrop.IsDragging)
 			{
@@ -389,6 +449,11 @@ namespace LELEngine.Editor
 			}
 
 			onHeaderItem?.Invoke();
+			if (overridden)
+			{
+				PrefabInspector.MarkOverride(context);
+			}
+
 			float suffixWidth = row?.Suffix != null ? row.SuffixWidth + ImGui.GetStyle().ItemSpacing.X : 0f;
 			if (valueArea != null)
 			{
@@ -541,7 +606,12 @@ namespace LELEngine.Editor
 		internal static bool DrawScriptableObject(ScriptableObject asset, InspectorContext context, int depth)
 		{
 			object previousTarget = context.UndoTarget;
+			PrefabInstanceOverrides previousOverrides = context.Overrides;
+			string previousPath = context.Path;
 			context.UndoTarget = asset;
+			// The asset's fields are its own, not the prefab instance's.
+			context.Overrides = null;
+			context.Path = "";
 			bool changed;
 			try
 			{
@@ -550,6 +620,8 @@ namespace LELEngine.Editor
 			finally
 			{
 				context.UndoTarget = previousTarget;
+				context.Overrides = previousOverrides;
+				context.Path = previousPath;
 			}
 
 			if (changed)
