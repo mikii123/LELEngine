@@ -133,7 +133,7 @@ namespace LELEngine
 		/// <summary>The material of sub-meshes without an imported material (the project template's default material).</summary>
 		public const string DefaultMaterialPath = "Materials/Default.material";
 
-		public string AssetPath { get; }
+		public string AssetPath { get; internal set; }
 
 		public string name => Path.GetFileNameWithoutExtension(AssetPath ?? "Model");
 

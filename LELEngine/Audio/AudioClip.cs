@@ -15,7 +15,7 @@ namespace LELEngine.Audio
 
 		public static readonly string[] Extensions = AudioDecoder.Extensions;
 
-		public string AssetPath { get; private set; }
+		public string AssetPath { get; internal set; }
 		public string SubAssetName => null;
 		public string name;
 
@@ -139,6 +139,16 @@ namespace LELEngine.Audio
 			{
 				cache.Clear();
 				fileTimes.Clear();
+			}
+		}
+
+		/// <summary>A file or folder moved: the loaded clips keep their identity under the new path.</summary>
+		internal static void AssetMoved(string fromPath, string toPath)
+		{
+			lock (cache)
+			{
+				AssetDatabase.RekeyMoved(cache, fromPath, toPath, (clip, path) => clip.AssetPath = path);
+				AssetDatabase.RekeyMoved(fileTimes, fromPath, toPath);
 			}
 		}
 

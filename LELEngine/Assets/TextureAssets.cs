@@ -565,6 +565,33 @@ namespace LELEngine
 			}
 		}
 
+		/// <summary>A file or folder moved: the loaded textures and sprites keep their identity under the new path.</summary>
+		internal static void AssetMoved(string fromPath, string toPath)
+		{
+			lock (sync)
+			{
+				AssetDatabase.RekeyMoved(entries, fromPath, toPath, (entry, path) =>
+				{
+					if (entry.Texture != null)
+					{
+						entry.Texture.AssetPath = path;
+					}
+					if (entry.Single != null)
+					{
+						entry.Single.AssetPath = path;
+					}
+					if (entry.Sprites != null)
+					{
+						foreach (Sprite sprite in entry.Sprites)
+						{
+							sprite.AssetPath = path;
+						}
+					}
+				});
+				AssetDatabase.RekeyMoved(uiTextures, fromPath, toPath, (texture, path) => texture.AssetPath = path);
+			}
+		}
+
 		/// <summary>Drops every loaded texture (project closed) and releases their GL textures.</summary>
 		public static void Clear()
 		{

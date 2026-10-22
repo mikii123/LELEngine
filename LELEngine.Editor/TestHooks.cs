@@ -19,6 +19,8 @@ namespace LELEngine.Editor
 	///     wheel=N;anchor;notches|... (mouse wheel over an anchor), mdrag=N;anchor;dx,dy|... (middle button drag by
 	///     pixels; anchor "sceneview" is the scene view's image), logsceneview=N|M logs the scene view camera;
 	///     logfield=N;Object;Component.field|... logs a field's value; pingasset=N;path shows a file in the project panel.
+	///     key=N;F2|M;Enter (ImGuiKey presses), type=N;text (characters), logselection=N|M (what the inspector shows).
+	///     Project panel anchors: project:Folder/File.ext, project:Folder/ (a folder row), tree:Folder, rename (the field).
 	///     Prefabs: selectframe=, instantiateprefab=, openprefab=, closeprefab=, saveprefab=, createprefab=, createvariant=,
 	///     unpackprefab=, applyprefab=, revertprefab=, setfield=, addcomponentat=, removecomponent=, destroyobject=,
 	///     reparent=, undoat=, replacetext=, logprefab= (see <see cref="UpdatePrefabHooks" />).
@@ -483,7 +485,14 @@ namespace LELEngine.Editor
 				Debug.Log($"[Test] Scene view at {editor.SceneView.CameraPosition}, forward {editor.SceneView.CameraForward}, focus {editor.SceneView.FocusDistance:0.###}");
 			}
 
+			// logselection=N|M: what the inspector shows (the selected GameObject, the selected asset).
+			if (IsListed("logselection"))
+			{
+				Debug.Log($"[Test] Selection: object {editor.Selected?.Name ?? "none"}, asset {editor.SelectedAsset ?? "none"}");
+			}
+
 			RunScriptedMouse();
+			RunScriptedKeys();
 
 			// logfield=N;Object;Component.field|...: the field's value as the inspector names it.
 			if (values.TryGetValue("logfield", out string logFields))
@@ -502,6 +511,48 @@ namespace LELEngine.Editor
 		#endregion
 
 		#region PrivateMethods
+
+		/// <summary>
+		///     key=N;F2|M;Enter: a key press for the focused window (ImGuiKey names; down at N, up at N + 1);
+		///     type=N;text|M;...: characters typed at N (into the active text field).
+		/// </summary>
+		private void RunScriptedKeys()
+		{
+			ImGuiIOPtr io = ImGui.GetIO();
+			if (values.TryGetValue("key", out string keys))
+			{
+				foreach (string entry in keys.Split('|'))
+				{
+					string[] parts = entry.Split(';');
+					if (parts.Length == 2 && int.TryParse(parts[0], out int at) && Enum.TryParse(parts[1], true, out ImGuiKey key))
+					{
+						if (frame == at)
+						{
+							io.AddKeyEvent(key, true);
+						}
+						else if (frame == at + 1)
+						{
+							io.AddKeyEvent(key, false);
+						}
+					}
+				}
+			}
+
+			if (values.TryGetValue("type", out string typed))
+			{
+				foreach (string entry in typed.Split('|'))
+				{
+					string[] parts = entry.Split(';', 2);
+					if (parts.Length == 2 && int.TryParse(parts[0], out int at) && frame == at)
+					{
+						foreach (char c in parts[1])
+						{
+							io.AddInputCharacter(c);
+						}
+					}
+				}
+			}
+		}
 
 		/// <summary>Feeds the scripted drags and clicks to ImGui as mouse events (aimed at the anchors recorded last frame).</summary>
 		private void RunScriptedMouse()
@@ -752,6 +803,9 @@ namespace LELEngine.Editor
 			At("revertprefab", parts => PrefabMenus.RevertAll(editor, Find(scene, parts[1]).prefabInstance));
 			At("undoat", parts => editor.UndoLast());
 			// replacetext=N;assetPath;old;new: an edit of a file outside the editor (the file watcher notices it).
+			// inputmanager=N;Page: Window > Input Manager on the project's configuration, showing a page (Actions, KeyboardMaps, ...).
+			At("inputmanager", parts => editor.OpenInputManager(null, parts.Length > 1 ? parts[1] : null));
+
 			At("replacetext", parts =>
 			{
 				string file = AssetDatabase.ToAbsolute(parts[1]);

@@ -1,9 +1,11 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Reflection;
 using Hexa.NET.ImGui;
 using LELEngine.Serialization;
+using LELEngine.Shaders;
 using OpenTK.Mathematics;
 using NVector2 = System.Numerics.Vector2;
 using NVector3 = System.Numerics.Vector3;
@@ -17,6 +19,9 @@ namespace LELEngine.Editor
 
 		private readonly EditorApplication editor;
 		private readonly InspectorContext context;
+
+		// The renderers' material editors below the components (their own undo target and field paths).
+		private readonly InspectorContext materialContext;
 		private string nameBuffer = "";
 		private GameObject nameOwner;
 		private string componentFilter = "";
@@ -41,6 +46,7 @@ namespace LELEngine.Editor
 		{
 			this.editor = editor;
 			context = new InspectorContext { Editor = editor };
+			materialContext = new InspectorContext { Editor = editor };
 		}
 
 		#endregion
@@ -116,6 +122,12 @@ namespace LELEngine.Editor
 			}
 
 			ImGui.End();
+		}
+
+		/// <summary>An asset file or folder moved: a lock on an asset follows it.</summary>
+		public void AssetMoved(string fromPath, string toPath)
+		{
+			lockedAsset = AssetDatabase.MovedPath(lockedAsset, fromPath, toPath) ?? lockedAsset;
 		}
 
 		/// <summary>The inspector keeps showing what it shows now (or follows the selection again).</summary>
@@ -198,6 +210,56 @@ namespace LELEngine.Editor
 			PrefabInspector.DrawRemovedComponents(editor, go, context);
 			ImGui.Spacing();
 			DrawAddComponent(go);
+			DrawRendererMaterials(go);
+		}
+
+		/// <summary>
+		///     The materials of the object's renderers below its components, each with its full editor (as in Unity): an
+		///     imported model's materials are edited where they are used. Edits change the material asset, so every
+		///     renderer using it follows. Engine materials and materials made at runtime are shown, not edited.
+		/// </summary>
+		private void DrawRendererMaterials(GameObject go)
+		{
+			var materials = new List<Material>();
+			foreach (Behaviour component in go.Components)
+			{
+				if (component is MeshRenderer renderer)
+				{
+					foreach (Material material in renderer.Materials)
+					{
+						if (material != null && !materials.Contains(material))
+						{
+							materials.Add(material);
+						}
+					}
+				}
+			}
+
+			materialContext.Scene = editor.Scene;
+			materialContext.LabelWidth = context.LabelWidth;
+			for (int i = 0; i < materials.Count; i++)
+			{
+				Material material = materials[i];
+				bool editable = material.AssetPath != null && !AssetDatabase.IsEngineResource(material.AssetPath) && File.Exists(AssetDatabase.ToAbsolute(material.AssetPath));
+				ImGui.Spacing();
+				ImGui.PushID("material" + i);
+				string title = (material.name ?? "Material") + (editable ? "" : material.AssetPath == null ? "  (runtime material)" : "  (engine material)");
+				bool open = ImGui.CollapsingHeader(title + "###material", ImGuiTreeNodeFlags.DefaultOpen);
+				TestAnchors.RecordItem("material:" + (material.name ?? i.ToString()));
+				if (open)
+				{
+					if (material.AssetPath != null)
+					{
+						ImGui.TextDisabled(material.AssetPath);
+					}
+
+					ImGui.BeginDisabled(!editable);
+					MaterialEditor.Draw(material, materialContext);
+					ImGui.EndDisabled();
+				}
+
+				ImGui.PopID();
+			}
 		}
 
 		private void DrawObjectHeader(GameObject go)

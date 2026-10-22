@@ -58,7 +58,7 @@ namespace LELEngine.Shaders
 		public string SourcePath { get; }
 
 		/// <summary>Root-relative path of the .shader asset, or the engine-relative path of an engine shader; null for inline programs.</summary>
-		public string AssetPath { get; }
+		public string AssetPath { get; internal set; }
 
 		public string SubAssetName => null;
 

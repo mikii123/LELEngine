@@ -67,6 +67,10 @@ namespace LELEngine.Editor
 					context.Editor.NotifySceneChanged();
 				}
 			}
+			else if (type == typeof(ScriptableObject) && EditorIcons.KindOfFile(assetPath) == IconKind.InputConfiguration)
+			{
+				DrawInputConfiguration(assetPath, context);
+			}
 			else if (type == typeof(ScriptableObject))
 			{
 				ScriptableObjectInspector.Draw(assetPath, context);
@@ -238,6 +242,24 @@ namespace LELEngine.Editor
 			{
 				ImGui.TextColored(EditorStyle.Error, "Cannot load: " + e.Message);
 			}
+		}
+
+		/// <summary>An input configuration: what it holds and a button to the Input Manager (its editor).</summary>
+		private static void DrawInputConfiguration(string assetPath, InspectorContext context)
+		{
+			if (ImGui.Button("Open in Input Manager", new NVector2(-1, 0)))
+			{
+				context.Editor.OpenInputManager(assetPath);
+			}
+
+			if (ScriptableObjectAssets.Load(assetPath) is LELEngine.InputSystem.InputConfiguration configuration)
+			{
+				ImGui.TextDisabled($"{configuration.Actions.Count} actions, {configuration.Players.Count} players, {configuration.Maps.Count} controller maps, {configuration.Behaviors.Count} input behaviors");
+				bool used = string.Equals(ProjectSettings.Current.Input.Configuration, assetPath, StringComparison.OrdinalIgnoreCase);
+				ImGui.TextDisabled(used ? "The project's input configuration (Project Settings > Input)." : "Not the project's input configuration.");
+			}
+
+			DrawFileInfo(AssetDatabase.ToAbsolute(assetPath));
 		}
 
 		public static void DrawFileInfo(string absolute)

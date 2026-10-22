@@ -23,7 +23,7 @@ namespace LELEngine
 
 		public const string Extension = ".prefab";
 
-		public string AssetPath { get; }
+		public string AssetPath { get; internal set; }
 
 		public string name => Path.GetFileNameWithoutExtension(AssetPath);
 
@@ -140,6 +140,17 @@ namespace LELEngine
 		#endregion
 
 		#region InternalMethods
+
+		/// <summary>A file or folder moved: the loaded prefabs and their resolved data keep their identity under the new path.</summary>
+		internal static void AssetMoved(string fromPath, string toPath)
+		{
+			lock (sync)
+			{
+				AssetDatabase.RekeyMoved(loaded, fromPath, toPath, (prefab, path) => prefab.AssetPath = path);
+			}
+
+			PrefabCache.AssetMoved(fromPath, toPath);
+		}
 
 		/// <summary>Drops the objects of prefab files that no longer exist (deleted or moved).</summary>
 		internal static void ForgetMissing(IEnumerable<string> assetPaths)

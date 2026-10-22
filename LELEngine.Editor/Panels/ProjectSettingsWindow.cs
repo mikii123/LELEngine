@@ -31,6 +31,7 @@ namespace LELEngine.Editor
 			Physics2D,
 			SplashScreen,
 			Audio,
+			Input,
 			Build
 		}
 
@@ -166,6 +167,12 @@ namespace LELEngine.Editor
 				EndTab();
 			}
 
+			if (BeginTab(Tab.Input, "Input"))
+			{
+				changed |= DrawInput(settings.Input ??= new LELEngine.InputSystem.InputProjectSettings());
+				EndTab();
+			}
+
 			if (BeginTab(Tab.Build, "Build"))
 			{
 				DrawBuild(editor.Project);
@@ -199,6 +206,32 @@ namespace LELEngine.Editor
 		{
 			ImGui.EndChild();
 			ImGui.EndTabItem();
+		}
+
+		// ---------------------------------------------------------------- input
+
+		/// <summary>The input configuration the game's players use (its actions, maps and players are edited in the Input Manager).</summary>
+		private bool DrawInput(LELEngine.InputSystem.InputProjectSettings input)
+		{
+			FieldDrawer.Label("Configuration", null, context);
+			object value = string.IsNullOrEmpty(input.Configuration) ? null : ScriptableObjectAssets.Load(input.Configuration);
+			bool changed = AssetField.Draw(typeof(LELEngine.InputSystem.InputConfiguration), ref value);
+			context.Track(changed);
+			if (changed)
+			{
+				input.Configuration = (value as LELEngine.InputSystem.InputConfiguration)?.AssetPath ?? "";
+			}
+
+			ImGui.Spacing();
+			if (ImGui.Button(string.IsNullOrEmpty(input.Configuration) ? "Open Input Manager (create one)" : "Open in Input Manager"))
+			{
+				editor.OpenInputManager(string.IsNullOrEmpty(input.Configuration) ? null : input.Configuration);
+			}
+
+			ImGui.Spacing();
+			ImGui.TextDisabled("Scripts read actions of players: InputManager.GetPlayer(0).GetButtonDown(\"Fire\").");
+			ImGui.TextDisabled("Without a configuration the game reads keys directly (Input.GetKey).");
+			return changed;
 		}
 
 		// ---------------------------------------------------------------- lighting

@@ -106,6 +106,15 @@ namespace LELEngine
 			}
 		}
 
+		/// <summary>A file or folder moved: the loaded materials keep their identity under the new path.</summary>
+		internal static void AssetMoved(string fromPath, string toPath)
+		{
+			lock (cache)
+			{
+				AssetDatabase.RekeyMoved(cache, fromPath, toPath, (material, path) => material.AssetPath = path);
+			}
+		}
+
 		#endregion
 	}
 }

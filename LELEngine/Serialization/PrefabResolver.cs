@@ -537,6 +537,37 @@ namespace LELEngine.Serialization
 			return changed;
 		}
 
+		/// <summary>A file or folder moved: the resolved prefabs stay, under their new paths and with their dependencies' new paths.</summary>
+		internal static void AssetMoved(string fromPath, string toPath)
+		{
+			lock (sync)
+			{
+				AssetDatabase.RekeyMoved(cache, fromPath, toPath, (resolved, path) => resolved.AssetPath = path);
+				foreach (ResolvedPrefab resolved in cache.Values)
+				{
+					List<string> moved = null;
+					foreach (string dependency in resolved.Dependencies)
+					{
+						if (AssetDatabase.MovedPath(dependency, fromPath, toPath) != null)
+						{
+							(moved ??= new List<string>()).Add(dependency);
+						}
+					}
+
+					if (moved == null)
+					{
+						continue;
+					}
+
+					foreach (string dependency in moved)
+					{
+						resolved.Dependencies.Remove(dependency);
+						resolved.Dependencies.Add(AssetDatabase.MovedPath(dependency, fromPath, toPath));
+					}
+				}
+			}
+		}
+
 		/// <summary>True when the prefab at <paramref name="assetPath" /> is built from <paramref name="dependency" /> (or is it).</summary>
 		public static bool DependsOn(string assetPath, string dependency)
 		{

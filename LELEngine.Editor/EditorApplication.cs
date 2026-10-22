@@ -80,6 +80,7 @@ namespace LELEngine.Editor
 		private readonly LightingPanel lightingPanel;
 		private readonly ProjectSettingsWindow projectSettingsWindow;
 		private readonly VFX.VfxGraphWindow vfxGraphWindow;
+		private readonly InputManagerWindow inputManagerWindow;
 		private readonly GameInputHost gameInput;
 		private readonly TestHooks testHooks;
 		private readonly bool layoutFileExisted;
@@ -153,6 +154,7 @@ namespace LELEngine.Editor
 			lightingPanel = new LightingPanel(this);
 			projectSettingsWindow = new ProjectSettingsWindow(this);
 			vfxGraphWindow = new VFX.VfxGraphWindow(this);
+			inputManagerWindow = new InputManagerWindow(this);
 
 			gameInput = new GameInputHost(window, () => PlayState == PlayState.Playing && GameView.HasInputFocus);
 			Input.Host = gameInput;
@@ -310,6 +312,7 @@ namespace LELEngine.Editor
 			consolePanel.Draw();
 			projectSettingsWindow.Draw();
 			vfxGraphWindow.Draw();
+			inputManagerWindow.Draw();
 			Extensions.DrawWindows();
 			ObjectPicker.Draw(this);
 			Extensions.EndFrame();
@@ -448,6 +451,9 @@ namespace LELEngine.Editor
 			projectSettingsStamp = FileStamp.Of(project.ProjectSettingsFile);
 			AssetDatabase.Initialize(project.AssetsPath, true);
 			ModelAssets.CacheFolder = project.ModelCachePath;
+			ImportChangedModels(true);
+			// Remapped controls of play mode are the project's, not the user's (a built game keeps them in AppData).
+			LELEngine.InputSystem.InputManager.UserDataPath = Path.Combine(project.LibraryPath, "InputUserData.json");
 			OpenAudioProjectForEditor();
 			RecentProjects.Add(project.RootPath);
 			Debug.Log($"[Editor] Opened project {project.Name} ({project.RootPath})");
@@ -736,6 +742,90 @@ namespace LELEngine.Editor
 				SelectedAsset = null;
 				AssetInspectors.Deselected();
 			}
+		}
+
+		/// <summary>Nothing selected: the inspector clears (a click on an empty area of the hierarchy or the project panel).</summary>
+		public void ClearSelection()
+		{
+			SelectAsset(null);
+		}
+
+		/// <summary>
+		///     Renames or moves an asset file or folder (<see cref="AssetDatabase.MoveAsset" />): loaded assets keep their
+		///     identity, and the open scene, prefab stages, the selection and the project's scene lists follow. Not in play
+		///     mode. Returns an error message, or null when it moved.
+		/// </summary>
+		public string MoveAsset(string fromPath, string toPath)
+		{
+			if (IsPlaying)
+			{
+				return "Stop play mode to rename or move assets.";
+			}
+
+			Edits.Commit();
+			string error = AssetDatabase.MoveAsset(fromPath, toPath);
+			if (error != null)
+			{
+				return error;
+			}
+
+			string Moved(string path) => AssetDatabase.MovedPath(path, fromPath, toPath) ?? path;
+			if (Scene != null && Scene.Path != null)
+			{
+				Scene.Path = Moved(Scene.Path);
+			}
+
+			foreach (StageFrame frame in stageFrames)
+			{
+				frame.Path = frame.Path != null ? Moved(frame.Path) : null;
+				if (frame.Stage != null)
+				{
+					frame.Stage.AssetPath = Moved(frame.Stage.AssetPath);
+				}
+			}
+
+			if (SelectedAsset != null)
+			{
+				SelectedAsset = Moved(SelectedAsset);
+			}
+
+			inspector.AssetMoved(fromPath, toPath);
+			inputManagerWindow.AssetMoved(fromPath, toPath);
+			AssetThumbnails.Invalidate(fromPath);
+
+			// The project's scene lists name scenes by path.
+			string startScene = Moved(Project.StartScene);
+			string lastScene = Project.LastScene != null ? Moved(Project.LastScene) : null;
+			List<string> buildScenes = Project.BuildScenes.ConvertAll(Moved);
+			bool buildScenesMoved = false;
+			for (int i = 0; i < buildScenes.Count; i++)
+			{
+				buildScenesMoved |= buildScenes[i] != Project.BuildScenes[i];
+			}
+
+			if (startScene != Project.StartScene || lastScene != Project.LastScene || buildScenesMoved)
+			{
+				Project.StartScene = startScene;
+				Project.LastScene = lastScene;
+				Project.BuildScenes = buildScenes;
+				Project.Save();
+			}
+
+			// Project settings that name assets by path: the audio project, the input configuration.
+			ProjectSettings settings = ProjectSettings.Current;
+			string audioProject = settings.Audio.Project != "" ? Moved(settings.Audio.Project) : "";
+			string inputConfiguration = settings.Input.Configuration != "" ? Moved(settings.Input.Configuration) : "";
+			if (audioProject != settings.Audio.Project || inputConfiguration != settings.Input.Configuration)
+			{
+				settings.Audio.Project = audioProject;
+				settings.Input.Configuration = inputConfiguration;
+				settings.Save(Project.ProjectSettingsFile);
+				projectSettingsStamp = FileStamp.Of(Project.ProjectSettingsFile);
+			}
+
+			NotifyAssetsChanged();
+			Debug.Log($"[Editor] Moved {fromPath} to {toPath}");
+			return null;
 		}
 
 		/// <summary>Shows a project file in the inspector (clears the GameObject selection, as in Unity).</summary>
@@ -1071,6 +1161,8 @@ namespace LELEngine.Editor
 			}
 
 			Input.SetCursorLocked(false);
+			// The next play starts the input system again (with the configuration as edited meanwhile).
+			LELEngine.InputSystem.InputManager.Shutdown();
 			PlayState = PlayState.Edit;
 			SceneManager.Lifecycle = SceneLifecycle.Edit;
 			LELEngine.Audio.AudioSystem.StopAll();
@@ -1123,6 +1215,16 @@ namespace LELEngine.Editor
 		public void ShowProjectSettings(ProjectSettingsWindow.Tab? tab = null)
 		{
 			projectSettingsWindow.Show(tab);
+		}
+
+		/// <summary>Opens Window > Input Manager on an input configuration (null: the project's).</summary>
+		public void OpenInputManager(string assetPath, string page = null)
+		{
+			inputManagerWindow.Show(assetPath);
+			if (page != null)
+			{
+				inputManagerWindow.ShowPage(page);
+			}
 		}
 
 		/// <summary>Writes the live project settings to ProjectSettings/ProjectSettings.asset.</summary>
@@ -1595,6 +1697,12 @@ namespace LELEngine.Editor
 					else OpenVfxGraph(null);
 				}
 
+				if (ImGui.MenuItem("Input Manager", "", inputManagerWindow.Open))
+				{
+					if (inputManagerWindow.Open) inputManagerWindow.Open = false;
+					else OpenInputManager(null);
+				}
+
 				bool builderOpen = uiBuilder != null && uiBuilder.IsOpen;
 				if (ImGui.MenuItem("UI Builder", "", builderOpen))
 				{
@@ -1914,6 +2022,26 @@ namespace LELEngine.Editor
 			assetsChanged = true;
 		}
 
+		/// <summary>
+		///     Models new or changed on disk import completely now (materials extracted when their settings ask), not when
+		///     something first uses them; a loaded one is replaced by its new import (the scene reloads, not in play mode).
+		/// </summary>
+		private void ImportChangedModels(bool verifyMaterials = false)
+		{
+			List<string> imported = ModelAssets.ImportOutdated(verifyMaterials);
+			if (imported.Count == 0)
+			{
+				return;
+			}
+
+			List<string> loaded = imported.FindAll(ModelAssets.IsLoaded);
+			if (loaded.Count > 0 && !IsPlaying)
+			{
+				ReloadScene(() => loaded.ForEach(ModelAssets.Unload));
+				Lighting.GI.InvalidateStatic();
+			}
+		}
+
 		private void RefreshAssetsIfChanged()
 		{
 			// Debounced: copying a folder raises many events.
@@ -1924,6 +2052,7 @@ namespace LELEngine.Editor
 
 			assetsChanged = false;
 			AssetDatabase.Refresh(true);
+			ImportChangedModels();
 			AssetsVersion++;
 			// Hot reload of .uss / .uxml files: the documents using them rebuild.
 			UIElements.UIAssets.ReloadChanged();
@@ -2138,6 +2267,7 @@ namespace LELEngine.Editor
 			states.Open["Project Settings"] = projectSettingsWindow.Open;
 			states.ProjectSettingsTab = projectSettingsWindow.CurrentTab.ToString();
 			states.Open["VFX Graph"] = vfxGraphWindow.Open;
+			states.Open["Input Manager"] = inputManagerWindow.Open;
 			string graph = vfxGraphWindow.Document?.AssetPath;
 			if (graph != null)
 			{
@@ -2166,6 +2296,7 @@ namespace LELEngine.Editor
 			projectPanel.Open = Saved("Project", true);
 			consolePanel.Open = Saved("Console", true);
 			lightingPanel.Open = Saved("Lighting", true);
+			inputManagerWindow.Open = Saved("Input Manager", false);
 			if (Saved("Project Settings", false))
 			{
 				projectSettingsWindow.Restore(Enum.TryParse(states.ProjectSettingsTab, out ProjectSettingsWindow.Tab tab) ? tab : ProjectSettingsWindow.Tab.Lighting);

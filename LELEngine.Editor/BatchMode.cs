@@ -129,6 +129,12 @@ namespace LELEngine.Editor
 			project.LoadProjectSettings();
 			AssetDatabase.Initialize(project.AssetsPath, true);
 			ModelAssets.CacheFolder = project.ModelCachePath;
+			// Models new or changed since the last import import completely (materials too), as in the editor.
+			foreach (string model in ModelAssets.ImportOutdated(true))
+			{
+				Debug.Log("[Batch] Imported " + model);
+			}
+
 			ProjectGenerator.Generate(project);
 			Debug.Log($"[Batch] Opened project {project.Name} ({project.RootPath})");
 

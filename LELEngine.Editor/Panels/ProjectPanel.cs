@@ -62,6 +62,27 @@ namespace LELEngine.Editor
 		private bool openCreatePopup;
 		private string error;
 
+		// A folder row picked in the file list (highlighted; F2 renames it). Files and folders are not selected together.
+		private string selectedFolder;
+
+		// Inline rename: the file or folder being renamed (asset path), the name typed so far, and the first frame of the
+		// field (it takes the keyboard focus). Files are renamed without their extension.
+		private string renaming;
+		private string renameBuffer = "";
+		private bool renameStarted;
+		private bool renameCommitted;
+
+		// The field is where the rename started: the tree or the file list.
+		private bool renameInTree;
+
+		// Tree nodes open in the last drawn tree, and those to open on the next frame (a renamed folder and the folders
+		// inside it keep their open state under their new ids).
+		private readonly HashSet<string> openFolders = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+		private readonly HashSet<string> openNext = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+		// The tree opens the shown folder's parents once after the folder changed (a ping, the file list, the breadcrumb).
+		private bool revealFolder;
+
 		#endregion
 
 		#region Constructors
@@ -101,6 +122,12 @@ namespace LELEngine.Editor
 			}
 
 			ImGui.End();
+			if (renameCommitted)
+			{
+				renameCommitted = false;
+				CommitRename();
+			}
+
 			if (droppedObject != null)
 			{
 				GameObject dropped = droppedObject;
@@ -123,6 +150,7 @@ namespace LELEngine.Editor
 			pinged = assetPath;
 			pingTime = ImGui.GetTime();
 			revealPinged = true;
+			revealFolder = true;
 		}
 
 		#endregion
@@ -151,7 +179,9 @@ namespace LELEngine.Editor
 				ImGui.TableSetColumnIndex(0);
 				if (ImGui.BeginChild("##folders"))
 				{
+					openFolders.Clear();
 					DrawFolderTree("", "Assets");
+					revealFolder = false;
 				}
 
 				ImGui.EndChild();
@@ -171,8 +201,14 @@ namespace LELEngine.Editor
 
 		private void DrawFolderTree(string relative, string label)
 		{
+			if (!Directory.Exists(Absolute(relative)))
+			{
+				// Gone since the parent listed it (deleted or moved outside the editor).
+				return;
+			}
+
 			string[] children = Directory.GetDirectories(Absolute(relative));
-			ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags.OpenOnArrow | ImGuiTreeNodeFlags.SpanAvailWidth;
+			ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags.OpenOnArrow | ImGuiTreeNodeFlags.OpenOnDoubleClick | ImGuiTreeNodeFlags.SpanAvailWidth;
 			if (relative.Length == 0)
 			{
 				flags |= ImGuiTreeNodeFlags.DefaultOpen;
@@ -183,18 +219,73 @@ namespace LELEngine.Editor
 				flags |= ImGuiTreeNodeFlags.Leaf;
 			}
 
-			if (string.Equals(relative, folder, StringComparison.OrdinalIgnoreCase))
+			bool current = string.Equals(relative, folder, StringComparison.OrdinalIgnoreCase);
+			if (current)
 			{
 				flags |= ImGuiTreeNodeFlags.Selected;
 			}
 
-			bool open = ImGui.TreeNodeEx(label + "##" + relative, flags);
-			if (ImGui.IsItemClicked() && !ImGui.IsItemToggledOpen())
+			// The shown folder's parents open, so it is visible in the tree.
+			if (openNext.Remove(relative) || (folder.StartsWith(relative + "/", StringComparison.OrdinalIgnoreCase) && relative.Length > 0 && revealFolder))
 			{
-				folder = relative;
+				ImGui.SetNextItemOpen(true);
+			}
+
+			// The label is drawn after the node: the folder icon, then the name (or the rename field).
+			bool open = ImGui.TreeNodeEx("##" + relative, flags);
+			bool clicked = ImGui.IsItemClicked() && !ImGui.IsItemToggledOpen();
+			NVector2 min = ImGui.GetItemRectMin();
+			float labelX = min.X + ImGui.GetTreeNodeToLabelSpacing();
+			float iconSize = ImGui.GetTextLineHeight();
+			float y = min.Y + (ImGui.GetItemRectSize().Y - iconSize) * 0.5f;
+			ImDrawListPtr draw = ImGui.GetWindowDrawList();
+			IconKind icon = open && children.Length > 0 ? IconKind.FolderOpen : IconKind.Folder;
+			EditorIcons.Draw(draw, new NVector2(labelX, y), iconSize, icon, EditorIcons.ColorOf(icon));
+			TestAnchors.RecordItem("tree:" + (relative.Length == 0 ? "Assets" : relative));
+			if (open)
+			{
+				openFolders.Add(relative);
+			}
+
+			if (relative.Length > 0 && renameInTree && string.Equals(renaming, relative, StringComparison.OrdinalIgnoreCase))
+			{
+				NVector2 after = ImGui.GetCursorScreenPos();
+				ImGui.SetCursorScreenPos(new NVector2(labelX + iconSize + 4f, min.Y));
+				DrawRenameField();
+				ImGui.SetCursorScreenPos(new NVector2(after.X, Math.Max(after.Y, ImGui.GetCursorScreenPos().Y)));
+			}
+			else
+			{
+				draw.AddText(new NVector2(labelX + iconSize + 4f, y), ImGui.GetColorU32(ImGuiCol.Text), label);
+			}
+
+			if (clicked)
+			{
+				ShowFolder(relative);
+			}
+
+			if (current && relative.Length > 0 && ImGui.IsWindowFocused() && ImGui.IsKeyPressed(ImGuiKey.F2) && renaming == null)
+			{
+				StartRename(relative, true);
 			}
 
 			AcceptSceneObject(relative);
+			if (ImGui.BeginPopupContextItem("##tree_context"))
+			{
+				if (ImGui.MenuItem("Create Folder"))
+				{
+					ShowFolder(relative);
+					StartCreate("Folder", "New Folder");
+				}
+
+				if (relative.Length > 0 && ImGui.MenuItem("Rename", "F2"))
+				{
+					StartRename(relative, true);
+				}
+
+				if (ImGui.MenuItem("Show in Explorer")) ShowInExplorer(Absolute(relative));
+				ImGui.EndPopup();
+			}
 
 			if (open)
 			{
@@ -209,37 +300,121 @@ namespace LELEngine.Editor
 			}
 		}
 
+		/// <summary>Shows a folder in the file list (its files, nothing selected in it yet).</summary>
+		private void ShowFolder(string relative)
+		{
+			if (!string.Equals(folder, relative, StringComparison.OrdinalIgnoreCase))
+			{
+				folder = relative;
+				selectedFolder = null;
+				revealFolder = true;
+			}
+		}
+
+		/// <summary>The current folder as links: Assets > A > B (a click shows that folder).</summary>
+		private void DrawBreadcrumb()
+		{
+			string[] parts = folder.Length == 0 ? Array.Empty<string>() : folder.Split('/');
+			ImGui.PushStyleColor(ImGuiCol.Button, new System.Numerics.Vector4(0f, 0f, 0f, 0f));
+			ImGui.PushStyleVar(ImGuiStyleVar.FramePadding, new NVector2(3f, 1f));
+			for (int i = -1; i < parts.Length; i++)
+			{
+				if (i >= 0)
+				{
+					ImGui.SameLine(0f, 2f);
+					ImGui.TextDisabled(">");
+					ImGui.SameLine(0f, 2f);
+				}
+
+				string target = i < 0 ? "" : string.Join("/", parts, 0, i + 1);
+				if (ImGui.SmallButton((i < 0 ? "Assets" : parts[i]) + "##crumb" + i) && i < parts.Length - 1)
+				{
+					ShowFolder(target);
+				}
+
+				AcceptSceneObject(target);
+			}
+
+			ImGui.PopStyleVar();
+			ImGui.PopStyleColor();
+		}
+
 		private void DrawFiles()
 		{
 			RefreshListing();
-			ImGui.TextDisabled("Assets/" + folder);
+			FollowEditorSelection();
+			DrawBreadcrumb();
 			ImGui.Separator();
 
-			if (folder.Length > 0 && ImGui.Selectable("..", false, ImGuiSelectableFlags.AllowDoubleClick) && ImGui.IsMouseDoubleClicked(ImGuiMouseButton.Left))
-			{
-				int slash = folder.LastIndexOf('/');
-				folder = slash >= 0 ? folder.Substring(0, slash) : "";
-				return;
-			}
+			float iconSize = ImGui.GetTextLineHeight();
+			ImDrawListPtr draw = ImGui.GetWindowDrawList();
 
+			// Folders first: a click selects (F2 renames), a double click opens.
 			foreach (string directory in listedDirectories)
 			{
-				if (ImGui.Selectable("[" + directory + "]##dir", false, ImGuiSelectableFlags.AllowDoubleClick) && ImGui.IsMouseDoubleClicked(ImGuiMouseButton.Left))
+				string folderPath = Combine(folder, directory);
+				NVector2 rowStart = ImGui.GetCursorScreenPos();
+				if (!renameInTree && string.Equals(renaming, folderPath, StringComparison.OrdinalIgnoreCase))
 				{
-					folder = Combine(folder, directory);
-					return;
+					EditorIcons.Draw(draw, rowStart + new NVector2(1f, 0f), iconSize, IconKind.Folder, EditorIcons.ColorOf(IconKind.Folder));
+					ImGui.SetCursorScreenPos(rowStart + new NVector2(iconSize + 4f, -ImGui.GetStyle().FramePadding.Y));
+					DrawRenameField();
+					continue;
 				}
 
-				AcceptSceneObject(Combine(folder, directory));
+				bool selected = string.Equals(selectedFolder, folderPath, StringComparison.OrdinalIgnoreCase);
+				if (ImGui.Selectable("##dir" + directory, selected, ImGuiSelectableFlags.AllowDoubleClick))
+				{
+					if (ImGui.IsMouseDoubleClicked(ImGuiMouseButton.Left))
+					{
+						ShowFolder(folderPath);
+						return;
+					}
+
+					SelectFolderRow(folderPath);
+				}
+
+				TestAnchors.RecordItem("project:" + folderPath + "/");
+				EditorIcons.Draw(draw, rowStart + new NVector2(1f, 0f), iconSize, IconKind.Folder, EditorIcons.ColorOf(IconKind.Folder));
+				draw.AddText(rowStart + new NVector2(iconSize + 6f, 0f), ImGui.GetColorU32(ImGuiCol.Text), directory);
+				if (string.Equals(folderPath, pinged, StringComparison.OrdinalIgnoreCase))
+				{
+					FlashPinged();
+				}
+
+				AcceptSceneObject(folderPath);
+				if (ImGui.BeginPopupContextItem("##dir_context"))
+				{
+					SelectFolderRow(folderPath);
+					if (ImGui.MenuItem("Open")) ShowFolder(folderPath);
+					if (ImGui.MenuItem("Rename", "F2")) StartRename(folderPath);
+					if (ImGui.MenuItem("Show in Explorer")) ShowInExplorer(Absolute(folderPath));
+					ImGui.EndPopup();
+				}
 			}
 
-			float iconSize = ImGui.GetTextLineHeight();
 			for (int index = 0; index < listedFiles.Count; index++)
 			{
 				string file = listedFiles[index];
 				string assetPath = Combine(folder, file);
-				bool selected = selection.Contains(assetPath) || string.Equals(selectedFile, assetPath, StringComparison.OrdinalIgnoreCase);
+				bool isPrefab = assetPath.EndsWith(Prefab.Extension, StringComparison.OrdinalIgnoreCase);
+				listedVariants.TryGetValue(assetPath, out string variantOf);
+				IconKind iconKind = EditorIcons.KindOfFile(assetPath);
+				if (iconKind == IconKind.Prefab && variantOf != null)
+				{
+					iconKind = IconKind.PrefabVariant;
+				}
+
 				NVector2 rowStart = ImGui.GetCursorScreenPos();
+				if (!renameInTree && string.Equals(renaming, assetPath, StringComparison.OrdinalIgnoreCase))
+				{
+					DrawFileIcon(draw, rowStart, iconSize, assetPath, iconKind);
+					ImGui.SetCursorScreenPos(rowStart + new NVector2(iconSize + 4f, -ImGui.GetStyle().FramePadding.Y));
+					DrawRenameField();
+					continue;
+				}
+
+				bool selected = selection.Contains(assetPath) || string.Equals(selectedFile, assetPath, StringComparison.OrdinalIgnoreCase);
 				if (ImGui.Selectable("##file" + file, selected, ImGuiSelectableFlags.AllowDoubleClick))
 				{
 					Click(assetPath, index);
@@ -251,12 +426,8 @@ namespace LELEngine.Editor
 
 				TestAnchors.RecordItem("project:" + assetPath);
 
-				// Icon and name over the row (ScriptableObject assets with their class, prefabs as blue cubes, variants with their base).
-				ImDrawListPtr draw = ImGui.GetWindowDrawList();
-				bool isPrefab = assetPath.EndsWith(Prefab.Extension, StringComparison.OrdinalIgnoreCase);
-				listedVariants.TryGetValue(assetPath, out string variantOf);
-				IconKind iconKind = isPrefab ? variantOf != null ? IconKind.PrefabVariant : IconKind.Prefab : ScriptableObjectAssets.IsAssetFile(assetPath) ? IconKind.ScriptableObject : IconKind.Asset;
-				EditorIcons.Draw(draw, rowStart + new NVector2(1f, 0f), iconSize, iconKind, isPrefab ? ImGui.GetColorU32(EditorStyle.Prefab) : ImGui.GetColorU32(ImGuiCol.Text, 0.7f));
+				// Icon and name over the row (ScriptableObject assets with their class, variants with their base).
+				DrawFileIcon(draw, rowStart, iconSize, assetPath, iconKind);
 				draw.AddText(rowStart + new NVector2(iconSize + 6f, 0f), ImGui.GetColorU32(ImGuiCol.Text), file);
 				if (variantOf != null)
 				{
@@ -316,8 +487,19 @@ namespace LELEngine.Editor
 						editor.NotifySceneChanged();
 					}
 
+					if (ImGui.MenuItem("Rename", "F2")) StartRename(assetPath);
 					if (ImGui.MenuItem("Show in Explorer")) ShowInExplorer(Absolute(assetPath));
 					ImGui.EndPopup();
+				}
+			}
+
+			// F2 renames the picked folder or the inspected file.
+			if (renaming == null && ImGui.IsWindowFocused() && ImGui.IsKeyPressed(ImGuiKey.F2))
+			{
+				string target = selectedFolder ?? selectedFile;
+				if (target != null)
+				{
+					StartRename(target);
 				}
 			}
 
@@ -326,7 +508,14 @@ namespace LELEngine.Editor
 			TestAnchors.RecordItem("project:(empty)");
 			if (ImGui.IsItemClicked(ImGuiMouseButton.Left))
 			{
+				// Nothing selected: the inspector clears too.
 				selection.Clear();
+				selectedFile = null;
+				selectedFolder = null;
+				if (editor.SelectedAsset != null)
+				{
+					editor.ClearSelection();
+				}
 			}
 
 			// A scene object dropped here becomes a prefab in this folder.
@@ -349,6 +538,7 @@ namespace LELEngine.Editor
 				if (ImGui.MenuItem("Create Physics Material 2D")) StartCreate("PhysicsMaterial2D", "NewPhysicsMaterial");
 				if (ImGui.MenuItem("Create Visual Effect Graph")) StartCreate("VFX", "NewVisualEffect");
 				if (ImGui.MenuItem("Create Audio Project")) StartCreate("AudioProject", "Audio");
+				if (ImGui.MenuItem("Create Input Configuration")) StartCreate("InputConfiguration", "Input");
 				if (ImGui.MenuItem("Create Scene")) StartCreate("Scene", "NewScene");
 				if (ImGui.MenuItem("Create UI Document (UXML)")) StartCreate("UXML", "NewDocument");
 				if (ImGui.MenuItem("Create Style Sheet (USS)")) StartCreate("USS", "NewStyle");
@@ -400,8 +590,182 @@ namespace LELEngine.Editor
 				selectionAnchor = assetPath;
 			}
 
-			selectedFile = assetPath;
-			editor.SelectAsset(assetPath);
+			selectedFolder = null;
+			if (selection.Contains(assetPath))
+			{
+				selectedFile = assetPath;
+			}
+			else
+			{
+				// Ctrl+click took the file out: the inspector shows another selected file, or nothing.
+				selectedFile = null;
+				foreach (string listed in listedFiles)
+				{
+					string path = Combine(folder, listed);
+					if (selection.Contains(path))
+					{
+						selectedFile = path;
+					}
+				}
+			}
+
+			if (selectedFile != null)
+			{
+				editor.SelectAsset(selectedFile);
+			}
+			else
+			{
+				editor.ClearSelection();
+			}
+		}
+
+		/// <summary>A folder row picked: the files' selection and the inspector clear.</summary>
+		private void SelectFolderRow(string folderPath)
+		{
+			selectedFolder = folderPath;
+			selection.Clear();
+			selectedFile = null;
+			if (editor.SelectedAsset != null)
+			{
+				editor.ClearSelection();
+			}
+		}
+
+		/// <summary>
+		///     The panel shows what the inspector shows: a GameObject selected elsewhere clears the files' highlight, an
+		///     asset selected elsewhere (an object field ping) becomes the selection.
+		/// </summary>
+		private void FollowEditorSelection()
+		{
+			string inspected = editor.SelectedAsset;
+			if (string.Equals(inspected, selectedFile, StringComparison.OrdinalIgnoreCase))
+			{
+				return;
+			}
+
+			selectedFile = inspected;
+			selection.Clear();
+			if (inspected != null)
+			{
+				selection.Add(inspected);
+				selectedFolder = null;
+			}
+		}
+
+		/// <summary>A file's icon: the image itself for pictures (when it has a preview), else the icon of its kind.</summary>
+		private static void DrawFileIcon(ImDrawListPtr draw, NVector2 rowStart, float iconSize, string assetPath, IconKind kind)
+		{
+			NVector2 min = rowStart + new NVector2(1f, 0f);
+			if (kind == IconKind.Texture && AssetThumbnails.TryGet(assetPath, out int handle, out NVector2 uv0, out NVector2 uv1))
+			{
+				draw.AddImage(EditorGui.Texture(handle), min, min + new NVector2(iconSize), uv0, uv1);
+				return;
+			}
+
+			EditorIcons.Draw(draw, min, iconSize, kind, EditorIcons.ColorOf(kind));
+		}
+
+		// ---------------------------------------------------------------- rename
+
+		private void StartRename(string assetPath, bool inTree = false)
+		{
+			if (editor.IsPlaying)
+			{
+				Debug.LogWarning("[Editor] Stop play mode to rename assets.");
+				return;
+			}
+
+			renaming = assetPath;
+			renameInTree = inTree;
+			bool isFolder = Directory.Exists(Absolute(assetPath));
+			string name = Path.GetFileName(assetPath);
+			renameBuffer = isFolder ? name : Path.GetFileNameWithoutExtension(name);
+			renameStarted = true;
+		}
+
+		/// <summary>The name field of the row being renamed: Enter or a click elsewhere renames, Escape cancels.</summary>
+		private void DrawRenameField()
+		{
+			if (renameStarted)
+			{
+				ImGui.SetKeyboardFocusHere();
+			}
+
+			ImGui.SetNextItemWidth(Math.Max(120f, ImGui.GetContentRegionAvail().X));
+			bool enter = ImGui.InputText("##rename", ref renameBuffer, 256, ImGuiInputTextFlags.EnterReturnsTrue | ImGuiInputTextFlags.AutoSelectAll);
+			TestAnchors.RecordItem("rename");
+			if (renameStarted)
+			{
+				renameStarted = false;
+				return;
+			}
+
+			if (ImGui.IsItemActive() && ImGui.IsKeyPressed(ImGuiKey.Escape))
+			{
+				renaming = null;
+				return;
+			}
+
+			if (enter || ImGui.IsItemDeactivated())
+			{
+				// Renamed after the panel is drawn: the tree and the listing are being walked now.
+				renameCommitted = true;
+			}
+		}
+
+		private void CommitRename()
+		{
+			string path = renaming;
+			renaming = null;
+			if (path == null)
+			{
+				return;
+			}
+
+			string name = renameBuffer.Trim();
+			bool isFolder = Directory.Exists(Absolute(path));
+			if (name.Length == 0 || name.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0 || name == "." || name == "..")
+			{
+				Debug.LogWarning("[Editor] Cannot rename " + path + ": '" + name + "' is not a valid name.");
+				return;
+			}
+
+			int slash = path.LastIndexOf('/');
+			string parent = slash >= 0 ? path.Substring(0, slash) : "";
+			string target = Combine(parent, isFolder ? name : name + Path.GetExtension(path));
+			if (string.Equals(target, path, StringComparison.Ordinal))
+			{
+				return;
+			}
+
+			string failure = editor.MoveAsset(path, target);
+			if (failure != null)
+			{
+				Debug.LogWarning("[Editor] Cannot rename " + path + ": " + failure);
+				return;
+			}
+
+			// The panel follows: the shown folder, the picked folder, the selection, the open tree nodes.
+			foreach (string open in openFolders)
+			{
+				if (AssetDatabase.MovedPath(open, path, target) is string reopened)
+				{
+					openNext.Add(reopened);
+				}
+			}
+
+			folder = AssetDatabase.MovedPath(folder, path, target) ?? folder;
+			selectedFolder = AssetDatabase.MovedPath(selectedFolder, path, target) ?? selectedFolder;
+			selectionAnchor = AssetDatabase.MovedPath(selectionAnchor, path, target) ?? selectionAnchor;
+			var moved = new List<string>(selection);
+			selection.Clear();
+			foreach (string selected in moved)
+			{
+				selection.Add(AssetDatabase.MovedPath(selected, path, target) ?? selected);
+			}
+
+			selectedFile = editor.SelectedAsset;
+			listedVersion = -1;
 		}
 
 		/// <summary>The pinged file's row (the last item): scrolled into view once, outlined while the ping lasts.</summary>
@@ -603,6 +967,10 @@ namespace LELEngine.Editor
 			{
 				editor.OpenAudioStudio(assetPath, null);
 			}
+			else if (EditorIcons.KindOfFile(assetPath) == IconKind.InputConfiguration)
+			{
+				editor.OpenInputManager(assetPath);
+			}
 			else if (AssetDatabase.GetAssetType(assetPath) != null && !assetPath.EndsWith(".shader", StringComparison.OrdinalIgnoreCase))
 			{
 				// Materials, textures, meshes, physics materials: edited in the inspector.
@@ -766,6 +1134,15 @@ namespace LELEngine.Editor
 					audioProject.Save(AssetDatabase.ToAssetPath(target));
 					break;
 				}
+				case "InputConfiguration":
+				{
+					target = Absolute(Combine(folder, name + ScriptableObjectAssets.Extension));
+					EnsureNew(target);
+					var configuration = ScriptableObject.CreateInstance<LELEngine.InputSystem.InputConfiguration>();
+					configuration.Reset();
+					ScriptableObjectAssets.Save(configuration, AssetDatabase.ToAssetPath(target));
+					break;
+				}
 				case "Scene":
 					target = Absolute(Combine(folder, name + SceneSerializer.Extension));
 					EnsureNew(target);
@@ -815,6 +1192,10 @@ namespace LELEngine.Editor
 				else if (kind == "AudioProject")
 				{
 					editor.OpenAudioStudio(selectedFile, null);
+				}
+				else if (kind == "InputConfiguration")
+				{
+					editor.OpenInputManager(selectedFile);
 				}
 			}
 		}

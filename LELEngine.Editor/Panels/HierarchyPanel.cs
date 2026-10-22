@@ -157,7 +157,7 @@ namespace LELEngine.Editor
 			ImGui.InvisibleButton("##hierarchy_empty", new NVector2(Math.Max(1, rest.X), Math.Max(30, rest.Y)));
 			if (ImGui.IsItemClicked(ImGuiMouseButton.Left))
 			{
-				editor.Select(null);
+				editor.ClearSelection();
 			}
 
 			if (ImGui.BeginDragDropTarget())

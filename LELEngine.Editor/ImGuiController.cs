@@ -535,7 +535,8 @@ void main()
 			}
 		}
 
-		private static ImGuiKey MapKey(Keys key)
+		/// <summary>ImGui's key for a window key (ImGuiKey.None for keys ImGui does not know); the Input Manager listens with it.</summary>
+		internal static ImGuiKey MapKey(Keys key)
 		{
 			if (key >= Keys.A && key <= Keys.Z)
 			{

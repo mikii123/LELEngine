@@ -245,6 +245,65 @@
   the same. The yaw turns the opposite way to Unity's skybox `_Rotation`. Unity skies (left-handed) seen from a
   right-handed camera come out mirrored; mirror the faces (flip each horizontally, swap +X / -X) to keep the image.
 
+## Input system (Rewired-like, 2026-10-22)
+
+- Runtime in `LELEngine/InputSystem`: `InputConfiguration` (a ScriptableObject asset: `Settings`, action categories,
+  `Actions` (Axis / Button, category, behavior, positive / negative names), map categories, layouts, `Behaviors`
+  (digital axis simulation, mouse sensitivity, button dead zone, double / short / long press times), `Players` (keyboard /
+  mouse on start, gamepads, starting maps), `Maps` (per controller type, map category and layout; `ActionElementMap`:
+  element code, contribution, axis range, invert, modifiers)), `ControllerTypes` (Keyboard = OpenTK `Keys` codes, Mouse =
+  `MouseElement`, Gamepad = `GamepadElement`: the standard layout GLFW maps controllers onto; names, element lists),
+  `Controllers.cs` (`KeyboardController` / `MouseController` polling `Input`, `GamepadController` from GLFW slots or
+  virtual: `SetButton` / `SetAxis`, radial stick dead zone), `InputPlayer` (Rewired's Player: `GetButton` / `Down` / `Up`,
+  `GetNegativeButton*`, `GetButtonDoublePressDown`, `GetButtonTimedPress*`, `GetButtonShortPress*` / `LongPress*`,
+  `GetButtonTimePressed`, `GetAnyButton*`, `GetAxis` / `Raw` / `Previous` / `Delta` / `2D`, `GetBindingName` for prompts,
+  `LastActiveController`, `AddController`, `LoadMap`, `SetMapsEnabled`; per action the largest analog value wins, keys
+  push ±1 through the behavior's digital axis), `InputManager` (ReInput: started on the first frame with Project
+  Settings > Input > Configuration, updated from `Input.BeginFrame` with real time; gamepads connect / disconnect /
+  auto-assign / go back to their previous player; `CreateVirtualGamepad`; `SaveUserData` / `LoadUserData` /
+  `ClearUserData` to `UserDataPath`: LocalAppData/LELEngine/<exe>/ in a player, the project's Library in the editor;
+  `Shutdown` when play mode ends), `InputMapper` (runtime remapping: listens after release, Escape cancels, timeout,
+  conflicts Replace / Swap / Allow / Cancel, `Finished` event). `Input.GetMouseButtonDown` / `Up` were added for it.
+- The type `InputAction` clashes with OpenTK's GLFW `InputAction`: files using both namespaces alias it
+  (`using InputAction = LELEngine.InputSystem.InputAction;`).
+- Editor: `InputSystem/InputManagerWindow.cs` (Window > Input Manager; double click on the asset; Project Settings >
+  Input tab names the configuration; Create > Input Configuration): pages Settings, Players (starting maps), Actions,
+  Action / Map Categories, Layouts, Input Behaviors (FieldDrawer), Keyboard / Mouse / Gamepad Maps (per action rows; the
+  element button listens for the next key (with modifiers), mouse button / wheel or gamepad button / stick (GLFW in edit
+  mode, `EditorGamepads`); the arrow picks from every element), Debug (play mode: every player's actions live, gamepads
+  with owners). Edits go through the inspector context (undo steps, the asset saves when an edit ends). Builds ship the
+  configuration (`BuildDependencies`: "Project Settings > Input").
+- Test hooks: `inputmanager=N;Page` (KeyboardMaps, GamepadMaps, Debug, ...), anchors `input:Page`,
+  `binding:Action/Element`, `listen:Action`, `action:Name`; `key=N;G` presses for listening. Verified 2026-10-22 on New
+  Frontier: a virtual gamepad flew the ship through the actions (stick 1.0, aim, 17 shots from the trigger, a skill),
+  a held key went down / held / up, `LastActiveController` and the HUD's binding labels followed the device; listening
+  bound G and undo restored Space (the asset file byte-identical).
+
+## Project panel, asset moves, model import (2026-10-22)
+
+- `AssetDatabase.MoveAsset(from, to)` renames / moves a file (with its meta) or a folder (case-only renames through a
+  temporary name), rebuilds the index and calls `InternalStorage.AssetMoved`, which re-keys every path-keyed cache
+  (materials, shaders, textures and sprites, models and meshes, prefabs and resolved prefabs, ScriptableObjects, physics
+  materials, audio clips and projects, UI sheets / documents / fonts, VFX graphs) and sets the loaded objects'
+  `AssetPath` (setters made internal): loaded assets keep their identity and save to the new path. `MovedPath` maps a
+  path. `EditorApplication.MoveAsset` also moves the scene path, prefab stages, the selection, the inspector lock,
+  Project.json scene lists and the project settings' audio project / input configuration paths; not in play mode.
+- `ProjectPanel`: folder tree with folder icons (open / closed), the shown folder's parents opened, a breadcrumb; the
+  file list shows folders first as rows (click selects, double click opens, context menu Open / Rename / Show in Explorer),
+  files with icons per kind (`EditorIcons.KindOfFile` / `ColorOf`: folder, scene, script, shader, material, texture (its
+  thumbnail), model, audio clip / project, VFX, UXML, USS, font, physics material, input configuration, text, prefab /
+  variant, ScriptableObject). Rename: F2 or the context menu, inline field where it started (tree or list), Enter / click
+  away commits after the panel is drawn, Escape cancels. A click on empty space (here or in the hierarchy) clears the
+  selection and the inspector (`ClearSelection`); the panel follows the editor's selection (a GameObject selected
+  elsewhere clears the file highlight).
+- Models import completely as soon as they are in the project: `ModelAssets.ImportOutdated` (new / changed file,
+  settings or importer; with `verifyMaterials` also an import whose extracted material files are gone) runs when a
+  project opens (editor and batch mode) and after every asset refresh (watcher); a loaded model that reimported is
+  replaced by reloading the scene. Model import settings: `importMaterials` (Materials header) chooses extracted
+  material assets or the default material.
+- The inspector draws the materials of the selected object's renderers below its components (full material editors, as
+  Unity); engine and runtime materials are shown disabled.
+
 ## GI method: fixed while running, only the active one allocates (2026-10-22)
 
 - `Lighting.GIMethod` is the method that runs: `GI.Mode` latched at the first frame. In a player and in the editor's

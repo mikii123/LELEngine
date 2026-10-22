@@ -46,7 +46,10 @@ namespace LELEngine
 		/// <summary>
 		///     Creates a .material asset per material of the file (Materials folder next to the model, never
 		///     overwritten) and writes embedded textures out (Textures folder); off: the project's default material.
+		///     The import runs as soon as the file is in the project (the editor imports new and changed models).
 		/// </summary>
+		[Header("Materials")]
+		[Tooltip("Create a material asset per material of the model (Materials/ next to it, editable, never overwritten); off: the default material")]
 		public bool importMaterials = true;
 
 		/// <summary>Reorders triangles and vertices for the GPU's vertex cache.</summary>

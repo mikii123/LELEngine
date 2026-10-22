@@ -37,6 +37,10 @@ namespace LELEngine
 
 		private static Vector2 lastMousePosition;
 
+		// Mouse buttons pressed / released this frame (bits by MouseButton), from the window's events.
+		private static int mouseButtonsPressed;
+		private static int mouseButtonsReleased;
+
 		public enum StandardInputAxis
 		{
 			MouseX,
@@ -60,6 +64,8 @@ namespace LELEngine
 
 			lastMousePosition = mousePosition;
 			mouseScrollDelta = Vector2.Zero;
+			mouseButtonsPressed = 0;
+			mouseButtonsReleased = 0;
 			// The UI drains the raw events on its next update (events raised during a frame reach it then); a host
 			// without any scene update would let them pile up, so they are capped.
 			if (UIEvents.Count > 4096)
@@ -72,6 +78,8 @@ namespace LELEngine
 		{
 			// Key state is captured via events; the mouse delta is polled so it works with a grabbed cursor.
 			mouseDelta = Host != null ? Host.MouseState.Delta : Vector2.Zero;
+			// The input actions read this frame's devices (InputSystem.InputManager).
+			InputSystem.InputManager.Update();
 		}
 
 		/// <summary>
@@ -102,6 +110,18 @@ namespace LELEngine
 		public static bool GetMouseButton(MouseButton button)
 		{
 			return Host != null && Host.IsMouseButtonDown(button);
+		}
+
+		/// <summary>The button was pressed this frame (also a click shorter than a frame).</summary>
+		public static bool GetMouseButtonDown(MouseButton button)
+		{
+			return (mouseButtonsPressed & (1 << (int)button)) != 0;
+		}
+
+		/// <summary>The button was released this frame.</summary>
+		public static bool GetMouseButtonUp(MouseButton button)
+		{
+			return (mouseButtonsReleased & (1 << (int)button)) != 0;
 		}
 
 		public static bool GetKey(Keys code)
@@ -161,11 +181,13 @@ namespace LELEngine
 
 		public static void Input_MouseDown(MouseButtonEventArgs e)
 		{
+			mouseButtonsPressed |= 1 << (int)e.Button;
 			UIEvents.Add(new RawInputEvent { kind = RawInputKind.MouseDown, button = e.Button, modifiers = e.Modifiers, position = mousePosition });
 		}
 
 		public static void Input_MouseUp(MouseButtonEventArgs e)
 		{
+			mouseButtonsReleased |= 1 << (int)e.Button;
 			UIEvents.Add(new RawInputEvent { kind = RawInputKind.MouseUp, button = e.Button, modifiers = e.Modifiers, position = mousePosition });
 		}
 

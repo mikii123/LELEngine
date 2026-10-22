@@ -35,6 +35,29 @@ namespace LELEngine
 		#region PublicMethods
 
 		/// <summary>
+		///     An asset file or folder moved (<see cref="AssetDatabase.MoveAsset" />): every asset cache keeps its loaded
+		///     objects under their new paths, so the scenes and editor windows holding them see the move.
+		/// </summary>
+		internal static void AssetMoved(string fromPath, string toPath)
+		{
+			lock (Sync)
+			{
+				AssetDatabase.RekeyMoved(Materials, fromPath, toPath, (material, path) => material.AssetPath = path);
+				AssetDatabase.RekeyMoved(Shaders, fromPath, toPath, (shader, path) => shader.AssetPath = path);
+			}
+
+			TextureAssets.AssetMoved(fromPath, toPath);
+			ModelAssets.AssetMoved(fromPath, toPath);
+			Prefab.AssetMoved(fromPath, toPath);
+			ScriptableObjectAssets.AssetMoved(fromPath, toPath);
+			PhysicsMaterial2D.AssetMoved(fromPath, toPath);
+			Audio.AudioClip.AssetMoved(fromPath, toPath);
+			Audio.AudioProject.AssetMoved(fromPath, toPath);
+			UIElements.UIAssets.AssetMoved(fromPath, toPath);
+			VFX.VfxGraph.AssetMoved(fromPath, toPath);
+		}
+
+		/// <summary>
 		///     Releases every loaded project asset (another project was opened: the same asset paths now mean other
 		///     files). Renderers that still use them must be destroyed first.
 		/// </summary>

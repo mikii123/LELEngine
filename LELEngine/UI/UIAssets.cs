@@ -334,6 +334,15 @@ namespace LELEngine.UIElements
 			AssetReloaded?.Invoke(asset);
 		}
 
+		/// <summary>A file or folder moved: the loaded sheets, documents and fonts keep their identity under the new path.</summary>
+		internal static void AssetMoved(string fromPath, string toPath)
+		{
+			lock (styleSheets) AssetDatabase.RekeyMoved(styleSheets, fromPath, toPath, (sheet, path) => sheet.AssetPath = path);
+			lock (visualTrees) AssetDatabase.RekeyMoved(visualTrees, fromPath, toPath, (tree, path) => tree.AssetPath = path);
+			lock (fonts) AssetDatabase.RekeyMoved(fonts, fromPath, toPath, (font, path) => font.AssetPath = path);
+			lock (fileTimes) AssetDatabase.RekeyMoved(fileTimes, fromPath, toPath);
+		}
+
 		/// <summary>Drops every cached asset (project closed) and releases GL textures.</summary>
 		public static void Clear()
 		{

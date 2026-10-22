@@ -539,6 +539,129 @@ namespace LELEngine
 			}
 		}
 
+		// ---------------------------------------------------------------- moving
+
+		/// <summary>
+		///     Renames or moves an asset file (its meta file goes with it) or a folder with everything in it. Loaded assets
+		///     keep their identity: every asset cache re-keys them and they report the new path
+		///     (<see cref="IAsset.AssetPath" />, InternalStorage.AssetMoved). References stay valid through the GUIDs. Returns an error message,
+		///     or null when it was moved.
+		/// </summary>
+		public static string MoveAsset(string fromPath, string toPath)
+		{
+			fromPath = Normalize(fromPath ?? "");
+			toPath = Normalize(toPath ?? "");
+			if (fromPath.Length == 0 || toPath.Length == 0)
+			{
+				return "The Assets folder itself cannot move.";
+			}
+
+			if (string.Equals(fromPath, toPath, StringComparison.Ordinal))
+			{
+				return null;
+			}
+
+			string from = ToAbsolute(fromPath);
+			string to = ToAbsolute(toPath);
+			bool folder = Directory.Exists(from);
+			if (!folder && !File.Exists(from))
+			{
+				return fromPath + " does not exist.";
+			}
+
+			// Only the case changes: the file system sees the target as the source.
+			bool caseOnly = string.Equals(fromPath, toPath, StringComparison.OrdinalIgnoreCase);
+			if (!caseOnly && (File.Exists(to) || Directory.Exists(to)))
+			{
+				return toPath + " already exists.";
+			}
+
+			if (folder && toPath.StartsWith(fromPath + "/", StringComparison.OrdinalIgnoreCase))
+			{
+				return "A folder cannot move into itself.";
+			}
+
+			string parent = Path.GetDirectoryName(to);
+			if (parent != null && !Directory.Exists(parent))
+			{
+				return "The folder " + Path.GetDirectoryName(toPath) + " does not exist.";
+			}
+
+			try
+			{
+				Move(from, to, folder, caseOnly);
+				if (File.Exists(from + MetaExtension))
+				{
+					Move(from + MetaExtension, to + MetaExtension, false, caseOnly);
+				}
+			}
+			catch (Exception e) when (e is IOException || e is UnauthorizedAccessException)
+			{
+				return e.Message;
+			}
+
+			lock (sync)
+			{
+				EnsureInitialized();
+				Rebuild(false);
+			}
+
+			InternalStorage.AssetMoved(fromPath, toPath);
+			Refreshed?.Invoke();
+			return null;
+		}
+
+		/// <summary>
+		///     Where <paramref name="path" /> is after <paramref name="fromPath" /> moved to <paramref name="toPath" />: the new
+		///     path for the moved asset or anything inside a moved folder, null for paths the move did not touch.
+		/// </summary>
+		public static string MovedPath(string path, string fromPath, string toPath)
+		{
+			if (path == null)
+			{
+				return null;
+			}
+
+			path = Normalize(path);
+			fromPath = Normalize(fromPath);
+			if (string.Equals(path, fromPath, StringComparison.OrdinalIgnoreCase))
+			{
+				return Normalize(toPath);
+			}
+
+			return path.StartsWith(fromPath + "/", StringComparison.OrdinalIgnoreCase) ? Normalize(toPath) + path.Substring(fromPath.Length) : null;
+		}
+
+		/// <summary>Moves the entries of a path-keyed cache that a move touched to their new keys; <paramref name="moved" /> gets each value with its new path.</summary>
+		internal static void RekeyMoved<T>(IDictionary<string, T> cache, string fromPath, string toPath, Action<T, string> moved = null)
+		{
+			List<(string oldKey, string newKey, T value)> changes = null;
+			foreach (KeyValuePair<string, T> entry in cache)
+			{
+				string newKey = MovedPath(entry.Key, fromPath, toPath);
+				if (newKey != null)
+				{
+					(changes ??= new List<(string, string, T)>()).Add((entry.Key, newKey, entry.Value));
+				}
+			}
+
+			if (changes == null)
+			{
+				return;
+			}
+
+			foreach ((string oldKey, string newKey, T value) change in changes)
+			{
+				cache.Remove(change.oldKey);
+			}
+
+			foreach ((string oldKey, string newKey, T value) change in changes)
+			{
+				cache[change.newKey] = change.value;
+				moved?.Invoke(change.value, change.newKey);
+			}
+		}
+
 		// ---------------------------------------------------------------- loading
 
 		/// <summary>Loads (or returns the cached) asset of the given type from a root-relative path.</summary>
@@ -883,6 +1006,26 @@ namespace LELEngine
 		private static string Normalize(string path)
 		{
 			return path.Replace('\\', '/').TrimStart('/');
+		}
+
+		// A case-only rename goes through a temporary name (Windows treats the target as the source).
+		private static void Move(string from, string to, bool folder, bool caseOnly)
+		{
+			if (caseOnly)
+			{
+				string temporary = from + ".moving-" + Guid.NewGuid().ToString("N").Substring(0, 8);
+				Move(from, temporary, folder, false);
+				from = temporary;
+			}
+
+			if (folder)
+			{
+				Directory.Move(from, to);
+			}
+			else
+			{
+				File.Move(from, to);
+			}
 		}
 
 		#endregion

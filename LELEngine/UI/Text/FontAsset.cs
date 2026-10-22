@@ -45,7 +45,7 @@ namespace LELEngine.UIElements
 
 		public const int AtlasSize = 1024;
 
-		public string AssetPath { get; private set; }
+		public string AssetPath { get; internal set; }
 		public string name;
 		public string familyName => font?.FamilyName ?? name;
 		public bool isBold { get; private set; }

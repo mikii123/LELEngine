@@ -35,6 +35,9 @@ namespace LELEngine
 		/// <summary>The audio system: the audio project, master volume, voice count, device buffer, banks loaded at start.</summary>
 		public LELEngine.Audio.AudioSettings Audio = new LELEngine.Audio.AudioSettings();
 
+		/// <summary>The input system: the configuration the game's players read their actions through.</summary>
+		public InputSystem.InputProjectSettings Input = new InputSystem.InputProjectSettings();
+
 		#endregion
 
 		#region PublicMethods

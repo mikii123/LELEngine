@@ -195,6 +195,16 @@ namespace LELEngine.Audio
 			}
 		}
 
+		/// <summary>A file or folder moved: the loaded projects keep their identity under the new path.</summary>
+		internal static void AssetMoved(string fromPath, string toPath)
+		{
+			lock (cache)
+			{
+				AssetDatabase.RekeyMoved(cache, fromPath, toPath, (project, path) => project.AssetPath = path);
+				AssetDatabase.RekeyMoved(fileTimes, fromPath, toPath);
+			}
+		}
+
 		/// <summary>Drops a cached project (its file was deleted or replaced) so the next use reloads it.</summary>
 		public static void Forget(string assetPath)
 		{

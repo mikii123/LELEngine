@@ -75,6 +75,13 @@ namespace LELEngine.Editor
 				}
 			}
 
+			// The input configuration Project Settings > Input names (the player loads it on its first frame).
+			string input = ProjectSettings.Current.Input.Configuration;
+			if (!string.IsNullOrEmpty(input) && File.Exists(AssetDatabase.ToAbsolute(input)))
+			{
+				result.Add(input, "Project Settings > Input");
+			}
+
 			while (result.pending.Count > 0)
 			{
 				string assetPath = result.pending.Dequeue();

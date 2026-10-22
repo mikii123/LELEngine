@@ -343,6 +343,17 @@ namespace LELEngine
 		///     Runs OnDisable on every loaded asset and drops them all (before the game scripts unload, when the project
 		///     closes); they load again from their files on the next use.
 		/// </summary>
+		/// <summary>A file or folder moved: the loaded assets keep their identity under the new path (and save there).</summary>
+		internal static void AssetMoved(string fromPath, string toPath)
+		{
+			lock (sync)
+			{
+				AssetDatabase.RekeyMoved(cache, fromPath, toPath, (asset, path) => asset.AssetPath = path);
+				AssetDatabase.RekeyMoved(typeNames, fromPath, toPath);
+				AssetDatabase.RekeyMoved(fileTimes, fromPath, toPath);
+			}
+		}
+
 		public static void UnloadAll()
 		{
 			List<ScriptableObject> loaded;

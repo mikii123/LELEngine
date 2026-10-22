@@ -38,7 +38,7 @@ namespace LELEngine
 		#region PublicFields
 
 		/// <summary>Root-relative path of the source file (see <see cref="AssetDatabase" />).</summary>
-		public string AssetPath { get; }
+		public string AssetPath { get; internal set; }
 
 		/// <summary>Name of the mesh inside its model file (null for a mesh built in code).</summary>
 		public string SubAssetName { get; }

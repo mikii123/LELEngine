@@ -184,6 +184,15 @@ namespace LELEngine.VFX
 			}
 		}
 
+		/// <summary>A file or folder moved: the loaded graphs keep their identity under the new path.</summary>
+		internal static void AssetMoved(string fromPath, string toPath)
+		{
+			lock (cache)
+			{
+				AssetDatabase.RekeyMoved(cache, fromPath, toPath, (graph, path) => graph.AssetPath = path);
+			}
+		}
+
 		/// <summary>Drops a cached graph (its file was deleted or replaced) so the next use reloads it.</summary>
 		public static void Forget(string assetPath)
 		{

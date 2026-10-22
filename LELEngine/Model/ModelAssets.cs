@@ -178,8 +178,78 @@ namespace LELEngine
 			}
 		}
 
+		/// <summary>A file or folder moved: the loaded models and their meshes keep their identity under the new path.</summary>
+		internal static void AssetMoved(string fromPath, string toPath)
+		{
+			lock (sync)
+			{
+				AssetDatabase.RekeyMoved(models, fromPath, toPath, (model, path) =>
+				{
+					model.AssetPath = path;
+					foreach (Mesh mesh in model.Meshes)
+					{
+						if (mesh != null && AssetDatabase.MovedPath(mesh.AssetPath, fromPath, toPath) is string meshPath)
+						{
+							mesh.AssetPath = meshPath;
+						}
+					}
+				});
+			}
+		}
+
+		/// <summary>
+		///     Imports every model of the project whose cached import is missing or outdated (new file, changed file,
+		///     settings or importer), materials included: the editor runs it when a project opens and after files change,
+		///     so a model copied in from outside (Explorer, a script, the command line) is complete before anything uses
+		///     it. Needs the import cache (<see cref="CacheFolder" />). With <paramref name="verifyMaterials" /> (a project
+		///     opening) an import whose extracted material files are gone counts as outdated too (it reads the cached
+		///     imports). Returns the paths imported.
+		/// </summary>
+		public static List<string> ImportOutdated(bool verifyMaterials = false)
+		{
+			var imported = new List<string>();
+			if (CacheFolder == null)
+			{
+				return imported;
+			}
+
+			foreach (string assetPath in AssetDatabase.GetAllAssetPaths(Extensions))
+			{
+				try
+				{
+					if (NeedsImport(assetPath, verifyMaterials))
+					{
+						// A fresh import: the cached one may match the file and still miss its material files.
+						LoadData(assetPath, true);
+						imported.Add(assetPath);
+					}
+				}
+				catch (Exception e)
+				{
+					Debug.LogWarning($"[Model] Cannot import {assetPath}: {e.Message}");
+				}
+			}
+
+			return imported;
+		}
+
+		/// <summary>The model is loaded (its meshes may be in use).</summary>
+		public static bool IsLoaded(string assetPath)
+		{
+			lock (sync)
+			{
+				return models.ContainsKey(assetPath);
+			}
+		}
+
 		/// <summary>The imported data of a model file, importing it when there is no valid cached import.</summary>
 		public static ModelData LoadData(string assetPath)
+		{
+			return LoadData(assetPath, false);
+		}
+
+		/// <summary>The imported data of a model file; <paramref name="reimport" /> imports it even when the cached import is valid.</summary>
+		public static ModelData LoadData(string assetPath, bool reimport)
 		{
 			string file = AssetDatabase.ToAbsolute(assetPath);
 			if (IsImportedFile(file))
@@ -199,7 +269,7 @@ namespace LELEngine
 			ModelImporter settings = AssetDatabase.GetImporter<ModelImporter>(assetPath);
 			string stamp = Stamp(file, settings, backend);
 			string cacheFile = CacheFile(assetPath);
-			if (cacheFile != null && File.Exists(cacheFile))
+			if (cacheFile != null && File.Exists(cacheFile) && !reimport)
 			{
 				try
 				{
@@ -449,6 +519,64 @@ namespace LELEngine
 			settings.version = version;
 			string settingsHash = Convert.ToHexString(SHA1.HashData(settingsBytes));
 			return $"{info.Length}:{info.LastWriteTimeUtc.Ticks}:{settingsHash}:{backend.GetType().Name}:{backend.Version}:{(MaterialExtractor != null ? 1 : 0)}";
+		}
+
+		// A source model without a cached import of its current file, settings and importer (or, verifying materials,
+		// whose import should have material files that are missing).
+		private static bool NeedsImport(string assetPath, bool verifyMaterials)
+		{
+			string file = AssetDatabase.ToAbsolute(assetPath);
+			IModelImportBackend backend = FindBackend(assetPath);
+			string cacheFile = CacheFile(assetPath);
+			if (backend == null || cacheFile == null || IsImportedFile(file))
+			{
+				return false;
+			}
+
+			if (!File.Exists(cacheFile))
+			{
+				return true;
+			}
+
+			try
+			{
+				using (var reader = new BinaryReader(File.OpenRead(cacheFile), Encoding.UTF8))
+				{
+					byte[] magic = reader.ReadBytes(Magic.Length);
+					if (!magic.AsSpan().SequenceEqual(Magic) || reader.ReadInt32() != FormatVersion)
+					{
+						return true;
+					}
+
+					ModelImporter settings = AssetDatabase.GetImporter<ModelImporter>(assetPath);
+					if (reader.ReadString() != Stamp(file, settings, backend))
+					{
+						return true;
+					}
+
+					if (!verifyMaterials || !settings.importMaterials || MaterialExtractor == null)
+					{
+						return false;
+					}
+				}
+
+				using (FileStream stream = File.OpenRead(cacheFile))
+				{
+					foreach (ModelMaterial material in Read(stream, out _).Materials)
+					{
+						if (material.AssetPath == null || !File.Exists(AssetDatabase.ToAbsolute(material.AssetPath)))
+						{
+							return true;
+						}
+					}
+				}
+
+				return false;
+			}
+			catch (Exception e) when (e is IOException || e is EndOfStreamException || e is InvalidDataException)
+			{
+				return true;
+			}
 		}
 
 		private static string CacheFile(string assetPath)
