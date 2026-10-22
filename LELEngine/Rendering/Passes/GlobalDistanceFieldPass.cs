@@ -57,23 +57,25 @@ namespace LELEngine.Rendering.Passes
 
 		#region PublicMethods
 
-		public override void Initialize(Renderer renderer)
-		{
-			compose = new ComputeShader("Engine/SdfCompose.shader");
-			CreateVolumes(Lighting.GI.SdfResolution);
-		}
-
 		public override void Execute(RenderContext context)
 		{
 			GlobalIlluminationSettings gi = Lighting.GI;
-			if (!gi.Enabled || !gi.DistanceFieldEnabled)
+			// Made when the GI first needs the field, freed when it stops (GI off, voxel cones without the SDF).
+			if (!gi.DistanceFieldActive)
 			{
+				Release();
 				gi.GlobalSdf = 0;
 				gi.GlobalSdfObjectIds = 0;
+				// Lumen without the distance field still has its surface cache in the scene.
+				if (!gi.LumenActive)
+				{
+					context.Renderer.ReleaseLumenScene();
+				}
 				return;
 			}
 
-			if (gi.SdfResolution != currentResolution)
+			compose ??= new ComputeShader("Engine/SdfCompose.shader");
+			if (globalSdf == 0 || gi.SdfResolution != currentResolution)
 			{
 				CreateVolumes(gi.SdfResolution);
 			}
@@ -110,11 +112,17 @@ namespace LELEngine.Rendering.Passes
 			gi.GlobalSdfObjectIds = globalIds;
 		}
 
+		public override void ReleaseUnusedResources()
+		{
+			if (!Lighting.GI.DistanceFieldActive)
+			{
+				Release();
+			}
+		}
+
 		public override void Dispose()
 		{
-			DeleteVolumes();
-			compose?.Delete();
-			compose = null;
+			Release();
 			Lighting.GI.GlobalSdf = 0;
 			Lighting.GI.GlobalSdfObjectIds = 0;
 		}
@@ -122,6 +130,24 @@ namespace LELEngine.Rendering.Passes
 		#endregion
 
 		#region PrivateMethods
+
+		private void Release()
+		{
+			if (compose == null && globalSdf == 0)
+			{
+				return;
+			}
+
+			DeleteVolumes();
+			compose?.Delete();
+			compose = null;
+			currentResolution = 0;
+			staticDirty = true;
+			dynamicPending = true;
+			lastStaticCount = -1;
+			previousRegions.Clear();
+			Console.WriteLine("[SDF] Global distance field released");
+		}
 
 		private void CreateVolumes(int resolution)
 		{

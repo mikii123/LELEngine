@@ -37,11 +37,6 @@ namespace LELEngine.Rendering.Passes
 
 		#region PublicMethods
 
-		public override void Initialize(Renderer renderer)
-		{
-			program = new ShaderProgram("Engine/SurfaceCacheDebug.shader");
-		}
-
 		public override void Execute(RenderContext context)
 		{
 			LumenScene scene = context.Renderer.LumenScene;
@@ -50,6 +45,9 @@ namespace LELEngine.Rendering.Passes
 			{
 				return;
 			}
+
+			// Compiled when the view is first shown.
+			program ??= new ShaderProgram("Engine/SurfaceCacheDebug.shader");
 
 			context.SceneTarget.Bind();
 			GLState.SetDepth(false, false);

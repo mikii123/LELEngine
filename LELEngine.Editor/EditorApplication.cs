@@ -238,6 +238,10 @@ namespace LELEngine.Editor
 				RestoreWindowStates();
 			}
 
+			// The GI method changes in edit mode only (Project Settings, undo, a reload from disk); play mode keeps the
+			// method it started with.
+			Lighting.AllowGIMethodChange = PlayState == PlayState.Edit;
+
 			RefreshAssetsIfChanged();
 			RefreshSettingsIfChanged();
 			ReloadSceneIfChangedOnDisk();

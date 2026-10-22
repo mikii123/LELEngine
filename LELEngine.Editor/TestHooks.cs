@@ -16,6 +16,8 @@ namespace LELEngine.Editor
 	///     Scripted mouse input (real ImGui drag and drop, aimed at <see cref="TestAnchors" />):
 	///     drag=N;fromAnchor;toAnchor|M;... (press at N, move, hover at N+10, release at N+12),
 	///     click=N;anchor|..., doubleclick=N;anchor|...; expandinspector=1 opens every inspector foldout;
+	///     wheel=N;anchor;notches|... (mouse wheel over an anchor), mdrag=N;anchor;dx,dy|... (middle button drag by
+	///     pixels; anchor "sceneview" is the scene view's image), logsceneview=N|M logs the scene view camera;
 	///     logfield=N;Object;Component.field|... logs a field's value; pingasset=N;path shows a file in the project panel.
 	///     Prefabs: selectframe=, instantiateprefab=, openprefab=, closeprefab=, saveprefab=, createprefab=, createvariant=,
 	///     unpackprefab=, applyprefab=, revertprefab=, setfield=, addcomponentat=, removecomponent=, destroyobject=,
@@ -34,6 +36,8 @@ namespace LELEngine.Editor
 		private double lastFrameMs;
 		private readonly List<(int start, string from, string to)> drags = new List<(int, string, string)>();
 		private readonly List<(int at, string anchor, bool twice, int button)> clicks = new List<(int, string, bool, int)>();
+		private readonly List<(int at, string anchor, float amount)> wheels = new List<(int, string, float)>();
+		private readonly List<(int start, string anchor, System.Numerics.Vector2 delta)> middleDrags = new List<(int, string, System.Numerics.Vector2)>();
 
 		#endregion
 
@@ -79,7 +83,36 @@ namespace LELEngine.Editor
 				}
 			}
 
-			TestAnchors.Enabled = drags.Count > 0 || clicks.Count > 0;
+			// wheel=N;anchor;notches|...: the mouse over the anchor at N, the wheel turned at N + 1 (positive: forward).
+			if (values.TryGetValue("wheel", out string wheelList))
+			{
+				foreach (string entry in wheelList.Split('|'))
+				{
+					string[] parts = entry.Split(';');
+					if (parts.Length == 3 && int.TryParse(parts[0], out int at) && float.TryParse(parts[2], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float amount))
+					{
+						wheels.Add((at, parts[1], amount));
+					}
+				}
+			}
+
+			// mdrag=N;anchor;dx,dy|...: a middle button drag from the anchor by (dx, dy) pixels (press at N + 1, release at N + 11).
+			if (values.TryGetValue("mdrag", out string middleList))
+			{
+				foreach (string entry in middleList.Split('|'))
+				{
+					string[] parts = entry.Split(';');
+					string[] delta = parts.Length == 3 ? parts[2].Split(',') : Array.Empty<string>();
+					if (parts.Length == 3 && delta.Length == 2 && int.TryParse(parts[0], out int at)
+						&& float.TryParse(delta[0], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float dx)
+						&& float.TryParse(delta[1], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float dy))
+					{
+						middleDrags.Add((at, parts[1], new System.Numerics.Vector2(dx, dy)));
+					}
+				}
+			}
+
+			TestAnchors.Enabled = drags.Count > 0 || clicks.Count > 0 || wheels.Count > 0 || middleDrags.Count > 0;
 			FieldDrawer.ForceOpen = values.TryGetValue("expandinspector", out string expand) && expand == "1";
 		}
 
@@ -444,6 +477,12 @@ namespace LELEngine.Editor
 				Debug.Log("[Test] Redo");
 			}
 
+			// logsceneview=N|M: the scene view camera's position, view direction and focus distance.
+			if (IsListed("logsceneview"))
+			{
+				Debug.Log($"[Test] Scene view at {editor.SceneView.CameraPosition}, forward {editor.SceneView.CameraForward}, focus {editor.SceneView.FocusDistance:0.###}");
+			}
+
 			RunScriptedMouse();
 
 			// logfield=N;Object;Component.field|...: the field's value as the inspector names it.
@@ -529,6 +568,41 @@ namespace LELEngine.Editor
 				}
 				else if (step == 2 || (twice && step == 4)) io.AddMouseButtonEvent(mouseButton, false);
 				else if (step == 3 && button < 0) io.AddKeyEvent(ImGuiKey.ModCtrl, false);
+			}
+
+			foreach ((int at, string anchor, float amount) in wheels)
+			{
+				int step = frame - at;
+				if (step < 0 || step > 1 || !TestAnchors.TryGetPoint(anchor, out System.Numerics.Vector2 point))
+				{
+					continue;
+				}
+
+				if (step == 0) io.AddMousePosEvent(point.X, point.Y);
+				else io.AddMouseWheelEvent(0f, amount);
+			}
+
+			foreach ((int start, string anchor, System.Numerics.Vector2 delta) in middleDrags)
+			{
+				int step = frame - start;
+				if (step < 0 || step > 12 || !TestAnchors.TryGetPoint(anchor, out System.Numerics.Vector2 a))
+				{
+					continue;
+				}
+
+				// Middle button: 2. Moves in eight even steps, so every frame carries part of the delta.
+				if (step == 0) io.AddMousePosEvent(a.X, a.Y);
+				else if (step == 1) io.AddMouseButtonEvent(2, true);
+				else if (step <= 10)
+				{
+					System.Numerics.Vector2 p = a + delta * ((step - 2) / 8f);
+					io.AddMousePosEvent(p.X, p.Y);
+				}
+				else if (step == 11)
+				{
+					io.AddMouseButtonEvent(2, false);
+					Debug.Log($"[Test] Middle-dragged {anchor} by {delta}");
+				}
 			}
 		}
 

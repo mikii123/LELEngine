@@ -93,6 +93,7 @@ namespace LELEngine.Rendering
 			TransparentShadowProgram = new ShaderProgram("Engine/DepthOnly.shader", new[] { "LEL_SHADOW_TRANSMITTANCE" });
 			Fullscreen = new FullscreenQuad();
 			LumenScene = new LumenScene();
+			Lighting.GIUsageChanged += ReleaseUnusedGI;
 
 			Console.WriteLine("[Renderer] GL " + GL.GetString(StringName.Version) + " | " + GL.GetString(StringName.Renderer));
 		}
@@ -557,8 +558,39 @@ namespace LELEngine.Rendering
 			Lighting.GI.InvalidateStatic();
 		}
 
+		// What the GI uses changed: free the rest now, also while this renderer does not draw (a hidden editor view).
+		private void ReleaseUnusedGI()
+		{
+			foreach (RenderPass pass in passes)
+			{
+				pass.ReleaseUnusedResources();
+			}
+
+			GlobalIlluminationSettings gi = Lighting.GI;
+			if (!gi.LumenActive)
+			{
+				LumenScene.ReleaseSurfaceCache();
+				if (!gi.DistanceFieldActive)
+				{
+					ReleaseLumenScene();
+				}
+			}
+		}
+
+		/// <summary>Frees the GI's scene (distance fields, surface cache, object tables) once no GI pass reads it.</summary>
+		internal void ReleaseLumenScene()
+		{
+			if (LumenScene.Allocated)
+			{
+				LumenScene.Delete();
+				LumenScene = new LumenScene();
+				Console.WriteLine("[GI] Scene distance fields and tables released");
+			}
+		}
+
 		public void Dispose()
 		{
+			Lighting.GIUsageChanged -= ReleaseUnusedGI;
 			foreach (RenderPass pass in passes)
 			{
 				pass.Dispose();

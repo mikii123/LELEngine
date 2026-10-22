@@ -14,9 +14,9 @@ namespace TestGame.Scenes
 	///     F1 GI on/off, F2 debug view (off / voxels / SDF), F3/F4 voxel view mip -/+, F5 shadows on/off,
 	///     F6 voxel resolution 64/128/256, F7 depth prepass on/off, F8 tonemap on/off,
 	///     F9 half-res GI resolve on/off, F10 rebuild static caches, F11 multi-bounce on/off,
-	///     T cone visibility: SDF detail trace / voxel cones only, G GI pipeline: Lumen / voxel cone tracing,
-	///     R radiance cache, V adaptive probes, Y indirect specular, J probe jitter, K probe anchor jitter,
-	///     [ ] probe history weight, - = pixel history weight.
+	///     T cone visibility: SDF detail trace / voxel cones only, R radiance cache, V adaptive probes,
+	///     Y indirect specular, J probe jitter, K probe anchor jitter, [ ] probe history weight, - = pixel history weight.
+	///     The GI method is chosen at start (gi=vct) and cannot change while running (<see cref="Lighting.GIMethod" />).
 	/// </summary>
 	public sealed class GIDebugControls : Behaviour
 	{
@@ -75,7 +75,7 @@ namespace TestGame.Scenes
 
 		public override void Start()
 		{
-			Console.WriteLine("[Controls] WASD move, Shift sprint, Esc cursor, F fly | F1 GI, F2 debug view (voxels/SDF/surface cache/probes), G GI mode (Lumen/VCT), R radiance cache, V adaptive probes, Y indirect specular, J probe jitter, K anchor jitter, [ ] probe history weight, - = pixel history weight, F3/F4 mip, F5 shadows, F6 voxel res, F7 depth prepass, F8 tonemap, F9 resolve, F10 cache, F11 bounce, T trace mode");
+			Console.WriteLine("[Controls] WASD move, Shift sprint, Esc cursor, F fly | F1 GI, F2 debug view (voxels/SDF/surface cache/probes), R radiance cache, V adaptive probes, Y indirect specular, J probe jitter, K anchor jitter, [ ] probe history weight, - = pixel history weight, F3/F4 mip, F5 shadows, F6 voxel res, F7 depth prepass, F8 tonemap, F9 resolve, F10 cache, F11 bounce, T trace mode");
 		}
 
 		public override void Update()
@@ -121,12 +121,6 @@ namespace TestGame.Scenes
 				}
 				if (probeDebug != null) probeDebug.Enabled = View == DebugView.Probes;
 				Console.WriteLine("[Debug] view " + View);
-			}
-
-			if (Input.GetKeyDown(Keys.G))
-			{
-				Lighting.GI.Mode = Lighting.GI.Mode == GIMode.Lumen ? GIMode.VoxelConeTracing : GIMode.Lumen;
-				Console.WriteLine("[GI] mode " + Lighting.GI.Mode);
 			}
 
 			if (Input.GetKeyDown(Keys.Y))
@@ -336,7 +330,7 @@ namespace TestGame.Scenes
 				$"[Stats] {statsFrames / statsTimer:0.0} fps | GPU {(sectionElapsedSum / statsFrames).ToString("0.00", CultureInfo.InvariantCulture)} ms (frame wall {(gpuWallSum / statsFrames).ToString("0.00", CultureInfo.InvariantCulture)}, pass sum {total.ToString("0.00", CultureInfo.InvariantCulture)}, skipped {profiler.SkippedSections}, head {(headSum / statsFrames).ToString("0.00", CultureInfo.InvariantCulture)}, tail {(tailSum / statsFrames).ToString("0.00", CultureInfo.InvariantCulture)})" +
 				$" | CPU render {(cpuRenderSum / statsFrames).ToString("0.00", CultureInfo.InvariantCulture)} ms swap {(swapSum / statsFrames).ToString("0.00", CultureInfo.InvariantCulture)} ms" +
 				$" (GPU scene {Game.Renderer.GpuScene.LastInstanceCount} instances, build {Game.Renderer.GpuScene.LastBuildMilliseconds.ToString("0.00", CultureInfo.InvariantCulture)} ms) |{passes}" +
-				$" | GI {(Lighting.GI.Enabled ? "on" : "off")} {Lighting.GI.Mode} resolve {(Lighting.GI.ResolveActive ? "on" : "off")}{adaptive}" +
+				$" | GI {(Lighting.GI.Enabled ? "on" : "off")} {Lighting.GIMethod} resolve {(Lighting.GI.ResolveActive ? "on" : "off")}{adaptive}" +
 				$" | gaps {gapTotal.ToString("0.00", CultureInfo.InvariantCulture)} ms:{gaps} | foreign {foreignTotal.ToString("0.00", CultureInfo.InvariantCulture)} ms:{foreignText}");
 
 			statsTimer = 0f;

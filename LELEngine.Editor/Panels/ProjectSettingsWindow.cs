@@ -205,12 +205,15 @@ namespace LELEngine.Editor
 
 		/// <summary>
 		///     The GI method combo (project-wide; the context's undo target must be the project settings). Also drawn at
-		///     the top of the Lighting panel's GI section.
+		///     the top of the Lighting panel's GI section. Locked in play mode: the method the game started with runs
+		///     until it stops (<see cref="Lighting.GIMethod" />).
 		/// </summary>
 		internal static bool DrawGIMethod(GlobalIlluminationSettings gi, InspectorContext context)
 		{
 			FieldDrawer.Label("GI Method", null, context);
 			GIMode selected = gi.Mode;
+			bool playing = context.Editor != null && context.Editor.IsPlaying;
+			ImGui.BeginDisabled(playing);
 			if (ImGui.BeginCombo("##gimethod", SerializationUtility.NicifyName(selected.ToString())))
 			{
 				foreach (GIMode mode in Enum.GetValues<GIMode>())
@@ -222,6 +225,12 @@ namespace LELEngine.Editor
 				}
 
 				ImGui.EndCombo();
+			}
+
+			ImGui.EndDisabled();
+			if (playing && ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+			{
+				ImGui.SetTooltip("The GI method cannot change in play mode.");
 			}
 
 			bool changed = selected != gi.Mode;

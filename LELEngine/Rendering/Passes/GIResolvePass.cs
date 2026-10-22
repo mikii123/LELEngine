@@ -43,6 +43,7 @@ namespace LELEngine.Rendering.Passes
 		private RenderTexture final;
 
 		// Variants by the voxel mips the cones read, indexed by VoxelMipMode (compiled in, see Engine/VoxelRadiance.glsl).
+		private static readonly string[] VariantDefines = { "LEL_VOXEL_ISO", "LEL_VOXEL_ANISO", "LEL_VOXEL_SH" };
 		private readonly ShaderProgram[] programs = new ShaderProgram[3];
 		private ShaderProgram filter;
 
@@ -50,21 +51,19 @@ namespace LELEngine.Rendering.Passes
 
 		#region PublicMethods
 
-		public override void Initialize(Renderer renderer)
-		{
-			programs[(int)VoxelMipMode.Isotropic] = new ShaderProgram("Engine/GIResolve.shader", new[] { "LEL_VOXEL_ISO" });
-			programs[(int)VoxelMipMode.Anisotropic] = new ShaderProgram("Engine/GIResolve.shader", new[] { "LEL_VOXEL_ANISO" });
-			programs[(int)VoxelMipMode.SphericalHarmonics] = new ShaderProgram("Engine/GIResolve.shader", new[] { "LEL_VOXEL_SH" });
-			filter = new ShaderProgram("Engine/GIFilter.shader");
-		}
-
 		public override void Execute(RenderContext context)
 		{
 			GlobalIlluminationSettings gi = Lighting.GI;
-			bool active = gi.Enabled && gi.Mode == GIMode.VoxelConeTracing && gi.ScreenSpaceResolve && gi.VoxelTexture != 0 && context.DepthPrepassDone && context.NormalRoughness != null;
+			bool used = gi.VoxelConeTracingActive && gi.ScreenSpaceResolve;
+			bool active = used && gi.VoxelTexture != 0 && context.DepthPrepassDone && context.NormalRoughness != null;
 			if (!active)
 			{
 				gi.ResolveActive = false;
+				// Made when the resolve first runs, freed when it is not used (GI off, Lumen, resolve switched off).
+				if (!used)
+				{
+					Release();
+				}
 				return;
 			}
 
@@ -78,7 +77,9 @@ namespace LELEngine.Rendering.Passes
 			GLState.SetDepth(false, false);
 			GLState.SetCull(false);
 
-			ShaderProgram program = programs[(int)Lighting.EffectiveVoxelMips(gi.VoxelVolume, Lighting.VoxelDirectionalTextureUnit)];
+			// The variant of the mips the volume has (compiled when first needed).
+			int variant = (int)Lighting.EffectiveVoxelMips(gi.VoxelVolume, Lighting.VoxelDirectionalTextureUnit);
+			ShaderProgram program = programs[variant] ??= new ShaderProgram("Engine/GIResolve.shader", new[] { VariantDefines[variant] });
 			program.Use();
 			// The resolve itself always traces; make sure it does not try to read its own output.
 			gi.ResolveActive = false;
@@ -98,6 +99,7 @@ namespace LELEngine.Rendering.Passes
 			if (gi.ResolveFilterPasses > 0)
 			{
 				context.Renderer.Profiler.Split("GIResolve.filter");
+				filter ??= new ShaderProgram("Engine/GIFilter.shader");
 				filter.Use();
 				filter.SetTexture("Guide", TextureTarget.Texture2D, guide.Handle, 1);
 				filter.SetVector2("resolveTargetSize", new Vector2(width, height));
@@ -134,14 +136,38 @@ namespace LELEngine.Rendering.Passes
 			gi.ResolveActive = true;
 		}
 
+		public override void ReleaseUnusedResources()
+		{
+			GlobalIlluminationSettings gi = Lighting.GI;
+			if (!(gi.VoxelConeTracingActive && gi.ScreenSpaceResolve))
+			{
+				Release();
+			}
+		}
+
 		public override void Dispose()
+		{
+			Release();
+			Lighting.GI.ResolveActive = false;
+		}
+
+		#endregion
+
+		#region PrivateMethods
+
+		private void Release()
 		{
 			traceTarget?.Delete();
 			traceTarget = null;
+			diffuse = null;
+			specular = null;
+			guide = null;
+			final = null;
 			for (int i = 0; i < filterTargets.Length; i++)
 			{
 				filterTargets[i]?.Delete();
 				filterTargets[i] = null;
+				filtered[i] = null;
 			}
 			for (int i = 0; i < programs.Length; i++)
 			{
@@ -150,12 +176,7 @@ namespace LELEngine.Rendering.Passes
 			}
 			filter?.Delete();
 			filter = null;
-			Lighting.GI.ResolveActive = false;
 		}
-
-		#endregion
-
-		#region PrivateMethods
 
 		// From the camera to the far plane through screen point (x, y) in pixels from the bottom left.
 		private static Vector3 PixelRay(Matrix4 invViewProjection, Vector3 cameraPosition, float x, float y, int width, int height)

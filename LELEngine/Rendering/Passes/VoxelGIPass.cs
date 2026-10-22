@@ -78,6 +78,9 @@ namespace LELEngine.Rendering.Passes
 		// The mips the volume has this frame (the setting, unless the context lacks the texture units).
 		private VoxelMipMode mipMode;
 
+		// The mips the volumes were made for (their directional textures exist for this mode only).
+		private VoxelMipMode volumeMipMode;
+
 		// The bounce per 2x2x2 voxels (irradiance / pi of every cell), refilled every pass.
 		private int bounceCells;
 
@@ -140,51 +143,30 @@ namespace LELEngine.Rendering.Passes
 
 		#region PublicMethods
 
-		public override void Initialize(Renderer renderer)
-		{
-			voxelize = new ShaderProgram("Engine/Voxelize.shader");
-			voxelizeCoverage = new ShaderProgram("Engine/VoxelizeCoverage.shader");
-			clearGeometry = new ComputeShader("Engine/VoxelClearGeometry.shader");
-			clearAccumulators = new ComputeShader("Engine/VoxelClearAccumulators.shader");
-			resolveGeometry = new ComputeShader("Engine/VoxelResolveGeometry.shader");
-			clearRadiance = new ComputeShader("Engine/VoxelClearRadiance.shader");
-			compactBlocks = new ComputeShader("Engine/VoxelCompactBlocks.shader");
-			for (int i = 0; i < MipModeDefines.Length; i++)
-			{
-				inject[i] = new ComputeShader("Engine/VoxelInject.shader", MipModeDefines[i]);
-				bounce[i] = new ComputeShader("Engine/VoxelBounceCells.shader", MipModeDefines[i]);
-			}
-			mip = new ComputeShader("Engine/VoxelMip.shader");
-			mipBlocks = new ComputeShader("Engine/VoxelMipBlocks.shader");
-			anisoBase = new ComputeShader("Engine/VoxelAnisoBase.shader");
-			anisoMip = new ComputeShader("Engine/VoxelAnisoMip.shader");
-			shBase = new ComputeShader("Engine/VoxelSHBase.shader");
-
-			// Attachment-less framebuffers: rasterization happens, but all output goes through images.
-			framebuffer = GL.GenFramebuffer();
-			coverageFramebuffer = GL.GenFramebuffer();
-			coverageSamples = Math.Max(1, Math.Min(CoverageSamples, GL.GetInteger((GetPName)0x9318))); // GL_MAX_FRAMEBUFFER_SAMPLES
-			blockList = GL.GenBuffer();
-
-			CreateVolumes(Lighting.GI.Resolution);
-			CreateGridShadow(Lighting.GI.GridShadowMapSize);
-		}
-
 		public override void Execute(RenderContext context)
 		{
 			GlobalIlluminationSettings gi = Lighting.GI;
 			RebuiltStaticThisFrame = false;
 
-			if (!gi.Enabled || gi.Mode != GIMode.VoxelConeTracing)
+			// Made when voxel cone tracing first runs, freed when it does not (GI off, Lumen).
+			if (!gi.VoxelConeTracingActive)
 			{
+				Release();
 				gi.VoxelTexture = 0;
 				gi.VoxelVolume = default;
 				return;
 			}
 
-			if (gi.Resolution != currentResolution)
+			EnsureCreated(gi);
+			VoxelMipMode volumeMode = MipModeFor(gi);
+			if (radiance[0] == 0 || gi.Resolution != currentResolution || volumeMode != volumeMipMode)
 			{
-				CreateVolumes(gi.Resolution);
+				CreateVolumes(gi.Resolution, volumeMode);
+			}
+			// The coverage accumulators exist while coverage voxelization is on (made by VoxelizeCoverage).
+			if (!gi.VoxelCoverage)
+			{
+				accumulators.Delete();
 			}
 			if (gridShadow.Width != gi.GridShadowMapSize)
 			{
@@ -266,14 +248,61 @@ namespace LELEngine.Rendering.Passes
 			staticDirty = true;
 		}
 
+		public override void ReleaseUnusedResources()
+		{
+			if (!Lighting.GI.VoxelConeTracingActive)
+			{
+				Release();
+			}
+		}
+
 		public override void Dispose()
 		{
-			DeleteVolumes();
+			Release();
+			Lighting.GI.VoxelTexture = 0;
+			Lighting.GI.VoxelVolume = default;
+		}
+
+		#endregion
+
+		#region PrivateMethods
+
+		// ---------------------------------------------------------------- setup
+
+		// What every configuration uses; the rest is made where it is needed (the variants of the mips the volume has,
+		// the coverage voxelization, the directional mips).
+		private void EnsureCreated(GlobalIlluminationSettings gi)
+		{
 			if (framebuffer != 0)
 			{
-				GL.DeleteFramebuffer(framebuffer);
-				framebuffer = 0;
+				return;
 			}
+
+			clearGeometry = new ComputeShader("Engine/VoxelClearGeometry.shader");
+			clearRadiance = new ComputeShader("Engine/VoxelClearRadiance.shader");
+			compactBlocks = new ComputeShader("Engine/VoxelCompactBlocks.shader");
+			mip = new ComputeShader("Engine/VoxelMip.shader");
+			mipBlocks = new ComputeShader("Engine/VoxelMipBlocks.shader");
+
+			// Attachment-less framebuffers: rasterization happens, but all output goes through images.
+			framebuffer = GL.GenFramebuffer();
+			coverageFramebuffer = GL.GenFramebuffer();
+			coverageSamples = Math.Max(1, Math.Min(CoverageSamples, GL.GetInteger((GetPName)0x9318))); // GL_MAX_FRAMEBUFFER_SAMPLES
+			blockList = GL.GenBuffer();
+
+			CreateGridShadow(gi.GridShadowMapSize);
+		}
+
+		private void Release()
+		{
+			if (framebuffer == 0)
+			{
+				return;
+			}
+
+			DeleteVolumes();
+			GL.DeleteFramebuffer(framebuffer);
+			framebuffer = 0;
 			if (coverageFramebuffer != 0)
 			{
 				GL.DeleteFramebuffer(coverageFramebuffer);
@@ -294,31 +323,49 @@ namespace LELEngine.Rendering.Passes
 			resolveGeometry?.Delete();
 			clearRadiance?.Delete();
 			compactBlocks?.Delete();
+			voxelize = null;
+			voxelizeCoverage = null;
+			clearGeometry = null;
+			clearAccumulators = null;
+			resolveGeometry = null;
+			clearRadiance = null;
+			compactBlocks = null;
 			for (int i = 0; i < inject.Length; i++)
 			{
 				inject[i]?.Delete();
 				bounce[i]?.Delete();
+				inject[i] = null;
+				bounce[i] = null;
 			}
 			mip?.Delete();
 			mipBlocks?.Delete();
 			anisoBase?.Delete();
 			anisoMip?.Delete();
 			shBase?.Delete();
-			Lighting.GI.VoxelTexture = 0;
-			Lighting.GI.VoxelVolume = default;
+			mip = null;
+			mipBlocks = null;
+			anisoBase = null;
+			anisoMip = null;
+			shBase = null;
+
+			// The next run starts like the first: volumes made, static geometry voxelized, nothing lit yet.
+			currentResolution = 0;
+			previousValid = false;
+			lastStaticCount = -1;
+			previousRegions.Clear();
+			currentRegions.Clear();
+			Console.WriteLine("[VoxelGI] Volume released");
 		}
 
-		#endregion
-
-		#region PrivateMethods
-
-		// ---------------------------------------------------------------- setup
-
-		private void CreateVolumes(int resolution)
+		// The volume's resolution for a setting: a multiple of the block size.
+		private static int VolumeResolution(int setting)
 		{
-			resolution = Math.Max(BlockSize, resolution);
-			// Must be a multiple of the block size.
-			resolution = resolution / BlockSize * BlockSize;
+			return Math.Max(BlockSize, setting) / BlockSize * BlockSize;
+		}
+
+		private void CreateVolumes(int resolution, VoxelMipMode mode)
+		{
+			resolution = VolumeResolution(resolution);
 
 			DeleteVolumes();
 
@@ -328,7 +375,8 @@ namespace LELEngine.Rendering.Passes
 			radiance[0] = CreateRadianceTexture(resolution);
 			radiance[1] = CreateRadianceTexture(resolution);
 
-			// Directional mips: as many levels as the slab size halves evenly (all of them for a power of two).
+			// Directional mips: as many levels as the slab size halves evenly (all of them for a power of two). Only the
+			// textures of the mips the cones read exist.
 			anisoSlabSize = resolution / 2;
 			anisoLevels = 0;
 			for (int size = anisoSlabSize; size >= 1; size >>= 1)
@@ -339,16 +387,23 @@ namespace LELEngine.Rendering.Passes
 					break;
 				}
 			}
-			anisoRadiance[0] = CreateAnisoTexture(anisoSlabSize, anisoLevels);
-			anisoRadiance[1] = CreateAnisoTexture(anisoSlabSize, anisoLevels);
-			for (int i = 0; i < 2; i++)
+			shLevels = 1 + (int)Math.Floor(Math.Log(resolution / 2, 2));
+			if (mode == VoxelMipMode.Anisotropic)
 			{
-				for (int axis = 0; axis < 3; axis++)
+				anisoRadiance[0] = CreateAnisoTexture(anisoSlabSize, anisoLevels);
+				anisoRadiance[1] = CreateAnisoTexture(anisoSlabSize, anisoLevels);
+			}
+			else if (mode == VoxelMipMode.SphericalHarmonics)
+			{
+				for (int i = 0; i < 2; i++)
 				{
-					shGradients[i][axis] = CreateRadianceTexture(resolution / 2);
+					for (int axis = 0; axis < 3; axis++)
+					{
+						shGradients[i][axis] = CreateRadianceTexture(resolution / 2);
+					}
 				}
 			}
-			shLevels = 1 + (int)Math.Floor(Math.Log(resolution / 2, 2));
+			volumeMipMode = mode;
 			bounceCells = CreateVolumeTexture(resolution / 2, PixelInternalFormat.Rgba16f, PixelFormat.Rgba, PixelType.Float);
 
 			current = 0;
@@ -378,8 +433,10 @@ namespace LELEngine.Rendering.Passes
 			previousRegions.Clear();
 
 			long voxels = (long)resolution * resolution * resolution;
-			double megabytes = (voxels * 4 * 6 + voxels * 8 * 2 * 8 / 7.0 + voxels / 8 * (6 + 3) * 8 * 2 * 8 / 7.0) / (1024.0 * 1024.0);
-			Console.WriteLine($"[VoxelGI] Volume {resolution}^3: geometry 2x(RGBA8+RGBA8+R11G11B10F), radiance 2xRGBA16F {mipLevels} mips + anisotropic {anisoLevels} levels + SH gradients {shLevels} levels, {blockResolution}^3 blocks, ~{megabytes:0} MB (+{voxels * 20 / (1024 * 1024)} MB coverage accumulators when used), {coverageSamples}x coverage samples");
+			int directionalTextures = mode == VoxelMipMode.Anisotropic ? 6 : mode == VoxelMipMode.SphericalHarmonics ? 3 : 0;
+			string directional = mode == VoxelMipMode.Anisotropic ? $" + anisotropic {anisoLevels} levels" : mode == VoxelMipMode.SphericalHarmonics ? $" + SH gradients {shLevels} levels" : "";
+			double megabytes = (voxels * 4 * 6 + voxels * 8 * 2 * 8 / 7.0 + voxels / 8 * directionalTextures * 8 * 2 * 8 / 7.0) / (1024.0 * 1024.0);
+			Console.WriteLine($"[VoxelGI] Volume {resolution}^3: geometry 2x(RGBA8+RGBA8+R11G11B10F), radiance 2xRGBA16F {mipLevels} mips{directional}, {blockResolution}^3 blocks, ~{megabytes:0} MB (+{voxels * 20 / (1024 * 1024)} MB coverage accumulators when used), {coverageSamples}x coverage samples");
 		}
 
 		private static void SetDefaultFramebufferSize(int handle, int resolution, int samples)
@@ -531,7 +588,7 @@ namespace LELEngine.Rendering.Passes
 		{
 			int units = gi.VoxelMips == VoxelMipMode.SphericalHarmonics ? 3 : 1;
 			bool unitsAvailable = Lighting.VoxelDirectionalTextureUnit + units - 1 < GLCapabilities.MaxTextureUnits;
-			if (!unitsAvailable || (gi.VoxelMips == VoxelMipMode.Anisotropic && (anisoLevels == 0 || gi.AnisotropicMipLevels <= 0)))
+			if (!unitsAvailable || (gi.VoxelMips == VoxelMipMode.Anisotropic && gi.AnisotropicMipLevels <= 0))
 			{
 				return VoxelMipMode.Isotropic;
 			}
@@ -668,14 +725,18 @@ namespace LELEngine.Rendering.Passes
 				DispatchRegion(clearRadiance, region.AtLevel(level, Math.Max(1, currentResolution >> level)));
 			}
 
-			GL.BindImageTexture(0, anisoRadiance[index], 0, true, 0, TextureAccess.WriteOnly, SizedInternalFormat.Rgba16f);
+			// The directional textures of the volume's mips (only one kind exists).
 			VoxelRegion slabRegion = region.AtLevel(1, anisoSlabSize);
-			for (int slab = 0; slab < 6; slab++)
+			if (anisoRadiance[index] != 0)
 			{
-				DispatchRegion(clearRadiance, slabRegion.OffsetX(slab * anisoSlabSize));
+				GL.BindImageTexture(0, anisoRadiance[index], 0, true, 0, TextureAccess.WriteOnly, SizedInternalFormat.Rgba16f);
+				for (int slab = 0; slab < 6; slab++)
+				{
+					DispatchRegion(clearRadiance, slabRegion.OffsetX(slab * anisoSlabSize));
+				}
 			}
 
-			for (int axis = 0; axis < 3; axis++)
+			for (int axis = 0; axis < 3 && shGradients[index][axis] != 0; axis++)
 			{
 				GL.BindImageTexture(0, shGradients[index][axis], 0, true, 0, TextureAccess.WriteOnly, SizedInternalFormat.Rgba16f);
 				DispatchRegion(clearRadiance, slabRegion);
@@ -707,17 +768,20 @@ namespace LELEngine.Rendering.Passes
 				}
 			}
 
-			GL.BindImageTexture(0, anisoRadiance[index], 0, true, 0, TextureAccess.WriteOnly, SizedInternalFormat.Rgba16f);
-			foreach (VoxelRegion region in regions)
+			if (anisoRadiance[index] != 0)
 			{
-				VoxelRegion slabRegion = region.AtLevel(1, anisoSlabSize);
-				for (int slab = 0; slab < 6; slab++)
+				GL.BindImageTexture(0, anisoRadiance[index], 0, true, 0, TextureAccess.WriteOnly, SizedInternalFormat.Rgba16f);
+				foreach (VoxelRegion region in regions)
 				{
-					DispatchRegion(clearRadiance, slabRegion.OffsetX(slab * anisoSlabSize));
+					VoxelRegion slabRegion = region.AtLevel(1, anisoSlabSize);
+					for (int slab = 0; slab < 6; slab++)
+					{
+						DispatchRegion(clearRadiance, slabRegion.OffsetX(slab * anisoSlabSize));
+					}
 				}
 			}
 
-			for (int axis = 0; axis < 3; axis++)
+			for (int axis = 0; axis < 3 && shGradients[index][axis] != 0; axis++)
 			{
 				GL.BindImageTexture(0, shGradients[index][axis], 0, true, 0, TextureAccess.WriteOnly, SizedInternalFormat.Rgba16f);
 				foreach (VoxelRegion region in regions)
@@ -761,6 +825,7 @@ namespace LELEngine.Rendering.Passes
 			GL.Disable(EnableCap.CullFace);
 			GL.DepthMask(false);
 
+			voxelize ??= new ShaderProgram("Engine/Voxelize.shader");
 			voxelize.Use();
 			voxelize.SetVector3("voxelGridMin", gi.GridMin);
 			voxelize.SetFloat("voxelGridSize", gi.GridSize);
@@ -784,6 +849,12 @@ namespace LELEngine.Rendering.Passes
 			if (accumulators.AlbedoRG == 0)
 			{
 				accumulators = AccumulatorVolume.Create(currentResolution);
+			}
+			if (voxelizeCoverage == null)
+			{
+				voxelizeCoverage = new ShaderProgram("Engine/VoxelizeCoverage.shader");
+				clearAccumulators = new ComputeShader("Engine/VoxelClearAccumulators.shader");
+				resolveGeometry = new ComputeShader("Engine/VoxelResolveGeometry.shader");
 			}
 
 			clearAccumulators.Use();
@@ -965,7 +1036,7 @@ namespace LELEngine.Rendering.Passes
 		// The bounce of the next injection pass per 2x2x2 voxels, traced from radiance[current] (the previous pass).
 		private void TraceBounceCells(GlobalIlluminationSettings gi)
 		{
-			ComputeShader shader = bounce[(int)mipMode];
+			ComputeShader shader = bounce[(int)mipMode] ??= new ComputeShader("Engine/VoxelBounceCells.shader", MipModeDefines[(int)mipMode]);
 			shader.Use();
 			ShaderProgram program = shader.Program;
 			SetTraceUniforms(program, gi);
@@ -1014,7 +1085,7 @@ namespace LELEngine.Rendering.Passes
 		// through the bounce cells or by tracing from every voxel.
 		private void InjectLighting(int target, GlobalIlluminationSettings gi, Matrix4 lightView, Matrix4 lightProjection, bool bounce, bool cells)
 		{
-			ComputeShader shader = inject[(int)mipMode];
+			ComputeShader shader = inject[(int)mipMode] ??= new ComputeShader("Engine/VoxelInject.shader", MipModeDefines[(int)mipMode]);
 			ShaderProgram program = shader.Program;
 
 			shader.Use();
@@ -1107,6 +1178,7 @@ namespace LELEngine.Rendering.Passes
 		// averages (the gradients are linear in the voxels).
 		private void UpdateSHMips(int index)
 		{
+			shBase ??= new ComputeShader("Engine/VoxelSHBase.shader");
 			shBase.Use();
 			ShaderProgram program = shBase.Program;
 			program.SetTexture("StaticAlbedo", TextureTarget.Texture3D, staticGeometry.Albedo, 4);
@@ -1134,6 +1206,8 @@ namespace LELEngine.Rendering.Passes
 		// use whole, each slab from the same slab one level finer.
 		private void UpdateAnisoMips(int index, int levels)
 		{
+			anisoBase ??= new ComputeShader("Engine/VoxelAnisoBase.shader");
+			anisoMip ??= new ComputeShader("Engine/VoxelAnisoMip.shader");
 			anisoBase.Use();
 			anisoBase.Program.SetInt("slabSize", anisoSlabSize);
 			GL.BindImageTexture(0, radiance[index], 0, true, 0, TextureAccess.ReadOnly, SizedInternalFormat.Rgba16f);

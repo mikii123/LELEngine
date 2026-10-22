@@ -245,6 +245,46 @@
   the same. The yaw turns the opposite way to Unity's skybox `_Rotation`. Unity skies (left-handed) seen from a
   right-handed camera come out mirrored; mirror the faces (flip each horizontally, swap +X / -X) to keep the image.
 
+## GI method: fixed while running, only the active one allocates (2026-10-22)
+
+- `Lighting.GIMethod` is the method that runs: `GI.Mode` latched at the first frame. In a player and in the editor's
+  play mode it never changes: a later `GI.Mode` write logs one warning (`[GI] The GI method cannot change while the
+  game runs`) and is ignored. The editor sets `Lighting.AllowGIMethodChange` in edit mode only (`EditorApplication.Update`),
+  so Project Settings, undo or a reload from disk switch it there (`[GI] Method A -> B`); the GI Method combo is
+  disabled in play mode. Engine code reads `GIMethod` (or `GI.VoxelConeTracingActive` / `LumenActive` /
+  `DistanceFieldActive`), never `GI.Mode`. TestGame sets the method at start (`gi=vct`); its G toggle is gone.
+- Every GI pass makes its shaders and textures on its first active frame and frees them when its part is not used:
+  `VoxelGIPass` (VCT; only the selected mips' directional textures and shader variants, coverage accumulators only
+  with `VoxelCoverage`), `GIResolvePass` (VCT + `ScreenSpaceResolve`, the variant in use), `GlobalDistanceFieldPass`
+  (`DistanceFieldActive`: Lumen, or VCT with an SDF trace mode; `VoxelCones` builds no field and no mesh SDFs),
+  `SurfaceCachePass` / `RadianceCachePass` / `ScreenProbeGatherPass` (Lumen), `LumenScene` (made by its first
+  `Update`; surface cache only in Lumen; `Renderer.ReleaseLumenScene` when neither needs it), the GI's sky cubemap
+  (`SkyEnvironment.Clear` with GI off), debug views (on first show). With GI off nothing is allocated.
+- A renderer that does not draw (hidden editor view) still frees at once: `Lighting.BeginFrame` raises
+  `GIUsageChanged` when (method, scene GI on, distance field used, resolve used) changes, and every `Renderer` calls
+  `RenderPass.ReleaseUnusedResources` on its passes. Releases are logged (`[VoxelGI] Volume released`, `[SDF] Global
+  distance field released`, `[SurfaceCache] Atlas released`, `[GI] Scene distance fields and tables released`).
+- Measured on TestGame (128^3): VCT volume ~112 MB aniso / ~98 MB SH / ~85 MB iso (was ~126 MB with every kind of
+  mips), Lumen no voxel volume, VCT no surface cache (46 MB), `trace=voxel` no SDF. Frames of the 6 configurations
+  (lumen, vct, vct trace=voxel, voxmips=sh, voxmips=iso, gi=0) match the previous build within 1 level (run-to-run
+  noise). Verified in the editor with menu items setting `GI.Mode` in edit mode, play mode and after stop.
+
+## GI sky lighting (2026-10-22)
+
+- The GI never samples the skybox texture itself: `SkyEnvironment.LightingCubemap` resamples it into its own
+  cubemap (`FaceSize` 128, RGBA16F, box filter of taps x taps per texel in `Engine/SkyLighting.shader`, full mip
+  chain), rebuilt when the source changes. Escaped cones read the mip of their aperture (`SkyRadiance(dir, aperture)`
+  in `Sky.glsl`: lod = log2(4 * aperture * faceSize / pi)), rays the diffuse level (`giSkyboxLod`). Before, every cone
+  read a fixed level of the skybox as imported: a skybox without mips put a sharp sky into rough reflections.
+
+## Scene view navigation (2026-10-22)
+
+- `SceneViewPanel`: the wheel moves 20% (`WheelShare`) of the distance to the point under the mouse (picked object,
+  else the ground plane), so it works at any distance; middle-drag pans by the focus distance (world per pixel =
+  2 * focusDistance * tan(fov / 2) / view height). `FocusDistance` follows wheel, pick, frame (F) and is saved with
+  the view. Test hooks: `wheel=N;sceneview;notches|...`, `mdrag=N;sceneview;dx,dy|...`, `logsceneview=N|M`
+  (position, forward, focus distance); anchor `sceneview`.
+
 ## GI volume placement
 
 - `SceneGISettings.FollowCamera` + `FollowCameraLookAhead` (2026-10-22): the volume's centre is the camera position

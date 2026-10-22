@@ -17,11 +17,16 @@ namespace LELEngine.Rendering.Lumen
 	{
 		#region PublicFields
 
-		public DistanceFieldAtlas DistanceFields { get; }
+		public DistanceFieldAtlas DistanceFields { get; private set; }
+
+		/// <summary>Lumen's surface cache; null unless Lumen runs (voxel cone tracing reads only the distance fields).</summary>
 		public SurfaceCacheAtlas SurfaceCache { get; private set; }
 
-		public int ObjectBuffer { get; }
-		public int CardBuffer { get; }
+		public int ObjectBuffer { get; private set; }
+		public int CardBuffer { get; private set; }
+
+		/// <summary>The GPU resources exist: made by the first <see cref="Update" />, never by a renderer whose GI needs no scene.</summary>
+		public bool Allocated => DistanceFields != null;
 
 		/// <summary>Objects in table order: static ones first, then dynamic ones.</summary>
 		public IReadOnlyList<SceneObject> Objects => objects;
@@ -82,21 +87,11 @@ namespace LELEngine.Rendering.Lumen
 		private Vector3 lastSunDirection;
 		private float lastSunStrength;
 		private Color4 lastSunColor;
-		private CardData[] cardData = new CardData[0];
+		// Never empty, like the object table: the card binding always has storage, also without cards (voxel cone tracing).
+		private CardData[] cardData = new CardData[1];
 		private int surfaceCacheSize;
 		private int objectBufferBytes;
 		private int cardBufferBytes;
-
-		#endregion
-
-		#region Constructors
-
-		public LumenScene()
-		{
-			DistanceFields = new DistanceFieldAtlas();
-			ObjectBuffer = GL.GenBuffer();
-			CardBuffer = GL.GenBuffer();
-		}
 
 		#endregion
 
@@ -113,7 +108,18 @@ namespace LELEngine.Rendering.Lumen
 			}
 			UpdatedFrame = frame;
 
-			if (SurfaceCache == null || surfaceCacheSize != gi.SurfaceCacheAtlasSize)
+			if (DistanceFields == null)
+			{
+				DistanceFields = new DistanceFieldAtlas();
+				ObjectBuffer = GL.GenBuffer();
+				CardBuffer = GL.GenBuffer();
+			}
+
+			if (!gi.LumenActive)
+			{
+				ReleaseSurfaceCache();
+			}
+			else if (SurfaceCache == null || surfaceCacheSize != gi.SurfaceCacheAtlasSize)
 			{
 				SurfaceCache?.Delete();
 				surfaceCacheSize = gi.SurfaceCacheAtlasSize;
@@ -163,12 +169,31 @@ namespace LELEngine.Rendering.Lumen
 			}
 		}
 
+		/// <summary>Frees Lumen's surface cache (the objects lose their cards); voxel cone tracing keeps the rest of the scene.</summary>
+		public void ReleaseSurfaceCache()
+		{
+			if (SurfaceCache == null)
+			{
+				return;
+			}
+
+			SurfaceCache.Delete();
+			SurfaceCache = null;
+			Console.WriteLine("[SurfaceCache] Atlas released");
+		}
+
 		public void Delete()
 		{
-			DistanceFields.Delete();
+			DistanceFields?.Delete();
 			SurfaceCache?.Delete();
-			GL.DeleteBuffer(ObjectBuffer);
-			GL.DeleteBuffer(CardBuffer);
+			if (ObjectBuffer != 0)
+			{
+				GL.DeleteBuffer(ObjectBuffer);
+			}
+			if (CardBuffer != 0)
+			{
+				GL.DeleteBuffer(CardBuffer);
+			}
 		}
 
 		#endregion
@@ -199,7 +224,8 @@ namespace LELEngine.Rendering.Lumen
 					continue;
 				}
 
-				SurfaceCardSet cards = SurfaceCache.GetOrAllocate(renderer, field, gi.SurfaceCacheTexelsPerMeter, gi.SurfaceCacheMaxCardSize);
+				// Cards only with Lumen's surface cache (see Update).
+				SurfaceCardSet cards = SurfaceCache?.GetOrAllocate(renderer, field, gi.SurfaceCacheTexelsPerMeter, gi.SurfaceCacheMaxCardSize);
 
 				objects.Add(new SceneObject
 				{
@@ -338,9 +364,10 @@ namespace LELEngine.Rendering.Lumen
 		private void UploadTables()
 		{
 			objectData.Clear();
-			if (cardData.Length < SurfaceCache.CardCount)
+			int cardCount = SurfaceCache?.CardCount ?? 0;
+			if (cardData.Length < cardCount)
 			{
-				Array.Resize(ref cardData, Math.Max(SurfaceCache.CardCount, 6));
+				Array.Resize(ref cardData, Math.Max(cardCount, 6));
 			}
 
 			Vector3 staticMin = new Vector3(float.MaxValue);

@@ -32,11 +32,6 @@ namespace LELEngine.Rendering.Passes
 
 		#region PublicMethods
 
-		public override void Initialize(Renderer renderer)
-		{
-			program = new ShaderProgram("Engine/SdfDebug.shader");
-		}
-
 		public override void Execute(RenderContext context)
 		{
 			GlobalIlluminationSettings gi = Lighting.GI;
@@ -44,6 +39,9 @@ namespace LELEngine.Rendering.Passes
 			{
 				return;
 			}
+
+			// Compiled when the view is first shown.
+			program ??= new ShaderProgram("Engine/SdfDebug.shader");
 
 			context.SceneTarget.Bind();
 			GLState.SetDepth(false, false);

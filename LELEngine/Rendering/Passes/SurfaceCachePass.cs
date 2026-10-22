@@ -35,20 +35,22 @@ namespace LELEngine.Rendering.Passes
 
 		#region PublicMethods
 
-		public override void Initialize(Renderer renderer)
-		{
-			capture = new ShaderProgram("Engine/CardCapture.shader");
-			radiosity = new ComputeShader("Engine/CardRadiosityProbes.shader");
-			lighting = new ComputeShader("Engine/CardLighting.shader");
-			gridShadow = new GridShadowMap(Lighting.GI.GridShadowMapSize);
-		}
-
 		public override void Execute(RenderContext context)
 		{
 			GlobalIlluminationSettings gi = Lighting.GI;
-			if (!gi.Enabled || gi.Mode != GIMode.Lumen)
+			// Made when Lumen first runs, freed when it does not (GI off; the scene's surface cache goes with LumenScene).
+			if (!gi.LumenActive)
 			{
+				Release();
 				return;
+			}
+
+			if (capture == null)
+			{
+				capture = new ShaderProgram("Engine/CardCapture.shader");
+				radiosity = new ComputeShader("Engine/CardRadiosityProbes.shader");
+				lighting = new ComputeShader("Engine/CardLighting.shader");
+				gridShadow = new GridShadowMap(gi.GridShadowMapSize);
 			}
 
 			LumenScene scene = context.Renderer.LumenScene;
@@ -67,17 +69,34 @@ namespace LELEngine.Rendering.Passes
 			LightCards(context.Renderer, scene, gi);
 		}
 
+		public override void ReleaseUnusedResources()
+		{
+			if (!Lighting.GI.LumenActive)
+			{
+				Release();
+			}
+		}
+
 		public override void Dispose()
 		{
-			capture?.Delete();
-			radiosity?.Delete();
-			lighting?.Delete();
-			gridShadow?.Delete();
+			Release();
 		}
 
 		#endregion
 
 		#region PrivateMethods
+
+		private void Release()
+		{
+			capture?.Delete();
+			radiosity?.Delete();
+			lighting?.Delete();
+			gridShadow?.Delete();
+			capture = null;
+			radiosity = null;
+			lighting = null;
+			gridShadow = null;
+		}
 
 		private void CaptureCards(LumenScene scene)
 		{

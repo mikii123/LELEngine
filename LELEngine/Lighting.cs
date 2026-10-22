@@ -33,6 +33,27 @@ namespace LELEngine
 		/// <summary>Global illumination: the project's method and tunables with the active scene's volume and strengths.</summary>
 		public static GlobalIlluminationSettings GI => ProjectSettings.Current.GI;
 
+		/// <summary>
+		///     The GI method that runs: the project's <see cref="GlobalIlluminationSettings.Mode" /> as it was when the GI
+		///     first ran. It does not change while the game runs (a player, the editor's play mode): a later change of the
+		///     setting is ignored with a warning. Only the editor changes it, in edit mode (<see cref="AllowGIMethodChange" />).
+		///     Only this method's passes run and hold GPU resources; the other method's release theirs.
+		/// </summary>
+		public static GIMode GIMethod => giMethod ??= GI.Mode;
+
+		/// <summary>
+		///     Set by the editor while in edit mode: a change of <see cref="GlobalIlluminationSettings.Mode" /> becomes
+		///     <see cref="GIMethod" /> at the next frame. Off in play mode and in players.
+		/// </summary>
+		internal static bool AllowGIMethodChange;
+
+		/// <summary>
+		///     Raised by <see cref="BeginFrame" /> when what the GI uses changed (the method, the scene's GI switch, the
+		///     distance field, the screen-space resolve): every renderer frees what is no longer used at once, also one
+		///     that does not draw this frame (a hidden editor view).
+		/// </summary>
+		internal static event Action GIUsageChanged;
+
 		/// <summary>Texture unit reserved for the directional shadow map (material textures use 0..N).</summary>
 		public const int ShadowMapTextureUnit = 15;
 
@@ -116,13 +137,18 @@ namespace LELEngine
 
 		private static readonly string[] ShadowMatrixNames = { "shadowMatrices[0]", "shadowMatrices[1]", "shadowMatrices[2]", "shadowMatrices[3]" };
 
+		private static GIMode? giMethod;
+		private static bool giMethodWarned;
+		private static (GIMode, bool, bool, bool) giUsage;
+
 		#endregion
 
 		#region PublicMethods
 
 		/// <summary>
 		///     Per-frame sync before rendering: the sun's color and strength from the scene's directional light, the
-		///     environment into the uniform carriers and the renderer's clear color / exposure / tonemapping.
+		///     environment into the uniform carriers and the renderer's clear color / exposure / tonemapping, the GI
+		///     method (<see cref="GIMethod" />) and the GI's sky.
 		/// </summary>
 		public static void BeginFrame(RenderSettings settings)
 		{
@@ -134,7 +160,23 @@ namespace LELEngine
 			}
 
 			Environment.ApplyTo(settings);
-			SkyEnvironment.Update(Environment.Skybox);
+			UpdateGIMethod();
+			(GIMode, bool, bool, bool) usage = (GIMethod, GI.Enabled, GI.DistanceFieldActive, GI.VoxelConeTracingActive && GI.ScreenSpaceResolve);
+			if (usage != giUsage)
+			{
+				giUsage = usage;
+				GIUsageChanged?.Invoke();
+			}
+
+			// The GI's sky (a resampled cubemap) exists only while the scene uses GI.
+			if (GI.Enabled)
+			{
+				SkyEnvironment.Update(Environment.Skybox);
+			}
+			else
+			{
+				SkyEnvironment.Clear();
+			}
 		}
 
 		/// <summary>
@@ -159,6 +201,7 @@ namespace LELEngine
 				program.SetVector2("giSkyboxRotation", SkyEnvironment.Rotation);
 				program.SetVector2("giSkyboxTilt", SkyEnvironment.Tilt);
 				program.SetFloat("giSkyboxLod", SkyEnvironment.Lod);
+				program.SetFloat("giSkyboxFaceSize", SkyEnvironment.FaceSize);
 			}
 		}
 
@@ -217,8 +260,8 @@ namespace LELEngine
 			// What this view can read this frame: its screen-space resolve (the lighting camera), the voxel volume, or
 			// the Lumen probes.
 			bool resolve = ScreenGIView && GI.ResolveActive && GI.ResolvedDiffuse != 0;
-			bool voxels = GI.Mode == GIMode.VoxelConeTracing && GI.VoxelTexture != 0;
-			bool probes = !resolve && GI.Mode == GIMode.Lumen && RadianceCache.Valid && probeUnit && opaqueMaterial;
+			bool voxels = GIMethod == GIMode.VoxelConeTracing && GI.VoxelTexture != 0;
+			bool probes = !resolve && GIMethod == GIMode.Lumen && RadianceCache.Valid && probeUnit && opaqueMaterial;
 			bool enabled = receiveGI && GI.Enabled && (resolve || voxels || probes);
 			program.SetInt("giEnabled", enabled ? 1 : 0);
 			if (!enabled)
@@ -268,8 +311,8 @@ namespace LELEngine
 		/// </summary>
 		public static void SetVolumeGIUniforms(ShaderProgram program, bool receiveGI)
 		{
-			bool voxels = GI.Mode == GIMode.VoxelConeTracing && GI.VoxelTexture != 0;
-			bool probes = GI.Mode == GIMode.Lumen && RadianceCache.Valid;
+			bool voxels = GIMethod == GIMode.VoxelConeTracing && GI.VoxelTexture != 0;
+			bool probes = GIMethod == GIMode.Lumen && RadianceCache.Valid;
 			bool enabled = receiveGI && GI.Enabled && (voxels || probes);
 			program.SetInt("giEnabled", enabled ? 1 : 0);
 			program.SetInt("giResolveMode", 0);
@@ -466,6 +509,31 @@ namespace LELEngine
 		{
 			program.SetFloat("shadowDepthBias", Shadows.DepthBiasTexels);
 			program.SetFloat("shadowNormalBias", Shadows.NormalBiasTexels);
+		}
+
+		// A changed GI.Mode becomes the method only where the editor allows it (edit mode); while the game runs it is
+		// reported once and ignored.
+		private static void UpdateGIMethod()
+		{
+			if (GI.Mode == GIMethod)
+			{
+				giMethodWarned = false;
+				return;
+			}
+
+			if (AllowGIMethodChange)
+			{
+				Console.WriteLine($"[GI] Method {GIMethod} -> {GI.Mode}");
+				giMethod = GI.Mode;
+				giMethodWarned = false;
+				return;
+			}
+
+			if (!giMethodWarned)
+			{
+				giMethodWarned = true;
+				Debug.LogWarning($"[GI] The GI method cannot change while the game runs: {GIMethod} stays, {GI.Mode} applies at the next start");
+			}
 		}
 
 		#endregion
@@ -839,7 +907,23 @@ namespace LELEngine
 
 		// ---- Which GI pipeline runs ----
 
+		/// <summary>
+		///     The project's GI method. It is chosen before the game runs: the passes read <see cref="Lighting.GIMethod" />,
+		///     which keeps the method the game started with.
+		/// </summary>
 		public GIMode Mode = GIMode.Lumen;
+
+		/// <summary>Voxel cone tracing runs: the active scene uses GI and it is the method (<see cref="Lighting.GIMethod" />).</summary>
+		public bool VoxelConeTracingActive => Enabled && Lighting.GIMethod == GIMode.VoxelConeTracing;
+
+		/// <summary>Lumen runs: the active scene uses GI and it is the method (<see cref="Lighting.GIMethod" />).</summary>
+		public bool LumenActive => Enabled && Lighting.GIMethod == GIMode.Lumen;
+
+		/// <summary>
+		///     The global distance field is built: Lumen traces it, voxel cone tracing only in an SDF trace mode
+		///     (<see cref="TraceMode" />; <see cref="GITraceMode.VoxelCones" /> never reads it).
+		/// </summary>
+		public bool DistanceFieldActive => Enabled && DistanceFieldEnabled && (Lighting.GIMethod == GIMode.Lumen || TraceMode != GITraceMode.VoxelCones);
 
 		// ---- Lumen surface cache (SurfaceCachePass) ----
 

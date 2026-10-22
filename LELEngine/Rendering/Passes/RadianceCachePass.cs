@@ -114,20 +114,11 @@ namespace LELEngine.Rendering.Passes
 
 		#region PublicMethods
 
-		public override void Initialize(Renderer renderer)
-		{
-			trace = new ComputeShader("Engine/RadianceCacheTrace.shader");
-			resolve = new ComputeShader("Engine/RadianceCacheResolve.shader");
-			sh = new ComputeShader("Engine/RadianceCacheSH.shader");
-			probeListBuffer = GL.GenBuffer();
-			probeFramesBuffer = GL.GenBuffer();
-		}
-
 		public override void Execute(RenderContext context)
 		{
 			GlobalIlluminationSettings gi = Lighting.GI;
 			LumenScene scene = context.Renderer.LumenScene;
-			bool possible = gi.Enabled && gi.Mode == GIMode.Lumen && gi.GlobalSdf != 0 && scene.SurfaceCache != null;
+			bool possible = gi.LumenActive && gi.GlobalSdf != 0 && scene.SurfaceCache != null;
 			bool transparents = context.TransparentRenderers != null && context.TransparentRenderers.Count > 0;
 			Running = possible && (gi.RadianceCacheEnabled || transparents);
 			Active = Running && gi.RadianceCacheEnabled;
@@ -136,7 +127,21 @@ namespace LELEngine.Rendering.Passes
 				Idle = false;
 				tracedSinceChange = 0;
 				Lighting.RadianceCache = default;
+				// Made when the cache first runs, freed when Lumen does not run.
+				if (!gi.LumenActive)
+				{
+					Release();
+				}
 				return;
+			}
+
+			if (trace == null)
+			{
+				trace = new ComputeShader("Engine/RadianceCacheTrace.shader");
+				resolve = new ComputeShader("Engine/RadianceCacheResolve.shader");
+				sh = new ComputeShader("Engine/RadianceCacheSH.shader");
+				probeListBuffer = GL.GenBuffer();
+				probeFramesBuffer = GL.GenBuffer();
 			}
 
 			int perAxis = Math.Max(2, gi.RadianceCacheProbesPerAxis);
@@ -296,11 +301,35 @@ namespace LELEngine.Rendering.Passes
 
 		#region PublicMethods
 
+		public override void ReleaseUnusedResources()
+		{
+			if (!Lighting.GI.LumenActive)
+			{
+				Release();
+			}
+		}
+
 		public override void Dispose()
 		{
+			Release();
+		}
+
+		#endregion
+
+		#region PrivateMethods
+
+		private void Release()
+		{
+			if (Lighting.RadianceCache.Atlas != 0 && Lighting.RadianceCache.Atlas == atlas)
+			{
+				Lighting.RadianceCache = default;
+			}
 			trace?.Delete();
 			resolve?.Delete();
 			sh?.Delete();
+			trace = null;
+			resolve = null;
+			sh = null;
 			if (atlas != 0)
 			{
 				GL.DeleteTexture(atlas);
@@ -315,10 +344,6 @@ namespace LELEngine.Rendering.Passes
 			{
 				GL.DeleteTexture(shTexture);
 				shTexture = 0;
-			}
-			if (Lighting.RadianceCache.Atlas != 0 && Lighting.RadianceCache.Atlas == atlas)
-			{
-				Lighting.RadianceCache = default;
 			}
 			if (traceBuffer != 0)
 			{
@@ -335,11 +360,12 @@ namespace LELEngine.Rendering.Passes
 				GL.DeleteBuffer(probeFramesBuffer);
 				probeFramesBuffer = 0;
 			}
+			// The next run starts like the first: atlas, trace buffer and probe lists rebuilt.
+			probesPerAxis = 0;
+			traceSlots = 0;
+			probeSpacing = 0f;
+			listValid = false;
 		}
-
-		#endregion
-
-		#region PrivateMethods
 
 		/// <summary>This frame's cache for the material shaders' volume lighting (<see cref="Lighting.RadianceCache" />).</summary>
 		private void Publish()

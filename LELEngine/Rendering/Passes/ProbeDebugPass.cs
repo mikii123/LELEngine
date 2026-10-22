@@ -31,11 +31,6 @@ namespace LELEngine.Rendering.Passes
 
 		#region PublicMethods
 
-		public override void Initialize(Renderer renderer)
-		{
-			program = new ShaderProgram("Engine/ProbeDebug.shader");
-		}
-
 		public override void Execute(RenderContext context)
 		{
 			ScreenProbeGatherPass gather = context.Renderer.GetPass<ScreenProbeGatherPass>();
@@ -43,6 +38,9 @@ namespace LELEngine.Rendering.Passes
 			{
 				return;
 			}
+
+			// Compiled when the view is first shown.
+			program ??= new ShaderProgram("Engine/ProbeDebug.shader");
 
 			context.SceneTarget.Bind();
 			GLState.SetDepth(false, false);

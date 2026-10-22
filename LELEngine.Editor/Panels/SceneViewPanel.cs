@@ -14,8 +14,10 @@ namespace LELEngine.Editor
 	/// <summary>
 	///     The editable view of the scene, rendered by the game's own renderer (same lighting and GI as the game)
 	///     from an editor camera that is not part of the scene.
-	///     Right mouse: look + WASD/QE fly (Shift faster, wheel while flying changes the speed); middle mouse: pan;
-	///     wheel: dolly; F: frame the selection; W / E / R: move / rotate / scale gizmo; left click: select.
+	///     Right mouse: look + WASD/QE fly (Shift faster, wheel while flying changes the speed); middle mouse: pan (the
+	///     scene follows the mouse at the depth of what is under it); wheel: dolly a fifth of the way to what the mouse
+	///     points at (an object or the ground plane), as fast far away as close up; F: frame the selection;
+	///     W / E / R: move / rotate / scale gizmo; left click: select.
 	/// </summary>
 	internal sealed class SceneViewPanel : IDisposable
 	{
@@ -28,6 +30,9 @@ namespace LELEngine.Editor
 		public Vector3 CameraPosition => position;
 
 		public Vector3 CameraForward => Forward();
+
+		/// <summary>Depth the view looks at (pans move the scene at it).</summary>
+		public float FocusDistance => focusDistance;
 
 		/// <summary>Views render every frame, not only on changes (animated shaders, time-based effects).</summary>
 		public bool AlwaysRefresh { get; private set; }
@@ -46,6 +51,12 @@ namespace LELEngine.Editor
 		private float yaw;
 		private float pitch = 15f;
 		private float flySpeed = 6f;
+
+		/// <summary>Depth of what the view looks at (last mouse pick or framed object): pans move the scene at it.</summary>
+		private float focusDistance = 10f;
+
+		private const float WheelShare = 0.2f;
+		private const float MinFocusDistance = 0.05f;
 		private readonly ViewRefresh refresh = new ViewRefresh();
 		private bool visible;
 		private bool focusRequested;
@@ -211,7 +222,8 @@ namespace LELEngine.Editor
 				radius = Math.Max(0.25f, ((max - min) * go.transform.lossyScale).Length * 0.5f);
 			}
 
-			position = center - Forward() * (radius * 2.5f + 0.5f);
+			focusDistance = radius * 2.5f + 0.5f;
+			position = center - Forward() * focusDistance;
 			ApplyCamera();
 		}
 
@@ -239,6 +251,7 @@ namespace LELEngine.Editor
 					yaw = root.GetProperty("cameraYaw").GetSingle();
 					pitch = root.GetProperty("cameraPitch").GetSingle();
 					flySpeed = root.TryGetProperty("flySpeed", out JsonElement speed) ? speed.GetSingle() : flySpeed;
+					focusDistance = root.TryGetProperty("focusDistance", out JsonElement focus) ? Math.Max(MinFocusDistance, focus.GetSingle()) : focusDistance;
 					AlwaysRefresh = root.TryGetProperty("alwaysRefresh", out JsonElement always) && always.ValueKind == JsonValueKind.True;
 				}
 
@@ -255,7 +268,7 @@ namespace LELEngine.Editor
 			try
 			{
 				Directory.CreateDirectory(project.LibraryPath);
-				string json = "{\n  \"cameraPosition\": [" + F(position.X) + ", " + F(position.Y) + ", " + F(position.Z) + "],\n  \"cameraYaw\": " + F(yaw) + ",\n  \"cameraPitch\": " + F(pitch) + ",\n  \"flySpeed\": " + F(flySpeed) + ",\n  \"alwaysRefresh\": " + (AlwaysRefresh ? "true" : "false") + "\n}\n";
+				string json = "{\n  \"cameraPosition\": [" + F(position.X) + ", " + F(position.Y) + ", " + F(position.Z) + "],\n  \"cameraYaw\": " + F(yaw) + ",\n  \"cameraPitch\": " + F(pitch) + ",\n  \"flySpeed\": " + F(flySpeed) + ",\n  \"focusDistance\": " + F(focusDistance) + ",\n  \"alwaysRefresh\": " + (AlwaysRefresh ? "true" : "false") + "\n}\n";
 				File.WriteAllText(StateFile(project), json);
 			}
 			catch (Exception e)
@@ -281,6 +294,10 @@ namespace LELEngine.Editor
 			NVector2 available = ImGui.GetContentRegionAvail();
 			viewSize = new NVector2(Math.Max(16, available.X), Math.Max(16, available.Y));
 			viewMin = ImGui.GetCursorScreenPos();
+			if (TestAnchors.Enabled)
+			{
+				TestAnchors.Record("sceneview", viewMin, viewMin + viewSize);
+			}
 			if (ViewRenderer == null)
 			{
 				return;
@@ -446,9 +463,28 @@ namespace LELEngine.Editor
 				return;
 			}
 
+			// Wheel: towards what the mouse points at (an object, else the ground plane) by a share of the distance, so a
+			// notch moves as much of the view far away as close up, and never through the point.
 			if (io.MouseWheel != 0f)
 			{
-				position += Forward() * io.MouseWheel * Math.Max(0.5f, flySpeed * 0.25f);
+				Pick(ImGui.GetMousePos(), out _, out Vector3? point);
+				Vector3 target = point ?? position + Forward() * focusDistance;
+				Vector3 toTarget = target - position;
+				if (toTarget.LengthSquared > 1e-8f)
+				{
+					position += toTarget * Math.Clamp(io.MouseWheel * WheelShare, -1f, 0.9f);
+					focusDistance = Math.Max(MinFocusDistance, Vector3.Dot(target - position, Forward()));
+				}
+			}
+
+			// Middle drag: the scene follows the mouse at the depth of what was under it when the drag started.
+			if (ImGui.IsMouseClicked(ImGuiMouseButton.Middle))
+			{
+				Pick(ImGui.GetMousePos(), out _, out Vector3? point);
+				if (point.HasValue)
+				{
+					focusDistance = Math.Max(MinFocusDistance, Vector3.Dot(point.Value - position, Forward()));
+				}
 			}
 
 			if (ImGui.IsMouseDragging(ImGuiMouseButton.Middle))
@@ -456,8 +492,8 @@ namespace LELEngine.Editor
 				Vector3 forward = Forward();
 				Vector3 right = Vector3.Cross(forward, Vector3.UnitY).Normalized();
 				Vector3 up = Vector3.Cross(right, forward).Normalized();
-				float scale = 0.01f * Math.Max(1f, flySpeed * 0.3f);
-				position += (-right * io.MouseDelta.X + up * io.MouseDelta.Y) * scale;
+				float worldPerPixel = 2f * focusDistance * MathF.Tan(camera.FoV * 0.5f * MathF.PI / 180f) / Math.Max(1f, viewSize.Y);
+				position += (-right * io.MouseDelta.X + up * io.MouseDelta.Y) * worldPerPixel;
 			}
 
 			if (!io.WantTextInput)

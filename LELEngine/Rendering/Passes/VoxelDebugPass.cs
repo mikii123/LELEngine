@@ -38,25 +38,26 @@ namespace LELEngine.Rendering.Passes
 
 		#region PublicMethods
 
-		public override void Initialize(Renderer renderer)
-		{
-			program = new ShaderProgram("Engine/VoxelDebug.shader");
-
-			// Point sampling makes individual voxels visible.
-			nearestSampler = GL.GenSampler();
-			GL.SamplerParameter(nearestSampler, SamplerParameterName.TextureMinFilter, (int)TextureMinFilter.NearestMipmapNearest);
-			GL.SamplerParameter(nearestSampler, SamplerParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
-			GL.SamplerParameter(nearestSampler, SamplerParameterName.TextureWrapS, (int)TextureWrapMode.ClampToBorder);
-			GL.SamplerParameter(nearestSampler, SamplerParameterName.TextureWrapT, (int)TextureWrapMode.ClampToBorder);
-			GL.SamplerParameter(nearestSampler, SamplerParameterName.TextureWrapR, (int)TextureWrapMode.ClampToBorder);
-		}
-
 		public override void Execute(RenderContext context)
 		{
 			GlobalIlluminationSettings gi = Lighting.GI;
 			if (gi.VoxelTexture == 0)
 			{
 				return;
+			}
+
+			// Made when the view is first shown.
+			if (program == null)
+			{
+				program = new ShaderProgram("Engine/VoxelDebug.shader");
+
+				// Point sampling makes individual voxels visible.
+				nearestSampler = GL.GenSampler();
+				GL.SamplerParameter(nearestSampler, SamplerParameterName.TextureMinFilter, (int)TextureMinFilter.NearestMipmapNearest);
+				GL.SamplerParameter(nearestSampler, SamplerParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
+				GL.SamplerParameter(nearestSampler, SamplerParameterName.TextureWrapS, (int)TextureWrapMode.ClampToBorder);
+				GL.SamplerParameter(nearestSampler, SamplerParameterName.TextureWrapT, (int)TextureWrapMode.ClampToBorder);
+				GL.SamplerParameter(nearestSampler, SamplerParameterName.TextureWrapR, (int)TextureWrapMode.ClampToBorder);
 			}
 
 			context.SceneTarget.Bind();

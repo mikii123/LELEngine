@@ -105,37 +105,42 @@ namespace LELEngine.Rendering.Passes
 
 		#region PublicMethods
 
-		public override void Initialize(Renderer renderer)
-		{
-			anchors = new ShaderProgram("Engine/ProbeAnchors.shader");
-			adaptiveClear = new ComputeShader("Engine/ProbeAdaptiveClear.shader");
-			adaptiveSnapshot = new ComputeShader("Engine/ProbeAdaptiveSnapshot.shader");
-			placement = new ComputeShader("Engine/ProbePlacement.shader");
-			adaptiveLevelBuffer = GL.GenBuffer();
-			importance = new ComputeShader("Engine/ProbeImportance.shader");
-			trace = new ShaderProgram("Engine/ProbeTrace.shader");
-			compose = new ComputeShader("Engine/ProbeCompose.shader");
-			filter = new ComputeShader("Engine/ProbeFilter.shader");
-			sh = new ComputeShader("Engine/ProbeSH.shader");
-			integrate = new ShaderProgram("Engine/ProbeIntegrate.shader");
-			adaptiveBuffers[0] = GL.GenBuffer();
-			adaptiveBuffers[1] = GL.GenBuffer();
-			readbackBuffer = GL.GenBuffer();
-			GL.BindBuffer(BufferTarget.CopyWriteBuffer, readbackBuffer);
-			GL.BufferData(BufferTarget.CopyWriteBuffer, sizeof(int), IntPtr.Zero, BufferUsageHint.StreamRead);
-			GL.BindBuffer(BufferTarget.CopyWriteBuffer, 0);
-		}
-
 		public override void Execute(RenderContext context)
 		{
 			GlobalIlluminationSettings gi = Lighting.GI;
 			LumenScene scene = context.Renderer.LumenScene;
-			bool active = gi.Enabled && gi.Mode == GIMode.Lumen && gi.GlobalSdf != 0 && context.DepthPrepassDone && context.NormalRoughness != null && context.Motion != null && scene.SurfaceCache != null;
+			bool active = gi.LumenActive && gi.GlobalSdf != 0 && context.DepthPrepassDone && context.NormalRoughness != null && context.Motion != null && scene.SurfaceCache != null;
 			if (!active)
 			{
 				historyValid = false;
 				ProbesReady = false;
+				// Made when the gather first runs, freed when Lumen does not run.
+				if (!gi.LumenActive)
+				{
+					Release();
+				}
 				return;
+			}
+
+			if (anchors == null)
+			{
+				anchors = new ShaderProgram("Engine/ProbeAnchors.shader");
+				adaptiveClear = new ComputeShader("Engine/ProbeAdaptiveClear.shader");
+				adaptiveSnapshot = new ComputeShader("Engine/ProbeAdaptiveSnapshot.shader");
+				placement = new ComputeShader("Engine/ProbePlacement.shader");
+				adaptiveLevelBuffer = GL.GenBuffer();
+				importance = new ComputeShader("Engine/ProbeImportance.shader");
+				trace = new ShaderProgram("Engine/ProbeTrace.shader");
+				compose = new ComputeShader("Engine/ProbeCompose.shader");
+				filter = new ComputeShader("Engine/ProbeFilter.shader");
+				sh = new ComputeShader("Engine/ProbeSH.shader");
+				integrate = new ShaderProgram("Engine/ProbeIntegrate.shader");
+				adaptiveBuffers[0] = GL.GenBuffer();
+				adaptiveBuffers[1] = GL.GenBuffer();
+				readbackBuffer = GL.GenBuffer();
+				GL.BindBuffer(BufferTarget.CopyWriteBuffer, readbackBuffer);
+				GL.BufferData(BufferTarget.CopyWriteBuffer, sizeof(int), IntPtr.Zero, BufferUsageHint.StreamRead);
+				GL.BindBuffer(BufferTarget.CopyWriteBuffer, 0);
 			}
 
 			frameIndex++;
@@ -433,40 +438,73 @@ namespace LELEngine.Rendering.Passes
 			historyValid = false;
 		}
 
+		public override void ReleaseUnusedResources()
+		{
+			if (!Lighting.GI.LumenActive)
+			{
+				Release();
+			}
+		}
+
 		public override void Dispose()
+		{
+			Release();
+		}
+
+		#endregion
+
+		#region PrivateMethods
+
+		private void Release()
 		{
 			anchors?.Delete();
 			adaptiveClear?.Delete();
 			adaptiveSnapshot?.Delete();
 			placement?.Delete();
-			if (adaptiveLevelBuffer != 0)
-			{
-				GL.DeleteBuffer(adaptiveLevelBuffer);
-				adaptiveLevelBuffer = 0;
-			}
 			importance?.Delete();
 			trace?.Delete();
 			compose?.Delete();
 			filter?.Delete();
 			sh?.Delete();
 			integrate?.Delete();
+			anchors = null;
+			adaptiveClear = null;
+			adaptiveSnapshot = null;
+			placement = null;
+			importance = null;
+			trace = null;
+			compose = null;
+			filter = null;
+			sh = null;
+			integrate = null;
+			if (adaptiveLevelBuffer != 0)
+			{
+				GL.DeleteBuffer(adaptiveLevelBuffer);
+				adaptiveLevelBuffer = 0;
+			}
 			traceTarget?.Delete();
+			traceTarget = null;
 			filterScratch?.Delete();
+			filterScratch = null;
 			if (selectionTexture != 0)
 			{
 				GL.DeleteTexture(selectionTexture);
+				selectionTexture = 0;
 			}
 			if (rayTableTexture != 0)
 			{
 				GL.DeleteTexture(rayTableTexture);
+				rayTableTexture = 0;
 			}
 			if (probeChangeTexture != 0)
 			{
 				GL.DeleteTexture(probeChangeTexture);
+				probeChangeTexture = 0;
 			}
 			if (adaptivePixelTexture != 0)
 			{
 				GL.DeleteTexture(adaptivePixelTexture);
+				adaptivePixelTexture = 0;
 			}
 			if (readbackFence != IntPtr.Zero)
 			{
@@ -489,16 +527,23 @@ namespace LELEngine.Rendering.Passes
 				composeTargets[i]?.Delete();
 				filterTargets[i]?.Delete();
 				output[i]?.Delete();
+				anchorTargets[i] = null;
+				composeTargets[i] = null;
+				filterTargets[i] = null;
+				output[i] = null;
 			}
 			if (shTexture != 0)
 			{
 				GL.DeleteTexture(shTexture);
+				shTexture = 0;
 			}
+			// The next run sizes its targets again (EnsureTargets) and starts without history.
+			probesX = 0;
+			probesY = 0;
+			historyValid = false;
+			ProbesReady = false;
+			AdaptiveProbeCount = 0;
 		}
-
-		#endregion
-
-		#region PrivateMethods
 
 		private void SetProbeUniforms(ShaderProgram program, RenderContext context, int spacing, Vector2i probeJitter)
 		{

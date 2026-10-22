@@ -65,6 +65,13 @@ namespace LELEngine.Rendering
 		public virtual void ReleaseSceneReferences()
 		{ }
 
+		/// <summary>
+		///     Called when what the GI uses changed (<see cref="Lighting.GIUsageChanged" />), also on a renderer that does not
+		///     draw this frame: free the GPU resources the GI no longer uses. Passes free them in Execute too.
+		/// </summary>
+		public virtual void ReleaseUnusedResources()
+		{ }
+
 		public virtual void Dispose()
 		{ }
 

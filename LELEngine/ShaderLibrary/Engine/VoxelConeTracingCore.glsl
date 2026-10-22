@@ -94,8 +94,8 @@ vec4 TraceConeVoxel(vec3 origin, vec3 direction, float aperture, float startDist
 		dist += diameter;
 	}
 
-	// Whatever the cone did not hit sees the sky.
-	color += (1.0 - alpha) * SkyRadiance(direction);
+	// Whatever the cone did not hit sees the sky, averaged over the cone's footprint.
+	color += (1.0 - alpha) * SkyRadiance(direction, aperture);
 	return vec4(color, alpha);
 }
 
@@ -171,8 +171,8 @@ vec4 TraceConeSdf(vec3 origin, vec3 direction, float aperture, float maxDistance
 		dist += diameter * 0.5;
 	}
 
-	// Whatever the cone did not hit sees the sky.
-	color += (1.0 - alpha) * SkyRadiance(direction);
+	// Whatever the cone did not hit sees the sky, averaged over the cone's footprint.
+	color += (1.0 - alpha) * SkyRadiance(direction, aperture);
 	return vec4(color, alpha);
 }
 
