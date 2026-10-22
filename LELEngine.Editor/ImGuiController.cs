@@ -29,6 +29,10 @@ namespace LELEngine.Editor
 
 		private readonly NativeWindow window;
 		private readonly IntPtr iniPath;
+
+		/// <summary>The preferences' theme version this context shows (<see cref="ApplyStyle" />).</summary>
+		private int themeVersion = -1;
+
 		private int vertexArray;
 		private int vertexBuffer;
 		private int indexBuffer;
@@ -82,8 +86,21 @@ void main()
 			io.BackendFlags |= ImGuiBackendFlags.RendererHasVtxOffset | ImGuiBackendFlags.RendererHasTextures | ImGuiBackendFlags.HasMouseCursors;
 
 			Directory.CreateDirectory(Path.GetDirectoryName(iniFile));
-			iniPath = Marshal.StringToHGlobalAnsi(iniFile);
-			io.IniFilename = (byte*)iniPath;
+			if (ReadOnlyLayouts)
+			{
+				// Automated runs read the user's layout but never write it (a test docking windows would move theirs).
+				if (File.Exists(iniFile))
+				{
+					ImGui.LoadIniSettingsFromDisk(iniFile);
+				}
+
+				io.IniFilename = null;
+			}
+			else
+			{
+				iniPath = Marshal.StringToHGlobalAnsi(iniFile);
+				io.IniFilename = (byte*)iniPath;
+			}
 
 			string font = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Fonts), "segoeui.ttf");
 			if (File.Exists(font))
@@ -102,6 +119,11 @@ void main()
 				EditorFonts.Register((nint)Context.Handle, io.Fonts.AddFontFromFileTTF(bold, 17f));
 			}
 
+			// Source code (the console's source view): Consolas or Cascadia Mono, else ImGui's own monospaced font.
+			string fonts = Environment.GetFolderPath(Environment.SpecialFolder.Fonts);
+			string mono = Array.Find(new[] { "consola.ttf", "CascadiaMono.ttf" }, name => File.Exists(Path.Combine(fonts, name)));
+			EditorFonts.RegisterMono((nint)Context.Handle, mono != null ? io.Fonts.AddFontFromFileTTF(Path.Combine(fonts, mono), 15f) : io.Fonts.AddFontDefault());
+
 			CreateDeviceObjects();
 
 			window.KeyDown += OnKeyDown;
@@ -118,6 +140,15 @@ void main()
 
 		#region PublicMethods
 
+		/// <summary>
+		///     Applies the editor's theme to this context; again before the next frame when the preferences' theme
+		///     changed. A window with a look of its own on top (the Audio Studio) sets its own.
+		/// </summary>
+		public Action ApplyStyle = EditorStyle.Apply;
+
+		/// <summary>Automated runs: layout files (layout.ini, ...) are read, never saved.</summary>
+		public static bool ReadOnlyLayouts;
+
 		/// <summary>Makes this controller's ImGui context the current one (several windows have their own).</summary>
 		public void Activate()
 		{
@@ -128,6 +159,12 @@ void main()
 		public void NewFrame(float deltaTime, int width, int height)
 		{
 			Activate();
+			if (themeVersion != EditorPreferences.ThemeVersion)
+			{
+				themeVersion = EditorPreferences.ThemeVersion;
+				ApplyStyle();
+			}
+
 			ImGuiIOPtr io = ImGui.GetIO();
 			io.DisplaySize = new NVector2(Math.Max(1, width), Math.Max(1, height));
 			io.DisplayFramebufferScale = new NVector2(1f, 1f);

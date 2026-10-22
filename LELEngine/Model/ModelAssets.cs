@@ -178,7 +178,10 @@ namespace LELEngine
 			}
 		}
 
-		/// <summary>A file or folder moved: the loaded models and their meshes keep their identity under the new path.</summary>
+		/// <summary>
+		///     A file or folder moved: the loaded models and their meshes keep their identity under the new path, and the
+		///     models whose material assets moved use them where they are.
+		/// </summary>
 		internal static void AssetMoved(string fromPath, string toPath)
 		{
 			lock (sync)
@@ -194,6 +197,17 @@ namespace LELEngine
 						}
 					}
 				});
+
+				foreach (Model model in models.Values)
+				{
+					foreach (ModelMaterial material in model.Data.Materials)
+					{
+						if (AssetDatabase.MovedPath(material.AssetPath, fromPath, toPath) is string materialPath)
+						{
+							material.AssetPath = materialPath;
+						}
+					}
+				}
 			}
 		}
 
@@ -513,12 +527,21 @@ namespace LELEngine
 		private static string Stamp(string file, ModelImporter settings, IModelImportBackend backend)
 		{
 			var info = new FileInfo(file);
+			// The import's own record (the material assets it made) is not a setting.
 			int version = settings.version;
+			List<ModelExtractedAsset> materialAssets = settings.materialAssets;
+			List<ModelExtractedAsset> textureAssets = settings.textureAssets;
 			settings.version = 0;
+			settings.materialAssets = null;
+			settings.textureAssets = null;
 			byte[] settingsBytes = Serialization.Documents.WriteObject(settings, Serialization.DocumentFormat.Binary);
 			settings.version = version;
+			settings.materialAssets = materialAssets;
+			settings.textureAssets = textureAssets;
 			string settingsHash = Convert.ToHexString(SHA1.HashData(settingsBytes));
-			return $"{info.Length}:{info.LastWriteTimeUtc.Ticks}:{settingsHash}:{backend.GetType().Name}:{backend.Version}:{(MaterialExtractor != null ? 1 : 0)}";
+			// Extractor layout 3 (2026-10-22): materials and embedded textures next to the model, kept by GUID (older
+			// imports redo once).
+			return $"{info.Length}:{info.LastWriteTimeUtc.Ticks}:{settingsHash}:{backend.GetType().Name}:{backend.Version}:{(MaterialExtractor != null ? 3 : 0)}";
 		}
 
 		// A source model without a cached import of its current file, settings and importer (or, verifying materials,
@@ -562,11 +585,17 @@ namespace LELEngine
 
 				using (FileStream stream = File.OpenRead(cacheFile))
 				{
-					foreach (ModelMaterial material in Read(stream, out _).Materials)
+					// The materials a mesh uses (the extractor makes no asset for the rest).
+					ModelData data = Read(stream, out _);
+					foreach (ModelMeshData mesh in data.Meshes)
 					{
-						if (material.AssetPath == null || !File.Exists(AssetDatabase.ToAbsolute(material.AssetPath)))
+						foreach (int index in mesh.Materials)
 						{
-							return true;
+							string materialPath = index >= 0 && index < data.Materials.Count ? data.Materials[index].AssetPath : "";
+							if (materialPath == null || (materialPath.Length > 0 && !File.Exists(AssetDatabase.ToAbsolute(materialPath))))
+							{
+								return true;
+							}
 						}
 					}
 				}

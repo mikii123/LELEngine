@@ -64,8 +64,12 @@ namespace LELEngine.Editor.Audio
 			native.Context.SwapInterval = 0;
 			string layout = Path.Combine(RecentProjects.EditorDataFolder, "audio-studio-layout.ini");
 			imgui = new ImGuiController(native, layout);
-			EditorStyle.Apply();
-			StudioUi.ApplyStyle();
+			imgui.ApplyStyle = () =>
+			{
+				EditorStyle.Apply();
+				StudioUi.ApplyStyle();
+			};
+			imgui.ApplyStyle();
 			// A saved layout from before a panel existed would leave that panel floating: rebuild the default then.
 			Studio = new AudioStudio(editor, this, AudioStudio.LayoutIsCurrent(layout));
 			owner.MakeEditorCurrent();

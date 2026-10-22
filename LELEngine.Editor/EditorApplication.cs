@@ -79,7 +79,11 @@ namespace LELEngine.Editor
 		private readonly ConsolePanel consolePanel;
 		private readonly LightingPanel lightingPanel;
 		private readonly ProjectSettingsWindow projectSettingsWindow;
+		private readonly PreferencesWindow preferencesWindow = new PreferencesWindow();
 		private readonly VFX.VfxGraphWindow vfxGraphWindow;
+
+		/// <summary>The console's error count Error Pause last saw.</summary>
+		private int errorsSeen;
 		private readonly InputManagerWindow inputManagerWindow;
 		private readonly GameInputHost gameInput;
 		private readonly TestHooks testHooks;
@@ -228,10 +232,22 @@ namespace LELEngine.Editor
 
 		public void Update(float deltaTime)
 		{
+			EditorPreferences.Update();
 			if (Project == null)
 			{
 				ChooseProject();
 				return;
+			}
+
+			// Error Pause: an error or exception since the last frame pauses the game before its next frame.
+			if (Log.ErrorsLogged != errorsSeen)
+			{
+				errorsSeen = Log.ErrorsLogged;
+				if (PlayState == PlayState.Playing && EditorPreferences.Current.Console.ErrorPause)
+				{
+					TogglePause();
+					Debug.Log("[Editor] Paused on an error (Console > Error Pause)");
+				}
 			}
 
 			if (restoreWindowsPending)
@@ -303,6 +319,12 @@ namespace LELEngine.Editor
 				resetLayoutRequested = false;
 			}
 
+			if (testHooks.PendingDock is (string window, string target))
+			{
+				testHooks.PendingDock = null;
+				DockInto(window, target);
+			}
+
 			hierarchy.Draw();
 			SceneView.Draw();
 			GameView.Draw();
@@ -311,6 +333,7 @@ namespace LELEngine.Editor
 			projectPanel.Draw();
 			consolePanel.Draw();
 			projectSettingsWindow.Draw();
+			preferencesWindow.Draw();
 			vfxGraphWindow.Draw();
 			inputManagerWindow.Draw();
 			Extensions.DrawWindows();
@@ -455,7 +478,12 @@ namespace LELEngine.Editor
 			// Remapped controls of play mode are the project's, not the user's (a built game keeps them in AppData).
 			LELEngine.InputSystem.InputManager.UserDataPath = Path.Combine(project.LibraryPath, "InputUserData.json");
 			OpenAudioProjectForEditor();
-			RecentProjects.Add(project.RootPath);
+			if (!automated)
+			{
+				// Test projects stay out of the user's list.
+				RecentProjects.Add(project.RootPath);
+			}
+
 			Debug.Log($"[Editor] Opened project {project.Name} ({project.RootPath})");
 
 			GameView.EnsureRenderer();
@@ -1120,6 +1148,11 @@ namespace LELEngine.Editor
 			}
 
 			Edits.Commit();
+			if (EditorPreferences.Current.Console.ClearOnPlay)
+			{
+				Log.Clear();
+			}
+
 			// Previews of the studio and the inspectors stop; the game starts with silence.
 			LELEngine.Audio.AudioSystem.StopAll();
 			playSnapshot = SceneSerializer.SaveToBytes(Scene);
@@ -1215,6 +1248,19 @@ namespace LELEngine.Editor
 		public void ShowProjectSettings(ProjectSettingsWindow.Tab? tab = null)
 		{
 			projectSettingsWindow.Show(tab);
+		}
+
+		/// <summary>Edit > Preferences... on a section (null: the one it was on).</summary>
+		public void ShowPreferences(PreferencesWindow.Section? section = null)
+		{
+			preferencesWindow.Show(section);
+		}
+
+		/// <summary>Selects the first console message containing the text (test runs).</summary>
+		public bool SelectConsoleMessage(string text)
+		{
+			consolePanel.Open = true;
+			return consolePanel.SelectFirst(text);
 		}
 
 		/// <summary>Opens Window > Input Manager on an input configuration (null: the project's).</summary>
@@ -1378,6 +1424,7 @@ namespace LELEngine.Editor
 
 		public void Dispose()
 		{
+			EditorPreferences.Flush();
 			TextureAssets.TextureReplaced -= OnTextureReplaced;
 			SceneManager.ActiveSceneChanged -= OnActiveSceneChanged;
 			uiBuilder?.Dispose();
@@ -1653,6 +1700,7 @@ namespace LELEngine.Editor
 
 				ImGui.Separator();
 				if (ImGui.MenuItem("Project Settings...")) ShowProjectSettings();
+				if (ImGui.MenuItem("Preferences...")) ShowPreferences();
 				Extensions.DrawMenuItems("Edit");
 				ImGui.EndMenu();
 			}
@@ -1979,6 +2027,20 @@ namespace LELEngine.Editor
 			else if (ctrl && ImGui.IsKeyPressed(ImGuiKey.D, false)) DuplicateSelected();
 			else if (ctrl && shift && ImGui.IsKeyPressed(ImGuiKey.B, false)) ShowBuildWindow();
 			else if (!ctrl && ImGui.IsKeyPressed(ImGuiKey.Delete, false) && Selected != null && (hierarchy.IsFocused || SceneView.IsFocused)) DeleteSelected();
+		}
+
+		/// <summary>Docks <paramref name="window" /> where <paramref name="target" /> is docked (test runs: dockwindow=).</summary>
+		private static unsafe void DockInto(string window, string target)
+		{
+			ImGuiWindowPtr targetWindow = ImGuiP.FindWindowByName(target);
+			if (targetWindow.Handle == null || targetWindow.DockId == 0)
+			{
+				Debug.LogWarning("[Test] Cannot dock " + window + ": " + target + " is no docked window");
+				return;
+			}
+
+			ImGuiP.DockBuilderDockWindow(window, targetWindow.DockId);
+			Debug.Log("[Test] Docked " + window + " with " + target);
 		}
 
 		private unsafe void BuildDefaultLayout(uint dockspace)

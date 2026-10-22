@@ -5,18 +5,106 @@ using System.Text;
 
 namespace LELEngine.Editor
 {
-	internal struct ConsoleEntry
+	/// <summary>A message of the console: its text, the call stack that logged it, where and when.</summary>
+	internal sealed class ConsoleEntry
 	{
+		#region PublicFields
+
+		/// <summary>Order of arrival (selection and collapsing keep to it across clears).</summary>
+		public long Id;
+
 		public string Text;
+
+		/// <summary>The call stack ("   at Type.Method(...) in file:line N" lines), or null.</summary>
+		public string StackTrace;
+
 		public LogType Type;
+
+		/// <summary>A build diagnostic's source location (its only frame), or null.</summary>
 		public string File;
+
 		public int Line;
+		public DateTime Time;
+
+		/// <summary>Time.frameCount when logged in play mode, else -1.</summary>
+		public long Frame = -1;
+
+		/// <summary>The object the message is about (selected when the message is); weak: unloaded scripts' objects can go.</summary>
+		public WeakReference<object> Context;
+
+		/// <summary>Script build diagnostics: Clear keeps them until the next build (Unity's compile errors).</summary>
+		public bool Sticky;
+
+		public bool IsError => Type == LogType.Error || Type == LogType.Exception;
+
+		/// <summary>The message's first line (list rows).</summary>
+		public string FirstLine
+		{
+			get
+			{
+				if (firstLine == null)
+				{
+					int newline = Text.IndexOf('\n');
+					firstLine = newline >= 0 ? Text.Substring(0, newline).TrimEnd('\r') : Text;
+				}
+
+				return firstLine;
+			}
+		}
+
+		/// <summary>The engine's [Tag] the message starts with ("[Model]"), or null.</summary>
+		public string Tag
+		{
+			get
+			{
+				if (tag == null)
+				{
+					int close = Text.Length > 2 && Text[0] == '[' ? Text.IndexOf(']', 1) : -1;
+					tag = close > 1 && close <= 32 && Text.IndexOf(' ', 1, close - 1) < 0 ? Text.Substring(0, close + 1) : "";
+				}
+
+				return tag.Length > 0 ? tag : null;
+			}
+		}
+
+		public IReadOnlyList<ConsoleFrame> Frames => frames ??= ConsoleStackTrace.Parse(this);
+
+		/// <summary>The same text, type and stack: one row when collapsed.</summary>
+		public string CollapseKey => collapseKey ??= (int)Type + "\u0001" + Text + "\u0001" + StackTrace + "\u0001" + File + ":" + Line;
+
+		#endregion
+
+		#region PrivateFields
+
+		private string firstLine;
+		private string tag;
+		private IReadOnlyList<ConsoleFrame> frames;
+		private string collapseKey;
+
+		#endregion
+
+		#region PublicMethods
+
+		public object GetContext()
+		{
+			return Context != null && Context.TryGetTarget(out object target) ? target : null;
+		}
+
+		/// <summary>The message and its call stack as text (copy, export).</summary>
+		public string ToFullText()
+		{
+			string location = File != null ? "\n   at " + File + ":line " + Line : "";
+			return Text + (StackTrace != null ? "\n" + StackTrace : location);
+		}
+
+		#endregion
 	}
 
 	/// <summary>
-	///     Captures everything written to the console (engine logs, shader compiler messages, script build output)
-	///     for the Console panel, and still forwards it to the original output. Thread safe: script builds report
-	///     from a background thread.
+	///     The console's messages: the engine's log (<see cref="Debug.MessageLogged" />, with call stacks and context
+	///     objects), script build diagnostics (<see cref="Add" />) and everything else written to the console (shader
+	///     compiler messages, build output, Console.WriteLine of scripts), which it still forwards to the original
+	///     output. Thread safe: script builds and game threads report from the background.
 	/// </summary>
 	internal sealed class ConsoleLog : TextWriter
 	{
@@ -24,18 +112,24 @@ namespace LELEngine.Editor
 
 		public override Encoding Encoding => Encoding.UTF8;
 
-		/// <summary>Bumped on every new entry (panels scroll to the bottom when it changes).</summary>
+		/// <summary>Bumped on every change (panels re-filter, and scroll to the bottom on new messages).</summary>
 		public int Version { get; private set; }
+
+		/// <summary>Errors and exceptions logged since the editor started (Error Pause notices new ones).</summary>
+		public int ErrorsLogged { get; private set; }
+
+		/// <summary>Bumped when messages go or change (clear, the oldest trimmed): views rebuild instead of adding the new ones.</summary>
+		public int RemovalVersion { get; private set; }
 
 		#endregion
 
 		#region PrivateFields
 
-		private const int MaxEntries = 5000;
 		private readonly TextWriter original;
 		private readonly StringBuilder line = new StringBuilder();
 		private readonly List<ConsoleEntry> entries = new List<ConsoleEntry>();
 		private readonly object sync = new object();
+		private long nextId;
 
 		#endregion
 
@@ -54,6 +148,9 @@ namespace LELEngine.Editor
 		{
 			var log = new ConsoleLog(Console.Out);
 			Console.SetOut(log);
+			// The engine's messages come with their call stack from the event; their text goes straight to the output.
+			Debug.Output = log.original;
+			Debug.MessageLogged += log.OnMessageLogged;
 			return log;
 		}
 
@@ -97,12 +194,12 @@ namespace LELEngine.Editor
 			}
 		}
 
-		/// <summary>Adds an entry directly (build diagnostics with a source location).</summary>
-		public void Add(string text, LogType type, string file = null, int lineNumber = 0)
+		/// <summary>Adds an entry directly (build diagnostics with a source location; <paramref name="sticky" />: kept by Clear).</summary>
+		public void Add(string text, LogType type, string file = null, int lineNumber = 0, bool sticky = false)
 		{
 			lock (sync)
 			{
-				AddEntry(new ConsoleEntry { Text = text, Type = type, File = file, Line = lineNumber });
+				AddEntry(new ConsoleEntry { Text = text, Type = type, File = file, Line = lineNumber, Sticky = sticky });
 			}
 
 			original.WriteLine(text);
@@ -110,24 +207,60 @@ namespace LELEngine.Editor
 
 		public List<ConsoleEntry> Snapshot()
 		{
+			return Snapshot(out _);
+		}
+
+		/// <summary>The messages, and the <see cref="RemovalVersion" /> they are of.</summary>
+		public List<ConsoleEntry> Snapshot(out int removalVersion)
+		{
 			lock (sync)
 			{
+				removalVersion = RemovalVersion;
 				return new List<ConsoleEntry>(entries);
 			}
 		}
 
+		/// <summary>Removes every message but the sticky ones (script build errors stay until the next build).</summary>
 		public void Clear()
 		{
 			lock (sync)
 			{
-				entries.Clear();
+				entries.RemoveAll(entry => !entry.Sticky);
 				Version++;
+				RemovalVersion++;
+			}
+		}
+
+		/// <summary>The previous build's diagnostics go (a new build reports its own).</summary>
+		public void RemoveSticky()
+		{
+			lock (sync)
+			{
+				if (entries.RemoveAll(entry => entry.Sticky) > 0)
+				{
+					Version++;
+					RemovalVersion++;
+				}
 			}
 		}
 
 		#endregion
 
 		#region PrivateMethods
+
+		private void OnMessageLogged(string message, string stackTrace, LogType type, object context)
+		{
+			lock (sync)
+			{
+				AddEntry(new ConsoleEntry
+				{
+					Text = message ?? "Null",
+					StackTrace = stackTrace,
+					Type = type,
+					Context = context != null ? new WeakReference<object>(context) : null
+				});
+			}
+		}
 
 		private void FlushLine()
 		{
@@ -150,11 +283,15 @@ namespace LELEngine.Editor
 			}
 			else if (text.StartsWith("   at ", StringComparison.Ordinal) && entries.Count > 0)
 			{
-				// Stack trace line: belongs to the previous entry.
+				// Stack trace line of something printed to the console: belongs to the previous entry.
 				ConsoleEntry last = entries[entries.Count - 1];
-				last.Text += "\n" + text;
-				entries[entries.Count - 1] = last;
+				entries[entries.Count - 1] = new ConsoleEntry
+				{
+					Id = last.Id, Text = last.Text, Type = last.Type, Time = last.Time, Frame = last.Frame, Context = last.Context, Sticky = last.Sticky,
+					File = last.File, Line = last.Line, StackTrace = last.StackTrace != null ? last.StackTrace + "\n" + text : text
+				};
 				Version++;
+				RemovalVersion++;
 				return;
 			}
 
@@ -163,10 +300,21 @@ namespace LELEngine.Editor
 
 		private void AddEntry(ConsoleEntry entry)
 		{
+			entry.Id = nextId++;
+			entry.Time = DateTime.Now;
+			EditorApplication editor = EditorApplication.Instance;
+			entry.Frame = editor != null && editor.IsPlaying ? Time.frameCount : -1;
 			entries.Add(entry);
-			if (entries.Count > MaxEntries)
+			int max = EditorPreferences.Current.Console.MaxEntries;
+			if (entries.Count > max)
 			{
-				entries.RemoveRange(0, entries.Count - MaxEntries);
+				entries.RemoveRange(0, entries.Count - max);
+				RemovalVersion++;
+			}
+
+			if (entry.IsError)
+			{
+				ErrorsLogged++;
 			}
 
 			Version++;

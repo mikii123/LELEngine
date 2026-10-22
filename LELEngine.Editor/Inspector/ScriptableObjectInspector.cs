@@ -32,14 +32,7 @@ namespace LELEngine.Editor
 			ImGui.BeginDisabled(script == null);
 			if (ImGui.Button(type.Name + (script != null ? "##script" : " (no script file)##script"), new NVector2(-1f, 0f)) && script != null)
 			{
-				try
-				{
-					System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(AssetDatabase.ToAbsolute(script)) { UseShellExecute = true });
-				}
-				catch (Exception e)
-				{
-					Debug.LogWarning("[Editor] Cannot open " + script + ": " + e.Message);
-				}
+				ExternalScriptEditor.Open(AssetDatabase.ToAbsolute(script), 1);
 			}
 
 			ImGui.EndDisabled();

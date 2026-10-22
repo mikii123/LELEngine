@@ -24,6 +24,8 @@ namespace LELEngine.Editor
 	///     Prefabs: selectframe=, instantiateprefab=, openprefab=, closeprefab=, saveprefab=, createprefab=, createvariant=,
 	///     unpackprefab=, applyprefab=, revertprefab=, setfield=, addcomponentat=, removecomponent=, destroyobject=,
 	///     reparent=, undoat=, replacetext=, logprefab= (see <see cref="UpdatePrefabHooks" />).
+	///     Console and preferences: log=N;Type;text, consoleselect=N;text, preferences=N;Section (preferencesfile=path
+	///     gives an automated run preferences of its own); anchors console:row, consoleframe:index, preferences:Section.
 	/// </summary>
 	internal sealed class TestHooks
 	{
@@ -124,6 +126,9 @@ namespace LELEngine.Editor
 
 		/// <summary>Window the next UI frame brings to the front (focuswindow=).</summary>
 		public string PendingFocus { get; set; }
+
+		/// <summary>A window the next UI frame docks where another one is (dockwindow=).</summary>
+		public (string window, string target)? PendingDock { get; set; }
 
 		public void Update()
 		{
@@ -805,6 +810,14 @@ namespace LELEngine.Editor
 			// replacetext=N;assetPath;old;new: an edit of a file outside the editor (the file watcher notices it).
 			// inputmanager=N;Page: Window > Input Manager on the project's configuration, showing a page (Actions, KeyboardMaps, ...).
 			At("inputmanager", parts => editor.OpenInputManager(null, parts.Length > 1 ? parts[1] : null));
+			// preferences=N;Section: Edit > Preferences on a section (Theme, Console, ExternalTools).
+			At("preferences", parts => editor.ShowPreferences(parts.Length > 1 ? Enum.Parse<PreferencesWindow.Section>(parts[1], true) : null));
+			// log=N;Type;text: a message logged from a few nested calls (console call stacks), Type Log / Warning / Error / Exception.
+			At("log", parts => TestLog.Write(Enum.Parse<LogType>(parts[1], true), parts.Length > 2 ? parts[2] : "Test message"));
+			// dockwindow=N;Window;Target: docks the window into the dock node of the target window (the next UI frame).
+			At("dockwindow", parts => PendingDock = (parts[1], parts[2]));
+			// consoleselect=N;text: selects the first console message containing the text.
+			At("consoleselect", parts => Debug.Log("[Test] Console selection " + (editor.SelectConsoleMessage(parts[1]) ? "found" : "not found") + ": " + parts[1]));
 
 			At("replacetext", parts =>
 			{
@@ -934,5 +947,46 @@ namespace LELEngine.Editor
 		}
 
 		#endregion
+	}
+
+	/// <summary>Messages logged a few calls deep (log=): the console shows a call stack with source.</summary>
+	internal static class TestLog
+	{
+		public static void Write(LogType type, string text)
+		{
+			Outer(type, text);
+		}
+
+		private static void Outer(LogType type, string text)
+		{
+			Inner(type, text);
+		}
+
+		private static void Inner(LogType type, string text)
+		{
+			switch (type)
+			{
+				case LogType.Warning:
+					Debug.LogWarning(text);
+					break;
+				case LogType.Error:
+					Debug.LogError(text);
+					break;
+				case LogType.Exception:
+					try
+					{
+						throw new InvalidOperationException(text, new ArgumentException("The inner cause"));
+					}
+					catch (Exception e)
+					{
+						Debug.LogException(e);
+					}
+
+					break;
+				default:
+					Debug.Log(text);
+					break;
+			}
+		}
 	}
 }

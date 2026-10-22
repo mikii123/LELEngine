@@ -274,6 +274,13 @@ namespace LELEngine.Editor
 
 		private void StartBuild()
 		{
+			// The previous build's diagnostics go (this build reports its own); Clear on Recompile clears the rest too.
+			editor.Log.RemoveSticky();
+			if (EditorPreferences.Current.Console.ClearOnRecompile)
+			{
+				editor.Log.Clear();
+			}
+
 			ProjectGenerator.Generate(project);
 			StatusText = "Compiling scripts...";
 			string file = projectFile;
@@ -285,7 +292,7 @@ namespace LELEngine.Editor
 		{
 			foreach (BuildDiagnostic diagnostic in result.Diagnostics)
 			{
-				editor.Log.Add("[Scripts] " + diagnostic, diagnostic.IsError ? LogType.Error : LogType.Warning, diagnostic.File, diagnostic.Line);
+				editor.Log.Add("[Scripts] " + diagnostic, diagnostic.IsError ? LogType.Error : LogType.Warning, diagnostic.File, diagnostic.Line, true);
 			}
 
 			if (!result.Success)

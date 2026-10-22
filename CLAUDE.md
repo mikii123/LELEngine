@@ -42,8 +42,14 @@
   the editor, `SceneModels` in `TestGame.Scenes` (full asset paths: `Meshes/cube.obj`, `Materials/X.material`).
 - Backends: `ObjModelBackend` (built into the engine, .obj + .mtl, works without the editor, e.g. in TestGame) and
   `AssimpModelBackend` (editor, Silk.NET.Assimp: fbx, gltf/glb, dae, 3ds, blend, ply, stl), registered in the
-  editor's `Program.Main` with `ModelMaterialExtractor` (writes `Materials/<name>.material` with the engine's
-  `Engine/LitTextured.shader` / `Engine/LitTransparent.shader`, embedded textures into `Textures/`, never overwrites).
+  editor's `Program.Main` with `ModelMaterialExtractor` (writes `<name>.material` next to the model with the engine's
+  `Engine/LitTextured.shader` / `Engine/LitTransparent.shader`, embedded textures as image files next to it too,
+  never overwrites; only materials a mesh uses, as Assimp adds an unused default material to every glTF file).
+  Since 2026-10-22 both are recorded by GUID in the model's meta (`ModelImporter.materialAssets` / `textureAssets`,
+  Unity's external object remap, left out of the import stamp): a renamed or moved material or texture stays the
+  model's (the next import finds it, no duplicate). What older imports put in `Materials/` and `Textures/` moves next
+  to the model on the next import (extractor layout 3 in the stamp makes every model import once); emptied folders go.
+  Unnamed embedded images (glTF) are named `<model> Texture <n>`, so models in one folder don't share them.
 - The lit shaders (`Lit`, `LitTextured`, `LitTransparent`) are engine shaders in `LELEngine/ShaderLibrary/Engine`
   (the GI and shadow contracts live there); new projects get no copies. A material naming a project copy that no
   longer exists (`Shaders/Lit.shader`) loads `Engine/Lit.shader` (`AssetDatabase.EngineShaderFallback`). Imports cache in `Library/ModelCache`
@@ -296,13 +302,60 @@
   away commits after the panel is drawn, Escape cancels. A click on empty space (here or in the hierarchy) clears the
   selection and the inspector (`ClearSelection`); the panel follows the editor's selection (a GameObject selected
   elsewhere clears the file highlight).
+- Unity-like expansion (`DrawFileRow`, recursive): a model file has an arrow (anchor `expand:<path>`); expanded, it
+  shows its companion files (an OBJ's material library from its `mtllib` lines and the material and texture assets of
+  its import (`ModelImporter.ExtractedGuids`), same folder; listed only there, not on their own: `listedCompanions`) as
+  full rows and its
+  meshes as sub-asset rows (anchor `project:<model>/<mesh>`; a click
+  selects the model, a drag carries `DragItem.FromFile(model, mesh)` on to a Mesh field). Renaming a companion .mtl
+  rewrites the OBJ's `mtllib` line. A pinged or selected companion opens its owner. Shift ranges and multi-file drags
+  use the rows as drawn last frame (`shownRows`).
 - Models import completely as soon as they are in the project: `ModelAssets.ImportOutdated` (new / changed file,
-  settings or importer; with `verifyMaterials` also an import whose extracted material files are gone) runs when a
+  settings or importer; with `verifyMaterials` also an import whose extracted material files (of materials a mesh
+  uses) are gone) runs when a
   project opens (editor and batch mode) and after every asset refresh (watcher); a loaded model that reimported is
   replaced by reloading the scene. Model import settings: `importMaterials` (Materials header) chooses extracted
   material assets or the default material.
 - The inspector draws the materials of the selected object's renderers below its components (full material editors, as
   Unity); engine and runtime materials are shown disabled.
+
+## Console, editor preferences, theme (2026-10-22)
+
+- `Debug` records the caller's stack for every message (`Debug.SetStackTraceLogType(LogType, StackTraceLogType)`,
+  Unity's None / ScriptOnly / Full; ScriptOnly drops System/Microsoft/OpenTK/Hexa/Silk frames; nothing is captured
+  without a `MessageLogged` subscriber). Stdout still gets the text (stack only for exceptions, plus inner exceptions
+  as `--- Caused by` lines); `Debug.Output` routes it: the editor points it at the real stdout and takes the message
+  from `MessageLogged`, so `ConsoleLog` no longer parses Debug text (only other console writes, as before).
+- `ConsoleLog` entries are `ConsoleEntry` objects (text, stack, type, time, play-mode frame, weak context reference so
+  unloaded script objects can go, `Sticky` for script build diagnostics: Clear keeps them, `RemoveSticky` at the next
+  build). `RemovalVersion` tells the panel to rebuild instead of appending new rows.
+- `ConsolePanel` (Console Pro style): toolbar Clear + options (Clear on Recompile, columns, lines per row, source view,
+  library frames, stack trace capture, copy / save shown messages to `Logs/Console-*.txt`, Preferences), Collapse,
+  Clear on Play, Error Pause (these stay in the console, not in the Preferences window), type toggles with counts,
+  search (regex / case / call stacks), Tags menu ([Tag] prefixes), custom filter chips (click toggles, Alt+click solo,
+  right-click edit; matches tinted). Rows via a clipper; narrow consoles drop Time/Source columns. Two parts only
+  (list, then the message with its call stack; no separate source pane, the user's call): stack frames with the
+  code around their line inline (`SourceSnippet`, line ± `SourceContextLines`, default 1 = three lines, shared
+  indentation removed), shown for project frames and the frame the message opens, a click toggles it on the others.
+  Project frames bright, engine dim, libraries hidden, logging wrappers (`HiddenFrames` prefixes) skipped as the open
+  target; lambdas / iterators shown as their method.
+- `SourceFiles` + `CSharpLexer`: frames' files (cached, reloaded on change), C# highlighting with line states for
+  multi-line comments / strings; double-click opens the line. `ExternalScriptEditor` opens files at a line (Auto: Rider, Visual Studio,
+  VS Code where they install; Custom with `$(File) $(Line) $(Column) $(ProjectPath) $(SolutionPath)`); script assets
+  opened from the project panel and inspectors go through it too.
+- `EditorPreferences` (`%APPDATA%\LELEngine\Editor\preferences.json`, outside projects): Theme, Console, External
+  Tools; saved 0.4 s after `MarkChanged`, re-read when another editor changes the file. Automated runs use defaults and
+  save nothing unless `preferencesfile=path`. Edit > Preferences... is `PreferencesWindow`.
+- `EditorStyle`: presets Dark / Midnight / Light / Classic, editor colors `EditorColor` (Warning, Error, Link, Code*
+  ...) plus every ImGuiCol overridable by name, text size via `style.FontSizeBase`. `ImGuiController.ApplyStyle`
+  re-applies it per window when `EditorPreferences.ThemeVersion` changes (Audio Studio adds its own style on top).
+  Monospace font per context: `EditorFonts.PushMono(size)` (Consolas / Cascadia Mono / ImGui default).
+- Automated runs read the user's `layout.ini` (and the other windows' ini files) but never save them
+  (`ImGuiController.ReadOnlyLayouts`), and their projects stay out of `recent.json`: a test that docked the console
+  elsewhere once moved the user's real console.
+- Test hooks: `log=N;Type;text` (nested calls, Exception with an inner cause), `consoleselect=N;text`,
+  `preferences=N;Section`, `dockwindow=N;Window;Target` (dock next to another window, e.g. Console;Inspector for a
+  tall narrow console), anchors `console:row`, `consoleframe:i`, `consolefilter:Name`, `preferences:Section`.
 
 ## GI method: fixed while running, only the active one allocates (2026-10-22)
 

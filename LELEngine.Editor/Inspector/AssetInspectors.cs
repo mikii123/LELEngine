@@ -278,6 +278,12 @@ namespace LELEngine.Editor
 
 		private static void OpenExternally(string absolute)
 		{
+			if (absolute.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
+			{
+				ExternalScriptEditor.Open(absolute, 1);
+				return;
+			}
+
 			try
 			{
 				Process.Start(new ProcessStartInfo(absolute) { UseShellExecute = true });

@@ -83,6 +83,20 @@ namespace LELEngine.Editor
 		// The tree opens the shown folder's parents once after the folder changed (a ping, the file list, the breadcrumb).
 		private bool revealFolder;
 
+		// Unity-like expansion: a model shows its meshes and its companion files (an OBJ's material library) under it.
+		private readonly HashSet<string> expanded = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+		// Files listed under another file instead of on their own (owner -> companions), from the listing.
+		private readonly Dictionary<string, List<string>> listedCompanions = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+
+		// File rows in drawing order (nested files included): this frame's, and the last complete frame's (Shift
+		// ranges and multi-file drags read that one).
+		private readonly List<string> rows = new List<string>();
+		private readonly List<string> shownRows = new List<string>();
+
+		// The mesh row picked under a model ("Models/Ship.obj/Hull"); the inspector shows the model.
+		private string selectedSubAsset;
+
 		#endregion
 
 		#region Constructors
@@ -343,6 +357,16 @@ namespace LELEngine.Editor
 		{
 			RefreshListing();
 			FollowEditorSelection();
+
+			// A pinged or selected file listed under another one opens its owner.
+			foreach (KeyValuePair<string, List<string>> pair in listedCompanions)
+			{
+				if (pair.Value.Exists(c => string.Equals(c, pinged, StringComparison.OrdinalIgnoreCase) || string.Equals(c, selectedFile, StringComparison.OrdinalIgnoreCase)))
+				{
+					expanded.Add(pair.Key);
+				}
+			}
+
 			DrawBreadcrumb();
 			ImGui.Separator();
 
@@ -393,105 +417,15 @@ namespace LELEngine.Editor
 				}
 			}
 
-			for (int index = 0; index < listedFiles.Count; index++)
+			rows.Clear();
+			foreach (string file in listedFiles)
 			{
-				string file = listedFiles[index];
-				string assetPath = Combine(folder, file);
-				bool isPrefab = assetPath.EndsWith(Prefab.Extension, StringComparison.OrdinalIgnoreCase);
-				listedVariants.TryGetValue(assetPath, out string variantOf);
-				IconKind iconKind = EditorIcons.KindOfFile(assetPath);
-				if (iconKind == IconKind.Prefab && variantOf != null)
-				{
-					iconKind = IconKind.PrefabVariant;
-				}
-
-				NVector2 rowStart = ImGui.GetCursorScreenPos();
-				if (!renameInTree && string.Equals(renaming, assetPath, StringComparison.OrdinalIgnoreCase))
-				{
-					DrawFileIcon(draw, rowStart, iconSize, assetPath, iconKind);
-					ImGui.SetCursorScreenPos(rowStart + new NVector2(iconSize + 4f, -ImGui.GetStyle().FramePadding.Y));
-					DrawRenameField();
-					continue;
-				}
-
-				bool selected = selection.Contains(assetPath) || string.Equals(selectedFile, assetPath, StringComparison.OrdinalIgnoreCase);
-				if (ImGui.Selectable("##file" + file, selected, ImGuiSelectableFlags.AllowDoubleClick))
-				{
-					Click(assetPath, index);
-					if (ImGui.IsMouseDoubleClicked(ImGuiMouseButton.Left))
-					{
-						OpenAsset(assetPath);
-					}
-				}
-
-				TestAnchors.RecordItem("project:" + assetPath);
-
-				// Icon and name over the row (ScriptableObject assets with their class, variants with their base).
-				DrawFileIcon(draw, rowStart, iconSize, assetPath, iconKind);
-				draw.AddText(rowStart + new NVector2(iconSize + 6f, 0f), ImGui.GetColorU32(ImGuiCol.Text), file);
-				if (variantOf != null)
-				{
-					draw.AddText(rowStart + new NVector2(iconSize + 6f + ImGui.CalcTextSize(file).X, 0f), ImGui.GetColorU32(ImGuiCol.TextDisabled), "  variant of " + variantOf);
-				}
-				if (listedAssetTypes.TryGetValue(assetPath, out (string name, bool found) stored))
-				{
-					string kind = stored.found ? "  " + stored.name : "  " + (stored.name ?? "?") + " (missing script)";
-					draw.AddText(rowStart + new NVector2(iconSize + 6f + ImGui.CalcTextSize(file).X, 0f), ImGui.GetColorU32(stored.found ? ImGui.GetStyle().Colors[(int)ImGuiCol.TextDisabled] : EditorStyle.Warning), kind);
-				}
-
-				if (string.Equals(assetPath, pinged, StringComparison.OrdinalIgnoreCase))
-				{
-					FlashPinged();
-				}
-
-				if (ImGui.BeginDragDropSource())
-				{
-					DraggedAsset = assetPath;
-					// Dragging one of several selected files drags them all (on to a list: every one that fits is added).
-					var dragged = new List<DragItem>();
-					if (selection.Contains(assetPath) && selection.Count > 1)
-					{
-						foreach (string listed in listedFiles)
-						{
-							string path = Combine(folder, listed);
-							if (selection.Contains(path))
-							{
-								dragged.Add(DragItem.FromFile(path));
-							}
-						}
-					}
-					else
-					{
-						dragged.Add(DragItem.FromFile(assetPath));
-					}
-
-					DragAndDrop.SetPayload(DragType, dragged);
-					ImGui.EndDragDropSource();
-				}
-
-				if (ImGui.BeginPopupContextItem("##file_context"))
-				{
-					selectedFile = assetPath;
-					editor.SelectAsset(assetPath);
-					if (ImGui.MenuItem(isPrefab ? "Open Prefab" : "Open")) OpenAsset(assetPath);
-					if (isPrefab)
-					{
-						if (ImGui.MenuItem("Create Prefab Variant")) editor.CreatePrefabVariant(assetPath);
-						if (ImGui.MenuItem("Instantiate in Scene", "", false, editor.Scene != null)) editor.InstantiatePrefab(assetPath);
-					}
-
-					if (TextureAssets.IsImageFile(assetPath) && ImGui.MenuItem("Reimport"))
-					{
-						TextureAssets.Reimport(assetPath);
-						AssetThumbnails.Invalidate(assetPath);
-						editor.NotifySceneChanged();
-					}
-
-					if (ImGui.MenuItem("Rename", "F2")) StartRename(assetPath);
-					if (ImGui.MenuItem("Show in Explorer")) ShowInExplorer(Absolute(assetPath));
-					ImGui.EndPopup();
-				}
+				DrawFileRow(Combine(folder, file), 0, draw, iconSize);
 			}
+
+			// Shift ranges and multi-file drags use the rows as drawn (nested files included).
+			shownRows.Clear();
+			shownRows.AddRange(rows);
 
 			// F2 renames the picked folder or the inspected file.
 			if (renaming == null && ImGui.IsWindowFocused() && ImGui.IsKeyPressed(ImGuiKey.F2))
@@ -548,9 +482,265 @@ namespace LELEngine.Editor
 			}
 		}
 
-		/// <summary>A click on a file: Ctrl toggles it in the selection, Shift selects the range from the last click, else it alone.</summary>
-		private void Click(string assetPath, int index)
+		/// <summary>
+		///     One file row: the expand arrow of a file with things under it (a model's meshes, an OBJ's material
+		///     library), its icon and name, selection, drag, context menu; then, expanded, what is under it one level in.
+		/// </summary>
+		private void DrawFileRow(string assetPath, int depth, ImDrawListPtr draw, float iconSize)
 		{
+			string file = Path.GetFileName(assetPath);
+			bool isPrefab = assetPath.EndsWith(Prefab.Extension, StringComparison.OrdinalIgnoreCase);
+			listedVariants.TryGetValue(assetPath, out string variantOf);
+			IconKind iconKind = EditorIcons.KindOfFile(assetPath);
+			if (iconKind == IconKind.Prefab && variantOf != null)
+			{
+				iconKind = IconKind.PrefabVariant;
+			}
+
+			// Every row keeps room for the arrow, so names line up; nested rows are one arrow further in.
+			float arrow = iconSize;
+			float indent = depth * arrow;
+			NVector2 rowStart = ImGui.GetCursorScreenPos();
+			NVector2 iconStart = rowStart + new NVector2(indent + arrow, 0f);
+			rows.Add(assetPath);
+			if (!renameInTree && string.Equals(renaming, assetPath, StringComparison.OrdinalIgnoreCase))
+			{
+				DrawFileIcon(draw, iconStart, iconSize, assetPath, iconKind);
+				ImGui.SetCursorScreenPos(iconStart + new NVector2(iconSize + 4f, -ImGui.GetStyle().FramePadding.Y));
+				DrawRenameField();
+				return;
+			}
+
+			bool expandable = ModelAssets.IsModelFile(assetPath) || listedCompanions.ContainsKey(assetPath);
+			bool expanded = expandable && this.expanded.Contains(assetPath);
+			bool selected = selection.Contains(assetPath) || string.Equals(selectedFile, assetPath, StringComparison.OrdinalIgnoreCase);
+			if (ImGui.Selectable("##file" + assetPath, selected, ImGuiSelectableFlags.AllowDoubleClick | ImGuiSelectableFlags.AllowOverlap))
+			{
+				Click(assetPath);
+				if (ImGui.IsMouseDoubleClicked(ImGuiMouseButton.Left))
+				{
+					OpenAsset(assetPath);
+				}
+			}
+
+			TestAnchors.RecordItem("project:" + assetPath);
+			NVector2 rowEnd = ImGui.GetCursorScreenPos();
+
+			// Icon and name over the row (ScriptableObject assets with their class, variants with their base).
+			DrawFileIcon(draw, iconStart, iconSize, assetPath, iconKind);
+			NVector2 textStart = iconStart + new NVector2(iconSize + 5f, 0f);
+			draw.AddText(textStart, ImGui.GetColorU32(ImGuiCol.Text), file);
+			if (variantOf != null)
+			{
+				draw.AddText(textStart + new NVector2(ImGui.CalcTextSize(file).X, 0f), ImGui.GetColorU32(ImGuiCol.TextDisabled), "  variant of " + variantOf);
+			}
+			if (listedAssetTypes.TryGetValue(assetPath, out (string name, bool found) stored))
+			{
+				string kind = stored.found ? "  " + stored.name : "  " + (stored.name ?? "?") + " (missing script)";
+				draw.AddText(textStart + new NVector2(ImGui.CalcTextSize(file).X, 0f), ImGui.GetColorU32(stored.found ? ImGui.GetStyle().Colors[(int)ImGuiCol.TextDisabled] : EditorStyle.Warning), kind);
+			}
+
+			if (string.Equals(assetPath, pinged, StringComparison.OrdinalIgnoreCase))
+			{
+				FlashPinged();
+			}
+
+			if (ImGui.BeginDragDropSource())
+			{
+				DraggedAsset = assetPath;
+				// Dragging one of several selected files drags them all (on to a list: every one that fits is added).
+				var dragged = new List<DragItem>();
+				if (selection.Contains(assetPath) && selection.Count > 1)
+				{
+					foreach (string path in shownRows)
+					{
+						if (selection.Contains(path))
+						{
+							dragged.Add(DragItem.FromFile(path));
+						}
+					}
+				}
+				else
+				{
+					dragged.Add(DragItem.FromFile(assetPath));
+				}
+
+				DragAndDrop.SetPayload(DragType, dragged);
+				ImGui.EndDragDropSource();
+			}
+
+			if (ImGui.BeginPopupContextItem("##file_context"))
+			{
+				selectedFile = assetPath;
+				editor.SelectAsset(assetPath);
+				if (ImGui.MenuItem(isPrefab ? "Open Prefab" : "Open")) OpenAsset(assetPath);
+				if (isPrefab)
+				{
+					if (ImGui.MenuItem("Create Prefab Variant")) editor.CreatePrefabVariant(assetPath);
+					if (ImGui.MenuItem("Instantiate in Scene", "", false, editor.Scene != null)) editor.InstantiatePrefab(assetPath);
+				}
+
+				if (TextureAssets.IsImageFile(assetPath) && ImGui.MenuItem("Reimport"))
+				{
+					TextureAssets.Reimport(assetPath);
+					AssetThumbnails.Invalidate(assetPath);
+					editor.NotifySceneChanged();
+				}
+
+				if (ImGui.MenuItem("Rename", "F2")) StartRename(assetPath);
+				if (ImGui.MenuItem("Show in Explorer")) ShowInExplorer(Absolute(assetPath));
+				ImGui.EndPopup();
+			}
+
+			if (expandable)
+			{
+				// The arrow is a button of its own over the row (the row allows the overlap).
+				ImGui.SetCursorScreenPos(rowStart + new NVector2(indent, 0f));
+				if (ImGui.InvisibleButton("##expand" + assetPath, new NVector2(arrow, rowEnd.Y - rowStart.Y)))
+				{
+					if (!this.expanded.Remove(assetPath))
+					{
+						this.expanded.Add(assetPath);
+					}
+				}
+
+				TestAnchors.RecordItem("expand:" + assetPath);
+				float arrowSize = iconSize * 0.7f;
+				NVector2 arrowMin = rowStart + new NVector2(indent + (arrow - arrowSize) * 0.5f, (iconSize - arrowSize) * 0.5f);
+				EditorIcons.Draw(draw, arrowMin, arrowSize, expanded ? IconKind.Dropdown : IconKind.Open, ImGui.GetColorU32(ImGuiCol.Text, ImGui.IsItemHovered() ? 1f : 0.6f));
+				ImGui.SetCursorScreenPos(rowEnd);
+			}
+
+			if (!expanded)
+			{
+				return;
+			}
+
+			if (listedCompanions.TryGetValue(assetPath, out List<string> companions))
+			{
+				foreach (string companion in companions)
+				{
+					DrawFileRow(companion, depth + 1, draw, iconSize);
+				}
+			}
+
+			if (ModelAssets.IsModelFile(assetPath))
+			{
+				DrawModelSubAssets(assetPath, depth + 1, draw, iconSize);
+			}
+		}
+
+		/// <summary>A model's meshes under it: a click selects the model, a drag carries the mesh (a Mesh field takes it).</summary>
+		private void DrawModelSubAssets(string assetPath, int depth, ImDrawListPtr draw, float iconSize)
+		{
+			Model model;
+			try
+			{
+				model = ModelAssets.Load(assetPath);
+			}
+			catch (Exception e)
+			{
+				ImGui.Indent((depth + 1) * iconSize);
+				ImGui.TextColored(EditorStyle.Error, "Cannot import: " + e.Message);
+				ImGui.Unindent((depth + 1) * iconSize);
+				return;
+			}
+
+			foreach (Mesh mesh in model.Meshes)
+			{
+				string name = mesh.SubAssetName ?? mesh.name;
+				NVector2 rowStart = ImGui.GetCursorScreenPos();
+				string key = assetPath + "/" + name;
+				if (ImGui.Selectable("##sub" + key, string.Equals(selectedSubAsset, key, StringComparison.OrdinalIgnoreCase)))
+				{
+					Click(assetPath);
+					selectedSubAsset = key;
+				}
+
+				TestAnchors.RecordItem("project:" + key);
+				if (ImGui.IsItemHovered())
+				{
+					ImGui.SetTooltip($"Mesh {name} of {Path.GetFileName(assetPath)}: {mesh.Vertices.Length} vertices, {mesh.TriangleCount} triangles (drag it on to a Mesh field)");
+				}
+
+				if (ImGui.BeginDragDropSource())
+				{
+					DraggedAsset = assetPath;
+					DragAndDrop.SetPayload(DragType, new List<DragItem> { DragItem.FromFile(assetPath, name) });
+					ImGui.EndDragDropSource();
+				}
+
+				NVector2 iconStart = rowStart + new NVector2((depth + 1) * iconSize, 0f);
+				EditorIcons.Draw(draw, iconStart, iconSize, IconKind.Model, ImGui.GetColorU32(ImGuiCol.TextDisabled));
+				draw.AddText(iconStart + new NVector2(iconSize + 5f, 0f), ImGui.GetColorU32(ImGuiCol.Text), name);
+				draw.AddText(iconStart + new NVector2(iconSize + 5f + ImGui.CalcTextSize(name).X, 0f), ImGui.GetColorU32(ImGuiCol.TextDisabled), "  mesh");
+			}
+		}
+
+		/// <summary>
+		///     The material libraries an OBJ names (<c>mtllib</c> lines before its geometry), as asset paths of files that
+		///     exist in the same folder or below it.
+		/// </summary>
+		private List<string> ObjMaterialLibraries(string objPath)
+		{
+			var libraries = new List<string>();
+			string folderOfObj = Path.GetDirectoryName(objPath.Replace('/', Path.DirectorySeparatorChar))?.Replace('\\', '/') ?? "";
+			try
+			{
+				using var reader = new StreamReader(Absolute(objPath));
+				string line;
+				for (int count = 0; (line = reader.ReadLine()) != null && count < 5000; count++)
+				{
+					line = line.Trim();
+					if (line.StartsWith("v ", StringComparison.Ordinal) || line.StartsWith("f ", StringComparison.Ordinal))
+					{
+						break;
+					}
+
+					if (!line.StartsWith("mtllib", StringComparison.Ordinal))
+					{
+						continue;
+					}
+
+					string name = line.Substring(6).Trim().Replace('\\', '/');
+					string candidate = Combine(folderOfObj, name);
+					if (File.Exists(Absolute(candidate)))
+					{
+						libraries.Add(candidate);
+					}
+				}
+			}
+			catch (IOException)
+			{
+			}
+
+			return libraries;
+		}
+
+		/// <summary>An OBJ's material library was renamed: its <c>mtllib</c> line follows, so the model keeps its material.</summary>
+		private static void RenameMaterialLibraryReference(string objAbsolute, string oldName, string newName)
+		{
+			try
+			{
+				string text = File.ReadAllText(objAbsolute);
+				string updated = System.Text.RegularExpressions.Regex.Replace(text, @"^(\s*mtllib\s+)" + System.Text.RegularExpressions.Regex.Escape(oldName) + @"(\s*)$", "${1}" + newName.Replace("$", "$$") + "${2}", System.Text.RegularExpressions.RegexOptions.Multiline);
+				if (updated != text)
+				{
+					File.WriteAllText(objAbsolute, updated);
+					Debug.Log($"[Editor] {Path.GetFileName(objAbsolute)}: mtllib {oldName} -> {newName}");
+				}
+			}
+			catch (IOException e)
+			{
+				Debug.LogWarning("[Editor] Cannot update the mtllib line of " + objAbsolute + ": " + e.Message);
+			}
+		}
+
+		/// <summary>A click on a file: Ctrl toggles it in the selection, Shift selects the range from the last click, else it alone.</summary>
+		private void Click(string assetPath)
+		{
+			selectedSubAsset = null;
+			int index = shownRows.FindIndex(row => string.Equals(row, assetPath, StringComparison.OrdinalIgnoreCase));
 			ImGuiIOPtr io = ImGui.GetIO();
 			if (io.KeyCtrl)
 			{
@@ -564,9 +754,9 @@ namespace LELEngine.Editor
 					selection.Add(selectedFile);
 				}
 			}
-			else if (io.KeyShift && selectionAnchor != null)
+			else if (io.KeyShift && selectionAnchor != null && index >= 0)
 			{
-				int anchor = listedFiles.FindIndex(file => string.Equals(Combine(folder, file), selectionAnchor, StringComparison.OrdinalIgnoreCase));
+				int anchor = shownRows.FindIndex(row => string.Equals(row, selectionAnchor, StringComparison.OrdinalIgnoreCase));
 				selection.Clear();
 				if (anchor < 0)
 				{
@@ -575,7 +765,7 @@ namespace LELEngine.Editor
 
 				for (int i = Math.Min(anchor, index); i <= Math.Max(anchor, index); i++)
 				{
-					selection.Add(Combine(folder, listedFiles[i]));
+					selection.Add(shownRows[i]);
 				}
 			}
 			else
@@ -599,9 +789,8 @@ namespace LELEngine.Editor
 			{
 				// Ctrl+click took the file out: the inspector shows another selected file, or nothing.
 				selectedFile = null;
-				foreach (string listed in listedFiles)
+				foreach (string path in shownRows)
 				{
-					string path = Combine(folder, listed);
 					if (selection.Contains(path))
 					{
 						selectedFile = path;
@@ -738,11 +927,33 @@ namespace LELEngine.Editor
 				return;
 			}
 
+			// A material library listed under its OBJ: the OBJ's mtllib line is renamed with it.
+			string owner = null;
+			foreach (KeyValuePair<string, List<string>> pair in listedCompanions)
+			{
+				if (pair.Value.Exists(c => string.Equals(c, path, StringComparison.OrdinalIgnoreCase)))
+				{
+					owner = pair.Key;
+				}
+			}
+
 			string failure = editor.MoveAsset(path, target);
 			if (failure != null)
 			{
 				Debug.LogWarning("[Editor] Cannot rename " + path + ": " + failure);
 				return;
+			}
+
+			if (owner != null)
+			{
+				RenameMaterialLibraryReference(Absolute(owner), Path.GetFileName(path), Path.GetFileName(target));
+			}
+
+			var expandedBefore = new List<string>(expanded);
+			expanded.Clear();
+			foreach (string row in expandedBefore)
+			{
+				expanded.Add(AssetDatabase.MovedPath(row, path, target) ?? row);
 			}
 
 			// The panel follows: the shown folder, the picked folder, the selection, the open tree nodes.
@@ -918,6 +1129,51 @@ namespace LELEngine.Editor
 
 			listedDirectories.Sort(StringComparer.OrdinalIgnoreCase);
 			listedFiles.Sort(StringComparer.OrdinalIgnoreCase);
+
+			// A model's files are listed under it (when they are in this folder), not on their own: an OBJ's material
+			// library, the material assets and embedded textures its import made.
+			listedCompanions.Clear();
+			foreach (string file in new List<string>(listedFiles))
+			{
+				if (!ModelAssets.IsModelFile(file))
+				{
+					continue;
+				}
+
+				string modelPath = Combine(folder, file);
+				var owned = new List<string>();
+				if (file.EndsWith(".obj", StringComparison.OrdinalIgnoreCase))
+				{
+					owned.AddRange(ObjMaterialLibraries(modelPath));
+				}
+
+				if (AssetDatabase.GetMeta(modelPath).importer is ModelImporter importer)
+				{
+					foreach (string guid in importer.ExtractedGuids())
+					{
+						if (AssetDatabase.GetPath(guid) is string extractedPath)
+						{
+							owned.Add(extractedPath);
+						}
+					}
+				}
+
+				foreach (string companion in owned)
+				{
+					string name = Path.GetFileName(companion);
+					if (string.Equals(Combine(folder, name), companion, StringComparison.OrdinalIgnoreCase) && listedFiles.Remove(name))
+					{
+						if (!listedCompanions.TryGetValue(modelPath, out List<string> companions))
+						{
+							companions = new List<string>();
+							listedCompanions[modelPath] = companions;
+						}
+
+						companions.Add(companion);
+					}
+				}
+			}
+
 			listedAssetTypes.Clear();
 			listedVariants.Clear();
 			foreach (string file in listedFiles)
@@ -976,9 +1232,14 @@ namespace LELEngine.Editor
 				// Materials, textures, meshes, physics materials: edited in the inspector.
 				editor.SelectAsset(assetPath);
 			}
+			else if (assetPath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
+			{
+				// Scripts: the script editor of the preferences.
+				ExternalScriptEditor.Open(Absolute(assetPath), 1);
+			}
 			else
 			{
-				// Scripts, shaders, materials: the user's default application (IDE, text editor).
+				// Shaders and other text: the user's default application (IDE, text editor).
 				try
 				{
 					Process.Start(new ProcessStartInfo(Absolute(assetPath)) { UseShellExecute = true });

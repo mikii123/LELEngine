@@ -356,7 +356,7 @@ namespace LELEngine.Editor
 				AiTexture* embedded = Embedded(reference);
 				if (embedded != null)
 				{
-					return EmbeddedTexture(embedded, reference);
+					return EmbeddedTexture(embedded, reference, Path.GetFileNameWithoutExtension(file));
 				}
 
 				string assetPath = FindTextureFile(reference);
@@ -390,13 +390,16 @@ namespace LELEngine.Editor
 				return null;
 			}
 
-			/// <summary>A compressed embedded image as is; raw texels as an uncompressed TGA.</summary>
-			private static ModelTexture EmbeddedTexture(AiTexture* texture, string reference)
+			/// <summary>
+			///     A compressed embedded image as is; raw texels as an uncompressed TGA. Unnamed images (glTF) are named after
+			///     the model, so two models in one folder do not share them.
+			/// </summary>
+			private static ModelTexture EmbeddedTexture(AiTexture* texture, string reference, string modelName)
 			{
 				string name = Path.GetFileNameWithoutExtension(texture->MFilename.AsString.Replace('\\', '/'));
 				if (string.IsNullOrEmpty(name))
 				{
-					name = "Texture" + reference.TrimStart('*');
+					name = modelName + " Texture " + reference.TrimStart('*');
 				}
 
 				if (texture->MHeight == 0)

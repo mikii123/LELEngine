@@ -41,6 +41,10 @@ namespace LELEngine.Editor
 		/// </summary>
 		private static int RunEditor(string[] args)
 		{
+			// The user's preferences first: the theme applies to the first window.
+			EditorPreferences.Initialize(args);
+			ImGuiController.ReadOnlyLayouts = EditorApplication.IsAutomatedRun(args);
+
 			// focus=0: automated runs open their windows without taking the keyboard focus.
 			Window.StartFocused = Array.IndexOf(args, "focus=0") < 0;
 			if (!EditorApplication.OpensProjectDirectly(args))
