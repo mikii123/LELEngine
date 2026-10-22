@@ -281,11 +281,20 @@ namespace LELEngine.Editor
 
 			if (PlayState == PlayState.Playing)
 			{
-				// Background scene loads advance, then every loaded scene runs (scripts may load more).
-				Input.BeginFrame();
-				SceneManager.Update();
-				SceneManager.UpdateScenes(deltaTime);
-				Input.EndFrame();
+				// Background scene loads advance, then every loaded scene runs (scripts may load more). What the frame
+				// logs is the game's (the console tells it from the editor's).
+				ConsoleLog.BeginGame();
+				try
+				{
+					Input.BeginFrame();
+					SceneManager.Update();
+					SceneManager.UpdateScenes(deltaTime);
+					Input.EndFrame();
+				}
+				finally
+				{
+					ConsoleLog.EndGame();
+				}
 			}
 			else
 			{
@@ -1120,9 +1129,18 @@ namespace LELEngine.Editor
 		{
 			if (PlayState == PlayState.Paused && Scene != null)
 			{
-				Input.BeginFrame();
-				Scene.Update(1f / 60f);
-				Input.EndFrame();
+				ConsoleLog.BeginGame();
+				try
+				{
+					Input.BeginFrame();
+					Scene.Update(1f / 60f);
+					Input.EndFrame();
+				}
+				finally
+				{
+					ConsoleLog.EndGame();
+				}
+
 				NotifySceneChanged();
 			}
 		}
@@ -1180,7 +1198,16 @@ namespace LELEngine.Editor
 			Time.ResetTime();
 			PlayState = PlayState.Playing;
 			SceneManager.Lifecycle = SceneLifecycle.Play;
-			ReplaceScene(play, true);
+			ConsoleLog.BeginGame();
+			try
+			{
+				// The game's start (Awake, OnEnable, Start).
+				ReplaceScene(play, true);
+			}
+			finally
+			{
+				ConsoleLog.EndGame();
+			}
 			Selected = selected != 0 ? play.FindObjectById(selected) : null;
 			GameView.Focus();
 			Undo.Clear();

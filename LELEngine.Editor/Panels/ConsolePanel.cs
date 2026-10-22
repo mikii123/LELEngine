@@ -209,7 +209,7 @@ namespace LELEngine.Editor
 			float optionWidth = ImGui.CalcTextSize("Stack").X + ImGui.GetStyle().FramePadding.X * 2f;
 			float width = Math.Clamp(ImGui.GetContentRegionAvail().X * 0.3f, 140f, 320f);
 			Flow(width + optionWidth * 3f);
-			ImGui.SetNextItemWidth(width);
+			ImGui.SetNextItemWidth(Math.Max(60f, Math.Min(width, ImGui.GetContentRegionAvail().X - optionWidth * 3f - 3f)));
 			if (searchInvalid)
 			{
 				ImGui.PushStyleColor(ImGuiCol.FrameBg, EditorStyle.Error * new NVector4(1f, 1f, 1f, 0.35f));
@@ -613,6 +613,12 @@ namespace LELEngine.Editor
 
 		private void Process(ConsolePreferences prefs, ConsoleEntry entry)
 		{
+			// The editor's plain messages are off in the preferences: not shown, not counted (its warnings and errors are).
+			if (entry.Source == ConsoleSource.Editor && entry.Type == LogType.Log && !prefs.ShowEditorMessages)
+			{
+				return;
+			}
+
 			switch (entry.Type)
 			{
 				case LogType.Warning:
@@ -755,7 +761,10 @@ namespace LELEngine.Editor
 				Time = prefs.ShowTimestamps && width >= 380f,
 				Frame = prefs.ShowFrames && width >= 460f,
 				Source = prefs.ShowSourceColumn && width >= 560f,
-				Count = prefs.Collapse
+				Count = prefs.Collapse,
+
+				// Messages wrap in their cell; a narrow list gives each at least two lines.
+				Lines = width < 560f ? Math.Max(2, prefs.LinesPerEntry) : prefs.LinesPerEntry
 			};
 
 			int columns = 2 + (shown.Time ? 1 : 0) + (shown.Frame ? 1 : 0) + (shown.Source ? 1 : 0) + (shown.Count ? 1 : 0);
@@ -768,7 +777,7 @@ namespace LELEngine.Editor
 
 			float lineHeight = ImGui.GetTextLineHeight();
 			float padding = ImGui.GetStyle().CellPadding.Y;
-			float rowHeight = lineHeight * prefs.LinesPerEntry + padding * 2f;
+			float rowHeight = lineHeight * shown.Lines + padding * 2f;
 			ImGui.TableSetupColumn("##type", ImGuiTableColumnFlags.WidthFixed | ImGuiTableColumnFlags.NoResize, lineHeight + 4f);
 			if (shown.Time)
 			{
@@ -911,7 +920,17 @@ namespace LELEngine.Editor
 				ImGui.PushStyleColor(ImGuiCol.Text, entry.Type == LogType.Warning ? EditorStyle.Warning : EditorStyle.Error);
 			}
 
-			ImGui.TextUnformatted(prefs.LinesPerEntry == 1 ? entry.FirstLine : FirstLines(entry.Text, prefs.LinesPerEntry));
+			// Wrapped to the cell and cut at the row's lines (drawn: a taller item would grow the row past the clipper's height).
+			NVector2 messagePos = ImGui.GetCursorScreenPos();
+			float messageWidth = Math.Max(20f, ImGui.GetContentRegionAvail().X);
+			uint messageColor = ImGui.GetColorU32(ImGuiCol.Text);
+			List<string> lines = Wrap(shown.Lines == 1 ? entry.FirstLine : FirstLines(entry.Text, shown.Lines), messageWidth, shown.Lines);
+			for (int l = 0; l < lines.Count; l++)
+			{
+				draw.AddText(messagePos + new NVector2(0f, l * lineHeight), messageColor, lines[l]);
+			}
+
+			ImGui.Dummy(new NVector2(1f, lineHeight * shown.Lines));
 			if (colored)
 			{
 				ImGui.PopStyleColor();
@@ -1012,7 +1031,9 @@ namespace LELEngine.Editor
 				return;
 			}
 
-			if (ImGui.BeginChild("##details", NVector2.Zero, ImGuiChildFlags.None, ImGuiWindowFlags.HorizontalScrollbar))
+			// No horizontal scrolling: everything wraps or shortens to the width (with it, wrapping followed the content's
+			// width of the last frame and kept itself wider than the window).
+			if (ImGui.BeginChild("##details", NVector2.Zero))
 			{
 				DrawStack(prefs, entry, entry.Frames);
 			}
@@ -1057,15 +1078,25 @@ namespace LELEngine.Editor
 			}
 
 			// When, on which frame, about what.
-			string meta = entry.Time.ToString("HH:mm:ss.fff") + (entry.Frame >= 0 ? "  ·  frame " + entry.Frame : "") + "  ·  " + entry.Type;
+			string meta = entry.Time.ToString("HH:mm:ss.fff") + (entry.Frame >= 0 ? "  ·  frame " + entry.Frame : "") + "  ·  " + entry.Type + "  ·  " + entry.Source;
 			ImGui.TextDisabled(meta);
 			object context = entry.GetContext();
 			if (context != null)
 			{
+				// The object on the same line when it fits, else on the next.
+				string name = ContextName(context);
 				ImGui.SameLine();
-				ImGui.TextDisabled("·");
-				ImGui.SameLine();
-				if (ImGui.TextLink(ContextName(context) + "##context"))
+				if (ImGui.GetContentRegionAvail().X < ImGui.CalcTextSize("· " + name).X + ImGui.GetStyle().ItemSpacing.X)
+				{
+					ImGui.NewLine();
+				}
+				else
+				{
+					ImGui.TextDisabled("·");
+					ImGui.SameLine();
+				}
+
+				if (ImGui.TextLink(Ellipsis(name, ImGui.GetContentRegionAvail().X) + "##context"))
 				{
 					editor.SelectObject(context);
 				}
@@ -1096,7 +1127,11 @@ namespace LELEngine.Editor
 
 				if (frame.Kind == ConsoleFrameKind.Note)
 				{
-					ImGui.TextColored(EditorStyle.Dim, frame.Method);
+					ImGui.PushStyleColor(ImGuiCol.Text, EditorStyle.Dim);
+					ImGui.PushTextWrapPos(0f);
+					ImGui.TextUnformatted(frame.Method);
+					ImGui.PopTextWrapPos();
+					ImGui.PopStyleColor();
 					continue;
 				}
 
@@ -1108,8 +1143,19 @@ namespace LELEngine.Editor
 				NVector2 pos = ImGui.GetCursorScreenPos();
 				string method = ConsoleStackTrace.ShortMethod(frame.Method);
 				string location = frame.DisplayFile != null ? frame.DisplayFile + ":" + frame.Line : "";
-				float width = arrow + ImGui.CalcTextSize(method).X + 12f + ImGui.CalcTextSize(location).X;
-				if (ImGui.Selectable("##frame", false, ImGuiSelectableFlags.AllowDoubleClick | ImGuiSelectableFlags.AllowOverlap, new NVector2(Math.Max(width, ImGui.GetContentRegionAvail().X), lineHeight)))
+				float available = ImGui.GetContentRegionAvail().X;
+
+				// Nothing past the window's edge: the file goes to a second line when the frame does not fit, and what
+				// still does not fit is shortened (the method's end, the path's start; the tooltip has both whole).
+				float textWidth = Math.Max(10f, available - arrow);
+				method = Ellipsis(method, textWidth);
+				float methodWidth = ImGui.CalcTextSize(method).X;
+				bool twoLines = location.Length > 0 && methodWidth + 12f + ImGui.CalcTextSize(location).X > textWidth;
+				if (twoLines)
+				{
+					location = EllipsisStart(location, textWidth);
+				}
+				if (ImGui.Selectable("##frame", false, ImGuiSelectableFlags.AllowDoubleClick | ImGuiSelectableFlags.AllowOverlap, new NVector2(available, lineHeight * (twoLines ? 2f : 1f))))
 				{
 					// A click shows or hides the code; a double-click opens it (and leaves the code as it was).
 					if (expandable && !toggledFrames.Remove(i))
@@ -1174,7 +1220,8 @@ namespace LELEngine.Editor
 				if (location.Length > 0)
 				{
 					NVector4 linkColor = frame.HasSource ? EditorStyle.Get(EditorColor.Link) : EditorStyle.Dim;
-					draw.AddText(textPos + new NVector2(ImGui.CalcTextSize(method).X + 12f, 0f), ImGui.ColorConvertFloat4ToU32(bright ? linkColor : linkColor * new NVector4(1f, 1f, 1f, 0.6f)), location);
+					NVector2 at = twoLines ? textPos + new NVector2(0f, lineHeight) : textPos + new NVector2(methodWidth + 12f, 0f);
+					draw.AddText(at, ImGui.ColorConvertFloat4ToU32(bright ? linkColor : linkColor * new NVector4(1f, 1f, 1f, 0.6f)), location);
 				}
 
 				if (expanded)
@@ -1187,8 +1234,11 @@ namespace LELEngine.Editor
 
 			if (hiddenLibrary > 0)
 			{
-				ImGui.TextDisabled($"{hiddenLibrary} frame{(hiddenLibrary == 1 ? "" : "s")} of .NET and libraries hidden");
-				ImGui.SameLine();
+				ImGui.PushStyleColor(ImGuiCol.Text, ImGui.GetStyle().Colors[(int)ImGuiCol.TextDisabled]);
+				ImGui.PushTextWrapPos(0f);
+				ImGui.TextUnformatted($"{hiddenLibrary} frame{(hiddenLibrary == 1 ? "" : "s")} of .NET and libraries hidden");
+				ImGui.PopTextWrapPos();
+				ImGui.PopStyleColor();
 				if (ImGui.TextLink("Show##libraryframes"))
 				{
 					prefs.ShowLibraryFrames = true;
@@ -1551,6 +1601,100 @@ namespace LELEngine.Editor
 			return text.Substring(0, end).TrimEnd('\r');
 		}
 
+		/// <summary>
+		///     The text's lines broken to <paramref name="width" /> pixels at spaces (inside long words when none fits),
+		///     at most <paramref name="maxLines" />; the last one shown ends with "..." when text is left.
+		/// </summary>
+		private static List<string> Wrap(string text, float width, int maxLines)
+		{
+			var lines = new List<string>();
+			foreach (string paragraph in text.Split('\n'))
+			{
+				string rest = paragraph.TrimEnd('\r');
+				do
+				{
+					if (lines.Count == maxLines)
+					{
+						lines[maxLines - 1] = Ellipsis(lines[maxLines - 1], width, true);
+						return lines;
+					}
+
+					int fit = Fit(rest, width);
+					int cut = fit;
+					if (fit < rest.Length)
+					{
+						int space = rest.LastIndexOf(' ', Math.Max(0, fit - 1), fit);
+						cut = space > 0 ? space : Math.Max(1, fit);
+					}
+
+					lines.Add(rest.Substring(0, cut));
+					rest = rest.Substring(cut).TrimStart(' ');
+				}
+				while (rest.Length > 0);
+			}
+
+			return lines;
+		}
+
+		/// <summary>How many leading characters of the text fit in the width.</summary>
+		private static int Fit(string text, float width)
+		{
+			if (ImGui.CalcTextSize(text).X <= width)
+			{
+				return text.Length;
+			}
+
+			int low = 0;
+			int high = text.Length;
+			while (low < high)
+			{
+				int middle = (low + high + 1) / 2;
+				if (ImGui.CalcTextSize(text.Substring(0, middle)).X <= width)
+				{
+					low = middle;
+				}
+				else
+				{
+					high = middle - 1;
+				}
+			}
+
+			return low;
+		}
+
+		/// <summary>
+		///     The text, or its start with "..." when it is wider than <paramref name="width" /> (<paramref name="more" />:
+		///     text follows it, the "..." comes anyway).
+		/// </summary>
+		private static string Ellipsis(string line, float width, bool more = false)
+		{
+			if (!more && ImGui.CalcTextSize(line).X <= width)
+			{
+				return line;
+			}
+
+			float dots = ImGui.CalcTextSize("...").X;
+			return line.Substring(0, Fit(line, Math.Max(0f, width - dots))).TrimEnd() + "...";
+		}
+
+		/// <summary>The text, or "..." and its end when it is wider than <paramref name="width" /> (paths: the file name stays).</summary>
+		private static string EllipsisStart(string text, float width)
+		{
+			if (ImGui.CalcTextSize(text).X <= width)
+			{
+				return text;
+			}
+
+			float room = Math.Max(0f, width - ImGui.CalcTextSize("...").X);
+			int start = text.Length;
+			while (start > 0 && ImGui.CalcTextSize(text.Substring(start - 1)).X <= room)
+			{
+				start--;
+			}
+
+			return "..." + text.Substring(start);
+		}
+
 		/// <summary>Namespace.Type of a frame's method (logging wrappers are hidden by it).</summary>
 		private static string TypeOf(string method)
 		{
@@ -1593,6 +1737,9 @@ namespace LELEngine.Editor
 			public bool Frame;
 			public bool Source;
 			public bool Count;
+
+			/// <summary>Lines of a message per row.</summary>
+			public int Lines;
 		}
 
 		#endregion

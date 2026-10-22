@@ -251,6 +251,12 @@ namespace LELEngine.Editor
 	/// <summary>The Console panel: its toolbar's toggles, list, stack traces, source view and custom filters.</summary>
 	internal sealed class ConsolePreferences
 	{
+		/// <summary>
+		///     The editor's own messages (imports, rendering setup, ...: <see cref="ConsoleSource.Editor" />); off hides
+		///     its plain messages, its warnings and errors always show. The game's are filtered in the console.
+		/// </summary>
+		public bool ShowEditorMessages = true;
+
 		public bool ShowLogs = true;
 		public bool ShowWarnings = true;
 		public bool ShowErrors = true;

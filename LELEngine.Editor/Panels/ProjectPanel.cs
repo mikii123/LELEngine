@@ -486,7 +486,7 @@ namespace LELEngine.Editor
 		///     One file row: the expand arrow of a file with things under it (a model's meshes, an OBJ's material
 		///     library), its icon and name, selection, drag, context menu; then, expanded, what is under it one level in.
 		/// </summary>
-		private void DrawFileRow(string assetPath, int depth, ImDrawListPtr draw, float iconSize)
+		private void DrawFileRow(string assetPath, float indent, ImDrawListPtr draw, float iconSize)
 		{
 			string file = Path.GetFileName(assetPath);
 			bool isPrefab = assetPath.EndsWith(Prefab.Extension, StringComparison.OrdinalIgnoreCase);
@@ -497,11 +497,14 @@ namespace LELEngine.Editor
 				iconKind = IconKind.PrefabVariant;
 			}
 
-			// Every row keeps room for the arrow, so names line up; nested rows are one arrow further in.
-			float arrow = iconSize;
-			float indent = depth * arrow;
+			// Only a file with things under it has the arrow (and the room for it) before its icon; the others line up
+			// with the folders. What is under a file starts below its name.
+			bool expandable = ModelAssets.IsModelFile(assetPath) || listedCompanions.ContainsKey(assetPath);
+			float arrow = expandable ? iconSize : 0f;
 			NVector2 rowStart = ImGui.GetCursorScreenPos();
-			NVector2 iconStart = rowStart + new NVector2(indent + arrow, 0f);
+			// The icon where a folder row has its (1 px in), the name 5 px after it.
+			NVector2 iconStart = rowStart + new NVector2(indent + arrow + 1f, 0f);
+			float childIndent = indent + arrow + iconSize;
 			rows.Add(assetPath);
 			if (!renameInTree && string.Equals(renaming, assetPath, StringComparison.OrdinalIgnoreCase))
 			{
@@ -511,7 +514,6 @@ namespace LELEngine.Editor
 				return;
 			}
 
-			bool expandable = ModelAssets.IsModelFile(assetPath) || listedCompanions.ContainsKey(assetPath);
 			bool expanded = expandable && this.expanded.Contains(assetPath);
 			bool selected = selection.Contains(assetPath) || string.Equals(selectedFile, assetPath, StringComparison.OrdinalIgnoreCase);
 			if (ImGui.Selectable("##file" + assetPath, selected, ImGuiSelectableFlags.AllowDoubleClick | ImGuiSelectableFlags.AllowOverlap))
@@ -620,18 +622,18 @@ namespace LELEngine.Editor
 			{
 				foreach (string companion in companions)
 				{
-					DrawFileRow(companion, depth + 1, draw, iconSize);
+					DrawFileRow(companion, childIndent, draw, iconSize);
 				}
 			}
 
 			if (ModelAssets.IsModelFile(assetPath))
 			{
-				DrawModelSubAssets(assetPath, depth + 1, draw, iconSize);
+				DrawModelSubAssets(assetPath, childIndent, draw, iconSize);
 			}
 		}
 
 		/// <summary>A model's meshes under it: a click selects the model, a drag carries the mesh (a Mesh field takes it).</summary>
-		private void DrawModelSubAssets(string assetPath, int depth, ImDrawListPtr draw, float iconSize)
+		private void DrawModelSubAssets(string assetPath, float indent, ImDrawListPtr draw, float iconSize)
 		{
 			Model model;
 			try
@@ -640,9 +642,9 @@ namespace LELEngine.Editor
 			}
 			catch (Exception e)
 			{
-				ImGui.Indent((depth + 1) * iconSize);
+				ImGui.Indent(Math.Max(1f, indent));
 				ImGui.TextColored(EditorStyle.Error, "Cannot import: " + e.Message);
-				ImGui.Unindent((depth + 1) * iconSize);
+				ImGui.Unindent(Math.Max(1f, indent));
 				return;
 			}
 
@@ -670,7 +672,7 @@ namespace LELEngine.Editor
 					ImGui.EndDragDropSource();
 				}
 
-				NVector2 iconStart = rowStart + new NVector2((depth + 1) * iconSize, 0f);
+				NVector2 iconStart = rowStart + new NVector2(indent, 0f);
 				EditorIcons.Draw(draw, iconStart, iconSize, IconKind.Model, ImGui.GetColorU32(ImGuiCol.TextDisabled));
 				draw.AddText(iconStart + new NVector2(iconSize + 5f, 0f), ImGui.GetColorU32(ImGuiCol.Text), name);
 				draw.AddText(iconStart + new NVector2(iconSize + 5f + ImGui.CalcTextSize(name).X, 0f), ImGui.GetColorU32(ImGuiCol.TextDisabled), "  mesh");

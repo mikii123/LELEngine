@@ -280,6 +280,9 @@ namespace LELEngine.Editor
 		{
 			bool changed = false;
 			ImGui.TextDisabled("Clear on Play, Error Pause, Collapse and Clear on Recompile are in the console's toolbar.");
+			ImGui.SeparatorText("Messages");
+			changed |= Check("Editor messages", ref console.ShowEditorMessages, "Plain messages of the editor and the engine outside the game (imports, rendering setup, ...). Their warnings and errors always show; the game's messages are filtered in the console");
+			ImGui.TextDisabled("The game's messages: the project's scripts, and anything logged while the game runs.");
 			ImGui.SeparatorText("List");
 			changed |= Check("Timestamps", ref console.ShowTimestamps, "The time of each message");
 			changed |= Check("Frame numbers", ref console.ShowFrames, "The frame (Time.frameCount) of messages logged in play mode");

@@ -7,8 +7,8 @@ namespace LELEngine.Editor
 {
 	/// <summary>
 	///     A few lines of a source file around a line, drawn inline under a console stack frame: line numbers, C#
-	///     highlighting, the frame's line marked, the common indentation left out. Double-click opens the clicked line in
-	///     the script editor.
+	///     highlighting, the frame's line marked, the common indentation left out. A preview: lines are cut at the
+	///     console's edge (no wrapping, no scrolling); a click opens the clicked line in the script editor.
 	/// </summary>
 	internal static class SourceSnippet
 	{
@@ -41,7 +41,6 @@ namespace LELEngine.Editor
 
 			// The snippet starts at the left: the indentation its lines share goes.
 			int dedent = int.MaxValue;
-			int widest = 0;
 			for (int n = first; n <= last; n++)
 			{
 				string text = source.Lines[n - 1];
@@ -55,21 +54,24 @@ namespace LELEngine.Editor
 				{
 					dedent = Math.Min(dedent, lead);
 				}
-
-				widest = Math.Max(widest, text.Length);
 			}
 
 			dedent = dedent == int.MaxValue ? 0 : dedent;
+			float width = Math.Max(40f, ImGui.GetContentRegionAvail().X - indent);
 			bool mono = EditorFonts.PushMono(EditorPreferences.Current.Theme.CodeFontSize);
 			float lineHeight = MathF.Ceiling(ImGui.GetTextLineHeight() * 1.15f);
 			float textOffset = (lineHeight - ImGui.GetTextLineHeight()) * 0.5f;
 			float charWidth = ImGui.CalcTextSize("0").X;
 			float gutter = charWidth * (last.ToString().Length + 2);
-			NVector2 start = ImGui.GetCursorScreenPos() + new NVector2(indent, 1f);
-			float width = Math.Max(ImGui.GetContentRegionAvail().X - indent, gutter + charWidth * (widest - dedent + 1) + Padding * 2f);
 			float height = (last - first + 1) * lineHeight + Padding * 2f;
-			NVector2 end = start + new NVector2(width, height);
 
+			// A preview, cut at the console's edge (no wrapping, no scrolling); a click opens the file at the clicked line.
+			ImGui.SetCursorPosX(ImGui.GetCursorPosX() + indent);
+			NVector2 start = ImGui.GetCursorScreenPos();
+			NVector2 end = start + new NVector2(width, height);
+			ImGui.InvisibleButton("##snippet", new NVector2(width, height));
+			bool hovered = ImGui.IsItemHovered();
+			bool clicked = ImGui.IsItemClicked(ImGuiMouseButton.Left);
 			ImDrawListPtr draw = ImGui.GetWindowDrawList();
 			draw.AddRectFilled(start, end, EditorStyle.GetU32(EditorColor.CodeBackground), 3f);
 			draw.PushClipRect(start, end, true);
@@ -90,19 +92,21 @@ namespace LELEngine.Editor
 			}
 
 			draw.PopClipRect();
-			ImGui.Dummy(new NVector2(indent + width, height + 3f));
-			if (ImGui.IsItemHovered() && ImGui.IsMouseDoubleClicked(ImGuiMouseButton.Left))
+			if (hovered)
 			{
-				int clicked = first + (int)((ImGui.GetMousePos().Y - start.Y - Padding) / lineHeight);
-				ExternalScriptEditor.Open(file, Math.Clamp(clicked, first, last));
+				draw.AddRect(start, end, ImGui.GetColorU32(ImGuiCol.HeaderHovered), 3f);
+				ImGui.SetMouseCursor(ImGuiMouseCursor.Hand);
+				ImGui.SetTooltip(file + ":" + line + "\nClick: open in the script editor");
 			}
 
-			if (ImGui.IsItemHovered())
+			if (clicked)
 			{
-				ImGui.SetTooltip(file + ":" + line + "\nDouble-click: open in the script editor");
+				int at = first + (int)((ImGui.GetMousePos().Y - start.Y - Padding) / lineHeight);
+				ExternalScriptEditor.Open(file, Math.Clamp(at, first, last));
 			}
 
 			EditorFonts.Pop(mono);
+			ImGui.Dummy(new NVector2(0f, 2f));
 		}
 
 		#endregion

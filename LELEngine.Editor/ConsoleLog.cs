@@ -5,6 +5,16 @@ using System.Text;
 
 namespace LELEngine.Editor
 {
+	/// <summary>Who logged a console message.</summary>
+	internal enum ConsoleSource
+	{
+		/// <summary>The editor and the engine outside the game (imports, rendering setup, ...).</summary>
+		Editor,
+
+		/// <summary>The game: the project's scripts (a frame of theirs in the call stack) or anything while game code runs.</summary>
+		Game
+	}
+
 	/// <summary>A message of the console: its text, the call stack that logged it, where and when.</summary>
 	internal sealed class ConsoleEntry
 	{
@@ -12,6 +22,8 @@ namespace LELEngine.Editor
 
 		/// <summary>Order of arrival (selection and collapsing keep to it across clears).</summary>
 		public long Id;
+
+		public ConsoleSource Source;
 
 		public string Text;
 
@@ -103,8 +115,9 @@ namespace LELEngine.Editor
 	/// <summary>
 	///     The console's messages: the engine's log (<see cref="Debug.MessageLogged" />, with call stacks and context
 	///     objects), script build diagnostics (<see cref="Add" />) and everything else written to the console (shader
-	///     compiler messages, build output, Console.WriteLine of scripts), which it still forwards to the original
-	///     output. Thread safe: script builds and game threads report from the background.
+	///     compiler messages, build output, Console.WriteLine of scripts, with the writer's call stack), which it still
+	///     forwards to the original output. Every message is the game's or the editor's (<see cref="ConsoleSource" />).
+	///     Thread safe: script builds and game threads report from the background.
 	/// </summary>
 	internal sealed class ConsoleLog : TextWriter
 	{
@@ -130,6 +143,13 @@ namespace LELEngine.Editor
 		private readonly List<ConsoleEntry> entries = new List<ConsoleEntry>();
 		private readonly object sync = new object();
 		private long nextId;
+
+		/// <summary>Game code runs on this thread (<see cref="BeginGame" />): what it logs is the game's.</summary>
+		[ThreadStatic] private static int gameDepth;
+
+		// The project folder as stack traces write it (with a separator at the end), for the one it was made from.
+		private string projectRoot;
+		private string projectRootSource;
 
 		#endregion
 
@@ -192,6 +212,20 @@ namespace LELEngine.Editor
 					}
 				}
 			}
+		}
+
+		/// <summary>
+		///     Game code starts running on this thread (play mode's frames, scene loads, [ExecuteAlways] components in edit
+		///     mode): what is logged until <see cref="EndGame" /> is the game's, engine messages included.
+		/// </summary>
+		public static void BeginGame()
+		{
+			gameDepth++;
+		}
+
+		public static void EndGame()
+		{
+			gameDepth = Math.Max(0, gameDepth - 1);
 		}
 
 		/// <summary>Adds an entry directly (build diagnostics with a source location; <paramref name="sticky" />: kept by Clear).</summary>
@@ -287,7 +321,7 @@ namespace LELEngine.Editor
 				ConsoleEntry last = entries[entries.Count - 1];
 				entries[entries.Count - 1] = new ConsoleEntry
 				{
-					Id = last.Id, Text = last.Text, Type = last.Type, Time = last.Time, Frame = last.Frame, Context = last.Context, Sticky = last.Sticky,
+					Id = last.Id, Source = last.Source, Text = last.Text, Type = last.Type, Time = last.Time, Frame = last.Frame, Context = last.Context, Sticky = last.Sticky,
 					File = last.File, Line = last.Line, StackTrace = last.StackTrace != null ? last.StackTrace + "\n" + text : text
 				};
 				Version++;
@@ -295,13 +329,45 @@ namespace LELEngine.Editor
 				return;
 			}
 
-			AddEntry(new ConsoleEntry { Text = text, Type = type });
+			// Written to the console directly (Console.WriteLine): the call stack is the writer's, past the runtime's writer frames.
+			AddEntry(new ConsoleEntry { Text = text, Type = type, StackTrace = Debug.CaptureStackTrace(Debug.GetStackTraceLogType(type), IsWriterFrame) });
+		}
+
+		private static bool IsWriterFrame(Type type)
+		{
+			return type == typeof(ConsoleLog) || (type.Namespace != null && (type.Namespace == "System" || type.Namespace.StartsWith("System.", StringComparison.Ordinal)));
+		}
+
+		/// <summary>The project's scripts logged it (a frame of theirs in the call stack, a diagnostic of their file) or game code was running.</summary>
+		private ConsoleSource SourceOf(ConsoleEntry entry)
+		{
+			if (gameDepth > 0)
+			{
+				return ConsoleSource.Game;
+			}
+
+			string root = EditorApplication.Instance?.Project?.RootPath;
+			if (root == null)
+			{
+				return ConsoleSource.Editor;
+			}
+
+			if (root != projectRootSource)
+			{
+				projectRootSource = root;
+				projectRoot = Path.GetFullPath(root).TrimEnd('\\', '/') + Path.DirectorySeparatorChar;
+			}
+
+			bool inProject = (entry.StackTrace != null && entry.StackTrace.Contains(projectRoot, StringComparison.OrdinalIgnoreCase))
+				|| (entry.File != null && entry.File.Replace('/', '\\').StartsWith(projectRoot.Replace('/', '\\'), StringComparison.OrdinalIgnoreCase));
+			return inProject ? ConsoleSource.Game : ConsoleSource.Editor;
 		}
 
 		private void AddEntry(ConsoleEntry entry)
 		{
 			entry.Id = nextId++;
 			entry.Time = DateTime.Now;
+			entry.Source = SourceOf(entry);
 			EditorApplication editor = EditorApplication.Instance;
 			entry.Frame = editor != null && editor.IsPlaying ? Time.frameCount : -1;
 			entries.Add(entry);

@@ -114,7 +114,6 @@ namespace LELEngine
 				Shaders.TryGetValue(key, out sp);
 				if (sp == null)
 				{
-					Console.WriteLine("Creating Shader " + key);
 					sp = new ShaderProgram(key);
 					Shaders.Add(key, sp);
 					shaderList = new List<ShaderProgram>(Shaders.Values).ToArray();
@@ -139,7 +138,6 @@ namespace LELEngine
 				Material mat;
 				if (!Materials.TryGetValue(assetPath, out mat))
 				{
-					Console.WriteLine("Creating Material " + assetPath);
 					mat = Material.Load(assetPath);
 					Materials.Add(assetPath, mat);
 				}

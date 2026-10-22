@@ -96,35 +96,28 @@ namespace LELEngine
 			stackTraceTypes[(int)type] = value;
 		}
 
-		#endregion
-
-		#region PrivateMethods
-
-		private static void Write(string message, string stackTrace, LogType type, object context)
+		/// <summary>
+		///     The current call stack in the format of exception stack traces ("   at Type.Method(...) in file:line N"),
+		///     from the first caller that is not Debug's and not one <paramref name="skipCaller" /> skips (a host's console
+		///     capture: its own and the runtime's writer frames); null for <see cref="StackTraceLogType.None" />.
+		/// </summary>
+		public static string CaptureStackTrace(StackTraceLogType mode, Predicate<Type> skipCaller)
 		{
-			string prefix = type == LogType.Log ? "" : "[" + type + "] ";
-			(Output ?? Console.Out).WriteLine(prefix + message + (stackTrace != null ? "\n" + stackTrace : ""));
-			MessageLogged?.Invoke(message, stackTrace ?? CaptureStackTrace(stackTraceTypes[(int)type]), type, context);
-		}
-
-		/// <summary>The caller's stack in the format of exception stack traces ("   at Type.Method(...) in file:line N").</summary>
-		private static string CaptureStackTrace(StackTraceLogType mode)
-		{
-			if (mode == StackTraceLogType.None || MessageLogged == null)
+			if (mode == StackTraceLogType.None)
 			{
 				return null;
 			}
 
 			var builder = new StringBuilder();
 			bool caller = false;
-			foreach (StackFrame frame in new StackTrace(2, true).GetFrames())
+			foreach (StackFrame frame in new StackTrace(1, true).GetFrames())
 			{
 				MethodBase method = frame.GetMethod();
 				Type declaring = method?.DeclaringType;
 				if (!caller)
 				{
 					// Debug's own frames (and a wrapper's call into them) are not the caller.
-					if (declaring == typeof(Debug))
+					if (declaring == typeof(Debug) || (declaring != null && skipCaller != null && skipCaller(declaring)))
 					{
 						continue;
 					}
@@ -152,6 +145,20 @@ namespace LELEngine
 			}
 
 			return builder.Length > 0 ? builder.ToString() : null;
+		}
+
+		#endregion
+
+		#region PrivateMethods
+
+		private static void Write(string message, string stackTrace, LogType type, object context)
+		{
+			string prefix = type == LogType.Log ? "" : "[" + type + "] ";
+			(Output ?? Console.Out).WriteLine(prefix + message + (stackTrace != null ? "\n" + stackTrace : ""));
+			if (MessageLogged != null)
+			{
+				MessageLogged.Invoke(message, stackTrace ?? CaptureStackTrace(stackTraceTypes[(int)type], null), type, context);
+			}
 		}
 
 		private static bool IsLibrary(Type type)

@@ -302,7 +302,8 @@
   away commits after the panel is drawn, Escape cancels. A click on empty space (here or in the hierarchy) clears the
   selection and the inspector (`ClearSelection`); the panel follows the editor's selection (a GameObject selected
   elsewhere clears the file highlight).
-- Unity-like expansion (`DrawFileRow`, recursive): a model file has an arrow (anchor `expand:<path>`); expanded, it
+- Unity-like expansion (`DrawFileRow`, recursive, pixel indent): a model file has an arrow (anchor `expand:<path>`), and
+  only such rows have room for it (the user's call: other files line up with the folders); expanded, it
   shows its companion files (an OBJ's material library from its `mtllib` lines and the material and texture assets of
   its import (`ModelImporter.ExtractedGuids`), same folder; listed only there, not on their own: `listedCompanions`) as
   full rows and its
@@ -326,6 +327,12 @@
   without a `MessageLogged` subscriber). Stdout still gets the text (stack only for exceptions, plus inner exceptions
   as `--- Caused by` lines); `Debug.Output` routes it: the editor points it at the real stdout and takes the message
   from `MessageLogged`, so `ConsoleLog` no longer parses Debug text (only other console writes, as before).
+- Direct console writes (the engine's 70-odd `Console.WriteLine`s: `[ProbeGather]`, `[SDF]`, ...) get the writer's
+  call stack too (`Debug.CaptureStackTrace(mode, skipCaller)`, skipping ConsoleLog and System writer frames).
+- Every entry is `ConsoleSource.Game` (a frame in the project folder, a diagnostic of a project file, or logged inside
+  `ConsoleLog.BeginGame/EndGame`: play mode frames, the play scene's start, Step) or `Editor`. Preferences > Console >
+  Editor messages hides the editor's plain messages (not counted either); its warnings and errors always show. The
+  game's messages are filtered in the console window as before. The details' meta line names the source.
 - `ConsoleLog` entries are `ConsoleEntry` objects (text, stack, type, time, play-mode frame, weak context reference so
   unloaded script objects can go, `Sticky` for script build diagnostics: Clear keeps them, `RemoveSticky` at the next
   build). `RemovalVersion` tells the panel to rebuild instead of appending new rows.
@@ -336,7 +343,11 @@
   right-click edit; matches tinted). Rows via a clipper; narrow consoles drop Time/Source columns. Two parts only
   (list, then the message with its call stack; no separate source pane, the user's call): stack frames with the
   code around their line inline (`SourceSnippet`, line ± `SourceContextLines`, default 1 = three lines, shared
-  indentation removed), shown for project frames and the frame the message opens, a click toggles it on the others.
+  indentation removed; a preview: cut at the console's edge, no wrapping, no scrollbars, a click opens the line), shown for
+  project frames and the frame the message opens, a click toggles it on the others. Everything else in a narrow
+  console fits the width: list rows get two wrapped lines with "...", the message wraps, frames shorten the method
+  and put the file on a second line. The details child has no horizontal scrollbar on purpose (with it, wrapping
+  followed last frame's content width and kept the content wider than the window).
   Project frames bright, engine dim, libraries hidden, logging wrappers (`HiddenFrames` prefixes) skipped as the open
   target; lambdas / iterators shown as their method.
 - `SourceFiles` + `CSharpLexer`: frames' files (cached, reloaded on change), C# highlighting with line states for
