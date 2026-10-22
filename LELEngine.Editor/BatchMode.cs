@@ -36,7 +36,8 @@ namespace LELEngine.Editor
 			"  -createProject             create the project when the folder holds none (starter assets, default scene)\n" +
 			"  -scene <asset path>        open this scene (default: the last or start scene, only with -executeMethod)\n" +
 			"  -executeMethod <Type.Method>\n" +
-			"                             call a static method of the scripts, the engine or the editor: no parameters\n" +
+			"                             call a static method of the scripts (Editor folders included), the engine or\n" +
+			"                             the editor: no parameters\n" +
 			"                             or (string[] args) with the whole command line; void, bool or int result\n" +
 			"  -build <folder>            build the game into the folder\n" +
 			"  -buildConfig Release|Debug configuration of the build (default Release)\n" +
@@ -51,6 +52,9 @@ namespace LELEngine.Editor
 		#region PrivateFields
 
 		private static NativeWindow graphics;
+
+		/// <summary>Game.Editor.dll of the project (null without editor scripts): -executeMethod finds its types too.</summary>
+		private static Assembly editorScripts;
 
 		#endregion
 
@@ -195,7 +199,11 @@ namespace LELEngine.Editor
 			return 0;
 		}
 
-		/// <summary>Compiles the scripts when the editor build is out of date and loads them (types for scenes and methods).</summary>
+		/// <summary>
+		///     Compiles the scripts when the editor build is out of date and loads them (types for scenes and methods):
+		///     Game.dll, and Game.Editor.dll when some script lies in an Editor folder (for -executeMethod; not
+		///     registered for serialization, as in the editor).
+		/// </summary>
 		private static bool CompileScripts(ProjectInfo project)
 		{
 			if (!ScriptDomain.HasScripts(project))
@@ -203,28 +211,36 @@ namespace LELEngine.Editor
 				return true;
 			}
 
+			bool withEditor = ScriptDomain.HasEditorScripts(project);
 			string dll = ScriptDomain.AssemblyFile(project);
+			string editorDll = ScriptDomain.EditorAssemblyFile(project);
 			byte[] assembly;
 			byte[] symbols;
-			if (ScriptDomain.IsAssemblyCurrent(project))
+			byte[] editorAssembly = null;
+			byte[] editorSymbols = null;
+			if (ScriptDomain.IsAssemblyCurrent(project, withEditor))
 			{
 				Debug.Log("[Batch] Scripts are up to date");
 				// Built before the weaver existed (or by an IDE): rewritten before they load.
 				var woven = new BuildResult();
-				if (!ScriptBuilder.Weave(dll, Path.GetDirectoryName(dll), woven))
+				if (!ScriptBuilder.Weave(dll, Path.GetDirectoryName(dll), woven) || (withEditor && !ScriptBuilder.Weave(editorDll, Path.GetDirectoryName(editorDll), woven)))
 				{
 					Debug.LogError("[Scripts] " + woven.Diagnostics[0]);
 					return false;
 				}
 
 				assembly = File.ReadAllBytes(dll);
-				string pdb = Path.ChangeExtension(dll, ".pdb");
-				symbols = File.Exists(pdb) ? File.ReadAllBytes(pdb) : null;
+				symbols = ReadSymbols(dll);
+				if (withEditor)
+				{
+					editorAssembly = File.ReadAllBytes(editorDll);
+					editorSymbols = ReadSymbols(editorDll);
+				}
 			}
 			else
 			{
-				Debug.Log("[Batch] Compiling scripts...");
-				BuildResult result = ScriptBuilder.Build(ProjectGenerator.ProjectFile(project), "Debug", null);
+				Debug.Log(withEditor ? "[Batch] Compiling scripts (with the editor scripts)..." : "[Batch] Compiling scripts...");
+				BuildResult result = ScriptBuilder.Build(ProjectGenerator.ProjectFile(project), "Debug", null, withEditor);
 				foreach (BuildDiagnostic diagnostic in result.Diagnostics)
 				{
 					if (diagnostic.IsError)
@@ -246,11 +262,26 @@ namespace LELEngine.Editor
 				Debug.Log($"[Batch] Scripts compiled ({result.Seconds:0.0} s), {result.WovenChecks} null checks woven");
 				assembly = result.Assembly;
 				symbols = result.Symbols;
+				editorAssembly = result.EditorAssembly;
+				editorSymbols = result.EditorSymbols;
 			}
 
-			// Batch runs never reload: the default context is enough.
-			TypeRegistry.Register(symbols != null ? Assembly.Load(assembly, symbols) : Assembly.Load(assembly));
+			// One context for both, as in the editor: Game.Editor.dll resolves Game.dll through it (Assembly.Load(byte[])
+			// would put each into its own anonymous context). Batch runs never reload.
+			var context = new ScriptDomain.GameLoadContext(Path.GetDirectoryName(dll));
+			TypeRegistry.Register(context.Load(assembly, symbols));
+			if (editorAssembly != null)
+			{
+				editorScripts = context.Load(editorAssembly, editorSymbols);
+			}
+
 			return true;
+		}
+
+		private static byte[] ReadSymbols(string dll)
+		{
+			string pdb = Path.ChangeExtension(dll, ".pdb");
+			return File.Exists(pdb) ? File.ReadAllBytes(pdb) : null;
 		}
 
 		private static bool OpenScene(ProjectInfo project, string requested)
@@ -342,6 +373,11 @@ namespace LELEngine.Editor
 		private static Type FindType(string name)
 		{
 			var assemblies = new List<Assembly>(TypeRegistry.Assemblies);
+			if (editorScripts != null)
+			{
+				assemblies.Add(editorScripts);
+			}
+
 			if (!assemblies.Contains(typeof(BatchMode).Assembly))
 			{
 				assemblies.Add(typeof(BatchMode).Assembly);

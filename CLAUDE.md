@@ -49,6 +49,12 @@
   longer exists (`Shaders/Lit.shader`) loads `Engine/Lit.shader` (`AssetDatabase.EngineShaderFallback`). Imports cache in `Library/ModelCache`
   (`ModelAssets.CacheFolder`, set when a project opens); player builds write the imported binary (`LELMODEL`
   magic) under the model's own file name, so the player never needs Assimp.
+- `LitTextured`: `DiffuseMap`, `NormalMap`, `EmissionMap` (rgb x `Emissive`, white default). The GI captures read the
+  conventional names (`voxAlbedoMap` unit 0 from DiffuseMap / AlbedoMap, `voxEmissionMap` unit 1 from EmissionMap in
+  `CardCapture`, `Voxelize`, `VoxelizeCoverage`; the card capture key hashes both handles). `Material.SetUniforms`
+  binds the neutral default of every texture the shader declares and the material lacks, and `OpaquePass` does the
+  same (`Material.SetDefaultTextures`) for GPU-driven buckets without a material: an unbound sampler read whatever an
+  earlier draw left on its unit (2026-10-22).
 - `Mesh` is indexed (`Vertices`, `Indices`, `SubMeshes`); `GetTrianglePositions()` serves CPU queries (picking,
   navmesh, SDF build). `MeshRenderer` has one material per sub-mesh (`Materials`, `GetMaterial(i)` repeats the last
   slot); a renderer can be in both the opaque and the transparent list (`HasOpaqueParts` / `HasTransparentParts`),
@@ -91,6 +97,11 @@
   in `EditorExtensions.OnDomainUnloading` (called from `EditorApplication.ClearTypeCaches`). `GameLoadContext` must
   not keep its own list of the assemblies it loaded: that kept the old context alive (leak warning after every
   reload); it resolves Game.dll for Game.Editor.dll through its `Assemblies`.
+- Batch mode (since 2026-10-22) builds the editor project too when the project has editor scripts, loads both
+  assemblies into one `ScriptDomain.GameLoadContext` (plain `Assembly.Load(byte[])` gives each its own anonymous
+  context, so Game.Editor.dll could not resolve Game.dll) and lets `-executeMethod` find types of Game.Editor.dll
+  (`BatchMode.editorScripts`; not registered in `TypeRegistry`, no `EditorExtensions` in batch: editor windows and
+  menus are not available there, plain static methods are).
 - Leak report: a context that survives its unload check (`ScriptDomain.VerifyUnload`, 40 GC passes in the
   background) is traced on the main thread (`ScriptDomain.Update` -> `LeakTracer`, `LELEngine.Editor/Scripting`):
   breadth-first from the static fields of the engine and the assemblies referencing it (closed generic base classes
@@ -182,7 +193,8 @@
   costs ~2 ms (GenerateMipmap is asynchronous); the first mipmap generation of the process costs ~11 ms.
 - Leak fixes found with play-mode + reload runs: `UIRuntime.frameDocuments` cleared after input, pooled UI events
   reset on `Dispose`, the hover chain buffers cleared, `SceneManager.combinedRenderers/Behaviours` cleared in
-  `UnloadAll` (several loaded scenes, DontDestroyOnLoad). Verify play-mode work with a reload afterwards
+  `UnloadAll` (several loaded scenes, DontDestroyOnLoad), `VisualElement`'s type-name cache keyed weakly
+  (`ConditionalWeakTable`: game scripts' element subclasses held Game.dll, 2026-10-22). Verify play-mode work with a reload afterwards
   (`touchscript=N;file` with a `/*v1*/` file), not only with the startup reload; the leak warning lists what holds
   the old scripts (see "Leak report" above).
 
@@ -225,6 +237,49 @@
   - the marker in a player build's Game.dll.
 - **Benchmark:** `LELEngine.Benchmarks physics2d-scene` fails because `Meshes/cube.obj` is not copied to its output
   folder. That asset is unrelated to destroying.
+
+## Skybox orientation
+
+- `Engine/Skybox.shader` and `Engine/SkyboxPanoramic.shader`: `Tilt` (degrees about X, applied first) then `Rotation`
+  (yaw), 2026-10-22; the GI's sky lookup (`Sky.glsl`, `giSkyboxTilt` / `giSkyboxRotation` from `SkyEnvironment`) does
+  the same. The yaw turns the opposite way to Unity's skybox `_Rotation`. Unity skies (left-handed) seen from a
+  right-handed camera come out mirrored; mirror the faces (flip each horizontally, swap +X / -X) to keep the image.
+
+## GI volume placement
+
+- `SceneGISettings.FollowCamera` + `FollowCameraLookAhead` (2026-10-22): the volume's centre is the camera position
+  plus `RenderContext.CameraForward` x look-ahead, snapped to voxels (`GlobalIlluminationSettings.UpdateGridPlacement`,
+  called by `VoxelGIPass` and `GlobalDistanceFieldPass`). For top-down / third-person cameras: one volume covers the
+  camera's surroundings and the ground it looks at.
+
+## AnimationCurve and the curve editor
+
+- `LELEngine/Mono/AnimationCurve.cs` (2026-10-22): Unity's API (`Keyframe` time / value / in / out tangent,
+  `Evaluate` = cubic Hermite with slopes scaled by the segment length, `preWrapMode` / `postWrapMode` Clamp / Loop /
+  PingPong, `AddKey`, `MoveKey`, `RemoveKey`, `SmoothTangents`, presets `Constant` / `Linear` / `EaseInOut` / `EaseIn` /
+  `EaseOut`). `Keyframe.tangentMode` (`TangentMode`: Free = 0 so keys without a mode keep their tangents, ClampedAuto =
+  monotone Fritsch-Carlson slopes flat at ends and extremes, Linear, Constant = step, Broken) is what
+  `RecalculateTangents` derives. Infinite tangents (Unity's steps) evaluate as Constant; presets never store infinity
+  (JSON). Serialized inline as `m_Keys` / `m_PreWrapMode` / `m_PostWrapMode`.
+- Editor: `FieldDrawer.DrawValue` hands `AnimationCurve` fields to `CurveEditor.DrawField`
+  (`LELEngine.Editor/Inspector/CurveEditor.cs`): a preview on the field line, a click opens a popup editor (preset
+  buttons mapped onto the curve's ranges, grid, keys, tangent handles of the selected key, right click key menu,
+  double click adds, Delete removes, wheel zoom with Shift / Ctrl for one axis, middle or Alt drag pans, F frames,
+  key fields, wrap modes). Edits use the inspector's undo (`context.BeginEdit` / `EndEdit`, `Track` for drag
+  fields). `EditorGUILayout.CurveField`. Test anchors: `curvekey:N`, `curvecanvas` (e.g. `drag=N;curvekey:2;curvecanvas`).
+
+## Component lookups and Rigidbody2D settings
+
+- `GameObject` / `Behaviour`: `GetComponent<T>` / `GetComponents<T>` take interfaces (`where T : class`), plus
+  `GetComponentInChildren` / `GetComponentsInChildren` (depth first, self first) and `GetComponentInParent` /
+  `GetComponentsInParent` (nearest first), generic and by `Type`, with `includeInactive` (inactive = `activeSelf` off
+  on the object or an ancestor) and list overloads. Dead components are skipped unless the searching object is dead
+  itself (same rule as `GetComponent`). Added 2026-10-22 for the New Frontier port.
+- `Rigidbody2D` settings are properties over Unity's serialized names (`m_BodyType`, `m_Material`, `m_Simulated`,
+  `m_UseAutoMass`, `m_Mass`, `m_LinearDamping`, `m_AngularDamping`, `m_GravityScale`, `m_CollisionDetection`,
+  `m_SleepingMode`, `m_Interpolate`, `m_Constraints`); setters push into the live body at once (`SettingsChanged`,
+  `MassChanged`; deferred to `SyncToBody` while the world steps), and so does `OnValidate`. Since 2026-10-22: documents
+  saved earlier with the plain names (`mass`, `bodyType`, ...) lose those values until re-saved.
 
 ## Inspector fields, drag and drop, polymorphism, ScriptableObjects
 

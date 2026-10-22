@@ -78,7 +78,7 @@ namespace LELEngine.Rendering.Passes
 				CreateVolumes(gi.SdfResolution);
 			}
 
-			gi.UpdateGridPlacement(context.CameraPosition);
+			gi.UpdateGridPlacement(context.CameraPosition, context.CameraForward);
 
 			LumenScene scene = context.Renderer.LumenScene;
 			frameIndex++;

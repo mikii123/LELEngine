@@ -17,6 +17,9 @@ namespace LELEngine.Rendering
 		public static int CubemapHandle { get; private set; }
 		public static Vector4 TintExposure { get; private set; } = Vector4.One;
 		public static Vector2 Rotation { get; private set; } = new Vector2(1f, 0f);
+
+		/// <summary>Cos, sin of the skybox material's Tilt (about X, before the yaw).</summary>
+		public static Vector2 Tilt { get; private set; } = new Vector2(1f, 0f);
 		public static float Lod { get; private set; }
 
 		/// <summary>A 1x1 black cubemap bound when no skybox is set (the sampler stays complete).</summary>
@@ -80,6 +83,8 @@ namespace LELEngine.Rendering
 			CubemapHandle = cubemap.Handle;
 			TintExposure = new Vector4(tint.R * exposure, tint.G * exposure, tint.B * exposure, 1f);
 			Rotation = new Vector2(MathF.Cos(rotation), MathF.Sin(rotation));
+			float tilt = skybox.GetFloat("Tilt", 0f) * (float)(Math.PI / 180.0);
+			Tilt = new Vector2(MathF.Cos(tilt), MathF.Sin(tilt));
 			// Diffuse rays read a blurred sky (about 8 texels across a face) when the cubemap has mips.
 			Lod = cubemap.mipmapEnabled ? Math.Max(0f, MathF.Log2(Math.Max(1, cubemap.size)) - 3f) : 0f;
 			Enabled = true;

@@ -3,6 +3,7 @@ Cubemap ("Cubemap", Cube) = "" {}
 [HDR] Tint ("Tint", Color) = (1, 1, 1, 1)
 Exposure ("Exposure", Range(0, 8)) = 1
 Rotation ("Rotation", Range(0, 360)) = 0
+Tilt ("Tilt (about X, before Rotation)", Range(-180, 180)) = 0
 /////Properties
 
 //Vertex
@@ -35,6 +36,7 @@ uniform samplerCube Cubemap;
 uniform vec4 Tint;
 uniform float Exposure;
 uniform float Rotation;
+uniform float Tilt;
 
 out vec4 FragColor;
 
@@ -43,6 +45,12 @@ void main()
 	vec4 clip = vec4(fUV * 2.0 - 1.0, 1.0, 1.0);
 	vec4 world = invViewProjection * clip;
 	vec3 dir = normalize(world.xyz / world.w);
+
+	// Tilt about X first (a sky authored for another up axis), then the yaw.
+	float t = radians(Tilt);
+	float ct = cos(t);
+	float st = sin(t);
+	dir = vec3(dir.x, ct * dir.y - st * dir.z, st * dir.y + ct * dir.z);
 
 	float a = radians(Rotation);
 	float c = cos(a);

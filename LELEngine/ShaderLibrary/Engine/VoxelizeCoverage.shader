@@ -93,6 +93,8 @@ uniform vec4 voxAlbedo;
 uniform vec4 voxEmissive;      // rgb color, a intensity
 uniform sampler2D voxAlbedoMap;
 uniform int voxUseAlbedoMap;
+uniform sampler2D voxEmissionMap; // multiplies the emission colour (texture unit 1)
+uniform int voxUseEmissionMap;
 
 centroid in vec3 fWorldPos;
 centroid in vec3 fNormal;
@@ -177,6 +179,10 @@ void main()
 	}
 	vec3 normal01 = normalize(fNormal) * 0.5 + 0.5;
 	vec3 emission = voxEmissive.rgb * voxEmissive.a;
+	if (voxUseEmissionMap != 0)
+	{
+		emission *= texture(voxEmissionMap, fUV).rgb;
+	}
 
 	// The pixel is the voxel column; along the axis the surface's depth in voxel centres decides the weights.
 	ivec2 column = ivec2(gl_FragCoord.xy);

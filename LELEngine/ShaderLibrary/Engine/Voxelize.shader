@@ -82,6 +82,8 @@ uniform vec4 voxAlbedo;
 uniform vec4 voxEmissive;      // rgb color, a intensity
 uniform sampler2D voxAlbedoMap;
 uniform int voxUseAlbedoMap;
+uniform sampler2D voxEmissionMap; // multiplies the emission colour (texture unit 1)
+uniform int voxUseEmissionMap;
 
 in vec3 fWorldPos;
 in vec3 fNormal;
@@ -101,7 +103,13 @@ void main()
 
 	imageStore(AlbedoOut, coord, vec4(albedo, 1.0));
 	imageStore(NormalOut, coord, vec4(normalize(fNormal) * 0.5 + 0.5, 1.0));
-	imageStore(EmissiveOut, coord, vec4(voxEmissive.rgb * voxEmissive.a, 0.0));
+	vec3 emission = voxEmissive.rgb * voxEmissive.a;
+	if (voxUseEmissionMap != 0)
+	{
+		emission *= texture(voxEmissionMap, fUV).rgb;
+	}
+
+	imageStore(EmissiveOut, coord, vec4(emission, 0.0));
 	imageStore(BlocksOut, coord >> 3, vec4(1.0));
 }
 

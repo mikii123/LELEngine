@@ -535,7 +535,8 @@ namespace LELEngine
 			shapes.Add(new ShapeGeometry { Kind = ShapeKind.Polygon, Polygon = b2MakePolygon(hull, Math.Max(0f, radius)) });
 		}
 
-		private void ApplyMaterial()
+		/// <summary>Friction and bounciness into the live shapes (this collider's material, else its rigidbody's).</summary>
+		internal void ApplyMaterial()
 		{
 			foreach (B2ShapeId shape in shapes)
 			{

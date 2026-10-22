@@ -163,7 +163,7 @@ namespace LELEngine.Rendering.Passes
 			}
 		}
 
-		// Hash of the material inputs baked into the cards (albedo colour, emission colour, albedo map handle).
+		// Hash of the material inputs baked into the cards (albedo colour, emission colour, albedo and emission maps).
 		private static long CaptureKey(Material material)
 		{
 			Vector4 albedo;
@@ -194,6 +194,7 @@ namespace LELEngine.Rendering.Passes
 				hash = hash * 31 + emissive.Y.GetHashCode();
 				hash = hash * 31 + emissive.Z.GetHashCode();
 				hash = hash * 31 + albedoMap;
+				hash = hash * 31 + material.GetTextureHandle("EmissionMap");
 				return hash;
 			}
 		}
@@ -225,6 +226,13 @@ namespace LELEngine.Rendering.Passes
 			if (albedoMap != 0)
 			{
 				capture.SetTexture("voxAlbedoMap", TextureTarget.Texture2D, albedoMap, 0);
+			}
+
+			int emissionMap = material.GetTextureHandle("EmissionMap");
+			capture.SetInt("voxUseEmissionMap", emissionMap != 0 ? 1 : 0);
+			if (emissionMap != 0)
+			{
+				capture.SetTexture("voxEmissionMap", TextureTarget.Texture2D, emissionMap, 1);
 			}
 		}
 

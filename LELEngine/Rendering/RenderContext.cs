@@ -30,6 +30,9 @@ namespace LELEngine.Rendering
 		public Matrix4 ViewProjection;
 		public Vector3 CameraPosition;
 
+		/// <summary>The camera's view direction (world, normalized).</summary>
+		public Vector3 CameraForward;
+
 		/// <summary>Window (backbuffer) size.</summary>
 		public int Width;
 		public int Height;

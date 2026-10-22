@@ -20,27 +20,153 @@ namespace LELEngine
 	{
 		#region PublicFields
 
-		public RigidbodyType2D bodyType = RigidbodyType2D.Dynamic;
-		public PhysicsMaterial2D sharedMaterial;
+		// ---- settings: serialized fields behind properties (Unity's names); a setter reaches the live body at once
 
-		/// <summary>Off: the body and its colliders are removed from the simulation (no collisions, no movement).</summary>
-		public bool simulated = true;
+		[SerializeField] private RigidbodyType2D m_BodyType = RigidbodyType2D.Dynamic;
 
-		/// <summary>Mass from the colliders' densities; off: <see cref="mass" /> is used.</summary>
-		public bool useAutoMass = true;
+		[Tooltip("Friction and bounciness of the colliders that have no material of their own.")]
+		[SerializeField] private PhysicsMaterial2D m_Material;
+
+		[Tooltip("Off: the body and its colliders are removed from the simulation (no collisions, no movement).")]
+		[SerializeField] private bool m_Simulated = true;
+
+		[Tooltip("Mass from the colliders' densities; off: Mass is used.")]
+		[SerializeField] private bool m_UseAutoMass = true;
 
 		[Tooltip("Mass in kilograms when Use Auto Mass is off.")]
-		public float mass = 1f;
+		[SerializeField] private float m_Mass = 1f;
 
 		[Tooltip("Velocity lost per second (0 = none).")]
-		public float linearDamping;
+		[SerializeField] private float m_LinearDamping;
 
-		public float angularDamping = 0.05f;
-		public float gravityScale = 1f;
-		public CollisionDetectionMode2D collisionDetectionMode = CollisionDetectionMode2D.Discrete;
-		public RigidbodySleepMode2D sleepMode = RigidbodySleepMode2D.StartAwake;
-		public RigidbodyInterpolation2D interpolation = RigidbodyInterpolation2D.None;
-		public RigidbodyConstraints2D constraints = RigidbodyConstraints2D.None;
+		[SerializeField] private float m_AngularDamping = 0.05f;
+		[SerializeField] private float m_GravityScale = 1f;
+		[SerializeField] private CollisionDetectionMode2D m_CollisionDetection = CollisionDetectionMode2D.Discrete;
+		[SerializeField] private RigidbodySleepMode2D m_SleepingMode = RigidbodySleepMode2D.StartAwake;
+		[SerializeField] private RigidbodyInterpolation2D m_Interpolate = RigidbodyInterpolation2D.None;
+		[SerializeField] private RigidbodyConstraints2D m_Constraints = RigidbodyConstraints2D.None;
+
+		public RigidbodyType2D bodyType
+		{
+			get => m_BodyType;
+			set
+			{
+				m_BodyType = value;
+				SettingsChanged();
+			}
+		}
+
+		/// <summary>Material of the colliders that have none of their own.</summary>
+		public PhysicsMaterial2D sharedMaterial
+		{
+			get => m_Material;
+			set
+			{
+				m_Material = value;
+				MaterialChanged();
+			}
+		}
+
+		/// <summary>Off: the body and its colliders are removed from the simulation (no collisions, no movement).</summary>
+		public bool simulated
+		{
+			get => m_Simulated;
+			set
+			{
+				m_Simulated = value;
+				SettingsChanged();
+			}
+		}
+
+		/// <summary>Mass from the colliders' densities; off: <see cref="mass" /> is used.</summary>
+		public bool useAutoMass
+		{
+			get => m_UseAutoMass;
+			set
+			{
+				m_UseAutoMass = value;
+				MassChanged();
+			}
+		}
+
+		/// <summary>Mass in kilograms (used when <see cref="useAutoMass" /> is off).</summary>
+		public float mass
+		{
+			get => hasBody && m_UseAutoMass ? b2Body_GetMass(body) : m_Mass;
+			set
+			{
+				m_Mass = value;
+				MassChanged();
+			}
+		}
+
+		/// <summary>Velocity lost per second (0 = none).</summary>
+		public float linearDamping
+		{
+			get => m_LinearDamping;
+			set
+			{
+				m_LinearDamping = value;
+				SettingsChanged();
+			}
+		}
+
+		public float angularDamping
+		{
+			get => m_AngularDamping;
+			set
+			{
+				m_AngularDamping = value;
+				SettingsChanged();
+			}
+		}
+
+		public float gravityScale
+		{
+			get => m_GravityScale;
+			set
+			{
+				m_GravityScale = value;
+				SettingsChanged();
+			}
+		}
+
+		public CollisionDetectionMode2D collisionDetectionMode
+		{
+			get => m_CollisionDetection;
+			set
+			{
+				m_CollisionDetection = value;
+				SettingsChanged();
+			}
+		}
+
+		public RigidbodySleepMode2D sleepMode
+		{
+			get => m_SleepingMode;
+			set
+			{
+				m_SleepingMode = value;
+				SettingsChanged();
+			}
+		}
+
+		/// <summary>How the transform follows the body between physics steps (read every frame).</summary>
+		public RigidbodyInterpolation2D interpolation
+		{
+			get => m_Interpolate;
+			set => m_Interpolate = value;
+		}
+
+		public RigidbodyConstraints2D constraints
+		{
+			get => m_Constraints;
+			set
+			{
+				m_Constraints = value;
+				SettingsChanged();
+			}
+		}
 
 		// ---- runtime state
 
@@ -69,21 +195,13 @@ namespace LELEngine
 		public float drag
 		{
 			get => linearDamping;
-			set
-			{
-				linearDamping = value;
-				settingsDirty = true;
-			}
+			set => linearDamping = value;
 		}
 
 		public float angularDrag
 		{
 			get => angularDamping;
-			set
-			{
-				angularDamping = value;
-				settingsDirty = true;
-			}
+			set => angularDamping = value;
 		}
 
 		/// <summary>Angular velocity in degrees per second.</summary>
@@ -161,21 +279,13 @@ namespace LELEngine
 		public bool freezeRotation
 		{
 			get => (constraints & RigidbodyConstraints2D.FreezeRotation) != 0;
-			set
-			{
-				constraints = value ? constraints | RigidbodyConstraints2D.FreezeRotation : constraints & ~RigidbodyConstraints2D.FreezeRotation;
-				settingsDirty = true;
-			}
+			set => constraints = value ? constraints | RigidbodyConstraints2D.FreezeRotation : constraints & ~RigidbodyConstraints2D.FreezeRotation;
 		}
 
 		public bool isKinematic
 		{
 			get => bodyType == RigidbodyType2D.Kinematic;
-			set
-			{
-				bodyType = value ? RigidbodyType2D.Kinematic : RigidbodyType2D.Dynamic;
-				settingsDirty = true;
-			}
+			set => bodyType = value ? RigidbodyType2D.Kinematic : RigidbodyType2D.Dynamic;
 		}
 
 		public int attachedColliderCount
@@ -253,10 +363,12 @@ namespace LELEngine
 			world?.RemoveRigidbody(this);
 		}
 
+		/// <summary>Inspector edits (or a script writing the serialized state) reach the live body at once.</summary>
 		public override void OnValidate()
 		{
-			settingsDirty = true;
 			massDirty = true;
+			SettingsChanged();
+			MaterialChanged();
 		}
 
 		#endregion
@@ -549,6 +661,30 @@ namespace LELEngine
 			if (hasBody && world != null && !world.IsStepping)
 			{
 				ApplyMass();
+			}
+		}
+
+		/// <summary>A body setting changed: applied now, or before the next step while the world is stepping.</summary>
+		private void SettingsChanged()
+		{
+			settingsDirty = true;
+			if (hasBody && world != null && !world.IsStepping)
+			{
+				ApplyBodySettings();
+			}
+		}
+
+		/// <summary>The colliders without a material of their own use this body's: their shapes take the new values.</summary>
+		private void MaterialChanged()
+		{
+			if (!hasBody)
+			{
+				return;
+			}
+
+			foreach (Collider2D collider in Colliders())
+			{
+				collider.ApplyMaterial();
 			}
 		}
 

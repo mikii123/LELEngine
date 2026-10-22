@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 
 namespace LELEngine
@@ -119,11 +120,69 @@ namespace LELEngine
 
 		#region PublicMethods
 
+		/// <summary>The first component of type <typeparamref name="T" /> (a class or an interface) on this GameObject.</summary>
 		public T GetComponent<T>()
-			where T : Behaviour
+			where T : class
 		{
 			ThrowIfDestroyed();
 			return gameObject.GetComponent<T>();
+		}
+
+		public Behaviour GetComponent(Type type)
+		{
+			ThrowIfDestroyed();
+			return gameObject.GetComponent(type);
+		}
+
+		public List<T> GetComponents<T>()
+			where T : class
+		{
+			ThrowIfDestroyed();
+			return gameObject.GetComponents<T>();
+		}
+
+		public void GetComponents<T>(List<T> results)
+			where T : class
+		{
+			ThrowIfDestroyed();
+			gameObject.GetComponents(results);
+		}
+
+		/// <summary>See <see cref="GameObject.GetComponentInChildren{T}(bool)" />.</summary>
+		public T GetComponentInChildren<T>(bool includeInactive = false)
+			where T : class
+		{
+			ThrowIfDestroyed();
+			return gameObject.GetComponentInChildren<T>(includeInactive);
+		}
+
+		public List<T> GetComponentsInChildren<T>(bool includeInactive = false)
+			where T : class
+		{
+			ThrowIfDestroyed();
+			return gameObject.GetComponentsInChildren<T>(includeInactive);
+		}
+
+		public void GetComponentsInChildren<T>(bool includeInactive, List<T> results)
+			where T : class
+		{
+			ThrowIfDestroyed();
+			gameObject.GetComponentsInChildren(includeInactive, results);
+		}
+
+		/// <summary>See <see cref="GameObject.GetComponentInParent{T}(bool)" />.</summary>
+		public T GetComponentInParent<T>(bool includeInactive = false)
+			where T : class
+		{
+			ThrowIfDestroyed();
+			return gameObject.GetComponentInParent<T>(includeInactive);
+		}
+
+		public List<T> GetComponentsInParent<T>(bool includeInactive = false)
+			where T : class
+		{
+			ThrowIfDestroyed();
+			return gameObject.GetComponentsInParent<T>(includeInactive);
 		}
 
 		public T AddComponent<T>()

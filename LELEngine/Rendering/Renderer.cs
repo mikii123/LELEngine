@@ -426,6 +426,7 @@ namespace LELEngine.Rendering
 				Projection = camera.ProjectionMatrix,
 				ViewProjection = camera.ViewProjectionMatrix,
 				CameraPosition = camera.transform.position,
+				CameraForward = camera.transform.forward,
 				Width = Width,
 				Height = Height,
 				Renderers = lists.Opaque,

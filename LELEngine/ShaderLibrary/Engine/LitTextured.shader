@@ -3,6 +3,7 @@ Color ("Color", Color) = (1, 1, 1, 1)
 DiffuseMap ("Albedo", 2D) = "white" {}
 NormalMap ("Normal Map", 2D) = "bump" {}
 [HDR] Emissive ("Emissive (rgb color, a intensity)", Color) = (0, 0, 0, 0)
+EmissionMap ("Emission Map (rgb, multiplies Emissive)", 2D) = "white" {}
 Roughness ("Roughness", Range(0, 1)) = 0.6
 /////Properties
 
@@ -51,8 +52,9 @@ void main()
 #include "Engine/Shadows.glsl"
 #include "Engine/VoxelConeTracing.glsl"
 
-// Lit with an albedo map (multiplies Color) and a tangent-space normal map. Material: Color, DiffuseMap,
-// NormalMap, Emissive (rgb color, a intensity, also fed into the GI), Roughness (0 = unset -> 0.6).
+// Lit with an albedo map (multiplies Color), a tangent-space normal map and an emission map (multiplies Emissive).
+// Material: Color, DiffuseMap, NormalMap, Emissive (rgb color, a intensity, also fed into the GI), EmissionMap,
+// Roughness (0 = unset -> 0.6).
 #include "Engine/Instancing.glsl"
 
 in vec3 fNormal;
@@ -63,6 +65,7 @@ in vec2 fTexCoord;
 
 uniform sampler2D DiffuseMap;
 uniform sampler2D NormalMap;
+uniform sampler2D EmissionMap;
 
 struct Directional {
 	vec4 dirColor;
@@ -91,7 +94,8 @@ void main()
 {
 	LelMaterial material = LelMaterialData();
 	vec4 color = material.color * texture(DiffuseMap, fTexCoord);
-	vec4 emissive = material.emissive;
+	// The default (white) map leaves Emissive as it is.
+	vec4 emissive = vec4(material.emissive.rgb * texture(EmissionMap, fTexCoord).rgb, material.emissive.a);
 	float materialRoughness = material.params.x;
 
 	// Tangent-space normal (the default "bump" texture leaves the vertex normal unchanged).

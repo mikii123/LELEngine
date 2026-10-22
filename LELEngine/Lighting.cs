@@ -157,6 +157,7 @@ namespace LELEngine
 			{
 				program.SetVector4("giSkyboxTint", SkyEnvironment.TintExposure);
 				program.SetVector2("giSkyboxRotation", SkyEnvironment.Rotation);
+				program.SetVector2("giSkyboxTilt", SkyEnvironment.Tilt);
 				program.SetFloat("giSkyboxLod", SkyEnvironment.Lod);
 			}
 		}
@@ -666,6 +667,13 @@ namespace LELEngine
 			set => Lighting.SceneGI.FollowCamera = value;
 		}
 
+		/// <summary>With <see cref="FollowCamera" />: the volume's center this far along the camera's view direction.</summary>
+		public float FollowCameraLookAhead
+		{
+			get => Lighting.SceneGI.FollowCameraLookAhead;
+			set => Lighting.SceneGI.FollowCameraLookAhead = value;
+		}
+
 		public float DiffuseStrength
 		{
 			get => Lighting.SceneGI.DiffuseStrength;
@@ -1165,19 +1173,21 @@ namespace LELEngine
 		}
 
 		/// <summary>
-		///     Positions the GI grid for this frame: around <see cref="Center" />, or around the camera snapped
-		///     to voxels when <see cref="FollowCamera" /> is set. Called by the volume passes.
+		///     Positions the GI grid for this frame: around <see cref="Center" />, or, with <see cref="FollowCamera" />,
+		///     around the point <see cref="FollowCameraLookAhead" /> along the camera's view, snapped to voxels (the volume
+		///     moves in whole voxels: every move re-voxelizes its static geometry). Called by the volume passes.
 		/// </summary>
-		public void UpdateGridPlacement(Vector3 cameraPosition)
+		public void UpdateGridPlacement(Vector3 cameraPosition, Vector3 cameraForward)
 		{
 			Vector3 center = Center;
 			if (FollowCamera)
 			{
+				Vector3 target = cameraPosition + cameraForward * FollowCameraLookAhead;
 				float voxel = VoxelSize;
 				center = new Vector3(
-					(float)Math.Floor(cameraPosition.X / voxel) * voxel,
-					(float)Math.Floor(cameraPosition.Y / voxel) * voxel,
-					(float)Math.Floor(cameraPosition.Z / voxel) * voxel);
+					(float)Math.Floor(target.X / voxel) * voxel,
+					(float)Math.Floor(target.Y / voxel) * voxel,
+					(float)Math.Floor(target.Z / voxel) * voxel);
 			}
 
 			GridMin = center - new Vector3(GridSize * 0.5f);

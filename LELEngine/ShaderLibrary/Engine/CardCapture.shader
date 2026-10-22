@@ -37,6 +37,8 @@ uniform vec4 voxAlbedo;        // material base color
 uniform vec4 voxEmissive;      // rgb color; the intensity (a) travels with the object table so pulsing never recaptures
 uniform sampler2D voxAlbedoMap;
 uniform int voxUseAlbedoMap;
+uniform sampler2D voxEmissionMap; // multiplies the emission colour (texture unit 1)
+uniform int voxUseEmissionMap;
 uniform int cardIndex;
 
 layout(location = 0) out vec4 OutAlbedo;        // rgb albedo, a = 1 valid
@@ -60,7 +62,13 @@ void main()
 
 	OutAlbedo = vec4(albedo, 1.0);
 	OutNormal = vec4(n * 0.5 + 0.5, 1.0);
-	OutEmissive = vec4(voxEmissive.rgb, 1.0);
+	vec3 emission = voxEmissive.rgb;
+	if (voxUseEmissionMap != 0)
+	{
+		emission *= texture(voxEmissionMap, fTexCoord).rgb;
+	}
+
+	OutEmissive = vec4(emission, 1.0);
 	OutLocalPosition = vec4(fLocalPos, 1.0);
 	OutCardIndex = uint(cardIndex);
 }

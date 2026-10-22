@@ -193,7 +193,7 @@ namespace LELEngine.Rendering.Passes
 				CreateGridShadow(gi.GridShadowMapSize);
 			}
 
-			gi.UpdateGridPlacement(context.CameraPosition);
+			gi.UpdateGridPlacement(context.CameraPosition, context.CameraForward);
 			PartitionRenderers(context.Renderers);
 			DetectGeometryChanges(gi);
 
@@ -888,6 +888,13 @@ namespace LELEngine.Rendering.Passes
 			if (albedoMap != 0)
 			{
 				program.SetTexture("voxAlbedoMap", TextureTarget.Texture2D, albedoMap, 0);
+			}
+
+			int emissionMap = material.GetTextureHandle("EmissionMap");
+			program.SetInt("voxUseEmissionMap", emissionMap != 0 ? 1 : 0);
+			if (emissionMap != 0)
+			{
+				program.SetTexture("voxEmissionMap", TextureTarget.Texture2D, emissionMap, 1);
 			}
 		}
 

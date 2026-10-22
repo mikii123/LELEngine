@@ -66,6 +66,13 @@ namespace LELEngine.Editor
 			return edited;
 		}
 
+		/// <summary>A curve's preview line; a click opens the curve editor (keys, tangents, presets). Returns the curve (created when null).</summary>
+		public static AnimationCurve CurveField(string label, AnimationCurve curve)
+		{
+			Field(label, ref curve);
+			return curve;
+		}
+
 		public static float Slider(string label, float value, float min, float max)
 		{
 			PrefixLabel(label);

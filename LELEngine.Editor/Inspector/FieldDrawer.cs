@@ -215,6 +215,12 @@ namespace LELEngine.Editor
 				return maskChanged;
 			}
 
+			if (type == typeof(AnimationCurve))
+			{
+				// A preview that opens the curve editor.
+				return CurveEditor.DrawField(label, ref value, info, context);
+			}
+
 			if (type == typeof(LELEngine.Audio.AudioEventReference))
 			{
 				// An event of the audio project, picked from a list.

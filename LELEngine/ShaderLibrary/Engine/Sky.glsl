@@ -9,6 +9,7 @@ uniform int giSkyboxEnabled;
 uniform samplerCube giSkybox;
 uniform vec4 giSkyboxTint;     // rgb: the skybox material's tint times its exposure
 uniform vec2 giSkyboxRotation; // cos, sin of the skybox's yaw rotation (same convention as Engine/Skybox.shader)
+uniform vec2 giSkyboxTilt;     // cos, sin of its tilt about X (applied before the yaw)
 uniform float giSkyboxLod;     // mip level sampled: diffuse rays read a blurred sky
 
 vec3 SkyRadiance(vec3 direction)
@@ -18,9 +19,12 @@ vec3 SkyRadiance(vec3 direction)
 		return giSkyRadiance;
 	}
 
+	vec3 t = vec3(direction.x,
+		giSkyboxTilt.x * direction.y - giSkyboxTilt.y * direction.z,
+		giSkyboxTilt.y * direction.y + giSkyboxTilt.x * direction.z);
 	float c = giSkyboxRotation.x;
 	float s = giSkyboxRotation.y;
-	vec3 d = vec3(c * direction.x + s * direction.z, direction.y, -s * direction.x + c * direction.z);
+	vec3 d = vec3(c * t.x + s * t.z, t.y, -s * t.x + c * t.z);
 	return textureLod(giSkybox, d, giSkyboxLod).rgb * giSkyboxTint.rgb;
 }
 

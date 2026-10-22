@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using OpenTK.Mathematics;
 
 namespace LELEngine.UIElements
@@ -201,7 +202,9 @@ namespace LELEngine.UIElements
 		private PseudoStates m_PseudoStates;
 		private List<string> m_ClassList;
 		private Action<MeshGenerationContext> m_GenerateVisualContent;
-		private static readonly Dictionary<Type, string> typeNames = new Dictionary<Type, string>();
+		// Weak keys: element types of the game scripts (a collectible assembly) do not keep it loaded after a reload.
+		private static readonly ConditionalWeakTable<Type, string> typeNames = new ConditionalWeakTable<Type, string>();
+		private static readonly ConditionalWeakTable<Type, string>.CreateValueCallback typeNameOf = TypeNameOf;
 
 		#endregion
 
@@ -209,26 +212,16 @@ namespace LELEngine.UIElements
 
 		public VisualElement()
 		{
-			Type type = GetType();
-			lock (typeNames)
-			{
-				string cached;
-				if (!typeNames.TryGetValue(type, out cached))
-				{
-					cached = type.Name;
-					int generic = cached.IndexOf('`');
-					if (generic >= 0)
-					{
-						cached = cached.Substring(0, generic);
-					}
-
-					typeNames[type] = cached;
-				}
-
-				typeName = cached;
-			}
-
+			typeName = typeNames.GetValue(GetType(), typeNameOf);
 			layoutNode = new LayoutNodeData();
+		}
+
+		/// <summary>The type's name without a generic arity suffix ("ListView`1" → "ListView").</summary>
+		private static string TypeNameOf(Type type)
+		{
+			string name = type.Name;
+			int generic = name.IndexOf('`');
+			return generic >= 0 ? name.Substring(0, generic) : name;
 		}
 
 		#endregion

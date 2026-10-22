@@ -71,6 +71,13 @@ namespace LELEngine
 		/// <summary>Center the volume on the camera (snapped to voxels) instead of <see cref="Center" />.</summary>
 		public bool FollowCamera;
 
+		/// <summary>
+		///     With <see cref="FollowCamera" />: the volume's center lies this far along the camera's view direction (0: on
+		///     the camera). A top-down or third-person camera puts it between itself and what it looks at, so one volume
+		///     lights both the space at the camera and the ground (and what lies under it).
+		/// </summary>
+		public float FollowCameraLookAhead;
+
 		public float DiffuseStrength = 1f;
 		public float SpecularStrength = 1f;
 		public float OcclusionStrength = 1f;

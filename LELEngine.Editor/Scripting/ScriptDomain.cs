@@ -547,7 +547,11 @@ namespace LELEngine.Editor
 		///     (shared types); the assemblies loaded from memory (Game.dll for Game.Editor.dll) resolve to themselves;
 		///     other dependencies (NuGet packages of the game) load from the build output.
 		/// </summary>
-		private sealed class GameLoadContext : AssemblyLoadContext
+		/// <summary>
+		///     Game.dll and Game.Editor.dll in one context: the editor scripts resolve Game.dll through it (batch mode loads
+		///     its scripts the same way).
+		/// </summary>
+		internal sealed class GameLoadContext : AssemblyLoadContext
 		{
 			private readonly string folder;
 

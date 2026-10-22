@@ -122,6 +122,9 @@ namespace LELEngine.Shaders
 
 		private static readonly string[] MainTextureNames = { "DiffuseMap", "MainTex", "AlbedoMap", "Albedo", "BaseMap" };
 
+		// Empty texture properties by name: they bind the sampler kind's default (see ApplyMissingTextures).
+		private static readonly Dictionary<string, TextureProperty> DefaultTextures = new Dictionary<string, TextureProperty>();
+
 		[SerializeField] private ShaderProgram m_Shader;
 		[SerializeField] private List<MaterialProperty> m_Properties = new List<MaterialProperty>();
 		[SerializeField] private int m_RenderQueue = -1;
@@ -457,6 +460,18 @@ namespace LELEngine.Shaders
 					property.Apply(program, ref textureUnit);
 				}
 			}
+
+			ApplyMissingTextures(program, this, ref textureUnit);
+		}
+
+		/// <summary>
+		///     Binds the neutral default of every texture the program declares, for draws without a material of their own
+		///     (GPU-driven buckets of materials with only the standard values).
+		/// </summary>
+		public static void SetDefaultTextures(ShaderProgram program)
+		{
+			int textureUnit = 0;
+			ApplyMissingTextures(program, null, ref textureUnit);
 		}
 
 		/// <summary>
@@ -616,6 +631,34 @@ namespace LELEngine.Shaders
 		#endregion
 
 		#region PrivateMethods
+
+		/// <summary>
+		///     Textures the program declares that the material does not set (a material saved before the shader gained the
+		///     property, or no material at all) get the declared kind's neutral default: an unbound sampler would read
+		///     whatever an earlier draw left on its texture unit.
+		/// </summary>
+		private static void ApplyMissingTextures(ShaderProgram program, Material material, ref int textureUnit)
+		{
+			foreach (ShaderProperty declared in program.Properties)
+			{
+				if (declared.Type < ShaderPropertyType.Texture2D || (material != null && material.Find(declared.Name) != null))
+				{
+					continue;
+				}
+
+				TextureProperty fallback;
+				lock (DefaultTextures)
+				{
+					if (!DefaultTextures.TryGetValue(declared.Name, out fallback))
+					{
+						fallback = new TextureProperty { name = declared.Name };
+						DefaultTextures[declared.Name] = fallback;
+					}
+				}
+
+				fallback.Apply(program, ref textureUnit);
+			}
+		}
 
 		private MaterialProperty Find(string propertyName)
 		{

@@ -82,8 +82,16 @@ namespace LELEngine.Rendering.Passes
 				program.RenderState.ApplyCull();
 				context.Camera.SetUniforms(program);
 				Lighting.SetUniforms(program, bucket.ReceiveShadows, bucket.ReceiveGI);
-				// A material with its own uniforms (textures, custom values) sets them; standard ones come from the table.
-				bucket.Material?.SetUniforms(program);
+				// A material with its own uniforms (textures, custom values) sets them; standard ones come from the table
+				// (their declared textures get the neutral defaults).
+				if (bucket.Material != null)
+				{
+					bucket.Material.SetUniforms(program);
+				}
+				else
+				{
+					Material.SetDefaultTextures(program);
+				}
 				gpu.DrawCameraBucket(i);
 			}
 		}
