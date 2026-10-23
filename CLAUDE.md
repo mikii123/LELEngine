@@ -468,9 +468,14 @@
   required), `CollectionDrawers` (lists: grip reorder, index, remove, count, add, drop to append; dictionaries: table,
   new-key row). Rows decorate any field kind through `InspectorContext.PendingRow` (taken by `BeginLine` / `Header`).
   The hierarchy selects on mouse release (a drag keeps the selection); the inspector has a lock (top right).
+- ImGui's asserts are on in the editor's own panels (only user callbacks run with error recovery): an unbalanced
+  Push / Pop aborts the process (`Assertion failed ... "Calling PopStyleColor() too many times!"`, exit code 127).
+  Pop by the condition that pushed, not by state the widget in between changed (the inspector lock crashed on its
+  first click that way until 2026-10-24).
 - Test hooks (TestHooks / TestAnchors): `drag=N;from;to|...` (press N, hover N+10, drop N+12), `click=`,
   `doubleclick=`, `rclick=`, `ctrlclick=` (N;anchor|...), anchors `hierarchy:Name`, `project:Folder/File.ext`,
-  `project:(empty)`, `component:Type`, `field:Type.field[@fraction]`, `row:Label/i[/row]`, `button:AddEntry`;
+  `project:(empty)`, `component:Type`, `field:Type.field[@fraction]`, `row:Label/i[/row]`, `button:AddEntry`,
+  `button:InspectorLock` (the real lock button; `lockinspector=N` locks without clicking);
   `logfield=N;Object;Component.field|...`, `pingasset=N;path|...`, `lockinspector=N`, `undo=N|M`, `redo=`,
   `expandinspector=1`, `inspectorscroll=N;px`, `screenshotframe=a,b,c` (folder/fNNNN). Each hook name holds one
   value (repeat with `|`), and `Start-Process` splits arguments at spaces: no spaces in anchors.

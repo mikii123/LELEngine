@@ -105,17 +105,21 @@ namespace LELEngine.Editor
 				// The lock at the top right, over the first line.
 				float size = ImGui.GetFrameHeight();
 				ImGui.SetCursorScreenPos(topRight - new NVector2(size, 0f));
-				if (locked)
+				// The click changes the lock: the pop follows the push, not the new state (an unbalanced pop is an ImGui assert).
+				bool wasLocked = locked;
+				if (wasLocked)
 				{
 					ImGui.PushStyleColor(ImGuiCol.Button, EditorStyle.Accent);
 				}
 
-				if (EditorIcons.Button("inspector_lock", locked ? IconKind.Lock : IconKind.Unlock, locked ? "Locked: shows this object whatever is selected (click to unlock)" : "Lock the inspector on this object (select other things, e.g. assets to drag on to its fields)", size))
+				bool clicked = EditorIcons.Button("inspector_lock", wasLocked ? IconKind.Lock : IconKind.Unlock, wasLocked ? "Locked: shows this object whatever is selected (click to unlock)" : "Lock the inspector on this object (select other things, e.g. assets to drag on to its fields)", size);
+				TestAnchors.RecordItem("button:InspectorLock");
+				if (clicked)
 				{
-					Lock(!locked);
+					Lock(!wasLocked);
 				}
 
-				if (locked)
+				if (wasLocked)
 				{
 					ImGui.PopStyleColor();
 				}
