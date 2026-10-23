@@ -284,7 +284,8 @@ namespace LELEngine.Editor
 			}
 
 			AcceptSceneObject(relative);
-			if (ImGui.BeginPopupContextItem("##tree_context"))
+			// The path keeps the popups apart: a closed tree node pushes no ID, so its siblings and parent share the stack.
+			if (ImGui.BeginPopupContextItem("##tree_context" + relative))
 			{
 				if (ImGui.MenuItem("Create Folder"))
 				{
@@ -407,7 +408,7 @@ namespace LELEngine.Editor
 				}
 
 				AcceptSceneObject(folderPath);
-				if (ImGui.BeginPopupContextItem("##dir_context"))
+				if (ImGui.BeginPopupContextItem("##dir_context" + folderPath))
 				{
 					SelectFolderRow(folderPath);
 					if (ImGui.MenuItem("Open")) ShowFolder(folderPath);
@@ -571,7 +572,7 @@ namespace LELEngine.Editor
 				ImGui.EndDragDropSource();
 			}
 
-			if (ImGui.BeginPopupContextItem("##file_context"))
+			if (ImGui.BeginPopupContextItem("##file_context" + assetPath))
 			{
 				selectedFile = assetPath;
 				editor.SelectAsset(assetPath);

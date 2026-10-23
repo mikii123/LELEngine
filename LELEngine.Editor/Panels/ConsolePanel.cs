@@ -1496,6 +1496,8 @@ namespace LELEngine.Editor
 		/// <summary>A horizontal (or <paramref name="vertical" />) bar dragged to resize; true when the drag ends, <paramref name="delta" /> while it moves.</summary>
 		private static bool Splitter(string id, bool vertical, float length, out float delta)
 		{
+			// A window not laid out yet (first frame, collapsed dock node) has no room: ImGui asserts on a zero-size button.
+			length = Math.Max(1f, length);
 			NVector2 size = vertical ? new NVector2(SplitterThickness, length) : new NVector2(length, SplitterThickness);
 			NVector2 pos = ImGui.GetCursorScreenPos();
 			ImGui.InvisibleButton(id, size);
