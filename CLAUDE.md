@@ -362,6 +362,80 @@
   as above; a batch build lists exactly the used variants in ShaderVariants.txt; an old LitTransparent material shows
   Refraction Strength 0.1 in the inspector. Default room vs. HEAD build (animate=0): differences below run-to-run noise.
 
+## Mesh distance field atlas: shapes, settling, freeing, growing (2026-10-24)
+
+- `DistanceFieldAtlas` (`Rendering/DistanceField`) keys fields by mesh and shape (`ShapeKey`: |scale| / its largest
+  component, thousandths; every uniform scale is (1000, 1000, 1000)), built at that shape (`MeshDistanceField.Shape`,
+  bounds and distances in shape units). `LumenScene` draws a field at `UniformScale(scale, shape)` (the largest u with u
+  x shape inside the scale on every axis: the scale's largest component for its own shape, smaller for a borrowed one):
+  the object table's bounds, padding and mesh bounds are times u (`SceneObject.Scale` = shape x u), and `atlasSize.w` =
+  u multiplies the sampled distance in `SceneObjectDistance` (Engine/SceneObjects.glsl, the only atlas read). Surface
+  cache cards keep the scale they were laid out for (`SurfaceCardSet.Scale`, the capture's `objectScale`).
+- `LumenScene.ResolveField`: a renderer seen for the first time gets its shape's field (built when missing); after its
+  shape changes it builds none until the shape held `ShapeSettleSeconds` (0.25 s of `Time.timeD`; frame counts settled
+  at the extremes of a sine at 1000 fps), meanwhile it takes the atlas's field of the new shape if there is one, else
+  keeps its previous one (`IsValid`), else has none. States per renderer (`fieldStates`), pruned when renderers go.
+  Before: effects scaling every frame (New Frontier's flashes, 0.5 -> 2) made a field per frame (and a GPU readback
+  each) until the 1024 slices were full, then "Atlas full" once per new scale, and later meshes got no field.
+- Room: slices come first fit from a free list (merged neighbours). No fit: the fields unused for `EvictAfterFrames`
+  (30) frames are freed (`IsValid` false; the copy kept on the mesh re-uploads them when needed again), then the texture
+  doubles (`Grow`: new texture, glCopyImageSubData, `[SDF] Distance field atlas grown to N slices`) up to `MaxDepth` =
+  min(4096, GL_MAX_3D_TEXTURE_SIZE) (32 MB); then the request fails, warned once (`ReportFull`), and fails at once for
+  the rest of that frame. `GLCapabilities.Max3DTextureSize`. Old `.sdf` files and caches stay valid: a key always meant
+  a field built at key / 1000 (`BakedDistanceField.ShapeKey`, same file layout).
+- Verified: TestGame frames vs. before (animate=0): VCT max 2 of 255 (mean 0.024: shape quantization, half floats in
+  shape units), Lumen within run-to-run noise; 13 fields instead of 14 in the room. `sdfatlas=1` (`SdfAtlasProbe`):
+  30 shapes grow the atlas to 2048, 30 other shapes a second later reuse the room of the first (no growth), 120 more
+  grow it to 4096 and warn once (99 fields, 64 objects without), a box whose shape changes every frame builds no field
+  for 3.5 s and one 0.25 s after it holds. New Frontier's Flight scene firing for ~500 frames: 4 fields, no warning.
+
+## TrailRenderer, Gradient, ParticlesUnlit tiling and soft particles (2026-10-24)
+
+- `TrailRenderer` (`Mono/Behaviours/TrailRenderer.cs`, global namespace, `[ExecuteAlways]`): Unity's settings as
+  properties over `m_` fields (`time`, `minVertexDistance`, `autodestruct`, `emitting`, `widthCurve` x
+  `widthMultiplier`, `startWidth` / `endWidth`, `colorGradient`, `startColor` / `endColor`, `numCornerVertices`,
+  `numCapVertices`, `alignment` View / TransformZ, `textureMode` Stretch / Tile / DistributePerSegment /
+  RepeatPerSegment, `textureScale` (x: Tile and RepeatPerSegment, y: across), `receiveShadows`, `receiveGI`,
+  materials (`Materials`, `SetMaterials`, `sharedMaterial(s)`); `Clear`, `AddPosition(s)`, `Get/SetPosition(s)`,
+  `positionCount` (index 0 = oldest). `LateUpdate` advances the trail's own clock (frames that update it: a paused
+  game keeps the trail; time spent disabled is added on `OnEnable`, as Unity's points age by Time.time), adds a point
+  when the object moved `minVertexDistance`, drops points older than `time` (no tail interpolation, as Unity), and
+  autodestructs in play mode. Points survive disabling (pooled objects call `Clear`). `Reset` (Add Component, the
+  GameObject menu's Trail) assigns the built-in `Engine/Materials/Default-Line.material` (ParticlesUnlit, alpha).
+- Drawing: `TransparentPass.CollectTrails` takes the trails from `context.Behaviours` (on the camera's layers) and
+  builds each for this camera (`BuildGeometry`: the object while emitting, then the points newest first; t =
+  distance / length from the object for width, color and Stretch u) with `LineGeometryBuilder`
+  (`Rendering/LineGeometry.cs`: two vertices per point across `cross(along, facing)`, facing = towards the camera or
+  the stored Z; corner fans around the inner vertex, cap half discs; world space, normal = facing, tangent = along,
+  bitangent = -side) into one stream per camera (`DynamicGeometry`, orphaned buffers, the standard vertex layout).
+  Each material slot is an entry sorted with the meshes (queue, then the bounds' centre), drawn with
+  `modelMatrix` = identity; opaque materials too (they draw in the transparent pass before the transparent queues:
+  no depth prepass, shadows or GI from trails). GrabPass works for trails (bounds rectangle).
+- `Gradient` (`Mono/Gradient.cs`): Unity's API (`GradientColorKey` / `GradientAlphaKey`, at most 8 of each, sorted,
+  `mode` Blend / Fixed (the next key's value) / PerceptualBlend (Oklab), `Evaluate`, `SetKeys`); values used as
+  stored (no color space conversion, as Unity's trails with Apply Active Color Space off). Inspector:
+  `GradientEditor` (`FieldDrawer`, `EditorGUILayout.GradientField`): a bar with the checkerboard; a popup with the
+  mode, alpha keys above the bar and color keys below (click selects, drag moves, click beside the bar adds, Delete
+  removes), the selected key's color / alpha and location, undo through the inspector context. Anchors
+  `gradientbar`, `gradientkey:c0` / `gradientkey:a0`.
+- `Engine/ParticlesUnlit.shader`: `BaseMap_ST` (Unity's _ST: tiling xy, offset zw); the material editor draws any
+  `<texture>_ST` Vector property as Tiling / Offset rows under its texture. Soft particles: `[Toggle(SOFT_PARTICLES)]`
+  with Unity's `SoftParticlesNearFadeDistance` / `SoftParticlesFarFadeDistance` (fade = saturate((scene depth -
+  fragment depth - near) / (far - near)) on the tint's alpha; Unity's legacy InvFade = near 0, far 1 / InvFade), not
+  in Opaque mode. New render state line `SceneDepth On` (`ShaderRenderState.SceneDepth`; such variants stay in a
+  transparent queue like GrabPass ones): the transparent pass takes the opaque depth copy the VFX soft particles use
+  (`VfxRuntime.CaptureDepth`) once and binds it (`SceneDepthTexture`, unit 22) for `Engine/SceneDepth.glsl`
+  (`LelEyeDepth`, `LelSceneEyeDepth`, `LelSoftParticleFade`).
+- Porting Unity's legacy particle materials to ParticlesUnlit: Legacy Particles/Additive computes 2 x vertex color x
+  _TintColor x texture (alpha too) with Blend SrcAlpha One and Cull Off, so Color = 2 x _TintColor, BlendMode
+  Additive, RenderFace Both; _MainTex scale / offset -> BaseMap_ST; _InvFade -> soft particles (far 1 / InvFade) when
+  the Unity project ran with soft particles. FORGE3D/Additive: the same without the doubling.
+- Verified: TestGame `trails=1` (`BuildTrails`: tapering additive figure eight, alpha trail with round corners and
+  caps that toggles emitting, twisting TransformZ ribbon (opaque), Tile checker, and two additive glows half sunk into
+  a slab, soft and hard), with `night=1 glass=0 emitters=0 gi=0` for contrast; New Frontier's Photon in editor play
+  mode (scratch probe script, removed); the gradient editor scripted on a new scratch project (select, drag to 50%,
+  Delete, undo; Reset's default material saved as a path); a batch build (glslang on the SOFT_PARTICLES variant).
+
 ## Skybox orientation
 
 - `Engine/Skybox.shader` and `Engine/SkyboxPanoramic.shader`: `Tilt` (degrees about X, applied first) then `Rotation`
@@ -479,10 +553,12 @@
   ...) plus every ImGuiCol overridable by name, text size via `style.FontSizeBase`. `ImGuiController.ApplyStyle`
   re-applies it per window when `EditorPreferences.ThemeVersion` changes (Audio Studio adds its own style on top).
   Monospace font per context: `EditorFonts.PushMono(size)` (Consolas / Cascadia Mono / ImGui default).
-- Hierarchy folding (2026-10-24): `HierarchyExpansion` keeps the folded rows per project folder + scene / prefab path
+- Hierarchy folding (2026-10-24): rows start folded; `HierarchyExpansion` keeps the unfolded rows (`Expanded`) per project folder + scene / prefab path
   (object ids) in `%APPDATA%\LELEngine\Editor\hierarchy.json`, never in the project; saved 0.5 s after a change and
   in `SaveEditorState`. Automated runs read it and save nothing unless `hierarchyfile=path`. The editor has no
-  `exitseconds=` (that is TestGame's): use `exitframe=`.
+  `exitseconds=` (that is TestGame's): use `exitframe=`, and keep it small: New Frontier's Flight scene runs far
+  slower than 1000 fps in the editor (a script reload with the leak check finished well within 2000 frames;
+  `exitframe=30000` ran for minutes). Always `WaitForExit(timeout)` and stop the process on a timeout.
 - Automated runs read the user's `layout.ini` (and the other windows' ini files) but never save them
   (`ImGuiController.ReadOnlyLayouts`), and their projects stay out of `recent.json`: a test that docked the console
   elsewhere once moved the user's real console.
@@ -700,8 +776,9 @@
     alpha 0, the usual particle texture, decoded to alpha 1/255 and additive particles drew their quad faintly). Sprites
     and the images USS / UXML reference (`url()`, `resource()`) stay PNG: the UI draws images as they are;
   - `Data/.assetindex` (GUID to path): the player reads it instead of every meta file;
-  - `<model file>.sdf` next to each model: the GI's mesh distance fields at every scale the scenes draw the mesh
-    (scale keys quantized to 0.001) and at scale 1, baked by `DistanceFieldBaker` with the renderer's GPU build
+  - `<model file>.sdf` next to each model: the GI's mesh distance fields at every shape the scenes draw the mesh at
+    (shape keys: the scale over its largest component, in thousandths; every uniform scale is shape 1) and at shape 1,
+    baked by `DistanceFieldBaker` with the renderer's GPU build
     (needs the GL context: batch mode bakes on its own thread, the Project Settings window before its build task),
     cached in `Library/DistanceFieldCache`. Without them a big mesh's field takes seconds when its scene appears; the
     editor still builds them on first use (then keeps them on the `Mesh`).

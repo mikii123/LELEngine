@@ -280,7 +280,8 @@ namespace LELEngine.Rendering
 		///     Linear eye depth from an NDC depth z: (z * x + y) / (z * z + w), the inverse of the projection's depth rows
 		///     (perspective or orthographic; row vectors, so GLSL's projection[3][2] is M43).
 		/// </summary>
-		private static Vector4 DepthParams(Matrix4 projection)
+		/// <summary>The projection's depth rows for linear eye depth in shaders: (z * x + y) / (z * z + w), z the NDC depth (row vectors).</summary>
+		internal static Vector4 DepthParams(Matrix4 projection)
 		{
 			return new Vector4(projection.M44, -projection.M43, projection.M34, -projection.M33);
 		}

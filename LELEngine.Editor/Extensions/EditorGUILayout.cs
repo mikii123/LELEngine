@@ -73,6 +73,13 @@ namespace LELEngine.Editor
 			return curve;
 		}
 
+		/// <summary>A gradient's bar; a click opens the gradient editor (mode, color and alpha keys). Returns the gradient (created when null).</summary>
+		public static Gradient GradientField(string label, Gradient gradient)
+		{
+			Field(label, ref gradient);
+			return gradient;
+		}
+
 		public static float Slider(string label, float value, float min, float max)
 		{
 			PrefixLabel(label);

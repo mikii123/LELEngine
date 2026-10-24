@@ -11,8 +11,9 @@ using OpenTK.Mathematics;
 namespace LELEngine.Editor
 {
 	/// <summary>
-	///     Bakes the mesh distance fields of a game build: every mesh its scenes draw for the GI, at the scale each
-	///     renderer has (and at scale 1, for copies made at runtime), with the renderer's own GPU build. The player
+	///     Bakes the mesh distance fields of a game build: every mesh its scenes draw for the GI, at the shape of each
+	///     renderer's scale (every uniform scale is one shape; plus shape 1, for copies made at runtime), with the
+	///     renderer's own GPU build. The player
 	///     uploads them instead of building them, which takes seconds for big meshes right when a scene appears.
 	///     Baking needs the GL context on the calling thread; without it only cached fields are used. Fields are cached
 	///     in Library/DistanceFieldCache, valid while the model file, its meta file and the field layout are the same.
@@ -49,7 +50,9 @@ namespace LELEngine.Editor
 		{
 			public string ModelPath;
 			public string MeshName;
-			public Vector3 Scale;
+
+			/// <summary>The shape of the renderers' scale (<see cref="DistanceFieldAtlas.ShapeKey" />).</summary>
+			public Vector3i Shape;
 		}
 
 		#endregion
@@ -116,7 +119,7 @@ namespace LELEngine.Editor
 			{
 				foreach (Request request in requests.Values)
 				{
-					Vector3i key = DistanceFieldAtlas.ScaleKey(request.Scale);
+					Vector3i key = request.Shape;
 					string cacheFile = CacheFile(project, request, key);
 					string stamp = Stamp(request.ModelPath);
 					BakedDistanceField field = ReadCache(cacheFile, stamp);
@@ -134,13 +137,13 @@ namespace LELEngine.Editor
 
 						atlas ??= new DistanceFieldAtlas(DistanceFieldAtlas.AtlasXY);
 						atlas.Reset();
-						MeshDistanceField built = atlas.GetOrBuild(mesh, request.Scale);
+						MeshDistanceField built = atlas.GetOrBuild(mesh, key);
 						if (built == null)
 						{
 							continue;
 						}
 
-						field = new BakedDistanceField { ScaleKey = key, Size = built.Size, Voxels = atlas.Read(built) };
+						field = new BakedDistanceField { ShapeKey = key, Size = built.Size, Voxels = atlas.Read(built) };
 						DistanceFieldFile.Write(cacheFile, stamp, new[] { new KeyValuePair<string, BakedDistanceField>(request.MeshName, field) });
 						result.Baked++;
 					}
@@ -367,8 +370,9 @@ namespace LELEngine.Editor
 
 		private static void Add(Dictionary<string, Request> requests, string modelPath, string meshName, Vector3 scale)
 		{
-			Vector3i key = DistanceFieldAtlas.ScaleKey(scale);
-			requests[$"{modelPath}|{meshName}|{key.X},{key.Y},{key.Z}"] = new Request { ModelPath = modelPath, MeshName = meshName, Scale = scale };
+			// Every uniform scale is one shape: one field per mesh for all of them.
+			Vector3i key = DistanceFieldAtlas.ShapeKey(scale);
+			requests[$"{modelPath}|{meshName}|{key.X},{key.Y},{key.Z}"] = new Request { ModelPath = modelPath, MeshName = meshName, Shape = key };
 		}
 
 		private static string CacheFile(ProjectInfo project, Request request, Vector3i key)

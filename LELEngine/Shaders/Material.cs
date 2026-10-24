@@ -85,7 +85,8 @@ namespace LELEngine.Shaders
 		/// <summary>
 		///     Render queue (<see cref="MaterialQueue" />): the shader's unless overridden (set -1 to follow the shader
 		///     again). Queues above <see cref="MaterialQueue.GeometryLast" /> draw in the transparent pass. A variant with
-		///     GrabPass stays in a transparent queue whatever the override: the scene copy it reads exists only there.
+		///     GrabPass or SceneDepth stays in a transparent queue whatever the override: the scene copy it reads exists
+		///     only there.
 		/// </summary>
 		public int renderQueue
 		{
@@ -93,7 +94,7 @@ namespace LELEngine.Shaders
 			{
 				ShaderRenderState state = RenderState;
 				int queue = m_RenderQueue >= 0 ? m_RenderQueue : state.Queue;
-				return state.GrabPass && !MaterialQueue.IsTransparent(queue) ? MaterialQueue.GeometryLast + 1 : queue;
+				return (state.GrabPass || state.SceneDepth) && !MaterialQueue.IsTransparent(queue) ? MaterialQueue.GeometryLast + 1 : queue;
 			}
 			set => m_RenderQueue = value;
 		}

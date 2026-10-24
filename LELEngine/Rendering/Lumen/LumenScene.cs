@@ -81,6 +81,12 @@ namespace LELEngine.Rendering.Lumen
 
 		// Each dynamic object's world bounds last frame (the region a move leaves), and this frame's change regions.
 		private readonly Dictionary<MeshRenderer, ChangeRegion> lastBounds = new Dictionary<MeshRenderer, ChangeRegion>();
+
+		// Per GI renderer: the shape of its scale and the field it draws with (see ResolveField); the renderers seen this
+		// update, so the states of the others can go.
+		private readonly Dictionary<MeshRenderer, FieldState> fieldStates = new Dictionary<MeshRenderer, FieldState>();
+		private readonly HashSet<MeshRenderer> seenRenderers = new HashSet<MeshRenderer>();
+		private readonly List<MeshRenderer> goneRenderers = new List<MeshRenderer>();
 		private readonly List<ChangeRegion> changeRegions = new List<ChangeRegion>();
 		private int lastDynamicCount = -1;
 		private int lastStaticVersion = -1;
@@ -115,6 +121,8 @@ namespace LELEngine.Rendering.Lumen
 				CardBuffer = GL.GenBuffer();
 			}
 
+			DistanceFields.BeginFrame(frame);
+
 			if (!gi.LumenActive)
 			{
 				ReleaseSurfaceCache();
@@ -128,9 +136,11 @@ namespace LELEngine.Rendering.Lumen
 
 			objects.Clear();
 			changeRegions.Clear();
+			seenRenderers.Clear();
 			CollectObjects(renderers, true, gi);
 			StaticObjectCount = objects.Count;
 			CollectObjects(renderers, false, gi);
+			PruneFieldStates();
 			DynamicChanged = DetectDynamicChanges();
 
 			UploadTables();
@@ -203,6 +213,12 @@ namespace LELEngine.Rendering.Lumen
 		/// <summary>Texture units used by the shared scene uniforms (materials never bind this high).</summary>
 		public const int SdfAtlasTextureUnit = 10;
 
+		/// <summary>
+		///     Seconds a renderer's scale must keep its shape after changing before the renderer gets a field of that shape:
+		///     a scale animated every frame (effects growing, stretching) builds no fields, it borrows the one it had.
+		/// </summary>
+		public const double ShapeSettleSeconds = 0.25;
+
 		public const int CardPositionTextureUnit = 9;
 
 		#endregion
@@ -218,24 +234,95 @@ namespace LELEngine.Rendering.Lumen
 					continue;
 				}
 
-				MeshDistanceField field = DistanceFields.GetOrBuild(renderer.Mesh, renderer.transform.scale);
-				if (field == null)
+				seenRenderers.Add(renderer);
+				Vector3 scale = renderer.transform.scale;
+				MeshDistanceField field = ResolveField(renderer, scale);
+				float uniform = field != null ? DistanceFieldAtlas.UniformScale(scale, field.Shape) : 0f;
+				if (!(uniform > 0f))
 				{
 					continue;
 				}
 
+				// The size the GI sees: the field's shape at the renderer's scale (its own scale unless it borrows a field).
+				Vector3 giScale = field.Shape * uniform;
+
 				// Cards only with Lumen's surface cache (see Update).
-				SurfaceCardSet cards = SurfaceCache?.GetOrAllocate(renderer, field, gi.SurfaceCacheTexelsPerMeter, gi.SurfaceCacheMaxCardSize);
+				SurfaceCardSet cards = SurfaceCache?.GetOrAllocate(renderer, giScale, gi.SurfaceCacheTexelsPerMeter, gi.SurfaceCacheMaxCardSize);
 
 				objects.Add(new SceneObject
 				{
 					Index = objects.Count,
 					Renderer = renderer,
 					Field = field,
+					Uniform = uniform,
+					Scale = giScale,
 					Cards = cards,
 					IsStatic = wantStatic
 				});
 			}
+		}
+
+		/// <summary>
+		///     The field a renderer draws with: the field of its mesh at the shape of its scale (every uniform scale shares
+		///     one). A renderer seen for the first time, or whose shape held for <see cref="ShapeSettleSeconds" />, gets it
+		///     built when the atlas has none; while its shape keeps changing (a scale animation) it takes one the atlas
+		///     already has, else keeps the one it had, else none: animations build no fields.
+		/// </summary>
+		private MeshDistanceField ResolveField(MeshRenderer renderer, Vector3 scale)
+		{
+			Vector3i key = DistanceFieldAtlas.ShapeKey(scale);
+			double now = Time.timeD;
+			if (!fieldStates.TryGetValue(renderer, out FieldState state) || state.Mesh != renderer.Mesh)
+			{
+				state = new FieldState { Mesh = renderer.Mesh, Key = key, Settled = true };
+				fieldStates[renderer] = state;
+			}
+			else if (state.Key != key)
+			{
+				state.Key = key;
+				state.Settled = false;
+				state.ChangedTime = now;
+			}
+			else if (!state.Settled && (now - state.ChangedTime >= ShapeSettleSeconds || now < state.ChangedTime))
+			{
+				// Held long enough (or the clock restarted, play mode): the shape is the renderer's now.
+				state.Settled = true;
+			}
+
+			MeshDistanceField field = state.Settled ? DistanceFields.GetOrBuild(renderer.Mesh, key) : DistanceFields.Find(renderer.Mesh, key);
+			if (field == null && state.Field != null && state.Field.IsValid)
+			{
+				field = state.Field;
+				DistanceFields.Use(field);
+			}
+
+			state.Field = field;
+			return field;
+		}
+
+		// Drops the field states of renderers no longer drawn for the GI (destroyed, disabled, no longer contributing).
+		private void PruneFieldStates()
+		{
+			if (fieldStates.Count <= seenRenderers.Count)
+			{
+				return;
+			}
+
+			goneRenderers.Clear();
+			foreach (MeshRenderer renderer in fieldStates.Keys)
+			{
+				if (!seenRenderers.Contains(renderer))
+				{
+					goneRenderers.Add(renderer);
+				}
+			}
+
+			foreach (MeshRenderer renderer in goneRenderers)
+			{
+				fieldStates.Remove(renderer);
+			}
+
+			goneRenderers.Clear();
 		}
 
 		/// <summary>
@@ -339,9 +426,8 @@ namespace LELEngine.Rendering.Lumen
 		{
 			Transform t = o.Renderer.transform;
 			Matrix4 localToWorld = Matrix4.CreateFromQuaternion(t.rotation) * Matrix4.CreateTranslation(t.position);
-			Vector3 scale = o.Field.Scale;
-			Vector3 bmin = o.Renderer.Mesh.BoundsMin * scale;
-			Vector3 bmax = o.Renderer.Mesh.BoundsMax * scale;
+			Vector3 bmin = o.Renderer.Mesh.BoundsMin * o.Scale;
+			Vector3 bmax = o.Renderer.Mesh.BoundsMax * o.Scale;
 			Vector3 min = new Vector3(float.MaxValue);
 			Vector3 max = new Vector3(float.MinValue);
 			for (int corner = 0; corner < 8; corner++)
@@ -379,7 +465,8 @@ namespace LELEngine.Rendering.Lumen
 			{
 				Transform t = o.Renderer.transform;
 				Matrix4 localToWorld = Matrix4.CreateFromQuaternion(t.rotation) * Matrix4.CreateTranslation(t.position);
-				Vector3 scale = o.Field.Scale;
+				Vector3 scale = o.Scale;
+				float uniform = o.Uniform;
 
 				// Material state that changes the lighting (colour, emission colour and intensity).
 				MaterialInputs(o.Renderer, out Vector4 color, out Vector4 emissiveState, out float emissiveIntensity);
@@ -411,11 +498,12 @@ namespace LELEngine.Rendering.Lumen
 				{
 					WorldToLocal = Matrix4.Invert(localToWorld),
 					LocalToWorld = localToWorld,
-					BoundsMin = new Vector4(o.Field.BoundsMin, 0f),
-					BoundsMax = new Vector4(o.Field.BoundsMax, 0f),
+					// The field is in shape units: the object sees it at its uniform factor (bounds and distances).
+					BoundsMin = new Vector4(o.Field.BoundsMin * uniform, 0f),
+					BoundsMax = new Vector4(o.Field.BoundsMax * uniform, 0f),
 					AtlasOrigin = new Vector4(0f, 0f, o.Field.AtlasZ, 0f),
-					AtlasSize = new Vector4(o.Field.Size.X, o.Field.Size.Y, o.Field.Size.Z, 0f),
-					Padding = new Vector4(o.Field.TexelSize * DistanceFieldAtlas.Padding, emissiveIntensity),
+					AtlasSize = new Vector4(o.Field.Size.X, o.Field.Size.Y, o.Field.Size.Z, uniform),
+					Padding = new Vector4(o.Field.TexelSize * (DistanceFieldAtlas.Padding * uniform), emissiveIntensity),
 					MeshBoundsMin = new Vector4(o.Renderer.Mesh.BoundsMin * scale, 0f),
 					MeshBoundsMax = new Vector4(o.Renderer.Mesh.BoundsMax * scale, 0f),
 					CardInfo = new Vector4i(o.Cards?.FirstCardIndex ?? 0, o.Cards?.Cards.Length ?? 0, o.IsStatic ? 0 : 1, MovedRecently(o) ? 1 : 0)
@@ -485,8 +573,25 @@ namespace LELEngine.Rendering.Lumen
 			public int Index;
 			public MeshRenderer Renderer;
 			public MeshDistanceField Field;
+
+			/// <summary>The field is drawn at this factor: bounds and distances times it.</summary>
+			public float Uniform;
+
+			/// <summary>The scale the GI sees the object at (scaled-local space): the field's shape times <see cref="Uniform" />.</summary>
+			public Vector3 Scale;
+
 			public SurfaceCardSet Cards;
 			public bool IsStatic;
+		}
+
+		// A renderer's shape (the key of its scale), whether it held long enough to get its own field, and its field.
+		private sealed class FieldState
+		{
+			public Mesh Mesh;
+			public Vector3i Key;
+			public bool Settled;
+			public double ChangedTime;
+			public MeshDistanceField Field;
 		}
 
 		/// <summary>A world-space box whose lighting changed this frame (see <see cref="ChangeRegions" />).</summary>

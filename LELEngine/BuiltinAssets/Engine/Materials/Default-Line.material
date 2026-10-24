@@ -1,0 +1,17 @@
+{
+  "$format": "LELEngine",
+  "$version": 2,
+  "$kind": "Object",
+  "$type": "LELEngine.Shaders.Material, LELEngine",
+  "m_Shader": { "path": "Engine/ParticlesUnlit.shader" },
+  "m_Properties": [
+    { "$type": "LELEngine.Shaders.ColorProperty, LELEngine", "name": "Color", "value": [1, 1, 1, 1] },
+    { "$type": "LELEngine.Shaders.FloatProperty, LELEngine", "name": "BlendMode", "value": 0 },
+    { "$type": "LELEngine.Shaders.FloatProperty, LELEngine", "name": "RenderFace", "value": 0 }
+  ],
+  "$types": {
+    "LELEngine.Shaders.Material, LELEngine": { "m_Shader": "Asset", "m_Properties": "Array<Object>" },
+    "LELEngine.Shaders.ColorProperty, LELEngine": { "name": "String", "value": "Color4" },
+    "LELEngine.Shaders.FloatProperty, LELEngine": { "name": "String", "value": "Single" }
+  }
+}

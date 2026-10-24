@@ -1950,6 +1950,12 @@ namespace LELEngine.Editor
 				}, parent);
 			}
 
+			if (ImGui.MenuItem("Trail"))
+			{
+				// With the default line material, as the inspector's Add Component gives it.
+				CreateObject("Trail", go => go.AddComponent<TrailRenderer>().Reset(), parent);
+			}
+
 			if (ImGui.BeginMenu("Audio"))
 			{
 				if (ImGui.MenuItem("Audio Listener")) CreateObject("Audio Listener", go => go.AddComponent<LELEngine.Audio.AudioListener>(), parent);

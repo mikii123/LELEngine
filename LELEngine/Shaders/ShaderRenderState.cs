@@ -82,6 +82,7 @@ namespace LELEngine.Shaders
 	///     Queue Transparent                           // Background, Geometry, AlphaTest, Transparent, Overlay, +/- offset, or a number
 	///     ShadowCaster Off                            // On / Off: the material's objects cast no shadow (Unity: a shader without a ShadowCaster pass)
 	///     GrabPass On                                 // On / Off / a float property: the scene drawn so far is copied before each draw (Unity's GrabPass)
+	///     SceneDepth On                               // On / Off: the shader reads the opaque scene's depth (Unity's _CameraDepthTexture, soft particles)
 	///     </code>
 	///     A shader that blends or grabs without naming a queue goes to the Transparent queue. Blending, depth writes and
 	///     the depth test apply in the transparent pass (the opaque passes draw with their own depth state and no
@@ -92,6 +93,8 @@ namespace LELEngine.Shaders
 	///     the object draws. Naming a float property instead of On ("GrabPass RefractionStrength") bounds how far the
 	///     shader shifts its lookups (LelSceneRefraction's strength, world units): only the object's screen rectangle
 	///     widened by that shift is copied, and one copy serves the later objects nothing drawn since overlaps.
+	///     SceneDepth (transparent queues only): the transparent pass copies the depth buffer once the opaques are drawn and
+	///     binds the copy to the shader's draws (Engine/SceneDepth.glsl).
 	/// </summary>
 	public sealed class ShaderRenderState
 	{
@@ -129,6 +132,12 @@ namespace LELEngine.Shaders
 		/// </summary>
 		public string GrabOffsetProperty;
 
+		/// <summary>
+		///     The shader reads the opaque scene's depth (Unity's _CameraDepthTexture, e.g. soft particles) through
+		///     Engine/SceneDepth.glsl: the transparent pass copies the depth buffer after the opaques and binds it.
+		/// </summary>
+		public bool SceneDepth;
+
 		/// <summary>The shader named its queue (otherwise it follows the blend state).</summary>
 		public bool QueueDeclared;
 
@@ -154,6 +163,7 @@ namespace LELEngine.Shaders
 				case "queue":
 				case "shadowcaster":
 				case "grabpass":
+				case "scenedepth":
 					return true;
 				default:
 					return false;
@@ -181,6 +191,8 @@ namespace LELEngine.Shaders
 					return ParseSwitch(rest, out CastShadows, out error);
 				case "grabpass":
 					return ParseGrabPass(rest, out error);
+				case "scenedepth":
+					return ParseSwitch(rest, out SceneDepth, out error);
 				case "queue":
 				{
 					int? queue = MaterialQueue.Parse(rest);
@@ -201,17 +213,18 @@ namespace LELEngine.Shaders
 		}
 
 		/// <summary>
-		///     Blend or GrabPass without a queue: the Transparent queue (call once the block is read). A grab exists only in
-		///     the transparent pass, so a GrabPass shader that names an opaque queue draws right after the opaques.
+		///     Blend, GrabPass or SceneDepth without a queue: the Transparent queue (call once the block is read). A grab and
+		///     the depth copy exist only in the transparent pass, so such a shader that names an opaque queue draws right
+		///     after the opaques.
 		/// </summary>
 		public void Finish()
 		{
-			if ((BlendEnabled || GrabPass) && !QueueDeclared)
+			if ((BlendEnabled || GrabPass || SceneDepth) && !QueueDeclared)
 			{
 				Queue = MaterialQueue.Transparent;
 			}
 
-			if (GrabPass && !MaterialQueue.IsTransparent(Queue))
+			if ((GrabPass || SceneDepth) && !MaterialQueue.IsTransparent(Queue))
 			{
 				Queue = MaterialQueue.GeometryLast + 1;
 			}
@@ -269,6 +282,7 @@ namespace LELEngine.Shaders
 			if (Cull != CullMode.Back) text.Append(", Cull ").Append(Cull);
 			if (!CastShadows) text.Append(", no shadows");
 			if (GrabPass) text.Append(", GrabPass").Append(GrabOffsetProperty != null ? " (" + GrabOffsetProperty + ")" : "");
+			if (SceneDepth) text.Append(", SceneDepth");
 			return text.ToString();
 		}
 

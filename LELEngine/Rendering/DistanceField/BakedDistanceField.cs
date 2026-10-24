@@ -7,15 +7,18 @@ using OpenTK.Mathematics;
 namespace LELEngine.Rendering.DistanceField
 {
 	/// <summary>
-	///     A mesh distance field computed by the game build (the same GPU build the renderer runs), at one scale: the
+	///     A mesh distance field computed by the game build (the same GPU build the renderer runs), at one shape: the
 	///     atlas uploads it instead of building it, which takes seconds for meshes of 100k triangles.
 	/// </summary>
 	public sealed class BakedDistanceField
 	{
 		#region PublicFields
 
-		/// <summary>The renderer scale it was built for (<see cref="DistanceFieldAtlas.ScaleKey" />).</summary>
-		public Vector3i ScaleKey;
+		/// <summary>
+		///     The shape it was built at (<see cref="DistanceFieldAtlas.ShapeKey" />). Files written when this was the
+		///     renderer's scale key read the same: a key always stands for a field built at key / 1000.
+		/// </summary>
+		public Vector3i ShapeKey;
 
 		/// <summary>Texels per axis, padding included (the atlas checks its own layout matches).</summary>
 		public Vector3i Size;
@@ -59,9 +62,9 @@ namespace LELEngine.Rendering.DistanceField
 				{
 					BakedDistanceField field = entry.Value;
 					writer.Write(entry.Key ?? "");
-					writer.Write(field.ScaleKey.X);
-					writer.Write(field.ScaleKey.Y);
-					writer.Write(field.ScaleKey.Z);
+					writer.Write(field.ShapeKey.X);
+					writer.Write(field.ShapeKey.Y);
+					writer.Write(field.ShapeKey.Z);
 					writer.Write(field.Size.X);
 					writer.Write(field.Size.Y);
 					writer.Write(field.Size.Z);
@@ -93,7 +96,7 @@ namespace LELEngine.Rendering.DistanceField
 					string mesh = reader.ReadString();
 					var field = new BakedDistanceField
 					{
-						ScaleKey = new Vector3i(reader.ReadInt32(), reader.ReadInt32(), reader.ReadInt32()),
+						ShapeKey = new Vector3i(reader.ReadInt32(), reader.ReadInt32(), reader.ReadInt32()),
 						Size = new Vector3i(reader.ReadInt32(), reader.ReadInt32(), reader.ReadInt32())
 					};
 					int length = reader.ReadInt32();

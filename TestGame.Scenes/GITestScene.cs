@@ -191,6 +191,9 @@ namespace TestGame.Scenes
 			/// </summary>
 			public bool Refraction;
 
+			/// <summary>Trail props (TrailRenderer) close to the player's start; off by default.</summary>
+			public bool Trails;
+
 			/// <summary>Start position of the player's eye (null = the usual spot by the open side of the room).</summary>
 			public Vector3? CameraPosition;
 
@@ -254,6 +257,10 @@ namespace TestGame.Scenes
 			if (options.Refraction)
 			{
 				BuildRefraction(scene);
+			}
+			if (options.Trails)
+			{
+				BuildTrails(scene);
 			}
 			BuildLight(scene);
 			if (options.Emitters)
@@ -728,6 +735,133 @@ namespace TestGame.Scenes
 			glow.SetFloat("RefractionStrength", 0.12f);
 			glow.SetFloat("RefractionBlend", 0.6f);
 			RefractionQuad(scene, "RefractionGlow", glow, new Vector3(1.05f, 1.5f, -6.9f), 0.25f);
+		}
+
+		/// <summary>
+		///     Trail props (trails=1, TrailRenderer, Engine/ParticlesUnlit) in front of the player's start: a tapering
+		///     additive figure eight (white to cyan to transparent blue, a soft band across it), a looping alpha blended trail
+		///     with round corners and caps that stops emitting every 1.5 s, a twisting ribbon facing its transform's Z axis
+		///     (opaque, both faces), and a checker trail in Tile mode (two checks per world unit).
+		/// </summary>
+		private static void BuildTrails(Scene scene)
+		{
+			ShaderProgram particles = InternalStorage.GetOrCreateShader("Engine/ParticlesUnlit.shader");
+
+			var additive = new Material(particles);
+			additive.SetTexture("BaseMap", SoftBand(64));
+			additive.SetFloat("BlendMode", 2f);
+			TrailRenderer taper = TrailProp(scene, "TrailTaper", new Vector3(-1.1f, 1.45f, -5.6f), new Vector2(0.55f, 0.35f), 1.3f, 2.6f, 0f, additive);
+			taper.time = 1.2f;
+			taper.minVertexDistance = 0.02f;
+			taper.widthCurve = AnimationCurve.Linear(0f, 1f, 1f, 0f);
+			taper.widthMultiplier = 0.25f;
+			var taperColors = new Gradient();
+			taperColors.SetKeys(
+				new[] { new GradientColorKey(Color4.White, 0f), new GradientColorKey(new Color4(0.2f, 0.9f, 1f, 1f), 0.4f), new GradientColorKey(new Color4(0.1f, 0.2f, 1f, 1f), 1f) },
+				new[] { new GradientAlphaKey(1f, 0f), new GradientAlphaKey(0.8f, 0.5f), new GradientAlphaKey(0f, 1f) });
+			taper.colorGradient = taperColors;
+
+			var alpha = new Material(particles);
+			TrailRenderer round = TrailProp(scene, "TrailRound", new Vector3(1.1f, 1.45f, -5.6f), new Vector2(0.45f, 0.45f), 2f, 2f, MathF.PI * 0.5f, alpha);
+			round.time = 2f;
+			round.minVertexDistance = 0.15f;
+			round.widthMultiplier = 0.12f;
+			round.numCornerVertices = 8;
+			round.numCapVertices = 8;
+			round.colorGradient = Gradient.Linear(new Color4(1f, 0.6f, 0.1f, 1f), new Color4(1f, 0.1f, 0.1f, 0.3f));
+			round.GetComponent<TrailMover>().EmitToggle = 1.5f;
+
+			var opaque = new Material(particles);
+			opaque.SetFloat("BlendMode", 5f);
+			TrailRenderer ribbon = TrailProp(scene, "TrailRibbon", new Vector3(0f, 2.15f, -5.2f), new Vector2(1.2f, 0.15f), 1.1f, 3.3f, 0f, opaque);
+			ribbon.alignment = LineAlignment.TransformZ;
+			ribbon.time = 1.5f;
+			ribbon.minVertexDistance = 0.03f;
+			ribbon.widthMultiplier = 0.2f;
+			ribbon.colorGradient = Gradient.Linear(new Color4(1f, 0.9f, 0.1f, 1f), new Color4(0.8f, 0.1f, 0.9f, 1f));
+			ribbon.GetComponent<TrailMover>().SpinSpeed = 120f;
+
+			var checker = new Material(particles);
+			checker.SetTexture("BaseMap", Checker(32));
+			TrailRenderer tiled = TrailProp(scene, "TrailTiled", new Vector3(0f, 0.85f, -5.2f), new Vector2(1.3f, 0.2f), 0.9f, 1.8f, 0f, checker);
+			tiled.time = 1.5f;
+			tiled.minVertexDistance = 0.03f;
+			tiled.widthMultiplier = 0.15f;
+			tiled.textureMode = LineTextureMode.Tile;
+			tiled.textureScale = new Vector2(2f, 1f);
+
+			// Soft particles: two additive glows half sunk into a slab; the left one fades out towards the slab (near 0,
+			// far 0.3 as Unity's legacy InvFade 3.33), the right one is cut off along a hard line.
+			Box(scene, "SoftParticlesSlab", "LitRed.material", new Vector3(0f, 0.45f, -5f), new Vector3(0.9f, 0.025f, 0.4f));
+			var soft = new Material(particles);
+			soft.SetTexture("BaseMap", LELEngine.VFX.VfxDefaults.SoftDisc);
+			soft.SetColor("Color", new Color4(1f, 0.55f, 0.15f, 1f));
+			soft.SetFloat("BlendMode", 2f);
+			soft.SetFloat("SoftParticles", 1f);
+			soft.SetFloat("SoftParticlesFarFadeDistance", 0.3f);
+			Material hard = soft.Clone();
+			hard.SetFloat("SoftParticles", 0f);
+			// The quad faces the player's start, so +X is on the screen's left.
+			RefractionQuad(scene, "SoftParticlesOn", soft, new Vector3(0.35f, 0.45f, -5f), 0.25f);
+			RefractionQuad(scene, "SoftParticlesOff", hard, new Vector3(-0.35f, 0.45f, -5f), 0.25f);
+		}
+
+		// A small sphere moved by a TrailMover, with a trail of the given material.
+		private static TrailRenderer TrailProp(Scene scene, string name, Vector3 center, Vector2 size, float frequencyX, float frequencyY, float phase, Material material)
+		{
+			GameObject go = SceneModels.Instantiate(scene, SceneModels.Sphere, name);
+			go.transform.position = center;
+			go.transform.scale = Vector3.One * 0.04f;
+			MeshRenderer renderer = go.GetComponent<MeshRenderer>();
+			renderer.ContributesToGI = false;
+			TrailMover mover = go.AddComponent<TrailMover>();
+			mover.Center = center;
+			mover.Size = size;
+			mover.FrequencyX = frequencyX;
+			mover.FrequencyY = frequencyY;
+			mover.Phase = phase;
+			TrailRenderer trail = go.AddComponent<TrailRenderer>();
+			trail.SetMaterials(material);
+			return trail;
+		}
+
+		// White, opaque in the middle row and fading to transparent at the top and bottom (across a trail).
+		private static Texture2D SoftBand(int height)
+		{
+			const int width = 4;
+			var pixels = new byte[width * height * 4];
+			for (int y = 0; y < height; y++)
+			{
+				float d = MathF.Abs((y + 0.5f) / height * 2f - 1f);
+				float a = Math.Clamp(1f - d, 0f, 1f);
+				a = a * a * (3f - 2f * a);
+				for (int x = 0; x < width; x++)
+				{
+					int i = (y * width + x) * 4;
+					pixels[i] = pixels[i + 1] = pixels[i + 2] = 255;
+					pixels[i + 3] = (byte)(a * 255f + 0.5f);
+				}
+			}
+
+			return new Texture2D(width, height, pixels, "trail-soft-band", true);
+		}
+
+		// Two by two checks of white and dark gray.
+		private static Texture2D Checker(int size)
+		{
+			var pixels = new byte[size * size * 4];
+			for (int y = 0; y < size; y++)
+			{
+				for (int x = 0; x < size; x++)
+				{
+					byte value = (x < size / 2) == (y < size / 2) ? (byte)255 : (byte)40;
+					int i = (y * size + x) * 4;
+					pixels[i] = pixels[i + 1] = pixels[i + 2] = value;
+					pixels[i + 3] = 255;
+				}
+			}
+
+			return new Texture2D(size, size, pixels, "trail-checker");
 		}
 
 		// A built-in quad (2 x 2 in the model's YZ plane) facing the player's start.

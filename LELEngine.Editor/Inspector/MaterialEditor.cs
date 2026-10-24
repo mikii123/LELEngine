@@ -69,13 +69,19 @@ namespace LELEngine.Editor
 				foreach (ShaderProperty declared in shader.Properties)
 				{
 					shown.Add(declared.Name);
-					if (declared.HideInInspector)
+					if (declared.HideInInspector || IsScaleOffsetOfTexture(shader, declared))
 					{
 						continue;
 					}
 
 					ImGui.PushID(declared.Name);
 					changed |= DrawDeclared(material, declared, context);
+					ShaderProperty scaleOffset = declared.IsTexture ? FindScaleOffset(shader, declared.Name) : null;
+					if (scaleOffset != null && !scaleOffset.HideInInspector)
+					{
+						changed |= DrawScaleOffset(material, scaleOffset, context);
+					}
+
 					ImGui.PopID();
 				}
 			}
@@ -512,6 +518,47 @@ namespace LELEngine.Editor
 			}
 
 			return changed;
+		}
+
+		// Unity's texture Tiling and Offset: a Vector property named after a texture plus "_ST" (xy tiling, zw offset) is
+		// drawn under that texture as two rows instead of on its own.
+		private static ShaderProperty FindScaleOffset(ShaderProgram shader, string textureName)
+		{
+			ShaderProperty property = shader.FindProperty(textureName + "_ST");
+			return property != null && property.Type == ShaderPropertyType.Vector ? property : null;
+		}
+
+		private static bool IsScaleOffsetOfTexture(ShaderProgram shader, ShaderProperty declared)
+		{
+			if (declared.Type != ShaderPropertyType.Vector || !declared.Name.EndsWith("_ST", StringComparison.Ordinal))
+			{
+				return false;
+			}
+
+			ShaderProperty texture = shader.FindProperty(declared.Name.Substring(0, declared.Name.Length - 3));
+			return texture != null && texture.IsTexture;
+		}
+
+		private static bool DrawScaleOffset(Material material, ShaderProperty declared, InspectorContext context)
+		{
+			Vector4 value = material.GetVector(declared.Name, declared.DefaultValue);
+			var tiling = new NVector2(value.X, value.Y);
+			var offset = new NVector2(value.Z, value.W);
+			ImGui.PushID(declared.Name);
+			FieldDrawer.Label("Tiling", null, context);
+			bool tilingChanged = ImGui.DragFloat2("##tiling", ref tiling, 0.01f);
+			context.Track(tilingChanged);
+			FieldDrawer.Label("Offset", null, context);
+			bool offsetChanged = ImGui.DragFloat2("##offset", ref offset, 0.01f);
+			context.Track(offsetChanged);
+			ImGui.PopID();
+			if (tilingChanged || offsetChanged)
+			{
+				material.SetVector(declared.Name, new Vector4(tiling.X, tiling.Y, offset.X, offset.Y));
+				return true;
+			}
+
+			return false;
 		}
 
 		private static bool DrawTexture(Material material, string name, string label, Type textureType, InspectorContext context)

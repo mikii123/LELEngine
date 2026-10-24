@@ -52,10 +52,10 @@ namespace LELEngine.Editor
 		// A prefab to open after the tree is drawn (the arrow at the end of a row).
 		private string openPrefab;
 
-		// Folded rows of the shown scene, kept per user (HierarchyExpansion): applied to each row the first time it is
-		// drawn for the scene, saved a moment after a change.
+		// Unfolded rows of the shown scene (rows start folded), kept per user (HierarchyExpansion): applied to each row the
+		// first time it is drawn for the scene, saved a moment after a change.
 		private string expansionKey;
-		private HashSet<ulong> collapsed = new HashSet<ulong>();
+		private HashSet<ulong> expanded = new HashSet<ulong>();
 		private readonly HashSet<ulong> expansionApplied = new HashSet<ulong>();
 		private bool expansionDirty;
 		private double expansionChangedAt;
@@ -137,7 +137,7 @@ namespace LELEngine.Editor
 			if (expansionDirty)
 			{
 				expansionDirty = false;
-				HierarchyExpansion.Save(expansionKey, collapsed);
+				HierarchyExpansion.Save(expansionKey, expanded);
 			}
 		}
 
@@ -159,7 +159,7 @@ namespace LELEngine.Editor
 			{
 				SaveState();
 				expansionKey = key;
-				collapsed = HierarchyExpansion.Load(key);
+				expanded = HierarchyExpansion.Load(key);
 				expansionApplied.Clear();
 			}
 
@@ -314,7 +314,7 @@ namespace LELEngine.Editor
 			}
 
 			ImGui.PushID(go.Id.ToString());
-			ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags.OpenOnArrow | ImGuiTreeNodeFlags.OpenOnDoubleClick | ImGuiTreeNodeFlags.SpanFullWidth | ImGuiTreeNodeFlags.DefaultOpen;
+			ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags.OpenOnArrow | ImGuiTreeNodeFlags.OpenOnDoubleClick | ImGuiTreeNodeFlags.SpanFullWidth;
 			bool leaf = go.transform.childCount == 0;
 			if (leaf)
 			{
@@ -322,7 +322,7 @@ namespace LELEngine.Editor
 			}
 			else if (expansionApplied.Add(go.Id))
 			{
-				ImGui.SetNextItemOpen(!collapsed.Contains(go.Id), ImGuiCond.Always);
+				ImGui.SetNextItemOpen(expanded.Contains(go.Id), ImGuiCond.Always);
 			}
 
 			if (editor.Selected == go)
@@ -412,15 +412,15 @@ namespace LELEngine.Editor
 			}
 
 			ImGui.PopStyleVar(2);
-			if (!leaf && open == collapsed.Contains(go.Id))
+			if (!leaf && open != expanded.Contains(go.Id))
 			{
 				if (open)
 				{
-					collapsed.Remove(go.Id);
+					expanded.Add(go.Id);
 				}
 				else
 				{
-					collapsed.Add(go.Id);
+					expanded.Remove(go.Id);
 				}
 
 				expansionDirty = true;

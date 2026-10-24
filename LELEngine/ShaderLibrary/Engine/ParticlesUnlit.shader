@@ -1,13 +1,22 @@
 //Properties
 // Unlit: Base Map x Base Color x vertex color, nothing lights it (Unity's Particles/Unlit). Blending Mode, Render Face,
-// Alpha Clipping and Refraction are keywords: each combination a material picks is a variant of its own, with the render
-// state below (compiled on first use; game builds compile the ones their materials use).
+// Alpha Clipping, Soft Particles and Refraction are keywords: each combination a material picks is a variant of its own,
+// with the render state below (compiled on first use; game builds compile the ones their materials use).
 BaseMap ("Base Map", 2D) = "white" {}
+// Unity's texture Tiling (xy) and Offset (zw) of the Base Map (the material editor shows them under the map); the normal
+// map uses the same coordinates.
+BaseMap_ST ("Base Map Tiling / Offset", Vector) = (1, 1, 0, 0)
 [HDR] Color ("Base Color", Color) = (1, 1, 1, 1)
 [KeywordEnum(Alpha, Premultiply, Additive, Soft Additive, Multiply, Opaque)] BlendMode ("Blending Mode", Float) = 0
 [KeywordEnum(Both, Front, Back)] RenderFace ("Render Face", Float) = 0
 [Toggle(ALPHA_CLIP)] AlphaClip ("Alpha Clipping", Float) = 0
 Cutoff ("Alpha Cutoff", Range(0, 1)) = 0.5
+// Soft particles (Unity's): the alpha fades where the opaque surface behind comes close, from 1 at Far Fade Distance to 0
+// at Near Fade Distance in front of it (Unity's legacy particle shaders: near 0, far 1 / InvFade). Reads the scene's
+// depth; not in Opaque mode.
+[Toggle(SOFT_PARTICLES)] SoftParticles ("Soft Particles", Float) = 0
+SoftParticlesNearFadeDistance ("Soft Particles Near Fade Distance", Float) = 0
+SoftParticlesFarFadeDistance ("Soft Particles Far Fade Distance", Float) = 1
 // Refraction (Unity's particle Distortion): the scene behind, from a copy taken right before the object draws
 // (GrabPass), shifted by the normal map's tilt and fading with the alpha. Refraction Blend gives the dense parts back to
 // the particle's own color (0: wherever it has alpha, 1: refraction only). Objects in front are never shifted into it.
@@ -19,6 +28,9 @@ RefractionBlend ("Refraction Blend", Range(0, 1)) = 0.5
 ShadowCaster Off
 #if REFRACTION
 GrabPass RefractionStrength
+#endif
+#if SOFT_PARTICLES && !BLENDMODE_OPAQUE
+SceneDepth On
 #endif
 #if BLENDMODE_OPAQUE
 #if ALPHA_CLIP || REFRACTION
@@ -63,6 +75,7 @@ invariant gl_Position;
 uniform mat4 projectionMatrix;
 uniform mat4 viewMatrix;
 uniform mat4 modelMatrix;
+uniform vec4 BaseMap_ST;
 
 in vec3 vPosition;
 in vec4 vColor;
@@ -82,7 +95,7 @@ out vec3 fBitangent;
 void main()
 {
 	gl_Position = projectionMatrix * viewMatrix * modelMatrix * vec4(vPosition, 1.0);
-	fTexCoord = vTexCoord;
+	fTexCoord = vTexCoord * BaseMap_ST.xy + BaseMap_ST.zw;
 	fColor = vColor;
 #ifdef REFRACTION
 	// The surface's directions in the world: the normal map's tilt becomes a world vector across the surface.
@@ -100,6 +113,10 @@ void main()
 #ifdef REFRACTION
 #include "Engine/GrabPass.glsl"
 #endif
+#if defined(SOFT_PARTICLES) && !defined(BLENDMODE_OPAQUE)
+#include "Engine/SceneDepth.glsl"
+#define LEL_SOFT_PARTICLES
+#endif
 
 in vec2 fTexCoord;
 in vec4 fColor;
@@ -111,6 +128,10 @@ in vec3 fBitangent;
 uniform sampler2D BaseMap;
 uniform vec4 Color;
 uniform float Cutoff;
+#ifdef LEL_SOFT_PARTICLES
+uniform float SoftParticlesNearFadeDistance;
+uniform float SoftParticlesFarFadeDistance;
+#endif
 #ifdef REFRACTION
 uniform sampler2D NormalMap;
 uniform float RefractionStrength;
@@ -123,6 +144,10 @@ void main()
 {
 	vec4 texel = texture(BaseMap, fTexCoord);
 	vec4 tint = Color * fColor;
+#ifdef LEL_SOFT_PARTICLES
+	// The tint's alpha fades every mode: blending by alpha, additive amounts, premultiplied color.
+	tint.a *= LelSoftParticleFade(SoftParticlesNearFadeDistance, SoftParticlesFarFadeDistance);
+#endif
 	vec4 color = texel * tint;
 
 #ifdef ALPHA_CLIP

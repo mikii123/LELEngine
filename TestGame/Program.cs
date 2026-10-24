@@ -24,6 +24,8 @@ namespace TestGame
 		///            [rcache=0|1] [rcradio=0|1] [rcnear=meters] [rchistory=frames] [rcprobes=N per frame] [rcres=8|16] [rctrace=16|32]
 		///            [dumpafter=seconds] [gpudriven=0|1] [stress=N extra cubes] [focus=0|1] [glass=0|1 transparent props]
 		///            [refraction=1 refracting props: GrabPass glass and particles before the player]
+		///            [trails=1 TrailRenderer props before the player: taper, round corners and caps, ribbon, tiled]
+		///            [sdfatlas=1 distance field atlas check: many box shapes in steps, logged as [SdfAtlasProbe]]
 		///            Scenes: [outdoor=1 open-sky yard] [sky=0|1 procedural skybox] [skybox=asset path] [physics=1] [nav=1] [ui=1] [scene=path]
 		///            View: [view=ghost from under the ceiling down at the orbs] [camera=x,y,z] [look=x,y,z] [night=1 emitters only]
 		///            Ghosting measurements (GhostTest): [emitterstep=frame] [emitteroff=frame]
@@ -129,6 +131,7 @@ namespace TestGame
 				ProbeAdaptiveFraction = GetFloat(args, "pfraction", 0.5f),
 				Glass = GetBool(args, "glass", true),
 				Refraction = GetBool(args, "refraction", false),
+				Trails = GetBool(args, "trails", false),
 				EmitterStepFrame = GetInt(args, "emitterstep", 0),
 				EmitterOffFrame = GetInt(args, "emitteroff", 0),
 				MoverFrame = GetInt(args, "mover", 0),
@@ -249,6 +252,12 @@ namespace TestGame
 
 			// Added after saving: the counter is a TestGame type that saved scenes should not reference.
 			scene.CreateGameObject("FrameRateCounter").AddComponent<FrameRateCounter>();
+
+			// sdfatlas=1: boxes of many shapes in steps, logging the distance field atlas (growing, freeing, full, animated scales).
+			if (GetBool(args, "sdfatlas", false))
+			{
+				scene.CreateGameObject("SdfAtlasProbe").AddComponent<SdfAtlasProbe>();
+			}
 
 			// exitframe=N closes the window after N frames (automated runs).
 			// exitseconds=S closes it after S seconds of game time.

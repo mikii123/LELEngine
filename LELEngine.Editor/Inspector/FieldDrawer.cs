@@ -225,6 +225,12 @@ namespace LELEngine.Editor
 				return CurveEditor.DrawField(label, ref value, info, context);
 			}
 
+			if (type == typeof(Gradient))
+			{
+				// A bar that opens the gradient editor.
+				return GradientEditor.DrawField(label, ref value, info, context);
+			}
+
 			if (type == typeof(LELEngine.Audio.AudioEventReference))
 			{
 				// An event of the audio project, picked from a list.

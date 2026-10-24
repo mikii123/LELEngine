@@ -1,8 +1,9 @@
 // Lumen scene: the per-object table shared by the global distance field composition, the surface cache
 // and the probe gather. Mirrors LumenScene.SceneObjectData (std430, 256 bytes) and CardData (80 bytes).
 //
-// Object space is "scaled local": the renderer's scale is baked into the mesh SDF and the cards, so
-// worldToLocal / localToWorld contain rotation and translation only (distances are preserved).
+// Object space is "scaled local": the renderer's scale is in the bounds and the cards, so worldToLocal / localToWorld
+// contain rotation and translation only (distances are preserved). A mesh SDF is stored for the scale's shape (every
+// uniform scale of a mesh shares it); atlasSize.w scales its distances to the object's size.
 
 struct SceneObject
 {
@@ -11,7 +12,7 @@ struct SceneObject
 	vec4 boundsMin;     // mesh SDF field bounds (mesh bounds + padding)
 	vec4 boundsMax;
 	vec4 atlasOrigin;   // SDF atlas texel origin
-	vec4 atlasSize;     // SDF texels per axis
+	vec4 atlasSize;     // SDF texels per axis, w = world units per stored distance unit (the object's uniform scale)
 	vec4 padding;       // xyz SDF padding ring width per axis, w = emissive intensity (card emission colour x this)
 	vec4 meshBoundsMin; // scaled-local mesh bounds
 	vec4 meshBoundsMax;
@@ -51,7 +52,7 @@ float SceneObjectDistance(SceneObject o, vec3 local)
 
 	vec3 uvw = (clamped - bmin) / (bmax - bmin);
 	vec3 texel = o.atlasOrigin.xyz + clamp(uvw * o.atlasSize.xyz, vec3(0.5), o.atlasSize.xyz - 0.5);
-	float sampled = texture(SdfAtlas, texel / sdfAtlasTexels).r;
+	float sampled = texture(SdfAtlas, texel / sdfAtlasTexels).r * o.atlasSize.w;
 
 	if (outside <= 0.0) return sampled;
 

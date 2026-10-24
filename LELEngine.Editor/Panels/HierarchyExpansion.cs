@@ -7,7 +7,7 @@ using System.Text.Json;
 namespace LELEngine.Editor
 {
 	/// <summary>
-	///     Which hierarchy rows the user folded, per project folder and scene (or prefab): hierarchy.json in the
+	///     Which hierarchy rows the user unfolded (rows start folded), per project folder and scene (or prefab): hierarchy.json in the
 	///     editor's data folder (%APPDATA%/LELEngine/Editor), next to layout.ini, never in the project. Objects are
 	///     known by their scene id, so the state survives reloads, play mode and restarts. Automated runs read the
 	///     user's file and save nothing, unless hierarchyfile=path names a file of their own.
@@ -53,19 +53,19 @@ namespace LELEngine.Editor
 			return projectRoot == null || string.IsNullOrEmpty(assetPath) ? null : Path.GetFullPath(projectRoot).TrimEnd('\\', '/') + "|" + assetPath;
 		}
 
-		/// <summary>The ids of the folded objects of the scene; empty when none were saved.</summary>
+		/// <summary>The ids of the unfolded objects of the scene; empty when none were saved.</summary>
 		public static HashSet<ulong> Load(string key)
 		{
-			if (key != null && Read().TryGetValue(key, out Entry entry) && entry.Collapsed != null)
+			if (key != null && Read().TryGetValue(key, out Entry entry) && entry.Expanded != null)
 			{
-				return new HashSet<ulong>(entry.Collapsed);
+				return new HashSet<ulong>(entry.Expanded);
 			}
 
 			return new HashSet<ulong>();
 		}
 
-		/// <summary>Writes the scene's folded objects (read first: other scenes and other editors' changes stay).</summary>
-		public static void Save(string key, HashSet<ulong> collapsed)
+		/// <summary>Writes the scene's unfolded objects (read first: other scenes and other editors' changes stay).</summary>
+		public static void Save(string key, HashSet<ulong> expanded)
 		{
 			if (!writable || key == null || file == null)
 			{
@@ -73,13 +73,13 @@ namespace LELEngine.Editor
 			}
 
 			Dictionary<string, Entry> entries = Read();
-			if (collapsed.Count == 0)
+			if (expanded.Count == 0)
 			{
 				entries.Remove(key);
 			}
 			else
 			{
-				entries[key] = new Entry { Collapsed = collapsed.OrderBy(id => id).ToList(), Used = DateTime.UtcNow };
+				entries[key] = new Entry { Expanded = expanded.OrderBy(id => id).ToList(), Used = DateTime.UtcNow };
 			}
 
 			if (entries.Count > MaxEntries)
@@ -94,7 +94,7 @@ namespace LELEngine.Editor
 			}
 			catch (Exception e) when (e is IOException || e is UnauthorizedAccessException)
 			{
-				Debug.LogWarning("[Editor] Cannot save the hierarchy's folded objects: " + e.Message);
+				Debug.LogWarning("[Editor] Cannot save the hierarchy's unfolded objects: " + e.Message);
 			}
 		}
 
@@ -123,7 +123,8 @@ namespace LELEngine.Editor
 
 		private sealed class Entry
 		{
-			public List<ulong> Collapsed { get; set; }
+			/// <summary>The unfolded objects (entries of the earlier format, which listed folded ones, read as empty).</summary>
+			public List<ulong> Expanded { get; set; }
 
 			/// <summary>Last saved (the oldest entries are dropped).</summary>
 			public DateTime Used { get; set; }

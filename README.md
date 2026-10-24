@@ -78,9 +78,15 @@ Built on .NET 10, OpenTK 4.9 (GLFW) and OpenGL 4.6 (4.3 minimum), developed and 
   compile stops the build, the messages name the file and line) and list them; the player compiles them while it loads.
 - Program binary cache: the player keeps every linked program as the driver's binary (`glGetProgramBinary`) in the
   user's local app data, so later starts compile nothing (probe: the shader step went from 6 s to 83 ms).
-- Unlit shader `Engine/ParticlesUnlit.shader` (Unity's Particles/Unlit): base map x base color (HDR) x vertex color,
-  blending modes Alpha, Premultiply, Additive, Soft Additive, Multiply and Opaque, render face (both, front, back)
-  and alpha clipping; casts no shadows.
+- Unlit shader `Engine/ParticlesUnlit.shader` (Unity's Particles/Unlit): base map (with Unity's tiling and offset) x
+  base color (HDR) x vertex color, blending modes Alpha, Premultiply, Additive, Soft Additive, Multiply and Opaque,
+  render face (both, front, back), alpha clipping and soft particles (fading out near the opaque surface behind, read
+  from a copy of the scene's depth); casts no shadows.
+- `TrailRenderer` (Unity's): a trail behind a moving object with Unity's settings (time, minimum vertex distance,
+  width curve and multiplier, color gradient, corner and end cap vertices, view or transform Z alignment, stretch /
+  tile / per-segment texture modes, autodestruct, emitting) and API (`Clear`, `AddPosition`, `GetPositions`, ...),
+  built for every camera and drawn by the transparent pass with any material. `Gradient` is Unity's too (blend,
+  fixed and perceptual blend modes), with a gradient editor in the inspector.
 - Refraction (Unity's GrabPass): a shader declares `GrabPass` and reads a copy of the scene drawn before the object,
   taken right before it draws, so refracting glass also shows the glass and particles behind it. Only the screen
   rectangles the objects read are copied, and one copy serves the objects nothing drawn in between overlaps.

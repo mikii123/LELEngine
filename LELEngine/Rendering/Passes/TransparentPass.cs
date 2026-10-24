@@ -14,9 +14,15 @@ namespace LELEngine.Rendering.Passes
 	///     the depth buffer, so the GI comes from the volume (Lighting.SetVolumeGIUniforms, Engine/VolumeLighting.glsl)
 	///     rather than the screen-space resolve. These renderers never go through the GPU-driven tables; their shadows
 	///     are drawn by <see cref="TransparentShadows" />.
+	///     Trails (<see cref="TrailRenderer" />, found among the frame's behaviours on the camera's layers) are built for
+	///     this camera into one stream of world space triangles (<see cref="DynamicGeometry" />), uploaded once, and sort
+	///     like meshes: each material of a trail is an entry at the centre of the trail's bounds (opaque materials too,
+	///     before the transparent queues).
 	///     Materials whose variant declares GrabPass read the scene drawn before them (<see cref="SceneGrab" />, Unity's
 	///     GrabPass, e.g. refraction): the copy they read is taken after the last earlier draw that touched the part of the
 	///     screen they read, and one copy serves a run of such objects whose parts nothing drawn in between overlaps.
+	///     Materials whose variant declares SceneDepth (soft particles) read the depth copy of the opaque scene that the
+	///     particle effects read too (<see cref="SceneDepthTexture" />), taken once before the transparent draws.
 	/// </summary>
 	public sealed class TransparentPass : RenderPass
 	{
@@ -46,12 +52,24 @@ namespace LELEngine.Rendering.Passes
 			public MeshRenderer Renderer;
 			public int SubMesh;
 			public VFX.VfxDrawEntry Vfx;
+
+			/// <summary>A trail's material slot (<see cref="SubMesh" /> is the slot): its triangles are in the trail stream.</summary>
+			public TrailRenderer Trail;
+
+			/// <summary>The material drawn (mesh and trail entries).</summary>
+			public Material Material;
 			public int Queue;
 			public float DistanceSquared;
 			public ulong Order;
 
 			/// <summary>The renderer's local-to-world matrix (mesh entries).</summary>
 			public Matrix4 World;
+
+			/// <summary>Trail entries: world bounds and the range of the trail stream's indices.</summary>
+			public Vector3 BoundsMin;
+			public Vector3 BoundsMax;
+			public int FirstIndex;
+			public int IndexCount;
 
 			/// <summary>The material's variant declares GrabPass: it reads the scene drawn before it.</summary>
 			public bool Grab;
@@ -76,6 +94,10 @@ namespace LELEngine.Rendering.Passes
 		private readonly List<PixelRect> copyRects = new List<PixelRect>();
 		private readonly List<PixelRect> drawnSinceCopy = new List<PixelRect>();
 
+		// This camera's trails: built into one stream, uploaded once.
+		private readonly LineGeometryBuilder trailBuilder = new LineGeometryBuilder();
+		private readonly DynamicGeometry trailGeometry = new DynamicGeometry();
+
 		#endregion
 
 		#region PublicMethods
@@ -86,11 +108,19 @@ namespace LELEngine.Rendering.Passes
 			DrawnCount = 0;
 			Grab.BeginFrame();
 			bool grabs = Collect(renderers, context.CameraPosition);
+			grabs |= CollectTrails(context);
 			vfxEntries.Clear();
 			VFX.VfxRuntime.CollectTransparent(context, vfxEntries);
 			if (entries.Count == 0 && vfxEntries.Count == 0)
 			{
 				return;
+			}
+
+			// Materials reading the opaque scene's depth (soft particles) share the depth copy the particle effects take.
+			bool readsDepth = false;
+			foreach (Entry entry in entries)
+			{
+				readsDepth |= entry.Material.RenderState.SceneDepth;
 			}
 
 			// Particle outputs sort among the meshes by queue and distance (their bounds centre).
@@ -117,7 +147,7 @@ namespace LELEngine.Rendering.Passes
 
 			// The scene depth with the opaques for soft particles (and the next simulation's depth collisions).
 			VFX.VfxDepthCapture depth = null;
-			if (vfxEntries.Count > 0 && VFX.VfxRuntime.NeedsDepth)
+			if ((vfxEntries.Count > 0 && VFX.VfxRuntime.NeedsDepth) || readsDepth)
 			{
 				depth = VFX.VfxRuntime.CaptureDepth(context);
 				context.SceneTarget.Bind();
@@ -156,8 +186,11 @@ namespace LELEngine.Rendering.Passes
 
 				afterMesh = true;
 				MeshRenderer renderer = entry.Renderer;
-				Material material = renderer.GetMaterial(entry.SubMesh);
+				TrailRenderer trail = entry.Trail;
+				Material material = entry.Material;
 				ShaderProgram program = material.Program;
+				bool entryShadows = trail != null ? trail.receiveShadows : renderer.ReceiveShadows;
+				bool entryGI = trail != null ? trail.receiveGI : renderer.ReceiveGI;
 				bool copied = false;
 				if (entry.GrabCopy >= 0)
 				{
@@ -180,17 +213,26 @@ namespace LELEngine.Rendering.Passes
 				}
 
 				// Camera and lighting uniforms once per program and flag combination, as the opaque pass does.
-				if (resend || renderer.ReceiveShadows != receiveShadows || renderer.ReceiveGI != receiveGI)
+				if (resend || entryShadows != receiveShadows || entryGI != receiveGI)
 				{
 					context.Camera.SetUniforms(program);
-					Lighting.SetUniforms(program, renderer.ReceiveShadows, false);
-					Lighting.SetVolumeGIUniforms(program, renderer.ReceiveGI);
-					receiveShadows = renderer.ReceiveShadows;
-					receiveGI = renderer.ReceiveGI;
+					Lighting.SetUniforms(program, entryShadows, false);
+					Lighting.SetVolumeGIUniforms(program, entryGI);
+					receiveShadows = entryShadows;
+					receiveGI = entryGI;
 					resend = false;
 				}
 
-				renderer.transform.SetModelMatrix(program);
+				if (trail != null)
+				{
+					// Trail vertices are in world space.
+					program.SetMatrix4("modelMatrix", Matrix4.Identity);
+				}
+				else
+				{
+					renderer.transform.SetModelMatrix(program);
+				}
+
 				material.SetUniforms();
 				if (material.OverridesSharedUniforms())
 				{
@@ -203,16 +245,21 @@ namespace LELEngine.Rendering.Passes
 				}
 
 				ShaderRenderState state = material.RenderState;
+				if (state.SceneDepth)
+				{
+					SceneDepthTexture.SetUniforms(program, context, depth);
+				}
+
 				state.ApplyTransparent();
 				if (state.Cull == CullMode.Off)
 				{
 					// Back faces first, then front faces: the inside of a convex object ends up behind its outside.
 					GLState.SetCull(true, TriangleFace.Front);
-					renderer.DrawSubMesh(entry.SubMesh);
+					DrawGeometry(entry);
 					GLState.SetCull(true, TriangleFace.Back);
 				}
 
-				renderer.DrawSubMesh(entry.SubMesh);
+				DrawGeometry(entry);
 				DrawnCount++;
 			}
 
@@ -235,6 +282,7 @@ namespace LELEngine.Rendering.Passes
 		public override void Dispose()
 		{
 			Grab.Delete();
+			trailGeometry.Delete();
 		}
 
 		#endregion
@@ -274,11 +322,86 @@ namespace LELEngine.Rendering.Passes
 
 					bool grab = material.RenderState.GrabPass;
 					grabs |= grab;
-					entries.Add(new Entry { Renderer = renderer, SubMesh = i, Queue = material.renderQueue, DistanceSquared = distanceSquared, Order = renderer.Id * 64 + (ulong)i, World = world, Grab = grab, GrabCopy = -1 });
+					entries.Add(new Entry { Renderer = renderer, SubMesh = i, Material = material, Queue = material.renderQueue, DistanceSquared = distanceSquared, Order = renderer.Id * 64 + (ulong)i, World = world, Grab = grab, GrabCopy = -1 });
 				}
 			}
 
 			return grabs;
+		}
+
+		// The trails among the frame's behaviours on the camera's layers: each built for this camera into the trail stream
+		// (uploaded here), one entry per drawable material at the centre of its bounds. True when one of them grabs.
+		private bool CollectTrails(RenderContext context)
+		{
+			trailBuilder.Clear();
+			IReadOnlyList<Behaviour> behaviours = context.Behaviours;
+			if (behaviours == null)
+			{
+				return false;
+			}
+
+			bool grabs = false;
+			// A perspective projection puts -z into w; an orthographic one keeps w = 1 (row vectors: column 3).
+			bool orthographic = System.MathF.Abs(context.Projection.M34) < 1e-6f;
+			foreach (Behaviour behaviour in behaviours)
+			{
+				if (behaviour is not TrailRenderer trail || !trail.isActiveAndEnabled || (context.CullingMask & (1 << (trail.gameObject.layer & 31))) == 0 || !HasDrawableMaterial(trail))
+				{
+					continue;
+				}
+
+				if (!trail.BuildGeometry(trailBuilder, context.CameraPosition, context.CameraForward, orthographic, out int firstIndex, out int indexCount, out Vector3 min, out Vector3 max))
+				{
+					continue;
+				}
+
+				float distanceSquared = ((min + max) * 0.5f - context.CameraPosition).LengthSquared;
+				for (int i = 0; i < trail.Materials.Count; i++)
+				{
+					Material material = trail.Materials[i];
+					if (!IsDrawable(material))
+					{
+						continue;
+					}
+
+					bool grab = material.RenderState.GrabPass;
+					grabs |= grab;
+					entries.Add(new Entry { Trail = trail, SubMesh = i, Material = material, Queue = material.renderQueue, DistanceSquared = distanceSquared, Order = trail.Id * 64 + (ulong)i, BoundsMin = min, BoundsMax = max, FirstIndex = firstIndex, IndexCount = indexCount, Grab = grab, GrabCopy = -1 });
+				}
+			}
+
+			trailGeometry.Upload(trailBuilder.Vertices, trailBuilder.VertexCount, trailBuilder.Indices, trailBuilder.IndexCount);
+			return grabs;
+		}
+
+		private static bool HasDrawableMaterial(TrailRenderer trail)
+		{
+			foreach (Material material in trail.Materials)
+			{
+				if (IsDrawable(material))
+				{
+					return true;
+				}
+			}
+
+			return false;
+		}
+
+		private static bool IsDrawable(Material material)
+		{
+			return material?.Program != null && material.Program.IsLinked;
+		}
+
+		private void DrawGeometry(Entry entry)
+		{
+			if (entry.Trail != null)
+			{
+				trailGeometry.Draw(entry.FirstIndex, entry.IndexCount);
+			}
+			else
+			{
+				entry.Renderer.DrawSubMesh(entry.SubMesh);
+			}
 		}
 
 		/// <summary>
@@ -344,6 +467,11 @@ namespace LELEngine.Rendering.Passes
 				return screen;
 			}
 
+			if (entry.Trail != null)
+			{
+				return SceneGrab.ScreenRect(context.ViewProjection, entry.BoundsMin, entry.BoundsMax, screen, out rect, out nearestW) ? rect : screen;
+			}
+
 			Mesh mesh = entry.Renderer.Mesh;
 			return SceneGrab.ScreenRect(entry.World * context.ViewProjection, mesh.BoundsMin, mesh.BoundsMax, screen, out rect, out nearestW) ? rect : screen;
 		}
@@ -357,7 +485,7 @@ namespace LELEngine.Rendering.Passes
 				return drawn;
 			}
 
-			Material material = entry.Renderer.GetMaterial(entry.SubMesh);
+			Material material = entry.Material;
 			ShaderProgram program = material.Program;
 			string offsetProperty = program.RenderState.GrabOffsetProperty;
 			if (offsetProperty == null)

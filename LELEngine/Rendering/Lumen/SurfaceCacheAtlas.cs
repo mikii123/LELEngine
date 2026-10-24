@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using LELEngine.Rendering.DistanceField;
 using OpenTK.Graphics.OpenGL4;
 using OpenTK.Mathematics;
 
@@ -29,6 +28,9 @@ namespace LELEngine.Rendering.Lumen
 		public int FirstCardIndex;
 		public SurfaceCard[] Cards;
 		public bool Captured;
+
+		/// <summary>The scale the cards were laid out for (scaled-local space); captures draw the mesh at it.</summary>
+		public Vector3 Scale;
 
 		/// <summary>
 		///     Material state the capture depends on (albedo colour, emission colour, albedo texture). Cards are
@@ -156,10 +158,10 @@ namespace LELEngine.Rendering.Lumen
 		#region PublicMethods
 
 		/// <summary>
-		///     Returns the renderer's card set, allocating six cards from its scaled-local mesh bounds on first use.
-		///     Null when the atlas is full.
+		///     Returns the renderer's card set, allocating six cards from its mesh bounds at <paramref name="scale" />
+		///     (scaled-local space) on first use. Null when the atlas is full.
 		/// </summary>
-		public SurfaceCardSet GetOrAllocate(MeshRenderer renderer, MeshDistanceField field, int texelsPerMeter, int maxCardSize)
+		public SurfaceCardSet GetOrAllocate(MeshRenderer renderer, Vector3 scale, int texelsPerMeter, int maxCardSize)
 		{
 			SurfaceCardSet set;
 			if (setsByRenderer.TryGetValue(renderer, out set))
@@ -167,7 +169,6 @@ namespace LELEngine.Rendering.Lumen
 				return set;
 			}
 
-			Vector3 scale = field.Scale;
 			Vector3 bmin = renderer.Mesh.BoundsMin * scale;
 			Vector3 bmax = renderer.Mesh.BoundsMax * scale;
 			Vector3 center = (bmin + bmax) * 0.5f;
@@ -221,7 +222,7 @@ namespace LELEngine.Rendering.Lumen
 				};
 			}
 
-			set = new SurfaceCardSet { Renderer = renderer, FirstCardIndex = cardCount, Cards = cards };
+			set = new SurfaceCardSet { Renderer = renderer, FirstCardIndex = cardCount, Cards = cards, Scale = scale };
 			cardCount += CardsPerObject;
 			sets.Add(set);
 			setsByRenderer[renderer] = set;

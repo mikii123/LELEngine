@@ -129,7 +129,7 @@ namespace LELEngine.Rendering.Passes
 					bound = true;
 				}
 
-				capture.SetVector3("objectScale", o.Field.Scale);
+				capture.SetVector3("objectScale", o.Cards.Scale);
 				MeshRenderer renderer = o.Renderer;
 				for (int i = 0; i < o.Cards.Cards.Length; i++)
 				{

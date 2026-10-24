@@ -100,7 +100,9 @@ namespace LELEngine.Editor
 				}
 				finally
 				{
+					// Both contexts: the material sections' keeps the scene too, and a reload must not find it.
 					context.Release();
+					materialContext.Release();
 				}
 
 				// The lock at the top right, over the first line.
@@ -227,14 +229,23 @@ namespace LELEngine.Editor
 			var materials = new List<Material>();
 			foreach (Behaviour component in go.Components)
 			{
-				if (component is MeshRenderer renderer)
+				IReadOnlyList<Material> slots = component switch
 				{
-					foreach (Material material in renderer.Materials)
+					MeshRenderer renderer => renderer.Materials,
+					TrailRenderer trail => trail.Materials,
+					_ => null
+				};
+
+				if (slots == null)
+				{
+					continue;
+				}
+
+				foreach (Material material in slots)
+				{
+					if (material != null && !materials.Contains(material))
 					{
-						if (material != null && !materials.Contains(material))
-						{
-							materials.Add(material);
-						}
+						materials.Add(material);
 					}
 				}
 			}
