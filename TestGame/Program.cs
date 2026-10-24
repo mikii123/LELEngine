@@ -23,6 +23,7 @@ namespace TestGame
 		///            [importance=0|1] [pfilter=0|1] [pradius=N probes] [texels=N per meter] [ajitter=0..1] [djitter=0|1]
 		///            [rcache=0|1] [rcradio=0|1] [rcnear=meters] [rchistory=frames] [rcprobes=N per frame] [rcres=8|16] [rctrace=16|32]
 		///            [dumpafter=seconds] [gpudriven=0|1] [stress=N extra cubes] [focus=0|1] [glass=0|1 transparent props]
+		///            [refraction=1 refracting props: GrabPass glass and particles before the player]
 		///            Scenes: [outdoor=1 open-sky yard] [sky=0|1 procedural skybox] [skybox=asset path] [physics=1] [nav=1] [ui=1] [scene=path]
 		///            View: [view=ghost from under the ceiling down at the orbs] [camera=x,y,z] [look=x,y,z] [night=1 emitters only]
 		///            Ghosting measurements (GhostTest): [emitterstep=frame] [emitteroff=frame]
@@ -127,6 +128,7 @@ namespace TestGame
 				ScreenProbeResolveScale = GetFloat(args, "presolve", 1f),
 				ProbeAdaptiveFraction = GetFloat(args, "pfraction", 0.5f),
 				Glass = GetBool(args, "glass", true),
+				Refraction = GetBool(args, "refraction", false),
 				EmitterStepFrame = GetInt(args, "emitterstep", 0),
 				EmitterOffFrame = GetInt(args, "emitteroff", 0),
 				MoverFrame = GetInt(args, "mover", 0),

@@ -44,6 +44,7 @@ namespace LELEngine.Editor
 			// The user's preferences first: the theme applies to the first window.
 			EditorPreferences.Initialize(args);
 			ImGuiController.ReadOnlyLayouts = EditorApplication.IsAutomatedRun(args);
+			HierarchyExpansion.Initialize(args);
 
 			// focus=0: automated runs open their windows without taking the keyboard focus.
 			Window.StartFocused = Array.IndexOf(args, "focus=0") < 0;

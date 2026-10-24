@@ -16,6 +16,7 @@ namespace LELEngine
 	///     follows the body after every physics step (its position along the plane's normal and its rotation about
 	///     other axes are kept). Moving the transform directly teleports the body. API modelled on Unity's Rigidbody2D.
 	/// </summary>
+	[InspectorColor(InspectorColorKind.Physics)]
 	public sealed class Rigidbody2D : Behaviour
 	{
 		#region PublicFields

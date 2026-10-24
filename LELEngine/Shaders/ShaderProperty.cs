@@ -77,6 +77,9 @@ namespace LELEngine.Shaders
 
 		public bool IsTexture => Type == ShaderPropertyType.Texture2D || Type == ShaderPropertyType.Cubemap || Type == ShaderPropertyType.Texture3D;
 
+		/// <summary>The declared default as a material value: what a material without this property draws with.</summary>
+		internal MaterialProperty DefaultValueProperty => defaultValueProperty ??= Material.CreateDefault(this);
+
 		#endregion
 
 		#region PublicMethods
@@ -203,6 +206,8 @@ namespace LELEngine.Shaders
 		#endregion
 
 		#region PrivateFields
+
+		private MaterialProperty defaultValueProperty;
 
 		private static readonly Regex Pattern = new Regex(
 			@"^(?<attr>\[[^\]]*\]\s*)*(?<name>[A-Za-z_]\w*)\s*\(\s*""(?<display>[^""]*)""\s*,\s*(?<type>[A-Za-z0-9]+)(\s*\(\s*(?<min>[-+0-9.eE]+)\s*,\s*(?<max>[-+0-9.eE]+)\s*\))?\s*\)\s*=\s*(?<default>.*)$",

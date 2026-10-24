@@ -52,7 +52,7 @@ namespace LELEngine.Editor
 			if (type == typeof(Material))
 			{
 				Material material = InternalStorage.GetOrCreateMaterial(assetPath);
-				MaterialEditor.Draw(material, context);
+				MaterialSection.Draw(material, context, "material:" + material.name, false);
 			}
 			else if (TextureAssets.IsImageFile(assetPath))
 			{

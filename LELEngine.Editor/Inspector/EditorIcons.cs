@@ -12,6 +12,12 @@ namespace LELEngine.Editor
 		None,
 		GameObject,
 		Component,
+
+		/// <summary>Four arrows from the centre (the move gizmo): transforms.</summary>
+		Transform,
+
+		/// <summary>The ScriptableObject's page with "&lt; &gt;" on it: components of the project's scripts.</summary>
+		ScriptComponent,
 		Asset,
 		ScriptableObject,
 		Picker,
@@ -76,8 +82,10 @@ namespace LELEngine.Editor
 			{
 				case GameObject _:
 					return IconKind.GameObject;
-				case Behaviour _:
-					return IconKind.Component;
+				case Transform _:
+					return IconKind.Transform;
+				case Behaviour component:
+					return IsScript(component) ? IconKind.ScriptComponent : IconKind.Component;
 				case ScriptableObject _:
 					return IconKind.ScriptableObject;
 				case Prefab prefab:
@@ -87,6 +95,12 @@ namespace LELEngine.Editor
 				default:
 					return IconKind.None;
 			}
+		}
+
+		/// <summary>A component of the project's scripts (not the engine's, not a missing script's placeholder).</summary>
+		public static bool IsScript(Behaviour component)
+		{
+			return component.GetType().Assembly != typeof(Behaviour).Assembly;
 		}
 
 		/// <summary>The icon of a project file by its type (prefabs, ScriptableObject assets and folders included).</summary>
@@ -160,6 +174,7 @@ namespace LELEngine.Editor
 				case IconKind.Scene:
 					return Rgb(0.86f, 0.88f, 0.92f);
 				case IconKind.Script:
+				case IconKind.ScriptComponent:
 					return Rgb(0.45f, 0.82f, 0.48f);
 				case IconKind.Shader:
 					return Rgb(0.74f, 0.55f, 0.95f);
@@ -187,6 +202,24 @@ namespace LELEngine.Editor
 					return Rgb(0.55f, 0.68f, 0.95f);
 				default:
 					return ImGui.GetColorU32(ImGuiCol.Text, 0.7f);
+			}
+		}
+
+		/// <summary>
+		///     The color of a referenced object's icon (object fields, component headers): prefabs, scripts and
+		///     ScriptableObjects in their kind's color, as the project panel shows their files; the rest in the text color.
+		/// </summary>
+		public static uint ReferenceColor(IconKind kind)
+		{
+			switch (kind)
+			{
+				case IconKind.Prefab:
+				case IconKind.PrefabVariant:
+				case IconKind.ScriptComponent:
+				case IconKind.ScriptableObject:
+					return ColorOf(kind);
+				default:
+					return ImGui.GetColorU32(ImGuiCol.Text, 0.85f);
 			}
 		}
 
@@ -232,10 +265,33 @@ namespace LELEngine.Editor
 					}
 
 					break;
+				case IconKind.Transform:
+				{
+					// A cross with an arrow head at each end and a dot in the middle.
+					float reach = s * 0.95f;
+					float head = s * 0.34f;
+					draw.AddLine(center + new NVector2(-reach + head * 0.5f, 0f), center + new NVector2(reach - head * 0.5f, 0f), color, thickness);
+					draw.AddLine(center + new NVector2(0f, -reach + head * 0.5f), center + new NVector2(0f, reach - head * 0.5f), color, thickness);
+					for (int i = 0; i < 4; i++)
+					{
+						float angle = i * MathF.PI * 0.5f;
+						var direction = new NVector2(MathF.Cos(angle), MathF.Sin(angle));
+						var side = new NVector2(-direction.Y, direction.X);
+						NVector2 tip = center + direction * reach;
+						NVector2 back = center + direction * (reach - head);
+						draw.AddTriangleFilled(tip, back + side * head * 0.75f, back - side * head * 0.75f, color);
+					}
+
+					draw.AddCircleFilled(center, s * 0.16f, color, 8);
+					break;
+				}
 				case IconKind.Asset:
 				case IconKind.ScriptableObject:
+				case IconKind.Script:
+				case IconKind.ScriptComponent:
 				{
-					// A page with a folded corner (lines of text for ScriptableObjects).
+					// A page with a folded corner (lines of text for ScriptableObjects, "< >" for script files and their
+					// components: the project panel and the inspector show them alike).
 					float w = s * 0.72f;
 					float h = s * 0.9f;
 					float fold = s * 0.38f;
@@ -259,6 +315,20 @@ namespace LELEngine.Editor
 							float y = center.Y - h * 0.1f + i * h * 0.36f;
 							draw.AddLine(new NVector2(center.X - w * 0.55f, y), new NVector2(center.X + w * 0.55f, y), color, thickness);
 						}
+					}
+					else if (kind == IconKind.Script || kind == IconKind.ScriptComponent)
+					{
+						// "<" and ">" filling the page below the fold.
+						float y = center.Y + h * 0.18f;
+						float arm = h * 0.42f;
+						draw.PathLineTo(new NVector2(center.X - w * 0.12f, y - arm));
+						draw.PathLineTo(new NVector2(center.X - w * 0.62f, y));
+						draw.PathLineTo(new NVector2(center.X - w * 0.12f, y + arm));
+						draw.PathStroke(color, ImDrawFlags.None, thickness * 1.2f);
+						draw.PathLineTo(new NVector2(center.X + w * 0.12f, y - arm));
+						draw.PathLineTo(new NVector2(center.X + w * 0.62f, y));
+						draw.PathLineTo(new NVector2(center.X + w * 0.12f, y + arm));
+						draw.PathStroke(color, ImDrawFlags.None, thickness * 1.2f);
 					}
 
 					break;
@@ -393,7 +463,6 @@ namespace LELEngine.Editor
 					draw.AddLine(center + new NVector2(-s * 0.6f, s * 0.2f), center + new NVector2(s * 0.6f, s * 0.2f), ink, thickness);
 					return true;
 				}
-				case IconKind.Script:
 				case IconKind.Shader:
 				case IconKind.UIDocument:
 				case IconKind.StyleSheet:
@@ -412,17 +481,6 @@ namespace LELEngine.Editor
 					draw.AddTriangleFilled(center + new NVector2(w - fold, -h), center + new NVector2(w, -h + fold), center + new NVector2(w - fold, -h + fold), color);
 					switch (kind)
 					{
-						case IconKind.Script:
-							// </>
-							draw.PathLineTo(center + new NVector2(-s * 0.18f, -s * 0.05f));
-							draw.PathLineTo(center + new NVector2(-s * 0.48f, s * 0.25f));
-							draw.PathLineTo(center + new NVector2(-s * 0.18f, s * 0.55f));
-							draw.PathStroke(color, ImDrawFlags.None, thickness * 1.3f);
-							draw.PathLineTo(center + new NVector2(s * 0.18f, -s * 0.05f));
-							draw.PathLineTo(center + new NVector2(s * 0.48f, s * 0.25f));
-							draw.PathLineTo(center + new NVector2(s * 0.18f, s * 0.55f));
-							draw.PathStroke(color, ImDrawFlags.None, thickness * 1.3f);
-							break;
 						case IconKind.Shader:
 							// A wave.
 							for (int i = 0; i <= 8; i++)

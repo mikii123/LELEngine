@@ -3,6 +3,7 @@ using OpenTK.Mathematics;
 
 /// <summary>The sun: shines along its transform's forward axis. <see cref="This" /> is the active scene's first one.</summary>
 [ExecuteAlways]
+[InspectorColor(InspectorColorKind.Lighting)]
 public sealed class DirectionalLight : Behaviour
 {
 	#region PublicFields

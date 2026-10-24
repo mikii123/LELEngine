@@ -54,6 +54,9 @@ namespace LELEngine.Editor
 		/// <summary>Id in the prefab of the component (or GameObject) whose fields are drawn: the target of their overrides (0: none).</summary>
 		public ulong OverrideTarget;
 
+		/// <summary>The list or dictionary being drawn has [InlineEditor]: its elements' ScriptableObjects unfold.</summary>
+		public bool InlineElements;
+
 		/// <summary>Property path of the field being drawn ("weapon.damage", "drops[2]", "loot{gold}"): kept by the drawers.</summary>
 		public string Path = "";
 
@@ -166,9 +169,10 @@ namespace LELEngine.Editor
 				}
 
 				ImGui.PopID();
-				if (TestAnchors.Enabled && depth == 0)
+				if (TestAnchors.Enabled)
 				{
-					TestAnchors.Record("field:" + target.GetType().Name + "." + field.Name, lineStart, new NVector2(lineRight, lineStart.Y + ImGui.GetFrameHeight()));
+					// Nested fields (objects, inline editors) apart, so they never move a top-level anchor.
+					TestAnchors.Record((depth == 0 ? "field:" : "nestedfield:") + target.GetType().Name + "." + field.Name, lineStart, new NVector2(lineRight, lineStart.Y + ImGui.GetFrameHeight()));
 				}
 			}
 
@@ -568,13 +572,15 @@ namespace LELEngine.Editor
 		}
 
 		/// <summary>
-		///     A reference (GameObject, component, asset, ScriptableObject) as an object field. A ScriptableObject it
-		///     points at can be unfolded and edited in place (the asset changes: its own undo, saved to its file).
+		///     A reference (GameObject, component, prefab, asset, ScriptableObject) as an object field. With [InlineEditor]
+		///     (on the field, or on the list / dictionary holding it) what it points at can be unfolded and edited in place
+		///     (<see cref="InlineEditors" />).
 		/// </summary>
 		private static bool DrawReference(string label, Type type, ref object value, FieldInfo info, InspectorContext context, int depth)
 		{
-			if (value is ScriptableObject scriptableObject && !scriptableObject.IsDestroyed && depth < SerializationUtility.MaxDepth - 1)
+			if (Inlines(value, info, context, depth))
 			{
+				object target = value;
 				object current = value;
 				bool fieldChanged = false;
 				bool open = Header(label, info, context, width =>
@@ -582,7 +588,7 @@ namespace LELEngine.Editor
 					ImGui.SetNextItemWidth(width);
 					fieldChanged = ObjectField.Draw(type, ref current, context);
 					context.Track(fieldChanged);
-				}, null, "Unfold to edit the asset here (the asset changes for everything using it)");
+				}, null, InlineEditors.Hint(target));
 				if (fieldChanged)
 				{
 					value = current;
@@ -592,7 +598,7 @@ namespace LELEngine.Editor
 				{
 					if (!fieldChanged)
 					{
-						DrawScriptableObject(scriptableObject, context, depth + 1);
+						InlineEditors.Draw(target, context, depth + 1);
 					}
 
 					ImGui.TreePop();
@@ -606,6 +612,13 @@ namespace LELEngine.Editor
 			context.Track(changed);
 			EndLine(row);
 			return changed;
+		}
+
+		/// <summary>The field (or the list / dictionary holding the value) has [InlineEditor] and the value can unfold.</summary>
+		private static bool Inlines(object value, FieldInfo info, InspectorContext context, int depth)
+		{
+			bool inline = info != null ? info.IsDefined(typeof(InlineEditorAttribute), true) : context.InlineElements;
+			return inline && depth < SerializationUtility.MaxDepth - 1 && InlineEditors.CanInline(value);
 		}
 
 		/// <summary>The fields of a ScriptableObject asset drawn inside another inspector (edits are the asset's: undo, save, OnValidate).</summary>
@@ -652,54 +665,82 @@ namespace LELEngine.Editor
 			string hint = PolymorphicHint(declaredType, canReference, creatable.Count);
 			if (value == null || value is EngineObject)
 			{
-				RowDecoration row = BeginLine(label, info, context);
-				float arrow = creatable.Count > 0 ? ImGui.GetFrameHeight() : 0f;
-				float width = ImGui.CalcItemWidth();
-				float fieldWidth = Math.Max(24f, width - (arrow > 0f ? arrow + ImGui.GetStyle().ItemInnerSpacing.X : 0f));
+				object current = value;
 				bool changed = false;
-				if (canReference)
+				// The reference (and the arrow creating an instance) on one line: a plain field line, or the header of
+				// an [InlineEditor] foldout.
+				void DrawLine(float width)
 				{
-					ImGui.SetNextItemWidth(fieldWidth);
-					changed = ObjectField.Draw(declaredType, ref value, context);
-					context.Track(changed);
+					float arrow = creatable.Count > 0 ? ImGui.GetFrameHeight() : 0f;
+					float fieldWidth = Math.Max(24f, width - (arrow > 0f ? arrow + ImGui.GetStyle().ItemInnerSpacing.X : 0f));
+					if (canReference)
+					{
+						ImGui.SetNextItemWidth(fieldWidth);
+						bool picked = ObjectField.Draw(declaredType, ref current, context);
+						context.Track(picked);
+						changed |= picked;
+					}
+					else
+					{
+						NVector2 start = ImGui.GetCursorScreenPos();
+						float height = ImGui.GetFrameHeight();
+						ImGui.InvisibleButton("##none", new NVector2(fieldWidth, height));
+						ImGui.GetWindowDrawList().AddRectFilled(start, start + new NVector2(fieldWidth, height), ImGui.GetColorU32(ImGuiCol.FrameBg), ImGui.GetStyle().FrameRounding);
+						ImGui.GetWindowDrawList().AddText(start + new NVector2(5f, (height - ImGui.GetTextLineHeight()) * 0.5f), ImGui.GetColorU32(ImGuiCol.TextDisabled), "None (" + ObjectField.TypeLabel(declaredType) + ")");
+						if (ImGui.IsItemHovered())
+						{
+							ImGui.SetTooltip(hint);
+						}
+
+						if (ImGui.IsItemClicked() && creatable.Count > 0)
+						{
+							ImGui.OpenPopup(popupId);
+						}
+					}
+
+					if (creatable.Count > 0)
+					{
+						ImGui.SameLine(0f, ImGui.GetStyle().ItemInnerSpacing.X);
+						if (EditorIcons.Button("create", IconKind.Dropdown, hint, arrow))
+						{
+							ImGui.OpenPopup(popupId);
+						}
+					}
+
+					if (TypeSelector.Popup(popupId, declaredType, null, current != null, out Type chosen))
+					{
+						context.BeginEdit();
+						current = chosen != null ? CreateInstance(chosen, null) : null;
+						context.EndEdit();
+						changed = true;
+					}
+				}
+
+				if (Inlines(value, info, context, depth))
+				{
+					object target = value;
+					if (Header(label, info, context, DrawLine, null, InlineEditors.Hint(target)))
+					{
+						if (!changed)
+						{
+							InlineEditors.Draw(target, context, depth + 1);
+						}
+
+						ImGui.TreePop();
+					}
 				}
 				else
 				{
-					NVector2 start = ImGui.GetCursorScreenPos();
-					float height = ImGui.GetFrameHeight();
-					ImGui.InvisibleButton("##none", new NVector2(fieldWidth, height));
-					ImGui.GetWindowDrawList().AddRectFilled(start, start + new NVector2(fieldWidth, height), ImGui.GetColorU32(ImGuiCol.FrameBg), ImGui.GetStyle().FrameRounding);
-					ImGui.GetWindowDrawList().AddText(start + new NVector2(5f, (height - ImGui.GetTextLineHeight()) * 0.5f), ImGui.GetColorU32(ImGuiCol.TextDisabled), "None (" + ObjectField.TypeLabel(declaredType) + ")");
-					if (ImGui.IsItemHovered())
-					{
-						ImGui.SetTooltip(hint);
-					}
-
-					if (ImGui.IsItemClicked() && creatable.Count > 0)
-					{
-						ImGui.OpenPopup(popupId);
-					}
+					RowDecoration row = BeginLine(label, info, context);
+					DrawLine(ImGui.CalcItemWidth());
+					EndLine(row);
 				}
 
-				if (creatable.Count > 0)
+				if (changed)
 				{
-					ImGui.SameLine(0f, ImGui.GetStyle().ItemInnerSpacing.X);
-					if (EditorIcons.Button("create", IconKind.Dropdown, hint, arrow))
-					{
-						ImGui.OpenPopup(popupId);
-					}
+					value = current;
 				}
 
-				Type chosen;
-				if (TypeSelector.Popup(popupId, declaredType, null, value != null, out chosen))
-				{
-					context.BeginEdit();
-					value = chosen != null ? CreateInstance(chosen, null) : null;
-					context.EndEdit();
-					changed = true;
-				}
-
-				EndLine(row);
 				return changed;
 			}
 

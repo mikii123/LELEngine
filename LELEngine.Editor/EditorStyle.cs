@@ -33,6 +33,31 @@ namespace LELEngine.Editor
 
 		/// <summary>Objects and components added to an instance (the "+" badge).</summary>
 		Added,
+
+		/// <summary>Material sections in the inspector: the header's tint, the bar on the left, the frame.</summary>
+		Material,
+
+		/// <summary>Component headers in the inspector by kind (a bar on the left and a light tint): rigidbodies, colliders, joints.</summary>
+		ComponentPhysics,
+
+		/// <summary>Mesh renderers.</summary>
+		ComponentRendering,
+
+		/// <summary>Audio emitters, listeners, triggers, bank loaders.</summary>
+		ComponentAudio,
+		ComponentCamera,
+
+		/// <summary>Lights.</summary>
+		ComponentLighting,
+
+		/// <summary>Nav mesh surfaces, agents, obstacles, modifiers.</summary>
+		ComponentNavigation,
+
+		/// <summary>Visual effects.</summary>
+		ComponentEffects,
+
+		/// <summary>UI documents.</summary>
+		ComponentUI,
 		CodeBackground,
 		CodeText,
 		CodeKeyword,
@@ -72,6 +97,7 @@ namespace LELEngine.Editor
 		public static NVector4 PrefabDim => Get(EditorColor.PrefabDim);
 		public static NVector4 PrefabMissing => Get(EditorColor.PrefabMissing);
 		public static NVector4 Added => Get(EditorColor.Added);
+		public static NVector4 Material => Get(EditorColor.Material);
 
 		/// <summary>The preset is light (backgrounds bright): drawings pick darker colors.</summary>
 		public static bool IsLight { get; private set; }
@@ -95,6 +121,15 @@ namespace LELEngine.Editor
 		{
 			NVector4 c = editorColors[(int)color];
 			return ImGui.ColorConvertFloat4ToU32(new NVector4(c.X, c.Y, c.Z, c.W * alpha));
+		}
+
+		/// <summary>A style color moved towards <paramref name="tint" /> (opaque, so a tinted header stands out in every theme).</summary>
+		public static NVector4 Tinted(ImGuiCol color, NVector4 tint, float amount)
+		{
+			NVector4 baseColor = ImGui.GetStyle().Colors[(int)color];
+			NVector4 mixed = NVector4.Lerp(baseColor, tint, amount);
+			mixed.W = Math.Max(baseColor.W, 0.9f);
+			return mixed;
 		}
 
 		/// <summary>The preferences' theme, applied to the current ImGui context.</summary>
@@ -274,6 +309,15 @@ namespace LELEngine.Editor
 			Set(EditorColor.PrefabDim, 0.36f, 0.49f, 0.66f);
 			Set(EditorColor.PrefabMissing, 1f, 0.42f, 0.38f);
 			Set(EditorColor.Added, 0.38f, 0.82f, 0.45f);
+			Set(EditorColor.Material, 0.95f, 0.58f, 0.35f);
+			Set(EditorColor.ComponentPhysics, 0.4f, 0.8f, 0.45f);
+			Set(EditorColor.ComponentRendering, 0.4f, 0.62f, 1f);
+			Set(EditorColor.ComponentAudio, 0.98f, 0.62f, 0.25f);
+			Set(EditorColor.ComponentCamera, 0.4f, 0.85f, 0.9f);
+			Set(EditorColor.ComponentLighting, 0.98f, 0.86f, 0.35f);
+			Set(EditorColor.ComponentNavigation, 0.62f, 0.5f, 0.98f);
+			Set(EditorColor.ComponentEffects, 0.98f, 0.45f, 0.7f);
+			Set(EditorColor.ComponentUI, 0.85f, 0.6f, 0.98f);
 
 			// Visual Studio Code's Dark+.
 			Set(EditorColor.CodeBackground, 0.115f, 0.115f, 0.12f);
@@ -324,6 +368,15 @@ namespace LELEngine.Editor
 			Set(EditorColor.PrefabDim, 0.4f, 0.52f, 0.72f);
 			Set(EditorColor.PrefabMissing, 0.8f, 0.14f, 0.1f);
 			Set(EditorColor.Added, 0.1f, 0.55f, 0.2f);
+			Set(EditorColor.Material, 0.85f, 0.42f, 0.12f);
+			Set(EditorColor.ComponentPhysics, 0.15f, 0.6f, 0.25f);
+			Set(EditorColor.ComponentRendering, 0.15f, 0.4f, 0.85f);
+			Set(EditorColor.ComponentAudio, 0.9f, 0.5f, 0.05f);
+			Set(EditorColor.ComponentCamera, 0.05f, 0.6f, 0.7f);
+			Set(EditorColor.ComponentLighting, 0.8f, 0.65f, 0f);
+			Set(EditorColor.ComponentNavigation, 0.42f, 0.3f, 0.85f);
+			Set(EditorColor.ComponentEffects, 0.85f, 0.2f, 0.5f);
+			Set(EditorColor.ComponentUI, 0.62f, 0.3f, 0.8f);
 
 			// Visual Studio's light.
 			Set(EditorColor.CodeBackground, 1f, 1f, 1f);

@@ -117,7 +117,9 @@ namespace LELEngine.Editor
 			{
 				// The project folder opens (or the window that has it comes forward), then the file at the line.
 				ScriptEditorKind.VisualStudioCode => "\"$(ProjectPath)\" -g \"$(File)\":$(Line):$(Column)",
-				ScriptEditorKind.Rider => "--line $(Line) --column $(Column) \"$(File)\"",
+				// The solution first (as Unity's Rider integration): Rider opens it, or brings the window that has it
+				// forward, then the file. A file alone opens in LightEdit mode, outside the solution.
+				ScriptEditorKind.Rider => (File.Exists(SolutionPath()) ? "\"$(SolutionPath)\" " : "") + "--line $(Line) --column $(Column) \"$(File)\"",
 				ScriptEditorKind.VisualStudio => "/edit \"$(File)\" /command \"Edit.GoTo $(Line)\"",
 				ScriptEditorKind.Custom => tools.CustomArguments,
 				_ => ""

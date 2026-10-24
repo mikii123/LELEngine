@@ -20,6 +20,7 @@ namespace LELEngine
 	///     without one it is a static collider in world space. Triggers overlap without colliding and report
 	///     OnTrigger callbacks. Shape edits (inspector or properties) rebuild the Box2D shapes.
 	/// </summary>
+	[InspectorColor(InspectorColorKind.Physics)]
 	public abstract class Collider2D : Behaviour
 	{
 		#region PublicFields

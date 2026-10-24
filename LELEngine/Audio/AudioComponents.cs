@@ -34,6 +34,7 @@ namespace LELEngine.Audio
 	///     The ears of the game: its position and orientation spatialize every 3D event. One per scene; without any,
 	///     the main camera listens.
 	/// </summary>
+	[InspectorColor(InspectorColorKind.Audio)]
 	public sealed class AudioListener : Behaviour
 	{
 		#region PublicFields
@@ -88,6 +89,7 @@ namespace LELEngine.Audio
 	///     or from scripts (<see cref="Play" />, <see cref="Stop" />), its 3D attributes following the transform, with
 	///     initial parameter values.
 	/// </summary>
+	[InspectorColor(InspectorColorKind.Audio)]
 	public sealed class AudioEventEmitter : Behaviour
 	{
 		#region PublicFields
@@ -311,6 +313,7 @@ namespace LELEngine.Audio
 	}
 
 	/// <summary>Loads (and optionally unloads) banks with the scene (FMOD's StudioBankLoader).</summary>
+	[InspectorColor(InspectorColorKind.Audio)]
 	public sealed class AudioBankLoader : Behaviour
 	{
 		#region PublicFields
@@ -377,6 +380,7 @@ namespace LELEngine.Audio
 	}
 
 	/// <summary>Starts a mixer snapshot when a game event happens and stops it on another (a quiet room, a pause menu, underwater).</summary>
+	[InspectorColor(InspectorColorKind.Audio)]
 	public sealed class AudioSnapshotTrigger : Behaviour
 	{
 		#region PublicFields
@@ -504,6 +508,7 @@ namespace LELEngine.Audio
 	}
 
 	/// <summary>Sets parameters (of an emitter's event, or global ones) when a game event happens (FMOD's StudioParameterTrigger).</summary>
+	[InspectorColor(InspectorColorKind.Audio)]
 	public sealed class AudioParameterTrigger : Behaviour
 	{
 		#region PublicFields

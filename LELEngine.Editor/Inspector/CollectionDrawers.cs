@@ -153,7 +153,16 @@ namespace LELEngine.Editor
 				}
 				else
 				{
-					changed |= DrawRows(ref list, type, element, context, depth, headerId, label);
+					bool inlineElements = context.InlineElements;
+					context.InlineElements = info != null && info.IsDefined(typeof(InlineEditorAttribute), true);
+					try
+					{
+						changed |= DrawRows(ref list, type, element, context, depth, headerId, label);
+					}
+					finally
+					{
+						context.InlineElements = inlineElements;
+					}
 				}
 
 				ImGui.TreePop();
@@ -217,7 +226,16 @@ namespace LELEngine.Editor
 				}
 				else
 				{
-					changed |= DrawEntries(dictionary, keyType, valueType, context, depth);
+					bool inlineElements = context.InlineElements;
+					context.InlineElements = info != null && info.IsDefined(typeof(InlineEditorAttribute), true);
+					try
+					{
+						changed |= DrawEntries(dictionary, keyType, valueType, context, depth);
+					}
+					finally
+					{
+						context.InlineElements = inlineElements;
+					}
 				}
 
 				ImGui.TreePop();

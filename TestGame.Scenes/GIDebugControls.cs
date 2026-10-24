@@ -326,6 +326,12 @@ namespace TestGame.Scenes
 
 			ScreenProbeGatherPass gather = Game.Renderer.GetPass<ScreenProbeGatherPass>();
 			string adaptive = gather != null ? $" adaptive probes {gather.AdaptiveProbeCount}" : string.Empty;
+			// Scene copies of the GrabPass materials in the last frame (refraction).
+			TransparentPass transparent = Game.Renderer.GetPass<TransparentPass>();
+			if (transparent != null && transparent.Grab.CopyCount > 0)
+			{
+				adaptive += $" | grabs {transparent.Grab.CopyCount} ({transparent.Grab.CopiedPixels} px)";
+			}
 			Console.WriteLine(
 				$"[Stats] {statsFrames / statsTimer:0.0} fps | GPU {(sectionElapsedSum / statsFrames).ToString("0.00", CultureInfo.InvariantCulture)} ms (frame wall {(gpuWallSum / statsFrames).ToString("0.00", CultureInfo.InvariantCulture)}, pass sum {total.ToString("0.00", CultureInfo.InvariantCulture)}, skipped {profiler.SkippedSections}, head {(headSum / statsFrames).ToString("0.00", CultureInfo.InvariantCulture)}, tail {(tailSum / statsFrames).ToString("0.00", CultureInfo.InvariantCulture)})" +
 				$" | CPU render {(cpuRenderSum / statsFrames).ToString("0.00", CultureInfo.InvariantCulture)} ms swap {(swapSum / statsFrames).ToString("0.00", CultureInfo.InvariantCulture)} ms" +

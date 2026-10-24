@@ -18,6 +18,7 @@ namespace LELEngine.Navigation
 	///     it. By default a moving obstacle stops carving until it has stood still for <see cref="carvingTimeToStationary" />.
 	/// </summary>
 	[ExecuteAlways]
+	[InspectorColor(InspectorColorKind.Navigation)]
 	public sealed class NavMeshObstacle : Behaviour
 	{
 		#region PublicFields

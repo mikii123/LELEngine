@@ -12,6 +12,7 @@ namespace LELEngine.VFX
 	///     the graph's spawn contexts listen to.
 	/// </summary>
 	[ExecuteAlways]
+	[InspectorColor(InspectorColorKind.Effects)]
 	public sealed class VisualEffect : Behaviour
 	{
 		#region PublicFields

@@ -1447,6 +1447,7 @@ namespace LELEngine.Editor
 			TypeSelector.ClearCache();
 			ObjectPicker.Close();
 			Edits.Cancel();
+			InlineEditors.Clear();
 		}
 
 		public void Dispose()
@@ -2327,6 +2328,7 @@ namespace LELEngine.Editor
 				SceneView.SaveState(Project);
 				Extensions.SaveOpenWindows(Project);
 				SaveWindowStates();
+				hierarchy.SaveState();
 			}
 		}
 

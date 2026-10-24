@@ -627,6 +627,18 @@ namespace LELEngine.VFX
 			}
 		}
 
+		/// <summary>World-space bounds of one system (false when they are not known yet).</summary>
+		internal bool TryGetSystemBounds(int systemIndex, out Vector3 min, out Vector3 max)
+		{
+			if (systemIndex < 0 || systemIndex >= systems.Count)
+			{
+				min = max = Vector3.Zero;
+				return false;
+			}
+
+			return WorldBounds(systems[systemIndex], out min, out max);
+		}
+
 		/// <summary>World-space bounds of every system (false when none is known yet).</summary>
 		public bool GetWorldBounds(out Vector3 min, out Vector3 max)
 		{

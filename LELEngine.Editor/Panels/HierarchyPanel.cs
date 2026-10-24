@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using Hexa.NET.ImGui;
 using NVector2 = System.Numerics.Vector2;
 using NVector4 = System.Numerics.Vector4;
@@ -45,8 +46,20 @@ namespace LELEngine.Editor
 		private bool revealPinged;
 		private const double PingSeconds = 1.6;
 
+		// Vertical padding above and below a row's text (rows have no spacing between them).
+		private const float RowPadding = 2f;
+
 		// A prefab to open after the tree is drawn (the arrow at the end of a row).
 		private string openPrefab;
+
+		// Folded rows of the shown scene, kept per user (HierarchyExpansion): applied to each row the first time it is
+		// drawn for the scene, saved a moment after a change.
+		private string expansionKey;
+		private HashSet<ulong> collapsed = new HashSet<ulong>();
+		private readonly HashSet<ulong> expansionApplied = new HashSet<ulong>();
+		private bool expansionDirty;
+		private double expansionChangedAt;
+		private const double ExpansionSaveDelay = 0.5;
 
 		// Leading spaces of a row's label: room for its icon.
 		private string iconPadding = "";
@@ -112,6 +125,20 @@ namespace LELEngine.Editor
 			}
 
 			ImGui.End();
+			if (expansionDirty && ImGui.GetTime() - expansionChangedAt > ExpansionSaveDelay)
+			{
+				SaveState();
+			}
+		}
+
+		/// <summary>Writes the folded rows of the shown scene now (when they changed).</summary>
+		public void SaveState()
+		{
+			if (expansionDirty)
+			{
+				expansionDirty = false;
+				HierarchyExpansion.Save(expansionKey, collapsed);
+			}
 		}
 
 		#endregion
@@ -125,6 +152,15 @@ namespace LELEngine.Editor
 			{
 				ImGui.TextDisabled("No scene");
 				return;
+			}
+
+			string key = HierarchyExpansion.Key(editor.Project?.RootPath, editor.Stage?.AssetPath ?? scene.Path);
+			if (key != expansionKey)
+			{
+				SaveState();
+				expansionKey = key;
+				collapsed = HierarchyExpansion.Load(key);
+				expansionApplied.Clear();
 			}
 
 			if (editor.Stage != null)
@@ -278,10 +314,15 @@ namespace LELEngine.Editor
 			}
 
 			ImGui.PushID(go.Id.ToString());
-			ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags.OpenOnArrow | ImGuiTreeNodeFlags.OpenOnDoubleClick | ImGuiTreeNodeFlags.SpanAvailWidth | ImGuiTreeNodeFlags.DefaultOpen;
-			if (go.transform.childCount == 0)
+			ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags.OpenOnArrow | ImGuiTreeNodeFlags.OpenOnDoubleClick | ImGuiTreeNodeFlags.SpanFullWidth | ImGuiTreeNodeFlags.DefaultOpen;
+			bool leaf = go.transform.childCount == 0;
+			if (leaf)
 			{
 				flags |= ImGuiTreeNodeFlags.Leaf;
+			}
+			else if (expansionApplied.Add(go.Id))
+			{
+				ImGui.SetNextItemOpen(!collapsed.Contains(go.Id), ImGuiCond.Always);
 			}
 
 			if (editor.Selected == go)
@@ -297,11 +338,15 @@ namespace LELEngine.Editor
 			PrefabInstance instance = go.prefabInstance;
 			Prefab openTarget = instance == null ? null : PrefabUtility.IsPrefabInstanceRoot(go) ? instance.Prefab : PrefabUtility.GetNestedPrefab(go);
 			bool open;
+			flags |= ImGuiTreeNodeFlags.FramePadding;
+			PushRowStyle();
 			ImGui.SetNextItemAllowOverlap();
+			// The row spans the whole width (indent included); its arrow and label start at the indented cursor.
+			float rowX = ImGui.GetCursorScreenPos().X;
 			if (renaming == go)
 			{
 				open = ImGui.TreeNodeEx(iconPadding + "###node", flags);
-				DrawIcon(go, instance);
+				DrawIcon(go, instance, rowX);
 				ImGui.SameLine();
 				if (focusRename)
 				{
@@ -330,13 +375,14 @@ namespace LELEngine.Editor
 				}
 
 				open = ImGui.TreeNodeEx(iconPadding + go.Name + "###node", flags);
-				TestAnchors.RecordItem("hierarchy:" + go.Name);
+				// From the label on: the row spans the arrow too, and a click there would fold instead of select.
+				TestAnchors.Record("hierarchy:" + go.Name, new NVector2(rowX + ImGui.GetTreeNodeToLabelSpacing(), ImGui.GetItemRectMin().Y), ImGui.GetItemRectMax());
 				if (color.HasValue)
 				{
 					ImGui.PopStyleColor();
 				}
 
-				DrawIcon(go, instance);
+				DrawIcon(go, instance, rowX);
 				if (ImGui.IsItemHovered() && instance != null && !DragAndDrop.IsDragging)
 				{
 					ImGui.SetTooltip(RowTooltip(go, instance));
@@ -363,6 +409,22 @@ namespace LELEngine.Editor
 				{
 					editor.SceneView.FrameObject(go);
 				}
+			}
+
+			ImGui.PopStyleVar(2);
+			if (!leaf && open == collapsed.Contains(go.Id))
+			{
+				if (open)
+				{
+					collapsed.Remove(go.Id);
+				}
+				else
+				{
+					collapsed.Add(go.Id);
+				}
+
+				expansionDirty = true;
+				expansionChangedAt = ImGui.GetTime();
 			}
 
 			if (go == pinged)
@@ -445,6 +507,19 @@ namespace LELEngine.Editor
 			ImGui.PopID();
 		}
 
+		/// <summary>
+		///     Style of a row's items (pops two vars): no vertical spacing, so rows touch and their highlights form one
+		///     column as in Unity; the row's own padding keeps the old pitch (text line + 4 px).
+		/// </summary>
+		private static void PushRowStyle()
+		{
+			ImGuiStylePtr style = ImGui.GetStyle();
+			var spacing = new NVector2(style.ItemSpacing.X, 0f);
+			var padding = new NVector2(style.FramePadding.X, RowPadding);
+			ImGui.PushStyleVar(ImGuiStyleVar.ItemSpacing, spacing);
+			ImGui.PushStyleVar(ImGuiStyleVar.FramePadding, padding);
+		}
+
 		/// <summary>Unity's colors: prefab instances blue (dimmed when inactive), a missing prefab's instance red, inactive objects grey.</summary>
 		private static NVector4? TextColor(GameObject go, PrefabInstance instance)
 		{
@@ -457,12 +532,12 @@ namespace LELEngine.Editor
 		}
 
 		/// <summary>The row's icon (the last item is its tree node): a cube; a solid prefab cube on instance roots and nested prefab roots; "+" on added objects.</summary>
-		private static void DrawIcon(GameObject go, PrefabInstance instance)
+		private static void DrawIcon(GameObject go, PrefabInstance instance, float rowX)
 		{
 			NVector2 min = ImGui.GetItemRectMin();
 			float height = ImGui.GetItemRectSize().Y;
 			float size = ImGui.GetTextLineHeight();
-			var at = new NVector2(min.X + ImGui.GetTreeNodeToLabelSpacing() + 1f, min.Y + (height - size) * 0.5f);
+			var at = new NVector2(rowX + ImGui.GetTreeNodeToLabelSpacing() + 1f, min.Y + (height - size) * 0.5f);
 			ImDrawListPtr draw = ImGui.GetWindowDrawList();
 			IconKind kind = IconKind.GameObject;
 			NVector4 color = go.activeInHierarchy ? new NVector4(0.75f, 0.75f, 0.78f, 1f) : EditorStyle.Dim;
@@ -493,7 +568,10 @@ namespace LELEngine.Editor
 			float width = height;
 			ImGui.SameLine();
 			ImGui.SetCursorScreenPos(new NVector2(rowMax.X - width, rowMin.Y));
+			// The last item of the row: it decides where the next row starts.
+			PushRowStyle();
 			ImGui.InvisibleButton("##open_prefab", new NVector2(width, height));
+			ImGui.PopStyleVar(2);
 			bool hovered = ImGui.IsItemHovered();
 			if (hovered)
 			{

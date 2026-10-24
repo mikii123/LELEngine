@@ -281,18 +281,21 @@ namespace LELEngine.Editor
 				return DrawKeywordToggle(material, declared, label, context);
 			}
 
+			// A material without a value (saved before the shader declared it) draws with the declared default, the standard
+			// parameters with the engine's (Material.ResetStandardUniforms): show what it draws with.
+			Vector4 fallback = !Material.IsStandardUniform(name) ? declared.DefaultValue : name == "Color" ? Vector4.One : Vector4.Zero;
 			switch (declared.Type)
 			{
 				case ShaderPropertyType.Color:
-					return DrawColor(material, name, label, declared.Hdr, context);
+					return DrawColor(material, name, label, declared.Hdr, context, new Color4(fallback.X, fallback.Y, fallback.Z, fallback.W));
 				case ShaderPropertyType.Range:
-					return DrawRange(material, name, label, declared.RangeMin, declared.RangeMax, context);
+					return DrawRange(material, name, label, declared.RangeMin, declared.RangeMax, context, fallback.X);
 				case ShaderPropertyType.Float:
-					return DrawFloat(material, name, label, context);
+					return DrawFloat(material, name, label, context, fallback.X);
 				case ShaderPropertyType.Int:
-					return DrawInt(material, name, label, context);
+					return DrawInt(material, name, label, context, (int)fallback.X);
 				case ShaderPropertyType.Vector:
-					return DrawVector(material, name, label, 4, context);
+					return DrawVector(material, name, label, 4, context, fallback);
 				case ShaderPropertyType.Cubemap:
 					return DrawTexture(material, name, label, typeof(Cubemap), context);
 				case ShaderPropertyType.Texture3D:
@@ -333,10 +336,10 @@ namespace LELEngine.Editor
 			}
 		}
 
-		private static bool DrawColor(Material material, string name, string label, bool hdr, InspectorContext context)
+		private static bool DrawColor(Material material, string name, string label, bool hdr, InspectorContext context, Color4? fallback = null)
 		{
 			FieldDrawer.Label(label, null, context);
-			Color4 color = material.GetColor(name, Color4.White);
+			Color4 color = material.GetColor(name, fallback ?? Color4.White);
 			NVector4 n = new NVector4(color.R, color.G, color.B, color.A);
 			ImGuiColorEditFlags flags = ImGuiColorEditFlags.Float | ImGuiColorEditFlags.AlphaPreviewHalf;
 			if (hdr)
@@ -354,10 +357,10 @@ namespace LELEngine.Editor
 			return changed;
 		}
 
-		private static bool DrawRange(Material material, string name, string label, float min, float max, InspectorContext context)
+		private static bool DrawRange(Material material, string name, string label, float min, float max, InspectorContext context, float fallback = 0f)
 		{
 			FieldDrawer.Label(label, null, context);
-			float value = material.GetFloat(name);
+			float value = material.GetFloat(name, fallback);
 			bool changed = ImGui.SliderFloat("##v", ref value, min, max);
 			context.Track(changed);
 			if (changed)
@@ -368,10 +371,10 @@ namespace LELEngine.Editor
 			return changed;
 		}
 
-		private static bool DrawFloat(Material material, string name, string label, InspectorContext context)
+		private static bool DrawFloat(Material material, string name, string label, InspectorContext context, float fallback = 0f)
 		{
 			FieldDrawer.Label(label, null, context);
-			float value = material.GetFloat(name);
+			float value = material.GetFloat(name, fallback);
 			bool changed = ImGui.DragFloat("##v", ref value, Math.Max(0.005f, Math.Abs(value) * 0.01f));
 			context.Track(changed);
 			if (changed)
@@ -382,10 +385,10 @@ namespace LELEngine.Editor
 			return changed;
 		}
 
-		private static bool DrawInt(Material material, string name, string label, InspectorContext context)
+		private static bool DrawInt(Material material, string name, string label, InspectorContext context, int fallback = 0)
 		{
 			FieldDrawer.Label(label, null, context);
-			int value = material.GetInt(name);
+			int value = material.GetInt(name, fallback);
 			bool changed = ImGui.DragInt("##v", ref value, 0.2f);
 			context.Track(changed);
 			if (changed)
@@ -478,10 +481,10 @@ namespace LELEngine.Editor
 			return changed;
 		}
 
-		private static bool DrawVector(Material material, string name, string label, int components, InspectorContext context)
+		private static bool DrawVector(Material material, string name, string label, int components, InspectorContext context, Vector4 fallback = default)
 		{
 			FieldDrawer.Label(label, null, context);
-			Vector4 value = material.GetVector(name);
+			Vector4 value = material.GetVector(name, fallback);
 			bool changed;
 			if (components == 2)
 			{

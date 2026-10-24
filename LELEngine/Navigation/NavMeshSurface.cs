@@ -32,6 +32,7 @@ namespace LELEngine.Navigation
 	///     with the scene. Subclass to change what is collected (<see cref="CollectSources" />).
 	/// </summary>
 	[ExecuteAlways]
+	[InspectorColor(InspectorColorKind.Navigation)]
 	public class NavMeshSurface : Behaviour
 	{
 		#region PublicFields
@@ -389,6 +390,7 @@ namespace LELEngine.Navigation
 
 	/// <summary>Changes how an object (and optionally its children) is baked: another area, or left out.</summary>
 	[ExecuteAlways]
+	[InspectorColor(InspectorColorKind.Navigation)]
 	public sealed class NavMeshModifier : Behaviour
 	{
 		#region PublicFields
@@ -421,6 +423,7 @@ namespace LELEngine.Navigation
 
 	/// <summary>A box volume whose walkable cells get an area (water, mud, danger zones), yaw-aligned with the object.</summary>
 	[ExecuteAlways]
+	[InspectorColor(InspectorColorKind.Navigation)]
 	public sealed class NavMeshModifierVolume : Behaviour
 	{
 		#region PublicFields

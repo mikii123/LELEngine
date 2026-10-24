@@ -185,6 +185,12 @@ namespace TestGame.Scenes
 			/// <summary>Glass props (transparent materials: sorting, blending, GI from the volume); off for the plain room.</summary>
 			public bool Glass = true;
 
+			/// <summary>
+			///     Refraction props (GrabPass materials) close to the player's start; off by default, so the room's reference
+			///     frames stay as they were.
+			/// </summary>
+			public bool Refraction;
+
 			/// <summary>Start position of the player's eye (null = the usual spot by the open side of the room).</summary>
 			public Vector3? CameraPosition;
 
@@ -244,6 +250,10 @@ namespace TestGame.Scenes
 			if (options.Glass)
 			{
 				BuildGlass(scene);
+			}
+			if (options.Refraction)
+			{
+				BuildRefraction(scene);
 			}
 			BuildLight(scene);
 			if (options.Emitters)
@@ -667,6 +677,121 @@ namespace TestGame.Scenes
 			sphere.transform.scale = Vector3.One * 0.9f;
 			MeshRenderer renderer = sphere.GetComponent<MeshRenderer>();
 			renderer.SetMaterials(SceneModels.Material("GlassRed.material"));
+		}
+
+		/// <summary>
+		///     Refraction props (refraction=1, GrabPass materials) in front of the player's start: a pane of bumpy glass in
+		///     front of the rail and the slab, with a thin red post between the player and the pane that must stay
+		///     sharp (nothing in front of a refracting surface is shifted into it); a bumpy glass sphere beside it, drawn
+		///     after the pane (it takes a copy of its own: it reads where the pane drew); and particle quads
+		///     (Engine/ParticlesUnlit) refracting through a ring normal map: pure refraction (alpha blending) and additive
+		///     with an orange glow (it shares the sphere's copy).
+		/// </summary>
+		private static void BuildRefraction(Scene scene)
+		{
+			Texture2D bumps = BumpNormalMap(256, 6, 0.35f);
+			Texture2D ring = RingNormalMap(128);
+
+			Material paneMaterial = SceneModels.Material("GlassCyan.material").Clone();
+			paneMaterial.SetFloat("Refraction", 1f);
+			paneMaterial.SetTexture("NormalMap", bumps);
+			paneMaterial.SetFloat("RefractionStrength", 0.06f);
+			GameObject pane = Box(scene, "RefractionPane", "GlassCyan.material", new Vector3(0.35f, 1.3f, -6.3f), new Vector3(0.75f, 0.55f, 0.01f));
+			pane.GetComponent<MeshRenderer>().SetMaterials(paneMaterial);
+
+			Box(scene, "RefractionPost", "LitRed.material", new Vector3(0.12f, 1.3f, -7.2f), new Vector3(0.025f, 0.35f, 0.025f));
+
+			Material sphereMaterial = SceneModels.Material("GlassRed.material").Clone();
+			sphereMaterial.SetFloat("Refraction", 1f);
+			sphereMaterial.SetTexture("NormalMap", bumps);
+			sphereMaterial.SetFloat("RefractionStrength", 0.1f);
+			GameObject sphere = SceneModels.Instantiate(scene, SceneModels.Sphere, "RefractionSphere");
+			sphere.transform.position = new Vector3(-0.95f, 1.35f, -6.55f);
+			sphere.transform.scale = Vector3.One * 0.3f;
+			sphere.GetComponent<MeshRenderer>().SetMaterials(sphereMaterial);
+
+			ShaderProgram particles = InternalStorage.GetOrCreateShader("Engine/ParticlesUnlit.shader");
+			var haze = new Material(particles);
+			haze.SetTexture("BaseMap", LELEngine.VFX.VfxDefaults.SoftDisc);
+			haze.SetTexture("NormalMap", ring);
+			haze.SetFloat("Refraction", 1f);
+			haze.SetFloat("RefractionStrength", 0.2f);
+			haze.SetFloat("RefractionBlend", 1f);
+			RefractionQuad(scene, "RefractionHaze", haze, new Vector3(-0.45f, 1.55f, -6.8f), 0.3f);
+
+			var glow = new Material(particles);
+			glow.SetTexture("BaseMap", LELEngine.VFX.VfxDefaults.SoftDisc);
+			glow.SetTexture("NormalMap", ring);
+			glow.SetColor("Color", new Color4(1f, 0.45f, 0.1f, 1f));
+			glow.SetFloat("BlendMode", 2f);
+			glow.SetFloat("Refraction", 1f);
+			glow.SetFloat("RefractionStrength", 0.12f);
+			glow.SetFloat("RefractionBlend", 0.6f);
+			RefractionQuad(scene, "RefractionGlow", glow, new Vector3(1.05f, 1.5f, -6.9f), 0.25f);
+		}
+
+		// A built-in quad (2 x 2 in the model's YZ plane) facing the player's start.
+		private static void RefractionQuad(Scene scene, string name, Material material, Vector3 position, float halfSize)
+		{
+			GameObject quad = SceneModels.Instantiate(scene, "Engine/Meshes/Quad.obj", name);
+			quad.transform.position = position;
+			quad.transform.rotation = QuaternionHelper.Euler(0f, 90f, 0f);
+			quad.transform.scale = Vector3.One * halfSize;
+			MeshRenderer renderer = quad.GetComponent<MeshRenderer>();
+			renderer.SetMaterials(material);
+			renderer.ContributesToGI = false;
+		}
+
+		// A tangent-space normal map of round bumps, cells x cells per tile; tilt is the slope scale.
+		private static Texture2D BumpNormalMap(int size, int cells, float tilt)
+		{
+			var pixels = new byte[size * size * 4];
+			for (int y = 0; y < size; y++)
+			{
+				for (int x = 0; x < size; x++)
+				{
+					float u = (x + 0.5f) / size * cells;
+					float v = (y + 0.5f) / size * cells;
+					float fx = u - MathF.Floor(u) - 0.5f;
+					float fy = v - MathF.Floor(v) - 0.5f;
+					float r = MathF.Sqrt(fx * fx + fy * fy);
+					// Height cos^2(pi r) inside the cell's disc: slope -pi sin(2 pi r) along the radius.
+					float slope = r < 0.5f && r > 1e-5f ? -MathF.PI * MathF.Sin(2f * MathF.PI * r) * tilt / r : 0f;
+					WriteNormal(pixels, (y * size + x) * 4, -slope * fx, -slope * fy);
+				}
+			}
+
+			return new Texture2D(size, size, pixels, "refraction-bumps", true);
+		}
+
+		// A tangent-space normal map of one round wave around the centre (a shockwave ring).
+		private static Texture2D RingNormalMap(int size)
+		{
+			var pixels = new byte[size * size * 4];
+			for (int y = 0; y < size; y++)
+			{
+				for (int x = 0; x < size; x++)
+				{
+					float fx = (x + 0.5f) / size - 0.5f;
+					float fy = (y + 0.5f) / size - 0.5f;
+					float r = MathF.Sqrt(fx * fx + fy * fy);
+					// Height exp(-((r - 0.3) / 0.1)^2): its slope along the radius, scaled to tilts up to ~0.6.
+					float d = (r - 0.3f) / 0.1f;
+					float slope = r > 1e-5f ? -2f * d / 0.1f * MathF.Exp(-d * d) * 0.07f / r : 0f;
+					WriteNormal(pixels, (y * size + x) * 4, -slope * fx, -slope * fy);
+				}
+			}
+
+			return new Texture2D(size, size, pixels, "refraction-ring", true);
+		}
+
+		private static void WriteNormal(byte[] pixels, int index, float nx, float ny)
+		{
+			var normal = new Vector3(nx, ny, 1f).Normalized();
+			pixels[index] = (byte)Math.Clamp((int)MathF.Round((normal.X * 0.5f + 0.5f) * 255f), 0, 255);
+			pixels[index + 1] = (byte)Math.Clamp((int)MathF.Round((normal.Y * 0.5f + 0.5f) * 255f), 0, 255);
+			pixels[index + 2] = (byte)Math.Clamp((int)MathF.Round((normal.Z * 0.5f + 0.5f) * 255f), 0, 255);
+			pixels[index + 3] = 255;
 		}
 
 		private static void BuildLight(Scene scene)

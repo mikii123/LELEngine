@@ -9,6 +9,7 @@ using LELEngine.Shaders;
 using OpenTK.Mathematics;
 using NVector2 = System.Numerics.Vector2;
 using NVector3 = System.Numerics.Vector3;
+using NVector4 = System.Numerics.Vector4;
 
 namespace LELEngine.Editor
 {
@@ -212,7 +213,6 @@ namespace LELEngine.Editor
 			}
 
 			PrefabInspector.DrawRemovedComponents(editor, go, context);
-			ImGui.Spacing();
 			DrawAddComponent(go);
 			DrawRendererMaterials(go);
 		}
@@ -239,30 +239,27 @@ namespace LELEngine.Editor
 				}
 			}
 
+			if (materials.Count == 0)
+			{
+				return;
+			}
+
+			// The materials are assets, not parts of the object: a gap and a heavy rule set them apart from the components.
+			ImGui.Dummy(new NVector2(0f, 10f));
+			ImDrawListPtr draw = ImGui.GetWindowDrawList();
+			NVector2 ruleStart = ImGui.GetCursorScreenPos();
+			float right = ruleStart.X + ImGui.GetContentRegionAvail().X;
+			draw.AddRectFilled(ruleStart, new NVector2(right, ruleStart.Y + 2f), ImGui.GetColorU32(ImGuiCol.Separator));
+			ImGui.Dummy(new NVector2(0f, 6f));
+
 			materialContext.Scene = editor.Scene;
 			materialContext.LabelWidth = context.LabelWidth;
 			for (int i = 0; i < materials.Count; i++)
 			{
-				Material material = materials[i];
-				bool editable = material.AssetPath != null && !AssetDatabase.IsEngineResource(material.AssetPath) && File.Exists(AssetDatabase.ToAbsolute(material.AssetPath));
-				ImGui.Spacing();
 				ImGui.PushID("material" + i);
-				string title = (material.name ?? "Material") + (editable ? "" : material.AssetPath == null ? "  (runtime material)" : "  (built-in, read-only)");
-				bool open = ImGui.CollapsingHeader(title + "###material", ImGuiTreeNodeFlags.DefaultOpen);
-				TestAnchors.RecordItem("material:" + (material.name ?? i.ToString()));
-				if (open)
-				{
-					if (material.AssetPath != null)
-					{
-						ImGui.TextDisabled(material.AssetPath);
-					}
-
-					ImGui.BeginDisabled(!editable);
-					MaterialEditor.Draw(material, materialContext);
-					ImGui.EndDisabled();
-				}
-
+				MaterialSection.Draw(materials[i], materialContext, "material:" + (materials[i].name ?? i.ToString()), true);
 				ImGui.PopID();
+				ImGui.Dummy(new NVector2(0f, 4f));
 			}
 		}
 
@@ -347,10 +344,37 @@ namespace LELEngine.Editor
 
 			bool added = PrefabUtility.IsAddedComponent(component);
 			bool overridden = added || HasOverrides(component);
+			// [InspectorColor] components (the engine's by kind, scripts as they choose): a bar on the left and a light tint
+			// of the header, quieter than a material's framed section.
+			NVector4? kind = ComponentColor(component);
+			if (kind.HasValue)
+			{
+				ImGui.PushStyleColor(ImGuiCol.Header, EditorStyle.Tinted(ImGuiCol.Header, kind.Value, 0.1f));
+				ImGui.PushStyleColor(ImGuiCol.HeaderHovered, EditorStyle.Tinted(ImGuiCol.HeaderHovered, kind.Value, 0.14f));
+			}
+
+			// The transform's and the project's scripts' own icons before the title (as in object fields referencing them).
+			IconKind headerIcon = component is Transform ? IconKind.Transform : !(component is MissingComponent) && EditorIcons.IsScript(component) ? IconKind.ScriptComponent : IconKind.None;
+			float iconSize = ImGui.GetTextLineHeight();
+			string iconPadding = headerIcon != IconKind.None ? new string(' ', (int)Math.Ceiling((iconSize + 4f) / Math.Max(1f, ImGui.CalcTextSize(" ").X))) : "";
 			ImGui.SetNextItemAllowOverlap();
 			bool bold = overridden && EditorFonts.PushBold();
-			bool open = ImGui.CollapsingHeader((added ? PrefabInspector.AddedTitlePadding() : "") + title + "##header", ImGuiTreeNodeFlags.DefaultOpen);
+			bool open = ImGui.CollapsingHeader((added ? PrefabInspector.AddedTitlePadding() : "") + iconPadding + title + "##header", ImGuiTreeNodeFlags.DefaultOpen);
 			EditorFonts.Pop(bold);
+			NVector2 headerMin = ImGui.GetItemRectMin();
+			NVector2 headerMax = ImGui.GetItemRectMax();
+			if (headerIcon != IconKind.None)
+			{
+				// After the "+" of a component added to a prefab instance.
+				float x = headerMin.X + ImGui.GetTreeNodeToLabelSpacing() + (added ? ImGui.CalcTextSize(PrefabInspector.AddedTitlePadding()).X : 0f);
+				EditorIcons.Draw(ImGui.GetWindowDrawList(), new NVector2(x, headerMin.Y + (headerMax.Y - headerMin.Y - iconSize) * 0.5f), iconSize, headerIcon, EditorIcons.ReferenceColor(headerIcon));
+			}
+			if (kind.HasValue)
+			{
+				ImGui.PopStyleColor(2);
+				ImGui.GetWindowDrawList().AddRectFilled(headerMin, new NVector2(headerMin.X + 3f, headerMax.Y), ImGui.GetColorU32(kind.Value));
+			}
+
 			TestAnchors.RecordItem("component:" + type.Name);
 			PrefabInspector.DecorateComponentHeader(editor, component, context);
 
@@ -376,6 +400,22 @@ namespace LELEngine.Editor
 					ResetFields(component);
 					editor.Edits.RequestCommit();
 					editor.NotifyChanged(go);
+				}
+
+				// The project's script of the component (engine components have none).
+				string script = component is MissingComponent ? null : ScriptFiles.Find(type);
+				if (script != null)
+				{
+					ImGui.Separator();
+					if (ImGui.MenuItem("Edit Script"))
+					{
+						ScriptFiles.Open(type);
+					}
+
+					if (ImGui.IsItemHovered())
+					{
+						ImGui.SetTooltip("Open " + script + " in the external script editor");
+					}
 				}
 
 				PrefabInspector.DrawComponentMenu(editor, component, context);
@@ -405,6 +445,34 @@ namespace LELEngine.Editor
 				return;
 			}
 
+			if (!kind.HasValue)
+			{
+				DrawComponentBody(go, component);
+				return;
+			}
+
+			// A faint tint of the kind's color behind the body (a material's panel is stronger and framed). Drawn first,
+			// shown behind: the body's size is known once it is drawn.
+			ImDrawListPtr draw = ImGui.GetWindowDrawList();
+			var bodyMin = new NVector2(headerMin.X, headerMax.Y);
+			float right = headerMax.X;
+			draw.ChannelsSplit(2);
+			draw.ChannelsSetCurrent(1);
+			try
+			{
+				DrawComponentBody(go, component);
+			}
+			finally
+			{
+				draw.ChannelsSetCurrent(0);
+				NVector4 tint = kind.Value;
+				draw.AddRectFilled(bodyMin, new NVector2(right, ImGui.GetCursorScreenPos().Y - ImGui.GetStyle().ItemSpacing.Y), ImGui.GetColorU32(new NVector4(tint.X, tint.Y, tint.Z, 0.045f)));
+				draw.ChannelsMerge();
+			}
+		}
+
+		private void DrawComponentBody(GameObject go, Behaviour component)
+		{
 			ImGui.Indent(4);
 			bool changed;
 			if (component is Transform transform)
@@ -436,6 +504,33 @@ namespace LELEngine.Editor
 
 			ImGui.Unindent(4);
 			ImGui.Spacing();
+		}
+
+		/// <summary>The component's [InspectorColor]: its kind's theme color or its fixed color; null without one.</summary>
+		private static NVector4? ComponentColor(Behaviour component)
+		{
+			var attribute = component.GetType().GetCustomAttribute<InspectorColorAttribute>(true);
+			if (attribute == null)
+			{
+				return null;
+			}
+
+			if (!attribute.Kind.HasValue)
+			{
+				return new NVector4(attribute.R, attribute.G, attribute.B, 1f);
+			}
+
+			return EditorStyle.Get(attribute.Kind.Value switch
+			{
+				InspectorColorKind.Physics => EditorColor.ComponentPhysics,
+				InspectorColorKind.Rendering => EditorColor.ComponentRendering,
+				InspectorColorKind.Audio => EditorColor.ComponentAudio,
+				InspectorColorKind.Camera => EditorColor.ComponentCamera,
+				InspectorColorKind.Lighting => EditorColor.ComponentLighting,
+				InspectorColorKind.Navigation => EditorColor.ComponentNavigation,
+				InspectorColorKind.Effects => EditorColor.ComponentEffects,
+				_ => EditorColor.ComponentUI
+			});
 		}
 
 		private bool DrawTransform(Transform transform)
@@ -504,7 +599,18 @@ namespace LELEngine.Editor
 
 		private void DrawAddComponent(GameObject go)
 		{
-			if (ImGui.Button("Add Component", new NVector2(-1, 0)))
+			// Its own strip between the components and the materials (as in Unity): a rule above, room around, a
+			// centered button taller than the fields.
+			ImGui.Dummy(new NVector2(0f, 6f));
+			NVector2 ruleStart = ImGui.GetCursorScreenPos();
+			float avail = ImGui.GetContentRegionAvail().X;
+			ImGui.GetWindowDrawList().AddLine(ruleStart, ruleStart + new NVector2(avail, 0f), ImGui.GetColorU32(ImGuiCol.Separator));
+			ImGui.Dummy(new NVector2(0f, 10f));
+			float width = Math.Min(avail, Math.Max(200f, avail * 0.6f));
+			ImGui.SetCursorPosX(ImGui.GetCursorPosX() + (avail - width) * 0.5f);
+			bool clicked = ImGui.Button("Add Component", new NVector2(width, ImGui.GetFrameHeight() + 8f));
+			ImGui.Dummy(new NVector2(0f, 6f));
+			if (clicked)
 			{
 				componentFilter = "";
 				ImGui.OpenPopup("##add_component");

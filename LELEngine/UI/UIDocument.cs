@@ -109,6 +109,7 @@ namespace LELEngine.UIElements
 	///     the UI.
 	/// </summary>
 	[ExecuteAlways]
+	[InspectorColor(InspectorColorKind.UI)]
 	public sealed class UIDocument : Behaviour
 	{
 		#region PublicFields

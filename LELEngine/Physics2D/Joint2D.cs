@@ -21,6 +21,7 @@ namespace LELEngine
 	///     <see cref="breakTorque" /> breaks (Box2D's joint event thresholds): OnJointBreak2D is sent and the component
 	///     is destroyed.
 	/// </summary>
+	[InspectorColor(InspectorColorKind.Physics)]
 	public abstract class Joint2D : Behaviour
 	{
 		#region PublicFields

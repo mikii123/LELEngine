@@ -1,5 +1,6 @@
 using System;
 using System.Globalization;
+using System.Linq;
 using System.Text;
 using OpenTK.Graphics.OpenGL4;
 
@@ -80,11 +81,17 @@ namespace LELEngine.Shaders
 	///     Cull Off                                    // Back, Front, Off
 	///     Queue Transparent                           // Background, Geometry, AlphaTest, Transparent, Overlay, +/- offset, or a number
 	///     ShadowCaster Off                            // On / Off: the material's objects cast no shadow (Unity: a shader without a ShadowCaster pass)
+	///     GrabPass On                                 // On / Off / a float property: the scene drawn so far is copied before each draw (Unity's GrabPass)
 	///     </code>
-	///     A shader that blends without naming a queue goes to the Transparent queue. Blending, depth writes and the
-	///     depth test apply in the transparent pass (the opaque passes draw with their own depth state and no
+	///     A shader that blends or grabs without naming a queue goes to the Transparent queue. Blending, depth writes and
+	///     the depth test apply in the transparent pass (the opaque passes draw with their own depth state and no
 	///     blending); the cull mode applies everywhere a material shader draws. Each variant of a shader
 	///     (<see cref="ShaderProgram.GetVariant" />) has its own state: the lines may sit in #if blocks over its keywords.
+	///     GrabPass (transparent queues only): the transparent pass copies what it has drawn so far (opaques, sky and the
+	///     transparent objects before this one) into a texture the shader reads through Engine/GrabPass.glsl, right before
+	///     the object draws. Naming a float property instead of On ("GrabPass RefractionStrength") bounds how far the
+	///     shader shifts its lookups (LelSceneRefraction's strength, world units): only the object's screen rectangle
+	///     widened by that shift is copied, and one copy serves the later objects nothing drawn since overlaps.
 	/// </summary>
 	public sealed class ShaderRenderState
 	{
@@ -108,6 +115,19 @@ namespace LELEngine.Shaders
 
 		/// <summary>The material's objects draw into shadow maps (opaque depth, or the transmittance of transparent ones).</summary>
 		public bool CastShadows = true;
+
+		/// <summary>
+		///     The transparent pass copies the scene drawn so far right before each of the material's objects draws
+		///     (Unity's GrabPass); the shader reads the copy through Engine/GrabPass.glsl.
+		/// </summary>
+		public bool GrabPass;
+
+		/// <summary>
+		///     The float property bounding how far the shader shifts its lookups into the grab (world units at the object's
+		///     distance, LelSceneRefraction's strength): only the object's screen bounds widened by that shift are copied.
+		///     Null (GrabPass On): the shader may read anywhere, the whole screen is copied.
+		/// </summary>
+		public string GrabOffsetProperty;
 
 		/// <summary>The shader named its queue (otherwise it follows the blend state).</summary>
 		public bool QueueDeclared;
@@ -133,6 +153,7 @@ namespace LELEngine.Shaders
 				case "cull":
 				case "queue":
 				case "shadowcaster":
+				case "grabpass":
 					return true;
 				default:
 					return false;
@@ -158,6 +179,8 @@ namespace LELEngine.Shaders
 					return ParseCull(rest, out error);
 				case "shadowcaster":
 					return ParseSwitch(rest, out CastShadows, out error);
+				case "grabpass":
+					return ParseGrabPass(rest, out error);
 				case "queue":
 				{
 					int? queue = MaterialQueue.Parse(rest);
@@ -177,12 +200,20 @@ namespace LELEngine.Shaders
 			}
 		}
 
-		/// <summary>Blend without a queue: the Transparent queue (call once the block is read).</summary>
+		/// <summary>
+		///     Blend or GrabPass without a queue: the Transparent queue (call once the block is read). A grab exists only in
+		///     the transparent pass, so a GrabPass shader that names an opaque queue draws right after the opaques.
+		/// </summary>
 		public void Finish()
 		{
-			if (BlendEnabled && !QueueDeclared)
+			if ((BlendEnabled || GrabPass) && !QueueDeclared)
 			{
 				Queue = MaterialQueue.Transparent;
+			}
+
+			if (GrabPass && !MaterialQueue.IsTransparent(Queue))
+			{
+				Queue = MaterialQueue.GeometryLast + 1;
 			}
 		}
 
@@ -237,6 +268,7 @@ namespace LELEngine.Shaders
 			if (ZTest.HasValue) text.Append(", ZTest ").Append(ZTest.Value);
 			if (Cull != CullMode.Back) text.Append(", Cull ").Append(Cull);
 			if (!CastShadows) text.Append(", no shadows");
+			if (GrabPass) text.Append(", GrabPass").Append(GrabOffsetProperty != null ? " (" + GrabOffsetProperty + ")" : "");
 			return text.ToString();
 		}
 
@@ -325,6 +357,29 @@ namespace LELEngine.Shaders
 					error = "expected On or Off";
 					return false;
 			}
+		}
+
+		// "On" / "Off", or the float property bounding the shader's lookup shift (on, region copies).
+		private bool ParseGrabPass(string text, out string error)
+		{
+			string value = text.Trim();
+			if (ParseSwitch(value, out GrabPass, out error))
+			{
+				GrabOffsetProperty = null;
+				return true;
+			}
+
+			if (value.Length == 0 || !(char.IsLetter(value[0]) || value[0] == '_') || !value.All(c => char.IsLetterOrDigit(c) || c == '_'))
+			{
+				GrabPass = false;
+				error = "expected On, Off or the name of the float property bounding the lookup offset";
+				return false;
+			}
+
+			error = null;
+			GrabPass = true;
+			GrabOffsetProperty = value;
+			return true;
 		}
 
 		private bool ParseDepthTest(string text, out string error)

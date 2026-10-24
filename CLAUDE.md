@@ -309,6 +309,59 @@
   and its other variant passed. Cache: cold / warm runs (frames equal), three binaries with a wrong format refused and
   replaced, `shadercache=0`.
 
+## Refraction: GrabPass, LitTransparent / ParticlesUnlit REFRACTION (2026-10-24)
+
+- Render state line `GrabPass On | Off | <FloatProperty>` (`ShaderRenderState.GrabPass`, `GrabOffsetProperty`), per
+  variant like the others: Unity's per-object GrabPass. Right before such an object draws, `TransparentPass` copies the
+  scene drawn so far (opaques, sky, the transparent objects before it) into `SceneGrab` (`Rendering/SceneGrab.cs`):
+  RGBA16F, rgb the HDR color, a the linear eye depth of the opaque surface (`Engine/SceneGrab.shader`, texelFetch of
+  SceneColor + SceneDepth under a scissor per rectangle), bound on texture unit 21 (9, the GI resolve normals unit, on
+  contexts with fewer units). Made on the first copy, follows the target size, freed in `ReleaseSceneReferences`.
+  The user chose (2026-10-24) the per-object grab over one copy before the transparents: refracting glass must see the
+  glass and particles behind it; the cost of more copies was accepted.
+- A grab variant always draws in a transparent queue: `Finish` lifts a declared opaque queue to GeometryLast + 1, and
+  `Material.renderQueue` does the same for an override.
+- Copies are planned per frame (`TransparentPass.PlanGrabs`, only when an entry grabs): every entry's drawn rectangle =
+  its bounds projected (mesh bounds x LocalToWorld, VFX system bounds; the whole screen when unknown or crossing the
+  camera plane); a grab entry reads that widened by the largest shift its offset property allows
+  (`SceneGrab.Widen`: sqrt(2) x strength x |projection| / 2 / nearest w, plus a texel; `GrabPass On` reads the whole
+  screen). It joins the latest copy (its rectangle is copied with it) while nothing drawn since overlaps what it reads,
+  else a new copy is taken before it; overlapping rectangles of one copy merge (`MaxCopyRects` 16), more than
+  `MaxDrawnRects` 32 draws since a copy collapse into their bounding box. Off-screen grab entries take no copy.
+  Stats: `TransparentPass.Grab.CopyCount` / `CopiedPixels`; TestGame `stats=1` prints `grabs N (px)`.
+- `Engine/GrabPass.glsl` (uniforms set by `SceneGrab.SetUniforms`: lelGrabTexture, lelGrabRect (uv of the readable part,
+  the lookups are clamped to it), lelGrabScreen, lelGrabDepth (eye depth = (z*x + y) / (z*z + w) from the projection's
+  depth rows, row vectors: x = M44, y = -M43, z = M34, w = -M33), lelGrabAxisX / Y (camera right / up x projection
+  scale / 2)): `LelGrabEyeDepth`, `LelGrabUV`, `LelSampleGrab`, `LelSceneRefraction(bend, strength)`. `bend` is the
+  normal map's tilt as a world vector across the surface (tangent x n.x + bitangent x n.y, length <= 1); the lookup moves
+  against it (light entering glass: a convex bump magnifies) by strength world units at the fragment's distance
+  (x gl_FragCoord.w: the same world size at any distance and resolution). Depth mask (the user's original ask: only
+  what is behind refracts): keep = saturate((grab depth at the shifted spot - fragment depth) / strength), and a second
+  lookup at offset x keep when below 1, so surfaces in front (drawn opaque before, or closer than the shift) are never
+  pulled in and no seam shows where the surface meets geometry behind it.
+- `Engine/LitTransparent.shader`: `[Toggle(REFRACTION)] Refraction`, `NormalMap` (in the variant it shapes the lighting
+  too), `RefractionStrength` (world units, 0.1). The variant: `Blend Off`, `ZWrite On` (the nearest surface wins where
+  the object overlaps itself, as Unity's refraction shaders), `GrabPass RefractionStrength`; output = behind x (1 -
+  opacity) + scattered x opacity + reflected (the blended look, refracted). Cull Off objects draw back then front faces
+  with one grab (the front faces overwrite).
+- `Engine/ParticlesUnlit.shader`: `Refraction`, `NormalMap`, `RefractionStrength` (x alpha), `RefractionBlend` (Unity's
+  Distortion Blend: own color where alpha - blend > 0; 0.5). Per blend mode: Alpha / Premultiply blend the refracted
+  scene normally; Additive adds (behind - scene here); Soft Additive and Multiply switch to `Blend One One` and add
+  (their blend over the refracted scene - scene here); Opaque goes to queue GeometryLast + 1. 74 keyword combinations.
+- `Material.SetUniforms` uploads declared defaults for numeric properties a material lacks (`ApplyMissingProperties`,
+  `ShaderProperty.DefaultValueProperty`; Color / Emissive / Roughness keep `ResetStandardUniforms`): a program keeps
+  uniform values between draws, so an old material (saved before the shader gained a property) showed the previous
+  material's value. The material inspector shows those effective values.
+- Limitations: transparent objects in front that sort before the grab object are in the copy without depth (they can
+  be refracted); triangles of one draw read the same copy; screen space: what is off screen or hidden is not there (the
+  shift falls back to the unshifted pixel, a thin seam beside foreground objects). VFX graph outputs have no refraction.
+- Verified: TestGame `refraction=1` (`BuildRefraction`: bumpy pane with a red post in front, bumpy sphere, haze and
+  additive particle quads; procedural normal maps): with the mask the post stays sharp, without it (keep = 1) it smears
+  into the glass as in Unity; 3 copies for 4 grab objects. Probe project (scratchpad `RefractionProbe`, editor script
+  calling `ShaderValidator` through reflection): all 74 variants pass glslang and link on GL, render states per variant
+  as above; a batch build lists exactly the used variants in ShaderVariants.txt; an old LitTransparent material shows
+  Refraction Strength 0.1 in the inspector. Default room vs. HEAD build (animate=0): differences below run-to-run noise.
+
 ## Skybox orientation
 
 - `Engine/Skybox.shader` and `Engine/SkyboxPanoramic.shader`: `Tilt` (degrees about X, applied first) then `Rotation`
@@ -426,6 +479,10 @@
   ...) plus every ImGuiCol overridable by name, text size via `style.FontSizeBase`. `ImGuiController.ApplyStyle`
   re-applies it per window when `EditorPreferences.ThemeVersion` changes (Audio Studio adds its own style on top).
   Monospace font per context: `EditorFonts.PushMono(size)` (Consolas / Cascadia Mono / ImGui default).
+- Hierarchy folding (2026-10-24): `HierarchyExpansion` keeps the folded rows per project folder + scene / prefab path
+  (object ids) in `%APPDATA%\LELEngine\Editor\hierarchy.json`, never in the project; saved 0.5 s after a change and
+  in `SaveEditorState`. Automated runs read it and save nothing unless `hierarchyfile=path`. The editor has no
+  `exitseconds=` (that is TestGame's): use `exitframe=`.
 - Automated runs read the user's `layout.ini` (and the other windows' ini files) but never save them
   (`ImGuiController.ReadOnlyLayouts`), and their projects stay out of `recent.json`: a test that docked the console
   elsewhere once moved the user's real console.
@@ -533,6 +590,25 @@
   required), `CollectionDrawers` (lists: grip reorder, index, remove, count, add, drop to append; dictionaries: table,
   new-key row). Rows decorate any field kind through `InspectorContext.PendingRow` (taken by `BeginLine` / `Header`).
   The hierarchy selects on mouse release (a drag keeps the selection); the inspector has a lock (top right).
+- References unfold in place only with `[InlineEditor]` (Odin's; on a list or dictionary it applies to the elements
+  through `InspectorContext.InlineElements`), 2026-10-24; without it they are a plain object field. `InlineEditors`
+  (`Inspector/InlineEditors.cs`): a ScriptableObject's fields, a scene component's fields (scene undo, override marks),
+  a GameObject's components, a `Prefab`'s root components, also on interface / polymorphic fields holding a reference.
+  A prefab is edited on a live copy (`PrefabPreview`, its file loaded as a detached scene, reloaded when the file's time
+  changes, dropped in `ClearTypeCaches`); `EditTracker` captures it and on commit defers `RecordPrefabFiles` (one undo
+  step, the scene reloads). Nested fields record test anchors as `nestedfield:Type.field` (top level stays `field:`).
+  Verified on a scratchpad copy of New Frontier: drag in an inline Ship.prefab wrote the file, undo restored it.
+- Icons (2026-10-24): `IconKind.Transform` (move arrows), `IconKind.ScriptComponent` (outline page with "< >", project
+  scripts' components) and `.cs` files share the outline page drawing with ScriptableObjects (lines); `ReferenceColor`
+  colors prefabs, scripts (green) and ScriptableObjects (blue) in object fields and headers from `ColorOf`, so the
+  inspector matches the project panel. Project panel rows share one layout (`IconInset` 1, `LabelGap` 5, children's
+  icons under the owner's name, the tree's `RenderArrow` on expandable files, tree rows full width and touching like
+  the hierarchy's, rename fields as tall as a row with the text in place). `tree:` and `hierarchy:` anchors start at
+  the label (full-width rows: a click at +40 px would hit a nested row's arrow).
+- Inspector colors (2026-10-24): `[InspectorColor(InspectorColorKind.Physics)]` (theme colors `EditorColor.Component*`,
+  Preferences > Theme) or `[InspectorColor(r, g, b)]` (fixed) on a component class gives its header a bar and tint and
+  its body a faint background; the engine's components carry it too (`Mono/Attributes.cs`, read in `InspectorPanel`).
+  Materials below the components are framed and tinted more strongly (`EditorColor.Material`).
 - ImGui's asserts are on in the editor's own panels (only user callbacks run with error recovery): an unbalanced
   Push / Pop aborts the process (`Assertion failed ... "Calling PopStyleColor() too many times!"`, exit code 127).
   Pop by the condition that pushed, not by state the widget in between changed (the inspector lock crashed on its

@@ -36,6 +36,7 @@ namespace LELEngine.Navigation
 	///     own simulated position (<see cref="nextPosition" />) and moves its transform to it every frame. Subclass
 	///     and override <see cref="ModifyDesiredVelocity" /> or <see cref="OnDestinationReached" /> for custom steering.
 	/// </summary>
+	[InspectorColor(InspectorColorKind.Navigation)]
 	public class NavMeshAgent : Behaviour
 	{
 		#region PublicFields

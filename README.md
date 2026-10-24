@@ -81,6 +81,12 @@ Built on .NET 10, OpenTK 4.9 (GLFW) and OpenGL 4.6 (4.3 minimum), developed and 
 - Unlit shader `Engine/ParticlesUnlit.shader` (Unity's Particles/Unlit): base map x base color (HDR) x vertex color,
   blending modes Alpha, Premultiply, Additive, Soft Additive, Multiply and Opaque, render face (both, front, back)
   and alpha clipping; casts no shadows.
+- Refraction (Unity's GrabPass): a shader declares `GrabPass` and reads a copy of the scene drawn before the object,
+  taken right before it draws, so refracting glass also shows the glass and particles behind it. Only the screen
+  rectangles the objects read are copied, and one copy serves the objects nothing drawn in between overlaps.
+  `Engine/LitTransparent.shader` and `Engine/ParticlesUnlit.shader` have a Refraction variant driven by a normal map;
+  unlike Unity's refraction shaders, objects in front of the refracting surface are never pulled into it (the copy
+  carries the depth).
 - Skybox materials (`Engine/Skybox.shader` for cubemaps, `Engine/SkyboxPanoramic.shader` for panoramas) set in
   the scene's environment settings.
 

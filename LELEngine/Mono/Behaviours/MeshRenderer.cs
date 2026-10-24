@@ -8,6 +8,7 @@ using LELEngine.Shaders;
 ///     transparent ones (see <see cref="Material.IsTransparent" />) in the transparent pass; a renderer can have both.
 /// </summary>
 [ExecuteAlways]
+[InspectorColor(InspectorColorKind.Rendering)]
 public sealed class MeshRenderer : Behaviour
 {
 	#region PublicFields

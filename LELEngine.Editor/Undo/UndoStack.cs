@@ -534,6 +534,11 @@ namespace LELEngine.Editor
 						editor.Undo.Push(new AssetStateRecord { Name = name ?? "Edit " + scriptableObject.name, AssetPath = scriptableObject.AssetPath, Before = before, After = after });
 						SaveAsset(scriptableObject);
 						break;
+					case PrefabPreview preview:
+						// An inline editor's prefab copy: written to the file as one undo step (files and scene before and
+						// after), after the frame, since the scene is loaded again so its instances follow.
+						editor.Defer(() => editor.RecordPrefabFiles(name ?? "Edit " + preview.Name, new[] { preview.AssetPath }, preview.Save));
+						break;
 				}
 			}
 
@@ -593,6 +598,8 @@ namespace LELEngine.Editor
 					return Serialization.Documents.WriteObject(physicsMaterial, Serialization.DocumentFormat.Binary);
 				case ScriptableObject scriptableObject:
 					return Serialization.Documents.WriteObject(scriptableObject, Serialization.DocumentFormat.Binary);
+				case PrefabPreview preview:
+					return preview.Capture();
 				default:
 					return null;
 			}

@@ -84,11 +84,17 @@ namespace LELEngine.Shaders
 
 		/// <summary>
 		///     Render queue (<see cref="MaterialQueue" />): the shader's unless overridden (set -1 to follow the shader
-		///     again). Queues above <see cref="MaterialQueue.GeometryLast" /> draw in the transparent pass.
+		///     again). Queues above <see cref="MaterialQueue.GeometryLast" /> draw in the transparent pass. A variant with
+		///     GrabPass stays in a transparent queue whatever the override: the scene copy it reads exists only there.
 		/// </summary>
 		public int renderQueue
 		{
-			get => m_RenderQueue >= 0 ? m_RenderQueue : RenderState.Queue;
+			get
+			{
+				ShaderRenderState state = RenderState;
+				int queue = m_RenderQueue >= 0 ? m_RenderQueue : state.Queue;
+				return state.GrabPass && !MaterialQueue.IsTransparent(queue) ? MaterialQueue.GeometryLast + 1 : queue;
+			}
 			set => m_RenderQueue = value;
 		}
 
@@ -511,7 +517,7 @@ namespace LELEngine.Shaders
 				}
 			}
 
-			ApplyMissingTextures(program, this, ref textureUnit);
+			ApplyMissingProperties(program, this, ref textureUnit);
 		}
 
 		/// <summary>
@@ -521,7 +527,7 @@ namespace LELEngine.Shaders
 		public static void SetDefaultTextures(ShaderProgram program)
 		{
 			int textureUnit = 0;
-			ApplyMissingTextures(program, null, ref textureUnit);
+			ApplyMissingProperties(program, null, ref textureUnit);
 		}
 
 		/// <summary>
@@ -685,14 +691,26 @@ namespace LELEngine.Shaders
 		/// <summary>
 		///     Textures the program declares that the material does not set (a material saved before the shader gained the
 		///     property, or no material at all) get the declared kind's neutral default: an unbound sampler would read
-		///     whatever an earlier draw left on its texture unit.
+		///     whatever an earlier draw left on its texture unit. A material's missing numbers get their declared defaults
+		///     (the standard parameters have theirs from <see cref="ResetStandardUniforms" />): a program keeps its uniform
+		///     values between draws, so they would show the last material drawn with it.
 		/// </summary>
-		private static void ApplyMissingTextures(ShaderProgram program, Material material, ref int textureUnit)
+		private static void ApplyMissingProperties(ShaderProgram program, Material material, ref int textureUnit)
 		{
 			foreach (ShaderProperty declared in program.Properties)
 			{
-				if (declared.Type < ShaderPropertyType.Texture2D || (material != null && material.Find(declared.Name) != null))
+				if (material != null && material.Find(declared.Name) != null)
 				{
+					continue;
+				}
+
+				if (!declared.IsTexture)
+				{
+					if (material != null && !IsStandardUniform(declared.Name))
+					{
+						declared.DefaultValueProperty.Apply(program, ref textureUnit);
+					}
+
 					continue;
 				}
 

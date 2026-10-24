@@ -2,9 +2,22 @@
 Color ("Color (a = opacity)", Color) = (1, 1, 1, 0.5)
 [HDR] Emissive ("Emissive (rgb color, a intensity)", Color) = (0, 0, 0, 0)
 Roughness ("Roughness", Range(0, 1)) = 0.2
+// Refraction: what is behind comes from a copy of the scene taken right before the object draws (GrabPass), shifted by
+// the normal map's tilt, which also shapes the lighting; objects in front of the surface are never shifted into it.
+[Toggle(REFRACTION)] Refraction ("Refraction", Float) = 0
+NormalMap ("Normal Map (Refraction)", 2D) = "bump" {}
+RefractionStrength ("Refraction Strength (world units)", Float) = 0.1
+#if REFRACTION
+// The shader composites the shifted scene itself, so nothing blends; the nearest surface wins where the object overlaps
+// itself, with depth written as Unity's refraction shaders do.
+Blend Off
+ZWrite On
+GrabPass RefractionStrength
+#else
 // Premultiplied alpha: the diffuse terms fade with the opacity, reflections and emission stay.
 Blend One OneMinusSrcAlpha
 ZWrite Off
+#endif
 Cull Off
 Queue Transparent
 /////Properties
@@ -29,6 +42,10 @@ in vec3 vBitangent;
 out vec3 fNormal;
 out vec3 fPosition;
 out vec2 fTexCoord;
+#ifdef REFRACTION
+out vec3 fTangent;
+out vec3 fBitangent;
+#endif
 
 void main()
 {
@@ -37,6 +54,10 @@ void main()
 	fPosition = vec3(model * vec4(vPosition, 1.0));
 	fNormal = LelNormalMatrix() * vNormal;
 	fTexCoord = vTexCoord;
+#ifdef REFRACTION
+	fTangent = mat3(model) * vTangent;
+	fBitangent = mat3(model) * vBitangent;
+#endif
 	LelVertexSetup();
 }
 
@@ -54,9 +75,21 @@ void main()
 // Material: Color (a = opacity), Emissive (rgb color, a intensity), Roughness (0 = unset -> 0.2).
 #include "Engine/Instancing.glsl"
 
+#ifdef REFRACTION
+// Refraction: NormalMap (tangent space), RefractionStrength (how far the scene behind shifts, world units).
+#include "Engine/GrabPass.glsl"
+#endif
+
 in vec3 fNormal;
 in vec3 fPosition;
 in vec2 fTexCoord;
+#ifdef REFRACTION
+in vec3 fTangent;
+in vec3 fBitangent;
+
+uniform sampler2D NormalMap;
+uniform float RefractionStrength;
+#endif
 
 struct Directional {
 	vec4 dirColor;
@@ -88,14 +121,30 @@ void main()
 	vec4 emissive = material.emissive;
 	float materialRoughness = material.params.x;
 
+	vec3 vertexNormal = normalize(fNormal);
+	vec3 N = vertexNormal;
+#ifdef REFRACTION
+	// Tangent-space normal (the default "bump" texture leaves the vertex normal unchanged).
+	vec3 tangent = fTangent - vertexNormal * dot(vertexNormal, fTangent);
+	vec3 mapped = texture(NormalMap, fTexCoord).xyz * 2.0 - 1.0;
+	if (dot(tangent, tangent) > 1e-12 && dot(fBitangent, fBitangent) > 1e-12)
+	{
+		N = normalize(mat3(normalize(tangent), normalize(fBitangent), vertexNormal) * mapped);
+	}
+#endif
+
 	// Both sides are drawn (Cull Off): a back face is lit as the inside surface it is.
-	vec3 N = normalize(fNormal);
-	if (!gl_FrontFacing) N = -N;
+	if (!gl_FrontFacing)
+	{
+		N = -N;
+		vertexNormal = -vertexNormal;
+	}
+
 	vec3 L = normalize(-LDirectional.dirDirection);
 	vec3 V = normalize(LSpecular.viewPos - fPosition);
 	vec3 H = normalize(L + V);
 
-	vec3 shadow = SampleShadowRGB(fPosition, N, L);
+	vec3 shadow = SampleShadowRGB(fPosition, vertexNormal, L);
 
 	vec3 albedo = color.rgb;
 	vec3 lightColor = LDirectional.dirColor.rgb * LDirectional.dirStrength;
@@ -120,11 +169,18 @@ void main()
 	vec3 indirectSpecular;
 	GetVolumeIndirectLighting(fPosition, N, V, roughness, indirectDiffuse, occlusion, indirectSpecular);
 
-	// Premultiplied output (Blend One OneMinusSrcAlpha): what the surface scatters scales with its opacity,
-	// what it reflects or emits is added on top.
 	vec3 scattered = ambient * occlusion + indirectDiffuse * albedo + diffuse * shadow;
 	vec3 reflected = indirectSpecular * reflectance + specular * shadow + emissive.rgb * emissive.a;
+#ifdef REFRACTION
+	// What the surface lets through is the scene behind it, shifted by the normal's tilt across the surface: the image
+	// the blending below makes, refracted (a flat normal map lets the scene through unshifted).
+	vec3 behind = LelSceneRefraction(N - vertexNormal * dot(N, vertexNormal), RefractionStrength);
+	FragColor = vec4(behind * (1.0 - opacity) + scattered * opacity + reflected, 1.0);
+#else
+	// Premultiplied output (Blend One OneMinusSrcAlpha): what the surface scatters scales with its opacity,
+	// what it reflects or emits is added on top.
 	FragColor = vec4(scattered * opacity + reflected, opacity);
+#endif
 }
 
 /////Fragment

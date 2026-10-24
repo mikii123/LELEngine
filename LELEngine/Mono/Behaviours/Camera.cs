@@ -26,6 +26,7 @@ public enum CameraRenderType
 ///     camera the renderer is drawing with right now (the editor's scene view camera is not part of any scene).
 /// </summary>
 [ExecuteAlways]
+[InspectorColor(InspectorColorKind.Camera)]
 public sealed class Camera : Behaviour
 {
 	#region PublicFields

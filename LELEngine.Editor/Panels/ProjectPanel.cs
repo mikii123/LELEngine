@@ -56,6 +56,9 @@ namespace LELEngine.Editor
 		private bool revealPinged;
 		private const double PingSeconds = 1.6;
 
+		// The pinged row's outline, drawn after the rows.
+		private (NVector2 Min, NVector2 Max)? pingOutline;
+
 		private string createKind;
 		private string createName = "";
 		private Type createType;
@@ -96,6 +99,12 @@ namespace LELEngine.Editor
 
 		// The mesh row picked under a model ("Models/Ship.obj/Hull"); the inspector shows the model.
 		private string selectedSubAsset;
+
+		// Row layout of the tree and the file list (every kind of row alike): an icon 1 px in from where the row's content
+		// starts, the name 5 px after it. Rows touch: the file list's selectables pad into the item spacing, the tree's
+		// rows are as tall (text padded by half the spacing, no spacing), as in the hierarchy.
+		private const float IconInset = 1f;
+		private const float LabelGap = 5f;
 
 		#endregion
 
@@ -222,7 +231,7 @@ namespace LELEngine.Editor
 			}
 
 			string[] children = Directory.GetDirectories(Absolute(relative));
-			ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags.OpenOnArrow | ImGuiTreeNodeFlags.OpenOnDoubleClick | ImGuiTreeNodeFlags.SpanAvailWidth;
+			ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags.OpenOnArrow | ImGuiTreeNodeFlags.OpenOnDoubleClick | ImGuiTreeNodeFlags.SpanFullWidth | ImGuiTreeNodeFlags.FramePadding;
 			if (relative.Length == 0)
 			{
 				flags |= ImGuiTreeNodeFlags.DefaultOpen;
@@ -245,32 +254,39 @@ namespace LELEngine.Editor
 				ImGui.SetNextItemOpen(true);
 			}
 
-			// The label is drawn after the node: the folder icon, then the name (or the rename field).
+			// The label is drawn after the node: the folder icon, then the name (or the rename field). The row spans the
+			// whole width (indent included), its arrow and label start at the indented cursor.
+			float rowX = ImGui.GetCursorScreenPos().X;
+			PushRowStyle();
 			bool open = ImGui.TreeNodeEx("##" + relative, flags);
+			ImGui.PopStyleVar(2);
 			bool clicked = ImGui.IsItemClicked() && !ImGui.IsItemToggledOpen();
 			NVector2 min = ImGui.GetItemRectMin();
-			float labelX = min.X + ImGui.GetTreeNodeToLabelSpacing();
+			float labelX = rowX + ImGui.GetTreeNodeToLabelSpacing();
 			float iconSize = ImGui.GetTextLineHeight();
 			float y = min.Y + (ImGui.GetItemRectSize().Y - iconSize) * 0.5f;
 			ImDrawListPtr draw = ImGui.GetWindowDrawList();
 			IconKind icon = open && children.Length > 0 ? IconKind.FolderOpen : IconKind.Folder;
 			EditorIcons.Draw(draw, new NVector2(labelX, y), iconSize, icon, EditorIcons.ColorOf(icon));
-			TestAnchors.RecordItem("tree:" + (relative.Length == 0 ? "Assets" : relative));
+			// From the label on: the row spans the arrow too, and a click there would fold instead of select.
+			TestAnchors.Record("tree:" + (relative.Length == 0 ? "Assets" : relative), new NVector2(labelX, min.Y), ImGui.GetItemRectMax());
 			if (open)
 			{
 				openFolders.Add(relative);
 			}
 
+			float textX = labelX + iconSize + LabelGap;
 			if (relative.Length > 0 && renameInTree && string.Equals(renaming, relative, StringComparison.OrdinalIgnoreCase))
 			{
+				// The field over the row, its text where the name was; the next row stays where it was.
 				NVector2 after = ImGui.GetCursorScreenPos();
-				ImGui.SetCursorScreenPos(new NVector2(labelX + iconSize + 4f, min.Y));
+				ImGui.SetCursorScreenPos(new NVector2(textX - ImGui.GetStyle().FramePadding.X, min.Y));
 				DrawRenameField();
-				ImGui.SetCursorScreenPos(new NVector2(after.X, Math.Max(after.Y, ImGui.GetCursorScreenPos().Y)));
+				ImGui.SetCursorScreenPos(after);
 			}
 			else
 			{
-				draw.AddText(new NVector2(labelX + iconSize + 4f, y), ImGui.GetColorU32(ImGuiCol.Text), label);
+				draw.AddText(new NVector2(textX, y), ImGui.GetColorU32(ImGuiCol.Text), label);
 			}
 
 			if (clicked)
@@ -379,11 +395,11 @@ namespace LELEngine.Editor
 			{
 				string folderPath = Combine(folder, directory);
 				NVector2 rowStart = ImGui.GetCursorScreenPos();
+				NVector2 folderIcon = rowStart + new NVector2(IconInset, 0f);
 				if (!renameInTree && string.Equals(renaming, folderPath, StringComparison.OrdinalIgnoreCase))
 				{
-					EditorIcons.Draw(draw, rowStart + new NVector2(1f, 0f), iconSize, IconKind.Folder, EditorIcons.ColorOf(IconKind.Folder));
-					ImGui.SetCursorScreenPos(rowStart + new NVector2(iconSize + 4f, -ImGui.GetStyle().FramePadding.Y));
-					DrawRenameField();
+					EditorIcons.Draw(draw, folderIcon, iconSize, IconKind.Folder, EditorIcons.ColorOf(IconKind.Folder));
+					DrawRenameFieldInRow(rowStart, folderIcon.X + iconSize + LabelGap);
 					continue;
 				}
 
@@ -400,8 +416,8 @@ namespace LELEngine.Editor
 				}
 
 				TestAnchors.RecordItem("project:" + folderPath + "/");
-				EditorIcons.Draw(draw, rowStart + new NVector2(1f, 0f), iconSize, IconKind.Folder, EditorIcons.ColorOf(IconKind.Folder));
-				draw.AddText(rowStart + new NVector2(iconSize + 6f, 0f), ImGui.GetColorU32(ImGuiCol.Text), directory);
+				EditorIcons.Draw(draw, folderIcon, iconSize, IconKind.Folder, EditorIcons.ColorOf(IconKind.Folder));
+				draw.AddText(folderIcon + new NVector2(iconSize + LabelGap, 0f), ImGui.GetColorU32(ImGuiCol.Text), directory);
 				if (string.Equals(folderPath, pinged, StringComparison.OrdinalIgnoreCase))
 				{
 					FlashPinged();
@@ -427,6 +443,7 @@ namespace LELEngine.Editor
 			// Shift ranges and multi-file drags use the rows as drawn (nested files included).
 			shownRows.Clear();
 			shownRows.AddRange(rows);
+			DrawPingOutline();
 
 			// F2 renames the picked folder or the inspected file.
 			if (renaming == null && ImGui.IsWindowFocused() && ImGui.IsKeyPressed(ImGuiKey.F2))
@@ -499,19 +516,18 @@ namespace LELEngine.Editor
 			}
 
 			// Only a file with things under it has the arrow (and the room for it) before its icon; the others line up
-			// with the folders. What is under a file starts below its name.
+			// with the folders. What is under a file starts below its name (its icon where the name starts).
 			bool expandable = ModelAssets.IsModelFile(assetPath) || listedCompanions.ContainsKey(assetPath);
 			float arrow = expandable ? iconSize : 0f;
 			NVector2 rowStart = ImGui.GetCursorScreenPos();
-			// The icon where a folder row has its (1 px in), the name 5 px after it.
-			NVector2 iconStart = rowStart + new NVector2(indent + arrow + 1f, 0f);
-			float childIndent = indent + arrow + iconSize;
+			NVector2 iconStart = rowStart + new NVector2(indent + arrow + IconInset, 0f);
+			NVector2 textStart = iconStart + new NVector2(iconSize + LabelGap, 0f);
+			float childIndent = textStart.X - IconInset - rowStart.X;
 			rows.Add(assetPath);
 			if (!renameInTree && string.Equals(renaming, assetPath, StringComparison.OrdinalIgnoreCase))
 			{
 				DrawFileIcon(draw, iconStart, iconSize, assetPath, iconKind);
-				ImGui.SetCursorScreenPos(iconStart + new NVector2(iconSize + 4f, -ImGui.GetStyle().FramePadding.Y));
-				DrawRenameField();
+				DrawRenameFieldInRow(rowStart, textStart.X);
 				return;
 			}
 
@@ -531,7 +547,6 @@ namespace LELEngine.Editor
 
 			// Icon and name over the row (ScriptableObject assets with their class, variants with their base).
 			DrawFileIcon(draw, iconStart, iconSize, assetPath, iconKind);
-			NVector2 textStart = iconStart + new NVector2(iconSize + 5f, 0f);
 			draw.AddText(textStart, ImGui.GetColorU32(ImGuiCol.Text), file);
 			if (variantOf != null)
 			{
@@ -608,9 +623,8 @@ namespace LELEngine.Editor
 				}
 
 				TestAnchors.RecordItem("expand:" + assetPath);
-				float arrowSize = iconSize * 0.7f;
-				NVector2 arrowMin = rowStart + new NVector2(indent + (arrow - arrowSize) * 0.5f, (iconSize - arrowSize) * 0.5f);
-				EditorIcons.Draw(draw, arrowMin, arrowSize, expanded ? IconKind.Dropdown : IconKind.Open, ImGui.GetColorU32(ImGuiCol.Text, ImGui.IsItemHovered() ? 1f : 0.6f));
+				// The tree's own arrow (size and place within the text line as a tree node draws it).
+				ImGuiP.RenderArrow(draw, rowStart + new NVector2(indent + (arrow - ImGui.GetFontSize()) * 0.5f, ImGui.GetFontSize() * 0.15f), ImGui.GetColorU32(ImGuiCol.Text), expanded ? ImGuiDir.Down : ImGuiDir.Right, 0.7f);
 				ImGui.SetCursorScreenPos(rowEnd);
 			}
 
@@ -673,10 +687,10 @@ namespace LELEngine.Editor
 					ImGui.EndDragDropSource();
 				}
 
-				NVector2 iconStart = rowStart + new NVector2(indent, 0f);
+				NVector2 iconStart = rowStart + new NVector2(indent + IconInset, 0f);
 				EditorIcons.Draw(draw, iconStart, iconSize, IconKind.Model, ImGui.GetColorU32(ImGuiCol.TextDisabled));
-				draw.AddText(iconStart + new NVector2(iconSize + 5f, 0f), ImGui.GetColorU32(ImGuiCol.Text), name);
-				draw.AddText(iconStart + new NVector2(iconSize + 5f + ImGui.CalcTextSize(name).X, 0f), ImGui.GetColorU32(ImGuiCol.TextDisabled), "  mesh");
+				draw.AddText(iconStart + new NVector2(iconSize + LabelGap, 0f), ImGui.GetColorU32(ImGuiCol.Text), name);
+				draw.AddText(iconStart + new NVector2(iconSize + LabelGap + ImGui.CalcTextSize(name).X, 0f), ImGui.GetColorU32(ImGuiCol.TextDisabled), "  mesh");
 			}
 		}
 
@@ -844,10 +858,22 @@ namespace LELEngine.Editor
 			}
 		}
 
-		/// <summary>A file's icon: the image itself for pictures (when it has a preview), else the icon of its kind.</summary>
-		private static void DrawFileIcon(ImDrawListPtr draw, NVector2 rowStart, float iconSize, string assetPath, IconKind kind)
+		/// <summary>Half the item spacing: how far a file list row's highlight reaches above and below its text.</summary>
+		private static float RowPadding => MathF.Floor(ImGui.GetStyle().ItemSpacing.Y * 0.5f);
+
+		/// <summary>The tree's row style (pops two vars): no vertical spacing, the text padded as a file list row's is.</summary>
+		private static void PushRowStyle()
 		{
-			NVector2 min = rowStart + new NVector2(1f, 0f);
+			ImGuiStylePtr style = ImGui.GetStyle();
+			var spacing = new NVector2(style.ItemSpacing.X, 0f);
+			var padding = new NVector2(style.FramePadding.X, RowPadding);
+			ImGui.PushStyleVar(ImGuiStyleVar.ItemSpacing, spacing);
+			ImGui.PushStyleVar(ImGuiStyleVar.FramePadding, padding);
+		}
+
+		/// <summary>A file's icon at <paramref name="min" />: the image itself for pictures (when it has a preview), else the icon of its kind.</summary>
+		private static void DrawFileIcon(ImDrawListPtr draw, NVector2 min, float iconSize, string assetPath, IconKind kind)
+		{
 			if (kind == IconKind.Texture && AssetThumbnails.TryGet(assetPath, out int handle, out NVector2 uv0, out NVector2 uv1))
 			{
 				draw.AddImage(EditorGui.Texture(handle), min, min + new NVector2(iconSize), uv0, uv1);
@@ -875,7 +901,18 @@ namespace LELEngine.Editor
 			renameStarted = true;
 		}
 
-		/// <summary>The name field of the row being renamed: Enter or a click elsewhere renames, Escape cancels.</summary>
+		/// <summary>The rename field over a file list row: its text where the name was, the rows below where they were.</summary>
+		private void DrawRenameFieldInRow(NVector2 rowStart, float textX)
+		{
+			ImGui.SetCursorScreenPos(new NVector2(textX - ImGui.GetStyle().FramePadding.X, rowStart.Y - RowPadding));
+			DrawRenameField();
+			ImGui.SetCursorScreenPos(new NVector2(rowStart.X, rowStart.Y + ImGui.GetTextLineHeightWithSpacing()));
+		}
+
+		/// <summary>
+		///     The name field of the row being renamed (as tall as the row's highlight, placed by the caller): Enter or a
+		///     click elsewhere renames, Escape cancels.
+		/// </summary>
 		private void DrawRenameField()
 		{
 			if (renameStarted)
@@ -884,7 +921,9 @@ namespace LELEngine.Editor
 			}
 
 			ImGui.SetNextItemWidth(Math.Max(120f, ImGui.GetContentRegionAvail().X));
+			ImGui.PushStyleVar(ImGuiStyleVar.FramePadding, new NVector2(ImGui.GetStyle().FramePadding.X, RowPadding));
 			bool enter = ImGui.InputText("##rename", ref renameBuffer, 256, ImGuiInputTextFlags.EnterReturnsTrue | ImGuiInputTextFlags.AutoSelectAll);
+			ImGui.PopStyleVar();
 			TestAnchors.RecordItem("rename");
 			if (renameStarted)
 			{
@@ -982,7 +1021,10 @@ namespace LELEngine.Editor
 			listedVersion = -1;
 		}
 
-		/// <summary>The pinged file's row (the last item): scrolled into view once, outlined while the ping lasts.</summary>
+		/// <summary>
+		///     The pinged file's row (the last item): scrolled into view once, outlined while the ping lasts. The outline is
+		///     drawn after every row (<see cref="DrawPingOutline" />): the next row's highlight would cover its lower edge.
+		/// </summary>
 		private void FlashPinged()
 		{
 			if (revealPinged)
@@ -991,16 +1033,26 @@ namespace LELEngine.Editor
 				revealPinged = false;
 			}
 
-			double age = ImGui.GetTime() - pingTime;
-			if (age > PingSeconds)
+			if (ImGui.GetTime() - pingTime > PingSeconds)
 			{
 				pinged = null;
 				return;
 			}
 
+			pingOutline = (ImGui.GetItemRectMin() - new NVector2(2f, 1f), ImGui.GetItemRectMax() + new NVector2(2f, 1f));
+		}
+
+		private void DrawPingOutline()
+		{
+			if (pingOutline is not (NVector2 min, NVector2 max))
+			{
+				return;
+			}
+
+			pingOutline = null;
 			System.Numerics.Vector4 color = EditorStyle.Selection;
-			color.W = (float)(1.0 - age / PingSeconds);
-			ImGui.GetWindowDrawList().AddRect(ImGui.GetItemRectMin() - new NVector2(2f, 1f), ImGui.GetItemRectMax() + new NVector2(2f, 1f), ImGui.GetColorU32(color), 3f, ImDrawFlags.None, 2f);
+			color.W = (float)Math.Max(0.0, 1.0 - (ImGui.GetTime() - pingTime) / PingSeconds);
+			ImGui.GetWindowDrawList().AddRect(min, max, ImGui.GetColorU32(color), 3f, ImDrawFlags.None, 2f);
 		}
 
 		/// <summary>
