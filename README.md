@@ -24,6 +24,10 @@ Built on .NET 10, OpenTK 4.9 (GLFW) and OpenGL 4.6 (4.3 minimum), developed and 
 - Textures: 2D, 3D (slice grids), cubemaps (crosses, strips, panoramas, HDR) and sprites (single or sliced sheets),
   configured per file like Unity's texture importer. Materials are documents of typed properties declared by the
   shader's `//Properties` block.
+- Built-in assets: the engine's shaders (`Engine/Lit.shader`, ...), the primitive meshes (`Engine/Meshes/Cube.obj`,
+  `Sphere.obj`, `Quad.obj`) and the default material (`Engine/Materials/Default.material`) sit next to the engine
+  binaries, read-only and always available in every project and player (like Unity's built-in resources); projects
+  get no copies, references store the path.
 - Models: `.fbx`, `.gltf` / `.glb`, `.dae`, `.3ds`, `.blend`, `.ply`, `.stl` (imported by the editor with Assimp,
   through Silk.NET.Assimp) and `.obj` with `.mtl` (a built-in reader). A model file is a `Model` asset: its node
   hierarchy and meshes, which are sub-assets (`Car.fbx` / `Wheel`). Meshes are indexed with sub-meshes; a
@@ -67,6 +71,16 @@ Built on .NET 10, OpenTK 4.9 (GLFW) and OpenGL 4.6 (4.3 minimum), developed and 
   since they are not in the depth buffer the screen-space resolve covers. They cast translucent shadows (a
   transmittance map next to every shadow map: a 35% cyan pane casts a 35% cyan shadow), in the camera shadow map
   and in the shadow maps that light the GI.
+- Shader variants (Unity's `shader_feature`, automatic): `[Toggle]` and `[KeywordEnum(...)]` material properties
+  enable keywords, and each keyword combination a material uses is a program of its own with its own render state
+  (`#if` blocks in the Properties block), compiled on first use. Game builds check the variants their materials use
+  with glslang, the Khronos reference compiler (no GPU needed, the same verdict on every machine; one that does not
+  compile stops the build, the messages name the file and line) and list them; the player compiles them while it loads.
+- Program binary cache: the player keeps every linked program as the driver's binary (`glGetProgramBinary`) in the
+  user's local app data, so later starts compile nothing (probe: the shader step went from 6 s to 83 ms).
+- Unlit shader `Engine/ParticlesUnlit.shader` (Unity's Particles/Unlit): base map x base color (HDR) x vertex color,
+  blending modes Alpha, Premultiply, Additive, Soft Additive, Multiply and Opaque, render face (both, front, back)
+  and alpha clipping; casts no shadows.
 - Skybox materials (`Engine/Skybox.shader` for cubemaps, `Engine/SkyboxPanoramic.shader` for panoramas) set in
   the scene's environment settings.
 
@@ -169,9 +183,10 @@ GPU event, ribbons and soft smoke puffs, all simulated and drawn on the GPU.*
 - Models: drag a model file into the scene view or onto the hierarchy to build its GameObjects; its inspector shows
   the import settings (Apply reimports and reloads the scene), the size, meshes, materials and node tree. A material
   dropped on an object goes into the slot of the sub-mesh under the mouse.
-- Asset inspectors: a Unity-style material editor (shader picker, colors, ranges, texture slots with an object
-  picker and drag and drop), texture import settings with previews and Apply/Revert, shader, model and physics
-  material views. Material edits apply live, are undoable and save to the asset file.
+- Asset inspectors: a Unity-style material editor (shader picker, colors, ranges, keyword toggles and dropdowns that
+  pick the shader variant, texture slots with an object picker and drag and drop), texture import settings with
+  previews and Apply/Revert, shader, model and physics material views. Material edits apply live, are undoable and
+  save to the asset file; built-in assets show read-only.
 - Scene and game views render through the same renderer as the game. Play, pause and step restore the scene
   snapshot when you stop.
 - Game scripts compile in the background with `dotnet build`, and a full domain reload swaps them in.

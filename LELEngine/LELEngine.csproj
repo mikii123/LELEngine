@@ -29,4 +29,13 @@
     </Content>
   </ItemGroup>
 
+  <!-- Built-in assets (primitive meshes, the default material): read-only engine resources ("Engine/Meshes/Cube.obj"),
+       next to the binaries in BuiltinAssets/ like the shader library, never copied into projects. -->
+  <ItemGroup>
+    <Content Include="BuiltinAssets\**\*">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <TargetPath>BuiltinAssets\%(RecursiveDir)%(Filename)%(Extension)</TargetPath>
+    </Content>
+  </ItemGroup>
+
 </Project>

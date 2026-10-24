@@ -86,7 +86,7 @@ namespace LELEngine.Rendering
 			{
 				if (renderer.CastShadows)
 				{
-					renderer.RenderWith(context.DepthOnlyProgram);
+					renderer.RenderShadowCastersWith(context.DepthOnlyProgram);
 				}
 			}
 

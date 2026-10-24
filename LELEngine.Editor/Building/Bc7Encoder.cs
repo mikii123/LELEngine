@@ -210,14 +210,19 @@ namespace LELEngine.Editor
 
 		/// <summary>
 		///     An end as 7 bits per channel and one shared p-bit: <paramref name="quantized" /> gets the 8-bit values it
-		///     decodes to (c * 2 + p) with the p-bit of the lower error, which is returned.
+		///     decodes to (c * 2 + p) with the p-bit of the lower error, which is returned. A fully transparent end keeps
+		///     alpha 0 (p-bit 0): white with alpha 0, the usual particle texture, would otherwise get alpha 1 (the color's
+		///     error is the larger one), and additive or premultiplied blending would draw the texture's whole square
+		///     faintly. (Opaque ends are not held at 255: 254 does not show, and odd values only would halve the colors'
+		///     precision.)
 		/// </summary>
 		private static int Quantize(ReadOnlySpan<float> end, Span<int> quantized)
 		{
 			int bestP = 0;
 			float bestError = float.MaxValue;
 			Span<int> candidate = stackalloc int[4];
-			for (int p = 0; p < 2; p++)
+			bool transparent = end[3] < 0.5f;
+			for (int p = 0; p < (transparent ? 1 : 2); p++)
 			{
 				float error = 0f;
 				for (int c = 0; c < 4; c++)
@@ -239,7 +244,11 @@ namespace LELEngine.Editor
 			return bestP;
 		}
 
-		/// <summary>Each texel's nearest of the 16 colors between the quantized ends; the summed squared error.</summary>
+		/// <summary>
+		///     Each texel's nearest of the 16 colors between the quantized ends; the summed squared error. A fully
+		///     transparent texel weighs its alpha error 16 times: it takes a color of alpha 0 where the ends offer one,
+		///     even when another is closer in color (its color does not show; any alpha does).
+		/// </summary>
 		private static float SelectIndices(ReadOnlySpan<float> texels, ReadOnlySpan<int> q0, ReadOnlySpan<int> q1, Span<byte> indices)
 		{
 			Span<float> palette = stackalloc float[64];
@@ -258,13 +267,15 @@ namespace LELEngine.Editor
 			{
 				float best = float.MaxValue;
 				int bestIndex = 0;
+				float alpha = texels[i * 4 + 3];
+				float alphaWeight = alpha <= 0f ? 16f : 1f;
 				for (int w = 0; w < 16; w++)
 				{
 					float dr = palette[w * 4] - texels[i * 4];
 					float dg = palette[w * 4 + 1] - texels[i * 4 + 1];
 					float db = palette[w * 4 + 2] - texels[i * 4 + 2];
-					float da = palette[w * 4 + 3] - texels[i * 4 + 3];
-					float d = dr * dr + dg * dg + db * db + da * da;
+					float da = palette[w * 4 + 3] - alpha;
+					float d = dr * dr + dg * dg + db * db + alphaWeight * da * da;
 					if (d < best)
 					{
 						best = d;

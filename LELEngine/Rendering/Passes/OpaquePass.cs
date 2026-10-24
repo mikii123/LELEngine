@@ -23,6 +23,8 @@ namespace LELEngine.Rendering.Passes
 		#region PrivateFields
 
 		private readonly List<RendererPart> parts = new List<RendererPart>();
+		private static readonly List<ShaderProgram> programs = new List<ShaderProgram>();
+		private static readonly List<ShaderProgram> partPrograms = new List<ShaderProgram>();
 
 		#endregion
 
@@ -109,23 +111,37 @@ namespace LELEngine.Rendering.Passes
 		// every object drawn with a program, so they are sent once per program and again only when an object's
 		// ReceiveShadows / ReceiveGI flags differ from the previous object's or the previous object's material
 		// overrode one of them (Material.OverridesSharedUniforms); each draw (one sub-mesh) then only sends its
-		// model matrix and material uniforms.
+		// model matrix and material uniforms. The programs are the materials' variants (Material.Program, looked up once
+		// per part), in the order the parts first use them.
 		private static void PerShader(IReadOnlyList<RendererPart> parts, Camera camera, int layerMask)
 		{
-			foreach (ShaderProgram program in InternalStorage.ShaderList)
+			programs.Clear();
+			partPrograms.Clear();
+			foreach (RendererPart part in parts)
+			{
+				ShaderProgram candidate = part.Material?.Program;
+				partPrograms.Add(candidate);
+				if (candidate != null && !programs.Contains(candidate))
+				{
+					programs.Add(candidate);
+				}
+			}
+
+			foreach (ShaderProgram program in programs)
 			{
 				bool used = false;
 				bool resend = true;
 				bool receiveShadows = false;
 				bool receiveGI = false;
-				foreach (RendererPart part in parts)
+				for (int i = 0; i < parts.Count; i++)
 				{
-					Material material = part.Material;
-					if (material?.UsingShader != program)
+					if (partPrograms[i] != program)
 					{
 						continue;
 					}
 
+					RendererPart part = parts[i];
+					Material material = part.Material;
 					MeshRenderer renderer = part.Renderer;
 					if ((layerMask & (1 << (renderer.gameObject.layer & 31))) == 0)
 					{
@@ -155,6 +171,9 @@ namespace LELEngine.Rendering.Passes
 					}
 				}
 			}
+
+			programs.Clear();
+			partPrograms.Clear();
 		}
 
 		#endregion

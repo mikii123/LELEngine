@@ -20,7 +20,8 @@ namespace LELEngine.Editor
 	{
 		#region PrivateFields
 
-		private const int Version = 2;
+		// 3 (2026-10-24): BC7 keeps the alpha of fully transparent texels at 0.
+		private const int Version = 3;
 
 		private static readonly float[] SrgbToLinear = BuildSrgbTable();
 

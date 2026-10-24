@@ -173,6 +173,7 @@ namespace LELEngine.Player
 
 				host.Context.MakeCurrent();
 				Step("renderer", () => host.CreateRenderer(width, height));
+				Step("shader variants", CompileShaderVariants);
 				Step("scene", () =>
 				{
 					// Read and prepared for the GPU here; its lifecycle starts with the game loop (SceneManager.Lifecycle).
@@ -182,6 +183,12 @@ namespace LELEngine.Player
 					}
 				});
 				Step("first frames", WarmUp);
+				if (LELEngine.Shaders.ProgramBinaryCache.DriverFolder != null)
+				{
+					Console.WriteLine($"[Player] Program binary cache: {LELEngine.Shaders.ProgramBinaryCache.Loaded} programs loaded, {LELEngine.Shaders.ProgramBinaryCache.Saved} compiled and saved"
+						+ (LELEngine.Shaders.ProgramBinaryCache.Refused > 0 ? $", {LELEngine.Shaders.ProgramBinaryCache.Refused} refused by the driver" : "")
+						+ $" ({LELEngine.Shaders.ProgramBinaryCache.DriverFolder})");
+				}
 			}
 			catch (OperationCanceledException)
 			{
@@ -239,6 +246,28 @@ namespace LELEngine.Player
 			{
 				Console.WriteLine("[Player] Game assembly not found: " + gameAssembly + " (running without scripts)");
 			}
+		}
+
+		/// <summary>
+		///     Every shader variant the build's materials use (Data/ShaderVariants.txt, written by the build), compiled
+		///     now behind the splash screen: no material of a later scene or Resources load compiles during the game.
+		/// </summary>
+		private void CompileShaderVariants()
+		{
+			List<LELEngine.Shaders.ShaderVariant> variants = LELEngine.Shaders.ShaderVariantList.Read(Path.Combine(dataFolder, LELEngine.Shaders.ShaderVariantList.FileName));
+			if (variants.Count == 0)
+			{
+				return;
+			}
+
+			bool gpuDriven = Game.Renderer != null && Game.Renderer.Settings.GpuDriven && GpuScene.IsSupported;
+			List<string> failures = LELEngine.Shaders.ShaderVariantList.Compile(variants, gpuDriven, out int compiled, out long milliseconds);
+			foreach (string failure in failures)
+			{
+				Debug.LogWarning("[Player] Shader variant " + failure);
+			}
+
+			Console.WriteLine($"[Player] Compiled {compiled} shader programs for {variants.Count} variants in {milliseconds} ms");
 		}
 
 		/// <summary>

@@ -4,16 +4,16 @@ using OpenTK.Mathematics;
 namespace LELEngine.Editor
 {
 	/// <summary>
-	///     Content of a new scene and of the GameObject menu's primitives: instances of the project's starter models
-	///     (<see cref="Model.Instantiate" />, with the import's materials: the default material for the starter meshes).
+	///     Content of a new scene and of the GameObject menu's primitives: instances of the engine's built-in models
+	///     (<see cref="Model.Instantiate" />, with the built-in default material).
 	/// </summary>
 	internal static class DefaultScene
 	{
 		#region PublicFields
 
-		public const string CubeModel = "Meshes/Cube.obj";
-		public const string SphereModel = "Meshes/Sphere.obj";
-		public const string QuadModel = "Meshes/Quad.obj";
+		public const string CubeModel = "Engine/Meshes/Cube.obj";
+		public const string SphereModel = "Engine/Meshes/Sphere.obj";
+		public const string QuadModel = "Engine/Meshes/Quad.obj";
 		public const string GroundMaterial = "Materials/Ground.material";
 
 		#endregion
@@ -95,8 +95,8 @@ namespace LELEngine.Editor
 		}
 
 		/// <summary>
-		///     An instance of a project model named <paramref name="name" /> under <paramref name="parent" />; an empty
-		///     GameObject when the project no longer has the model (starter assets removed).
+		///     An instance of a model (built-in or the project's) named <paramref name="name" /> under
+		///     <paramref name="parent" />; an empty GameObject when the model file is not there.
 		/// </summary>
 		public static GameObject Instantiate(Scene scene, string modelPath, string name, Transform parent = null)
 		{
@@ -107,7 +107,7 @@ namespace LELEngine.Editor
 			}
 			else
 			{
-				Debug.LogWarning($"[Editor] '{modelPath}' is not in the project (starter assets were removed?)");
+				Debug.LogWarning($"[Editor] '{modelPath}' does not exist");
 			}
 
 			if (go == null)

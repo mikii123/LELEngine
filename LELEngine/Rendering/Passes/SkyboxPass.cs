@@ -25,7 +25,7 @@ namespace LELEngine.Rendering.Passes
 		public override void Execute(RenderContext context)
 		{
 			Material sky = Lighting.Environment?.Skybox;
-			ShaderProgram program = sky?.UsingShader;
+			ShaderProgram program = sky?.Program;
 			if (program == null || !program.IsLinked)
 			{
 				return;

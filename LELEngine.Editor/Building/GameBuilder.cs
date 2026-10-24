@@ -5,6 +5,7 @@ using System.Text.RegularExpressions;
 using LELEngine.Rendering;
 using LELEngine.Rendering.DistanceField;
 using LELEngine.Serialization;
+using LELEngine.Shaders;
 using OpenTK.Mathematics;
 
 namespace LELEngine.Editor
@@ -168,6 +169,15 @@ namespace LELEngine.Editor
 
 			log($"Assets: {dependencies.Included.Count} files ({dependencies.SceneCount} scenes, {dependencies.ResourceCount} in Resources folders, the rest used by them); report: {reportFile}");
 
+			// The shader variants the materials draw with, checked by the reference compiler (glslang: no GPU, the same
+			// verdict on every machine); one that does not compile stops the build.
+			List<ShaderVariant> variants = dependencies.CollectShaderVariants();
+			if (!ValidateShaderVariants(variants, log))
+			{
+				log("Error: shader variants do not compile; nothing was written.");
+				return false;
+			}
+
 			log("Copying assets...");
 			string data = Path.Combine(output, "Data");
 			if (Directory.Exists(data))
@@ -257,6 +267,9 @@ namespace LELEngine.Editor
 			// The GUID index of the shipped assets: the player reads one file instead of every meta file.
 			AssetDatabase.WriteIndex(Path.Combine(data, AssetDatabase.IndexFileName), path => dependencies.Included.Contains(path));
 
+			// The shader variants for the player to compile while it loads (Data/ShaderVariants.txt).
+			ShaderVariantList.Write(Path.Combine(data, ShaderVariantList.FileName), variants);
+
 			// 4b. The GI's mesh distance fields at the scales the scenes draw the meshes ("model.ext.sdf" next to each
 			//     model): baked here when this thread has the GL context (batch mode), by the editor before the build
 			//     otherwise; cached in Library.
@@ -320,6 +333,34 @@ namespace LELEngine.Editor
 		///     An image becomes a baked texture unless the UI may draw it: sprites, and the images UI documents name
 		///     (url(...) / resource(...) in style sheets and UXML files) stay images (the UI takes rows top down, gamma storage).
 		/// </summary>
+		/// <summary>
+		///     Checks the shader variants the build's materials use with glslang (<see cref="ShaderValidator" />): every
+		///     stage, with the instanced programs and for each kind of GPU; false (with the compiler's messages) when one
+		///     does not compile or the compiler cannot run.
+		/// </summary>
+		private static bool ValidateShaderVariants(List<ShaderVariant> variants, Action<string> log)
+		{
+			ShaderValidator.Result result;
+			try
+			{
+				result = ShaderValidator.Validate(variants);
+			}
+			catch (Exception e)
+			{
+				log("Error: the shader compiler (glslang, shaderc) could not run: " + e.Message);
+				return false;
+			}
+
+			foreach (string error in result.Errors)
+			{
+				log("Error: shader variant " + error);
+			}
+
+			log($"Shader variants: {variants.Count} used by the materials, {result.Stages} stage sources checked with glslang in {result.Milliseconds} ms"
+				+ (result.Warnings > 0 ? $", {result.Warnings} warnings" : "") + (result.Errors.Count > 0 ? $", {result.Errors.Count} failed" : ""));
+			return result.Errors.Count == 0;
+		}
+
 		private static bool IsBakedTexture(string assetPath, HashSet<string> uiImages)
 		{
 			if (assetPath == null || uiImages.Contains(Path.GetFileName(assetPath)))

@@ -34,8 +34,15 @@ namespace LELEngine.Shaders
 	///     /////Properties
 	///     </code>
 	///     Attributes: [HDR] (color picker with intensity), [HideInInspector], [NoScaleOffset] and [Normal] (accepted).
-	///     The same block takes the shader's render state lines (Blend, ZWrite, ZTest, Cull, Queue; see
-	///     <see cref="ShaderRenderState" />).
+	///     Keyword attributes (Unity's) on Float / Int / Range properties pick the shader variant a material draws with
+	///     (see <see cref="ShaderProgram.GetVariant" />):
+	///     <code>
+	///     [Toggle] Glow ("Glow", Float) = 0                         // keyword GLOW_ON while the value is not 0
+	///     [Toggle(ALPHA_CLIP)] AlphaClip ("Alpha Clipping", Float) = 0   // keyword ALPHA_CLIP
+	///     [KeywordEnum(Alpha, Soft Additive)] Mode ("Mode", Float) = 0   // MODE_ALPHA or MODE_SOFT_ADDITIVE (value = index)
+	///     </code>
+	///     The same block takes the shader's render state lines (Blend, ZWrite, ZTest, Cull, Queue, ShadowCaster; see
+	///     <see cref="ShaderRenderState" />), which may sit in #if / #ifdef blocks over the variant's keywords.
 	/// </summary>
 	public sealed class ShaderProperty
 	{
@@ -55,6 +62,18 @@ namespace LELEngine.Shaders
 
 		public bool Hdr;
 		public bool HideInInspector;
+
+		/// <summary>
+		///     Keywords the value enables, one at a time: [Toggle] has one (on while the value is not 0), [KeywordEnum]
+		///     one per option (the option at the value's index). Null for properties that pick no variant.
+		/// </summary>
+		public string[] Keywords;
+
+		/// <summary>Display names of a [KeywordEnum]'s options (null otherwise).</summary>
+		public string[] EnumOptions;
+
+		public bool IsToggle => Keywords != null && EnumOptions == null;
+		public bool IsKeywordEnum => EnumOptions != null;
 
 		public bool IsTexture => Type == ShaderPropertyType.Texture2D || Type == ShaderPropertyType.Cubemap || Type == ShaderPropertyType.Texture3D;
 
@@ -99,9 +118,10 @@ namespace LELEngine.Shaders
 			var property = new ShaderProperty { Name = match.Groups["name"].Value, DisplayName = match.Groups["display"].Value };
 			foreach (Capture attribute in match.Groups["attr"].Captures)
 			{
-				string text = attribute.Value.Trim('[', ']', ' ');
+				string text = attribute.Value.Trim().Trim('[', ']').Trim();
 				if (text.Equals("HDR", StringComparison.OrdinalIgnoreCase)) property.Hdr = true;
 				else if (text.Equals("HideInInspector", StringComparison.OrdinalIgnoreCase)) property.HideInInspector = true;
+				else ParseKeywordAttribute(property, text);
 			}
 
 			string type = match.Groups["type"].Value;
@@ -147,7 +167,37 @@ namespace LELEngine.Shaders
 					return null;
 			}
 
+			if (property.Keywords != null && property.Type != ShaderPropertyType.Float && property.Type != ShaderPropertyType.Int && property.Type != ShaderPropertyType.Range)
+			{
+				// Only numbers pick variants.
+				property.Keywords = null;
+				property.EnumOptions = null;
+			}
+
 			return property;
+		}
+
+		/// <summary>The keyword a value of this property enables (the option at its index, or the toggle's when not 0); null for none.</summary>
+		public string KeywordFor(float value)
+		{
+			if (Keywords == null)
+			{
+				return null;
+			}
+
+			if (IsKeywordEnum)
+			{
+				return Keywords[OptionIndex(value)];
+			}
+
+			return value != 0f ? Keywords[0] : null;
+		}
+
+		/// <summary>The [KeywordEnum] option a value selects (rounded, clamped to the options).</summary>
+		public int OptionIndex(float value)
+		{
+			int count = EnumOptions?.Length ?? 1;
+			return Math.Clamp((int)MathF.Round(value), 0, count - 1);
 		}
 
 		#endregion
@@ -161,6 +211,38 @@ namespace LELEngine.Shaders
 		#endregion
 
 		#region PrivateMethods
+
+		// [Toggle] -> NAME_ON, [Toggle(KEYWORD)] -> KEYWORD, [KeywordEnum(A, B c)] -> NAME_A, NAME_B_C (Unity's names).
+		private static void ParseKeywordAttribute(ShaderProperty property, string text)
+		{
+			int open = text.IndexOf('(');
+			string kind = (open < 0 ? text : text.Substring(0, open)).Trim();
+			string[] arguments = open < 0 ? Array.Empty<string>() : text.Substring(open + 1).TrimEnd(')').Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+			if (kind.Equals("Toggle", StringComparison.OrdinalIgnoreCase))
+			{
+				property.Keywords = new[] { arguments.Length > 0 ? KeywordName(arguments[0]) : KeywordName(property.Name) + "_ON" };
+			}
+			else if (kind.Equals("KeywordEnum", StringComparison.OrdinalIgnoreCase) && arguments.Length > 0)
+			{
+				property.EnumOptions = arguments;
+				property.Keywords = new string[arguments.Length];
+				for (int i = 0; i < arguments.Length; i++)
+				{
+					property.Keywords[i] = KeywordName(property.Name) + "_" + KeywordName(arguments[i]);
+				}
+			}
+		}
+
+		private static string KeywordName(string text)
+		{
+			var name = new System.Text.StringBuilder(text.Length);
+			foreach (char c in text.Trim())
+			{
+				name.Append(char.IsLetterOrDigit(c) ? char.ToUpperInvariant(c) : '_');
+			}
+
+			return name.ToString();
+		}
 
 		private static float ParseFloat(string text)
 		{

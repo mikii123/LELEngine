@@ -42,12 +42,45 @@ namespace LELEngine.Shaders
 			}
 		}
 
+		/// <summary>The material's shader (the asset; draws use its variant, <see cref="Program" />).</summary>
 		public ShaderProgram UsingShader => m_Shader;
+
 		public string ShaderPath => m_Shader?.AssetPath;
 		public IReadOnlyList<MaterialProperty> Properties => m_Properties;
 
-		/// <summary>Blend, depth, cull and queue state of the shader (the defaults without a shader).</summary>
-		public ShaderRenderState RenderState => m_Shader?.RenderState ?? ShaderRenderState.Default;
+		/// <summary>
+		///     The program draws use: the shader's variant for the keywords the material's [Toggle] / [KeywordEnum]
+		///     values enable (<see cref="Keywords" />), the shader itself when it has none. Follows value changes
+		///     (scripts and the editor set the values; the variant compiles on first use).
+		/// </summary>
+		public ShaderProgram Program
+		{
+			get
+			{
+				ShaderProgram shader = m_Shader;
+				if (shader == null || shader.KeywordProperties.Count == 0)
+				{
+					return shader;
+				}
+
+				long key = KeywordState(shader);
+				VariantChoice choice = variantChoice;
+				if (choice != null && choice.Shader == shader && choice.Key == key && key >= 0)
+				{
+					return choice.Variant;
+				}
+
+				ShaderProgram variant = shader.GetVariant(GetKeywords(shader));
+				variantChoice = new VariantChoice { Shader = shader, Key = key, Variant = variant };
+				return variant;
+			}
+		}
+
+		/// <summary>The keywords the material's [Toggle] / [KeywordEnum] values enable (sorted).</summary>
+		public IReadOnlyList<string> Keywords => Program?.Keywords ?? Array.Empty<string>();
+
+		/// <summary>Blend, depth, cull, queue and shadow state of the material's variant (the defaults without a shader).</summary>
+		public ShaderRenderState RenderState => Program?.RenderState ?? ShaderRenderState.Default;
 
 		/// <summary>
 		///     Render queue (<see cref="MaterialQueue" />): the shader's unless overridden (set -1 to follow the shader
@@ -105,7 +138,7 @@ namespace LELEngine.Shaders
 			{
 				foreach (string candidate in MainTextureNames)
 				{
-					if (m_Shader != null && m_Shader.HasUniform(candidate))
+					if (Program != null && Program.HasUniform(candidate))
 					{
 						SetTexture(candidate, value);
 						return;
@@ -128,6 +161,17 @@ namespace LELEngine.Shaders
 		[SerializeField] private ShaderProgram m_Shader;
 		[SerializeField] private List<MaterialProperty> m_Properties = new List<MaterialProperty>();
 		[SerializeField] private int m_RenderQueue = -1;
+
+		// The variant of the last keyword state (Program is read for every draw and sort), replaced as a whole: a scene
+		// loading in the background reads it too.
+		private sealed class VariantChoice
+		{
+			public ShaderProgram Shader;
+			public long Key;
+			public ShaderProgram Variant;
+		}
+
+		private VariantChoice variantChoice;
 
 		#endregion
 
@@ -207,6 +251,11 @@ namespace LELEngine.Shaders
 			if (string.IsNullOrEmpty(assetPath))
 			{
 				throw new InvalidOperationException("The material has no asset path");
+			}
+
+			if (AssetDatabase.IsEngineResource(assetPath))
+			{
+				throw new InvalidOperationException(assetPath + " is a built-in material (read-only): save a copy in the project instead");
 			}
 
 			AssetPath = assetPath.Replace('\\', '/');
@@ -442,9 +491,10 @@ namespace LELEngine.Shaders
 		/// </summary>
 		public void SetUniforms()
 		{
-			if (m_Shader != null)
+			ShaderProgram program = Program;
+			if (program != null)
 			{
-				SetUniforms(m_Shader);
+				SetUniforms(program);
 			}
 		}
 
@@ -658,6 +708,48 @@ namespace LELEngine.Shaders
 
 				fallback.Apply(program, ref textureUnit);
 			}
+		}
+
+		// The keyword each [Toggle] / [KeywordEnum] property picks, packed 6 bits a property (0: none, else option + 1);
+		// -1 (not cached) for more properties or options than that holds.
+		private long KeywordState(ShaderProgram shader)
+		{
+			long key = 0;
+			IReadOnlyList<ShaderProperty> declared = shader.KeywordProperties;
+			if (declared.Count > 10)
+			{
+				return -1;
+			}
+
+			for (int i = 0; i < declared.Count; i++)
+			{
+				ShaderProperty property = declared[i];
+				float value = GetFloat(property.Name, property.DefaultValue.X);
+				long state = property.IsKeywordEnum ? property.OptionIndex(value) + 1 : value != 0f ? 1 : 0;
+				if (state > 63)
+				{
+					return -1;
+				}
+
+				key |= state << (i * 6);
+			}
+
+			return key;
+		}
+
+		private List<string> GetKeywords(ShaderProgram shader)
+		{
+			var result = new List<string>();
+			foreach (ShaderProperty property in shader.KeywordProperties)
+			{
+				string keyword = property.KeywordFor(GetFloat(property.Name, property.DefaultValue.X));
+				if (keyword != null)
+				{
+					result.Add(keyword);
+				}
+			}
+
+			return result;
 		}
 
 		private MaterialProperty Find(string propertyName)

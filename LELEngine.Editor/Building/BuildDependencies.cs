@@ -31,6 +31,13 @@ namespace LELEngine.Editor
 		/// <summary>Why each file is included: "build scene", "Resources", or the asset that uses it.</summary>
 		public readonly Dictionary<string, string> Reasons = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
+		/// <summary>
+		///     The engine resources the build uses (engine paths of built-in meshes, materials, shaders) with the asset
+		///     using each: the player has them next to its binaries, so they are not in <see cref="Included" />; what they
+		///     use is followed all the same (a built-in model's default material, a material's shader variant).
+		/// </summary>
+		public readonly Dictionary<string, string> EngineResources = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
 		/// <summary>Stored type names and the first included document storing each.</summary>
 		public readonly Dictionary<string, string> Types = new Dictionary<string, string>(StringComparer.Ordinal);
 
@@ -172,6 +179,40 @@ namespace LELEngine.Editor
 			return problems;
 		}
 
+		/// <summary>
+		///     The shader variants the build's materials draw with (each material's shader and the keywords of its values),
+		///     shipped materials and the built-in ones they use alike: the build compiles them and lists them for the player
+		///     (<see cref="Shaders.ShaderVariantList" />).
+		/// </summary>
+		public List<Shaders.ShaderVariant> CollectShaderVariants()
+		{
+			var variants = new List<Shaders.ShaderVariant>();
+			var paths = new List<string>(Included);
+			paths.AddRange(EngineResources.Keys);
+			paths.Sort(StringComparer.OrdinalIgnoreCase);
+			foreach (string path in paths)
+			{
+				if (!path.EndsWith(Shaders.Material.Extension, StringComparison.OrdinalIgnoreCase))
+				{
+					continue;
+				}
+
+				Shaders.Material material = InternalStorage.GetOrCreateMaterial(path);
+				if (material?.UsingShader?.AssetPath == null)
+				{
+					continue;
+				}
+
+				Shaders.ShaderVariant variant = Shaders.ShaderVariant.Of(material);
+				if (!variants.Contains(variant))
+				{
+					variants.Add(variant);
+				}
+			}
+
+			return variants;
+		}
+
 		/// <summary>The report written next to the project's other build data: every shipped file with its reason, then the files left out.</summary>
 		public string Report(ProjectInfo project)
 		{
@@ -192,6 +233,14 @@ namespace LELEngine.Editor
 				{
 					excluded.Add(assetPath);
 				}
+			}
+
+			var engine = new List<string>(EngineResources.Keys);
+			engine.Sort(StringComparer.OrdinalIgnoreCase);
+			text.Append("\nBuilt-in engine resources used (the player has them) (").Append(engine.Count).Append(")\n");
+			foreach (string path in engine)
+			{
+				text.Append("  ").Append(path).Append("    <- ").Append(EngineResources[path]).Append('\n');
 			}
 
 			excluded.Sort(StringComparer.OrdinalIgnoreCase);
@@ -226,6 +275,16 @@ namespace LELEngine.Editor
 			}
 
 			assetPath = assetPath.Replace('\\', '/').TrimStart('/');
+			if (AssetDatabase.IsEngineResource(assetPath))
+			{
+				if (EngineResources.TryAdd(assetPath, reason))
+				{
+					pending.Enqueue(assetPath);
+				}
+
+				return false;
+			}
+
 			if (Included.Contains(assetPath) || !IsShippable(assetPath))
 			{
 				return false;
@@ -266,11 +325,14 @@ namespace LELEngine.Editor
 					string target = ResolveReference(reference);
 					if (target == null)
 					{
-						if (reference.Path == null || !AssetDatabase.IsEngineResource(reference.Path) && AssetDatabase.EngineShaderFallback(reference.Path) == null)
+						// An engine resource, or a project copy of an engine shader that is gone (the engine's stands in).
+						string engine = reference.Path == null ? null : AssetDatabase.IsEngineResource(reference.Path) ? reference.Path : AssetDatabase.EngineShaderFallback(reference.Path);
+						if (engine == null)
 						{
 							Warnings.Add($"{assetPath} references a missing asset (guid {reference.Guid ?? "none"}, last path '{reference.Path}')");
 						}
 
+						Add(engine, reason);
 						continue;
 					}
 

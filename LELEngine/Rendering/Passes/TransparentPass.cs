@@ -119,7 +119,7 @@ namespace LELEngine.Rendering.Passes
 				afterMesh = true;
 				MeshRenderer renderer = entry.Renderer;
 				Material material = renderer.GetMaterial(entry.SubMesh);
-				ShaderProgram program = material.UsingShader;
+				ShaderProgram program = material.Program;
 				if (program != active)
 				{
 					program.Use();
@@ -201,7 +201,7 @@ namespace LELEngine.Rendering.Passes
 				{
 					// Each transparent sub-mesh sorts on its own (same distance: the queue, then the slot, order them).
 					Material material = renderer.GetMaterial(i);
-					if (material?.UsingShader == null || !material.IsTransparent || !material.UsingShader.IsLinked || mesh.SubMeshes[i].IndexCount == 0)
+					if (material?.Program == null || !material.IsTransparent || !material.Program.IsLinked || mesh.SubMeshes[i].IndexCount == 0)
 					{
 						continue;
 					}

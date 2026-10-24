@@ -244,6 +244,71 @@
 - **Benchmark:** `LELEngine.Benchmarks physics2d-scene` fails because `Meshes/cube.obj` is not copied to its output
   folder. That asset is unrelated to destroying.
 
+## Shader variants, Engine/ParticlesUnlit.shader, built-in assets (2026-10-24)
+
+- Keyword variants, Unity's `shader_feature` made automatic: `[Toggle]` (keyword NAME_ON), `[Toggle(KEYWORD)]` and
+  `[KeywordEnum(A, Soft B)]` (NAME_A, NAME_SOFT_B; the value is the option's index) on Float / Int / Range properties
+  (`ShaderProperty.Keywords`, `KeywordFor`). `Material.Program` is the shader's variant for the keywords of the
+  material's values (`ShaderProgram.GetVariant(keywords)`: a program per sorted keyword set, made on first use from
+  the same file with the keywords as defines, kept with the shader, deleted with it); `UsingShader` stays the asset.
+  Every draw path uses `Program` (opaque per-object and GPU-driven buckets, transparent pass, skybox, scene-load
+  preparation `AssetLoadScope`); `Material.RenderState` / `renderQueue` / `IsTransparent` are the variant's. The
+  choice is cached per material (`VariantChoice`, keyword state packed in a long) and follows `SetFloat` at once.
+- Render state per variant: the Properties block is filtered by `ShaderConditionals` (#if / #ifdef / #ifndef / #elif /
+  #else / #endif; keywords, defined(), !, &&, ||) before its lines are read, so Blend / ZWrite / Cull / Queue lines can
+  depend on keywords. New render state keyword `ShadowCaster Off` (`ShaderRenderState.CastShadows`): no opaque shadow
+  map (`MeshRenderer.RenderShadowCastersWith`, the GPU-driven instance flag) and no transmittance
+  (`TransparentShadows`). File programs fill `ShaderProgram.BuildLog` (stage and link messages) like generated ones.
+- Builds: `BuildDependencies.CollectShaderVariants` (every shipped and built-in material: `ShaderVariant.Of`), checked
+  offline by `ShaderValidator` (`LELEngine.Editor/Building`, glslang through Silk.NET.Shaderc 2.22, editor only, natives
+  for win / linux / osx; no GL context, so it runs in batch mode, the Build tab and CI alike): every stage of each
+  variant and of its instanced program (shaders including Instancing.glsl) as the preamble makes it for three kinds of
+  GPU (`ShaderFeatures`: draw parameters ARB, GLSL 4.60 core, none), compiled for OpenGL 4.5 into SPIR-V that is thrown
+  away (auto-mapped locations and bindings: SPIR-V for GL wants them); identical code once (fragment stages do not
+  depend on the GPU kind; messages say "every kind of GPU" or name the kinds). `ShaderProgram.ReadSources(path,
+  defines, features, lineDirectives)` gives the exact sources; with line directives (GL_GOOGLE_cpp_style_line_directive,
+  checked copy only) messages read `Shaders/Broken.shader:36` / `BrokenInclude.glsl:6`. glslang declares
+  gl_BaseInstanceARB from GLSL 4.50 only, so the ARB profile's vertex stages are checked as `#version 450` (the no-draw-
+  parameters profile checks the file's own 430). One that does not compile stops the build (`GameBuilder`
+  `ValidateShaderVariants`); not covered: driver limits and bugs, the link between stages. ~350 ms for 13 variants
+  (64 stage sources). Listed in `Data/ShaderVariants.txt` (`ShaderVariantList`, "shader|KEYWORDS" lines); the player
+  compiles them in the loader step "shader variants" (after the renderer, before the scene). Runtime-made variants
+  still compile on first use.
+- Program binary cache (`ProgramBinaryCache`, engine): `ShaderProgram.Build` (file programs, compute passes included)
+  and `FromSources` (VFX kernels) load a program from the driver's binary (glProgramBinary) when one was saved for the
+  same final stage sources, else compile, link (retrievable hint) and save (glGetProgramBinary). Files `<SHA-256 of
+  the sources>.bin` in a folder per driver (hash of vendor / renderer / version / GLSL version, `driver.txt`), written
+  aside and moved in; a refused binary (driver update) is deleted and compiled again; files unused for 60 days and all
+  but the 3 most recent driver folders (only folders with a driver.txt) go at start. Off unless `Folder` is set: the
+  player sets `%LOCALAPPDATA%/LELEngine/<title>/ShaderCache` (`shadercache=0` turns it off) and logs `[Player] Program
+  binary cache: N loaded, M compiled and saved`. Probe (RTX 3080 Ti, 13 variants + engine passes = 41 programs, 1.9 MB):
+  shader variants 6146 ms -> 83 ms, first frames 802 -> 131 ms, start scene shown 7.6 s -> 1.4 s (the 1 s splash);
+  without the cache but with NVIDIA's own warm cache the variants still took 3.3 s. The editor does not use it.
+- `Engine/ParticlesUnlit.shader` (Unity's Particles/Unlit): `BaseMap` x `Color` (HDR) x vertex color; `BlendMode`
+  [KeywordEnum] Alpha (SrcAlpha OneMinusSrcAlpha), Premultiply (One OneMinusSrcAlpha, the map's color already
+  premultiplied, tint alpha fades all), Additive (SrcAlpha One), Soft Additive (One OneMinusSrcColor, rgb x alpha),
+  Multiply (DstColor Zero, rgb lerped to white by alpha), Opaque (opaque pass); `RenderFace` Both / Front / Back;
+  `AlphaClip` [Toggle(ALPHA_CLIP)] with `Cutoff`; Opaque + clip draws in the transparent pass at queue GeometryLast+1
+  (alpha-tested surfaces are not in the depth prepass). ShadowCaster Off in every mode. No Instancing.glsl: per-object.
+  The material editor draws [KeywordEnum] as a combo, [Toggle] as a checkbox, and the variant's keywords.
+- Built-in assets: `LELEngine/BuiltinAssets/Engine/...` (Content, copied to `BuiltinAssets/` next to the binaries of
+  the editor and every player, like `ShaderLibrary` -> `Shaders/`): `Engine/Meshes/Cube.obj`, `Sphere.obj`, `Quad.obj`,
+  `Engine/Materials/Default.material` (`Model.DefaultMaterialPath`). `AssetDatabase.EngineResourceFile` /
+  `IsEngineResource` cover both roots for "Engine/..." paths; `ToAbsolute` maps engine paths to their file (they win
+  over a project file of the same path), `ToRootAbsolute` is the root path (baked `.sdf` of built-in models in a
+  build's Data). Read-only: no meta files (`EnsureMeta` returns null, `SaveMeta` keeps it in memory), no material
+  extraction, `Material.Save` refuses them, inspectors draw them disabled, references store the path only. The
+  GameObject menu and the default scene use them (`DefaultScene`); the object picker lists them for Mesh / Model /
+  Material fields; new projects get only `Materials/Glass.material` and `Ground.material` from the template. Existing
+  projects keep their old copies (`Meshes/*.obj`, `Materials/Default.material`) as ordinary assets.
+- Verified with a probe project (scratchpad `UnlitProbe`: one quad per mode over a bar, `[ExecuteAlways]` script
+  added with `addcomponent=`): editor render, mode switch and undo through `materialfield:` / `materialoption:`,
+  switching from code, batch build (ShaderVariants.txt, report), the player's log and frame. glslang: materials of every
+  engine material shader (Lit, LitTextured, LitTransparent, Skybox, SkyboxPanoramic, ParticlesUnlit) pass; a project
+  shader with errors in one keyword variant (`Shaders/Broken.shader` + include) failed the build with both lines named
+  and its other variant passed. Cache: cold / warm runs (frames equal), three binaries with a wrong format refused and
+  replaced, `shadercache=0`.
+
 ## Skybox orientation
 
 - `Engine/Skybox.shader` and `Engine/SkyboxPanoramic.shader`: `Tilt` (degrees about X, applied first) then `Rotation`
@@ -475,7 +540,8 @@
 - Test hooks (TestHooks / TestAnchors): `drag=N;from;to|...` (press N, hover N+10, drop N+12), `click=`,
   `doubleclick=`, `rclick=`, `ctrlclick=` (N;anchor|...), anchors `hierarchy:Name`, `project:Folder/File.ext`,
   `project:(empty)`, `component:Type`, `field:Type.field[@fraction]`, `row:Label/i[/row]`, `button:AddEntry`,
-  `button:InspectorLock` (the real lock button; `lockinspector=N` locks without clicking);
+  `button:InspectorLock` (the real lock button; `lockinspector=N` locks without clicking), `materialfield:Name` (a
+  material's [KeywordEnum] combo, closed, or [Toggle] checkbox), `materialoption:Name/i` (option i of the open combo);
   `logfield=N;Object;Component.field|...`, `pingasset=N;path|...`, `lockinspector=N`, `undo=N|M`, `redo=`,
   `expandinspector=1`, `inspectorscroll=N;px`, `screenshotframe=a,b,c` (folder/fNNNN). Each hook name holds one
   value (repeat with `|`), and `Start-Process` splits arguments at spaces: no spaces in anchors.
@@ -542,8 +608,10 @@
 - `GameBuilder` ships only what the build uses (`BuildDependencies`): the build scenes, every file under a folder
   named Resources, and what those use, transitively: asset references anywhere in documents (read typeless with
   `DocumentReferences`, nested and polymorphic values, lists, dictionaries included), a model's imported materials
-  (and `Materials/Default.material`), a project shader's #include files, USS / UXML url() / resource() / src. The
-  rest is left out; `Library/BuildReport.txt` lists each shipped file with its reason and the files left out. Stored
+  (else the built-in default material), a project shader's #include files, USS / UXML url() / resource() / src. The
+  rest is left out; `Library/BuildReport.txt` lists each shipped file with its reason, the built-in engine resources
+  used (`BuildDependencies.EngineResources`: not shipped in Data, the player has them; followed for their own
+  dependencies) and the files left out. Stored
   type names are checked against the engine and the player's scripts (Mono.Cecil): types of Editor scripts or missing
   classes are reported. `Data/` is deleted before it is written.
 - `GameBuilder` (`LELEngine.Editor/Building`) ships assets the player uses as they are:
@@ -551,8 +619,10 @@
   - images as KTX 1.1 (`KtxFile`) baked by `TextureBaker`: every mip level (box filter, in linear light for sRGB),
     BC7 by `Bc7Encoder` (own, mode 6 only, fast) or by BCnEncoder.Net for `TextureImporter.compression =
     BC7HighQuality` (16-38 s per 1K image), `None` keeps RGBA8; HDR stays RGBA16F, volumes RGBA8. Cached in
-    `Library/TextureCache`. Sprites and the images USS / UXML reference (`url()`, `resource()`) stay PNG: the UI
-    draws images as they are;
+    `Library/TextureCache` (`TextureBaker.Version` in the stamp: bump it when the bake changes). Mode 6 has one p-bit
+    per end for color and alpha together: since 2026-10-24 fully transparent ends and texels keep alpha 0 (white with
+    alpha 0, the usual particle texture, decoded to alpha 1/255 and additive particles drew their quad faintly). Sprites
+    and the images USS / UXML reference (`url()`, `resource()`) stay PNG: the UI draws images as they are;
   - `Data/.assetindex` (GUID to path): the player reads it instead of every meta file;
   - `<model file>.sdf` next to each model: the GI's mesh distance fields at every scale the scenes draw the mesh
     (scale keys quantized to 0.001) and at scale 1, baked by `DistanceFieldBaker` with the renderer's GPU build

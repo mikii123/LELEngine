@@ -110,7 +110,8 @@ namespace LELEngine
 		/// <summary>The distance fields a game build baked for the model's meshes ("model.ext.sdf" next to it), when there are some.</summary>
 		private static void AttachBakedDistanceFields(Model model, string assetPath)
 		{
-			string file = AssetDatabase.ToAbsolute(assetPath) + Rendering.DistanceField.DistanceFieldFile.Extension;
+			// Under the root also for built-in models: the build writes their fields into its Data folder.
+			string file = AssetDatabase.ToRootAbsolute(assetPath) + Rendering.DistanceField.DistanceFieldFile.Extension;
 			if (!File.Exists(file))
 			{
 				return;
@@ -305,7 +306,7 @@ namespace LELEngine
 			var watch = System.Diagnostics.Stopwatch.StartNew();
 			ModelData data = backend.Import(assetPath, settings);
 			ApplySettings(data, settings);
-			if (settings.importMaterials && MaterialExtractor != null)
+			if (settings.importMaterials && MaterialExtractor != null && !AssetDatabase.IsEngineResource(assetPath))
 			{
 				MaterialExtractor.Extract(assetPath, data);
 			}

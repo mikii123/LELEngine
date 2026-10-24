@@ -38,8 +38,16 @@ namespace LELEngine.Editor
 				ImGui.TextDisabled("GUID " + guid);
 			}
 
+			// Engine shaders and built-in assets (Engine/...): shown, never edited.
+			bool builtin = AssetDatabase.IsEngineResource(assetPath);
+			if (builtin)
+			{
+				ImGui.TextDisabled("Built-in, read-only: part of the engine, in every project and game");
+			}
+
 			ImGui.Separator();
 			ImGui.Spacing();
+			ImGui.BeginDisabled(builtin);
 
 			if (type == typeof(Material))
 			{
@@ -138,6 +146,8 @@ namespace LELEngine.Editor
 
 				DrawFileInfo(absolute);
 			}
+
+			ImGui.EndDisabled();
 		}
 
 		/// <summary>Selection left the asset: inspectors drop their working state.</summary>

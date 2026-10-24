@@ -79,10 +79,12 @@ namespace LELEngine.Shaders
 	///     ZTest LEqual                                // Less, LEqual, Equal, GEqual, Greater, NotEqual, Always
 	///     Cull Off                                    // Back, Front, Off
 	///     Queue Transparent                           // Background, Geometry, AlphaTest, Transparent, Overlay, +/- offset, or a number
+	///     ShadowCaster Off                            // On / Off: the material's objects cast no shadow (Unity: a shader without a ShadowCaster pass)
 	///     </code>
 	///     A shader that blends without naming a queue goes to the Transparent queue. Blending, depth writes and the
 	///     depth test apply in the transparent pass (the opaque passes draw with their own depth state and no
-	///     blending); the cull mode applies everywhere a material shader draws.
+	///     blending); the cull mode applies everywhere a material shader draws. Each variant of a shader
+	///     (<see cref="ShaderProgram.GetVariant" />) has its own state: the lines may sit in #if blocks over its keywords.
 	/// </summary>
 	public sealed class ShaderRenderState
 	{
@@ -103,6 +105,9 @@ namespace LELEngine.Shaders
 
 		public CullMode Cull = CullMode.Back;
 		public int Queue = MaterialQueue.Geometry;
+
+		/// <summary>The material's objects draw into shadow maps (opaque depth, or the transmittance of transparent ones).</summary>
+		public bool CastShadows = true;
 
 		/// <summary>The shader named its queue (otherwise it follows the blend state).</summary>
 		public bool QueueDeclared;
@@ -127,6 +132,7 @@ namespace LELEngine.Shaders
 				case "ztest":
 				case "cull":
 				case "queue":
+				case "shadowcaster":
 					return true;
 				default:
 					return false;
@@ -150,6 +156,8 @@ namespace LELEngine.Shaders
 					return ParseDepthTest(rest, out error);
 				case "cull":
 					return ParseCull(rest, out error);
+				case "shadowcaster":
+					return ParseSwitch(rest, out CastShadows, out error);
 				case "queue":
 				{
 					int? queue = MaterialQueue.Parse(rest);
@@ -228,6 +236,7 @@ namespace LELEngine.Shaders
 			if (!ZWrite) text.Append(", ZWrite Off");
 			if (ZTest.HasValue) text.Append(", ZTest ").Append(ZTest.Value);
 			if (Cull != CullMode.Back) text.Append(", Cull ").Append(Cull);
+			if (!CastShadows) text.Append(", no shadows");
 			return text.ToString();
 		}
 

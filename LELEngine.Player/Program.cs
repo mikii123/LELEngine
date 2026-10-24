@@ -15,7 +15,9 @@ namespace LELEngine.Player
 	///     the splash screen once it has loaded and the splash screen's time is up; then the game loop runs. A window
 	///     application (no console): the log goes to Player.log, with the startup times.
 	///     Command line overrides (testing): data=folder game=assembly.dll scene=assetPath fullscreen=0|1
-	///     screenshot=folder screenshotframe=N exitframe=N focus=0.
+	///     screenshot=folder screenshotframe=N exitframe=N focus=0 shadercache=0 (no program binary cache).
+	///     Linked shader programs are kept as the driver's binaries in the user's local app data
+	///     (LELEngine/&lt;title&gt;/ShaderCache, <see cref="Shaders.ProgramBinaryCache" />): later starts compile nothing.
 	/// </summary>
 	internal static class Program
 	{
@@ -106,6 +108,13 @@ namespace LELEngine.Player
 			{
 				Console.WriteLine("[Player] No start scene in " + BootConfig.FileName);
 				return 1;
+			}
+
+			// The driver's binaries of the programs an earlier start linked (before the loader builds the first shader).
+			if (GetValue(args, "shadercache") != "0")
+			{
+				Shaders.ProgramBinaryCache.Folder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "LELEngine",
+					string.IsNullOrWhiteSpace(boot.Title) ? "Game" : boot.Title, "ShaderCache");
 			}
 
 			// While the window opens: the splash screen's logo is read, and the loading that needs no GL context starts.

@@ -130,8 +130,8 @@ namespace LELEngine
 
 		#region PublicFields
 
-		/// <summary>The material of sub-meshes without an imported material (the project template's default material).</summary>
-		public const string DefaultMaterialPath = "Materials/Default.material";
+		/// <summary>The material of sub-meshes without an imported material: the engine's built-in default material.</summary>
+		public const string DefaultMaterialPath = "Engine/Materials/Default.material";
 
 		public string AssetPath { get; internal set; }
 
@@ -195,7 +195,7 @@ namespace LELEngine
 		}
 
 		/// <summary>
-		///     The materials of a mesh's sub-meshes: the imported .material assets, the project's default material
+		///     The materials of a mesh's sub-meshes: the imported .material assets, the built-in default material
 		///     (<see cref="DefaultMaterialPath" />) where there is none.
 		/// </summary>
 		public List<Shaders.Material> LoadMaterials(Mesh mesh)

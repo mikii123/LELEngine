@@ -197,7 +197,7 @@ namespace LELEngine
 			switch (asset)
 			{
 				case Shaders.Material material:
-					Record(material.UsingShader);
+					Record(material.Program);
 					foreach (Shaders.MaterialProperty property in material.Properties)
 					{
 						if (property is Shaders.TextureProperty texture)

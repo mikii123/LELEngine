@@ -30,9 +30,17 @@ namespace LELEngine.Rendering
 
 			foreach (MeshRenderer renderer in casters)
 			{
-				if (renderer.CastShadows && renderer.Mesh != null)
+				if (!renderer.CastShadows || renderer.Mesh == null)
 				{
-					return true;
+					continue;
+				}
+
+				for (int i = 0; i < renderer.SubMeshCount; i++)
+				{
+					if (renderer.IsSubMeshTransparent(i) && renderer.IsSubMeshShadowCaster(i))
+					{
+						return true;
+					}
 				}
 			}
 
@@ -95,7 +103,7 @@ namespace LELEngine.Rendering
 				for (int i = 0; i < renderer.SubMeshCount; i++)
 				{
 					Material material = renderer.GetMaterial(i);
-					if (material == null || !material.IsTransparent)
+					if (material == null || !material.IsTransparent || !material.RenderState.CastShadows)
 					{
 						continue;
 					}

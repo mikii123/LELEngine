@@ -53,6 +53,16 @@ namespace LELEngine
 		/// <summary>Folder holding the engine's shader library (Shaders/Engine/...), next to the engine binaries.</summary>
 		public static string EngineShadersRoot => Path.Combine(AppContext.BaseDirectory, "Shaders");
 
+		/// <summary>
+		///     Folder holding the engine's built-in assets (BuiltinAssets/Engine/Meshes/Cube.obj, .../Materials/Default.material),
+		///     next to the engine binaries: always there, in every project and player, read-only (no meta files, never
+		///     saved; references store the path only).
+		/// </summary>
+		public static string EngineAssetsRoot => Path.Combine(AppContext.BaseDirectory, "BuiltinAssets");
+
+		/// <summary>Folder of engine paths ("Engine/Lit.shader", "Engine/Meshes/Cube.obj").</summary>
+		public const string EnginePrefix = "Engine/";
+
 		/// <summary>Raised after the index was rebuilt (files added, moved or deleted).</summary>
 		public static event Action Refreshed;
 
@@ -265,7 +275,14 @@ namespace LELEngine
 			}
 		}
 
+		/// <summary>The file of an asset path: an engine resource's own file (built-in, read-only), else the file under the root.</summary>
 		public static string ToAbsolute(string assetPath)
+		{
+			return EngineResourceFile(assetPath) ?? ToRootAbsolute(assetPath);
+		}
+
+		/// <summary>The path under the asset root, also for engine paths (files a game build writes next to them, such as baked distance fields).</summary>
+		public static string ToRootAbsolute(string assetPath)
 		{
 			return Path.Combine(Root, assetPath.Replace('/', Path.DirectorySeparatorChar));
 		}
@@ -299,22 +316,66 @@ namespace LELEngine
 			return IsEngineResource(engine) ? engine : null;
 		}
 
-		/// <summary>True when the path names an engine resource shipped next to the binaries (engine shaders) rather than a project asset.</summary>
+		/// <summary>
+		///     True when the path names an engine resource shipped next to the binaries (engine shaders, built-in meshes and
+		///     materials) rather than a project asset.
+		/// </summary>
 		public static bool IsEngineResource(string path)
 		{
-			if (string.IsNullOrEmpty(path))
+			return EngineResourceFile(path) != null;
+		}
+
+		/// <summary>The file of an engine resource ("Engine/..." in the shader library or the built-in assets), or null.</summary>
+		public static string EngineResourceFile(string path)
+		{
+			if (string.IsNullOrEmpty(path) || path.Length <= EnginePrefix.Length || !path.Replace('\\', '/').StartsWith(EnginePrefix, StringComparison.OrdinalIgnoreCase))
 			{
-				return false;
+				return null;
 			}
 
 			try
 			{
-				return File.Exists(Path.Combine(EngineShadersRoot, path.Replace('/', Path.DirectorySeparatorChar)));
+				string relative = path.Replace('/', Path.DirectorySeparatorChar);
+				string file = Path.Combine(EngineShadersRoot, relative);
+				if (File.Exists(file))
+				{
+					return file;
+				}
+
+				file = Path.Combine(EngineAssetsRoot, relative);
+				return File.Exists(file) ? file : null;
 			}
 			catch (Exception)
 			{
-				return false;
+				return null;
 			}
+		}
+
+		/// <summary>The built-in assets of a kind (".obj", ".material"), as engine paths ("Engine/Meshes/Cube.obj").</summary>
+		public static List<string> FindEngineAssets(params string[] extensions)
+		{
+			var result = new List<string>();
+			try
+			{
+				string folder = Path.Combine(EngineAssetsRoot, "Engine");
+				if (Directory.Exists(folder))
+				{
+					foreach (string file in Directory.EnumerateFiles(folder, "*", SearchOption.AllDirectories))
+					{
+						if (Array.Exists(extensions, extension => file.EndsWith(extension, StringComparison.OrdinalIgnoreCase)))
+						{
+							result.Add(EnginePrefix + Path.GetRelativePath(folder, file).Replace('\\', '/'));
+						}
+					}
+				}
+			}
+			catch (Exception)
+			{
+				// No built-in assets next to the binaries.
+			}
+
+			result.Sort(StringComparer.OrdinalIgnoreCase);
+			return result;
 		}
 
 		/// <summary>
@@ -444,12 +505,12 @@ namespace LELEngine
 
 		// ---------------------------------------------------------------- meta files
 
-		/// <summary>Creates the meta file of an asset if it is missing; returns the asset's GUID.</summary>
+		/// <summary>Creates the meta file of an asset if it is missing; returns the asset's GUID (null for engine resources: they have none).</summary>
 		public static string EnsureMeta(string assetPath)
 		{
 			string normalized = Normalize(assetPath);
 			string existing = GetGuid(normalized);
-			if (existing != null)
+			if (existing != null || IsEngineResource(normalized))
 			{
 				return existing;
 			}
@@ -522,10 +583,20 @@ namespace LELEngine
 			return importer;
 		}
 
-		/// <summary>Writes an asset's meta document (import settings changed in the editor).</summary>
+		/// <summary>Writes an asset's meta document (import settings changed in the editor). Engine resources keep theirs in memory only.</summary>
 		public static void SaveMeta(string assetPath, AssetMeta meta)
 		{
 			string normalized = Normalize(assetPath);
+			if (IsEngineResource(normalized))
+			{
+				lock (sync)
+				{
+					metaCache[normalized] = meta;
+				}
+
+				return;
+			}
+
 			if (string.IsNullOrEmpty(meta.guid))
 			{
 				meta.guid = GetGuid(normalized) ?? Guid.NewGuid().ToString("N");

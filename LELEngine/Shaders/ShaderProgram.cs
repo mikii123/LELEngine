@@ -16,6 +16,11 @@ namespace LELEngine.Shaders
 	///     (LEL_BASE_INSTANCE with the draw parameters extension in vertex stages, LEL_SUBGROUPS with the subgroup
 	///     extensions in compute stages). A shader that includes "Engine/Instancing.glsl" also has an instanced
 	///     variant (<see cref="GetInstancedVariant" />) for GPU-driven draws.
+	///     Keyword variants (Unity's shader_feature, automatic): the keywords of a material's [Toggle] / [KeywordEnum]
+	///     properties (<see cref="ShaderProperty.Keywords" />) are defines of a program of their own
+	///     (<see cref="GetVariant" />), made from the same file on first use, with its own render state (the Properties
+	///     block's #if lines see the keywords). Builds list the variants their materials use and the player compiles them
+	///     while it loads (<see cref="ShaderVariantList" />).
 	///     A program loaded from a file on a thread without the GL context (a scene loading in the background) reads
 	///     and prepares its sources there and compiles on first use, or when the scene loader prepares it
 	///     (<see cref="EnsureBuilt" />), on the thread that holds the context.
@@ -58,7 +63,21 @@ namespace LELEngine.Shaders
 		public string SourcePath { get; }
 
 		/// <summary>Root-relative path of the .shader asset, or the engine-relative path of an engine shader; null for inline programs.</summary>
-		public string AssetPath { get; internal set; }
+		public string AssetPath
+		{
+			get => assetPath;
+			internal set
+			{
+				assetPath = value;
+				lock (variants)
+				{
+					foreach (ShaderProgram variant in variants.Values)
+					{
+						variant.AssetPath = value;
+					}
+				}
+			}
+		}
 
 		public string SubAssetName => null;
 
@@ -68,13 +87,19 @@ namespace LELEngine.Shaders
 		/// <summary>This program is the instanced variant (compiled with <see cref="InstancedDefine" />).</summary>
 		public bool IsInstancedVariant { get; }
 
+		/// <summary>The keywords this program was compiled with (sorted; empty for the shader itself).</summary>
+		public IReadOnlyList<string> Keywords => keywords;
+
 		/// <summary>Material parameters declared in the file's Properties block (empty when it has none).</summary>
 		public IReadOnlyList<ShaderProperty> Properties => properties;
+
+		/// <summary>The declared properties that pick variants ([Toggle], [KeywordEnum]), in declaration order.</summary>
+		public IReadOnlyList<ShaderProperty> KeywordProperties => keywordProperties;
 
 		/// <summary>Blend, depth, cull and queue state declared in the Properties block (the defaults when it declares none).</summary>
 		public ShaderRenderState RenderState => renderState;
 
-		/// <summary>Compile and link messages of programs built from sources (<see cref="FromSources" />); empty when clean.</summary>
+		/// <summary>Compile and link messages per stage (files and <see cref="FromSources" />) once built; empty when clean.</summary>
 		public string BuildLog { get; private set; } = "";
 
 		#endregion
@@ -89,10 +114,18 @@ namespace LELEngine.Shaders
 		private readonly Dictionary<string, int> uniformCache = new Dictionary<string, int>();
 		private readonly Dictionary<string, ActiveUniformType> uniformTypes = new Dictionary<string, ActiveUniformType>(StringComparer.Ordinal);
 		private readonly List<ShaderProperty> properties = new List<ShaderProperty>();
+		private readonly List<ShaderProperty> keywordProperties = new List<ShaderProperty>();
 		private readonly ShaderRenderState renderState = new ShaderRenderState();
+		private readonly string[] defines = Array.Empty<string>();
+		private readonly string[] keywords = Array.Empty<string>();
+		private string assetPath;
+		private ShaderProgram baseShader;
 		private ShaderProgram instancedVariant;
 		private bool instancedVariantCreated;
 		private string linkLog = "";
+
+		// Keyword variants by their sorted keywords joined with spaces (only on the shader itself).
+		private readonly Dictionary<string, ShaderProgram> variants = new Dictionary<string, ShaderProgram>(StringComparer.Ordinal);
 
 		#endregion
 
@@ -109,6 +142,15 @@ namespace LELEngine.Shaders
 			Link(shaders);
 		}
 
+		// A program the binary cache linked (FromSources).
+		private ShaderProgram(string name, int linkedProgram)
+		{
+			Name = name;
+			handle = linkedProgram;
+			IsLinked = true;
+			CollectUniforms();
+		}
+
 		/// <summary>
 		///     Loads a multi-stage .shader file from the game's Shaders directory.
 		/// </summary>
@@ -121,10 +163,13 @@ namespace LELEngine.Shaders
 		{
 			Name = defines.Length == 0 ? path : path + " [" + string.Join(", ", defines) + "]";
 			SourcePath = path;
-			AssetPath = AssetDatabase.Resolve(path, "Shaders") ?? path.Replace('\\', '/');
+			assetPath = AssetDatabase.Resolve(path, "Shaders") ?? path.Replace('\\', '/');
 			IsInstancedVariant = Array.IndexOf(defines, InstancedDefine) >= 0;
+			this.defines = defines;
+			keywords = defines.Where(define => define != InstancedDefine).OrderBy(define => define, StringComparer.Ordinal).ToArray();
 			pendingStages = ReadStages(path, defines, properties, renderState, out bool includesInstancing);
 			SupportsInstancing = includesInstancing;
+			keywordProperties.AddRange(properties.Where(property => property.Keywords != null));
 			if (GraphicsThread.HasContext)
 			{
 				Build();
@@ -157,15 +202,34 @@ namespace LELEngine.Shaders
 		/// </summary>
 		public static ShaderProgram FromSources(string name, IEnumerable<KeyValuePair<ShaderType, string>> stages, params string[] defines)
 		{
-			var shaders = new List<Shader>();
-			var log = new System.Text.StringBuilder();
-			bool compiled = true;
+			var sources = new List<KeyValuePair<ShaderType, string>>();
 			string virtualPath = Path.Combine(ShadersRoot, "Generated", name.Replace('/', '_') + ".glsl");
 			foreach (KeyValuePair<ShaderType, string> stage in stages)
 			{
 				var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 				string code = ExpandIncludes(stage.Value.Replace("\r\n", "\n").Split('\n'), virtualPath, visited);
-				var shader = new Shader(InsertPreamble(code, stage.Key, defines ?? Array.Empty<string>()), stage.Key, name);
+				sources.Add(new KeyValuePair<ShaderType, string>(stage.Key, InsertPreamble(code, stage.Key, defines ?? Array.Empty<string>(), ShaderFeatures.Current)));
+			}
+
+			// The driver's binary of the same sources, when an earlier start saved one (ProgramBinaryCache).
+			string cacheKey = ProgramBinaryCache.Enabled ? ProgramBinaryCache.Key(sources) : null;
+			if (cacheKey != null)
+			{
+				int cached = GL.CreateProgram();
+				if (ProgramBinaryCache.TryLoad(cached, cacheKey))
+				{
+					return new ShaderProgram(name, cached);
+				}
+
+				GL.DeleteProgram(cached);
+			}
+
+			var shaders = new List<Shader>();
+			var log = new System.Text.StringBuilder();
+			bool compiled = true;
+			foreach (KeyValuePair<ShaderType, string> source in sources)
+			{
+				var shader = new Shader(source.Value, source.Key, name);
 				if (!Shader.LastCompiled)
 				{
 					compiled = false;
@@ -173,7 +237,7 @@ namespace LELEngine.Shaders
 
 				if (!string.IsNullOrWhiteSpace(Shader.LastLog))
 				{
-					log.Append(StageName(stage.Key)).Append(": ").Append(Shader.LastLog.Trim()).Append('\n');
+					log.Append(StageName(source.Key)).Append(": ").Append(Shader.LastLog.Trim()).Append('\n');
 				}
 
 				shaders.Add(shader);
@@ -196,6 +260,11 @@ namespace LELEngine.Shaders
 			}
 
 			program.BuildLog = log.ToString();
+			if (cacheKey != null && program.linked)
+			{
+				ProgramBinaryCache.Save(program.handle, cacheKey);
+			}
+
 			return program;
 		}
 
@@ -218,7 +287,7 @@ namespace LELEngine.Shaders
 			if (!instancedVariantCreated)
 			{
 				instancedVariantCreated = true;
-				instancedVariant = new ShaderProgram(SourcePath, new[] { InstancedDefine });
+				instancedVariant = new ShaderProgram(SourcePath, defines.Append(InstancedDefine).ToArray());
 				if (!instancedVariant.IsLinked)
 				{
 					Console.WriteLine("[Shader] The instanced variant of " + Name + " does not link; its objects draw one by one.");
@@ -228,6 +297,39 @@ namespace LELEngine.Shaders
 			}
 
 			return instancedVariant;
+		}
+
+		/// <summary>
+		///     The program of this shader compiled with <paramref name="variantKeywords" /> defined: the shader itself for
+		///     none, otherwise a variant made on first use (any thread: it compiles on the thread with the GL context, see
+		///     <see cref="EnsureBuilt" />) and kept with the shader. Keywords the shader never declared still define.
+		/// </summary>
+		public ShaderProgram GetVariant(IEnumerable<string> variantKeywords)
+		{
+			if (baseShader != null)
+			{
+				return baseShader.GetVariant(variantKeywords);
+			}
+
+			string[] sorted = variantKeywords?.Where(keyword => !string.IsNullOrEmpty(keyword)).Distinct(StringComparer.Ordinal).OrderBy(keyword => keyword, StringComparer.Ordinal).ToArray() ?? Array.Empty<string>();
+			if (sorted.Length == 0 || SourcePath == null)
+			{
+				return this;
+			}
+
+			string key = string.Join(" ", sorted);
+			lock (variants)
+			{
+				if (!variants.TryGetValue(key, out ShaderProgram variant))
+				{
+					// The shader's own defines (an engine pass's variant of a file) stay: the keywords add to them.
+					variant = new ShaderProgram(assetPath ?? SourcePath, defines.Concat(sorted).ToArray()) { baseShader = this };
+					variant.assetPath = assetPath;
+					variants.Add(key, variant);
+				}
+
+				return variant;
+			}
 		}
 
 		public void Delete()
@@ -241,6 +343,15 @@ namespace LELEngine.Shaders
 
 			instancedVariant?.Delete();
 			instancedVariant = null;
+			lock (variants)
+			{
+				foreach (ShaderProgram variant in variants.Values)
+				{
+					variant.Delete();
+				}
+
+				variants.Clear();
+			}
 		}
 
 		public int GetAttributeLocation(string name)
@@ -315,6 +426,19 @@ namespace LELEngine.Shaders
 			return !string.IsNullOrEmpty(path) && File.Exists(Path.Combine(ShadersRoot, path.Replace('/', Path.DirectorySeparatorChar)));
 		}
 
+		/// <summary>
+		///     The stages of a .shader file as a context with <paramref name="features" /> compiles them: includes
+		///     expanded, the engine preamble with <paramref name="defines" /> (a variant's keywords, plus
+		///     <see cref="InstancedDefine" /> for its instanced program). No GL calls. With <paramref name="lineDirectives" />
+		///     the code carries #line directives naming each file (GL_GOOGLE_cpp_style_line_directive), so a compiler's
+		///     messages point into the shader file and its includes: offline validation (drivers get the code without them).
+		/// </summary>
+		public static List<KeyValuePair<ShaderType, string>> ReadSources(string path, IEnumerable<string> defines, ShaderFeatures features, bool lineDirectives, out bool includesInstancing)
+		{
+			string[] all = defines?.ToArray() ?? Array.Empty<string>();
+			return ReadStages(path, all, new List<ShaderProperty>(), new ShaderRenderState(), features, lineDirectives, out includesInstancing);
+		}
+
 		/// <summary>Material parameters of a .shader file without compiling it (editor listings).</summary>
 		public static List<ShaderProperty> ReadProperties(string absolutePath)
 		{
@@ -325,7 +449,7 @@ namespace LELEngine.Shaders
 				string trimmed = line.TrimEnd('\r');
 				if (trimmed == PropertiesTag)
 				{
-					ParsePropertiesBlock(block, absolutePath, result, new ShaderRenderState());
+					ParsePropertiesBlock(block, absolutePath, result, new ShaderRenderState(), Array.Empty<string>());
 					break;
 				}
 
@@ -454,6 +578,8 @@ namespace LELEngine.Shaders
 			// Fixed attribute slots - must happen before linking.
 			VertexLayout.BindStandardLocations(handle);
 
+			// The binary stays retrievable for the program binary cache (when it is on).
+			ProgramBinaryCache.PrepareLink(handle);
 			GL.LinkProgram(handle);
 
 			int status;
@@ -526,13 +652,14 @@ namespace LELEngine.Shaders
 		}
 
 		/// <summary>
-		///     Reads a Properties block: render state keyword lines (Blend, ZWrite, ZTest, Cull, Queue) into
-		///     <paramref name="state" />, every other line as a material parameter (see <see cref="ShaderProperty" />).
+		///     Reads a Properties block: render state keyword lines (Blend, ZWrite, ZTest, Cull, Queue, ShadowCaster) into
+		///     <paramref name="state" />, every other line as a material parameter (see <see cref="ShaderProperty" />);
+		///     #if blocks are evaluated over the variant's <paramref name="defines" /> first.
 		/// </summary>
-		private static void ParsePropertiesBlock(IEnumerable<string> lines, string source, List<ShaderProperty> properties, ShaderRenderState state)
+		private static void ParsePropertiesBlock(IEnumerable<string> lines, string source, List<ShaderProperty> properties, ShaderRenderState state, string[] defines)
 		{
 			var propertyLines = new List<string>();
-			foreach (string line in lines)
+			foreach (string line in ShaderConditionals.Filter(lines, new HashSet<string>(defines, StringComparer.Ordinal), source))
 			{
 				if (ShaderRenderState.IsStateLine(line))
 				{
@@ -556,37 +683,85 @@ namespace LELEngine.Shaders
 		{
 			List<KeyValuePair<ShaderType, string>> stages = pendingStages;
 			pendingStages = null;
+			handle = GL.CreateProgram();
+
+			// The driver's binary of the same sources, when an earlier start saved one (ProgramBinaryCache).
+			string cacheKey = ProgramBinaryCache.Enabled ? ProgramBinaryCache.Key(stages) : null;
+			if (cacheKey != null && ProgramBinaryCache.TryLoad(handle, cacheKey))
+			{
+				IsLinked = true;
+				CollectUniforms();
+				BuildLog = "";
+				return;
+			}
+
 			var shaders = new List<Shader>(stages.Count);
+			var log = new System.Text.StringBuilder();
+			bool compiled = true;
 			foreach (KeyValuePair<ShaderType, string> stage in stages)
 			{
 				shaders.Add(new Shader(stage.Value, stage.Key, SourcePath));
+				compiled &= Shader.LastCompiled;
+				if (!string.IsNullOrWhiteSpace(Shader.LastLog))
+				{
+					log.Append(StageName(stage.Key)).Append(": ").Append(Shader.LastLog.Trim()).Append('\n');
+				}
 			}
 
-			handle = GL.CreateProgram();
 			Link(shaders.ToArray());
 			foreach (Shader shader in shaders)
 			{
 				shader.Delete();
+			}
+
+			if (!compiled)
+			{
+				IsLinked = false;
+			}
+
+			if (!string.IsNullOrWhiteSpace(linkLog))
+			{
+				log.Append("link: ").Append(linkLog.Trim()).Append('\n');
+			}
+
+			BuildLog = log.ToString();
+			if (cacheKey != null && linked)
+			{
+				ProgramBinaryCache.Save(handle, cacheKey);
 			}
 		}
 
 		/// <summary>The stages of a .shader file with their includes expanded and the engine preamble (no GL calls: any thread).</summary>
 		private static List<KeyValuePair<ShaderType, string>> ReadStages(string path, string[] defines, List<ShaderProperty> properties, ShaderRenderState state, out bool includesInstancing)
 		{
+			return ReadStages(path, defines, properties, state, ShaderFeatures.Current, false, out includesInstancing);
+		}
+
+		/// <summary>
+		///     <see cref="ReadStages(string, string[], List{ShaderProperty}, ShaderRenderState, out bool)" /> for the given
+		///     native features, with #line directives naming the files when <paramref name="lineDirectives" /> is set.
+		/// </summary>
+		private static List<KeyValuePair<ShaderType, string>> ReadStages(string path, string[] defines, List<ShaderProperty> properties, ShaderRenderState state, ShaderFeatures features, bool lineDirectives, out bool includesInstancing)
+		{
 			var shaders = new List<KeyValuePair<ShaderType, string>>();
 			string fullPath = ResolveShaderPath(path);
 			string instancing = Path.GetFullPath(Path.Combine(ShadersRoot, InstancingInclude));
+			string lineName = lineDirectives ? path.Replace('\\', '/') : null;
 			includesInstancing = false;
 
 			var stage = new List<string>();
+			int lineNumber = 0;
+			int stageFirstLine = 1;
 			foreach (string rawLine in File.ReadAllLines(fullPath))
 			{
+				lineNumber++;
 				string line = rawLine.TrimEnd('\r');
 				if (line == PropertiesTag)
 				{
 					// The Properties block is metadata for materials (parameters and render state), not GLSL.
-					ParsePropertiesBlock(stage, path, properties, state);
+					ParsePropertiesBlock(stage, path, properties, state, defines);
 					stage.Clear();
+					stageFirstLine = lineNumber + 1;
 					continue;
 				}
 
@@ -599,7 +774,7 @@ namespace LELEngine.Shaders
 
 				// Includes expand per stage: a file included by two stages is in both.
 				var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { Path.GetFullPath(fullPath) };
-				string code = ExpandIncludes(stage, fullPath, visited);
+				string code = ExpandIncludes(stage, fullPath, visited, lineName, stageFirstLine);
 				includesInstancing |= visited.Contains(instancing);
 				stage.Clear();
 				if (code.Trim().Length < 10)
@@ -607,19 +782,27 @@ namespace LELEngine.Shaders
 					Console.WriteLine("[Shader] Warning: stage " + type + " in " + path + " is shorter than 10 characters!");
 				}
 
-				shaders.Add(new KeyValuePair<ShaderType, string>(type, InsertPreamble(code, type, defines)));
+				shaders.Add(new KeyValuePair<ShaderType, string>(type, InsertPreamble(code, type, defines, features, lineName, stageFirstLine)));
+				stageFirstLine = lineNumber + 1;
 			}
 
 			return shaders;
 		}
 
 		/// <summary>
-		///     Engine defines after the #version line: the stage, the variant's defines and the native features the
-		///     context has (each with its extension directive, which must precede any code).
+		///     Engine defines after the #version line: the stage, the variant's defines and the native features
+		///     (<paramref name="features" />: each with its extension directive, which must precede any code). With a
+		///     <paramref name="lineName" /> (#line directives) the main file's numbering resumes after them.
 		/// </summary>
-		private static string InsertPreamble(string code, ShaderType type, string[] defines)
+		private static string InsertPreamble(string code, ShaderType type, string[] defines, ShaderFeatures features, string lineName = null, int firstLine = 1)
 		{
 			var preamble = new System.Text.StringBuilder();
+			if (lineName != null)
+			{
+				// #line with file names: the checked copy of offline validation, never what a driver compiles.
+				preamble.Append("#extension GL_GOOGLE_cpp_style_line_directive : require\n");
+			}
+
 			preamble.Append("#define LEL_STAGE_").Append(StageName(type)).Append(" 1\n");
 			foreach (string define in defines)
 			{
@@ -627,9 +810,9 @@ namespace LELEngine.Shaders
 			}
 
 			bool needs460 = false;
-			if (type == ShaderType.VertexShader && GLCapabilities.ShaderDrawParameters)
+			if (type == ShaderType.VertexShader && features.DrawParameters != DrawParametersSupport.None)
 			{
-				if (GLCapabilities.ShaderDrawParametersExtension)
+				if (features.DrawParameters == DrawParametersSupport.Extension)
 				{
 					preamble.Append("#extension GL_ARB_shader_draw_parameters : enable\n#define LEL_BASE_INSTANCE gl_BaseInstanceARB\n");
 				}
@@ -640,13 +823,13 @@ namespace LELEngine.Shaders
 				}
 			}
 
-			if (type == ShaderType.ComputeShader && GLCapabilities.ComputeSubgroups)
+			if (type == ShaderType.ComputeShader && features.ComputeSubgroups)
 			{
 				preamble.Append("#extension GL_KHR_shader_subgroup_basic : enable\n#extension GL_KHR_shader_subgroup_arithmetic : enable\n#define LEL_SUBGROUPS 1\n");
 			}
 
 			// No binding left for the previous world matrices (Engine/Instancing.glsl): motion vectors see static objects.
-			if (type == ShaderType.VertexShader && !Rendering.GpuScene.SupportsPreviousModels)
+			if (type == ShaderType.VertexShader && !features.PreviousModels)
 			{
 				preamble.Append("#define LEL_NO_PREVIOUS_MODELS 1\n");
 			}
@@ -654,7 +837,7 @@ namespace LELEngine.Shaders
 			int version = code.IndexOf("#version", StringComparison.Ordinal);
 			if (version < 0)
 			{
-				return preamble + code;
+				return preamble + LineDirective(lineName, firstLine) + code;
 			}
 
 			int lineEnd = code.IndexOf('\n', version);
@@ -670,7 +853,15 @@ namespace LELEngine.Shaders
 				versionLine = "#version 460";
 			}
 
-			return code.Substring(0, version) + versionLine + "\n" + preamble + (lineEnd < code.Length ? code.Substring(lineEnd + 1) : "");
+			// Nothing is included before #version: the lines up to it are the main file's.
+			string resume = LineDirective(lineName, firstLine + code.Take(version).Count(c => c == '\n') + 1);
+			return code.Substring(0, version) + versionLine + "\n" + preamble + resume + (lineEnd < code.Length ? code.Substring(lineEnd + 1) : "");
+		}
+
+		/// <summary>"#line N \"name\"" (the next line is line N of that file), or nothing without a name.</summary>
+		private static string LineDirective(string name, int line)
+		{
+			return name == null ? "" : "#line " + line + " \"" + name + "\"\n";
 		}
 
 		private static string StageName(ShaderType type)
@@ -691,23 +882,32 @@ namespace LELEngine.Shaders
 		///     Paths resolve against the Shaders root first, then relative to the including file.
 		///     Each file is included at most once per stage.
 		/// </summary>
-		private static string ReadSourceWithIncludes(string fullPath, HashSet<string> visited)
+		private static string ReadSourceWithIncludes(string fullPath, HashSet<string> visited, string lineName = null)
 		{
 			visited.Add(Path.GetFullPath(fullPath));
-			return ExpandIncludes(File.ReadAllLines(fullPath), fullPath, visited);
+			return LineDirective(lineName, 1) + ExpandIncludes(File.ReadAllLines(fullPath), fullPath, visited, lineName, 1);
 		}
 
-		private static string ExpandIncludes(IEnumerable<string> lines, string fullPath, HashSet<string> visited)
+		// With a lineName (#line directives, offline validation) the lines are those of that file from firstLine on: an
+		// included file names itself, the lines after it go back to this one, and a dropped #include keeps its line.
+		private static string ExpandIncludes(IEnumerable<string> lines, string fullPath, HashSet<string> visited, string lineName = null, int firstLine = 1)
 		{
 			var builder = new System.Text.StringBuilder();
-
+			int lineNumber = firstLine - 1;
 			foreach (string rawLine in lines)
 			{
+				lineNumber++;
 				string line = rawLine.Trim();
 				if (!line.StartsWith("#include", StringComparison.Ordinal))
 				{
 					builder.Append(rawLine).Append('\n');
 					continue;
+				}
+
+				if (lineName != null)
+				{
+					// Where the include's code goes (or nothing): this file's line, as numbered.
+					builder.Append('\n');
 				}
 
 				int start = line.IndexOf('"');
@@ -741,8 +941,9 @@ namespace LELEngine.Shaders
 				}
 
 				builder.Append("// ---- begin include: ").Append(includeName).Append('\n');
-				builder.Append(ReadSourceWithIncludes(includePath, visited));
+				builder.Append(ReadSourceWithIncludes(includePath, visited, lineName != null ? includeName : null));
 				builder.Append("// ---- end include: ").Append(includeName).Append('\n');
+				builder.Append(LineDirective(lineName, lineNumber + 1));
 			}
 
 			return builder.ToString();

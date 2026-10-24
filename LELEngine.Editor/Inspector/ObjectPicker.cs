@@ -541,7 +541,42 @@ namespace LELEngine.Editor
 				entries.Add(new Entry { Path = path, Label = Path.GetFileName(path), Detail = path, Icon = path.EndsWith(Prefab.Extension, StringComparison.OrdinalIgnoreCase) ? IconKind.Prefab : IconKind.Asset });
 			}
 
+			AddBuiltinEntries(entries);
 			return entries;
+		}
+
+		/// <summary>The engine's built-in assets of the type (primitive meshes and models, the default material): always there, read-only.</summary>
+		private static void AddBuiltinEntries(List<Entry> entries)
+		{
+			bool meshes = type == typeof(Mesh);
+			bool models = type == typeof(Model);
+			bool materials = type == typeof(Shaders.Material);
+			if (!meshes && !models && !materials)
+			{
+				return;
+			}
+
+			foreach (string path in AssetDatabase.FindEngineAssets(materials ? new[] { Shaders.Material.Extension } : ModelAssets.Extensions))
+			{
+				string label = Path.GetFileName(path) + "  (built-in)";
+				if (!meshes)
+				{
+					entries.Add(new Entry { Path = path, Label = label, Detail = "Built-in " + path, Icon = IconKind.Asset });
+					continue;
+				}
+
+				try
+				{
+					foreach (Mesh mesh in ModelAssets.Load(path).Meshes)
+					{
+						entries.Add(new Entry { Path = path, SubAsset = mesh.SubAssetName, Label = label, Detail = "Built-in " + path, Icon = IconKind.Asset });
+					}
+				}
+				catch (Exception e)
+				{
+					Debug.LogWarning($"[Editor] Cannot list the meshes of {path}: {e.Message}");
+				}
+			}
 		}
 
 		private static void Pick(Entry entry)

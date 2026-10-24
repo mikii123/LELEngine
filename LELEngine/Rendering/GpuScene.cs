@@ -200,12 +200,12 @@ namespace LELEngine.Rendering
 				}
 
 				Material material = part.Material;
-				ShaderProgram instanced = material?.UsingShader?.GetInstancedVariant();
+				ShaderProgram instanced = material?.Program?.GetInstancedVariant();
 				if (instanced == null)
 				{
 					// Depth passes still draw it from the tables; the opaque pass draws it per object.
 					unbucketed.Add(part);
-					if (material?.UsingShader != null)
+					if (material?.Program != null)
 					{
 						perObject.Add(part);
 					}
@@ -397,7 +397,7 @@ namespace LELEngine.Rendering
 				IndexCount = (uint)range.IndexCount,
 				FirstIndex = (uint)(mesh.PoolFirstIndex + range.FirstIndex),
 				BaseVertex = (uint)mesh.PoolBaseVertex,
-				Flags = renderer.CastShadows ? CastsShadowsFlag : 0u,
+				Flags = renderer.CastShadows && renderer.IsSubMeshShadowCaster(part.SubMesh) ? CastsShadowsFlag : 0u,
 				Material = (uint)MaterialIndex(part.Material),
 				Bucket = bucket < 0 ? uint.MaxValue : (uint)bucket,
 				LayerBit = 1u << (renderer.gameObject.layer & 31)

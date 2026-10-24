@@ -146,7 +146,7 @@ public sealed class MeshRenderer : Behaviour
 		for (int i = 0; i < mesh.SubMeshCount; i++)
 		{
 			Material m = GetMaterial(i);
-			ShaderProgram shader = m?.UsingShader;
+			ShaderProgram shader = m?.Program;
 			if (shader == null || m.IsTransparent)
 			{
 				continue;
@@ -170,12 +170,13 @@ public sealed class MeshRenderer : Behaviour
 	public void RenderSubMesh(int subMesh)
 	{
 		Material m = GetMaterial(subMesh);
-		if (mesh == null || m?.UsingShader == null)
+		ShaderProgram program = m?.Program;
+		if (mesh == null || program == null)
 		{
 			return;
 		}
 
-		transform.SetModelMatrix(m.UsingShader);
+		transform.SetModelMatrix(program);
 		m.SetUniforms();
 		DrawSubMesh(subMesh);
 	}
@@ -187,25 +188,23 @@ public sealed class MeshRenderer : Behaviour
 	/// </summary>
 	public void RenderWith(ShaderProgram program)
 	{
-		if (mesh == null)
-		{
-			return;
-		}
+		RenderWith(program, false);
+	}
 
-		transform.SetModelMatrix(program);
-		if (!HasTransparentParts)
-		{
-			DrawGeometry();
-			return;
-		}
+	/// <summary>
+	///     <see cref="RenderWith(ShaderProgram)" /> for shadow maps: the opaque sub-meshes whose material casts shadows
+	///     (not those of a shader with ShadowCaster Off).
+	/// </summary>
+	public void RenderShadowCastersWith(ShaderProgram program)
+	{
+		RenderWith(program, true);
+	}
 
-		for (int i = 0; i < mesh.SubMeshCount; i++)
-		{
-			if (!IsSubMeshTransparent(i))
-			{
-				DrawSubMesh(i);
-			}
-		}
+	/// <summary>The sub-mesh's material casts shadows (no material: it does).</summary>
+	public bool IsSubMeshShadowCaster(int subMesh)
+	{
+		Material m = GetMaterial(subMesh);
+		return m == null || m.RenderState.CastShadows;
 	}
 
 	/// <summary>One sub-mesh with an externally provided program (only the model matrix is set).</summary>
@@ -230,6 +229,39 @@ public sealed class MeshRenderer : Behaviour
 	public void DrawSubMesh(int subMesh)
 	{
 		LELEngine.Rendering.GeometryPool.DrawSubMesh(mesh, subMesh);
+	}
+
+	#endregion
+
+	#region PrivateMethods
+
+	private void RenderWith(ShaderProgram program, bool shadowCastersOnly)
+	{
+		if (mesh == null)
+		{
+			return;
+		}
+
+		transform.SetModelMatrix(program);
+		bool every = !HasTransparentParts;
+		for (int i = 0; every && shadowCastersOnly && i < PartCount; i++)
+		{
+			every = IsSubMeshShadowCaster(i);
+		}
+
+		if (every)
+		{
+			DrawGeometry();
+			return;
+		}
+
+		for (int i = 0; i < mesh.SubMeshCount; i++)
+		{
+			if (!IsSubMeshTransparent(i) && (!shadowCastersOnly || IsSubMeshShadowCaster(i)))
+			{
+				DrawSubMesh(i);
+			}
+		}
 	}
 
 	#endregion

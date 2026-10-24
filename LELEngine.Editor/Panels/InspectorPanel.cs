@@ -247,7 +247,7 @@ namespace LELEngine.Editor
 				bool editable = material.AssetPath != null && !AssetDatabase.IsEngineResource(material.AssetPath) && File.Exists(AssetDatabase.ToAbsolute(material.AssetPath));
 				ImGui.Spacing();
 				ImGui.PushID("material" + i);
-				string title = (material.name ?? "Material") + (editable ? "" : material.AssetPath == null ? "  (runtime material)" : "  (engine material)");
+				string title = (material.name ?? "Material") + (editable ? "" : material.AssetPath == null ? "  (runtime material)" : "  (built-in, read-only)");
 				bool open = ImGui.CollapsingHeader(title + "###material", ImGuiTreeNodeFlags.DefaultOpen);
 				TestAnchors.RecordItem("material:" + (material.name ?? i.ToString()));
 				if (open)

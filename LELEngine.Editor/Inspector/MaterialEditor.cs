@@ -44,9 +44,20 @@ namespace LELEngine.Editor
 				return changed;
 			}
 
-			if (!shader.IsLinked)
+			// The variant the material's keywords pick (compiled here on first use).
+			ShaderProgram program = material.Program;
+			if (program.Keywords.Count > 0)
 			{
-				ImGui.TextColored(EditorStyle.Error, "The shader does not compile (see the console).");
+				ImGui.TextDisabled("Variant: " + string.Join(" ", program.Keywords));
+				if (ImGui.IsItemHovered())
+				{
+					ImGui.SetTooltip("The keywords of the material's toggles and keyword enums: a program of its own (game builds compile the ones their materials use).");
+				}
+			}
+
+			if (!program.IsLinked)
+			{
+				ImGui.TextColored(EditorStyle.Error, program.Keywords.Count > 0 ? "This variant does not compile (see the console)." : "The shader does not compile (see the console).");
 			}
 
 			changed |= DrawRenderQueue(material, context);
@@ -260,6 +271,16 @@ namespace LELEngine.Editor
 		{
 			string name = declared.Name;
 			string label = string.IsNullOrEmpty(declared.DisplayName) ? name : declared.DisplayName;
+			if (declared.IsKeywordEnum)
+			{
+				return DrawKeywordEnum(material, declared, label, context);
+			}
+
+			if (declared.IsToggle)
+			{
+				return DrawKeywordToggle(material, declared, label, context);
+			}
+
 			switch (declared.Type)
 			{
 				case ShaderPropertyType.Color:
@@ -373,6 +394,74 @@ namespace LELEngine.Editor
 			}
 
 			return changed;
+		}
+
+		// [KeywordEnum]: a combo of the options; the value is the option's index (it picks the variant).
+		private static bool DrawKeywordEnum(Material material, ShaderProperty declared, string label, InspectorContext context)
+		{
+			FieldDrawer.Label(label, null, context);
+			int current = declared.OptionIndex(material.GetFloat(declared.Name, declared.DefaultValue.X));
+			bool changed = false;
+			if (ImGui.BeginCombo("##v", declared.EnumOptions[current]))
+			{
+				for (int i = 0; i < declared.EnumOptions.Length; i++)
+				{
+					if (ImGui.Selectable(declared.EnumOptions[i], i == current) && i != current)
+					{
+						context.BeginEdit();
+						SetKeywordValue(material, declared, i);
+						context.EndEdit();
+						changed = true;
+					}
+
+					TestAnchors.RecordItem("materialoption:" + declared.Name + "/" + i);
+					if (ImGui.IsItemHovered())
+					{
+						ImGui.SetTooltip("Keyword " + declared.Keywords[i]);
+					}
+				}
+
+				ImGui.EndCombo();
+			}
+			else
+			{
+				TestAnchors.RecordItem("materialfield:" + declared.Name);
+			}
+
+			return changed;
+		}
+
+		// [Toggle]: a checkbox (1 / 0) that switches the keyword.
+		private static bool DrawKeywordToggle(Material material, ShaderProperty declared, string label, InspectorContext context)
+		{
+			FieldDrawer.Label(label, null, context);
+			bool value = material.GetFloat(declared.Name, declared.DefaultValue.X) != 0f;
+			bool changed = ImGui.Checkbox("##v", ref value);
+			TestAnchors.RecordItem("materialfield:" + declared.Name);
+			if (ImGui.IsItemHovered())
+			{
+				ImGui.SetTooltip("Keyword " + declared.Keywords[0]);
+			}
+
+			context.Track(changed);
+			if (changed)
+			{
+				SetKeywordValue(material, declared, value ? 1 : 0);
+			}
+
+			return changed;
+		}
+
+		private static void SetKeywordValue(Material material, ShaderProperty declared, int value)
+		{
+			if (declared.Type == ShaderPropertyType.Int)
+			{
+				material.SetInt(declared.Name, value);
+			}
+			else
+			{
+				material.SetFloat(declared.Name, value);
+			}
 		}
 
 		private static bool DrawBool(Material material, string name, string label, InspectorContext context)
