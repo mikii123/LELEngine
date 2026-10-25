@@ -176,9 +176,11 @@ namespace LELEngine.Shaders
 				return;
 			}
 
-			if (textureUnit >= Material.MaxTextureUnits)
+			// textureUnit counts the material's textures; past the first 8 they go above the engine's units.
+			int unit = Material.TextureUnitAt(textureUnit);
+			if (unit < 0)
 			{
-				Debug.LogWarning($"[Material] More than {Material.MaxTextureUnits} textures; '{name}' is not bound");
+				Debug.LogWarning($"[Material] More than {Material.MaxTextures} textures; '{name}' is not bound");
 				return;
 			}
 
@@ -204,9 +206,9 @@ namespace LELEngine.Shaders
 				handle = fallback.Handle;
 			}
 
-			GL.ActiveTexture(TextureUnit.Texture0 + textureUnit);
+			GL.ActiveTexture(TextureUnit.Texture0 + unit);
 			GL.BindTexture(target, handle);
-			GL.Uniform1(location, textureUnit);
+			GL.Uniform1(location, unit);
 			textureUnit++;
 		}
 

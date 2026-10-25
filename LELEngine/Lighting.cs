@@ -18,6 +18,12 @@ namespace LELEngine
 		public static LightProperties Ambient = new LightProperties("LAmbient.ambColor", "LAmbient.ambStrength");
 		public static LightProperties Specular = new LightProperties("LSpecular.viewPos");
 
+		/// <summary>
+		///     Uniform every material receives with its lighting (vec4 lelTime, Unity's _Time): the game clock in seconds
+		///     (<see cref="Time.timeD" />) / 20, x 1, x 2, x 3.
+		/// </summary>
+		public const string TimeName = "lelTime";
+
 		/// <summary>Live settings of the active scene (see <see cref="SceneSettings.Activate" />).</summary>
 		public static EnvironmentSettings Environment = new EnvironmentSettings();
 
@@ -236,6 +242,10 @@ namespace LELEngine
 			program.SetFloat(Specular.StrengthName, Specular.Strength);
 			program.SetFloat(Specular.ShineName, Specular.Shine);
 			program.SetVector3(Specular.DirName, camPos);
+
+			// Unity's _Time: the game clock (Time.timeD) / 20, x 1, x 2, x 3.
+			float time = (float)Time.timeD;
+			program.SetVector4(TimeName, new Vector4(time / 20f, time, time * 2f, time * 3f));
 
 			SetShadowUniforms(program, receiveShadows);
 			SetGIUniforms(program, receiveGI);

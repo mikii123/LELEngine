@@ -25,6 +25,9 @@ namespace LELEngine.Shaders
 		/// </summary>
 		public const int InstanceIndexLocation = 6;
 
+		/// <summary>The second texture coordinate set (<see cref="Vertex.texcoord2" />).</summary>
+		public const int TexCoord2Location = 7;
+
 		public const string PositionName = "vPosition";
 		public const string ColorName = "vColor";
 		public const string TexCoordName = "vTexCoord";
@@ -32,6 +35,7 @@ namespace LELEngine.Shaders
 		public const string TangentName = "vTangent";
 		public const string BitangentName = "vBitangent";
 		public const string InstanceIndexName = "vInstanceIndex";
+		public const string TexCoord2Name = "vTexCoord2";
 
 		#endregion
 
@@ -49,6 +53,7 @@ namespace LELEngine.Shaders
 			GL.BindAttribLocation(programHandle, TangentLocation, TangentName);
 			GL.BindAttribLocation(programHandle, BitangentLocation, BitangentName);
 			GL.BindAttribLocation(programHandle, InstanceIndexLocation, InstanceIndexName);
+			GL.BindAttribLocation(programHandle, TexCoord2Location, TexCoord2Name);
 		}
 
 		/// <summary>
@@ -64,7 +69,8 @@ namespace LELEngine.Shaders
 				new VertexAttribute(TexCoordLocation, 2, VertexAttribPointerType.Float, Vertex.Size, (3 + 4) * f),
 				new VertexAttribute(NormalLocation, 3, VertexAttribPointerType.Float, Vertex.Size, (3 + 4 + 2) * f),
 				new VertexAttribute(TangentLocation, 3, VertexAttribPointerType.Float, Vertex.Size, (3 + 4 + 2 + 3) * f),
-				new VertexAttribute(BitangentLocation, 3, VertexAttribPointerType.Float, Vertex.Size, (3 + 4 + 2 + 3 + 3) * f)
+				new VertexAttribute(BitangentLocation, 3, VertexAttribPointerType.Float, Vertex.Size, (3 + 4 + 2 + 3 + 3) * f),
+				new VertexAttribute(TexCoord2Location, 2, VertexAttribPointerType.Float, Vertex.Size, (3 + 4 + 2 + 3 + 3 + 3) * f)
 			};
 		}
 

@@ -175,7 +175,7 @@ namespace LELEngine
 					bt = -bt;
 				}
 
-				result[i] = new Vertex(v.position, n, v.texcoord, t, bt, v.color);
+				result[i] = new Vertex(v.position, n, v.texcoord, t, bt, v.color, v.texcoord2);
 			}
 
 			return result;

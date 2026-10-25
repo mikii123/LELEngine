@@ -19,8 +19,18 @@ namespace LELEngine.Shaders
 
 		public const string Extension = ".material";
 
-		/// <summary>Texture units a material may use (the engine binds its own maps on the units above).</summary>
+		/// <summary>
+		///     The texture units below the engine's own (it binds its maps on the units from here up to
+		///     <see cref="ExtraTextureUnitStart" />): a material's first textures. Further ones go on the units from
+		///     <see cref="ExtraTextureUnitStart" /> the context has (<see cref="TextureUnitAt" />).
+		/// </summary>
 		public const int MaxTextureUnits = 8;
+
+		/// <summary>The first texture unit above the engine's reserved ones: a material's ninth texture and on.</summary>
+		public const int ExtraTextureUnitStart = 23;
+
+		/// <summary>How many textures a material can bind on this context (8 below the engine's units, the rest above them).</summary>
+		public static int MaxTextures => MaxTextureUnits + Math.Max(0, Rendering.GLCapabilities.MaxTextureUnits - ExtraTextureUnitStart);
 
 		/// <summary>The engine's lit shader: new materials and unreadable material files use it.</summary>
 		public const string DefaultShaderPath = "Engine/Lit.shader";
@@ -643,6 +653,21 @@ namespace LELEngine.Shaders
 		{
 			string n = uniformName.ToLowerInvariant();
 			return !(n.Contains("normal") || n.Contains("bump") || n.Contains("spec") || n.Contains("rough") || n.Contains("metal") || n.Contains("mask") || n.Contains("height"));
+		}
+
+		/// <summary>
+		///     The texture unit of a material's texture number <paramref name="index" /> (in the order they are bound): 0..7
+		///     below the engine's units, then <see cref="ExtraTextureUnitStart" /> and up; -1 past what the context has.
+		/// </summary>
+		public static int TextureUnitAt(int index)
+		{
+			if (index < MaxTextureUnits)
+			{
+				return index;
+			}
+
+			int unit = ExtraTextureUnitStart + index - MaxTextureUnits;
+			return unit < Rendering.GLCapabilities.MaxTextureUnits ? unit : -1;
 		}
 
 		public static bool IsNormalMapName(string uniformName)

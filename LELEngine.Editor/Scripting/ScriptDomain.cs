@@ -1,8 +1,11 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Reflection;
 using System.Runtime.Loader;
+using System.Security.Cryptography;
+using System.Text;
 using System.Threading.Tasks;
 using LELEngine.Serialization;
 
@@ -47,6 +50,10 @@ namespace LELEngine.Editor
 		private volatile bool sourcesChanged;
 		private double changedAt = double.MinValue;
 		private Task<BuildResult> buildTask;
+
+		// The scripts the running build compiles (SourceStamp when it started) and whether it builds the editor scripts.
+		private string buildSources;
+		private bool buildIncludesEditor;
 		private BuildResult pendingReload;
 		private GameLoadContext context;
 		private byte[] assemblyBytes;
@@ -138,7 +145,7 @@ namespace LELEngine.Editor
 
 		public static bool HasScripts(ProjectInfo project)
 		{
-			return NewestSource(project) != DateTime.MinValue;
+			return Directory.Exists(project.AssetsPath) && Directory.EnumerateFiles(project.AssetsPath, "*.cs", SearchOption.AllDirectories).Any();
 		}
 
 		/// <summary>Some script lies in an Editor folder.</summary>
@@ -161,28 +168,79 @@ namespace LELEngine.Editor
 		}
 
 		/// <summary>
-		///     The editor build exists and is newer than every script and the generated project (with
-		///     <paramref name="includeEditor" />: Game.Editor.dll too).
+		///     The editor build exists, was built from the scripts as they are now (<see cref="SourceStamp" />) and is newer
+		///     than the generated project (with <paramref name="includeEditor" />: Game.Editor.dll too).
 		/// </summary>
 		public static bool IsAssemblyCurrent(ProjectInfo project, bool includeEditor = false)
 		{
-			DateTime newest = NewestSource(project);
+			string sources = SourceStamp(project);
 			string projectFile = ProjectGenerator.ProjectFile(project);
 			string packages = Path.ChangeExtension(projectFile, ".packages.props");
-			return IsBuildCurrent(AssemblyFile(project), newest, projectFile, packages)
-				&& (!includeEditor || IsBuildCurrent(EditorAssemblyFile(project), newest, ProjectGenerator.EditorProjectFile(project), packages));
+			return IsBuildCurrent(AssemblyFile(project), sources, projectFile, packages)
+				&& (!includeEditor || IsBuildCurrent(EditorAssemblyFile(project), sources, ProjectGenerator.EditorProjectFile(project), packages));
 		}
 
-		private static bool IsBuildCurrent(string dll, DateTime newestSource, string projectFile, string packages)
+		/// <summary>
+		///     The scripts as one value: every .cs file under Assets with its size and modification time. A successful build
+		///     records the value it started from next to its assemblies (<see cref="RecordSources" />), and the build stays
+		///     current while the scripts give the same value: a deleted, added, renamed or moved script makes it stale, as
+		///     does an edit (a check of the newest modification time alone missed deletions and moves).
+		/// </summary>
+		public static string SourceStamp(ProjectInfo project)
 		{
-			if (!File.Exists(dll))
+			if (!Directory.Exists(project.AssetsPath))
+			{
+				return "";
+			}
+
+			var entries = new System.Collections.Generic.List<string>();
+			foreach (string file in Directory.EnumerateFiles(project.AssetsPath, "*.cs", SearchOption.AllDirectories))
+			{
+				var info = new FileInfo(file);
+				entries.Add(Path.GetRelativePath(project.AssetsPath, file).Replace('\\', '/') + "|" + info.Length + "|" + info.LastWriteTimeUtc.Ticks);
+			}
+
+			entries.Sort(StringComparer.Ordinal);
+			return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(string.Join("\n", entries))));
+		}
+
+		/// <summary>
+		///     Records the scripts a successful build compiled (<paramref name="sources" />: <see cref="SourceStamp" /> when
+		///     it started) next to Game.dll, and next to Game.Editor.dll when it built the editor scripts too.
+		/// </summary>
+		public static void RecordSources(ProjectInfo project, string sources, bool includeEditor)
+		{
+			try
+			{
+				File.WriteAllText(SourcesFile(AssemblyFile(project)), sources);
+				if (includeEditor)
+				{
+					File.WriteAllText(SourcesFile(EditorAssemblyFile(project)), sources);
+				}
+			}
+			catch (IOException e)
+			{
+				// Without the record the next start builds again: slower, never stale.
+				Debug.LogWarning("[Scripts] Cannot record the built scripts: " + e.Message);
+			}
+		}
+
+		// Library/ScriptAssemblies/Game.dll.sources: the SourceStamp of the scripts the assembly was built from.
+		private static string SourcesFile(string dll)
+		{
+			return dll + ".sources";
+		}
+
+		private static bool IsBuildCurrent(string dll, string sources, string projectFile, string packages)
+		{
+			string record = SourcesFile(dll);
+			if (!File.Exists(dll) || !File.Exists(record) || File.ReadAllText(record) != sources)
 			{
 				return false;
 			}
 
 			DateTime built = File.GetLastWriteTimeUtc(dll);
-			return newestSource <= built
-				&& (!File.Exists(projectFile) || File.GetLastWriteTimeUtc(projectFile) <= built)
+			return (!File.Exists(projectFile) || File.GetLastWriteTimeUtc(projectFile) <= built)
 				&& (!File.Exists(packages) || File.GetLastWriteTimeUtc(packages) <= built);
 		}
 
@@ -285,6 +343,9 @@ namespace LELEngine.Editor
 			StatusText = "Compiling scripts...";
 			string file = projectFile;
 			bool editorScripts = HasEditorScripts(project);
+			// The scripts as the build starts: an edit made while it runs is newer than what it compiles.
+			buildSources = SourceStamp(project);
+			buildIncludesEditor = editorScripts;
 			buildTask = Task.Run(() => ScriptBuilder.Build(file, "Debug", null, editorScripts));
 		}
 
@@ -304,6 +365,7 @@ namespace LELEngine.Editor
 			}
 
 			HasErrors = false;
+			RecordSources(project, buildSources, buildIncludesEditor);
 			StatusText = $"Scripts compiled ({result.Seconds:0.0} s)";
 			if (result.WovenChecks > 0)
 			{
@@ -516,26 +578,6 @@ namespace LELEngine.Editor
 
 			// One console entry for every line (written line by line, the paths would be plain log entries without the warning's color).
 			editor.Log.Add(text.ToString(), LogType.Warning);
-		}
-
-		private static DateTime NewestSource(ProjectInfo project)
-		{
-			DateTime newest = DateTime.MinValue;
-			if (!Directory.Exists(project.AssetsPath))
-			{
-				return newest;
-			}
-
-			foreach (string file in Directory.EnumerateFiles(project.AssetsPath, "*.cs", SearchOption.AllDirectories))
-			{
-				DateTime time = File.GetLastWriteTimeUtc(file);
-				if (time > newest)
-				{
-					newest = time;
-				}
-			}
-
-			return newest;
 		}
 
 		private static BuildResult Failed(Exception exception)

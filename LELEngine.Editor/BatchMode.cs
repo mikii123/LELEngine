@@ -246,6 +246,7 @@ namespace LELEngine.Editor
 			else
 			{
 				Debug.Log(withEditor ? "[Batch] Compiling scripts (with the editor scripts)..." : "[Batch] Compiling scripts...");
+				string sources = ScriptDomain.SourceStamp(project);
 				BuildResult result = ScriptBuilder.Build(ProjectGenerator.ProjectFile(project), "Debug", null, withEditor);
 				foreach (BuildDiagnostic diagnostic in result.Diagnostics)
 				{
@@ -265,6 +266,7 @@ namespace LELEngine.Editor
 					return false;
 				}
 
+				ScriptDomain.RecordSources(project, sources, withEditor);
 				Debug.Log($"[Batch] Scripts compiled ({result.Seconds:0.0} s), {result.WovenChecks} null checks woven");
 				assembly = result.Assembly;
 				symbols = result.Symbols;

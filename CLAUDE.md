@@ -108,6 +108,13 @@
   context, so Game.Editor.dll could not resolve Game.dll) and lets `-executeMethod` find types of Game.Editor.dll
   (`BatchMode.editorScripts`; not registered in `TypeRegistry`, no `EditorExtensions` in batch: editor windows and
   menus are not available there, plain static methods are).
+- Whether the built scripts are current (editor start, batch mode; `ScriptDomain.IsAssemblyCurrent`): a successful
+  build records the scripts it compiled next to its assemblies (`Game.dll.sources`, `Game.Editor.dll.sources`: a
+  SHA-256 of every .cs under Assets with its size and modification time, taken when the build starts), and the build is
+  current while the scripts give the same value and the generated projects are older than it (2026-10-25). Before, only
+  the newest script time counted, so a deleted, renamed or moved script left the old types loaded ("Scripts are up to
+  date"). A build without the record (older engines, an IDE build) is built again once. Running editors also rebuild
+  on the file watcher's events; `dotnet build` itself drops deleted files (the SDK hashes its Compile items).
 - Leak report: a context that survives its unload check (`ScriptDomain.VerifyUnload`, 40 GC passes in the
   background) is traced on the main thread (`ScriptDomain.Update` -> `LeakTracer`, `LELEngine.Editor/Scripting`):
   breadth-first from the static fields of the engine and the assemblies referencing it (closed generic base classes
@@ -442,6 +449,39 @@
   (yaw), 2026-10-22; the GI's sky lookup (`Sky.glsl`, `giSkyboxTilt` / `giSkyboxRotation` from `SkyEnvironment`) does
   the same. The yaw turns the opposite way to Unity's skybox `_Rotation`. Unity skies (left-handed) seen from a
   right-handed camera come out mirrored; mirror the faces (flip each horizontally, swap +X / -X) to keep the image.
+
+## Second UV set, textures past 8, lelTime, FBX pivots and tangents, sRGB output (2026-10-25)
+
+Added for New Frontier's port of the FORGE3D planets (Unity shaders reading uv2, ten textures, `_Time`):
+- The display transform (`BuiltinShaders.TonemapFragment`, after exposure and the optional ACES) encodes with the exact
+  sRGB transfer function (linear below 0.0031308, 1.055 x^(1/2.4) - 0.055 above), the curve sRGB textures are decoded
+  with and Unity encodes with; it was x^(1/2.2), which lifted the deep shadows (up to 9 / 255 against Unity's frames).
+  Verified on TestGame: the new frames are the old ones re-encoded (vct and gi=0 within 1 / 255; lumen, refraction
+  and trails within their run-to-run noise). The images in docs/ were made before: their darkest parts are a little
+  brighter than the engine draws now.
+- `Vertex.texcoord2` (Unity's uv2, zero when a mesh has none): attribute `vTexCoord2`, location 7
+  (`VertexLayout.TexCoord2Location`), after the bitangent (the other offsets are unchanged; `Vertex.Size` 80 bytes).
+  The Assimp backend reads texture coordinate channel 1. Imported-model format 2 (`ModelAssets.FormatVersion`): every
+  model imports once again. Anything that builds vertices from others (`WithTangents`, the import's scaling) keeps it.
+- Material textures past 8 (`Material.TextureUnitAt`): a material's first 8 textures go on units 0..7, the rest on
+  `Material.ExtraTextureUnitStart` (23, above the engine's reserved units 8..22) and up, as far as the context has
+  units (`Material.MaxTextures`: 8 + GL_MAX_TEXTURE_IMAGE_UNITS - 23, 17 on 32-unit GPUs); past that a warning.
+- `uniform vec4 lelTime` (`Lighting.TimeName`, set with the other lighting uniforms): Unity's `_Time` from
+  `Time.timeD`: t / 20, t, 2t, 3t. It runs in edit mode too (the window advances `Time.timeD`); play mode restarts it.
+- Assimp import (backend version 2):
+  - `IMPORT_FBX_PRESERVE_PIVOTS` on, and `Visit` folds the `<model>_$AssimpFbx$_<part>` helper chain back into one
+    node per FBX model: the transform parts (pre / post rotation, pivots, offsets) make its local transform, the
+    geometric ones (`Geometric*`, 3ds Max object offsets: they move the model's own geometry, not its children) are
+    baked into its mesh (positions, normals by the inverse transpose, triangles turned round when they mirror), as
+    Unity does. Before, Assimp merged them into the node, so a mesh used on its own lost them (FORGE3D's ring: -90
+    degrees about X and x2.54 that Unity has in the mesh). Children hanging off the chain keep the node as parent.
+  - Tangents come from `Mesh.WithTangents` (as for .obj files), no `CalculateTangentSpace`: Assimp's bitangents point
+    along -v, the engine's lit shaders (and Unity) read the normal map's green along +v, so normal-mapped FBX models
+    had their bumps lit upside down. Identical vertices that only Assimp's tangents had split now join (ak.fbx 7380 ->
+    7284 vertices; nodes and bounds unchanged).
+- Verified: TestGame A/B against HEAD (lumen, vct, gi=0, refraction, trails): identical or below run-to-run noise;
+  ak.fbx / Axe_HighPoly.FBX imported by the old and new backend (same nodes and bounds, flipped bitangents); New
+  Frontier's planets against Unity's renders (40 shots, mean difference 0.3..4 / 255, the rest texture compression).
 
 ## Input system (Rewired-like, 2026-10-22)
 

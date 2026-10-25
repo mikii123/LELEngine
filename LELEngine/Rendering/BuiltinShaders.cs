@@ -56,7 +56,8 @@ void main()
 ";
 
 		/// <summary>
-		///     HDR scene color to display: exposure, ACES tonemap, gamma.
+		///     HDR scene color to display: exposure, ACES tonemap, the sRGB transfer function (the exact curve, as sRGB
+		///     textures are decoded with and Unity encodes with).
 		/// </summary>
 		public const string TonemapFragment = @"
 #version 330 core
@@ -84,11 +85,17 @@ float Dither(vec2 pixel)
 	return fract(52.9829189 * fract(dot(pixel, vec2(0.06711056, 0.00583715))));
 }
 
+// The sRGB transfer function (IEC 61966-2-1): linear near black, a 2.4 power above.
+vec3 LinearToSrgb(vec3 c)
+{
+	return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(vec3(0.0031308), c));
+}
+
 void main()
 {
 	vec3 hdr = texture(SceneColor, fUV).rgb * Exposure;
 	vec3 color = TonemapEnabled != 0 ? ACESFilm(hdr) : clamp(hdr, 0.0, 1.0);
-	color = pow(color, vec3(1.0 / 2.2));
+	color = LinearToSrgb(color);
 	// Half an 8-bit step of static dither before quantisation: smooth gradients lose their contour bands, and
 	// a slowly drifting GI value no longer shows as a crawling band edge but as a gradual change of the pattern.
 	color += (Dither(gl_FragCoord.xy) - 0.5) / 255.0;

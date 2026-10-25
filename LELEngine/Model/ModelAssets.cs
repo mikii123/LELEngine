@@ -59,7 +59,8 @@ namespace LELEngine
 
 		#region PrivateFields
 
-		private const int FormatVersion = 1;
+		// 2 (2026-10-25): vertices carry a second UV set (Vertex.texcoord2).
+		private const int FormatVersion = 2;
 		private static readonly byte[] Magic = Encoding.ASCII.GetBytes("LELMODEL");
 		private static readonly object sync = new object();
 		private static readonly Dictionary<string, Model> models = new Dictionary<string, Model>(StringComparer.OrdinalIgnoreCase);
@@ -503,7 +504,7 @@ namespace LELEngine
 					for (int i = 0; i < mesh.Vertices.Length; i++)
 					{
 						Vertex v = mesh.Vertices[i];
-						mesh.Vertices[i] = new Vertex(v.position * scale, v.normal, v.texcoord, v.tangent, v.bitangent, v.color);
+						mesh.Vertices[i] = new Vertex(v.position * scale, v.normal, v.texcoord, v.tangent, v.bitangent, v.color, v.texcoord2);
 					}
 				}
 

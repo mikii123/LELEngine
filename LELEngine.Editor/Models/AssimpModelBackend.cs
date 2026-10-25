@@ -39,7 +39,8 @@ namespace LELEngine.Editor
 
 		#region PublicFields
 
-		public int Version => 1;
+		// 2: the second UV set (texture coordinate channel 1), FBX geometric transforms in the meshes, tangents along +u / +v.
+		public int Version => 2;
 
 		#endregion
 
@@ -54,7 +55,9 @@ namespace LELEngine.Editor
 		{
 			assimp ??= Assimp.GetApi();
 			string file = AssetDatabase.ToAbsolute(assetPath);
-			PostProcessSteps steps = PostProcessSteps.Triangulate | PostProcessSteps.JoinIdenticalVertices | PostProcessSteps.CalculateTangentSpace
+			// No CalculateTangentSpace: Assimp's bitangents point along -v (the engine's lit shaders and Unity read the normal
+			// map's green along +v); tangents come from Mesh.WithTangents, as for .obj files.
+			PostProcessSteps steps = PostProcessSteps.Triangulate | PostProcessSteps.JoinIdenticalVertices
 				| PostProcessSteps.SortByPrimitiveType | PostProcessSteps.FindDegenerates | PostProcessSteps.FindInvalidData
 				| PostProcessSteps.ValidateDataStructure | PostProcessSteps.GenerateUVCoords | PostProcessSteps.TransformUVCoords
 				| PostProcessSteps.GenerateSmoothNormals;
@@ -80,8 +83,9 @@ namespace LELEngine.Editor
 				assimp.SetImportPropertyFloat(store, "PP_GSN_MAX_SMOOTHING_ANGLE", settings.smoothingAngle);
 				assimp.SetImportPropertyInteger(store, "PP_SBP_REMOVE", PointsAndLines);
 				assimp.SetImportPropertyInteger(store, "PP_RVC_FLAGS", NormalsComponent);
-				// No $AssimpFbx$ helper nodes for pivots: one node per FBX model.
-				assimp.SetImportPropertyInteger(store, "IMPORT_FBX_PRESERVE_PIVOTS", 0);
+				// $AssimpFbx$ helper nodes for an FBX model's pivot chain: Visit folds them into one node per model, and the
+				// geometric ones (they move only the model's own geometry) into its mesh, as Unity does.
+				assimp.SetImportPropertyInteger(store, "IMPORT_FBX_PRESERVE_PIVOTS", 1);
 				scene = assimp.ImportFileExWithProperties(file, (uint)steps, null, store);
 			}
 			finally
@@ -147,20 +151,92 @@ namespace LELEngine.Editor
 
 			private void Visit(AiNode* node, int parent)
 			{
+				// An FBX model's pivot chain ("<model>_$AssimpFbx$_<part>" nodes down to the model's own node): the transform
+				// parts make the node's local transform, the geometric parts (after them) move its geometry only.
+				NMatrix4x4 local = NMatrix4x4.Identity;
+				NMatrix4x4 geometric = NMatrix4x4.Identity;
+				bool hasGeometric = false;
+				var others = new List<IntPtr>();
+				string chain = HelperBase(node);
+				while (chain != null && HelperBase(node) == chain)
+				{
+					if (HelperPart(node).StartsWith("Geometric", StringComparison.Ordinal))
+					{
+						geometric *= node->MTransformation;
+						hasGeometric = true;
+					}
+					else
+					{
+						local *= node->MTransformation;
+					}
+
+					AiNode* next = null;
+					for (uint i = 0; i < node->MNumChildren; i++)
+					{
+						AiNode* child = node->MChildren[i];
+						if (next == null && (HelperBase(child) == chain || child->MName.AsString == chain))
+						{
+							next = child;
+						}
+						else
+						{
+							others.Add((IntPtr)child);
+						}
+					}
+
+					if (next == null)
+					{
+						break;
+					}
+
+					node = next;
+				}
+
+				if (hasGeometric)
+				{
+					geometric *= node->MTransformation;
+				}
+				else
+				{
+					local *= node->MTransformation;
+				}
+
 				int index = data.Nodes.Count;
-				string name = node->MName.AsString;
+				string name = HelperBase(node) ?? node->MName.AsString;
 				var result = new ModelNode { Name = string.IsNullOrEmpty(name) ? "Node " + index : name, Parent = parent };
-				Decompose(node->MTransformation, result);
+				Decompose(local, result);
 				data.Nodes.Add(result);
 				if (node->MNumMeshes > 0)
 				{
-					result.Mesh = MeshOf(node, result.Name);
+					result.Mesh = MeshOf(node, result.Name, geometric);
 				}
 
 				for (uint i = 0; i < node->MNumChildren; i++)
 				{
 					Visit(node->MChildren[i], index);
 				}
+
+				foreach (IntPtr other in others)
+				{
+					Visit((AiNode*)other, index);
+				}
+			}
+
+			private const string PivotHelperTag = "_$AssimpFbx$_";
+
+			/// <summary>The model a pivot helper node belongs to, or null for any other node.</summary>
+			private static string HelperBase(AiNode* node)
+			{
+				string name = node->MName.AsString;
+				int at = name.IndexOf(PivotHelperTag, StringComparison.Ordinal);
+				return at >= 0 ? name.Substring(0, at) : null;
+			}
+
+			private static string HelperPart(AiNode* node)
+			{
+				string name = node->MName.AsString;
+				int at = name.IndexOf(PivotHelperTag, StringComparison.Ordinal);
+				return at >= 0 ? name.Substring(at + PivotHelperTag.Length) : "";
 			}
 
 			/// <summary>Assimp stores aiMatrix4x4 row-major with the translation in the 4th column.</summary>
@@ -181,8 +257,11 @@ namespace LELEngine.Editor
 
 			// ------------------------------------------------------------ meshes
 
-			/// <summary>The node's Assimp meshes as one mesh (a sub-mesh each); nodes sharing the same meshes share it.</summary>
-			private int MeshOf(AiNode* node, string nodeName)
+			/// <summary>
+			///     The node's Assimp meshes as one mesh (a sub-mesh each), moved by <paramref name="geometric" /> (an FBX
+			///     model's geometric transform, Assimp's layout); nodes sharing the same meshes and transform share it.
+			/// </summary>
+			private int MeshOf(AiNode* node, string nodeName, NMatrix4x4 geometric)
 			{
 				var sources = new uint[node->MNumMeshes];
 				for (uint i = 0; i < node->MNumMeshes; i++)
@@ -190,17 +269,20 @@ namespace LELEngine.Editor
 					sources[i] = node->MMeshes[i];
 				}
 
-				string key = string.Join(",", sources);
+				bool moved = !geometric.IsIdentity;
+				string key = string.Join(",", sources) + (moved ? ":" + geometric : "");
 				if (meshesByContent.TryGetValue(key, out int existing))
 				{
 					return existing;
 				}
 
+				// Normals move by the inverse transpose; a mirroring transform turns the triangles round.
+				NMatrix4x4.Invert(geometric, out NMatrix4x4 inverse);
+				bool mirrored = moved && geometric.GetDeterminant() < 0f;
 				var vertices = new List<Vertex>();
 				var indices = new List<uint>();
 				var subMeshes = new List<SubMesh>();
 				var materials = new List<int>();
-				bool hasTangents = true;
 				foreach (uint source in sources)
 				{
 					AiMesh* mesh = scene->MMeshes[source];
@@ -210,10 +292,16 @@ namespace LELEngine.Editor
 					}
 
 					uint baseVertex = (uint)vertices.Count;
-					hasTangents &= mesh->MTangents != null && mesh->MBitangents != null && mesh->MTextureCoords[0] != null;
 					for (uint v = 0; v < mesh->MNumVertices; v++)
 					{
-						vertices.Add(ReadVertex(mesh, v));
+						Vertex vertex = ReadVertex(mesh, v);
+						if (moved)
+						{
+							vertex = new Vertex(TransformPoint(geometric, vertex.position), TransformNormal(inverse, vertex.normal), vertex.texcoord, vertex.tangent,
+								vertex.bitangent, vertex.color, vertex.texcoord2);
+						}
+
+						vertices.Add(vertex);
 					}
 
 					int first = indices.Count;
@@ -226,8 +314,8 @@ namespace LELEngine.Editor
 						}
 
 						indices.Add(baseVertex + face.MIndices[0]);
-						indices.Add(baseVertex + face.MIndices[1]);
-						indices.Add(baseVertex + face.MIndices[2]);
+						indices.Add(baseVertex + face.MIndices[mirrored ? 2u : 1u]);
+						indices.Add(baseVertex + face.MIndices[mirrored ? 1u : 2u]);
 					}
 
 					subMeshes.Add(new SubMesh(first, indices.Count - first));
@@ -245,7 +333,7 @@ namespace LELEngine.Editor
 				var result = new ModelMeshData
 				{
 					Name = UniqueName(nodeName),
-					Vertices = hasTangents ? vertexArray : LELEngine.Mesh.WithTangents(vertexArray, indexArray),
+					Vertices = LELEngine.Mesh.WithTangents(vertexArray, indexArray),
 					Indices = indexArray,
 					SubMeshes = subMeshes.ToArray(),
 					Materials = materials.ToArray()
@@ -263,14 +351,31 @@ namespace LELEngine.Editor
 				Vector3 bitangent = mesh->MBitangents != null ? ToVector(mesh->MBitangents[v]) : Vector3.UnitZ;
 				System.Numerics.Vector3* uvs = mesh->MTextureCoords[0];
 				Vector2 uv = uvs != null ? new Vector2(uvs[v].X, uvs[v].Y) : Vector2.Zero;
+				System.Numerics.Vector3* uvs2 = mesh->MTextureCoords[1];
+				Vector2 uv2 = uvs2 != null ? new Vector2(uvs2[v].X, uvs2[v].Y) : Vector2.Zero;
 				System.Numerics.Vector4* colors = mesh->MColors[0];
 				Color4 color = colors != null ? new Color4(colors[v].X, colors[v].Y, colors[v].Z, colors[v].W) : Color4.White;
-				return new Vertex(new Vector3(p.X, p.Y, p.Z), normal, uv, tangent, bitangent, color);
+				return new Vertex(new Vector3(p.X, p.Y, p.Z), normal, uv, tangent, bitangent, color, uv2);
 			}
 
 			private static Vector3 ToVector(System.Numerics.Vector3 v)
 			{
 				return new Vector3(v.X, v.Y, v.Z);
+			}
+
+			/// <summary>A point through a matrix in Assimp's layout (row-major, translation in the 4th column).</summary>
+			private static Vector3 TransformPoint(NMatrix4x4 m, Vector3 p)
+			{
+				return new Vector3(m.M11 * p.X + m.M12 * p.Y + m.M13 * p.Z + m.M14, m.M21 * p.X + m.M22 * p.Y + m.M23 * p.Z + m.M24,
+					m.M31 * p.X + m.M32 * p.Y + m.M33 * p.Z + m.M34);
+			}
+
+			/// <summary>A normal through the inverse transpose of a matrix, given its inverse in Assimp's layout.</summary>
+			private static Vector3 TransformNormal(NMatrix4x4 inverse, Vector3 n)
+			{
+				var result = new Vector3(inverse.M11 * n.X + inverse.M21 * n.Y + inverse.M31 * n.Z, inverse.M12 * n.X + inverse.M22 * n.Y + inverse.M32 * n.Z,
+					inverse.M13 * n.X + inverse.M23 * n.Y + inverse.M33 * n.Z);
+				return result.LengthSquared > 0f ? result.Normalized() : n;
 			}
 
 			private string UniqueName(string name)
