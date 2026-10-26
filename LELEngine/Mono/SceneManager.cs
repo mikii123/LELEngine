@@ -498,6 +498,22 @@ namespace LELEngine
 			context.Post(state => ((Action)state)(), action);
 		}
 
+		/// <summary>
+		///     Before the first asset of a scene or resource is prepared (main thread): every shader program of it starts
+		///     compiling, so the driver compiles them together (parallel shader compile) while <see cref="PrepareAsset" />
+		///     waits for them one by one.
+		/// </summary>
+		internal static void StartShaderBuilds(IReadOnlyList<object> assets)
+		{
+			foreach (object asset in assets)
+			{
+				if (asset is ShaderProgram program)
+				{
+					program.StartBuild();
+				}
+			}
+		}
+
 		/// <summary>The GPU work of one asset of a scene or resource being prepared (main thread).</summary>
 		internal static void PrepareAsset(object asset, bool gpuDriven)
 		{

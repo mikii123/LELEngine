@@ -42,6 +42,7 @@ namespace LELEngine
 		private static Texture2D normal;
 		private byte[] pixels;
 		private float[] floatPixels;
+		private PendingTextureImport pendingImport;
 
 		#endregion
 
@@ -85,6 +86,7 @@ namespace LELEngine
 			SetSize(newWidth, newHeight);
 			pixels = rgba;
 			floatPixels = null;
+			pendingImport = null;
 			ClearKtx();
 			Release();
 		}
@@ -100,6 +102,7 @@ namespace LELEngine
 			SetSize(newWidth, newHeight);
 			floatPixels = rgba;
 			pixels = null;
+			pendingImport = null;
 			ClearKtx();
 			Release();
 		}
@@ -181,7 +184,18 @@ namespace LELEngine
 		#region InternalMethods
 
 		internal override TextureTarget Target => TextureTarget.Texture2D;
-		protected override bool HasData => pixels != null || floatPixels != null;
+
+		protected override bool HasData
+		{
+			get
+			{
+				pendingImport?.Complete();
+				return pixels != null || floatPixels != null;
+			}
+		}
+
+		/// <summary>The import filling this texture on a worker thread (<see cref="TextureImportBatch" />), or null.</summary>
+		internal PendingTextureImport PendingImport => pendingImport;
 
 		/// <summary>Fills this texture from decoded image data and importer settings (asset loading, reimport in place).</summary>
 		internal void SetImage(ImageData image, bool srgb, bool bottomUpData, bool mipmaps)
@@ -192,6 +206,7 @@ namespace LELEngine
 			sRGB = srgb;
 			bottomUp = bottomUpData;
 			SetMipmaps(mipmaps);
+			pendingImport = null;
 			ClearKtx();
 			Release();
 		}
@@ -203,15 +218,41 @@ namespace LELEngine
 			floatPixels = null;
 			sRGB = ktx.IsSrgb;
 			bottomUp = true;
+			pendingImport = null;
 			SetKtx(ktx, mipmaps);
 		}
 
 		/// <summary>
+		///     A texture a scene load fills on a worker thread (<see cref="TextureImportBatch" />): its size, color space and
+		///     mipmaps come from the file's header now (rows bottom up, as every imported texture), its texels when
+		///     <paramref name="import" /> completes (by the end of the load, or when something needs them first).
+		/// </summary>
+		internal void SetPendingImport(PendingTextureImport import, int newWidth, int newHeight, bool srgb, bool mipmaps)
+		{
+			SetSize(newWidth, newHeight);
+			pixels = null;
+			floatPixels = null;
+			sRGB = srgb;
+			bottomUp = true;
+			SetMipmaps(mipmaps);
+			pendingImport = import;
+			ClearKtx();
+			Release();
+		}
+
+		/// <summary>A failed import: the texture stays without texels (it does not upload).</summary>
+		internal void ClearPendingImport()
+		{
+			pendingImport = null;
+		}
+
+		/// <summary>
 		///     The CPU pixels of a baked texture, from its uncompressed first level (it then uploads from them; compressed
-		///     data stays without CPU pixels).
+		///     data stays without CPU pixels). A pending import completes first.
 		/// </summary>
 		private void EnsureCpuPixels()
 		{
+			pendingImport?.Complete();
 			KtxFile ktx = Ktx;
 			if (ktx == null || ktx.IsCompressed || pixels != null || floatPixels != null)
 			{
@@ -238,15 +279,29 @@ namespace LELEngine
 			Release();
 		}
 
+		// Immutable storage with every mip level allocated up front, then level 0: GenerateMipmap fills levels that exist.
+		// Measured on an RTX 5070 Ti with New Frontier's Planets scene (112 textures, 1.6 GB): 274 ms against 779-868 ms for
+		// glTexImage2D, whose GenerateMipmap had to allocate the chain (518-530 ms of it). The handle is never respecified:
+		// new pixels release it and the next use makes a new one.
 		protected override void UploadData()
 		{
-			if (floatPixels != null)
+			if (width <= 0 || height <= 0)
 			{
-				GL.TexImage2D(TextureTarget.Texture2D, 0, PixelInternalFormat.Rgba16f, width, height, 0, PixelFormat.Rgba, PixelType.Float, floatPixels);
+				// Immutable storage takes no empty texture; glTexImage2D does.
+				GL.TexImage2D(TextureTarget.Texture2D, 0, PixelInternalFormat.Rgba8, Math.Max(0, width), Math.Max(0, height), 0, PixelFormat.Rgba, PixelType.UnsignedByte, IntPtr.Zero);
 				return;
 			}
 
-			GL.TexImage2D(TextureTarget.Texture2D, 0, sRGB ? PixelInternalFormat.Srgb8Alpha8 : PixelInternalFormat.Rgba8, width, height, 0, PixelFormat.Rgba, PixelType.UnsignedByte, pixels);
+			int levels = mipmapEnabled ? 1 + (int)Math.Floor(Math.Log2(Math.Max(width, height))) : 1;
+			if (floatPixels != null)
+			{
+				GL.TexStorage2D(TextureTarget2d.Texture2D, levels, SizedInternalFormat.Rgba16f, width, height);
+				GL.TexSubImage2D(TextureTarget.Texture2D, 0, 0, 0, width, height, PixelFormat.Rgba, PixelType.Float, floatPixels);
+				return;
+			}
+
+			GL.TexStorage2D(TextureTarget2d.Texture2D, levels, sRGB ? SizedInternalFormat.Srgb8Alpha8 : SizedInternalFormat.Rgba8, width, height);
+			GL.TexSubImage2D(TextureTarget.Texture2D, 0, 0, 0, width, height, PixelFormat.Rgba, PixelType.UnsignedByte, pixels);
 		}
 
 		#endregion

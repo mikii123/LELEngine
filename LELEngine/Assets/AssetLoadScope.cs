@@ -178,6 +178,19 @@ namespace LELEngine
 			category.Ticks += Math.Max(0, elapsed - inner);
 		}
 
+		/// <summary>Time the load waited for work it handed to other threads (a <see cref="TextureImportBatch" />'s textures).</summary>
+		internal void AddWait(string kind, int count, long ticks)
+		{
+			if (!categories.TryGetValue(kind, out Category category))
+			{
+				category = new Category();
+				categories[kind] = category;
+			}
+
+			category.Count += count;
+			category.Ticks += ticks;
+		}
+
 		/// <summary>Holds back the Awake and OnEnable of a ScriptableObject this background load read (or found still held back).</summary>
 		internal void Defer(ScriptableObject asset)
 		{

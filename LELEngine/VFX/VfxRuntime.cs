@@ -644,7 +644,8 @@ namespace LELEngine.VFX
 
 		/// <summary>
 		///     Copies the view's scene depth (opaques drawn) for this frame's soft particles and, the lighting camera of
-		///     a stack, the next simulation's depth collisions. Called by the transparent pass before any particle draws.
+		///     a stack, the next simulation's depth collisions. Called by the transparent pass before any particle draws,
+		///     once the opaque surfaces it draws itself (queues up to GeometryLast + 1: alpha clip, vertex functions) are in.
 		/// </summary>
 		public static VfxDepthCapture CaptureDepth(RenderContext context)
 		{

@@ -174,6 +174,49 @@
 - Every load logs `[SceneManager] <path>: read N ms (textures N: N ms, meshes ..., per asset kind), GPU N ms in N
   frames, activated in N ms` (also `SceneLoadOperation.Summary`).
 
+## Textures of a load on worker threads (TextureImportBatch, 2026-10-26)
+
+- `SceneSerializer.LoadFromBytes` (every scene and prefab load: the editor's `OpenSceneNow`, `SceneLoadOperation.Read`
+  for `LoadScene` / `LoadSceneAsync` / the player's start scene, snapshots) and `ResourceRequest` open a
+  `TextureImportBatch` (`Assets/TextureImportBatch.cs`, one per thread, nested ones join). Inside it
+  `TextureAssets.TryDefer` makes each fresh 2D texture from its file's header (PNG etc. through StbImageSharp's
+  `ImageInfo` plus the importer's `maxSize`; a build's KTX through `KtxFile.ReadHeader`), so materials get the final
+  object, and `Task.Run`s the rest (`Import`: read, decode, flip, downscale; KTX: the file read). Disposing the batch
+  completes them on the loading thread, so a load still returns complete textures. Cubemaps, volumes, HDR, reimports
+  (`previous`) and headers the decoder rejects take the old synchronous path.
+- `Texture2D.PendingImport`: `HasData` (upload) and `EnsureCpuPixels` (CPU pixels) complete it first (waiting for that
+  one task; `PendingTextureImport.Complete` locks, so any thread may ask); `SetPixels` / `SetPixelsFloat` / `SetImage` /
+  `SetBaked` drop it (a late result never overwrites newer texels). A failed import logs `Cannot import` and leaves the
+  texture empty (it samples black; before, the material got its default texture). The load's summary shows the join
+  as `textures on worker threads N: ms` (the "textures" category is then the header reads); the editor logs `[Editor]
+  Opened <scene> in N ms (...)`.
+- Measured (scratchpad `LoadProbe`, headless: `AssetDatabase.Initialize` + `SceneSerializer.Load`, no GL): New
+  Frontier's Planets scene (112 textures, 17 of 4096^2, ~2.5 GB RGBA) read in 1.56 s against 9.2 s for the same
+  textures one by one (StbImageSharp 297 MB/s per thread, x11 on 32 threads); pixels, size, sRGB, mipmaps identical.
+  Synthetic checks: a KTX under an image name, pixels read inside the batch, SetPixels during the import, a truncated
+  PNG. GL work stays on the main thread: shader compiles and uploads (+ GenerateMipmap) happen on first use.
+
+## Shaders compiled together, immutable textures (2026-10-26)
+
+- `GLCapabilities.ParallelShaderCompile` (KHR / ARB_parallel_shader_compile): `glMaxShaderCompilerThreads(0xFFFFFFFF)`,
+  or 0 with `LEL_GL_DISABLE=parallelcompile` (NVIDIA's default is neither). `ShaderProgram` starts and finishes builds
+  apart: `StartBuild` (the constructor on the context's thread, `Start`: binary cache or `Shader.Submit` per stage and
+  `StartLink`, no queries) and `EnsureBuilt` (`FinishBuild`: `Shader.Check`, `FinishLink`, uniforms, `BuildLog`, the
+  binary saved); every accessor of the program (Handle, Use, IsLinked, uniforms, BuildLog) goes through `EnsureBuilt`.
+  `ShaderProgram.FinishStartedBuilds()` waits for all started ones (the editor's `OpenSceneNow`, which logs the wait);
+  `SceneManager.StartShaderBuilds` starts a scene's / request's programs on their first `Prepare`;
+  `ShaderVariantList.Compile` starts every variant, then waits for each. Programs from `FromSources` and the instanced
+  variants (checked at once by `GetInstancedVariant`) still build in one go.
+- Measured on an RTX 5070 Ti (driver 621.01; scratchpad `GLBench`, hidden window, sources with a random comment so the
+  driver's disk cache misses): the 13 FORGE3D planet programs (1.2 MB of source with the includes) 13.8 s one by one,
+  10.7 s one by one with driver threads, 9.3 s started together without them, 2.8 s started together with them.
+  Through the engine (Planets scene read, `FinishStartedBuilds`): 2.1 s with an empty binary cache, 0 ms from it (13
+  loaded); with `parallelcompile` disabled every program still links clean.
+- `Texture2D.UploadData`: `glTexStorage2D` with the whole mip chain (1 level without mipmaps), then `glTexSubImage2D`
+  (0x0 textures keep `glTexImage2D`). The Planets scene's 112 textures (1.6 GB): 274-287 ms against 779-868 ms, of which
+  `GenerateMipmap` on mutable textures was 518-530 ms (it allocated the chain). Verified: immutable levels as expected,
+  level 0 read back equal to the CPU pixels, no GL error.
+
 ## Background resource loading (Resources.LoadAsync)
 
 - `Resources.LoadAsync<T>(path)` / `LoadAsync(path, type)` / `LoadAsync(path)` return a `ResourceRequest`
@@ -290,7 +333,9 @@
   player sets `%LOCALAPPDATA%/LELEngine/<title>/ShaderCache` (`shadercache=0` turns it off) and logs `[Player] Program
   binary cache: N loaded, M compiled and saved`. Probe (RTX 3080 Ti, 13 variants + engine passes = 41 programs, 1.9 MB):
   shader variants 6146 ms -> 83 ms, first frames 802 -> 131 ms, start scene shown 7.6 s -> 1.4 s (the 1 s splash);
-  without the cache but with NVIDIA's own warm cache the variants still took 3.3 s. The editor does not use it.
+  without the cache but with NVIDIA's own warm cache the variants still took 3.3 s. The editor uses it too since
+  2026-10-26 (`%LOCALAPPDATA%\LELEngine\Editor\ShaderCache`, set in `Program.RunEditor`; `shadercache=0` turns it off):
+  a shader edited in the editor has new sources, hence a new key, and compiles.
 - `Engine/ParticlesUnlit.shader` (Unity's Particles/Unlit): `BaseMap` x `Color` (HDR) x vertex color; `BlendMode`
   [KeywordEnum] Alpha (SrcAlpha OneMinusSrcAlpha), Premultiply (One OneMinusSrcAlpha, the map's color already
   premultiplied, tint alpha fades all), Additive (SrcAlpha One), Soft Additive (One OneMinusSrcColor, rgb x alpha),
@@ -432,7 +477,11 @@
   in Opaque mode. New render state line `SceneDepth On` (`ShaderRenderState.SceneDepth`; such variants stay in a
   transparent queue like GrabPass ones): the transparent pass takes the opaque depth copy the VFX soft particles use
   (`VfxRuntime.CaptureDepth`) once and binds it (`SceneDepthTexture`, unit 22) for `Engine/SceneDepth.glsl`
-  (`LelEyeDepth`, `LelSceneEyeDepth`, `LelSoftParticleFade`).
+  (`LelEyeDepth`, `LelSceneEyeDepth`, `LelSoftParticleFade`). Since 2026-10-26 the copy is taken right before the
+  first entry that does not draw like an opaque (`TransparentPass.DrawsLikeOpaque`: queue <= GeometryLast + 1, no
+  blending, ZWrite On, not a SceneDepth reader, not VFX), so the opaque surfaces the prepass cannot draw (alpha clip,
+  vertex functions) are in it. Before, it was taken before them: New Frontier's FORGE3D sun (vertex function,
+  GeometryLast + 1) was missing, its corona plates (Depth Fade) saw the sky and cut into the sphere with a hard line.
 - Porting Unity's legacy particle materials to ParticlesUnlit: Legacy Particles/Additive computes 2 x vertex color x
   _TintColor x texture (alpha too) with Blend SrcAlpha One and Cull Off, so Color = 2 x _TintColor, BlendMode
   Additive, RenderFace Both; _MainTex scale / offset -> BaseMap_ST; _InvFade -> soft particles (far 1 / InvFade) when

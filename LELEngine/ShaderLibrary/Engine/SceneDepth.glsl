@@ -1,6 +1,7 @@
 // The opaque scene's depth for transparent shaders that declare SceneDepth On in their Properties block (Unity's
 // _CameraDepthTexture; LELEngine.Rendering.SceneDepthTexture): the transparent pass copies the depth buffer once the
-// opaques are drawn and binds the copy to such draws. Soft particles fade out where they come close to what lies behind.
+// opaques are drawn (with the opaque surfaces it draws itself at GeometryLast + 1: alpha clip, vertex functions) and
+// binds the copy to such draws. Soft particles fade out where they come close to what lies behind.
 
 #ifndef LEL_SCENE_DEPTH_GLSL
 #define LEL_SCENE_DEPTH_GLSL

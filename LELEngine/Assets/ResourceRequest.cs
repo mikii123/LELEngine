@@ -185,7 +185,12 @@ namespace LELEngine
 			{
 				try
 				{
-					loaded = Type != null ? Resources.Load(Path, Type) : Resources.Load(Path);
+					// The textures it uses decode on worker threads, complete when the batch closes.
+					using (TextureImportBatch.Begin())
+					{
+						loaded = Type != null ? Resources.Load(Path, Type) : Resources.Load(Path);
+					}
+
 					var recorded = new List<object>(scope.Assets);
 					if (loaded != null && !recorded.Contains(loaded))
 					{
@@ -227,6 +232,11 @@ namespace LELEngine
 		{
 			long start = Stopwatch.GetTimestamp();
 			prepareFrames++;
+			if (prepareFrames == 1)
+			{
+				SceneManager.StartShaderBuilds(assets);
+			}
+
 			while (prepared < assets.Count)
 			{
 				SceneManager.PrepareAsset(assets[prepared], gpuDriven);

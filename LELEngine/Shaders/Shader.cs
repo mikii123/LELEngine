@@ -95,15 +95,33 @@ namespace LELEngine.Shaders
 
 		private static int Compile(string code, ShaderType type, string debugName)
 		{
+			int handle = Submit(code, type);
+			LastCompiled = Check(handle, type, debugName, out string log);
+			LastLog = log;
+			return handle;
+		}
+
+		#endregion
+
+		#region InternalMethods
+
+		/// <summary>
+		///     A stage object with its source handed to the compiler, without waiting for the result (with parallel shader
+		///     compile the driver's threads work on it until <see cref="Check" />).
+		/// </summary>
+		internal static int Submit(string code, ShaderType type)
+		{
 			int handle = GL.CreateShader(type);
 			GL.ShaderSource(handle, code);
 			GL.CompileShader(handle);
+			return handle;
+		}
 
-			int status;
-			GL.GetShader(handle, ShaderParameter.CompileStatus, out status);
-			string log = GL.GetShaderInfoLog(handle);
-			LastLog = log ?? "";
-			LastCompiled = status != 0;
+		/// <summary>Waits for a submitted stage: true when it compiled; its log (empty when clean) is printed as Compile prints it.</summary>
+		internal static bool Check(int handle, ShaderType type, string debugName, out string log)
+		{
+			GL.GetShader(handle, ShaderParameter.CompileStatus, out int status);
+			log = GL.GetShaderInfoLog(handle) ?? "";
 			if (status == 0)
 			{
 				Console.WriteLine($"[Shader] Compile error in {debugName} ({type}):\n{log}");
@@ -113,7 +131,7 @@ namespace LELEngine.Shaders
 				Console.WriteLine($"[Shader] {debugName} ({type}):\n{log}");
 			}
 
-			return handle;
+			return status != 0;
 		}
 
 		#endregion

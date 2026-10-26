@@ -93,34 +93,8 @@ namespace LELEngine
 		/// <summary>Parses a KTX 1.1 file (little endian, no array textures); the texels stay in <paramref name="file" />.</summary>
 		public static KtxFile Read(byte[] file)
 		{
-			if (!IsKtx(file) || file.Length < 64)
-			{
-				throw new InvalidDataException("Not a KTX 1.1 file");
-			}
-
-			if (BitConverter.ToUInt32(file, 12) != 0x04030201)
-			{
-				throw new InvalidDataException("Big-endian KTX files are not supported");
-			}
-
-			var ktx = new KtxFile
-			{
-				data = file,
-				GlType = BitConverter.ToInt32(file, 16),
-				GlFormat = BitConverter.ToInt32(file, 24),
-				GlInternalFormat = BitConverter.ToInt32(file, 28),
-				Width = BitConverter.ToInt32(file, 36),
-				Height = Math.Max(1, BitConverter.ToInt32(file, 40)),
-				Depth = BitConverter.ToInt32(file, 44),
-				Faces = Math.Max(1, BitConverter.ToInt32(file, 52)),
-				Levels = Math.Max(1, BitConverter.ToInt32(file, 56))
-			};
-
-			if (BitConverter.ToInt32(file, 48) > 0)
-			{
-				throw new InvalidDataException("KTX array textures are not supported");
-			}
-
+			KtxFile ktx = ReadHeader(file);
+			ktx.data = file;
 			int position = 64 + BitConverter.ToInt32(file, 60);
 			ktx.offsets = new int[ktx.Levels][];
 			ktx.sizes = new int[ktx.Levels];
@@ -144,6 +118,40 @@ namespace LELEngine
 
 			ktx.DataSize = file.Length - 64;
 			return ktx;
+		}
+
+		/// <summary>
+		///     What a KTX 1.1 file holds, from its first 64 bytes: format, size, faces, depth and levels, without texels (a
+		///     scene load shapes the texture from it and reads the file on a worker thread, TextureImportBatch).
+		/// </summary>
+		public static KtxFile ReadHeader(ReadOnlySpan<byte> header)
+		{
+			if (!IsKtx(header) || header.Length < 64)
+			{
+				throw new InvalidDataException("Not a KTX 1.1 file");
+			}
+
+			if (BitConverter.ToUInt32(header.Slice(12)) != 0x04030201)
+			{
+				throw new InvalidDataException("Big-endian KTX files are not supported");
+			}
+
+			if (BitConverter.ToInt32(header.Slice(48)) > 0)
+			{
+				throw new InvalidDataException("KTX array textures are not supported");
+			}
+
+			return new KtxFile
+			{
+				GlType = BitConverter.ToInt32(header.Slice(16)),
+				GlFormat = BitConverter.ToInt32(header.Slice(24)),
+				GlInternalFormat = BitConverter.ToInt32(header.Slice(28)),
+				Width = BitConverter.ToInt32(header.Slice(36)),
+				Height = Math.Max(1, BitConverter.ToInt32(header.Slice(40))),
+				Depth = BitConverter.ToInt32(header.Slice(44)),
+				Faces = Math.Max(1, BitConverter.ToInt32(header.Slice(52))),
+				Levels = Math.Max(1, BitConverter.ToInt32(header.Slice(56)))
+			};
 		}
 
 		/// <summary>

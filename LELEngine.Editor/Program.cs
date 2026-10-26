@@ -41,6 +41,13 @@ namespace LELEngine.Editor
 		/// </summary>
 		private static int RunEditor(string[] args)
 		{
+			// The driver's binaries of the programs linked before (keyed by their final sources: an edited shader compiles
+			// again), before the first window builds a shader; shadercache=0 compiles everything, as the player's switch.
+			if (Array.IndexOf(args, "shadercache=0") < 0)
+			{
+				LELEngine.Shaders.ProgramBinaryCache.Folder =Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "LELEngine", "Editor", "ShaderCache");
+			}
+
 			// The user's preferences first: the theme applies to the first window.
 			EditorPreferences.Initialize(args);
 			ImGuiController.ReadOnlyLayouts = EditorApplication.IsAutomatedRun(args);

@@ -758,6 +758,12 @@ namespace LELEngine
 			{
 				var entry = new Entry { Shape = importer.shape };
 				string name = Path.GetFileNameWithoutExtension(assetPath);
+				TextureImportBatch batch = TextureImportBatch.Current;
+				if (batch != null && previous == null && TryDefer(batch, assetPath, absolute, importer, entry, name))
+				{
+					return entry;
+				}
+
 				byte[] file = File.ReadAllBytes(absolute);
 				if (KtxFile.IsKtx(file))
 				{
@@ -831,6 +837,82 @@ namespace LELEngine
 				Debug.LogWarning("[Assets] Cannot import " + assetPath + ": " + e.Message);
 				return null;
 			}
+		}
+
+		/// <summary>
+		///     Inside a scene load (<see cref="TextureImportBatch" />): a 2D texture shaped from the file's header now, read
+		///     and decoded on a worker thread (an image: <see cref="Import" />; a build's KTX file: its texels read). False
+		///     for what is read here as before: cubemaps, volumes, HDR images, headers the decoder does not know.
+		/// </summary>
+		private static bool TryDefer(TextureImportBatch batch, string assetPath, string absolute, TextureImporter importer, Entry entry, string name)
+		{
+			int width;
+			int height;
+			bool srgb;
+			bool mipmaps;
+			Func<Action<Texture2D>> work;
+			using (FileStream stream = File.OpenRead(absolute))
+			{
+				Span<byte> header = stackalloc byte[64];
+				int read = stream.ReadAtLeast(header, header.Length, false);
+				if (KtxFile.IsKtx(header.Slice(0, read)))
+				{
+					KtxFile shape = KtxFile.ReadHeader(header.Slice(0, read));
+					if (shape.Faces != 1 || shape.Depth > 0 || shape.IsHdr)
+					{
+						return false;
+					}
+
+					width = shape.Width;
+					height = shape.Height;
+					srgb = shape.IsSrgb;
+					mipmaps = shape.Levels > 1 || (importer.generateMipmaps && !shape.IsCompressed);
+					bool generateMipmaps = importer.generateMipmaps;
+					work = () =>
+					{
+						KtxFile ktx = KtxFile.Read(File.ReadAllBytes(absolute));
+						return texture => texture.SetBaked(ktx, generateMipmaps);
+					};
+				}
+				else
+				{
+					if (importer.shape == TextureImporterShape.Cube || importer.shape == TextureImporterShape.Texture3D
+						|| absolute.EndsWith(".hdr", StringComparison.OrdinalIgnoreCase))
+					{
+						return false;
+					}
+
+					stream.Position = 0;
+					ImageInfo? info = ImageInfo.FromStream(stream);
+					if (info == null)
+					{
+						return false;
+					}
+
+					// The size Import gives: the image reduced to the importer's maximum size.
+					var source = new ImageData(info.Value.Width, info.Value.Height, Array.Empty<byte>());
+					int factor = source.FactorFor(importer.maxSize);
+					width = factor > 1 ? Math.Max(1, source.Width / factor) : source.Width;
+					height = factor > 1 ? Math.Max(1, source.Height / factor) : source.Height;
+					srgb = importer.StoresSrgb;
+					mipmaps = importer.generateMipmaps;
+					work = () =>
+					{
+						ImportedTexture imported = Import(assetPath, importer);
+						return texture => texture.SetImage(imported.Image, imported.Srgb, true, imported.Mipmaps);
+					};
+				}
+			}
+
+			var texture2D = new Texture2D();
+			texture2D.SetPendingImport(batch.Defer(texture2D, assetPath, work), width, height, srgb, mipmaps);
+			texture2D.SetSamplerState(importer.filterMode, importer.wrapMode, importer.anisoLevel);
+			texture2D.name = name;
+			texture2D.AssetPath = assetPath;
+			entry.Shape = TextureImporterShape.Texture2D;
+			entry.Texture = texture2D;
+			BuildSprites(entry, texture2D, importer, assetPath, name);
+			return true;
 		}
 
 		/// <summary>

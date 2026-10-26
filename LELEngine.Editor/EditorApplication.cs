@@ -1510,7 +1510,21 @@ namespace LELEngine.Editor
 			{
 				string file = AssetDatabase.ToAbsolute(assetPath);
 				FileStamp stamp = FileStamp.Of(file);
-				Scene scene = SceneSerializer.Load(file);
+				long start = System.Diagnostics.Stopwatch.GetTimestamp();
+				Scene scene;
+				string summary;
+				using (AssetLoadScope scope = AssetLoadScope.Begin())
+				{
+					scene = SceneSerializer.Load(file);
+					summary = scope.Summary();
+				}
+
+				// The programs the scene's materials started compiling (together, on the driver's threads): their errors now.
+				long shaders = System.Diagnostics.Stopwatch.GetTimestamp();
+				LELEngine.Shaders.ShaderProgram.FinishStartedBuilds();
+				Debug.Log($"[Editor] Opened {assetPath} in {System.Diagnostics.Stopwatch.GetElapsedTime(start).TotalMilliseconds:F0} ms ({summary}; "
+					+ $"waiting for shaders {System.Diagnostics.Stopwatch.GetElapsedTime(shaders).TotalMilliseconds:F0} ms, "
+					+ $"{LELEngine.Shaders.ProgramBinaryCache.Loaded} from the binary cache so far); textures upload on the first frame");
 				scene.Path = assetPath;
 				LELEngine.Audio.AudioSystem.StopAll();
 				ReplaceScene(scene, false);

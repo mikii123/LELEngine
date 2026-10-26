@@ -24,6 +24,11 @@ namespace LELEngine.Shaders
 	///     A program loaded from a file on a thread without the GL context (a scene loading in the background) reads
 	///     and prepares its sources there and compiles on first use, or when the scene loader prepares it
 	///     (<see cref="EnsureBuilt" />), on the thread that holds the context.
+	///     Compiling is started and finished apart (<see cref="StartBuild" />, <see cref="EnsureBuilt" />): a program made on
+	///     the context's thread hands its stages to the driver and links without waiting, and the results (status, logs,
+	///     uniforms, the binary cache) are read when it is first used or <see cref="FinishStartedBuilds" /> runs. With
+	///     parallel shader compile (<see cref="GLCapabilities.ParallelShaderCompile" />) the programs a load started
+	///     compile together on the driver's threads.
 	/// </summary>
 	public sealed class ShaderProgram : IAsset
 	{
@@ -56,8 +61,8 @@ namespace LELEngine.Shaders
 			private set => linked = value;
 		}
 
-		/// <summary>Compiled and linked (or failed); false while the sources wait for a thread with the GL context.</summary>
-		public bool IsBuilt => pendingStages == null;
+		/// <summary>Compiled and linked (or failed); false while the sources wait for a thread with the GL context or the driver.</summary>
+		public bool IsBuilt => pendingStages == null && startedShaders == null;
 
 		/// <summary>The .shader file this program was loaded from (null for programs built from sources).</summary>
 		public string SourcePath { get; }
@@ -100,7 +105,15 @@ namespace LELEngine.Shaders
 		public ShaderRenderState RenderState => renderState;
 
 		/// <summary>Compile and link messages per stage (files and <see cref="FromSources" />) once built; empty when clean.</summary>
-		public string BuildLog { get; private set; } = "";
+		public string BuildLog
+		{
+			get
+			{
+				EnsureBuilt();
+				return buildLog;
+			}
+			private set => buildLog = value;
+		}
 
 		#endregion
 
@@ -123,6 +136,16 @@ namespace LELEngine.Shaders
 		private ShaderProgram instancedVariant;
 		private bool instancedVariantCreated;
 		private string linkLog = "";
+		private string buildLog = "";
+
+		// Started builds (StartBuild): the stage objects the driver compiles, the stages (their types name the log lines)
+		// and the binary cache's key, until EnsureBuilt reads the results.
+		private int[] startedShaders;
+		private List<KeyValuePair<ShaderType, string>> startedStages;
+		private string startedCacheKey;
+
+		// Programs whose build was started and not finished (context thread only).
+		private static readonly List<ShaderProgram> started = new List<ShaderProgram>();
 
 		// Keyword variants by their sorted keywords joined with spaces (only on the shader itself).
 		private readonly Dictionary<string, ShaderProgram> variants = new Dictionary<string, ShaderProgram>(StringComparer.Ordinal);
@@ -170,22 +193,50 @@ namespace LELEngine.Shaders
 			pendingStages = ReadStages(path, defines, properties, renderState, out bool includesInstancing);
 			SupportsInstancing = includesInstancing;
 			keywordProperties.AddRange(properties.Where(property => property.Keywords != null));
-			if (GraphicsThread.HasContext)
-			{
-				Build();
-			}
+			StartBuild();
 		}
 
 		#endregion
 
 		#region PublicMethods
 
-		/// <summary>Compiles and links the prepared sources when that has not happened yet and this thread holds the GL context.</summary>
+		/// <summary>
+		///     Compiles and links the prepared sources when that has not happened yet and this thread holds the GL context,
+		///     waiting for a build already started (<see cref="StartBuild" />).
+		/// </summary>
 		public void EnsureBuilt()
+		{
+			if ((pendingStages != null || startedShaders != null) && GraphicsThread.HasContext)
+			{
+				StartBuild();
+				FinishBuild();
+			}
+		}
+
+		/// <summary>
+		///     Hands the prepared sources to the driver without waiting for the result, when this thread holds the GL
+		///     context (a program made there does it itself): start every program a load needs before using one, and the
+		///     driver compiles them together. <see cref="EnsureBuilt" /> (any first use) waits for it.
+		/// </summary>
+		public void StartBuild()
 		{
 			if (pendingStages != null && GraphicsThread.HasContext)
 			{
-				Build();
+				Start();
+			}
+		}
+
+		/// <summary>Waits for every program whose build was started (context thread): their results and errors now.</summary>
+		public static void FinishStartedBuilds()
+		{
+			if (started.Count == 0)
+			{
+				return;
+			}
+
+			foreach (ShaderProgram program in started.ToArray())
+			{
+				program.EnsureBuilt();
 			}
 		}
 
@@ -335,6 +386,18 @@ namespace LELEngine.Shaders
 		public void Delete()
 		{
 			pendingStages = null;
+			if (startedShaders != null)
+			{
+				foreach (int shader in startedShaders)
+				{
+					GL.DeleteShader(shader);
+				}
+
+				startedShaders = null;
+				startedStages = null;
+				started.Remove(this);
+			}
+
 			if (handle != 0)
 			{
 				GL.DeleteProgram(handle);
@@ -570,9 +633,17 @@ namespace LELEngine.Shaders
 
 		private void Link(Shader[] shaders)
 		{
-			foreach (Shader shader in shaders)
+			int[] handles = shaders.Select(shader => shader.Handle).ToArray();
+			StartLink(handles);
+			FinishLink(handles);
+		}
+
+		// Attaches the stages and links without waiting for the driver.
+		private void StartLink(int[] shaders)
+		{
+			foreach (int shader in shaders)
 			{
-				GL.AttachShader(handle, shader.Handle);
+				GL.AttachShader(handle, shader);
 			}
 
 			// Fixed attribute slots - must happen before linking.
@@ -581,13 +652,17 @@ namespace LELEngine.Shaders
 			// The binary stays retrievable for the program binary cache (when it is on).
 			ProgramBinaryCache.PrepareLink(handle);
 			GL.LinkProgram(handle);
+		}
 
+		// Waits for the link: its status and log (printed), the stages detached, a linked program's uniforms.
+		private void FinishLink(int[] shaders)
+		{
 			int status;
 			GL.GetProgram(handle, GetProgramParameterName.LinkStatus, out status);
-			IsLinked = status != 0;
+			linked = status != 0;
 			string log = GL.GetProgramInfoLog(handle);
 			linkLog = log ?? "";
-			if (!IsLinked)
+			if (!linked)
 			{
 				Console.WriteLine($"[Shader] Link error in {Name}:\n{log}");
 			}
@@ -596,12 +671,12 @@ namespace LELEngine.Shaders
 				Console.WriteLine($"[Shader] {Name}:\n{log}");
 			}
 
-			foreach (Shader shader in shaders)
+			foreach (int shader in shaders)
 			{
-				GL.DetachShader(handle, shader.Handle);
+				GL.DetachShader(handle, shader);
 			}
 
-			if (IsLinked)
+			if (linked)
 			{
 				CollectUniforms();
 			}
@@ -678,8 +753,11 @@ namespace LELEngine.Shaders
 			properties.AddRange(ShaderProperty.Parse(propertyLines, source));
 		}
 
-		/// <summary>Compiles and links the stages read by the constructor (on the thread holding the GL context).</summary>
-		private void Build()
+		/// <summary>
+		///     Starts compiling and linking the stages read by the constructor (on the thread holding the GL context) without
+		///     waiting; a binary the cache has of them loads (and links) here instead.
+		/// </summary>
+		private void Start()
 		{
 			List<KeyValuePair<ShaderType, string>> stages = pendingStages;
 			pendingStages = null;
@@ -689,34 +767,61 @@ namespace LELEngine.Shaders
 			string cacheKey = ProgramBinaryCache.Enabled ? ProgramBinaryCache.Key(stages) : null;
 			if (cacheKey != null && ProgramBinaryCache.TryLoad(handle, cacheKey))
 			{
-				IsLinked = true;
+				linked = true;
 				CollectUniforms();
 				BuildLog = "";
 				return;
 			}
 
-			var shaders = new List<Shader>(stages.Count);
+			startedShaders = new int[stages.Count];
+			for (int i = 0; i < stages.Count; i++)
+			{
+				startedShaders[i] = Shader.Submit(stages[i].Value, stages[i].Key);
+			}
+
+			startedStages = stages;
+			startedCacheKey = cacheKey;
+			StartLink(startedShaders);
+			started.Add(this);
+		}
+
+		/// <summary>
+		///     Waits for a started build: the compile and link results (printed, and in <see cref="BuildLog" />), the
+		///     uniforms, the binary saved to the cache.
+		/// </summary>
+		private void FinishBuild()
+		{
+			int[] shaders = startedShaders;
+			if (shaders == null)
+			{
+				return;
+			}
+
+			List<KeyValuePair<ShaderType, string>> stages = startedStages;
+			startedShaders = null;
+			startedStages = null;
+			started.Remove(this);
+
 			var log = new System.Text.StringBuilder();
 			bool compiled = true;
-			foreach (KeyValuePair<ShaderType, string> stage in stages)
+			for (int i = 0; i < shaders.Length; i++)
 			{
-				shaders.Add(new Shader(stage.Value, stage.Key, SourcePath));
-				compiled &= Shader.LastCompiled;
-				if (!string.IsNullOrWhiteSpace(Shader.LastLog))
+				compiled &= Shader.Check(shaders[i], stages[i].Key, SourcePath, out string stageLog);
+				if (!string.IsNullOrWhiteSpace(stageLog))
 				{
-					log.Append(StageName(stage.Key)).Append(": ").Append(Shader.LastLog.Trim()).Append('\n');
+					log.Append(StageName(stages[i].Key)).Append(": ").Append(stageLog.Trim()).Append('\n');
 				}
 			}
 
-			Link(shaders.ToArray());
-			foreach (Shader shader in shaders)
+			FinishLink(shaders);
+			foreach (int shader in shaders)
 			{
-				shader.Delete();
+				GL.DeleteShader(shader);
 			}
 
 			if (!compiled)
 			{
-				IsLinked = false;
+				linked = false;
 			}
 
 			if (!string.IsNullOrWhiteSpace(linkLog))
@@ -725,10 +830,12 @@ namespace LELEngine.Shaders
 			}
 
 			BuildLog = log.ToString();
-			if (cacheKey != null && linked)
+			if (startedCacheKey != null && linked)
 			{
-				ProgramBinaryCache.Save(handle, cacheKey);
+				ProgramBinaryCache.Save(handle, startedCacheKey);
 			}
+
+			startedCacheKey = null;
 		}
 
 		/// <summary>The stages of a .shader file with their includes expanded and the engine preamble (no GL calls: any thread).</summary>

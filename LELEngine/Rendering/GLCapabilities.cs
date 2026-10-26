@@ -7,8 +7,8 @@ namespace LELEngine.Rendering
 	/// <summary>
 	///     What the current OpenGL context offers beyond the 4.3 baseline the engine requires. Queried once after
 	///     context creation; passes use it to pick the native path and fall back to 4.3 code otherwise.
-	///     The environment variable LEL_GL_DISABLE (comma separated: drawparameters, indirectparameters, subgroups)
-	///     turns detected features off, so the fallbacks can be tested on hardware that has everything;
+	///     The environment variable LEL_GL_DISABLE (comma separated: drawparameters, indirectparameters, subgroups,
+	///     parallelcompile) turns detected features off, so the fallbacks can be tested on hardware that has everything;
 	///     LEL_GL_ENABLE keeps a feature a driver workaround would turn off.
 	/// </summary>
 	public static class GLCapabilities
@@ -63,6 +63,13 @@ namespace LELEngine.Rendering
 
 		public static int VertexShaderStorageBlocks { get; private set; }
 		public static int FragmentShaderStorageBlocks { get; private set; }
+
+		/// <summary>
+		///     The driver compiles and links on its own threads (KHR / ARB_parallel_shader_compile, switched on here with as
+		///     many threads as it likes): programs started together compile together (<see cref="Shaders.ShaderProgram" />
+		///     asks for the results only when a program is first used). Without it the same code works, compiling in turn.
+		/// </summary>
+		public static bool ParallelShaderCompile { get; private set; }
 
 		public static bool Initialized { get; private set; }
 
@@ -126,11 +133,30 @@ namespace LELEngine.Rendering
 				Console.WriteLine("[GL] Indirect draw count off on Intel: the driver stalls on it, fixed-count multi-draw is faster (LEL_GL_ENABLE=indirectparameters to force it)");
 			}
 
+			bool parallelKhr = HasExtension("GL_KHR_parallel_shader_compile");
+			bool parallelArb = HasExtension("GL_ARB_parallel_shader_compile");
+			ParallelShaderCompile = parallelKhr || parallelArb;
 			ApplyDisabledFeatures(Environment.GetEnvironmentVariable("LEL_GL_DISABLE"));
+			if (parallelKhr || parallelArb)
+			{
+				// 0xFFFFFFFF: as many threads as the driver likes (measured on an RTX 5070 Ti: the 13 FORGE3D planet programs
+				// 13.8 s one by one, 2.8 s started together); 0 when switched off: it compiles on the calling thread (the
+				// driver's default is neither).
+				uint threads = ParallelShaderCompile ? 0xFFFFFFFF : 0u;
+				if (parallelKhr)
+				{
+					GL.Khr.MaxShaderCompilerThreads(threads);
+				}
+				else
+				{
+					GL.Arb.MaxShaderCompilerThreads(threads);
+				}
+			}
+
 			Initialized = true;
 
 			Console.WriteLine($"[GL] {Major}.{Minor} | clear texture {(ClearTexture ? "yes" : "no")} | DSA {(DirectStateAccess ? "yes" : "no")} | anisotropy {(AnisotropicFiltering ? MaxAnisotropy.ToString("0") + "x" : "no")} | image units {MaxImageUnits}");
-			Console.WriteLine($"[GL] draw parameters {Describe(ShaderDrawParameters, ShaderDrawParametersExtension ? "ARB" : "core")} | indirect count {Describe(IndirectParameters, "yes")} | compute subgroups {Describe(ComputeSubgroups, "yes")} | storage bindings {MaxShaderStorageBindings} (vertex {VertexShaderStorageBlocks}, fragment {FragmentShaderStorageBlocks})");
+			Console.WriteLine($"[GL] draw parameters {Describe(ShaderDrawParameters, ShaderDrawParametersExtension ? "ARB" : "core")} | indirect count {Describe(IndirectParameters, "yes")} | compute subgroups {Describe(ComputeSubgroups, "yes")} | parallel shader compile {Describe(ParallelShaderCompile, "yes")} | storage bindings {MaxShaderStorageBindings} (vertex {VertexShaderStorageBlocks}, fragment {FragmentShaderStorageBlocks})");
 		}
 
 		public static bool IsAtLeast(int major, int minor)
@@ -167,6 +193,9 @@ namespace LELEngine.Rendering
 						break;
 					case "subgroups":
 						ComputeSubgroups = false;
+						break;
+					case "parallelcompile":
+						ParallelShaderCompile = false;
 						break;
 					default:
 						Console.WriteLine("[GL] LEL_GL_DISABLE: unknown feature '" + item + "'");

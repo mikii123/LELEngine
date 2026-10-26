@@ -211,14 +211,21 @@ namespace LELEngine.Serialization
 			return scene;
 		}
 
-		/// <summary>Loads a scene (or prefab) document of either format (snapshots are binary, project files JSON).</summary>
+		/// <summary>
+		///     Loads a scene (or prefab) document of either format (snapshots are binary, project files JSON). The textures
+		///     it uses are read and decoded on worker threads while the document is read (<see cref="TextureImportBatch" />)
+		///     and are complete when it returns.
+		/// </summary>
 		public static Scene LoadFromBytes(byte[] data, string fallbackName = null, Action<float> progress = null)
 		{
-			if (Documents.IsJson(data))
+			using (TextureImportBatch.Begin())
 			{
-				return LoadFromJson(data, fallbackName, progress);
+				return Documents.IsJson(data) ? LoadFromJson(data, fallbackName, progress) : LoadFromBinary(data, fallbackName, progress);
 			}
+		}
 
+		private static Scene LoadFromBinary(byte[] data, string fallbackName, Action<float> progress)
+		{
 			var context = new SerializationContext();
 			var reader = new BinaryDocumentReader(data, context);
 			string name = reader.String(reader.Body.ReadInt32());

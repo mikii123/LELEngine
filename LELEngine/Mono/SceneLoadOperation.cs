@@ -202,6 +202,11 @@ namespace LELEngine
 		{
 			long start = Stopwatch.GetTimestamp();
 			prepareFrames++;
+			if (prepareFrames == 1)
+			{
+				SceneManager.StartShaderBuilds(assets);
+			}
+
 			while (prepared < assets.Count)
 			{
 				SceneManager.PrepareAsset(assets[prepared], gpuDriven);

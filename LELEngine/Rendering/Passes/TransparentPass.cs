@@ -22,7 +22,9 @@ namespace LELEngine.Rendering.Passes
 	///     GrabPass, e.g. refraction): the copy they read is taken after the last earlier draw that touched the part of the
 	///     screen they read, and one copy serves a run of such objects whose parts nothing drawn in between overlaps.
 	///     Materials whose variant declares SceneDepth (soft particles) read the depth copy of the opaque scene that the
-	///     particle effects read too (<see cref="SceneDepthTexture" />), taken once before the transparent draws.
+	///     particle effects read too (<see cref="SceneDepthTexture" />), taken once: after the opaque surfaces this pass
+	///     draws first (queues up to GeometryLast + 1 without blending, depth written: alpha clip, vertex functions) and
+	///     before every other draw.
 	/// </summary>
 	public sealed class TransparentPass : RenderPass
 	{
@@ -145,13 +147,10 @@ namespace LELEngine.Rendering.Passes
 
 			context.SceneTarget.Bind();
 
-			// The scene depth with the opaques for soft particles (and the next simulation's depth collisions).
+			// The scene depth with the opaques for soft particles (and the next simulation's depth collisions), taken
+			// once the opaque surfaces this pass draws itself are in it (DrawsLikeOpaque): right before the first other entry.
+			bool needsDepth = (vfxEntries.Count > 0 && VFX.VfxRuntime.NeedsDepth) || readsDepth;
 			VFX.VfxDepthCapture depth = null;
-			if ((vfxEntries.Count > 0 && VFX.VfxRuntime.NeedsDepth) || readsDepth)
-			{
-				depth = VFX.VfxRuntime.CaptureDepth(context);
-				context.SceneTarget.Bind();
-			}
 
 			ShaderProgram active = null;
 			bool receiveShadows = false;
@@ -161,6 +160,12 @@ namespace LELEngine.Rendering.Passes
 			bool afterMesh = false;
 			foreach (Entry entry in entries)
 			{
+				if (needsDepth && depth == null && !DrawsLikeOpaque(entry))
+				{
+					depth = VFX.VfxRuntime.CaptureDepth(context);
+					context.SceneTarget.Bind();
+				}
+
 				if (entry.Vfx != null)
 				{
 					// Consecutive particle draws skip the state they share; a mesh drawn in between resets that.
@@ -288,6 +293,21 @@ namespace LELEngine.Rendering.Passes
 		#endregion
 
 		#region PrivateMethods
+
+		// An opaque surface this pass draws: no blending and depth written, in the queues up to GeometryLast + 1, where the
+		// engine puts what the depth prepass cannot draw (alpha clip, vertex functions that move the surface, grab variants of
+		// opaque materials). They sort first and belong in the opaque scene's depth copy: soft particles fade against them as
+		// against the prepass's surfaces (a sun drawn with its vertex function and the corona plates crossing it).
+		private static bool DrawsLikeOpaque(Entry entry)
+		{
+			if (entry.Vfx != null || entry.Queue > MaterialQueue.GeometryLast + 1)
+			{
+				return false;
+			}
+
+			ShaderRenderState state = entry.Material.RenderState;
+			return !state.BlendEnabled && state.ZWrite && !state.SceneDepth;
+		}
 
 		// Drawable renderers with their sort keys: queue first, then far to near (the centre of the mesh bounds in
 		// the world, like Unity's default transparent sorting). True when one of them grabs the scene.

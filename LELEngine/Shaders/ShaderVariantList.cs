@@ -132,12 +132,28 @@ namespace LELEngine.Shaders
 			var failures = new List<string>();
 			compiled = 0;
 			var watch = Stopwatch.StartNew();
+
+			// Every variant starts compiling first (the driver compiles them together with parallel shader compile), then
+			// each is waited for.
+			var programs = new List<(ShaderVariant variant, ShaderProgram program)>();
 			foreach (ShaderVariant variant in variants)
 			{
-				ShaderProgram program;
 				try
 				{
-					program = variant.GetProgram();
+					ShaderProgram program = variant.GetProgram();
+					program.StartBuild();
+					programs.Add((variant, program));
+				}
+				catch (Exception e)
+				{
+					failures.Add(variant + ": " + e.Message);
+				}
+			}
+
+			foreach ((ShaderVariant variant, ShaderProgram program) in programs)
+			{
+				try
+				{
 					program.EnsureBuilt();
 				}
 				catch (Exception e)
