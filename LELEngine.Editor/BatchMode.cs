@@ -34,27 +34,29 @@ namespace LELEngine.Editor
 			"                             works too but a shell does not wait for a window application)\n" +
 			"Batch mode options:\n" +
 			"  -createProject             create the project when the folder holds none (starter assets, default scene)\n" +
-			"  -scene <asset path>        open this scene (default: the last or start scene, only with -executeMethod)\n" +
+			"  -scene <asset path>        open this scene (default: the last or start scene; with -executeMethod / -listen)\n" +
 			"  -executeMethod <Type.Method>\n" +
 			"                             call a static method of the scripts (Editor folders included), the engine or\n" +
 			"                             the editor: no parameters\n" +
-			"                             or (string[] args) with the whole command line; void, bool or int result\n" +
+			"                             or (string[] args) with the whole command line; void, bool, int, Task, Task<bool>\n" +
+			"                             or Task<int> result. It runs inside the editor, which draws no UI: the editor\n" +
+			"                             scripts' windows, menus and inspectors exist, EditorAutomation works (window\n" +
+			"                             screenshots are drawn off screen on request)\n" +
+			"  -listen                    serve editor automation commands until 'quit' (LELEngine.Editor.Console -command help)\n" +
 			"  -build <folder>            build the game into the folder\n" +
 			"  -buildConfig Release|Debug configuration of the build (default Release)\n" +
 			"  -selfContained [true|false]\n" +
 			"                             ship the .NET runtime with the game (default: the project's Build setting)\n" +
 			"  -logFile <file>            also write the log to the file\n" +
 			"  -quit                      accepted for Unity compatibility (batch mode always quits)\n" +
-			"Exit code: 0 success, 1 failure.";
+			"Exit code: 0 success, 1 failure.\n" +
+			Automation.AutomationClient.Usage;
 
 		#endregion
 
 		#region PrivateFields
 
 		private static NativeWindow graphics;
-
-		/// <summary>Game.Editor.dll of the project (null without editor scripts): -executeMethod finds its types too.</summary>
-		private static Assembly editorScripts;
 
 		#endregion
 
@@ -125,6 +127,19 @@ namespace LELEngine.Editor
 				Debug.Log("[Batch] Created project " + projectPath);
 			}
 
+			// A method or automation commands run inside the editor itself, without UI (BatchEditor); a build alone needs
+			// only the project.
+			if (options.Has("executemethod") || options.Has("listen"))
+			{
+				if (options.Has("executemethod") && string.IsNullOrEmpty(options.Get("executemethod")))
+				{
+					Debug.LogError("[Batch] -executeMethod needs a method name (Namespace.Type.Method).");
+					return 1;
+				}
+
+				return BatchEditor.Run(options, args, projectPath, options.Has("build") ? opened => BuildGame(opened, options, false) : null);
+			}
+
 			ProjectInfo project = ProjectInfo.Load(projectPath);
 			project.LoadProjectSettings();
 			AssetDatabase.Initialize(project.AssetsPath, true);
@@ -151,64 +166,44 @@ namespace LELEngine.Editor
 				return 1;
 			}
 
-			// 3. Scene and method.
-			string methodName = options.Get("executemethod");
-			if (options.Has("executemethod") && string.IsNullOrEmpty(methodName))
+			// 3. Game build.
+			if (options.Has("build") && !BuildGame(project, options, true))
 			{
-				Debug.LogError("[Batch] -executeMethod needs a method name (Namespace.Type.Method).");
 				return 1;
-			}
-
-			string scenePath = options.Get("scene");
-			if (scenePath != null || methodName != null)
-			{
-				if (!OpenScene(project, scenePath))
-				{
-					return 1;
-				}
-			}
-
-			if (methodName != null)
-			{
-				int code = ExecuteMethod(methodName, args);
-				if (code != 0)
-				{
-					return code;
-				}
-			}
-
-			// 4. Game build.
-			if (options.Has("build"))
-			{
-				string output = options.Get("build");
-				string configuration = options.Get("buildconfig") ?? "Release";
-				bool release = string.Equals(configuration, "Release", StringComparison.OrdinalIgnoreCase);
-				// -selfContained alone means true.
-				string selfContainedValue = options.Get("selfcontained");
-				bool selfContained = options.Has("selfcontained") ? selfContainedValue == null || string.Equals(selfContainedValue, "true", StringComparison.OrdinalIgnoreCase) : project.BuildSelfContained;
-				bool validSelfContained = selfContainedValue == null || string.Equals(selfContainedValue, "true", StringComparison.OrdinalIgnoreCase) || string.Equals(selfContainedValue, "false", StringComparison.OrdinalIgnoreCase);
-				if (string.IsNullOrEmpty(output) || (!release && !string.Equals(configuration, "Debug", StringComparison.OrdinalIgnoreCase)) || !validSelfContained)
-				{
-					Debug.LogError("[Batch] Usage: -build <folder> [-buildConfig Release|Debug] [-selfContained [true|false]]");
-					return 1;
-				}
-
-				// The GL context bakes the meshes' distance fields (and lets model import extract materials).
-				EnsureGraphics();
-				var settings = new BuildSettings { OutputFolder = Path.GetFullPath(output), Release = release, SelfContained = selfContained, StartScene = project.StartScene, Scenes = new List<string>(project.BuildScenes) };
-				if (!GameBuilder.Build(project, settings, line => Console.WriteLine((line.StartsWith("Error", StringComparison.Ordinal) ? "[Error] " : "") + "[Build] " + line)))
-				{
-					return 1;
-				}
 			}
 
 			return 0;
 		}
 
+		/// <summary>-build: the game into the folder (<paramref name="ownGraphics" />: make batch mode's own GL context; the editor has one).</summary>
+		private static bool BuildGame(ProjectInfo project, CommandLine options, bool ownGraphics)
+		{
+			string output = options.Get("build");
+			string configuration = options.Get("buildconfig") ?? "Release";
+			bool release = string.Equals(configuration, "Release", StringComparison.OrdinalIgnoreCase);
+			// -selfContained alone means true.
+			string selfContainedValue = options.Get("selfcontained");
+			bool selfContained = options.Has("selfcontained") ? selfContainedValue == null || string.Equals(selfContainedValue, "true", StringComparison.OrdinalIgnoreCase) : project.BuildSelfContained;
+			bool validSelfContained = selfContainedValue == null || string.Equals(selfContainedValue, "true", StringComparison.OrdinalIgnoreCase) || string.Equals(selfContainedValue, "false", StringComparison.OrdinalIgnoreCase);
+			if (string.IsNullOrEmpty(output) || (!release && !string.Equals(configuration, "Debug", StringComparison.OrdinalIgnoreCase)) || !validSelfContained)
+			{
+				Debug.LogError("[Batch] Usage: -build <folder> [-buildConfig Release|Debug] [-selfContained [true|false]]");
+				return false;
+			}
+
+			// The GL context bakes the meshes' distance fields (and lets model import extract materials).
+			if (ownGraphics)
+			{
+				EnsureGraphics();
+			}
+
+			var settings = new BuildSettings { OutputFolder = Path.GetFullPath(output), Release = release, SelfContained = selfContained, StartScene = project.StartScene, Scenes = new List<string>(project.BuildScenes) };
+			return GameBuilder.Build(project, settings, line => Console.WriteLine((line.StartsWith("Error", StringComparison.Ordinal) ? "[Error] " : "") + "[Build] " + line));
+		}
+
 		/// <summary>
-		///     Compiles the scripts when the editor build is out of date and loads them (types for scenes and methods):
-		///     Game.dll, and Game.Editor.dll when some script lies in an Editor folder (for -executeMethod; not
-		///     registered for serialization, as in the editor).
+		///     Compiles the scripts when the editor build is out of date (the editor scripts too, so their errors fail the run)
+		///     and loads Game.dll (types for the scenes the build reads).
 		/// </summary>
 		private static bool CompileScripts(ProjectInfo project)
 		{
@@ -222,8 +217,6 @@ namespace LELEngine.Editor
 			string editorDll = ScriptDomain.EditorAssemblyFile(project);
 			byte[] assembly;
 			byte[] symbols;
-			byte[] editorAssembly = null;
-			byte[] editorSymbols = null;
 			if (ScriptDomain.IsAssemblyCurrent(project, withEditor))
 			{
 				Debug.Log("[Batch] Scripts are up to date");
@@ -237,11 +230,6 @@ namespace LELEngine.Editor
 
 				assembly = File.ReadAllBytes(dll);
 				symbols = ReadSymbols(dll);
-				if (withEditor)
-				{
-					editorAssembly = File.ReadAllBytes(editorDll);
-					editorSymbols = ReadSymbols(editorDll);
-				}
 			}
 			else
 			{
@@ -270,19 +258,12 @@ namespace LELEngine.Editor
 				Debug.Log($"[Batch] Scripts compiled ({result.Seconds:0.0} s), {result.WovenChecks} null checks woven");
 				assembly = result.Assembly;
 				symbols = result.Symbols;
-				editorAssembly = result.EditorAssembly;
-				editorSymbols = result.EditorSymbols;
 			}
 
-			// One context for both, as in the editor: Game.Editor.dll resolves Game.dll through it (Assembly.Load(byte[])
-			// would put each into its own anonymous context). Batch runs never reload.
+			// The game's types (scenes read for the build). The editor scripts are compiled (a build with errors there fails
+			// too) but not loaded: methods and commands run in the editor itself (BatchEditor).
 			var context = new ScriptDomain.GameLoadContext(Path.GetDirectoryName(dll));
 			TypeRegistry.Register(context.Load(assembly, symbols));
-			if (editorAssembly != null)
-			{
-				editorScripts = context.Load(editorAssembly, editorSymbols);
-			}
-
 			return true;
 		}
 
@@ -290,138 +271,6 @@ namespace LELEngine.Editor
 		{
 			string pdb = Path.ChangeExtension(dll, ".pdb");
 			return File.Exists(pdb) ? File.ReadAllBytes(pdb) : null;
-		}
-
-		private static bool OpenScene(ProjectInfo project, string requested)
-		{
-			string assetPath = requested ?? project.LastScene ?? project.StartScene;
-			if (assetPath == null || !File.Exists(AssetDatabase.ToAbsolute(assetPath)))
-			{
-				if (requested != null)
-				{
-					Debug.LogError("[Batch] Scene not found: " + requested);
-					return false;
-				}
-
-				Debug.Log("[Batch] The project has no scene to open");
-				return true;
-			}
-
-			EnsureGraphics();
-			Scene scene = SceneSerializer.Load(AssetDatabase.ToAbsolute(assetPath));
-			scene.Path = assetPath;
-			SceneManager.SetActiveScene(scene);
-			scene.StartLifecycle(false);
-			Debug.Log("[Batch] Opened scene " + assetPath);
-			return true;
-		}
-
-		private static int ExecuteMethod(string name, string[] args)
-		{
-			int dot = name.LastIndexOf('.');
-			if (dot <= 0 || dot == name.Length - 1)
-			{
-				Debug.LogError("[Batch] -executeMethod expects Namespace.Type.Method: " + name);
-				return 1;
-			}
-
-			string typeName = name.Substring(0, dot);
-			string memberName = name.Substring(dot + 1);
-			Type type = FindType(typeName);
-			if (type == null)
-			{
-				Debug.LogError("[Batch] Type not found: " + typeName);
-				return 1;
-			}
-
-			const BindingFlags flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static;
-			object[] parameters = null;
-			MethodInfo method = type.GetMethod(memberName, flags, null, Type.EmptyTypes, null);
-			if (method == null)
-			{
-				method = type.GetMethod(memberName, flags, null, new[] { typeof(string[]) }, null);
-				parameters = new object[] { args };
-			}
-
-			if (method == null)
-			{
-				Debug.LogError($"[Batch] {type.FullName} has no static method {memberName}() or {memberName}(string[])");
-				return 1;
-			}
-
-			EnsureGraphics();
-			Debug.Log("[Batch] Executing " + type.FullName + "." + method.Name);
-			object result;
-			try
-			{
-				result = method.Invoke(null, parameters);
-			}
-			catch (TargetInvocationException e)
-			{
-				Debug.LogException(e.InnerException ?? e);
-				return 1;
-			}
-
-			if (result is bool success && !success)
-			{
-				Debug.LogError($"[Batch] {method.Name} returned false");
-				return 1;
-			}
-
-			if (result is int code && code != 0)
-			{
-				Debug.LogError($"[Batch] {method.Name} returned {code}");
-				return code;
-			}
-
-			return 0;
-		}
-
-		/// <summary>Full name in the scripts, the engine or the editor; a simple name when it is unique.</summary>
-		private static Type FindType(string name)
-		{
-			var assemblies = new List<Assembly>(TypeRegistry.Assemblies);
-			if (editorScripts != null)
-			{
-				assemblies.Add(editorScripts);
-			}
-
-			if (!assemblies.Contains(typeof(BatchMode).Assembly))
-			{
-				assemblies.Add(typeof(BatchMode).Assembly);
-			}
-
-			Type bySimpleName = null;
-			int simpleMatches = 0;
-			foreach (Assembly assembly in assemblies)
-			{
-				Type type = assembly.GetType(name, false);
-				if (type != null)
-				{
-					return type;
-				}
-
-				Type[] types;
-				try
-				{
-					types = assembly.GetTypes();
-				}
-				catch (ReflectionTypeLoadException e)
-				{
-					types = Array.FindAll(e.Types, t => t != null);
-				}
-
-				foreach (Type candidate in types)
-				{
-					if (candidate.Name == name)
-					{
-						bySimpleName = candidate;
-						simpleMatches++;
-					}
-				}
-			}
-
-			return simpleMatches == 1 ? bySimpleName : null;
 		}
 
 		/// <summary>Hidden window owning the OpenGL context (newest version the driver grants, 4.6 down to 4.3).</summary>

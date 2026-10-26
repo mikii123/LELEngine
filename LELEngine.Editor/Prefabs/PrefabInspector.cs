@@ -72,7 +72,7 @@ namespace LELEngine.Editor
 				ImGui.SetTooltip("Prefab override (right click: apply or revert)");
 			}
 
-			if (context.Overrides != null && ImGui.BeginPopupContextItem("##prefab_override"))
+			if (context.Overrides != null && EditorGui.BeginPopupContextItem("##prefab_override"))
 			{
 				DrawPropertyMenu(context, context.OverrideTarget, context.Path);
 				ImGui.EndPopup();
@@ -100,7 +100,7 @@ namespace LELEngine.Editor
 				PrefabMenus.ApplyProperties(context.Editor, instance, modifications, chosen);
 			}
 
-			if (ImGui.MenuItem("Revert"))
+			if (EditorMenu.Item("Revert"))
 			{
 				PrefabMenus.RevertProperties(context.Editor, instance, modifications);
 			}
@@ -119,7 +119,7 @@ namespace LELEngine.Editor
 				{
 					GameObject host = go.transform.parent.gameObject;
 					DrawBadgeText(IconKind.AddedBadge, EditorStyle.Added, "Added to the prefab instance of '" + host.prefabInstance.Prefab?.name + "'");
-					if (ImGui.BeginPopupContextItem("##added_object"))
+					if (EditorGui.BeginPopupContextItem("##added_object"))
 					{
 						PrefabMenus.DrawObjectMenu(editor, go);
 						ImGui.EndPopup();
@@ -137,7 +137,7 @@ namespace LELEngine.Editor
 			{
 				DrawIconText(IconKind.Prefab, EditorStyle.PrefabMissing, "Missing prefab: " + instance.PrefabPath);
 				ImGui.SameLine();
-				if (PrefabUtility.IsPrefabInstanceRoot(go) && ImGui.SmallButton("Unpack"))
+				if (PrefabUtility.IsPrefabInstanceRoot(go) && EditorGui.SmallButton("Unpack"))
 				{
 					editor.Defer(() => editor.UnpackPrefab(go, PrefabUnpackMode.Completely));
 				}
@@ -156,7 +156,7 @@ namespace LELEngine.Editor
 				ImGui.TextDisabled("Part of the prefab instance");
 				ImGui.SameLine();
 				ImGui.PushStyleColor(ImGuiCol.Text, EditorStyle.Prefab);
-				if (ImGui.SmallButton((instance.Root?.Name ?? "?") + "##root"))
+				if (EditorGui.SmallButton((instance.Root?.Name ?? "?") + "##root"))
 				{
 					editor.SelectObject(instance.Root);
 				}
@@ -183,7 +183,7 @@ namespace LELEngine.Editor
 			ImGui.SameLine();
 			ImGui.SameLine(Math.Max(ImGui.GetCursorPosX(), lineRight - width));
 			ImGui.BeginDisabled(editor.IsPlaying);
-			if (ImGui.SmallButton("Open"))
+			if (EditorGui.SmallButton("Open"))
 			{
 				string path = shown.AssetPath;
 				editor.Defer(() => editor.OpenPrefab(path));
@@ -196,7 +196,7 @@ namespace LELEngine.Editor
 			}
 
 			ImGui.SameLine();
-			if (ImGui.SmallButton("Select"))
+			if (EditorGui.SmallButton("Select"))
 			{
 				editor.SelectAsset(shown.AssetPath);
 				editor.Ping(shown.AssetPath);
@@ -210,7 +210,7 @@ namespace LELEngine.Editor
 					ImGui.PushStyleColor(ImGuiCol.Text, EditorStyle.Prefab);
 				}
 
-				if (ImGui.SmallButton(overridesLabel + "  ##overrides"))
+				if (EditorGui.SmallButton(overridesLabel + "  ##overrides"))
 				{
 					ImGui.OpenPopup("##prefab_overrides");
 				}
@@ -274,7 +274,7 @@ namespace LELEngine.Editor
 					PrefabMenus.ApplyAddedComponent(editor, component, chosen);
 				}
 
-				if (ImGui.MenuItem("Revert (Remove Added Component)"))
+				if (EditorMenu.Item("Revert (Remove Added Component)"))
 				{
 					PrefabMenus.RevertAddedComponent(editor, component);
 				}
@@ -296,7 +296,7 @@ namespace LELEngine.Editor
 				PrefabMenus.ApplyProperties(editor, component.prefabInstance, modifications, target);
 			}
 
-			if (ImGui.MenuItem("Revert Component Overrides"))
+			if (EditorMenu.Item("Revert Component Overrides"))
 			{
 				PrefabMenus.RevertProperties(editor, component.prefabInstance, modifications);
 			}
@@ -325,7 +325,7 @@ namespace LELEngine.Editor
 				NVector2 start = ImGui.GetCursorScreenPos();
 				ImGui.PushStyleColor(ImGuiCol.Header, new NVector4(0.2f, 0.2f, 0.21f, 1f));
 				ImGui.PushStyleColor(ImGuiCol.Text, EditorStyle.Dim);
-				ImGui.CollapsingHeader("      " + SerializationUtility.NicifyName(name) + "  (Removed)##removed", ImGuiTreeNodeFlags.Leaf);
+				EditorGui.CollapsingHeader("      " + SerializationUtility.NicifyName(name) + "  (Removed)##removed", ImGuiTreeNodeFlags.Leaf);
 				ImGui.PopStyleColor(2);
 				float size = ImGui.GetTextLineHeight() * 0.7f;
 				EditorIcons.Draw(ImGui.GetWindowDrawList(), new NVector2(start.X + 6f, start.Y + (ImGui.GetItemRectSize().Y - size) * 0.5f), size, IconKind.RemovedBadge, ImGui.GetColorU32(EditorStyle.PrefabMissing));
@@ -335,7 +335,7 @@ namespace LELEngine.Editor
 					ImGui.SetTooltip("The prefab has this component; this instance removed it (right click: revert or apply)");
 				}
 
-				if (ImGui.BeginPopupContextItem("##removed_menu"))
+				if (EditorGui.BeginPopupContextItem("##removed_menu"))
 				{
 					PrefabApplyTarget chosen = PrefabMenus.ApplyItems(PrefabUtility.GetApplyTargets(instance, removed, true));
 					if (chosen != null)
@@ -343,7 +343,7 @@ namespace LELEngine.Editor
 						PrefabMenus.ApplyRemovedComponent(editor, instance, removed, chosen);
 					}
 
-					if (ImGui.MenuItem("Revert (Restore Component)"))
+					if (EditorMenu.Item("Revert (Restore Component)"))
 					{
 						PrefabMenus.RevertRemovedComponent(editor, instance, removed);
 					}
@@ -364,7 +364,7 @@ namespace LELEngine.Editor
 			}
 
 			Bar(ImGui.GetItemRectMin().Y, ImGui.GetItemRectMax().Y);
-			if (ImGui.BeginPopupContextItem("##header_override_" + property))
+			if (EditorGui.BeginPopupContextItem("##header_override_" + property))
 			{
 				DrawPropertyMenu(context, go.prefabSourceId, property);
 				ImGui.EndPopup();
@@ -462,14 +462,14 @@ namespace LELEngine.Editor
 			}
 
 			ImGui.Separator();
-			if (ImGui.Button("Revert All"))
+			if (EditorGui.Button("Revert All"))
 			{
 				PrefabMenus.RevertAll(editor, instance);
 				ImGui.CloseCurrentPopup();
 			}
 
 			ImGui.SameLine();
-			if (ImGui.Button("Apply All"))
+			if (EditorGui.Button("Apply All"))
 			{
 				PrefabMenus.ApplyAll(editor, instance);
 				ImGui.CloseCurrentPopup();
@@ -533,7 +533,7 @@ namespace LELEngine.Editor
 			float buttons = ImGui.CalcTextSize("Revert").X + ImGui.CalcTextSize(targets.Count > 1 ? "Apply..." : "Apply").X + ImGui.GetStyle().FramePadding.X * 4f + ImGui.GetStyle().ItemSpacing.X;
 			ImGui.SameLine();
 			ImGui.SameLine(Math.Max(ImGui.GetCursorPosX() + 8f, lineRight - buttons));
-			if (ImGui.SmallButton("Revert"))
+			if (EditorGui.SmallButton("Revert"))
 			{
 				revert();
 				ImGui.CloseCurrentPopup();
@@ -543,7 +543,7 @@ namespace LELEngine.Editor
 			if (targets.Count <= 1)
 			{
 				ImGui.BeginDisabled(targets.Count == 0);
-				if (ImGui.SmallButton("Apply") && targets.Count == 1)
+				if (EditorGui.SmallButton("Apply") && targets.Count == 1)
 				{
 					apply(targets[0]);
 					ImGui.CloseCurrentPopup();
@@ -558,7 +558,7 @@ namespace LELEngine.Editor
 				return;
 			}
 
-			if (ImGui.SmallButton("Apply..."))
+			if (EditorGui.SmallButton("Apply..."))
 			{
 				ImGui.OpenPopup("##apply_targets");
 			}

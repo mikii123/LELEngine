@@ -169,7 +169,7 @@ namespace LELEngine.Editor.VFX
 			DrawGrid(draw);
 
 			ImGui.SetCursorScreenPos(canvasMin);
-			ImGui.InvisibleButton("##vfx_canvas", canvasSize, ImGuiButtonFlags.MouseButtonLeft | ImGuiButtonFlags.MouseButtonRight | ImGuiButtonFlags.MouseButtonMiddle);
+			EditorGui.InvisibleButton("##vfx_canvas", canvasSize, ImGuiButtonFlags.MouseButtonLeft | ImGuiButtonFlags.MouseButtonRight | ImGuiButtonFlags.MouseButtonMiddle);
 			hovered = ImGui.IsItemHovered();
 			focused = ImGui.IsWindowFocused(ImGuiFocusedFlags.RootAndChildWindows);
 			AcceptPropertyDrop();
@@ -1641,7 +1641,7 @@ namespace LELEngine.Editor.VFX
 			}
 
 			ImGui.SetNextItemWidth(-1);
-			ImGui.InputTextWithHint("##search", "Search nodes", ref createSearch, 128);
+			EditorGui.InputTextWithHint("##search", "Search nodes", ref createSearch, 128);
 			bool filtered = createSearch.Length > 0;
 			if (ImGui.BeginChild("##create_list", new NVector2(0f, 0f)))
 			{
@@ -1659,11 +1659,11 @@ namespace LELEngine.Editor.VFX
 					DrawCreateList(VfxNodeLibrary.OfKind(VfxNodeKind.Operator), filtered, "Operators");
 					if (Document.Graph.Properties.Count > 0 && (!filtered || "property".Contains(createSearch.ToLowerInvariant())))
 					{
-						if (ImGui.TreeNodeEx("Properties", filtered ? ImGuiTreeNodeFlags.DefaultOpen : ImGuiTreeNodeFlags.None))
+						if (EditorGui.TreeNodeEx("Properties", filtered ? ImGuiTreeNodeFlags.DefaultOpen : ImGuiTreeNodeFlags.None))
 						{
 							foreach (VfxProperty property in Document.Graph.Properties)
 							{
-								if (ImGui.Selectable(property.Name + " (" + property.Value.Type + ")"))
+								if (EditorGui.Selectable(property.Name + " (" + property.Value.Type + ")"))
 								{
 									CreateProperty(property.Name);
 									ImGui.CloseCurrentPopup();
@@ -1692,7 +1692,7 @@ namespace LELEngine.Editor.VFX
 						continue;
 					}
 
-					if (ImGui.Selectable(definition.Name + "  (" + definition.Category + ")"))
+					if (EditorGui.Selectable(definition.Name + "  (" + definition.Category + ")"))
 					{
 						CreateNode(definition);
 						ImGui.CloseCurrentPopup();
@@ -1704,7 +1704,7 @@ namespace LELEngine.Editor.VFX
 				return;
 			}
 
-			if (!ImGui.TreeNodeEx(header, ImGuiTreeNodeFlags.DefaultOpen))
+			if (!EditorGui.TreeNodeEx(header, ImGuiTreeNodeFlags.DefaultOpen))
 			{
 				return;
 			}
@@ -1722,7 +1722,7 @@ namespace LELEngine.Editor.VFX
 					}
 
 					current = category;
-					open = ImGui.TreeNodeEx(category.Length == 0 ? "Other" : category);
+					open = EditorGui.TreeNodeEx(category.Length == 0 ? "Other" : category);
 				}
 
 				if (!open)
@@ -1730,7 +1730,7 @@ namespace LELEngine.Editor.VFX
 					continue;
 				}
 
-				if (ImGui.Selectable(definition.Name))
+				if (EditorGui.Selectable(definition.Name))
 				{
 					CreateNode(definition);
 					ImGui.CloseCurrentPopup();
@@ -1878,7 +1878,7 @@ namespace LELEngine.Editor.VFX
 			}
 
 			ImGui.SetNextItemWidth(-1);
-			ImGui.InputTextWithHint("##block_search", "Search blocks", ref blockSearch, 128);
+			EditorGui.InputTextWithHint("##block_search", "Search blocks", ref blockSearch, 128);
 			string search = blockSearch.ToLowerInvariant();
 			if (ImGui.BeginChild("##block_list", new NVector2(0f, 0f)))
 			{
@@ -1893,7 +1893,7 @@ namespace LELEngine.Editor.VFX
 							continue;
 						}
 
-						if (ImGui.Selectable(definition.Name + "  (" + definition.Category + ")"))
+						if (EditorGui.Selectable(definition.Name + "  (" + definition.Category + ")"))
 						{
 							AddBlock(context, definition);
 							ImGui.CloseCurrentPopup();
@@ -1912,7 +1912,7 @@ namespace LELEngine.Editor.VFX
 						}
 
 						current = category;
-						open = ImGui.TreeNodeEx(category.Length == 0 ? "Other" : category, ImGuiTreeNodeFlags.DefaultOpen);
+						open = EditorGui.TreeNodeEx(category.Length == 0 ? "Other" : category, ImGuiTreeNodeFlags.DefaultOpen);
 					}
 
 					if (!open)
@@ -1920,7 +1920,7 @@ namespace LELEngine.Editor.VFX
 						continue;
 					}
 
-					if (ImGui.Selectable(definition.Name))
+					if (EditorGui.Selectable(definition.Name))
 					{
 						AddBlock(context, definition);
 						ImGui.CloseCurrentPopup();
@@ -1974,7 +1974,7 @@ namespace LELEngine.Editor.VFX
 
 			ImGui.TextDisabled(definition.GetTitle(node));
 			ImGui.Separator();
-			if (definition.Kind == VfxNodeKind.Context && ImGui.MenuItem("Add Block..."))
+			if (definition.Kind == VfxNodeKind.Context && EditorMenu.Item("Add Block..."))
 			{
 				OpenBlockMenu(node);
 			}
@@ -1983,12 +1983,12 @@ namespace LELEngine.Editor.VFX
 			{
 				VfxNodeData context = graph.FindNode(node.Parent);
 				int index = context?.Blocks.IndexOf(node.Id) ?? -1;
-				if (ImGui.MenuItem(node.Enabled ? "Disable" : "Enable"))
+				if (EditorMenu.Item(node.Enabled ? "Disable" : "Enable"))
 				{
 					Document.Edit("Toggle block", () => node.Enabled = !node.Enabled);
 				}
 
-				if (ImGui.MenuItem("Move Up", "", false, index > 0))
+				if (EditorMenu.Item("Move Up", "", false, index > 0))
 				{
 					Document.Edit("Move block up", () =>
 					{
@@ -1997,7 +1997,7 @@ namespace LELEngine.Editor.VFX
 					});
 				}
 
-				if (ImGui.MenuItem("Move Down", "", false, context != null && index >= 0 && index < context.Blocks.Count - 1))
+				if (EditorMenu.Item("Move Down", "", false, context != null && index >= 0 && index < context.Blocks.Count - 1))
 				{
 					Document.Edit("Move block down", () =>
 					{
@@ -2007,13 +2007,13 @@ namespace LELEngine.Editor.VFX
 				}
 			}
 
-			if (ImGui.MenuItem("Duplicate", "Ctrl+D"))
+			if (EditorMenu.Item("Duplicate", "Ctrl+D"))
 			{
 				Select(node.Id);
 				DuplicateSelected();
 			}
 
-			if (ImGui.MenuItem("Delete", "Del"))
+			if (EditorMenu.Item("Delete", "Del"))
 			{
 				if (!Selected.Contains(node.Id))
 				{

@@ -611,7 +611,7 @@ namespace LELEngine.Editor
 		{
 			float height = ImGui.GetFrameHeight();
 			size = size > 0f ? size : height;
-			bool pressed = ImGui.Button("##" + id, new NVector2(size, height));
+			bool pressed = EditorGui.Button("##" + id, new NVector2(size, height));
 			if (tooltip != null && ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
 			{
 				ImGui.SetTooltip(tooltip);

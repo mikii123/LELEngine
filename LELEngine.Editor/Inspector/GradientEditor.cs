@@ -50,7 +50,7 @@ namespace LELEngine.Editor
 
 			var size = new NVector2(Math.Max(40f, ImGui.CalcItemWidth()), ImGui.GetFrameHeight());
 			NVector2 min = ImGui.GetCursorScreenPos();
-			bool clicked = ImGui.InvisibleButton("##gradientfield", size);
+			bool clicked = EditorGui.InvisibleButton("##gradientfield", size);
 			bool hovered = ImGui.IsItemHovered();
 			ImDrawListPtr draw = ImGui.GetWindowDrawList();
 			if (gradient != null)
@@ -162,7 +162,7 @@ namespace LELEngine.Editor
 			NVector2 origin = ImGui.GetCursorScreenPos();
 			var barMin = new NVector2(origin.X + KeySize, origin.Y + KeyRow);
 			var barMax = new NVector2(origin.X + width - KeySize, barMin.Y + BarHeight);
-			ImGui.InvisibleButton("##gradientbar", new NVector2(width, KeyRow * 2f + BarHeight));
+			EditorGui.InvisibleButton("##gradientbar", new NVector2(width, KeyRow * 2f + BarHeight));
 			bool hovered = ImGui.IsItemHovered();
 			ImDrawListPtr draw = ImGui.GetWindowDrawList();
 			DrawPreview(draw, gradient, barMin, barMax);
@@ -369,7 +369,7 @@ namespace LELEngine.Editor
 				GradientAlphaKey[] keys = gradient.alphaKeys;
 				float alpha = keys[selected].alpha;
 				ImGui.SetNextItemWidth(fieldWidth);
-				bool edited = ImGui.SliderFloat("Alpha", ref alpha, 0f, 1f, "%.3f");
+				bool edited = EditorGui.SliderFloat("Alpha", ref alpha, 0f, 1f, "%.3f");
 				context.Track(edited);
 				if (edited)
 				{
@@ -384,7 +384,7 @@ namespace LELEngine.Editor
 				Color4 color = keys[selected].color;
 				var n = new NVector4(color.R, color.G, color.B, 1f);
 				ImGui.SetNextItemWidth(fieldWidth);
-				bool edited = ImGui.ColorEdit4("Color", ref n, ImGuiColorEditFlags.Float | ImGuiColorEditFlags.NoAlpha | ImGuiColorEditFlags.Hdr);
+				bool edited = EditorGui.ColorEdit4("Color", ref n, ImGuiColorEditFlags.Float | ImGuiColorEditFlags.NoAlpha | ImGuiColorEditFlags.Hdr);
 				context.Track(edited);
 				if (edited)
 				{
@@ -396,7 +396,7 @@ namespace LELEngine.Editor
 
 			float location = (selectedAlpha ? gradient.alphaKeys[selected].time : gradient.colorKeys[selected].time) * 100f;
 			ImGui.SetNextItemWidth(fieldWidth);
-			bool moved = ImGui.DragFloat("Location", ref location, 0.2f, 0f, 100f, "%.1f %%");
+			bool moved = EditorGui.DragFloat("Location", ref location, 0.2f, 0f, 100f, "%.1f %%");
 			context.Track(moved);
 			if (moved)
 			{
@@ -404,7 +404,7 @@ namespace LELEngine.Editor
 			}
 
 			ImGui.BeginDisabled(count <= 1);
-			if (ImGui.Button("Delete key"))
+			if (EditorGui.Button("Delete key"))
 			{
 				changed |= RemoveSelected(gradient, context);
 			}

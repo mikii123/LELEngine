@@ -13,12 +13,18 @@ namespace LELEngine.Editor.VFX
 	///     inspector of the selected node on the right and the compile messages at the bottom. Edits are undoable
 	///     (Ctrl+Z / Ctrl+Y of the editor) and apply live to every component playing the graph; Ctrl+S saves the asset.
 	/// </summary>
-	internal sealed class VfxGraphWindow
+	internal sealed class VfxGraphWindow : IEditorPanel
 	{
 		#region PublicFields
 
 		public const string Title = "VFX Graph";
 		public bool Open;
+
+		string IEditorPanel.PanelName => Title;
+		string IEditorPanel.ImGuiName => "###vfx_graph";
+		bool IEditorPanel.PanelOpen { get => Open; set => Open = value; }
+		NVector2 IEditorPanel.DefaultCaptureSize => new NVector2(1200, 760);
+		void IEditorPanel.Focus() => EditorApplication.Instance.OpenVfxGraph(document?.AssetPath);
 		public bool IsFocused { get; private set; }
 		public VfxGraphDocument Document => document;
 		public VfxGraphCanvas Canvas => canvas;
@@ -121,7 +127,11 @@ namespace LELEngine.Editor.VFX
 			bool open = Open;
 			string title = Title + (document != null ? " - " + Path.GetFileNameWithoutExtension(document.AssetPath ?? "untitled") + (document.Dirty ? " *" : "") : "") + "###vfx_graph";
 			bool visible = ImGui.Begin(title, ref open, ImGuiWindowFlags.MenuBar);
-			IsFocused = ImGui.IsWindowFocused(ImGuiFocusedFlags.RootAndChildWindows);
+			// A capture's own frames say nothing about the editor's focus (shortcuts read it).
+			if (!Automation.WindowCapture.Active)
+			{
+				IsFocused = ImGui.IsWindowFocused(ImGuiFocusedFlags.RootAndChildWindows);
+			}
 			if (visible)
 			{
 				try
@@ -247,50 +257,50 @@ namespace LELEngine.Editor.VFX
 				return;
 			}
 
-			if (ImGui.BeginMenu("File"))
+			if (EditorMenu.Begin("File"))
 			{
-				if (ImGui.MenuItem("Save", "Ctrl+S", false, document != null && document.Dirty)) document.Save();
-				if (ImGui.MenuItem("Revert", "", false, document != null && document.Dirty)) document.Revert();
+				if (EditorMenu.Item("Save", "Ctrl+S", false, document != null && document.Dirty)) document.Save();
+				if (EditorMenu.Item("Revert", "", false, document != null && document.Dirty)) document.Revert();
 				ImGui.Separator();
-				if (ImGui.MenuItem("Close")) closeRequested = true;
-				ImGui.EndMenu();
+				if (EditorMenu.Item("Close")) closeRequested = true;
+				EditorMenu.End();
 			}
 
-			if (ImGui.BeginMenu("Edit"))
+			if (EditorMenu.Begin("Edit"))
 			{
-				if (ImGui.MenuItem("Undo", "Ctrl+Z", false, editor.Undo.CanUndo)) editor.UndoLast();
-				if (ImGui.MenuItem("Redo", "Ctrl+Y", false, editor.Undo.CanRedo)) editor.RedoLast();
+				if (EditorMenu.Item("Undo", "Ctrl+Z", false, editor.Undo.CanUndo)) editor.UndoLast();
+				if (EditorMenu.Item("Redo", "Ctrl+Y", false, editor.Undo.CanRedo)) editor.RedoLast();
 				ImGui.Separator();
-				if (ImGui.MenuItem("Duplicate", "Ctrl+D", false, canvas.Selected.Count > 0)) canvas.DuplicateSelected();
-				if (ImGui.MenuItem("Delete", "Del", false, canvas.Selected.Count > 0)) canvas.DeleteSelected();
+				if (EditorMenu.Item("Duplicate", "Ctrl+D", false, canvas.Selected.Count > 0)) canvas.DuplicateSelected();
+				if (EditorMenu.Item("Delete", "Del", false, canvas.Selected.Count > 0)) canvas.DeleteSelected();
 				ImGui.Separator();
-				if (ImGui.MenuItem("Frame All", "F")) canvas.PendingFrame = true;
-				if (ImGui.MenuItem("Auto Layout")) canvas.AutoLayout();
-				ImGui.EndMenu();
+				if (EditorMenu.Item("Frame All", "F")) canvas.PendingFrame = true;
+				if (EditorMenu.Item("Auto Layout")) canvas.AutoLayout();
+				EditorMenu.End();
 			}
 
-			if (ImGui.BeginMenu("View"))
+			if (EditorMenu.Begin("View"))
 			{
-				ImGui.MenuItem("Blackboard", "", ref showBlackboard);
-				ImGui.MenuItem("Inspector", "", ref showInspector);
-				ImGui.MenuItem("Messages", "", ref showMessages);
-				ImGui.MenuItem("Generated Code", "", ref showCode);
-				ImGui.EndMenu();
+				EditorMenu.Item("Blackboard", "", ref showBlackboard);
+				EditorMenu.Item("Inspector", "", ref showInspector);
+				EditorMenu.Item("Messages", "", ref showMessages);
+				EditorMenu.Item("Generated Code", "", ref showCode);
+				EditorMenu.End();
 			}
 
-			if (ImGui.BeginMenu("Templates", document != null))
+			if (EditorMenu.Begin("Templates", document != null))
 			{
-				if (ImGui.MenuItem("Replace with default effect"))
+				if (EditorMenu.Item("Replace with default effect"))
 				{
 					ReplaceGraph(VfxGraphBuilder.CreateDefault(document.Graph.name));
 				}
 
-				if (ImGui.MenuItem("Replace with empty systems"))
+				if (EditorMenu.Item("Replace with empty systems"))
 				{
 					ReplaceGraph(VfxGraphBuilder.CreateEmpty(document.Graph.name));
 				}
 
-				ImGui.EndMenu();
+				EditorMenu.End();
 			}
 
 			ImGui.EndMenuBar();
@@ -317,7 +327,7 @@ namespace LELEngine.Editor.VFX
 		private void DrawToolbar()
 		{
 			ImGui.BeginDisabled(!document.Dirty);
-			if (ImGui.Button("Save"))
+			if (EditorGui.Button("Save"))
 			{
 				document.Save();
 			}
@@ -332,26 +342,26 @@ namespace LELEngine.Editor.VFX
 			// Playback of the scene's components playing this graph.
 			List<VisualEffect> players = Players();
 			ImGui.BeginDisabled(players.Count == 0);
-			if (ImGui.Button("Play"))
+			if (EditorGui.Button("Play"))
 			{
 				foreach (VisualEffect player in players) player.Play();
 			}
 
 			ImGui.SameLine();
-			if (ImGui.Button("Stop"))
+			if (EditorGui.Button("Stop"))
 			{
 				foreach (VisualEffect player in players) player.Stop();
 			}
 
 			ImGui.SameLine();
-			if (ImGui.Button("Restart"))
+			if (EditorGui.Button("Restart"))
 			{
 				foreach (VisualEffect player in players) player.Reinit();
 			}
 
 			ImGui.SameLine();
 			bool paused = players.Count > 0 && players[0].pause;
-			if (ImGui.Button(paused ? "Resume" : "Pause"))
+			if (EditorGui.Button(paused ? "Resume" : "Pause"))
 			{
 				foreach (VisualEffect player in players) player.pause = !paused;
 			}
@@ -360,7 +370,7 @@ namespace LELEngine.Editor.VFX
 			ImGui.SameLine();
 			if (players.Count == 0)
 			{
-				if (ImGui.Button("Add to scene"))
+				if (EditorGui.Button("Add to scene"))
 				{
 					string path = document.AssetPath;
 					editor.CreateObject(Path.GetFileNameWithoutExtension(path ?? "Visual Effect"), go => go.AddComponent<VisualEffect>().visualEffectAsset = VfxGraph.Load(path));
@@ -473,7 +483,7 @@ namespace LELEngine.Editor.VFX
 			foreach (VfxCompileMessage message in messages)
 			{
 				ImGui.TextColored(message.IsError ? EditorStyle.Error : EditorStyle.Warning, message.ToString());
-				if (message.NodeId != 0 && ImGui.IsItemClicked())
+				if (message.NodeId != 0 && EditorGui.IsItemClicked())
 				{
 					canvas.Select(message.NodeId);
 				}
@@ -534,7 +544,7 @@ namespace LELEngine.Editor.VFX
 				}
 			}
 
-			ImGui.InputTextMultiline("##code", ref codeText, (nuint)Math.Max(codeText.Length + 1, 1024), new NVector2(-1, -1), ImGuiInputTextFlags.ReadOnly);
+			EditorGui.InputTextMultiline("##code", ref codeText, (nuint)Math.Max(codeText.Length + 1, 1024), new NVector2(-1, -1), ImGuiInputTextFlags.ReadOnly);
 		}
 
 		private void HandleShortcuts()
@@ -572,7 +582,7 @@ namespace LELEngine.Editor.VFX
 
 			ImGui.Text("The graph '" + Path.GetFileName(document?.AssetPath ?? "") + "' has unsaved changes.");
 			ImGui.Spacing();
-			if (ImGui.Button("Save", new NVector2(110, 0)))
+			if (EditorGui.Button("Save", new NVector2(110, 0)))
 			{
 				document.Save();
 				Open = false;
@@ -580,7 +590,7 @@ namespace LELEngine.Editor.VFX
 			}
 
 			ImGui.SameLine();
-			if (ImGui.Button("Discard", new NVector2(110, 0)))
+			if (EditorGui.Button("Discard", new NVector2(110, 0)))
 			{
 				document.Revert();
 				Open = false;
@@ -588,7 +598,7 @@ namespace LELEngine.Editor.VFX
 			}
 
 			ImGui.SameLine();
-			if (ImGui.Button("Cancel", new NVector2(110, 0)))
+			if (EditorGui.Button("Cancel", new NVector2(110, 0)))
 			{
 				ImGui.CloseCurrentPopup();
 			}

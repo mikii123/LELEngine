@@ -133,9 +133,9 @@ namespace LELEngine.Editor
 			}
 
 			ImGui.SetNextItemWidth(300f);
-			ImGui.InputTextWithHint("##type_search", "Search " + ObjectField.TypeLabel(baseType) + " types", ref search, 128);
+			EditorGui.InputTextWithHint("##type_search", "Search " + ObjectField.TypeLabel(baseType) + " types", ref search, 128);
 			ImGui.Separator();
-			if (allowNone && ImGui.Selectable("None", current == null))
+			if (allowNone && EditorGui.Selectable("None", current == null))
 			{
 				result = true;
 				ImGui.CloseCurrentPopup();
@@ -162,7 +162,7 @@ namespace LELEngine.Editor
 						continue;
 					}
 
-					if (ImGui.Selectable(name + "##" + type.FullName, type == current))
+					if (EditorGui.Selectable(name + "##" + type.FullName, type == current))
 					{
 						chosen = type;
 						result = true;

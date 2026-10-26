@@ -650,53 +650,53 @@ namespace LELEngine.Editor.UIBuilder
 				return;
 			}
 
-			if (ImGui.BeginMenu("File"))
+			if (EditorMenu.Begin("File"))
 			{
-				if (ImGui.MenuItem("New Document", "Ctrl+N")) NewDocument();
-				if (ImGui.BeginMenu("Open"))
+				if (EditorMenu.Item("New Document", "Ctrl+N")) NewDocument();
+				if (EditorMenu.Begin("Open"))
 				{
 					foreach (string path in AssetDatabase.GetAllAssetPaths(".uxml"))
 					{
-						if (ImGui.MenuItem(path)) Open(path);
+						if (EditorMenu.Item(path)) Open(path);
 					}
 
-					ImGui.EndMenu();
+					EditorMenu.End();
 				}
 
 				ImGui.Separator();
-				if (ImGui.MenuItem("Save", "Ctrl+S")) Save();
-				if (ImGui.MenuItem("Save As...")) openSaveAsPopup = true;
+				if (EditorMenu.Item("Save", "Ctrl+S")) Save();
+				if (EditorMenu.Item("Save As...")) openSaveAsPopup = true;
 				ImGui.Separator();
-				if (ImGui.MenuItem("Close")) window.Close();
-				ImGui.EndMenu();
+				if (EditorMenu.Item("Close")) window.Close();
+				EditorMenu.End();
 			}
 
-			if (ImGui.BeginMenu("Edit"))
+			if (EditorMenu.Begin("Edit"))
 			{
-				if (ImGui.MenuItem("Undo", "Ctrl+Z", false, undoStack.Count > 0)) Undo();
-				if (ImGui.MenuItem("Redo", "Ctrl+Y", false, redoStack.Count > 0)) Redo();
+				if (EditorMenu.Item("Undo", "Ctrl+Z", false, undoStack.Count > 0)) Undo();
+				if (EditorMenu.Item("Redo", "Ctrl+Y", false, redoStack.Count > 0)) Redo();
 				ImGui.Separator();
 				UxmlNode selected = Selected;
-				if (ImGui.MenuItem("Duplicate", "Ctrl+D", false, selected != null)) DuplicateNode(selected);
-				if (ImGui.MenuItem("Delete", "Del", false, selected != null)) DeleteNode(selected);
-				ImGui.EndMenu();
+				if (EditorMenu.Item("Duplicate", "Ctrl+D", false, selected != null)) DuplicateNode(selected);
+				if (EditorMenu.Item("Delete", "Del", false, selected != null)) DeleteNode(selected);
+				EditorMenu.End();
 			}
 
-			if (ImGui.BeginMenu("View"))
+			if (EditorMenu.Begin("View"))
 			{
-				if (ImGui.MenuItem("1280 x 720")) SetCanvasSize(1280, 720);
-				if (ImGui.MenuItem("1920 x 1080")) SetCanvasSize(1920, 1080);
-				if (ImGui.MenuItem("800 x 600")) SetCanvasSize(800, 600);
-				if (ImGui.MenuItem("375 x 812 (phone)")) SetCanvasSize(375, 812);
+				if (EditorMenu.Item("1280 x 720")) SetCanvasSize(1280, 720);
+				if (EditorMenu.Item("1920 x 1080")) SetCanvasSize(1920, 1080);
+				if (EditorMenu.Item("800 x 600")) SetCanvasSize(800, 600);
+				if (EditorMenu.Item("375 x 812 (phone)")) SetCanvasSize(375, 812);
 				ImGui.Separator();
-				if (ImGui.MenuItem("Fit", "", zoom == 0f)) zoom = 0f;
-				if (ImGui.MenuItem("50%", "", zoom == 0.5f)) zoom = 0.5f;
-				if (ImGui.MenuItem("100%", "", zoom == 1f)) zoom = 1f;
-				if (ImGui.MenuItem("200%", "", zoom == 2f)) zoom = 2f;
+				if (EditorMenu.Item("Fit", "", zoom == 0f)) zoom = 0f;
+				if (EditorMenu.Item("50%", "", zoom == 0.5f)) zoom = 0.5f;
+				if (EditorMenu.Item("100%", "", zoom == 1f)) zoom = 1f;
+				if (EditorMenu.Item("200%", "", zoom == 2f)) zoom = 2f;
 				ImGui.Separator();
 				bool theme = preview.useDefaultTheme;
-				if (ImGui.MenuItem("Default Theme", "", theme)) preview.useDefaultTheme = !theme;
-				ImGui.EndMenu();
+				if (EditorMenu.Item("Default Theme", "", theme)) preview.useDefaultTheme = !theme;
+				EditorMenu.End();
 			}
 
 			float width = ImGui.CalcTextSize(title).X + 16;
@@ -764,8 +764,8 @@ namespace LELEngine.Editor.UIBuilder
 			if (ImGui.Begin("Hierarchy"))
 			{
 				ImGuiTreeNodeFlags rootFlags = ImGuiTreeNodeFlags.DefaultOpen | ImGuiTreeNodeFlags.OpenOnArrow | ImGuiTreeNodeFlags.SpanAvailWidth;
-				bool open = ImGui.TreeNodeEx(Path.GetFileName(document.assetPath ?? "Untitled.uxml") + "##docroot", rootFlags);
-				if (ImGui.IsItemClicked() && !ImGui.IsItemToggledOpen())
+				bool open = EditorGui.TreeNodeEx(Path.GetFileName(document.assetPath ?? "Untitled.uxml") + "##docroot", rootFlags);
+				if (EditorGui.IsItemClicked() && !ImGui.IsItemToggledOpen())
 				{
 					selectedPath = null;
 				}
@@ -783,9 +783,9 @@ namespace LELEngine.Editor.UIBuilder
 
 				// Empty area: deselect, context menu to add at the root.
 				NVector2 rest = ImGui.GetContentRegionAvail();
-				ImGui.InvisibleButton("##hierarchy_rest", new NVector2(Math.Max(1f, rest.X), Math.Max(24f, rest.Y)));
-				if (ImGui.IsItemClicked()) selectedPath = null;
-				if (ImGui.BeginPopupContextItem("##hierarchy_context"))
+				EditorGui.InvisibleButton("##hierarchy_rest", new NVector2(Math.Max(1f, rest.X), Math.Max(24f, rest.Y)));
+				if (EditorGui.IsItemClicked()) selectedPath = null;
+				if (EditorGui.BeginPopupContextItem("##hierarchy_context"))
 				{
 					DrawAddMenu(document.root);
 					ImGui.EndPopup();
@@ -805,8 +805,8 @@ namespace LELEngine.Editor.UIBuilder
 			if (node.children.Count == 0) flags |= ImGuiTreeNodeFlags.Leaf;
 
 			string label = NodeLabel(node);
-			bool open = ImGui.TreeNodeEx(label + "##" + node.id, flags);
-			if (ImGui.IsItemClicked() && !ImGui.IsItemToggledOpen())
+			bool open = EditorGui.TreeNodeEx(label + "##" + node.id, flags);
+			if (EditorGui.IsItemClicked() && !ImGui.IsItemToggledOpen())
 			{
 				Select(node);
 			}
@@ -825,7 +825,7 @@ namespace LELEngine.Editor.UIBuilder
 
 			DropTarget(node);
 
-			if (ImGui.BeginPopupContextItem("##node_context_" + node.id))
+			if (EditorGui.BeginPopupContextItem("##node_context_" + node.id))
 			{
 				Select(node);
 				if (!node.isInstance)
@@ -834,13 +834,13 @@ namespace LELEngine.Editor.UIBuilder
 					ImGui.Separator();
 				}
 
-				if (ImGui.MenuItem("Duplicate")) DuplicateNode(node);
-				if (ImGui.MenuItem("Delete")) DeleteNode(node);
+				if (EditorMenu.Item("Duplicate")) DuplicateNode(node);
+				if (EditorMenu.Item("Delete")) DeleteNode(node);
 				ImGui.Separator();
-				if (ImGui.MenuItem("Move Up")) MoveNode(node, -1);
-				if (ImGui.MenuItem("Move Down")) MoveNode(node, 1);
+				if (EditorMenu.Item("Move Up")) MoveNode(node, -1);
+				if (EditorMenu.Item("Move Down")) MoveNode(node, 1);
 				UxmlNode parent = document.ParentOf(node);
-				if (parent != null && parent != document.root && ImGui.MenuItem("Move To Parent Level"))
+				if (parent != null && parent != document.root && EditorMenu.Item("Move To Parent Level"))
 				{
 					UxmlNode grand = document.ParentOf(parent);
 					Reparent(node, grand, grand.children.IndexOf(parent) + 1);
@@ -906,14 +906,14 @@ namespace LELEngine.Editor.UIBuilder
 
 		private void DrawAddMenu(UxmlNode parent)
 		{
-			if (!ImGui.BeginMenu("Add"))
+			if (!EditorMenu.Begin("Add"))
 			{
 				return;
 			}
 
 			foreach (string group in new[] { "Containers", "Controls", "Custom" })
 			{
-				if (!ImGui.BeginMenu(group))
+				if (!EditorMenu.Begin(group))
 				{
 					continue;
 				}
@@ -921,13 +921,13 @@ namespace LELEngine.Editor.UIBuilder
 				foreach (Type type in libraryTypes)
 				{
 					if (GroupOf(type) != group) continue;
-					if (ImGui.MenuItem(type.Name)) AddElement(UxmlRegistry.TagOf(type), parent);
+					if (EditorMenu.Item(type.Name)) AddElement(UxmlRegistry.TagOf(type), parent);
 				}
 
-				ImGui.EndMenu();
+				EditorMenu.End();
 			}
 
-			ImGui.EndMenu();
+			EditorMenu.End();
 		}
 
 		// ------------------------------------------------------------------ library
@@ -948,7 +948,7 @@ namespace LELEngine.Editor.UIBuilder
 			if (ImGui.Begin("Library"))
 			{
 				ImGui.SetNextItemWidth(-1);
-				ImGui.InputTextWithHint("##search", "Search", ref librarySearch, 64u);
+				EditorGui.InputTextWithHint("##search", "Search", ref librarySearch, 64u);
 				ImGui.TextDisabled("Double-click or drag into the hierarchy / canvas");
 				foreach (string group in new[] { "Containers", "Controls", "Custom" })
 				{
@@ -963,7 +963,7 @@ namespace LELEngine.Editor.UIBuilder
 						continue;
 					}
 
-					if (!ImGui.CollapsingHeader(group, ImGuiTreeNodeFlags.DefaultOpen))
+					if (!EditorGui.CollapsingHeader(group, ImGuiTreeNodeFlags.DefaultOpen))
 					{
 						continue;
 					}
@@ -975,8 +975,8 @@ namespace LELEngine.Editor.UIBuilder
 							continue;
 						}
 
-						ImGui.Selectable("  " + type.Name);
-						if (ImGui.IsItemHovered() && ImGui.IsMouseDoubleClicked(ImGuiMouseButton.Left))
+						EditorGui.Selectable("  " + type.Name);
+						if (EditorGui.IsItemDoubleClicked())
 						{
 							UxmlNode parent = Selected;
 							AddElement(UxmlRegistry.TagOf(type), parent != null && !parent.isInstance ? parent : document.root);
@@ -1025,9 +1025,9 @@ namespace LELEngine.Editor.UIBuilder
 					ImGui.TextUnformatted(src);
 					if (!exists) ImGui.PopStyleColor();
 					ImGui.SameLine(ImGui.GetWindowWidth() - 110);
-					if (ImGui.SmallButton("Edit") && exists) OpenStyleSheet(resolved);
+					if (EditorGui.SmallButton("Edit") && exists) OpenStyleSheet(resolved);
 					ImGui.SameLine();
-					if (ImGui.SmallButton("Remove"))
+					if (EditorGui.SmallButton("Remove"))
 					{
 						int index = i;
 						Apply(() => document.styleSheets.RemoveAt(index));
@@ -1037,11 +1037,11 @@ namespace LELEngine.Editor.UIBuilder
 				}
 
 				ImGui.Separator();
-				if (ImGui.BeginCombo("##addsheet", "Add existing..."))
+				if (EditorGui.BeginCombo("##addsheet", "Add existing..."))
 				{
 					foreach (string path in AssetDatabase.GetAllAssetPaths(".uss"))
 					{
-						if (ImGui.Selectable(path))
+						if (EditorGui.Selectable(path))
 						{
 							string src = document.RelativeSource(path);
 							Apply(() => document.styleSheets.Add(src));
@@ -1049,11 +1049,11 @@ namespace LELEngine.Editor.UIBuilder
 						}
 					}
 
-					ImGui.EndCombo();
+					EditorGui.EndCombo();
 				}
 
 				ImGui.SameLine();
-				if (ImGui.Button("New..."))
+				if (EditorGui.Button("New..."))
 				{
 					newSheetName = Path.GetFileNameWithoutExtension(document.assetPath ?? "NewStyle");
 					openNewSheetPopup = true;
@@ -1066,7 +1066,7 @@ namespace LELEngine.Editor.UIBuilder
 					ImGui.TextDisabled("Classes of the selected element");
 					string classes = selected.GetAttribute("class") ?? "";
 					ImGui.SetNextItemWidth(-1);
-					bool changed = ImGui.InputText("##classes", ref classes, 512u);
+					bool changed = EditorGui.InputText("##classes", ref classes, 512u);
 					Track(changed, () => selected.SetAttribute("class", classes.Trim()));
 				}
 			}
@@ -1089,11 +1089,11 @@ namespace LELEngine.Editor.UIBuilder
 				{
 					ImGui.TextUnformatted(ussAssetPath + (ussDirty ? " *" : ""));
 					ImGui.SameLine();
-					if (ImGui.SmallButton("Save")) SaveStyleSheet();
+					if (EditorGui.SmallButton("Save")) SaveStyleSheet();
 					ImGui.SameLine();
-					if (ImGui.SmallButton("Revert")) OpenStyleSheet(ussAssetPath);
+					if (EditorGui.SmallButton("Revert")) OpenStyleSheet(ussAssetPath);
 					ImGui.SameLine();
-					if (ImGui.SmallButton("Close")) ussAssetPath = null;
+					if (EditorGui.SmallButton("Close")) ussAssetPath = null;
 					if (ussSheet != null && ussSheet.errors.Count > 0)
 					{
 						ImGui.SameLine();
@@ -1103,7 +1103,7 @@ namespace LELEngine.Editor.UIBuilder
 					if (ussAssetPath != null)
 					{
 						NVector2 size = ImGui.GetContentRegionAvail();
-						if (ImGui.InputTextMultiline("##uss", ref ussText, 1u << 20, size, ImGuiInputTextFlags.AllowTabInput))
+						if (EditorGui.InputTextMultiline("##uss", ref ussText, 1u << 20, size, ImGuiInputTextFlags.AllowTabInput))
 						{
 							ussDirty = true;
 							ussApplied = false;
@@ -1127,28 +1127,28 @@ namespace LELEngine.Editor.UIBuilder
 			{
 				ImGui.SetNextItemWidth(110);
 				int w = canvasWidth, h = canvasHeight;
-				if (ImGui.InputInt("##cw", ref w, 0)) canvasWidth = Math.Clamp(w, 16, 8192);
+				if (EditorGui.InputInt("##cw", ref w, 0)) canvasWidth = Math.Clamp(w, 16, 8192);
 				ImGui.SameLine();
 				ImGui.TextUnformatted("x");
 				ImGui.SameLine();
 				ImGui.SetNextItemWidth(110);
-				if (ImGui.InputInt("##ch", ref h, 0)) canvasHeight = Math.Clamp(h, 16, 8192);
+				if (EditorGui.InputInt("##ch", ref h, 0)) canvasHeight = Math.Clamp(h, 16, 8192);
 				ImGui.SameLine();
 				ImGui.SetNextItemWidth(90);
 				string zoomLabel = zoom == 0f ? "Fit" : (int)(zoom * 100) + "%";
-				if (ImGui.BeginCombo("##zoom", zoomLabel))
+				if (EditorGui.BeginCombo("##zoom", zoomLabel))
 				{
-					if (ImGui.Selectable("Fit", zoom == 0f)) zoom = 0f;
+					if (EditorGui.Selectable("Fit", zoom == 0f)) zoom = 0f;
 					foreach (float z in new[] { 0.25f, 0.5f, 0.75f, 1f, 1.5f, 2f })
 					{
-						if (ImGui.Selectable((int)(z * 100) + "%", zoom == z)) zoom = z;
+						if (EditorGui.Selectable((int)(z * 100) + "%", zoom == z)) zoom = z;
 					}
 
-					ImGui.EndCombo();
+					EditorGui.EndCombo();
 				}
 
 				ImGui.SameLine();
-				ImGui.Checkbox("Interact", ref interact);
+				EditorGui.Checkbox("Interact", ref interact);
 				if (ImGui.IsItemHovered()) ImGui.SetTooltip("Send the mouse to the preview (hover, clicks, scrolling) instead of selecting elements");
 				if (preview.errors.Count > 0)
 				{
@@ -1181,7 +1181,7 @@ namespace LELEngine.Editor.UIBuilder
 			displayScale = scale;
 			ImGui.Image(EditorGui.Texture(preview.Texture), size, new NVector2(0, 1), new NVector2(1, 0));
 			ImGui.SetCursorScreenPos(imageMin);
-			ImGui.InvisibleButton("##canvas_input", size, ImGuiButtonFlags.MouseButtonLeft | ImGuiButtonFlags.MouseButtonRight);
+			EditorGui.InvisibleButton("##canvas_input", size, ImGuiButtonFlags.MouseButtonLeft | ImGuiButtonFlags.MouseButtonRight);
 			bool hovered = ImGui.IsItemHovered();
 			NVector2 mouse = ImGui.GetMousePos();
 			var panelPoint = new Vector2((mouse.X - imageMin.X) / scale, (mouse.Y - imageMin.Y) / scale);
@@ -1349,8 +1349,8 @@ namespace LELEngine.Editor.UIBuilder
 					ImGui.TextDisabled(NodeLabel(node));
 					ImGui.Separator();
 					if (!node.isInstance) DrawAddMenu(node);
-					if (ImGui.MenuItem("Duplicate")) DuplicateNode(node);
-					if (ImGui.MenuItem("Delete")) DeleteNode(node);
+					if (EditorMenu.Item("Duplicate")) DuplicateNode(node);
+					if (EditorMenu.Item("Delete")) DeleteNode(node);
 				}
 
 				ImGui.EndPopup();
@@ -1471,15 +1471,15 @@ namespace LELEngine.Editor.UIBuilder
 			{
 				ImGui.Text("Asset path (inside the project's Assets folder):");
 				ImGui.SetNextItemWidth(420);
-				ImGui.InputText("##path", ref saveAsPath, 260u);
-				if (ImGui.Button("Save", new NVector2(110, 0)) && !string.IsNullOrWhiteSpace(saveAsPath))
+				EditorGui.InputText("##path", ref saveAsPath, 260u);
+				if (EditorGui.Button("Save", new NVector2(110, 0)) && !string.IsNullOrWhiteSpace(saveAsPath))
 				{
 					ImGui.CloseCurrentPopup();
 					SaveTo(saveAsPath);
 				}
 
 				ImGui.SameLine();
-				if (ImGui.Button("Cancel", new NVector2(110, 0))) ImGui.CloseCurrentPopup();
+				if (EditorGui.Button("Cancel", new NVector2(110, 0))) ImGui.CloseCurrentPopup();
 				ImGui.EndPopup();
 			}
 
@@ -1487,7 +1487,7 @@ namespace LELEngine.Editor.UIBuilder
 			if (ImGui.BeginPopupModal("Unsaved changes##builder", ImGuiWindowFlags.AlwaysAutoResize))
 			{
 				ImGui.Text("The document or style sheet has unsaved changes.");
-				if (ImGui.Button("Save", new NVector2(110, 0)))
+				if (EditorGui.Button("Save", new NVector2(110, 0)))
 				{
 					if (ussDirty) SaveStyleSheet();
 					if (!dirty || Save())
@@ -1499,7 +1499,7 @@ namespace LELEngine.Editor.UIBuilder
 				}
 
 				ImGui.SameLine();
-				if (ImGui.Button("Don't save", new NVector2(110, 0)))
+				if (EditorGui.Button("Don't save", new NVector2(110, 0)))
 				{
 					closeConfirmed = true;
 					ImGui.CloseCurrentPopup();
@@ -1507,7 +1507,7 @@ namespace LELEngine.Editor.UIBuilder
 				}
 
 				ImGui.SameLine();
-				if (ImGui.Button("Cancel", new NVector2(110, 0))) ImGui.CloseCurrentPopup();
+				if (EditorGui.Button("Cancel", new NVector2(110, 0))) ImGui.CloseCurrentPopup();
 				ImGui.EndPopup();
 			}
 
@@ -1516,15 +1516,15 @@ namespace LELEngine.Editor.UIBuilder
 			{
 				ImGui.Text("Name (created next to the document):");
 				ImGui.SetNextItemWidth(300);
-				ImGui.InputText("##sheetname", ref newSheetName, 120u);
-				if (ImGui.Button("Create", new NVector2(110, 0)) && !string.IsNullOrWhiteSpace(newSheetName))
+				EditorGui.InputText("##sheetname", ref newSheetName, 120u);
+				if (EditorGui.Button("Create", new NVector2(110, 0)) && !string.IsNullOrWhiteSpace(newSheetName))
 				{
 					ImGui.CloseCurrentPopup();
 					CreateStyleSheet(newSheetName.Trim());
 				}
 
 				ImGui.SameLine();
-				if (ImGui.Button("Cancel", new NVector2(110, 0))) ImGui.CloseCurrentPopup();
+				if (EditorGui.Button("Cancel", new NVector2(110, 0))) ImGui.CloseCurrentPopup();
 				ImGui.EndPopup();
 			}
 		}

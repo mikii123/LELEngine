@@ -118,14 +118,14 @@ namespace LELEngine.Editor
 			if (unused.Count > 0)
 			{
 				ImGui.Spacing();
-				if (ImGui.TreeNodeEx("Unused values (" + unused.Count + ")", ImGuiTreeNodeFlags.SpanAvailWidth))
+				if (EditorGui.TreeNodeEx("Unused values (" + unused.Count + ")", ImGuiTreeNodeFlags.SpanAvailWidth))
 				{
 					foreach (MaterialProperty property in unused)
 					{
 						ImGui.TextDisabled(property.name + " (" + property.Type + ")");
 					}
 
-					if (ImGui.Button("Remove unused values"))
+					if (EditorGui.Button("Remove unused values"))
 					{
 						context.Editor.Edits.Begin(material);
 						foreach (MaterialProperty property in unused)
@@ -142,7 +142,7 @@ namespace LELEngine.Editor
 			}
 
 			ImGui.Spacing();
-			if (ImGui.Button("Reset to shader defaults"))
+			if (EditorGui.Button("Reset to shader defaults"))
 			{
 				context.Editor.Edits.Begin(material);
 				foreach (string name in new List<string>(material.GetPropertyNames()))
@@ -179,12 +179,12 @@ namespace LELEngine.Editor
 			FieldDrawer.Label("Shader", null, context);
 			string current = material.shader?.AssetPath ?? "None";
 			bool changed = false;
-			if (ImGui.BeginCombo("##shader", current))
+			if (EditorGui.BeginCombo("##shader", current))
 			{
 				foreach (string choice in ShaderChoices(context.Editor))
 				{
 					bool selected = string.Equals(choice, current, StringComparison.OrdinalIgnoreCase);
-					if (ImGui.Selectable(choice, selected) && !selected)
+					if (EditorGui.Selectable(choice, selected) && !selected)
 					{
 						context.Editor.Edits.Begin(material);
 						material.shader = InternalStorage.GetOrCreateShader(choice);
@@ -193,7 +193,7 @@ namespace LELEngine.Editor
 					}
 				}
 
-				ImGui.EndCombo();
+				EditorGui.EndCombo();
 			}
 
 			if (ImGui.BeginDragDropTarget())
@@ -228,7 +228,7 @@ namespace LELEngine.Editor
 			FieldDrawer.Label("Render Queue", null, context);
 			int queue = material.renderQueue;
 			ImGui.SetNextItemWidth(Math.Max(60f, ImGui.GetContentRegionAvail().X - 110f));
-			bool changed = ImGui.InputInt("##queue", ref queue, 10, 100);
+			bool changed = EditorGui.InputInt("##queue", ref queue, 10, 100);
 			context.Track(changed);
 			if (changed)
 			{
@@ -239,7 +239,7 @@ namespace LELEngine.Editor
 			ImGui.SameLine();
 			if (material.OverridesRenderQueue)
 			{
-				if (ImGui.SmallButton("Shader's"))
+				if (EditorGui.SmallButton("Shader's"))
 				{
 					context.Editor.Edits.Begin(material);
 					material.renderQueue = -1;
@@ -353,7 +353,7 @@ namespace LELEngine.Editor
 				flags |= ImGuiColorEditFlags.Hdr;
 			}
 
-			bool changed = ImGui.ColorEdit4("##v", ref n, flags);
+			bool changed = EditorGui.ColorEdit4("##v", ref n, flags);
 			context.Track(changed);
 			if (changed)
 			{
@@ -367,7 +367,7 @@ namespace LELEngine.Editor
 		{
 			FieldDrawer.Label(label, null, context);
 			float value = material.GetFloat(name, fallback);
-			bool changed = ImGui.SliderFloat("##v", ref value, min, max);
+			bool changed = EditorGui.SliderFloat("##v", ref value, min, max);
 			context.Track(changed);
 			if (changed)
 			{
@@ -381,7 +381,7 @@ namespace LELEngine.Editor
 		{
 			FieldDrawer.Label(label, null, context);
 			float value = material.GetFloat(name, fallback);
-			bool changed = ImGui.DragFloat("##v", ref value, Math.Max(0.005f, Math.Abs(value) * 0.01f));
+			bool changed = EditorGui.DragFloat("##v", ref value, Math.Max(0.005f, Math.Abs(value) * 0.01f));
 			context.Track(changed);
 			if (changed)
 			{
@@ -395,7 +395,7 @@ namespace LELEngine.Editor
 		{
 			FieldDrawer.Label(label, null, context);
 			int value = material.GetInt(name, fallback);
-			bool changed = ImGui.DragInt("##v", ref value, 0.2f);
+			bool changed = EditorGui.DragInt("##v", ref value, 0.2f);
 			context.Track(changed);
 			if (changed)
 			{
@@ -411,11 +411,11 @@ namespace LELEngine.Editor
 			FieldDrawer.Label(label, null, context);
 			int current = declared.OptionIndex(material.GetFloat(declared.Name, declared.DefaultValue.X));
 			bool changed = false;
-			if (ImGui.BeginCombo("##v", declared.EnumOptions[current]))
+			if (EditorGui.BeginCombo("##v", declared.EnumOptions[current]))
 			{
 				for (int i = 0; i < declared.EnumOptions.Length; i++)
 				{
-					if (ImGui.Selectable(declared.EnumOptions[i], i == current) && i != current)
+					if (EditorGui.Selectable(declared.EnumOptions[i], i == current) && i != current)
 					{
 						context.BeginEdit();
 						SetKeywordValue(material, declared, i);
@@ -430,7 +430,7 @@ namespace LELEngine.Editor
 					}
 				}
 
-				ImGui.EndCombo();
+				EditorGui.EndCombo();
 			}
 			else
 			{
@@ -445,7 +445,7 @@ namespace LELEngine.Editor
 		{
 			FieldDrawer.Label(label, null, context);
 			bool value = material.GetFloat(declared.Name, declared.DefaultValue.X) != 0f;
-			bool changed = ImGui.Checkbox("##v", ref value);
+			bool changed = EditorGui.Checkbox("##v", ref value);
 			TestAnchors.RecordItem("materialfield:" + declared.Name);
 			if (ImGui.IsItemHovered())
 			{
@@ -477,7 +477,7 @@ namespace LELEngine.Editor
 		{
 			FieldDrawer.Label(label, null, context);
 			bool value = material.GetInt(name) != 0;
-			bool changed = ImGui.Checkbox("##v", ref value);
+			bool changed = EditorGui.Checkbox("##v", ref value);
 			context.Track(changed);
 			if (changed)
 			{
@@ -495,19 +495,19 @@ namespace LELEngine.Editor
 			if (components == 2)
 			{
 				NVector2 n = new NVector2(value.X, value.Y);
-				changed = ImGui.DragFloat2("##v", ref n, 0.05f);
+				changed = EditorGui.DragFloat2("##v", ref n, 0.05f);
 				value = new Vector4(n.X, n.Y, value.Z, value.W);
 			}
 			else if (components == 3)
 			{
 				NVector3 n = new NVector3(value.X, value.Y, value.Z);
-				changed = ImGui.DragFloat3("##v", ref n, 0.05f);
+				changed = EditorGui.DragFloat3("##v", ref n, 0.05f);
 				value = new Vector4(n.X, n.Y, n.Z, value.W);
 			}
 			else
 			{
 				NVector4 n = new NVector4(value.X, value.Y, value.Z, value.W);
-				changed = ImGui.DragFloat4("##v", ref n, 0.05f);
+				changed = EditorGui.DragFloat4("##v", ref n, 0.05f);
 				value = new Vector4(n.X, n.Y, n.Z, n.W);
 			}
 
@@ -546,10 +546,10 @@ namespace LELEngine.Editor
 			var offset = new NVector2(value.Z, value.W);
 			ImGui.PushID(declared.Name);
 			FieldDrawer.Label("Tiling", null, context);
-			bool tilingChanged = ImGui.DragFloat2("##tiling", ref tiling, 0.01f);
+			bool tilingChanged = EditorGui.DragFloat2("##tiling", ref tiling, 0.01f);
 			context.Track(tilingChanged);
 			FieldDrawer.Label("Offset", null, context);
-			bool offsetChanged = ImGui.DragFloat2("##offset", ref offset, 0.01f);
+			bool offsetChanged = EditorGui.DragFloat2("##offset", ref offset, 0.01f);
 			context.Track(offsetChanged);
 			ImGui.PopID();
 			if (tilingChanged || offsetChanged)

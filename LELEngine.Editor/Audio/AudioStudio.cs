@@ -1127,81 +1127,81 @@ namespace LELEngine.Editor.Audio
 				return;
 			}
 
-			if (ImGui.BeginMenu("File"))
+			if (EditorMenu.Begin("File"))
 			{
-				if (ImGui.MenuItem("New Audio Project...")) openNewProjectPopup = true;
-				if (ImGui.BeginMenu("Open"))
+				if (EditorMenu.Item("New Audio Project...")) openNewProjectPopup = true;
+				if (EditorMenu.Begin("Open"))
 				{
 					List<string> projects = AssetDatabase.GetAllAssetPaths(AudioProject.Extension);
 					if (projects.Count == 0) ImGui.TextDisabled("No .lelaudio files in the project");
 					foreach (string path in projects)
 					{
-						if (ImGui.MenuItem(path)) Open(path);
+						if (EditorMenu.Item(path)) Open(path);
 					}
 
-					ImGui.EndMenu();
+					EditorMenu.End();
 				}
 
 				ImGui.Separator();
-				if (ImGui.MenuItem("Save", "Ctrl+S", false, Project != null)) Save();
-				if (ImGui.MenuItem("Revert", "", false, Project != null && Dirty)) Revert();
+				if (EditorMenu.Item("Save", "Ctrl+S", false, Project != null)) Save();
+				if (EditorMenu.Item("Revert", "", false, Project != null && Dirty)) Revert();
 				ImGui.Separator();
-				if (ImGui.MenuItem("Build Banks (Library/AudioBanks)", "", false, Project != null)) BuildBanks(null);
+				if (EditorMenu.Item("Build Banks (Library/AudioBanks)", "", false, Project != null)) BuildBanks(null);
 				ImGui.Separator();
-				if (ImGui.MenuItem("Close")) window.Close();
-				ImGui.EndMenu();
+				if (EditorMenu.Item("Close")) window.Close();
+				EditorMenu.End();
 			}
 
-			if (ImGui.BeginMenu("Edit"))
+			if (EditorMenu.Begin("Edit"))
 			{
-				if (ImGui.MenuItem("Undo", "Ctrl+Z", false, undoStack.Count > 0)) Undo();
-				if (ImGui.MenuItem("Redo", "Ctrl+Y", false, redoStack.Count > 0)) Redo();
+				if (EditorMenu.Item("Undo", "Ctrl+Z", false, undoStack.Count > 0)) Undo();
+				if (EditorMenu.Item("Redo", "Ctrl+Y", false, redoStack.Count > 0)) Redo();
 				ImGui.Separator();
-				if (ImGui.MenuItem("Duplicate", "Ctrl+D", false, selection.Kind != SelectionKind.None)) DuplicateSelection();
-				if (ImGui.MenuItem("Delete", "Del", false, selection.Kind == SelectionKind.Instrument || selection.Kind == SelectionKind.Marker || selection.Kind == SelectionKind.Track)) DeleteSelection();
-				ImGui.EndMenu();
+				if (EditorMenu.Item("Duplicate", "Ctrl+D", false, selection.Kind != SelectionKind.None)) DuplicateSelection();
+				if (EditorMenu.Item("Delete", "Del", false, selection.Kind == SelectionKind.Instrument || selection.Kind == SelectionKind.Marker || selection.Kind == SelectionKind.Track)) DeleteSelection();
+				EditorMenu.End();
 			}
 
-			if (ImGui.BeginMenu("Event", Project != null))
+			if (EditorMenu.Begin("Event", Project != null))
 			{
-				if (ImGui.MenuItem("New Event...")) RequestNewEvent(SelectedEvent?.Folder);
-				if (ImGui.MenuItem("New Folder...")) openNewFolderPopup = true;
+				if (EditorMenu.Item("New Event...")) RequestNewEvent(SelectedEvent?.Folder);
+				if (EditorMenu.Item("New Folder...")) openNewFolderPopup = true;
 				ImGui.Separator();
 				AudioEvent current = SelectedEvent;
-				if (ImGui.MenuItem("Add Track", "", false, current != null)) Edit("Add track", () => current.Tracks.Add(AudioProject.CreateTrack("Audio " + (current.Tracks.Count + 1))));
-				if (ImGui.BeginMenu("Add Parameter Sheet", current != null))
+				if (EditorMenu.Item("Add Track", "", false, current != null)) Edit("Add track", () => current.Tracks.Add(AudioProject.CreateTrack("Audio " + (current.Tracks.Count + 1))));
+				if (EditorMenu.Begin("Add Parameter Sheet", current != null))
 				{
 					DrawAddSheetMenu(current);
-					ImGui.EndMenu();
+					EditorMenu.End();
 				}
 
 				ImGui.Separator();
-				if (ImGui.MenuItem("Play", "Space", false, current != null)) PlayPreview();
-				if (ImGui.MenuItem("Stop", "Space", false, Preview != null)) StopPreview();
-				ImGui.EndMenu();
+				if (EditorMenu.Item("Play", "Space", false, current != null)) PlayPreview();
+				if (EditorMenu.Item("Stop", "Space", false, Preview != null)) StopPreview();
+				EditorMenu.End();
 			}
 
-			if (ImGui.BeginMenu("View"))
+			if (EditorMenu.Begin("View"))
 			{
-				ImGui.MenuItem("Events", "", ref showEvents);
-				ImGui.MenuItem("Banks", "", ref showBanks);
-				ImGui.MenuItem("Parameters", "", ref showParameters);
-				ImGui.MenuItem("Snapshots", "", ref showSnapshots);
-				ImGui.MenuItem("Assets", "", ref showAssets);
-				ImGui.MenuItem("Deck", "", ref showDeck);
-				ImGui.MenuItem("Overview", "", ref showOverview);
-				ImGui.MenuItem("Mixer", "", ref showMixer);
+				EditorMenu.Item("Events", "", ref showEvents);
+				EditorMenu.Item("Banks", "", ref showBanks);
+				EditorMenu.Item("Parameters", "", ref showParameters);
+				EditorMenu.Item("Snapshots", "", ref showSnapshots);
+				EditorMenu.Item("Assets", "", ref showAssets);
+				EditorMenu.Item("Deck", "", ref showDeck);
+				EditorMenu.Item("Overview", "", ref showOverview);
+				EditorMenu.Item("Mixer", "", ref showMixer);
 				ImGui.Separator();
-				ImGui.MenuItem("Snap to Grid", "", ref snap);
-				ImGui.MenuItem("Follow Playhead", "", ref followPlayhead);
+				EditorMenu.Item("Snap to Grid", "", ref snap);
+				EditorMenu.Item("Follow Playhead", "", ref followPlayhead);
 				ImGui.Separator();
-				if (ImGui.MenuItem("Reset Layout"))
+				if (EditorMenu.Item("Reset Layout"))
 				{
 					showEvents = showBanks = showParameters = showAssets = showDeck = showOverview = showMixer = showSnapshots = true;
 					resetLayoutRequested = true;
 				}
 
-				ImGui.EndMenu();
+				EditorMenu.End();
 			}
 
 			// Status on the right: the device, then the title.
@@ -1242,7 +1242,7 @@ namespace LELEngine.Editor.Audio
 			foreach (AudioParameter parameter in Project.ParametersOf(current))
 			{
 				any = true;
-				if (ImGui.MenuItem(parameter.Name + (Project.FindGlobalParameter(parameter.Id) != null ? "  (global)" : "")))
+				if (EditorMenu.Item(parameter.Name + (Project.FindGlobalParameter(parameter.Id) != null ? "  (global)" : "")))
 				{
 					currentSheet = parameter.Id;
 				}
@@ -1383,7 +1383,7 @@ namespace LELEngine.Editor.Audio
 			if (ImGui.BeginPopupModal("Unsaved changes##audio", ImGuiWindowFlags.AlwaysAutoResize))
 			{
 				ImGui.Text("The audio project has unsaved changes.");
-				if (ImGui.Button("Save", new NVector2(110, 0)))
+				if (EditorGui.Button("Save", new NVector2(110, 0)))
 				{
 					if (Save())
 					{
@@ -1394,7 +1394,7 @@ namespace LELEngine.Editor.Audio
 				}
 
 				ImGui.SameLine();
-				if (ImGui.Button("Don't save", new NVector2(110, 0)))
+				if (EditorGui.Button("Don't save", new NVector2(110, 0)))
 				{
 					closeConfirmed = true;
 					ImGui.CloseCurrentPopup();
@@ -1404,7 +1404,7 @@ namespace LELEngine.Editor.Audio
 				}
 
 				ImGui.SameLine();
-				if (ImGui.Button("Cancel", new NVector2(110, 0)))
+				if (EditorGui.Button("Cancel", new NVector2(110, 0)))
 				{
 					ImGui.CloseCurrentPopup();
 				}
@@ -1418,15 +1418,15 @@ namespace LELEngine.Editor.Audio
 				ImGui.Text("Event path (folders separated by /):");
 				if (ImGui.IsWindowAppearing()) ImGui.SetKeyboardFocusHere();
 				ImGui.SetNextItemWidth(360);
-				bool enter = ImGui.InputText("##eventpath", ref newEventPath, 256, ImGuiInputTextFlags.EnterReturnsTrue);
-				if ((ImGui.Button("Create", new NVector2(110, 0)) || enter) && !string.IsNullOrWhiteSpace(newEventPath))
+				bool enter = EditorGui.InputText("##eventpath", ref newEventPath, 256, ImGuiInputTextFlags.EnterReturnsTrue);
+				if ((EditorGui.Button("Create", new NVector2(110, 0)) || enter) && !string.IsNullOrWhiteSpace(newEventPath))
 				{
 					CreateEvent(newEventPath.Trim());
 					ImGui.CloseCurrentPopup();
 				}
 
 				ImGui.SameLine();
-				if (ImGui.Button("Cancel", new NVector2(110, 0))) ImGui.CloseCurrentPopup();
+				if (EditorGui.Button("Cancel", new NVector2(110, 0))) ImGui.CloseCurrentPopup();
 				ImGui.EndPopup();
 			}
 
@@ -1436,8 +1436,8 @@ namespace LELEngine.Editor.Audio
 				ImGui.Text("Folder path:");
 				if (ImGui.IsWindowAppearing()) ImGui.SetKeyboardFocusHere();
 				ImGui.SetNextItemWidth(360);
-				bool enter = ImGui.InputText("##folderpath", ref newFolderPath, 256, ImGuiInputTextFlags.EnterReturnsTrue);
-				if ((ImGui.Button("Create", new NVector2(110, 0)) || enter) && !string.IsNullOrWhiteSpace(newFolderPath))
+				bool enter = EditorGui.InputText("##folderpath", ref newFolderPath, 256, ImGuiInputTextFlags.EnterReturnsTrue);
+				if ((EditorGui.Button("Create", new NVector2(110, 0)) || enter) && !string.IsNullOrWhiteSpace(newFolderPath))
 				{
 					string folder = newFolderPath.Trim().Replace('\\', '/').Trim('/');
 					Edit("Create folder", () =>
@@ -1448,7 +1448,7 @@ namespace LELEngine.Editor.Audio
 				}
 
 				ImGui.SameLine();
-				if (ImGui.Button("Cancel", new NVector2(110, 0))) ImGui.CloseCurrentPopup();
+				if (EditorGui.Button("Cancel", new NVector2(110, 0))) ImGui.CloseCurrentPopup();
 				ImGui.EndPopup();
 			}
 
@@ -1458,15 +1458,15 @@ namespace LELEngine.Editor.Audio
 				ImGui.Text(renameTarget.Kind == SelectionKind.Event ? "Event path:" : "Name:");
 				if (ImGui.IsWindowAppearing()) ImGui.SetKeyboardFocusHere();
 				ImGui.SetNextItemWidth(360);
-				bool enter = ImGui.InputText("##rename", ref renameBuffer, 256, ImGuiInputTextFlags.EnterReturnsTrue);
-				if ((ImGui.Button("Rename", new NVector2(110, 0)) || enter) && !string.IsNullOrWhiteSpace(renameBuffer))
+				bool enter = EditorGui.InputText("##rename", ref renameBuffer, 256, ImGuiInputTextFlags.EnterReturnsTrue);
+				if ((EditorGui.Button("Rename", new NVector2(110, 0)) || enter) && !string.IsNullOrWhiteSpace(renameBuffer))
 				{
 					ApplyRename(renameTarget, renameBuffer.Trim());
 					ImGui.CloseCurrentPopup();
 				}
 
 				ImGui.SameLine();
-				if (ImGui.Button("Cancel", new NVector2(110, 0))) ImGui.CloseCurrentPopup();
+				if (EditorGui.Button("Cancel", new NVector2(110, 0))) ImGui.CloseCurrentPopup();
 				ImGui.EndPopup();
 			}
 
@@ -1476,16 +1476,16 @@ namespace LELEngine.Editor.Audio
 				ImGui.Text("Asset path of the new audio project (inside Assets):");
 				if (ImGui.IsWindowAppearing()) ImGui.SetKeyboardFocusHere();
 				ImGui.SetNextItemWidth(360);
-				bool enter = ImGui.InputText("##projectpath", ref newProjectPath, 256, ImGuiInputTextFlags.EnterReturnsTrue);
+				bool enter = EditorGui.InputText("##projectpath", ref newProjectPath, 256, ImGuiInputTextFlags.EnterReturnsTrue);
 				ImGui.TextDisabled("A game has one audio project; a second one needs Project Settings > Audio to choose it.");
-				if ((ImGui.Button("Create", new NVector2(110, 0)) || enter) && !string.IsNullOrWhiteSpace(newProjectPath))
+				if ((EditorGui.Button("Create", new NVector2(110, 0)) || enter) && !string.IsNullOrWhiteSpace(newProjectPath))
 				{
 					CreateProject(newProjectPath.Trim());
 					ImGui.CloseCurrentPopup();
 				}
 
 				ImGui.SameLine();
-				if (ImGui.Button("Cancel", new NVector2(110, 0))) ImGui.CloseCurrentPopup();
+				if (EditorGui.Button("Cancel", new NVector2(110, 0))) ImGui.CloseCurrentPopup();
 				ImGui.EndPopup();
 			}
 
@@ -1495,7 +1495,7 @@ namespace LELEngine.Editor.Audio
 				AudioEvent target = Project?.FindEvent(pendingDeleteEvent);
 				ImGui.Text("Delete the event '" + (target?.Path ?? "?") + "'?");
 				ImGui.TextDisabled("Emitters referencing it keep its GUID and play nothing.");
-				if (ImGui.Button("Delete", new NVector2(110, 0)))
+				if (EditorGui.Button("Delete", new NVector2(110, 0)))
 				{
 					if (target != null) DeleteEvent(target);
 					pendingDeleteEvent = null;
@@ -1503,7 +1503,7 @@ namespace LELEngine.Editor.Audio
 				}
 
 				ImGui.SameLine();
-				if (ImGui.Button("Cancel", new NVector2(110, 0)))
+				if (EditorGui.Button("Cancel", new NVector2(110, 0)))
 				{
 					pendingDeleteEvent = null;
 					ImGui.CloseCurrentPopup();

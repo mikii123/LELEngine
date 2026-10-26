@@ -28,7 +28,7 @@ namespace LELEngine.Editor.Audio
 				}
 				else
 				{
-					if (ImGui.Button("+ Bus"))
+					if (EditorGui.Button("+ Bus"))
 					{
 						AudioBus parent = selection.Kind == SelectionKind.Bus ? Project.FindBus(selection.Id) : null;
 						var bus = new AudioBus { Id = AudioProject.NewId(), Name = "Bus " + Project.Buses.Count, ParentId = parent?.Id ?? AudioProject.MasterBusId };
@@ -98,7 +98,7 @@ namespace LELEngine.Editor.Audio
 			if (ImGui.BeginChild("##strip", new NVector2(96f, height), ImGuiChildFlags.Borders))
 			{
 				string name = new string(' ', Math.Min(depth, 6)) + bus.Name;
-				if (ImGui.Selectable(name + "##name", selected))
+				if (EditorGui.Selectable(name + "##name", selected))
 				{
 					selection = Selection.Of(SelectionKind.Bus, bus.Id);
 				}
@@ -108,22 +108,22 @@ namespace LELEngine.Editor.Audio
 					ImGui.SetTooltip(Project.BusPath(bus) + "\n" + bus.Effects.Count + (bus.Effects.Count == 1 ? " effect" : " effects") + "\nDouble click: rename");
 				}
 
-				if (ImGui.IsItemHovered() && ImGui.IsMouseDoubleClicked(ImGuiMouseButton.Left) && !isMaster)
+				if (EditorGui.IsItemDoubleClicked() && !isMaster)
 				{
 					RequestRename(Selection.Of(SelectionKind.Bus, bus.Id), bus.Name);
 				}
 
-				if (ImGui.BeginPopupContextItem("##bus_menu"))
+				if (EditorGui.BeginPopupContextItem("##bus_menu"))
 				{
-					if (ImGui.MenuItem("Rename...", "", false, !isMaster)) RequestRename(Selection.Of(SelectionKind.Bus, bus.Id), bus.Name);
-					if (ImGui.MenuItem("Add Child Bus"))
+					if (EditorMenu.Item("Rename...", "", false, !isMaster)) RequestRename(Selection.Of(SelectionKind.Bus, bus.Id), bus.Name);
+					if (EditorMenu.Item("Add Child Bus"))
 					{
 						var child = new AudioBus { Id = AudioProject.NewId(), Name = "Bus " + Project.Buses.Count, ParentId = bus.Id };
 						Edit("Add bus", () => Project.Buses.Add(child));
 						selection = Selection.Of(SelectionKind.Bus, child.Id);
 					}
 
-					if (ImGui.MenuItem("Delete", "", false, !isMaster))
+					if (EditorMenu.Item("Delete", "", false, !isMaster))
 					{
 						Edit("Delete bus", () =>
 						{
@@ -182,7 +182,7 @@ namespace LELEngine.Editor.Audio
 					ImGui.SetTooltip((volume <= AudioMath.SilenceDb ? "-inf dB" : volume.ToString("0.0") + " dB") + (snapshotMode ? inScope ? " (snapshot value)" : " (not in the snapshot: tick the box below)" : " (double click to reset)"));
 				}
 
-				if (!snapshotMode && ImGui.IsItemHovered() && ImGui.IsMouseDoubleClicked(ImGuiMouseButton.Left))
+				if (!snapshotMode && EditorGui.IsItemDoubleClicked())
 				{
 					Edit("Reset bus volume", () => bus.VolumeDb = 0f);
 				}
@@ -203,7 +203,7 @@ namespace LELEngine.Editor.Audio
 				if (snapshotMode)
 				{
 					bool tick = inScope;
-					if (ImGui.Checkbox("##scope", ref tick) && tick != inScope)
+					if (EditorGui.Checkbox("##scope", ref tick) && tick != inScope)
 					{
 						SetSnapshotVolume(scoped, bus, tick, bus.VolumeDb);
 					}
@@ -222,7 +222,7 @@ namespace LELEngine.Editor.Audio
 					ImGui.PushStyleColor(ImGuiCol.Button, EditorStyle.Selection);
 				}
 
-				if (ImGui.Button("M", new NVector2(26f, 0f)))
+				if (EditorGui.Button("M", new NVector2(26f, 0f)))
 				{
 					Edit("Toggle bus mute", () => bus.Mute = !mute);
 				}
@@ -297,7 +297,7 @@ namespace LELEngine.Editor.Audio
 
 			NVector2 min = ImGui.GetCursorScreenPos();
 			var size = new NVector2(22f, height);
-			ImGui.InvisibleButton("##meter", size);
+			EditorGui.InvisibleButton("##meter", size);
 			ImDrawListPtr draw = ImGui.GetWindowDrawList();
 			draw.AddRectFilled(min, min + size, Color(0.1f, 0.1f, 0.11f));
 			DrawMeterBar(draw, min, new NVector2(10f, height), shownLeft);

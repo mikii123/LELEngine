@@ -19,7 +19,7 @@ namespace LELEngine.Editor
 	///     points at (an object or the ground plane), as fast far away as close up; F: frame the selection;
 	///     W / E / R: move / rotate / scale gizmo; left click: select.
 	/// </summary>
-	internal sealed class SceneViewPanel : IDisposable
+	internal sealed class SceneViewPanel : IDisposable, IEditorPanel
 	{
 		#region PublicFields
 
@@ -117,8 +117,20 @@ namespace LELEngine.Editor
 		/// <summary>The window is shown (its close button and the Window menu toggle it; saved with the editor's windows).</summary>
 		public bool Open = true;
 
+		string IEditorPanel.PanelName => "Scene";
+		string IEditorPanel.ImGuiName => "Scene";
+		bool IEditorPanel.PanelOpen { get => Open; set => Open = value; }
+		NVector2 IEditorPanel.DefaultCaptureSize => new NVector2(1280, 760);
+		void IEditorPanel.Focus() => Focus();
+
 		public void Draw()
 		{
+			if (Automation.WindowCapture.Active)
+			{
+				DrawCapture();
+				return;
+			}
+
 			if (!Open)
 			{
 				// Closed: nothing to render either (see Render).
@@ -150,6 +162,47 @@ namespace LELEngine.Editor
 			}
 
 			ImGui.End();
+		}
+
+		/// <summary>
+		///     The window in a capture (<see cref="Automation.WindowCapture" />): the toolbar and the view at the capture's
+		///     size, rendered for it. No camera controls, gizmo, picking or selection outline, and nothing the editor's own
+		///     frames keep (view size, focus, visibility) changes.
+		/// </summary>
+		private void DrawCapture()
+		{
+			ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, new NVector2(0, 0));
+			bool shown = ImGui.Begin("Scene", ref Open);
+			ImGui.PopStyleVar();
+			if (shown)
+			{
+				DrawToolbar();
+				NVector2 available = ImGui.GetContentRegionAvail();
+				var size = new NVector2(Math.Max(16, available.X), Math.Max(16, available.Y));
+				NVector2 min = ImGui.GetCursorScreenPos();
+				TestAnchors.Record("sceneview", min, min + size);
+				if (editor.Scene != null)
+				{
+					int texture = Automation.WindowCapture.ViewTexture(this, ViewRenderer, visible, (int)size.X, (int)size.Y, RenderCapture);
+					ImGui.Image(EditorGui.Texture(texture), size, new NVector2(0, 1), new NVector2(1, 0));
+				}
+			}
+
+			ImGui.End();
+		}
+
+		/// <summary>One frame of the view into a capture's renderer (the editor camera, gizmos, debug primitives).</summary>
+		private void RenderCapture(ViewRenderer target)
+		{
+			(int, int) mark = Rendering.DebugDraw.Mark;
+			ApplyCamera();
+			LELEngine.VFX.VfxRuntime.FallbackCamera = camera;
+			target.Renderer.Settings.DebugPrimitives = true;
+			target.Renderer.Settings.RenderUI = false;
+			DrawGizmos();
+			target.Render(camera, editor.Scene);
+			// The gizmos queued for this image only: the editor's own frame queues its own.
+			Rendering.DebugDraw.Truncate(mark);
 		}
 
 		/// <summary>Renders when the view shows something new (<see cref="ViewRefresh" />) or every frame when continuous.</summary>
@@ -349,14 +402,14 @@ namespace LELEngine.Editor
 			ImGui.SameLine();
 			ToolButton("Scale (R)", "Scale", ImGuizmoOperation.Scale);
 			ImGui.SameLine();
-			if (ImGui.Button(mode == ImGuizmoMode.Local ? "Local" : "World"))
+			if (EditorGui.Button(mode == ImGuizmoMode.Local ? "Local" : "World"))
 			{
 				mode = mode == ImGuizmoMode.Local ? ImGuizmoMode.World : ImGuizmoMode.Local;
 			}
 
 			ImGui.SameLine();
 			bool alwaysRefresh = AlwaysRefresh;
-			if (ImGui.Checkbox("Always Refresh", ref alwaysRefresh))
+			if (EditorGui.Checkbox("Always Refresh", ref alwaysRefresh))
 			{
 				AlwaysRefresh = alwaysRefresh;
 			}
@@ -369,7 +422,7 @@ namespace LELEngine.Editor
 
 			ImGui.SameLine();
 			bool showNavigation = ShowNavigation;
-			if (ImGui.Checkbox("Nav", ref showNavigation))
+			if (EditorGui.Checkbox("Nav", ref showNavigation))
 			{
 				ShowNavigation = showNavigation;
 				editor.NotifySceneChanged();
@@ -393,7 +446,7 @@ namespace LELEngine.Editor
 				ImGui.PushStyleColor(ImGuiCol.Button, ImGui.GetStyle().Colors[(int)ImGuiCol.ButtonActive]);
 			}
 
-			if (ImGui.Button(label))
+			if (EditorGui.Button(label))
 			{
 				operation = target;
 			}

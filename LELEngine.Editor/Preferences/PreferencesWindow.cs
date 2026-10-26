@@ -13,7 +13,7 @@ namespace LELEngine.Editor
 	///     preset's), Console (toolbar, list, stack traces, hidden wrapper frames, source view, custom filters, hidden
 	///     tags) and External Tools (the script editor). Changes apply at once and are saved a moment later.
 	/// </summary>
-	internal sealed class PreferencesWindow
+	internal sealed class PreferencesWindow : IEditorPanel
 	{
 		#region PublicFields
 
@@ -25,6 +25,12 @@ namespace LELEngine.Editor
 		}
 
 		public bool Open;
+
+		string IEditorPanel.PanelName => "Preferences";
+		string IEditorPanel.ImGuiName => "Preferences";
+		bool IEditorPanel.PanelOpen { get => Open; set => Open = value; }
+		NVector2 IEditorPanel.DefaultCaptureSize => new NVector2(820, 620);
+		void IEditorPanel.Focus() => EditorApplication.Instance.ShowPreferences();
 
 		#endregion
 
@@ -93,7 +99,7 @@ namespace LELEngine.Editor
 			{
 				for (int i = 0; i < SectionNames.Length; i++)
 				{
-					if (ImGui.Selectable(SectionNames[i], (int)section == i))
+					if (EditorGui.Selectable(SectionNames[i], (int)section == i))
 					{
 						section = (Section)i;
 					}
@@ -142,29 +148,29 @@ namespace LELEngine.Editor
 		private void DrawTheme(ThemePreferences theme)
 		{
 			Label("Preset", "The colors the theme starts from (the colors below change them)");
-			if (ImGui.BeginCombo("##preset", theme.Preset))
+			if (EditorGui.BeginCombo("##preset", theme.Preset))
 			{
 				foreach (string preset in EditorStyle.Presets)
 				{
-					if (ImGui.Selectable(preset, preset == theme.Preset))
+					if (EditorGui.Selectable(preset, preset == theme.Preset))
 					{
 						theme.Preset = preset;
 						EditorPreferences.MarkChanged(true);
 					}
 				}
 
-				ImGui.EndCombo();
+				EditorGui.EndCombo();
 			}
 
 			Label("Text size", "Size of the editor's text, in pixels");
-			if (ImGui.SliderFloat("##fontsize", ref theme.FontSize, 12f, 24f, "%.0f px"))
+			if (EditorGui.SliderFloat("##fontsize", ref theme.FontSize, 12f, 24f, "%.0f px"))
 			{
 				theme.FontSize = MathF.Round(theme.FontSize);
 				EditorPreferences.MarkChanged(true);
 			}
 
 			Label("Code text size", "Size of source code (the console's source view)");
-			if (ImGui.SliderFloat("##codefontsize", ref theme.CodeFontSize, 10f, 24f, "%.0f px"))
+			if (EditorGui.SliderFloat("##codefontsize", ref theme.CodeFontSize, 10f, 24f, "%.0f px"))
 			{
 				theme.CodeFontSize = MathF.Round(theme.CodeFontSize);
 				EditorPreferences.MarkChanged(true);
@@ -172,10 +178,10 @@ namespace LELEngine.Editor
 
 			ImGui.SeparatorText("Colors");
 			ImGui.SetNextItemWidth(Math.Max(120f, ImGui.GetContentRegionAvail().X - ImGui.CalcTextSize("Reset All").X - ImGui.GetStyle().FramePadding.X * 2f - ImGui.GetStyle().ItemSpacing.X));
-			ImGui.InputTextWithHint("##colorfilter", "Filter colors", ref colorFilter, 64);
+			EditorGui.InputTextWithHint("##colorfilter", "Filter colors", ref colorFilter, 64);
 			ImGui.SameLine();
 			ImGui.BeginDisabled(theme.Colors.Count == 0);
-			if (ImGui.Button("Reset All"))
+			if (EditorGui.Button("Reset All"))
 			{
 				theme.Colors.Clear();
 				EditorPreferences.MarkChanged(true);
@@ -217,7 +223,7 @@ namespace LELEngine.Editor
 			}
 
 			ImGui.SetNextItemOpen(open, colorFilter.Length > 0 ? ImGuiCond.Always : ImGuiCond.Once);
-			if (!ImGui.CollapsingHeader(title + "##" + title))
+			if (!EditorGui.CollapsingHeader(title + "##" + title))
 			{
 				return;
 			}
@@ -249,14 +255,14 @@ namespace LELEngine.Editor
 				ImGui.PushID(name);
 				NVector4 value = EditorStyle.Current(name);
 				ImGui.SetNextItemWidth(-1f);
-				if (ImGui.ColorEdit4("##value", ref value, ImGuiColorEditFlags.AlphaBar | ImGuiColorEditFlags.AlphaPreviewHalf | ImGuiColorEditFlags.DisplayHex))
+				if (EditorGui.ColorEdit4("##value", ref value, ImGuiColorEditFlags.AlphaBar | ImGuiColorEditFlags.AlphaPreviewHalf | ImGuiColorEditFlags.DisplayHex))
 				{
 					theme.Colors[name] = ColorHex.ToHex(value);
 					EditorPreferences.MarkChanged(true);
 				}
 
 				ImGui.TableNextColumn();
-				if (changed && ImGui.SmallButton("Reset"))
+				if (changed && EditorGui.SmallButton("Reset"))
 				{
 					theme.Colors.Remove(name);
 					EditorPreferences.MarkChanged(true);
@@ -288,9 +294,9 @@ namespace LELEngine.Editor
 			changed |= Check("Frame numbers", ref console.ShowFrames, "The frame (Time.frameCount) of messages logged in play mode");
 			changed |= Check("Source column", ref console.ShowSourceColumn, "The file and line a message came from");
 			Label("Lines per message", "Lines of a message's text each row shows");
-			changed |= ImGui.SliderInt("##lines", ref console.LinesPerEntry, 1, 3);
+			changed |= EditorGui.SliderInt("##lines", ref console.LinesPerEntry, 1, 3);
 			Label("Messages kept", "Older messages go beyond this many");
-			if (ImGui.InputInt("##max", ref console.MaxEntries, 1000, 10000))
+			if (EditorGui.InputInt("##max", ref console.MaxEntries, 1000, 10000))
 			{
 				console.MaxEntries = Math.Clamp(console.MaxEntries, 100, 100000);
 				changed = true;
@@ -308,7 +314,7 @@ namespace LELEngine.Editor
 			ImGui.SeparatorText("Code in call stacks");
 			changed |= Check("Code under frames", ref console.ShowSourceCode, "The code around a frame's line under it (the project's frames and the one the message opens; a click shows or hides it on the others)");
 			Label("Lines around", "Lines above and below the frame's line (1: three lines)");
-			changed |= ImGui.SliderInt("##context", ref console.SourceContextLines, 0, 10);
+			changed |= EditorGui.SliderInt("##context", ref console.SourceContextLines, 0, 10);
 
 			ImGui.SeparatorText("Custom filters");
 			ImGui.TextDisabled("Toggles in the console's toolbar: off hides the messages a filter matches; matches get its color.");
@@ -320,7 +326,7 @@ namespace LELEngine.Editor
 				for (int i = 0; i < console.HiddenTags.Count; i++)
 				{
 					ImGui.PushID("tag" + i);
-					if (ImGui.SmallButton("Show"))
+					if (EditorGui.SmallButton("Show"))
 					{
 						console.HiddenTags.RemoveAt(i);
 						changed = true;
@@ -360,10 +366,10 @@ namespace LELEngine.Editor
 					ImGui.PushID(i);
 					ImGui.TableNextRow();
 					ImGui.TableNextColumn();
-					changed |= ImGui.Checkbox("##shown", ref filter.Shown);
+					changed |= EditorGui.Checkbox("##shown", ref filter.Shown);
 					ImGui.TableNextColumn();
 					NVector4 color = ColorHex.Parse(filter.Color, new NVector4(0.3f, 0.6f, 1f, 1f));
-					if (ImGui.ColorEdit4("##color", ref color, ImGuiColorEditFlags.NoInputs | ImGuiColorEditFlags.NoAlpha))
+					if (EditorGui.ColorEdit4("##color", ref color, ImGuiColorEditFlags.NoInputs | ImGuiColorEditFlags.NoAlpha))
 					{
 						filter.Color = ColorHex.ToHex(color);
 						changed = true;
@@ -371,18 +377,18 @@ namespace LELEngine.Editor
 
 					ImGui.TableNextColumn();
 					ImGui.SetNextItemWidth(-1f);
-					changed |= ImGui.InputTextWithHint("##name", "(the pattern)", ref filter.Name, 64);
+					changed |= EditorGui.InputTextWithHint("##name", "(the pattern)", ref filter.Name, 64);
 					ImGui.TableNextColumn();
 					ImGui.SetNextItemWidth(-1f);
-					changed |= ImGui.InputText("##pattern", ref filter.Pattern, 256);
+					changed |= EditorGui.InputText("##pattern", ref filter.Pattern, 256);
 					ImGui.TableNextColumn();
-					changed |= ImGui.Checkbox("##regex", ref filter.Regex);
+					changed |= EditorGui.Checkbox("##regex", ref filter.Regex);
 					ImGui.TableNextColumn();
-					changed |= ImGui.Checkbox("##case", ref filter.MatchCase);
+					changed |= EditorGui.Checkbox("##case", ref filter.MatchCase);
 					ImGui.TableNextColumn();
-					changed |= ImGui.Checkbox("##stack", ref filter.InStackTrace);
+					changed |= EditorGui.Checkbox("##stack", ref filter.InStackTrace);
 					ImGui.TableNextColumn();
-					if (ImGui.SmallButton("x"))
+					if (EditorGui.SmallButton("x"))
 					{
 						filters.RemoveAt(i);
 						changed = true;
@@ -396,7 +402,7 @@ namespace LELEngine.Editor
 				ImGui.EndTable();
 			}
 
-			if (ImGui.Button("Add Filter"))
+			if (EditorGui.Button("Add Filter"))
 			{
 				filters.Add(new ConsoleFilter { Name = "Filter " + (filters.Count + 1) });
 				changed = true;
@@ -425,18 +431,18 @@ namespace LELEngine.Editor
 			bool changed = false;
 			ImGui.SeparatorText("Script editor");
 			Label("Script editor", "Opens scripts at a line: the console's stack frames, script assets");
-			if (ImGui.BeginCombo("##scripteditor", EditorName(tools.ScriptEditor)))
+			if (EditorGui.BeginCombo("##scripteditor", EditorName(tools.ScriptEditor)))
 			{
 				foreach (ScriptEditorKind kind in Enum.GetValues<ScriptEditorKind>())
 				{
-					if (ImGui.Selectable(EditorName(kind) + (ExternalScriptEditor.IsInstalled(kind) ? "" : "  (not found)"), kind == tools.ScriptEditor))
+					if (EditorGui.Selectable(EditorName(kind) + (ExternalScriptEditor.IsInstalled(kind) ? "" : "  (not found)"), kind == tools.ScriptEditor))
 					{
 						tools.ScriptEditor = kind;
 						changed = true;
 					}
 				}
 
-				ImGui.EndCombo();
+				EditorGui.EndCombo();
 			}
 
 			ImGui.PushTextWrapPos(0f);
@@ -445,9 +451,9 @@ namespace LELEngine.Editor
 			if (tools.ScriptEditor == ScriptEditorKind.Custom)
 			{
 				Label("Path", "The editor's executable");
-				changed |= ImGui.InputTextWithHint("##path", @"C:\Tools\Editor\editor.exe", ref tools.CustomPath, 512);
+				changed |= EditorGui.InputTextWithHint("##path", @"C:\Tools\Editor\editor.exe", ref tools.CustomPath, 512);
 				Label("Arguments", "$(File), $(Line), $(Column), $(ProjectPath), $(SolutionPath) are replaced");
-				changed |= ImGui.InputText("##arguments", ref tools.CustomArguments, 512);
+				changed |= EditorGui.InputText("##arguments", ref tools.CustomArguments, 512);
 				ImGui.TextDisabled("$(File)  $(Line)  $(Column)  $(ProjectPath)  $(SolutionPath)");
 			}
 
@@ -487,7 +493,7 @@ namespace LELEngine.Editor
 		private bool Check(string label, ref bool value, string tooltip)
 		{
 			Label(label, tooltip);
-			return ImGui.Checkbox("##" + label, ref value);
+			return EditorGui.Checkbox("##" + label, ref value);
 		}
 
 		/// <summary>Editable strings with a remove button each and an add button.</summary>
@@ -501,14 +507,14 @@ namespace LELEngine.Editor
 				ImGui.PushID(i);
 				string value = values[i];
 				ImGui.SetNextItemWidth(Math.Max(80f, ImGui.GetContentRegionAvail().X - ImGui.GetFrameHeight() - ImGui.GetStyle().ItemSpacing.X));
-				if (ImGui.InputTextWithHint("##value", hint, ref value, 256))
+				if (EditorGui.InputTextWithHint("##value", hint, ref value, 256))
 				{
 					values[i] = value;
 					changed = true;
 				}
 
 				ImGui.SameLine();
-				if (ImGui.Button("x", new NVector2(ImGui.GetFrameHeight(), 0)))
+				if (EditorGui.Button("x", new NVector2(ImGui.GetFrameHeight(), 0)))
 				{
 					values.RemoveAt(i);
 					changed = true;
@@ -519,7 +525,7 @@ namespace LELEngine.Editor
 				ImGui.PopID();
 			}
 
-			if (ImGui.Button("Add"))
+			if (EditorGui.Button("Add"))
 			{
 				values.Add("");
 				changed = true;

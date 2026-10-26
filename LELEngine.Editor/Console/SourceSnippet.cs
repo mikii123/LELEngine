@@ -69,9 +69,9 @@ namespace LELEngine.Editor
 			ImGui.SetCursorPosX(ImGui.GetCursorPosX() + indent);
 			NVector2 start = ImGui.GetCursorScreenPos();
 			NVector2 end = start + new NVector2(width, height);
-			ImGui.InvisibleButton("##snippet", new NVector2(width, height));
+			EditorGui.InvisibleButton("##snippet", new NVector2(width, height));
 			bool hovered = ImGui.IsItemHovered();
-			bool clicked = ImGui.IsItemClicked(ImGuiMouseButton.Left);
+			bool clicked = EditorGui.IsItemClicked(ImGuiMouseButton.Left);
 			ImDrawListPtr draw = ImGui.GetWindowDrawList();
 			draw.AddRectFilled(start, end, EditorStyle.GetU32(EditorColor.CodeBackground), 3f);
 			draw.PushClipRect(start, end, true);

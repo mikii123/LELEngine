@@ -131,17 +131,31 @@ namespace LELEngine.Editor
 		/// <summary>Window > Reset Layout: the default docking is built on the next frame.</summary>
 		private bool resetLayoutRequested;
 
+		/// <summary>A window automation brought to the front (<see cref="RequestWindowFocus" />), focused by the next frame.</summary>
+		private string pendingFocus;
+
+		// The windows automation addresses beside the panels (see GetPanels).
+		private readonly IEditorPanel mainPanel;
+		private readonly IEditorPanel uiBuilderPanel;
+		private readonly IEditorPanel audioStudioPanel;
+
 		private static string WindowStatesFile => Path.Combine(RecentProjects.EditorDataFolder, "windows.json");
 
 		#endregion
 
 		#region Constructors
 
-		public EditorApplication(MainWindow window, string layoutFile, string[] args)
+		/// <param name="hasUI">False in batch mode: the editor runs without drawing (see <see cref="HasUI" />).</param>
+		public EditorApplication(MainWindow window, string layoutFile, string[] args, bool hasUI = true)
 		{
 			Instance = this;
 			Window = window;
-			automated = IsAutomatedRun(args);
+			HasUI = hasUI;
+			mainPanel = new Automation.MainWindowPanel(this);
+			uiBuilderPanel = new Automation.UIBuilderPanel(this);
+			audioStudioPanel = new Automation.AudioStudioPanel(this);
+			// Batch mode is automated too: the user's window states and recent projects stay as they are.
+			automated = !hasUI || IsAutomatedRun(args);
 			Edits = new EditTracker(this);
 			Extensions = new EditorExtensions(this);
 			Log = ConsoleLog.Install();
@@ -305,19 +319,45 @@ namespace LELEngine.Editor
 
 		public void DrawUI()
 		{
-			UpdateTitle();
-			UpdateAudio();
+			DrawUI(false);
+		}
+
+		/// <summary>
+		///     The editor's UI into the current ImGui context. <paramref name="capture" />: a capture of the whole main window
+		///     (<see cref="Automation.WindowCapture" />) draws the menu bar, the dock space and every open window, and nothing
+		///     with an effect beyond the image (title, audio, shortcuts, script windows' Update, edits, deferred actions,
+		///     focus requests, modal dialogs); a capture context without a saved layout gets the default one.
+		/// </summary>
+		internal void DrawUI(bool capture)
+		{
+			if (!capture)
+			{
+				UpdateTitle();
+				UpdateAudio();
+			}
+
 			if (Project == null)
 			{
 				// Hidden while the project chooser is up (see ChooseProject).
 				return;
 			}
 
-			HandleShortcuts();
+			if (!capture)
+			{
+				HandleShortcuts();
+			}
+
 			DrawMainMenu();
 
 			uint dockspace = ImGui.DockSpaceOverViewport();
-			if (!layoutBuilt || resetLayoutRequested)
+			if (capture)
+			{
+				if (Automation.WindowCapture.LayoutMissing)
+				{
+					BuildDefaultLayout(dockspace);
+				}
+			}
+			else if (!layoutBuilt || resetLayoutRequested)
 			{
 				layoutBuilt = true;
 				if (!layoutFileExisted || resetLayoutRequested)
@@ -328,7 +368,7 @@ namespace LELEngine.Editor
 				resetLayoutRequested = false;
 			}
 
-			if (testHooks.PendingDock is (string window, string target))
+			if (!capture && testHooks.PendingDock is (string window, string target))
 			{
 				testHooks.PendingDock = null;
 				DockInto(window, target);
@@ -345,6 +385,13 @@ namespace LELEngine.Editor
 			preferencesWindow.Draw();
 			vfxGraphWindow.Draw();
 			inputManagerWindow.Draw();
+			if (capture)
+			{
+				Extensions.DrawWindowsForCapture();
+				ObjectPicker.Draw(this);
+				return;
+			}
+
 			Extensions.DrawWindows();
 			ObjectPicker.Draw(this);
 			Extensions.EndFrame();
@@ -357,8 +404,65 @@ namespace LELEngine.Editor
 				testHooks.PendingFocus = null;
 			}
 
+			if (pendingFocus != null)
+			{
+				ImGui.SetWindowFocus(pendingFocus);
+				pendingFocus = null;
+			}
+
 			DrawModals();
 		}
+
+		/// <summary>
+		///     Batch mode: what a UI frame does besides drawing (audio callbacks, the script windows' Update and the menu items
+		///     they queued, the end of edits, deferred actions). Called once per tick after <see cref="Update" />.
+		/// </summary>
+		public void FrameWithoutUI()
+		{
+			if (Project == null)
+			{
+				return;
+			}
+
+			UpdateAudio();
+			Extensions.UpdateWindows(false);
+			Extensions.EndFrame();
+			Edits.Flush();
+			RunDeferred();
+		}
+
+		/// <summary>
+		///     The editor has work in flight: a script build (or one waiting), changed assets or settings not refreshed yet, a
+		///     scene or resource loading in the background. Automation waits for this to end (<see cref="EditorAutomation.WaitForIdle" />).
+		/// </summary>
+		public bool IsBusy => Project != null && (Scripts != null && !Scripts.IsIdle || assetsChanged || settingsChanged || restoreWindowsPending || SceneManager.PendingLoads.Count > 0);
+
+		/// <summary>The window comes to the front on the next frame (its ImGui name).</summary>
+		public void RequestWindowFocus(string imguiName)
+		{
+			pendingFocus = imguiName;
+		}
+
+		/// <summary>
+		///     Every window automation knows (<see cref="IEditorPanel" />): the main window as a whole ("Editor"), the docked
+		///     panels, the editor scripts' open windows and the windows with an OS window of their own.
+		/// </summary>
+		public IReadOnlyList<IEditorPanel> GetPanels()
+		{
+			var panels = new List<IEditorPanel>
+			{
+				mainPanel, hierarchy, SceneView, GameView, inspector, projectPanel, consolePanel, lightingPanel,
+				projectSettingsWindow, preferencesWindow, vfxGraphWindow, inputManagerWindow, uiBuilderPanel, audioStudioPanel
+			};
+			panels.AddRange(Extensions.OpenWindowPanels());
+			return panels;
+		}
+
+		/// <summary>
+		///     The editor draws its UI every frame (a window on screen). False in batch mode: nothing is drawn but the windows
+		///     captured on request (<see cref="Automation.WindowCapture" />).
+		/// </summary>
+		public bool HasUI { get; }
 
 		/// <summary>
 		///     Renders the visible views that need it (after the UI was built, before it is drawn): every frame while
@@ -570,6 +674,7 @@ namespace LELEngine.Editor
 			DragAndDrop.Clear();
 			CollectionDrawers.Reset();
 			AssetThumbnails.Clear();
+			Automation.WindowCapture.ReleaseViews();
 			vfxGraphWindow.Reset();
 			Undo.Clear();
 			Edits.Cancel();
@@ -1460,6 +1565,7 @@ namespace LELEngine.Editor
 			audioStudio?.Dispose();
 			audioStudio = null;
 			CloseProject();
+			Automation.WindowCapture.ReleaseViews();
 			LELEngine.Audio.AudioSystem.Shutdown();
 			SceneView.Dispose();
 			GameView.Dispose();
@@ -1612,7 +1718,7 @@ namespace LELEngine.Editor
 				ImGui.Text($"The scene '{Scene?.Name}' was changed outside the editor (git, Explorer),");
 				ImGui.Text("and it has unsaved changes here.");
 				ImGui.Spacing();
-				if (ImGui.Button("Reload", new NVector2(110, 0)))
+				if (EditorGui.Button("Reload", new NVector2(110, 0)))
 				{
 					ImGui.CloseCurrentPopup();
 					ReloadSceneFromDisk();
@@ -1624,7 +1730,7 @@ namespace LELEngine.Editor
 				}
 
 				ImGui.SameLine();
-				if (ImGui.Button("Keep mine", new NVector2(110, 0)))
+				if (EditorGui.Button("Keep mine", new NVector2(110, 0)))
 				{
 					ImGui.CloseCurrentPopup();
 				}
@@ -1642,7 +1748,7 @@ namespace LELEngine.Editor
 			{
 				ImGui.Text($"The scene '{Scene?.Name}' has unsaved changes.");
 				ImGui.Spacing();
-				if (ImGui.Button("Save", new NVector2(110, 0)))
+				if (EditorGui.Button("Save", new NVector2(110, 0)))
 				{
 					ImGui.CloseCurrentPopup();
 					Action continuation = pendingAfterSave;
@@ -1659,7 +1765,7 @@ namespace LELEngine.Editor
 				}
 
 				ImGui.SameLine();
-				if (ImGui.Button("Don't save", new NVector2(110, 0)))
+				if (EditorGui.Button("Don't save", new NVector2(110, 0)))
 				{
 					ImGui.CloseCurrentPopup();
 					Action continuation = pendingAfterSave;
@@ -1669,7 +1775,7 @@ namespace LELEngine.Editor
 				}
 
 				ImGui.SameLine();
-				if (ImGui.Button("Cancel", new NVector2(110, 0)))
+				if (EditorGui.Button("Cancel", new NVector2(110, 0)))
 				{
 					ImGui.CloseCurrentPopup();
 					pendingAfterSave = null;
@@ -1683,15 +1789,15 @@ namespace LELEngine.Editor
 			{
 				ImGui.Text("Asset path (inside the project's Assets folder):");
 				ImGui.SetNextItemWidth(420);
-				ImGui.InputText("##path", ref saveAsPath, 260);
-				if (ImGui.Button("Save", new NVector2(110, 0)) && !string.IsNullOrWhiteSpace(saveAsPath))
+				EditorGui.InputText("##path", ref saveAsPath, 260);
+				if (EditorGui.Button("Save", new NVector2(110, 0)) && !string.IsNullOrWhiteSpace(saveAsPath))
 				{
 					ImGui.CloseCurrentPopup();
 					SaveSceneTo(saveAsPath);
 				}
 
 				ImGui.SameLine();
-				if (ImGui.Button("Cancel", new NVector2(110, 0)))
+				if (EditorGui.Button("Cancel", new NVector2(110, 0)))
 				{
 					ImGui.CloseCurrentPopup();
 					pendingAfterSave = null;
@@ -1708,62 +1814,84 @@ namespace LELEngine.Editor
 				return;
 			}
 
-			if (ImGui.BeginMenu("File"))
+			DrawMenus();
+			DrawPlayControls();
+			DrawStatus();
+			ImGui.EndMainMenuBar();
+		}
+
+		/// <summary>Every item of the main menu bar, with its path ("File/Save Scene", "GameObject/Physics 2D/...", "Tools/...").</summary>
+		public List<EditorMenu.Entry> ListMenuItems()
+		{
+			return Project == null ? new List<EditorMenu.Entry>() : EditorMenu.List(DrawMenus);
+		}
+
+		/// <summary>Runs a main menu item as if clicked ("File/Save Scene", "Window/Reset Layout"); false when there is no such enabled item.</summary>
+		public bool ExecuteMenuItem(string menuPath)
+		{
+			return Project != null && EditorMenu.Execute(menuPath, DrawMenus);
+		}
+
+		/// <summary>The menus of the main menu bar (drawn, or walked by a menu pass: <see cref="EditorMenu" />).</summary>
+		private void DrawMenus()
+		{
+			if (EditorMenu.Begin("File"))
 			{
-				if (ImGui.MenuItem("New Scene", "Ctrl+N")) NewScene();
-				if (ImGui.MenuItem(Stage != null ? "Save Prefab" : "Save Scene", "Ctrl+S", false, !IsPlaying)) SaveScene();
-				if (ImGui.MenuItem("Save Scene As...", "Ctrl+Shift+S", false, !IsPlaying && Stage == null)) SaveSceneAs();
+				if (EditorMenu.Item("New Scene", "Ctrl+N")) NewScene();
+				if (EditorMenu.Item((Stage != null ? "Save Prefab" : "Save Scene") + "###Save", "Ctrl+S", false, !IsPlaying)) SaveScene();
+				if (EditorMenu.Item("Save Scene As...", "Ctrl+Shift+S", false, !IsPlaying && Stage == null)) SaveSceneAs();
 				ImGui.Separator();
-				if (ImGui.MenuItem("Open Script Project", "", false, Scripts != null)) Scripts.OpenInIde();
-				if (ImGui.MenuItem("Rebuild Scripts", "", false, Scripts != null && !IsPlaying)) Scripts.RequestBuild();
+				if (EditorMenu.Item("Open Script Project", "", false, Scripts != null)) Scripts.OpenInIde();
+				if (EditorMenu.Item("Rebuild Scripts", "", false, Scripts != null && !IsPlaying)) Scripts.RequestBuild();
 				ImGui.Separator();
-				if (ImGui.MenuItem("Build Settings...", "Ctrl+Shift+B")) ShowBuildWindow();
+				if (EditorMenu.Item("Build Settings...", "Ctrl+Shift+B")) ShowBuildWindow();
 				ImGui.Separator();
-				if (ImGui.MenuItem("Close Project")) LeaveAllStages(() => ConfirmDiscard(CloseProject));
-				if (ImGui.MenuItem("Exit")) Window.Close();
+				if (EditorMenu.Item("Close Project")) LeaveAllStages(() => ConfirmDiscard(CloseProject));
+				if (EditorMenu.Item("Exit")) Window.Close();
 				Extensions.DrawMenuItems("File");
-				ImGui.EndMenu();
+				EditorMenu.End();
 			}
 
-			if (ImGui.BeginMenu("Edit"))
+			if (EditorMenu.Begin("Edit"))
 			{
-				if (ImGui.MenuItem(Undo.CanUndo ? "Undo " + Undo.UndoName : "Undo", "Ctrl+Z", false, Undo.CanUndo)) UndoLast();
-				if (ImGui.MenuItem(Undo.CanRedo ? "Redo " + Undo.RedoName : "Redo", "Ctrl+Y", false, Undo.CanRedo)) RedoLast();
+				// The item's id stays "Undo" / "Redo" whatever the text says (menu paths of automation).
+				if (EditorMenu.Item((Undo.CanUndo ? "Undo " + Undo.UndoName : "Undo") + "###Undo", "Ctrl+Z", false, Undo.CanUndo)) UndoLast();
+				if (EditorMenu.Item((Undo.CanRedo ? "Redo " + Undo.RedoName : "Redo") + "###Redo", "Ctrl+Y", false, Undo.CanRedo)) RedoLast();
 				ImGui.Separator();
-				if (ImGui.MenuItem("Duplicate", "Ctrl+D", false, Selected != null)) DuplicateSelected();
-				if (ImGui.MenuItem("Delete", "Del", false, Selected != null)) DeleteSelected();
+				if (EditorMenu.Item("Duplicate", "Ctrl+D", false, Selected != null)) DuplicateSelected();
+				if (EditorMenu.Item("Delete", "Del", false, Selected != null)) DeleteSelected();
 				ImGui.Separator();
 				bool reload = Project.ReloadScriptsOnPlay;
-				if (ImGui.MenuItem("Reload Scripts On Play", "", reload))
+				if (EditorMenu.Item("Reload Scripts On Play", "", reload))
 				{
 					Project.ReloadScriptsOnPlay = !reload;
 					Project.Save();
 				}
 
 				ImGui.Separator();
-				if (ImGui.MenuItem("Project Settings...")) ShowProjectSettings();
-				if (ImGui.MenuItem("Preferences...")) ShowPreferences();
+				if (EditorMenu.Item("Project Settings...")) ShowProjectSettings();
+				if (EditorMenu.Item("Preferences...")) ShowPreferences();
 				Extensions.DrawMenuItems("Edit");
-				ImGui.EndMenu();
+				EditorMenu.End();
 			}
 
-			if (ImGui.BeginMenu("GameObject"))
+			if (EditorMenu.Begin("GameObject"))
 			{
 				DrawCreateMenu(null);
 				Extensions.DrawMenuItems("GameObject");
-				ImGui.EndMenu();
+				EditorMenu.End();
 			}
 
-			if (ImGui.BeginMenu("Window"))
+			if (EditorMenu.Begin("Window"))
 			{
 				// Ticked windows are open; a closed one comes back where it was docked (layout.ini keeps its place).
-				if (ImGui.MenuItem("Scene", "", SceneView.Open))
+				if (EditorMenu.Item("Scene", "", SceneView.Open))
 				{
 					if (SceneView.Open) SceneView.Open = false;
 					else SceneView.Focus();
 				}
 
-				if (ImGui.MenuItem("Game", "", GameView.Open))
+				if (EditorMenu.Item("Game", "", GameView.Open))
 				{
 					if (GameView.Open) GameView.Open = false;
 					else GameView.Focus();
@@ -1775,40 +1903,40 @@ namespace LELEngine.Editor
 				ToggleMenuItem("Console", ref consolePanel.Open);
 				ToggleMenuItem("Lighting", ref lightingPanel.Open);
 				ImGui.Separator();
-				if (ImGui.MenuItem("Project Settings", "", projectSettingsWindow.Open))
+				if (EditorMenu.Item("Project Settings", "", projectSettingsWindow.Open))
 				{
 					if (projectSettingsWindow.Open) projectSettingsWindow.Open = false;
 					else ShowProjectSettings();
 				}
 
-				if (ImGui.MenuItem("VFX Graph", "", vfxGraphWindow.Open))
+				if (EditorMenu.Item("VFX Graph", "", vfxGraphWindow.Open))
 				{
 					if (vfxGraphWindow.Open) vfxGraphWindow.Close();
 					else OpenVfxGraph(null);
 				}
 
-				if (ImGui.MenuItem("Input Manager", "", inputManagerWindow.Open))
+				if (EditorMenu.Item("Input Manager", "", inputManagerWindow.Open))
 				{
 					if (inputManagerWindow.Open) inputManagerWindow.Open = false;
 					else OpenInputManager(null);
 				}
 
 				bool builderOpen = uiBuilder != null && uiBuilder.IsOpen;
-				if (ImGui.MenuItem("UI Builder", "", builderOpen))
+				if (EditorMenu.Item("UI Builder", "", builderOpen))
 				{
 					if (builderOpen) uiBuilder.Close();
 					else OpenUIBuilder(null);
 				}
 
 				bool studioOpen = audioStudio != null && audioStudio.IsOpen;
-				if (ImGui.MenuItem("Audio Studio", "", studioOpen))
+				if (EditorMenu.Item("Audio Studio", "", studioOpen))
 				{
 					if (studioOpen) audioStudio.Close();
 					else OpenAudioStudio(null, null);
 				}
 
 				ImGui.Separator();
-				if (ImGui.MenuItem("Reset Layout"))
+				if (EditorMenu.Item("Reset Layout"))
 				{
 					// Every panel open, docked as by default.
 					SceneView.Open = GameView.Open = hierarchy.Open = inspector.Open = projectPanel.Open = consolePanel.Open = lightingPanel.Open = true;
@@ -1816,20 +1944,17 @@ namespace LELEngine.Editor
 				}
 
 				Extensions.DrawMenuItems("Window");
-				ImGui.EndMenu();
+				EditorMenu.End();
 			}
 
 			// Menus of the project's editor scripts ([MenuItem("Tools/...")]).
 			Extensions.DrawExtraMenus();
-			DrawPlayControls();
-			DrawStatus();
-			ImGui.EndMainMenuBar();
 		}
 
 		/// <summary>A Window menu entry: ticked while the window is open, a click opens or closes it.</summary>
 		private static void ToggleMenuItem(string label, ref bool open)
 		{
-			if (ImGui.MenuItem(label, "", open))
+			if (EditorMenu.Item(label, "", open))
 			{
 				open = !open;
 			}
@@ -1838,16 +1963,16 @@ namespace LELEngine.Editor
 		/// <summary>Create entries (also used by the hierarchy's context menu).</summary>
 		public void DrawCreateMenu(Transform parent)
 		{
-			if (ImGui.MenuItem("Create Empty")) CreateObject("GameObject", null, parent);
+			if (EditorMenu.Item("Create Empty")) CreateObject("GameObject", null, parent);
 			ImGui.Separator();
-			if (ImGui.MenuItem("Cube")) CreateModelObject("Cube", DefaultScene.CubeModel, null, parent);
-			if (ImGui.MenuItem("Sphere")) CreateModelObject("Sphere", DefaultScene.SphereModel, null, parent);
-			if (ImGui.MenuItem("Quad")) CreateModelObject("Quad", DefaultScene.QuadModel, null, parent);
+			if (EditorMenu.Item("Cube")) CreateModelObject("Cube", DefaultScene.CubeModel, null, parent);
+			if (EditorMenu.Item("Sphere")) CreateModelObject("Sphere", DefaultScene.SphereModel, null, parent);
+			if (EditorMenu.Item("Quad")) CreateModelObject("Quad", DefaultScene.QuadModel, null, parent);
 			ImGui.Separator();
-			if (ImGui.BeginMenu("Navigation"))
+			if (EditorMenu.Begin("Navigation"))
 			{
-				if (ImGui.MenuItem("NavMesh Surface")) CreateObject("NavMesh Surface", go => go.AddComponent<Navigation.NavMeshSurface>(), parent);
-				if (ImGui.MenuItem("NavMesh Agent"))
+				if (EditorMenu.Item("NavMesh Surface")) CreateObject("NavMesh Surface", go => go.AddComponent<Navigation.NavMeshSurface>(), parent);
+				if (EditorMenu.Item("NavMesh Agent"))
 				{
 					CreateModelObject("NavMesh Agent", DefaultScene.CubeModel, go =>
 					{
@@ -1859,7 +1984,7 @@ namespace LELEngine.Editor
 					}, parent);
 				}
 
-				if (ImGui.MenuItem("NavMesh Obstacle"))
+				if (EditorMenu.Item("NavMesh Obstacle"))
 				{
 					CreateModelObject("NavMesh Obstacle", DefaultScene.CubeModel, go =>
 					{
@@ -1868,12 +1993,12 @@ namespace LELEngine.Editor
 					}, parent);
 				}
 
-				ImGui.EndMenu();
+				EditorMenu.End();
 			}
 
-			if (ImGui.BeginMenu("Physics 2D"))
+			if (EditorMenu.Begin("Physics 2D"))
 			{
-				if (ImGui.MenuItem("Dynamic Box (Rigidbody2D + BoxCollider2D)"))
+				if (EditorMenu.Item("Dynamic Box (Rigidbody2D + BoxCollider2D)"))
 				{
 					CreateModelObject("Box 2D", DefaultScene.CubeModel, go =>
 					{
@@ -1884,7 +2009,7 @@ namespace LELEngine.Editor
 					}, parent);
 				}
 
-				if (ImGui.MenuItem("Dynamic Circle (Rigidbody2D + CircleCollider2D)"))
+				if (EditorMenu.Item("Dynamic Circle (Rigidbody2D + CircleCollider2D)"))
 				{
 					CreateModelObject("Circle 2D", DefaultScene.SphereModel, go =>
 					{
@@ -1894,7 +2019,7 @@ namespace LELEngine.Editor
 					}, parent);
 				}
 
-				if (ImGui.MenuItem("Static Ground (BoxCollider2D)"))
+				if (EditorMenu.Item("Static Ground (BoxCollider2D)"))
 				{
 					CreateModelObject("Ground 2D", DefaultScene.CubeModel, go =>
 					{
@@ -1908,7 +2033,7 @@ namespace LELEngine.Editor
 					}, parent);
 				}
 
-				if (ImGui.MenuItem("Dynamic Capsule (Rigidbody2D + CapsuleCollider2D)"))
+				if (EditorMenu.Item("Dynamic Capsule (Rigidbody2D + CapsuleCollider2D)"))
 				{
 					CreateModelObject("Capsule 2D", DefaultScene.CubeModel, go =>
 					{
@@ -1918,13 +2043,13 @@ namespace LELEngine.Editor
 					}, parent);
 				}
 
-				if (ImGui.MenuItem("Edge Ground (EdgeCollider2D)"))
+				if (EditorMenu.Item("Edge Ground (EdgeCollider2D)"))
 				{
 					CreateObject("Edge 2D", go => go.AddComponent<EdgeCollider2D>(), parent);
 				}
 
 				ImGui.Separator();
-				if (ImGui.MenuItem("Hinge Chain (3 links)"))
+				if (EditorMenu.Item("Hinge Chain (3 links)"))
 				{
 					CreateObject("Chain Anchor", go =>
 					{
@@ -1947,11 +2072,11 @@ namespace LELEngine.Editor
 					}, parent);
 				}
 
-				ImGui.EndMenu();
+				EditorMenu.End();
 			}
 
 			ImGui.Separator();
-			if (ImGui.MenuItem("Visual Effect"))
+			if (EditorMenu.Item("Visual Effect"))
 			{
 				CreateObject("Visual Effect", go =>
 				{
@@ -1964,24 +2089,24 @@ namespace LELEngine.Editor
 				}, parent);
 			}
 
-			if (ImGui.MenuItem("Trail"))
+			if (EditorMenu.Item("Trail"))
 			{
 				// With the default line material, as the inspector's Add Component gives it.
 				CreateObject("Trail", go => go.AddComponent<TrailRenderer>().Reset(), parent);
 			}
 
-			if (ImGui.BeginMenu("Audio"))
+			if (EditorMenu.Begin("Audio"))
 			{
-				if (ImGui.MenuItem("Audio Listener")) CreateObject("Audio Listener", go => go.AddComponent<LELEngine.Audio.AudioListener>(), parent);
-				if (ImGui.MenuItem("Audio Event Emitter")) CreateObject("Audio Emitter", go => go.AddComponent<LELEngine.Audio.AudioEventEmitter>(), parent);
-				if (ImGui.MenuItem("Audio Bank Loader")) CreateObject("Audio Bank Loader", go => go.AddComponent<LELEngine.Audio.AudioBankLoader>(), parent);
-				if (ImGui.MenuItem("Audio Snapshot Trigger")) CreateObject("Audio Snapshot Trigger", go => go.AddComponent<LELEngine.Audio.AudioSnapshotTrigger>(), parent);
-				ImGui.EndMenu();
+				if (EditorMenu.Item("Audio Listener")) CreateObject("Audio Listener", go => go.AddComponent<LELEngine.Audio.AudioListener>(), parent);
+				if (EditorMenu.Item("Audio Event Emitter")) CreateObject("Audio Emitter", go => go.AddComponent<LELEngine.Audio.AudioEventEmitter>(), parent);
+				if (EditorMenu.Item("Audio Bank Loader")) CreateObject("Audio Bank Loader", go => go.AddComponent<LELEngine.Audio.AudioBankLoader>(), parent);
+				if (EditorMenu.Item("Audio Snapshot Trigger")) CreateObject("Audio Snapshot Trigger", go => go.AddComponent<LELEngine.Audio.AudioSnapshotTrigger>(), parent);
+				EditorMenu.End();
 			}
 
 			ImGui.Separator();
-			if (ImGui.MenuItem("Camera")) CreateObject("Camera", go => go.AddComponent<Camera>(), parent);
-			if (ImGui.MenuItem("Directional Light"))
+			if (EditorMenu.Item("Camera")) CreateObject("Camera", go => go.AddComponent<Camera>(), parent);
+			if (EditorMenu.Item("Directional Light"))
 			{
 				CreateObject("Directional Light", go =>
 				{

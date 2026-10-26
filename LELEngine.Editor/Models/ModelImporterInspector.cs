@@ -38,13 +38,13 @@ namespace LELEngine.Editor
 			ImGui.Spacing();
 			float width = (ImGui.GetContentRegionAvail().X - ImGui.GetStyle().ItemSpacing.X) * 0.5f;
 			ImGui.BeginDisabled(!dirty);
-			if (ImGui.Button("Revert", new NVector2(width, 0)))
+			if (EditorGui.Button("Revert", new NVector2(width, 0)))
 			{
 				Load(assetPath);
 			}
 
 			ImGui.SameLine();
-			if (ImGui.Button("Apply", new NVector2(width, 0)))
+			if (EditorGui.Button("Apply", new NVector2(width, 0)))
 			{
 				Apply(assetPath, context.Editor);
 			}
@@ -64,7 +64,7 @@ namespace LELEngine.Editor
 			}
 
 			ImGui.Spacing();
-			if (ImGui.Button("Add to Scene", new NVector2(-1, 0)))
+			if (EditorGui.Button("Add to Scene", new NVector2(-1, 0)))
 			{
 				context.Editor.InstantiateModel(assetPath);
 			}
@@ -128,7 +128,7 @@ namespace LELEngine.Editor
 				ImGui.TextDisabled(string.Format(System.Globalization.CultureInfo.InvariantCulture, "Size {0:0.###} x {1:0.###} x {2:0.###} m", size.X, size.Y, size.Z));
 			}
 
-			if (ImGui.CollapsingHeader("Meshes (" + model.Meshes.Count + ")"))
+			if (EditorGui.CollapsingHeader("Meshes (" + model.Meshes.Count + ")"))
 			{
 				foreach (Mesh mesh in model.Meshes)
 				{
@@ -139,14 +139,14 @@ namespace LELEngine.Editor
 			}
 
 			ModelData data = model.Data;
-			if (ImGui.CollapsingHeader("Materials (" + data.Materials.Count + ")"))
+			if (EditorGui.CollapsingHeader("Materials (" + data.Materials.Count + ")"))
 			{
 				foreach (ModelMaterial material in data.Materials)
 				{
 					ImGui.PushID(material.Name);
 					if (material.AssetPath != null && File.Exists(AssetDatabase.ToAbsolute(material.AssetPath)))
 					{
-						if (ImGui.Selectable(material.Name + "  ->  " + material.AssetPath))
+						if (EditorGui.Selectable(material.Name + "  ->  " + material.AssetPath))
 						{
 							editor.SelectAsset(material.AssetPath);
 						}
@@ -164,7 +164,7 @@ namespace LELEngine.Editor
 				}
 			}
 
-			if (ImGui.CollapsingHeader("Hierarchy"))
+			if (EditorGui.CollapsingHeader("Hierarchy"))
 			{
 				DrawNode(model, 0, 0);
 			}
@@ -192,7 +192,7 @@ namespace LELEngine.Editor
 
 			ImGuiTreeNodeFlags flags = hasChildren ? ImGuiTreeNodeFlags.DefaultOpen : ImGuiTreeNodeFlags.Leaf | ImGuiTreeNodeFlags.NoTreePushOnOpen;
 			ImGui.PushID(index);
-			bool open = ImGui.TreeNodeEx(label, flags);
+			bool open = EditorGui.TreeNodeEx(label, flags);
 			ImGui.PopID();
 			if (!hasChildren || !open)
 			{

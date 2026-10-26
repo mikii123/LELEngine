@@ -33,7 +33,7 @@ namespace LELEngine.Editor
 		{
 			FieldDrawer.Label("Clear Depth", null, context);
 			bool clear = camera.ClearDepth;
-			bool changed = ImGui.Checkbox("##cleardepth", ref clear);
+			bool changed = EditorGui.Checkbox("##cleardepth", ref clear);
 			if (ImGui.IsItemHovered())
 			{
 				ImGui.SetTooltip("Clear the depth before drawing: this camera's objects draw over everything the cameras before it drew.");
@@ -85,7 +85,7 @@ namespace LELEngine.Editor
 				Camera overlay = stack[i];
 				ImGui.PushID(i);
 				ImGui.BeginDisabled(i == 0);
-				if (ImGui.ArrowButton("##up", ImGuiDir.Up))
+				if (EditorGui.ArrowButton("##up", ImGuiDir.Up))
 				{
 					swap = i - 1;
 				}
@@ -93,14 +93,14 @@ namespace LELEngine.Editor
 				ImGui.EndDisabled();
 				ImGui.SameLine();
 				ImGui.BeginDisabled(i == count - 1);
-				if (ImGui.ArrowButton("##down", ImGuiDir.Down))
+				if (EditorGui.ArrowButton("##down", ImGuiDir.Down))
 				{
 					swap = i;
 				}
 
 				ImGui.EndDisabled();
 				ImGui.SameLine();
-				if (ImGui.Button("X"))
+				if (EditorGui.Button("X"))
 				{
 					remove = i;
 				}
@@ -132,7 +132,7 @@ namespace LELEngine.Editor
 			// The overlay cameras of the scene not in the stack yet.
 			Camera added = null;
 			ImGui.SetNextItemWidth(-1);
-			if (ImGui.BeginCombo("##addoverlay", "Add Overlay Camera..."))
+			if (EditorGui.BeginCombo("##addoverlay", "Add Overlay Camera..."))
 			{
 				bool any = false;
 				foreach (Camera candidate in SceneCameras(context))
@@ -143,7 +143,7 @@ namespace LELEngine.Editor
 					}
 
 					any = true;
-					if (ImGui.Selectable(candidate.gameObject.Name + "##" + candidate.Id))
+					if (EditorGui.Selectable(candidate.gameObject.Name + "##" + candidate.Id))
 					{
 						added = candidate;
 					}
@@ -154,7 +154,7 @@ namespace LELEngine.Editor
 					ImGui.TextDisabled("No overlay camera to add (set a camera's Render Type to Overlay).");
 				}
 
-				ImGui.EndCombo();
+				EditorGui.EndCombo();
 			}
 
 			if (remove >= 0 || swap >= 0 || added != null)
@@ -196,9 +196,9 @@ namespace LELEngine.Editor
 			string thisCamera = camera.gameObject.Name + " (this camera)";
 			bool changed = false;
 			Camera chosen = camera.LightingCamera;
-			if (ImGui.BeginCombo("##lighting", lighting == camera ? thisCamera : lighting.gameObject.Name))
+			if (EditorGui.BeginCombo("##lighting", lighting == camera ? thisCamera : lighting.gameObject.Name))
 			{
-				if (ImGui.Selectable(thisCamera, lighting == camera))
+				if (EditorGui.Selectable(thisCamera, lighting == camera))
 				{
 					chosen = null;
 					changed = true;
@@ -206,14 +206,14 @@ namespace LELEngine.Editor
 
 				foreach (Camera overlay in camera.Stack ?? new List<Camera>())
 				{
-					if (Camera.RendersInStack(overlay) && ImGui.Selectable(overlay.gameObject.Name + "##" + overlay.Id, lighting == overlay))
+					if (Camera.RendersInStack(overlay) && EditorGui.Selectable(overlay.gameObject.Name + "##" + overlay.Id, lighting == overlay))
 					{
 						chosen = overlay;
 						changed = true;
 					}
 				}
 
-				ImGui.EndCombo();
+				EditorGui.EndCombo();
 			}
 
 			if (ImGui.IsItemHovered())

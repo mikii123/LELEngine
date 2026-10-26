@@ -109,11 +109,11 @@ namespace LELEngine.Editor.VFX
 					float f = value.Float;
 					if (slot != null && slot.HasRange)
 					{
-						changed = ImGui.SliderFloat("##v", ref f, slot.Min, slot.Max);
+						changed = EditorGui.SliderFloat("##v", ref f, slot.Min, slot.Max);
 					}
 					else
 					{
-						changed = ImGui.DragFloat("##v", ref f, Math.Max(0.005f, Math.Abs(f) * 0.01f));
+						changed = EditorGui.DragFloat("##v", ref f, Math.Max(0.005f, Math.Abs(f) * 0.01f));
 					}
 
 					Track(changed);
@@ -123,7 +123,7 @@ namespace LELEngine.Editor.VFX
 				case VfxValueType.Int:
 				{
 					int i = value.Int;
-					changed = slot != null && slot.HasRange ? ImGui.SliderInt("##v", ref i, (int)slot.Min, (int)slot.Max) : ImGui.DragInt("##v", ref i, 0.2f);
+					changed = slot != null && slot.HasRange ? EditorGui.SliderInt("##v", ref i, (int)slot.Min, (int)slot.Max) : EditorGui.DragInt("##v", ref i, 0.2f);
 					Track(changed);
 					if (changed) value.Int = i;
 					break;
@@ -131,7 +131,7 @@ namespace LELEngine.Editor.VFX
 				case VfxValueType.Uint:
 				{
 					int i = (int)Math.Min(int.MaxValue, value.Uint);
-					changed = ImGui.DragInt("##v", ref i, 0.2f);
+					changed = EditorGui.DragInt("##v", ref i, 0.2f);
 					Track(changed);
 					if (changed) value.Uint = (uint)Math.Max(0, i);
 					break;
@@ -139,7 +139,7 @@ namespace LELEngine.Editor.VFX
 				case VfxValueType.Bool:
 				{
 					bool b = value.Bool;
-					changed = ImGui.Checkbox("##v", ref b);
+					changed = EditorGui.Checkbox("##v", ref b);
 					Track(changed);
 					if (changed) value.Bool = b;
 					break;
@@ -147,7 +147,7 @@ namespace LELEngine.Editor.VFX
 				case VfxValueType.Vector2:
 				{
 					var n = new NVector2(value.Vector.X, value.Vector.Y);
-					changed = ImGui.DragFloat2("##v", ref n, 0.05f);
+					changed = EditorGui.DragFloat2("##v", ref n, 0.05f);
 					Track(changed);
 					if (changed) value.Vector2 = new Vector2(n.X, n.Y);
 					break;
@@ -155,7 +155,7 @@ namespace LELEngine.Editor.VFX
 				case VfxValueType.Vector3:
 				{
 					var n = new NVector3(value.Vector.X, value.Vector.Y, value.Vector.Z);
-					changed = ImGui.DragFloat3("##v", ref n, 0.05f);
+					changed = EditorGui.DragFloat3("##v", ref n, 0.05f);
 					Track(changed);
 					if (changed) value.Vector3 = new Vector3(n.X, n.Y, n.Z);
 					break;
@@ -163,7 +163,7 @@ namespace LELEngine.Editor.VFX
 				case VfxValueType.Vector4:
 				{
 					var n = new NVector4(value.Vector.X, value.Vector.Y, value.Vector.Z, value.Vector.W);
-					changed = ImGui.DragFloat4("##v", ref n, 0.05f);
+					changed = EditorGui.DragFloat4("##v", ref n, 0.05f);
 					Track(changed);
 					if (changed) value.Vector = new Vector4(n.X, n.Y, n.Z, n.W);
 					break;
@@ -172,7 +172,7 @@ namespace LELEngine.Editor.VFX
 				{
 					var n = new NVector4(value.Vector.X, value.Vector.Y, value.Vector.Z, value.Vector.W);
 					ImGuiColorEditFlags flags = ImGuiColorEditFlags.Float | ImGuiColorEditFlags.AlphaPreviewHalf | ImGuiColorEditFlags.Hdr;
-					changed = ImGui.ColorEdit4("##v", ref n, flags);
+					changed = EditorGui.ColorEdit4("##v", ref n, flags);
 					Track(changed);
 					if (changed) value.Vector = new Vector4(n.X, n.Y, n.Z, n.W);
 					break;
@@ -259,7 +259,7 @@ namespace LELEngine.Editor.VFX
 			draw.AddRect(barMin, barMax, ImGui.GetColorU32(ImGuiCol.Border));
 
 			// Alpha keys above the bar, color keys below.
-			ImGui.InvisibleButton("##gradient", new NVector2(width, keyHeight * 2 + barHeight));
+			EditorGui.InvisibleButton("##gradient", new NVector2(width, keyHeight * 2 + barHeight));
 			bool hovered = ImGui.IsItemHovered();
 			NVector2 mouse = ImGui.GetMousePos();
 			int hitKey = -1;
@@ -366,14 +366,14 @@ namespace LELEngine.Editor.VFX
 					if (selectedGradientAlpha)
 					{
 						float a = key.Color.A;
-						keyChanged = ImGui.SliderFloat("##alpha", ref a, 0f, 1f, "alpha %.2f");
+						keyChanged = EditorGui.SliderFloat("##alpha", ref a, 0f, 1f, "alpha %.2f");
 						Track(keyChanged);
 						if (keyChanged) key.Color = new Color4(1f, 1f, 1f, a);
 					}
 					else
 					{
 						var n = new NVector4(key.Color.R, key.Color.G, key.Color.B, 1f);
-						keyChanged = ImGui.ColorEdit4("##color", ref n, ImGuiColorEditFlags.Float | ImGuiColorEditFlags.NoAlpha | ImGuiColorEditFlags.Hdr);
+						keyChanged = EditorGui.ColorEdit4("##color", ref n, ImGuiColorEditFlags.Float | ImGuiColorEditFlags.NoAlpha | ImGuiColorEditFlags.Hdr);
 						Track(keyChanged);
 						if (keyChanged) key.Color = new Color4(n.X, n.Y, n.Z, 1f);
 					}
@@ -386,7 +386,7 @@ namespace LELEngine.Editor.VFX
 
 					ImGui.SameLine();
 					ImGui.BeginDisabled(keys.Count <= 1);
-					if (ImGui.SmallButton("Remove"))
+					if (EditorGui.SmallButton("Remove"))
 					{
 						LastEditState = EditState.Began;
 						keys.RemoveAt(selectedGradientKey);
@@ -448,7 +448,7 @@ namespace LELEngine.Editor.VFX
 				previous = current;
 			}
 
-			ImGui.InvisibleButton("##curve", new NVector2(width, height));
+			EditorGui.InvisibleButton("##curve", new NVector2(width, height));
 			bool hovered = ImGui.IsItemHovered();
 			NVector2 mouse = ImGui.GetMousePos();
 			int hitKey = -1;
@@ -520,7 +520,7 @@ namespace LELEngine.Editor.VFX
 				VfxCurveKey key = curve.Keys[selectedCurveKey];
 				float v = key.Value;
 				ImGui.SetNextItemWidth(width - 70f);
-				bool valueChanged = ImGui.DragFloat("##keyvalue", ref v, 0.01f);
+				bool valueChanged = EditorGui.DragFloat("##keyvalue", ref v, 0.01f);
 				Track(valueChanged);
 				if (valueChanged)
 				{
@@ -532,7 +532,7 @@ namespace LELEngine.Editor.VFX
 
 				ImGui.SameLine();
 				ImGui.BeginDisabled(curve.Keys.Count <= 1);
-				if (ImGui.SmallButton("Remove"))
+				if (EditorGui.SmallButton("Remove"))
 				{
 					LastEditState = EditState.Began;
 					curve.Keys.RemoveAt(selectedCurveKey);

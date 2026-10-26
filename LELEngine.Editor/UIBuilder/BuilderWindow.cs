@@ -20,6 +20,9 @@ namespace LELEngine.Editor.UIBuilder
 		public UIBuilder Builder { get; }
 		public bool IsOpen => native != null && native.Exists && !closeRequested;
 
+		/// <summary>The window's ImGui context (captures share its fonts and copy its layout).</summary>
+		public ImGuiController Controller => imgui;
+
 		/// <summary>Set by the test hooks: the next builder frame is written to this folder.</summary>
 		public static string ScreenshotFolder;
 
@@ -95,6 +98,7 @@ namespace LELEngine.Editor.UIBuilder
 				}
 
 				imgui.NewFrame(deltaTime, size.X, size.Y);
+				Automation.WindowCapture.UIFrameDepth++;
 				try
 				{
 					Builder.Draw();
@@ -102,6 +106,10 @@ namespace LELEngine.Editor.UIBuilder
 				catch (Exception e)
 				{
 					Debug.LogException(e);
+				}
+				finally
+				{
+					Automation.WindowCapture.UIFrameDepth--;
 				}
 
 				imgui.EndFrame();
@@ -162,6 +170,7 @@ namespace LELEngine.Editor.UIBuilder
 
 				native.MakeCurrent();
 				Builder.Dispose();
+				Automation.WindowCapture.Forget(native);
 				imgui.Dispose();
 			}
 

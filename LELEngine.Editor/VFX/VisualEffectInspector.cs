@@ -24,26 +24,26 @@ namespace LELEngine.Editor.VFX
 			ImGui.Spacing();
 			float width = (ImGui.GetContentRegionAvail().X - ImGui.GetStyle().ItemSpacing.X * 3f) * 0.25f;
 			ImGui.BeginDisabled(graph == null);
-			if (ImGui.Button("Edit", new NVector2(width, 0)) && graph?.AssetPath != null)
+			if (EditorGui.Button("Edit", new NVector2(width, 0)) && graph?.AssetPath != null)
 			{
 				editor.OpenVfxGraph(graph.AssetPath);
 			}
 
 			ImGui.SameLine();
-			if (ImGui.Button("Play", new NVector2(width, 0)))
+			if (EditorGui.Button("Play", new NVector2(width, 0)))
 			{
 				effect.Play();
 				editor.NotifySceneChanged();
 			}
 
 			ImGui.SameLine();
-			if (ImGui.Button("Stop", new NVector2(width, 0)))
+			if (EditorGui.Button("Stop", new NVector2(width, 0)))
 			{
 				effect.Stop();
 			}
 
 			ImGui.SameLine();
-			if (ImGui.Button("Restart", new NVector2(width, 0)))
+			if (EditorGui.Button("Restart", new NVector2(width, 0)))
 			{
 				effect.Reinit();
 				editor.NotifySceneChanged();
@@ -130,7 +130,7 @@ namespace LELEngine.Editor.VFX
 
 			bool overridden = entry != null && entry.Enabled && entry.Value != null;
 			bool toggle = overridden;
-			if (ImGui.Checkbox("##override", ref toggle))
+			if (EditorGui.Checkbox("##override", ref toggle))
 			{
 				context.Editor.Edits.Begin(effect);
 				if (toggle)

@@ -27,7 +27,7 @@ namespace LELEngine.Editor
 			PrefabApplyTarget chosen = null;
 			foreach (PrefabApplyTarget target in targets)
 			{
-				if (ImGui.MenuItem(ApplyLabel(target) + "##" + target.PrefabPath, "", false, enabled))
+				if (EditorMenu.Item(ApplyLabel(target) + "##" + target.PrefabPath, "", false, enabled))
 				{
 					chosen = target;
 				}
@@ -128,19 +128,19 @@ namespace LELEngine.Editor
 			{
 				Prefab nested = PrefabUtility.GetNestedPrefab(go);
 				Prefab nearest = nested ?? (isRoot ? instance.Prefab : PrefabUtility.GetNearestPrefab(go));
-				if (ImGui.MenuItem("Open Prefab" + (nearest != null ? " '" + nearest.name + "'" : ""), "", false, nearest != null && !editor.IsPlaying))
+				if (EditorMenu.Item("Open Prefab" + (nearest != null ? " '" + nearest.name + "'" : ""), "", false, nearest != null && !editor.IsPlaying))
 				{
 					string path = nearest.AssetPath;
 					editor.Defer(() => editor.OpenPrefab(path));
 				}
 
-				if (ImGui.MenuItem("Select Prefab Asset", "", false, nearest != null))
+				if (EditorMenu.Item("Select Prefab Asset", "", false, nearest != null))
 				{
 					editor.SelectAsset(nearest.AssetPath);
 					editor.Ping(nearest.AssetPath);
 				}
 
-				if (!isRoot && ImGui.MenuItem("Select Prefab Instance Root", "", false, instance.Root != null))
+				if (!isRoot && EditorMenu.Item("Select Prefab Instance Root", "", false, instance.Root != null))
 				{
 					editor.SelectObject(instance.Root);
 				}
@@ -148,14 +148,14 @@ namespace LELEngine.Editor
 				if (isRoot)
 				{
 					ImGui.Separator();
-					if (ImGui.MenuItem("Unpack Prefab")) editor.Defer(() => editor.UnpackPrefab(go, PrefabUnpackMode.OutermostRoot));
-					if (ImGui.MenuItem("Unpack Prefab Completely")) editor.Defer(() => editor.UnpackPrefab(go, PrefabUnpackMode.Completely));
+					if (EditorMenu.Item("Unpack Prefab")) editor.Defer(() => editor.UnpackPrefab(go, PrefabUnpackMode.OutermostRoot));
+					if (EditorMenu.Item("Unpack Prefab Completely")) editor.Defer(() => editor.UnpackPrefab(go, PrefabUnpackMode.Completely));
 					if (!instance.IsMissing)
 					{
 						PrefabInstanceOverrides overrides = PrefabUtility.GetOverrides(instance);
 						ImGui.Separator();
-						if (ImGui.MenuItem("Apply All Overrides to '" + instance.Prefab?.name + "'", "", false, !overrides.IsEmpty)) ApplyAll(editor, instance);
-						if (ImGui.MenuItem("Revert All Overrides", "", false, !overrides.IsEmpty)) RevertAll(editor, instance);
+						if (EditorMenu.Item("Apply All Overrides to '" + instance.Prefab?.name + "'", "", false, !overrides.IsEmpty)) ApplyAll(editor, instance);
+						if (EditorMenu.Item("Revert All Overrides", "", false, !overrides.IsEmpty)) RevertAll(editor, instance);
 					}
 				}
 			}
@@ -171,7 +171,7 @@ namespace LELEngine.Editor
 					ApplyAddedGameObject(editor, go, chosen);
 				}
 
-				if (ImGui.MenuItem("Revert (Remove Added GameObject)"))
+				if (EditorMenu.Item("Revert (Remove Added GameObject)"))
 				{
 					RevertAddedGameObject(editor, go);
 				}

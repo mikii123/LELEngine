@@ -20,7 +20,7 @@ namespace LELEngine.Editor
 	///     undoable and saved to ProjectSettings/ProjectSettings.asset when they end; the lighting of a scene
 	///     (environment, shadow reach, GI volume) stays in the Lighting panel.
 	/// </summary>
-	internal sealed class ProjectSettingsWindow
+	internal sealed class ProjectSettingsWindow : IEditorPanel
 	{
 		#region PublicFields
 
@@ -36,6 +36,12 @@ namespace LELEngine.Editor
 		}
 
 		public bool Open;
+
+		string IEditorPanel.PanelName => "Project Settings";
+		string IEditorPanel.ImGuiName => "Project Settings";
+		bool IEditorPanel.PanelOpen { get => Open; set => Open = value; }
+		NVector2 IEditorPanel.DefaultCaptureSize => new NVector2(820, 700);
+		void IEditorPanel.Focus() => EditorApplication.Instance.ShowProjectSettings();
 
 		/// <summary>The tab shown last (saved with the editor's windows: ImGui does not keep a tab bar's selection).</summary>
 		public Tab CurrentTab { get; private set; } = Tab.Lighting;
@@ -191,7 +197,7 @@ namespace LELEngine.Editor
 		private bool BeginTab(Tab tab, string label)
 		{
 			ImGuiTabItemFlags flags = requestedTab == tab ? ImGuiTabItemFlags.SetSelected : ImGuiTabItemFlags.None;
-			if (!ImGui.BeginTabItem(label, flags))
+			if (!EditorGui.BeginTabItem(label, flags))
 			{
 				return false;
 			}
@@ -223,7 +229,7 @@ namespace LELEngine.Editor
 			}
 
 			ImGui.Spacing();
-			if (ImGui.Button(string.IsNullOrEmpty(input.Configuration) ? "Open Input Manager (create one)" : "Open in Input Manager"))
+			if (EditorGui.Button(string.IsNullOrEmpty(input.Configuration) ? "Open Input Manager (create one)" : "Open in Input Manager"))
 			{
 				editor.OpenInputManager(string.IsNullOrEmpty(input.Configuration) ? null : input.Configuration);
 			}
@@ -247,17 +253,17 @@ namespace LELEngine.Editor
 			GIMode selected = gi.Mode;
 			bool playing = context.Editor != null && context.Editor.IsPlaying;
 			ImGui.BeginDisabled(playing);
-			if (ImGui.BeginCombo("##gimethod", SerializationUtility.NicifyName(selected.ToString())))
+			if (EditorGui.BeginCombo("##gimethod", SerializationUtility.NicifyName(selected.ToString())))
 			{
 				foreach (GIMode mode in Enum.GetValues<GIMode>())
 				{
-					if (ImGui.Selectable(SerializationUtility.NicifyName(mode.ToString()), mode == selected))
+					if (EditorGui.Selectable(SerializationUtility.NicifyName(mode.ToString()), mode == selected))
 					{
 						selected = mode;
 					}
 				}
 
-				ImGui.EndCombo();
+				EditorGui.EndCombo();
 			}
 
 			ImGui.EndDisabled();
@@ -294,7 +300,7 @@ namespace LELEngine.Editor
 			ImGui.TextDisabled("A scene's environment, shadow reach and GI volume are in the Lighting panel.");
 			ImGui.Spacing();
 
-			if (ImGui.CollapsingHeader("Shadows", ImGuiTreeNodeFlags.DefaultOpen))
+			if (EditorGui.CollapsingHeader("Shadows", ImGuiTreeNodeFlags.DefaultOpen))
 			{
 				ImGui.PushID("shadows");
 				changed |= FieldDrawer.DrawFields(settings.Shadows, context);
@@ -307,14 +313,14 @@ namespace LELEngine.Editor
 			// its open state, when the method changes).
 			GIMode mode = gi.Mode;
 			ImGui.PushID("gi");
-			if (ImGui.CollapsingHeader("Global Illumination", ImGuiTreeNodeFlags.DefaultOpen)
+			if (EditorGui.CollapsingHeader("Global Illumination", ImGuiTreeNodeFlags.DefaultOpen)
 				&& FieldDrawer.DrawFields(gi, context, filter: field => field.Name != nameof(GlobalIlluminationSettings.Mode) && GIMethodAttribute.Of(field.Field) == null))
 			{
 				gi.InvalidateStatic();
 				changed = true;
 			}
 
-			if (ImGui.CollapsingHeader(SerializationUtility.NicifyName(mode.ToString()) + "###method", ImGuiTreeNodeFlags.DefaultOpen)
+			if (EditorGui.CollapsingHeader(SerializationUtility.NicifyName(mode.ToString()) + "###method", ImGuiTreeNodeFlags.DefaultOpen)
 				&& FieldDrawer.DrawFields(gi, context, filter: field => GIMethodAttribute.Of(field.Field) == mode))
 			{
 				gi.InvalidateStatic();
@@ -345,13 +351,13 @@ namespace LELEngine.Editor
 				{
 					string fixedName = LayerMask.LayerToName(layer);
 					ImGui.BeginDisabled();
-					ImGui.InputText("##name", ref fixedName, 64, ImGuiInputTextFlags.ReadOnly);
+					EditorGui.InputText("##name", ref fixedName, 64, ImGuiInputTextFlags.ReadOnly);
 					ImGui.EndDisabled();
 				}
 				else
 				{
 					string name = layers.GetName(layer);
-					bool edited = ImGui.InputText("##name", ref name, 64);
+					bool edited = EditorGui.InputText("##name", ref name, 64);
 					context.Track(edited);
 					if (edited)
 					{
@@ -410,7 +416,7 @@ namespace LELEngine.Editor
 		/// <summary>Which layers collide with which (the used layers: named ones and those of the scene's objects).</summary>
 		private bool DrawLayerCollisionMatrix(Physics2DSettings physics)
 		{
-			if (!ImGui.TreeNodeEx("Layer Collision Matrix", ImGuiTreeNodeFlags.SpanAvailWidth | ImGuiTreeNodeFlags.DefaultOpen))
+			if (!EditorGui.TreeNodeEx("Layer Collision Matrix", ImGuiTreeNodeFlags.SpanAvailWidth | ImGuiTreeNodeFlags.DefaultOpen))
 			{
 				return false;
 			}
@@ -463,7 +469,7 @@ namespace LELEngine.Editor
 
 						bool collide = !physics.GetIgnoreLayerCollision(row, column);
 						ImGui.PushID(row * 32 + column);
-						if (ImGui.Checkbox("##c", ref collide))
+						if (EditorGui.Checkbox("##c", ref collide))
 						{
 							editor.Edits.Begin(context.UndoTarget);
 							physics.IgnoreLayerCollision(row, column, !collide);
@@ -496,7 +502,7 @@ namespace LELEngine.Editor
 
 			bool enabled = splash.Enabled;
 			FieldDrawer.Label("Show Splash Screen", null, context);
-			bool edited = ImGui.Checkbox("##enabled", ref enabled);
+			bool edited = EditorGui.Checkbox("##enabled", ref enabled);
 			Tooltip("Off: the window stays black while the start scene loads, and shows it as soon as it is ready.");
 			context.Track(edited);
 			if (edited)
@@ -509,7 +515,7 @@ namespace LELEngine.Editor
 
 			float duration = splash.Duration;
 			FieldDrawer.Label("Duration", null, context);
-			edited = ImGui.SliderFloat("##duration", ref duration, 0f, 10f, "%.1f s");
+			edited = EditorGui.SliderFloat("##duration", ref duration, 0f, 10f, "%.1f s");
 			Tooltip("Seconds the splash screen stays at least; longer when the start scene takes longer to load.\n0: only while it loads. Ctrl+click to type a value.");
 			context.Track(edited);
 			if (edited)
@@ -521,7 +527,7 @@ namespace LELEngine.Editor
 			Color4 color = splash.BackgroundColor;
 			var rgb = new NVector3(color.R, color.G, color.B);
 			FieldDrawer.Label("Background", null, context);
-			edited = ImGui.ColorEdit3("##background", ref rgb);
+			edited = EditorGui.ColorEdit3("##background", ref rgb);
 			context.Track(edited);
 			if (edited)
 			{
@@ -549,7 +555,7 @@ namespace LELEngine.Editor
 
 			float size = splash.LogoSize;
 			FieldDrawer.Label("Logo Size", null, context);
-			edited = ImGui.SliderFloat("##logosize", ref size, 0.05f, 1f, "%.2f");
+			edited = EditorGui.SliderFloat("##logosize", ref size, 0.05f, 1f, "%.2f");
 			Tooltip("The logo fits into this fraction of the window's width and height, keeping its aspect ratio.");
 			context.Track(edited);
 			if (edited)
@@ -637,7 +643,7 @@ namespace LELEngine.Editor
 				foreach (string scene in scenes)
 				{
 					bool included = project.BuildScenes.Contains(scene) || scene == project.StartScene;
-					if (ImGui.Checkbox(scene, ref included))
+					if (EditorGui.Checkbox(scene, ref included))
 					{
 						if (included) project.BuildScenes.Add(scene);
 						else project.BuildScenes.Remove(scene);
@@ -652,35 +658,35 @@ namespace LELEngine.Editor
 			ImGui.Text("Start scene");
 			ImGui.SameLine(120);
 			ImGui.SetNextItemWidth(-1);
-			if (ImGui.BeginCombo("##start", project.StartScene ?? "(none)"))
+			if (EditorGui.BeginCombo("##start", project.StartScene ?? "(none)"))
 			{
 				foreach (string scene in scenes)
 				{
-					if (ImGui.Selectable(scene, scene == project.StartScene))
+					if (EditorGui.Selectable(scene, scene == project.StartScene))
 					{
 						project.StartScene = scene;
 						changed = true;
 					}
 				}
 
-				ImGui.EndCombo();
+				EditorGui.EndCombo();
 			}
 
 			ImGui.AlignTextToFramePadding();
 			ImGui.Text("Output folder");
 			ImGui.SameLine(120);
 			ImGui.SetNextItemWidth(-1);
-			ImGui.InputText("##output", ref outputFolder, 512);
+			EditorGui.InputText("##output", ref outputFolder, 512);
 
 			ImGui.AlignTextToFramePadding();
 			ImGui.Text("Configuration");
 			ImGui.SameLine(120);
-			if (ImGui.RadioButton("Release", release)) release = true;
+			if (EditorGui.RadioButton("Release", release)) release = true;
 			ImGui.SameLine();
-			if (ImGui.RadioButton("Debug", !release)) release = false;
+			if (EditorGui.RadioButton("Debug", !release)) release = false;
 
 			bool selfContained = project.BuildSelfContained;
-			if (ImGui.Checkbox("Self-contained", ref selfContained))
+			if (EditorGui.Checkbox("Self-contained", ref selfContained))
 			{
 				project.BuildSelfContained = selfContained;
 				changed = true;
@@ -699,7 +705,7 @@ namespace LELEngine.Editor
 				: "This editor has no self-contained player (published without a runtime identifier).");
 
 			bool runInBackground = project.RunInBackground;
-			if (ImGui.Checkbox("Run In Background", ref runInBackground))
+			if (EditorGui.Checkbox("Run In Background", ref runInBackground))
 			{
 				project.RunInBackground = runInBackground;
 				changed = true;
@@ -718,7 +724,7 @@ namespace LELEngine.Editor
 			ImGui.Spacing();
 			bool building = buildTask != null && !buildTask.IsCompleted;
 			ImGui.BeginDisabled(building);
-			if (ImGui.Button(building ? "Building..." : "Build", new NVector2(140, 0)))
+			if (EditorGui.Button(building ? "Building..." : "Build", new NVector2(140, 0)))
 			{
 				StartBuild(project);
 			}
@@ -727,13 +733,13 @@ namespace LELEngine.Editor
 			if (lastOutput != null && !building)
 			{
 				ImGui.SameLine();
-				if (ImGui.Button("Open Folder", new NVector2(140, 0)))
+				if (EditorGui.Button("Open Folder", new NVector2(140, 0)))
 				{
 					Process.Start(new ProcessStartInfo("explorer.exe", "\"" + lastOutput + "\"") { UseShellExecute = true });
 				}
 
 				ImGui.SameLine();
-				if (ImGui.Button("Run", new NVector2(100, 0)))
+				if (EditorGui.Button("Run", new NVector2(100, 0)))
 				{
 					string exe = Path.Combine(lastOutput, ProjectGenerator.ProjectName(project) + ".exe");
 					Process.Start(new ProcessStartInfo(exe) { WorkingDirectory = lastOutput, UseShellExecute = false });

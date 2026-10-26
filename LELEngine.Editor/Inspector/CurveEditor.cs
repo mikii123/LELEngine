@@ -81,7 +81,7 @@ namespace LELEngine.Editor
 
 			var size = new NVector2(Math.Max(40f, ImGui.CalcItemWidth()), ImGui.GetFrameHeight());
 			NVector2 min = ImGui.GetCursorScreenPos();
-			bool clicked = ImGui.InvisibleButton("##curvefield", size);
+			bool clicked = EditorGui.InvisibleButton("##curvefield", size);
 			ImDrawListPtr draw = ImGui.GetWindowDrawList();
 			bool hovered = ImGui.IsItemHovered();
 			draw.AddRectFilled(min, min + size, ImGui.GetColorU32(hovered ? ImGuiCol.FrameBgHovered : ImGuiCol.FrameBg), ImGui.GetStyle().FrameRounding);
@@ -189,7 +189,7 @@ namespace LELEngine.Editor
 			var size = new NVector2(width, CanvasHeight);
 			NVector2 min = ImGui.GetCursorScreenPos();
 			NVector2 max = min + size;
-			ImGui.InvisibleButton("##canvas", size, ImGuiButtonFlags.MouseButtonLeft | ImGuiButtonFlags.MouseButtonRight | ImGuiButtonFlags.MouseButtonMiddle);
+			EditorGui.InvisibleButton("##canvas", size, ImGuiButtonFlags.MouseButtonLeft | ImGuiButtonFlags.MouseButtonRight | ImGuiButtonFlags.MouseButtonMiddle);
 			bool hovered = ImGui.IsItemHovered();
 			if (TestAnchors.Enabled)
 			{
@@ -226,7 +226,7 @@ namespace LELEngine.Editor
 
 				ImGui.PushID(i);
 				NVector2 min = ImGui.GetCursorScreenPos();
-				bool clicked = ImGui.Button("##preset", size);
+				bool clicked = EditorGui.Button("##preset", size);
 				ImDrawListPtr draw = ImGui.GetWindowDrawList();
 				DrawPreview(draw, Presets[i].Create(), min + new NVector2(5f, 4f), min + size - new NVector2(5f, 4f), ImGui.GetColorU32(ImGuiCol.Text), 1.2f);
 				if (ImGui.IsItemHovered())
@@ -248,7 +248,7 @@ namespace LELEngine.Editor
 			}
 
 			ImGui.SameLine();
-			if (ImGui.Button("Frame", new NVector2(0f, size.Y)))
+			if (EditorGui.Button("Frame", new NVector2(0f, size.Y)))
 			{
 				Frame(curve);
 			}
@@ -510,7 +510,7 @@ namespace LELEngine.Editor
 				{
 					drag = Drag.Pan;
 				}
-				else if (ImGui.IsMouseDoubleClicked(ImGuiMouseButton.Left) && hitKey < 0 && hitHandle == Drag.None)
+				else if (EditorGui.IsMouseDoubleClicked(ImGuiMouseButton.Left) && hitKey < 0 && hitHandle == Drag.None)
 				{
 					context.BeginEdit();
 					int added = curve.AddKey(mouseTime, mouseValue);
@@ -660,7 +660,7 @@ namespace LELEngine.Editor
 				TangentMode current = curve[menuKey].tangentMode;
 				foreach ((TangentMode mode, string label) in new[] { (TangentMode.ClampedAuto, "Clamped Auto"), (TangentMode.Free, "Free Smooth"), (TangentMode.Linear, "Linear"), (TangentMode.Constant, "Constant"), (TangentMode.Broken, "Broken") })
 				{
-					if (ImGui.MenuItem(label, "", current == mode))
+					if (EditorMenu.Item(label, "", current == mode))
 					{
 						context.BeginEdit();
 						SetMode(curve, menuKey, mode);
@@ -670,7 +670,7 @@ namespace LELEngine.Editor
 				}
 
 				ImGui.Separator();
-				if (ImGui.MenuItem("Delete Key"))
+				if (EditorMenu.Item("Delete Key"))
 				{
 					context.BeginEdit();
 					curve.RemoveKey(menuKey);
@@ -680,7 +680,7 @@ namespace LELEngine.Editor
 					changed = true;
 				}
 			}
-			else if (ImGui.MenuItem("Add Key"))
+			else if (EditorMenu.Item("Add Key"))
 			{
 				context.BeginEdit();
 				int added = curve.AddKey(menuTime, menuValue);
@@ -752,17 +752,17 @@ namespace LELEngine.Editor
 			ImGui.SameLine();
 			ImGui.SetNextItemWidth(110f);
 			TangentMode picked = key.tangentMode;
-			if (ImGui.BeginCombo("##mode", ModeName(key.tangentMode)))
+			if (EditorGui.BeginCombo("##mode", ModeName(key.tangentMode)))
 			{
 				foreach (TangentMode mode in (TangentMode[])Enum.GetValues(typeof(TangentMode)))
 				{
-					if (ImGui.Selectable(ModeName(mode), mode == key.tangentMode))
+					if (EditorGui.Selectable(ModeName(mode), mode == key.tangentMode))
 					{
 						picked = mode;
 					}
 				}
 
-				ImGui.EndCombo();
+				EditorGui.EndCombo();
 			}
 
 			if (picked != key.tangentMode && !changed)
@@ -792,7 +792,7 @@ namespace LELEngine.Editor
 			ImGui.TextUnformatted(label);
 			ImGui.SameLine();
 			ImGui.SetNextItemWidth(width);
-			bool changed = ImGui.DragFloat("##" + label, ref value, 0.01f, 0f, 0f, "%.3f");
+			bool changed = EditorGui.DragFloat("##" + label, ref value, 0.01f, 0f, 0f, "%.3f");
 			context.Track(changed);
 			return changed;
 		}
@@ -835,11 +835,11 @@ namespace LELEngine.Editor
 			bool changed = false;
 			ImGui.SetNextItemWidth(110f);
 			string shown = mode == WrapMode.Loop ? "Loop" : mode == WrapMode.PingPong ? "Ping Pong" : "Clamp";
-			if (ImGui.BeginCombo(id, shown))
+			if (EditorGui.BeginCombo(id, shown))
 			{
 				foreach ((WrapMode option, string label) in new[] { (WrapMode.ClampForever, "Clamp"), (WrapMode.Loop, "Loop"), (WrapMode.PingPong, "Ping Pong") })
 				{
-					if (ImGui.Selectable(label, shown == label) && shown != label)
+					if (EditorGui.Selectable(label, shown == label) && shown != label)
 					{
 						context.BeginEdit();
 						mode = option;
@@ -848,7 +848,7 @@ namespace LELEngine.Editor
 					}
 				}
 
-				ImGui.EndCombo();
+				EditorGui.EndCombo();
 			}
 
 			return changed;

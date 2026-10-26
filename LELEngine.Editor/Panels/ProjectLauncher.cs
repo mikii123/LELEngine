@@ -109,7 +109,7 @@ namespace LELEngine.Editor
 			ImGui.TextUnformatted("Recent projects");
 			const float openWidth = 150f;
 			ImGui.SameLine(ImGui.GetContentRegionAvail().X - openWidth + style.WindowPadding.X);
-			if (ImGui.Button("Open project...", new NVector2(openWidth, 0)))
+			if (EditorGui.Button("Open project...", new NVector2(openWidth, 0)))
 			{
 				pendingDialog = BrowseOpen;
 			}
@@ -138,7 +138,7 @@ namespace LELEngine.Editor
 				foreach (string path in recent)
 				{
 					ImGui.PushID(path);
-					if (ImGui.Selectable("##row", false, ImGuiSelectableFlags.None, new NVector2(0, rowHeight)))
+					if (EditorGui.Selectable("##row", false, ImGuiSelectableFlags.None, new NVector2(0, rowHeight)))
 					{
 						Open(path);
 					}
@@ -148,7 +148,7 @@ namespace LELEngine.Editor
 						ImGui.SetTooltip("Click to open. Right-click for more.");
 					}
 
-					if (ImGui.BeginPopupContextItem("row"))
+					if (EditorGui.BeginPopupContextItem("row"))
 					{
 						if (ImGui.MenuItem("Open"))
 						{
@@ -194,7 +194,7 @@ namespace LELEngine.Editor
 			ImGui.TextUnformatted("Name");
 			ImGui.SameLine(labelWidth);
 			ImGui.SetNextItemWidth(-1);
-			bool enter = ImGui.InputText("##name", ref newName, 128, ImGuiInputTextFlags.EnterReturnsTrue);
+			bool enter = EditorGui.InputText("##name", ref newName, 128, ImGuiInputTextFlags.EnterReturnsTrue);
 
 			ImGui.AlignTextToFramePadding();
 			ImGui.TextUnformatted("Location");
@@ -205,14 +205,14 @@ namespace LELEngine.Editor
 				// Read-only path: it is chosen with the system folder picker (or a click on the field).
 				string shown = newLocation;
 				ImGui.SetNextItemWidth(ImGui.GetContentRegionAvail().X - buttonWidth - style.ItemSpacing.X);
-				ImGui.InputText("##location", ref shown, 512, ImGuiInputTextFlags.ReadOnly);
-				if (ImGui.IsItemClicked())
+				EditorGui.InputText("##location", ref shown, 512, ImGuiInputTextFlags.ReadOnly);
+				if (EditorGui.IsItemClicked())
 				{
 					pendingDialog = BrowseLocation;
 				}
 
 				ImGui.SameLine();
-				if (ImGui.Button("Browse...", new NVector2(buttonWidth, 0)))
+				if (EditorGui.Button("Browse...", new NVector2(buttonWidth, 0)))
 				{
 					pendingDialog = BrowseLocation;
 				}
@@ -220,12 +220,12 @@ namespace LELEngine.Editor
 			else
 			{
 				ImGui.SetNextItemWidth(-1);
-				ImGui.InputText("##location", ref newLocation, 512);
+				EditorGui.InputText("##location", ref newLocation, 512);
 			}
 
 			// Under the fields, aligned with them.
 			ImGui.SetCursorPosX(labelWidth);
-			ImGui.Checkbox("Create a folder named after the project", ref createFolder);
+			EditorGui.Checkbox("Create a folder named after the project", ref createFolder);
 			if (ImGui.IsItemHovered())
 			{
 				ImGui.SetTooltip("On: the project goes into Location/Name.\nOff: the project goes into Location itself (an existing folder keeps its files).");
@@ -255,7 +255,7 @@ namespace LELEngine.Editor
 
 			ImGui.SameLine(ImGui.GetContentRegionAvail().X - buttonWidth + style.WindowPadding.X);
 			ImGui.BeginDisabled(problem != null);
-			bool create = ImGui.Button("Create", new NVector2(buttonWidth, 0));
+			bool create = EditorGui.Button("Create", new NVector2(buttonWidth, 0));
 			ImGui.EndDisabled();
 			if ((create || enter) && problem == null)
 			{

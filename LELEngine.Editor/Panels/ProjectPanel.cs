@@ -13,7 +13,7 @@ namespace LELEngine.Editor
 	///     The project's Assets folder: folders on the left, the current folder's files on the right. Double click
 	///     opens scenes and scripts; files can be dragged onto inspector fields and into the scene view.
 	/// </summary>
-	internal sealed class ProjectPanel
+	internal sealed class ProjectPanel : IEditorPanel
 	{
 		#region PublicFields
 
@@ -121,6 +121,11 @@ namespace LELEngine.Editor
 
 		/// <summary>The window is shown (its close button and the Window menu toggle it; saved with the editor's windows).</summary>
 		public bool Open = true;
+
+		string IEditorPanel.PanelName => "Project";
+		string IEditorPanel.ImGuiName => "Project";
+		bool IEditorPanel.PanelOpen { get => Open; set => Open = value; }
+		NVector2 IEditorPanel.DefaultCaptureSize => new NVector2(1000, 400);
 
 		/// <summary>The folder shown (asset path, "" for Assets).</summary>
 		public string Folder => folder;
@@ -258,9 +263,9 @@ namespace LELEngine.Editor
 			// whole width (indent included), its arrow and label start at the indented cursor.
 			float rowX = ImGui.GetCursorScreenPos().X;
 			PushRowStyle();
-			bool open = ImGui.TreeNodeEx("##" + relative, flags);
+			bool open = EditorGui.TreeNodeEx("##" + relative, flags);
 			ImGui.PopStyleVar(2);
-			bool clicked = ImGui.IsItemClicked() && !ImGui.IsItemToggledOpen();
+			bool clicked = EditorGui.IsItemClicked() && !ImGui.IsItemToggledOpen();
 			NVector2 min = ImGui.GetItemRectMin();
 			float labelX = rowX + ImGui.GetTreeNodeToLabelSpacing();
 			float iconSize = ImGui.GetTextLineHeight();
@@ -301,20 +306,20 @@ namespace LELEngine.Editor
 
 			AcceptSceneObject(relative);
 			// The path keeps the popups apart: a closed tree node pushes no ID, so its siblings and parent share the stack.
-			if (ImGui.BeginPopupContextItem("##tree_context" + relative))
+			if (EditorGui.BeginPopupContextItem("##tree_context" + relative))
 			{
-				if (ImGui.MenuItem("Create Folder"))
+				if (EditorMenu.Item("Create Folder"))
 				{
 					ShowFolder(relative);
 					StartCreate("Folder", "New Folder");
 				}
 
-				if (relative.Length > 0 && ImGui.MenuItem("Rename", "F2"))
+				if (relative.Length > 0 && EditorMenu.Item("Rename", "F2"))
 				{
 					StartRename(relative, true);
 				}
 
-				if (ImGui.MenuItem("Show in Explorer")) ShowInExplorer(Absolute(relative));
+				if (EditorMenu.Item("Show in Explorer")) ShowInExplorer(Absolute(relative));
 				ImGui.EndPopup();
 			}
 
@@ -358,7 +363,7 @@ namespace LELEngine.Editor
 				}
 
 				string target = i < 0 ? "" : string.Join("/", parts, 0, i + 1);
-				if (ImGui.SmallButton((i < 0 ? "Assets" : parts[i]) + "##crumb" + i) && i < parts.Length - 1)
+				if (EditorGui.SmallButton((i < 0 ? "Assets" : parts[i]) + "##crumb" + i) && i < parts.Length - 1)
 				{
 					ShowFolder(target);
 				}
@@ -404,9 +409,9 @@ namespace LELEngine.Editor
 				}
 
 				bool selected = string.Equals(selectedFolder, folderPath, StringComparison.OrdinalIgnoreCase);
-				if (ImGui.Selectable("##dir" + directory, selected, ImGuiSelectableFlags.AllowDoubleClick))
+				if (EditorGui.Selectable("##dir" + directory, selected, ImGuiSelectableFlags.AllowDoubleClick))
 				{
-					if (ImGui.IsMouseDoubleClicked(ImGuiMouseButton.Left))
+					if (EditorGui.IsMouseDoubleClicked(ImGuiMouseButton.Left))
 					{
 						ShowFolder(folderPath);
 						return;
@@ -424,12 +429,12 @@ namespace LELEngine.Editor
 				}
 
 				AcceptSceneObject(folderPath);
-				if (ImGui.BeginPopupContextItem("##dir_context" + folderPath))
+				if (EditorGui.BeginPopupContextItem("##dir_context" + folderPath))
 				{
 					SelectFolderRow(folderPath);
-					if (ImGui.MenuItem("Open")) ShowFolder(folderPath);
-					if (ImGui.MenuItem("Rename", "F2")) StartRename(folderPath);
-					if (ImGui.MenuItem("Show in Explorer")) ShowInExplorer(Absolute(folderPath));
+					if (EditorMenu.Item("Open")) ShowFolder(folderPath);
+					if (EditorMenu.Item("Rename", "F2")) StartRename(folderPath);
+					if (EditorMenu.Item("Show in Explorer")) ShowInExplorer(Absolute(folderPath));
 					ImGui.EndPopup();
 				}
 			}
@@ -456,9 +461,9 @@ namespace LELEngine.Editor
 			}
 
 			NVector2 rest = ImGui.GetContentRegionAvail();
-			ImGui.InvisibleButton("##files_empty", new NVector2(Math.Max(1, rest.X), Math.Max(30, rest.Y)));
+			EditorGui.InvisibleButton("##files_empty", new NVector2(Math.Max(1, rest.X), Math.Max(30, rest.Y)));
 			TestAnchors.RecordItem("project:(empty)");
-			if (ImGui.IsItemClicked(ImGuiMouseButton.Left))
+			if (EditorGui.IsItemClicked(ImGuiMouseButton.Left))
 			{
 				// Nothing selected: the inspector clears too.
 				selection.Clear();
@@ -473,29 +478,29 @@ namespace LELEngine.Editor
 			// A scene object dropped here becomes a prefab in this folder.
 			AcceptSceneObject(folder);
 
-			if (ImGui.BeginPopupContextItem("##files_context"))
+			if (EditorGui.BeginPopupContextItem("##files_context"))
 			{
-				if (ImGui.MenuItem("Create Folder")) StartCreate("Folder", "New Folder");
-				if (ImGui.MenuItem("Create C# Script")) StartCreate("Script", "NewBehaviour");
-				if (ImGui.MenuItem("Create C# ScriptableObject Script")) StartCreate("ScriptableObjectScript", "NewData");
-				if (ImGui.BeginMenu("Create ScriptableObject"))
+				if (EditorMenu.Item("Create Folder")) StartCreate("Folder", "New Folder");
+				if (EditorMenu.Item("Create C# Script")) StartCreate("Script", "NewBehaviour");
+				if (EditorMenu.Item("Create C# ScriptableObject Script")) StartCreate("ScriptableObjectScript", "NewData");
+				if (EditorMenu.Begin("Create ScriptableObject"))
 				{
 					DrawScriptableObjectMenu();
-					ImGui.EndMenu();
+					EditorMenu.End();
 				}
 
 				ImGui.Separator();
-				if (ImGui.MenuItem("Create Prefab")) StartCreate("Prefab", "NewPrefab");
-				if (ImGui.MenuItem("Create Material")) StartCreate("Material", "NewMaterial");
-				if (ImGui.MenuItem("Create Physics Material 2D")) StartCreate("PhysicsMaterial2D", "NewPhysicsMaterial");
-				if (ImGui.MenuItem("Create Visual Effect Graph")) StartCreate("VFX", "NewVisualEffect");
-				if (ImGui.MenuItem("Create Audio Project")) StartCreate("AudioProject", "Audio");
-				if (ImGui.MenuItem("Create Input Configuration")) StartCreate("InputConfiguration", "Input");
-				if (ImGui.MenuItem("Create Scene")) StartCreate("Scene", "NewScene");
-				if (ImGui.MenuItem("Create UI Document (UXML)")) StartCreate("UXML", "NewDocument");
-				if (ImGui.MenuItem("Create Style Sheet (USS)")) StartCreate("USS", "NewStyle");
+				if (EditorMenu.Item("Create Prefab")) StartCreate("Prefab", "NewPrefab");
+				if (EditorMenu.Item("Create Material")) StartCreate("Material", "NewMaterial");
+				if (EditorMenu.Item("Create Physics Material 2D")) StartCreate("PhysicsMaterial2D", "NewPhysicsMaterial");
+				if (EditorMenu.Item("Create Visual Effect Graph")) StartCreate("VFX", "NewVisualEffect");
+				if (EditorMenu.Item("Create Audio Project")) StartCreate("AudioProject", "Audio");
+				if (EditorMenu.Item("Create Input Configuration")) StartCreate("InputConfiguration", "Input");
+				if (EditorMenu.Item("Create Scene")) StartCreate("Scene", "NewScene");
+				if (EditorMenu.Item("Create UI Document (UXML)")) StartCreate("UXML", "NewDocument");
+				if (EditorMenu.Item("Create Style Sheet (USS)")) StartCreate("USS", "NewStyle");
 				ImGui.Separator();
-				if (ImGui.MenuItem("Show in Explorer")) ShowInExplorer(Absolute(folder));
+				if (EditorMenu.Item("Show in Explorer")) ShowInExplorer(Absolute(folder));
 				ImGui.EndPopup();
 			}
 		}
@@ -533,10 +538,10 @@ namespace LELEngine.Editor
 
 			bool expanded = expandable && this.expanded.Contains(assetPath);
 			bool selected = selection.Contains(assetPath) || string.Equals(selectedFile, assetPath, StringComparison.OrdinalIgnoreCase);
-			if (ImGui.Selectable("##file" + assetPath, selected, ImGuiSelectableFlags.AllowDoubleClick | ImGuiSelectableFlags.AllowOverlap))
+			if (EditorGui.Selectable("##file" + assetPath, selected, ImGuiSelectableFlags.AllowDoubleClick | ImGuiSelectableFlags.AllowOverlap))
 			{
 				Click(assetPath);
-				if (ImGui.IsMouseDoubleClicked(ImGuiMouseButton.Left))
+				if (EditorGui.IsMouseDoubleClicked(ImGuiMouseButton.Left))
 				{
 					OpenAsset(assetPath);
 				}
@@ -587,26 +592,26 @@ namespace LELEngine.Editor
 				ImGui.EndDragDropSource();
 			}
 
-			if (ImGui.BeginPopupContextItem("##file_context" + assetPath))
+			if (EditorGui.BeginPopupContextItem("##file_context" + assetPath))
 			{
 				selectedFile = assetPath;
 				editor.SelectAsset(assetPath);
-				if (ImGui.MenuItem(isPrefab ? "Open Prefab" : "Open")) OpenAsset(assetPath);
+				if (EditorMenu.Item(isPrefab ? "Open Prefab" : "Open")) OpenAsset(assetPath);
 				if (isPrefab)
 				{
-					if (ImGui.MenuItem("Create Prefab Variant")) editor.CreatePrefabVariant(assetPath);
-					if (ImGui.MenuItem("Instantiate in Scene", "", false, editor.Scene != null)) editor.InstantiatePrefab(assetPath);
+					if (EditorMenu.Item("Create Prefab Variant")) editor.CreatePrefabVariant(assetPath);
+					if (EditorMenu.Item("Instantiate in Scene", "", false, editor.Scene != null)) editor.InstantiatePrefab(assetPath);
 				}
 
-				if (TextureAssets.IsImageFile(assetPath) && ImGui.MenuItem("Reimport"))
+				if (TextureAssets.IsImageFile(assetPath) && EditorMenu.Item("Reimport"))
 				{
 					TextureAssets.Reimport(assetPath);
 					AssetThumbnails.Invalidate(assetPath);
 					editor.NotifySceneChanged();
 				}
 
-				if (ImGui.MenuItem("Rename", "F2")) StartRename(assetPath);
-				if (ImGui.MenuItem("Show in Explorer")) ShowInExplorer(Absolute(assetPath));
+				if (EditorMenu.Item("Rename", "F2")) StartRename(assetPath);
+				if (EditorMenu.Item("Show in Explorer")) ShowInExplorer(Absolute(assetPath));
 				ImGui.EndPopup();
 			}
 
@@ -614,7 +619,7 @@ namespace LELEngine.Editor
 			{
 				// The arrow is a button of its own over the row (the row allows the overlap).
 				ImGui.SetCursorScreenPos(rowStart + new NVector2(indent, 0f));
-				if (ImGui.InvisibleButton("##expand" + assetPath, new NVector2(arrow, rowEnd.Y - rowStart.Y)))
+				if (EditorGui.InvisibleButton("##expand" + assetPath, new NVector2(arrow, rowEnd.Y - rowStart.Y)))
 				{
 					if (!this.expanded.Remove(assetPath))
 					{
@@ -668,7 +673,7 @@ namespace LELEngine.Editor
 				string name = mesh.SubAssetName ?? mesh.name;
 				NVector2 rowStart = ImGui.GetCursorScreenPos();
 				string key = assetPath + "/" + name;
-				if (ImGui.Selectable("##sub" + key, string.Equals(selectedSubAsset, key, StringComparison.OrdinalIgnoreCase)))
+				if (EditorGui.Selectable("##sub" + key, string.Equals(selectedSubAsset, key, StringComparison.OrdinalIgnoreCase)))
 				{
 					Click(assetPath);
 					selectedSubAsset = key;
@@ -922,7 +927,7 @@ namespace LELEngine.Editor
 
 			ImGui.SetNextItemWidth(Math.Max(120f, ImGui.GetContentRegionAvail().X));
 			ImGui.PushStyleVar(ImGuiStyleVar.FramePadding, new NVector2(ImGui.GetStyle().FramePadding.X, RowPadding));
-			bool enter = ImGui.InputText("##rename", ref renameBuffer, 256, ImGuiInputTextFlags.EnterReturnsTrue | ImGuiInputTextFlags.AutoSelectAll);
+			bool enter = EditorGui.InputText("##rename", ref renameBuffer, 256, ImGuiInputTextFlags.EnterReturnsTrue | ImGuiInputTextFlags.AutoSelectAll);
 			ImGui.PopStyleVar();
 			TestAnchors.RecordItem("rename");
 			if (renameStarted)
@@ -1087,17 +1092,17 @@ namespace LELEngine.Editor
 				ImGui.Separator();
 			}
 
-			if (ImGui.BeginMenu("All ScriptableObject Classes"))
+			if (EditorMenu.Begin("All ScriptableObject Classes"))
 			{
 				foreach (Type type in types)
 				{
-					if (ImGui.MenuItem(type.FullName))
+					if (EditorMenu.Item(type.FullName))
 					{
 						StartCreateAsset(type, null);
 					}
 				}
 
-				ImGui.EndMenu();
+				EditorMenu.End();
 			}
 		}
 
@@ -1116,7 +1121,7 @@ namespace LELEngine.Editor
 
 				if (entry.path.Length == depth + 1)
 				{
-					if (ImGui.MenuItem(entry.path[depth] + "##" + entry.type.FullName))
+					if (EditorMenu.Item(entry.path[depth] + "##" + entry.type.FullName))
 					{
 						StartCreateAsset(entry.type, entry.fileName);
 					}
@@ -1133,10 +1138,10 @@ namespace LELEngine.Editor
 					end++;
 				}
 
-				if (ImGui.BeginMenu(name + "##" + depth))
+				if (EditorMenu.Begin(name + "##" + depth))
 				{
 					DrawMenuLevel(entries, depth + 1, i, end);
-					ImGui.EndMenu();
+					EditorMenu.End();
 				}
 
 				i = end;
@@ -1334,13 +1339,13 @@ namespace LELEngine.Editor
 			}
 
 			ImGui.SetNextItemWidth(320);
-			bool enter = ImGui.InputText("##name", ref createName, 128, ImGuiInputTextFlags.EnterReturnsTrue);
+			bool enter = EditorGui.InputText("##name", ref createName, 128, ImGuiInputTextFlags.EnterReturnsTrue);
 			if (error != null)
 			{
 				ImGui.TextColored(EditorStyle.Error, error);
 			}
 
-			if (ImGui.Button("Create", new NVector2(100, 0)) || enter)
+			if (EditorGui.Button("Create", new NVector2(100, 0)) || enter)
 			{
 				try
 				{
@@ -1354,7 +1359,7 @@ namespace LELEngine.Editor
 			}
 
 			ImGui.SameLine();
-			if (ImGui.Button("Cancel", new NVector2(100, 0)))
+			if (EditorGui.Button("Cancel", new NVector2(100, 0)))
 			{
 				ImGui.CloseCurrentPopup();
 			}

@@ -35,25 +35,25 @@ namespace LELEngine.Editor.Audio
 				{
 					ImGui.TextDisabled("No audio project open.");
 					ImGui.TextDisabled("File > New Audio Project, or open a .lelaudio file.");
-					if (ImGui.Button("New Audio Project...")) openNewProjectPopup = true;
+					if (EditorGui.Button("New Audio Project...")) openNewProjectPopup = true;
 				}
 				else
 				{
 					ImGui.SetNextItemWidth(-62);
-					ImGui.InputTextWithHint("##search", "Search events", ref eventsSearch, 128);
+					EditorGui.InputTextWithHint("##search", "Search events", ref eventsSearch, 128);
 					ImGui.SameLine();
-					if (ImGui.Button("+ Event")) RequestNewEvent(SelectedEvent?.Folder);
+					if (EditorGui.Button("+ Event")) RequestNewEvent(SelectedEvent?.Folder);
 					ImGui.Separator();
 					if (ImGui.BeginChild("##events_tree", NVector2.Zero))
 					{
 						DrawEventTree();
 						// Empty space: deselect, context menu for the root.
 						NVector2 rest = ImGui.GetContentRegionAvail();
-						ImGui.InvisibleButton("##events_rest", new NVector2(Math.Max(1f, rest.X), Math.Max(24f, rest.Y)));
-						if (ImGui.BeginPopupContextItem("##events_root_menu"))
+						EditorGui.InvisibleButton("##events_rest", new NVector2(Math.Max(1f, rest.X), Math.Max(24f, rest.Y)));
+						if (EditorGui.BeginPopupContextItem("##events_root_menu"))
 						{
-							if (ImGui.MenuItem("New Event...")) RequestNewEvent(null);
-							if (ImGui.MenuItem("New Folder...")) openNewFolderPopup = true;
+							if (EditorMenu.Item("New Event...")) RequestNewEvent(null);
+							if (EditorMenu.Item("New Folder...")) openNewFolderPopup = true;
 							ImGui.EndPopup();
 						}
 
@@ -109,24 +109,24 @@ namespace LELEngine.Editor.Audio
 				string name = subfolder.Substring(subfolder.LastIndexOf('/') + 1);
 				ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags.OpenOnArrow | ImGuiTreeNodeFlags.SpanAvailWidth | ImGuiTreeNodeFlags.OpenOnDoubleClick;
 				ImGui.SetNextItemOpen(!collapsedFolders.Contains(subfolder), ImGuiCond.Always);
-				bool open = ImGui.TreeNodeEx(name + "##folder_" + subfolder, flags);
+				bool open = EditorGui.TreeNodeEx(name + "##folder_" + subfolder, flags);
 				if (ImGui.IsItemToggledOpen())
 				{
 					if (open) collapsedFolders.Remove(subfolder);
 					else collapsedFolders.Add(subfolder);
 				}
 
-				if (ImGui.BeginPopupContextItem("##folder_menu_" + subfolder))
+				if (EditorGui.BeginPopupContextItem("##folder_menu_" + subfolder))
 				{
-					if (ImGui.MenuItem("New Event Here...")) RequestNewEvent(subfolder);
-					if (ImGui.MenuItem("New Subfolder..."))
+					if (EditorMenu.Item("New Event Here...")) RequestNewEvent(subfolder);
+					if (EditorMenu.Item("New Subfolder..."))
 					{
 						newFolderPath = subfolder + "/Folder";
 						openNewFolderPopup = true;
 					}
 
 					ImGui.Separator();
-					if (ImGui.MenuItem("Delete Folder", "", false, Project.Events.TrueForAll(e => !e.Folder.StartsWith(subfolder, StringComparison.OrdinalIgnoreCase))))
+					if (EditorMenu.Item("Delete Folder", "", false, Project.Events.TrueForAll(e => !e.Folder.StartsWith(subfolder, StringComparison.OrdinalIgnoreCase))))
 					{
 						string target = subfolder;
 						Edit("Delete folder", () => Project.Folders.RemoveAll(f => f == target || f.StartsWith(target + "/", StringComparison.OrdinalIgnoreCase)));
@@ -175,8 +175,8 @@ namespace LELEngine.Editor.Audio
 				label += "   [" + bank.Name + "]";
 			}
 
-			ImGui.TreeNodeEx(label + "##event_" + audioEvent.Id, flags);
-			if (ImGui.IsItemClicked() || (ImGui.IsItemClicked(ImGuiMouseButton.Right) && !selected))
+			EditorGui.TreeNodeEx(label + "##event_" + audioEvent.Id, flags);
+			if (EditorGui.IsItemClicked() || (EditorGui.IsItemClicked(ImGuiMouseButton.Right) && !selected))
 			{
 				SelectEvent(audioEvent.Id);
 			}
@@ -213,28 +213,28 @@ namespace LELEngine.Editor.Audio
 				ImGui.EndDragDropSource();
 			}
 
-			if (ImGui.BeginPopupContextItem("##event_menu_" + audioEvent.Id))
+			if (EditorGui.BeginPopupContextItem("##event_menu_" + audioEvent.Id))
 			{
-				if (ImGui.MenuItem("Rename...")) RequestRename(Selection.Of(SelectionKind.Event, audioEvent.Id), audioEvent.Path);
-				if (ImGui.MenuItem("Duplicate")) DuplicateEvent(audioEvent);
-				if (ImGui.BeginMenu("Move to Bank"))
+				if (EditorMenu.Item("Rename...")) RequestRename(Selection.Of(SelectionKind.Event, audioEvent.Id), audioEvent.Path);
+				if (EditorMenu.Item("Duplicate")) DuplicateEvent(audioEvent);
+				if (EditorMenu.Begin("Move to Bank"))
 				{
 					foreach (AudioBank other in Project.Banks)
 					{
-						if (ImGui.MenuItem(other.Name, "", other.Id == audioEvent.BankId))
+						if (EditorMenu.Item(other.Name, "", other.Id == audioEvent.BankId))
 						{
 							string id = other.Id;
 							Edit("Move event to bank", () => audioEvent.BankId = id);
 						}
 					}
 
-					ImGui.EndMenu();
+					EditorMenu.End();
 				}
 
-				if (ImGui.MenuItem("Copy Path")) ImGui.SetClipboardText(audioEvent.Path);
-				if (ImGui.MenuItem("Copy GUID")) ImGui.SetClipboardText(audioEvent.Id);
+				if (EditorMenu.Item("Copy Path")) ImGui.SetClipboardText(audioEvent.Path);
+				if (EditorMenu.Item("Copy GUID")) ImGui.SetClipboardText(audioEvent.Id);
 				ImGui.Separator();
-				if (ImGui.MenuItem("Delete")) pendingDeleteEvent = audioEvent.Id;
+				if (EditorMenu.Item("Delete")) pendingDeleteEvent = audioEvent.Id;
 				ImGui.EndPopup();
 			}
 		}
@@ -280,7 +280,7 @@ namespace LELEngine.Editor.Audio
 				}
 				else
 				{
-					if (ImGui.Button("+ Bank"))
+					if (EditorGui.Button("+ Bank"))
 					{
 						var bank = new AudioBank { Id = AudioProject.NewId(), Name = UniqueBankName("New Bank"), AutoLoad = false };
 						Edit("Add bank", () => Project.Banks.Add(bank));
@@ -288,7 +288,7 @@ namespace LELEngine.Editor.Audio
 					}
 
 					ImGui.SameLine();
-					if (ImGui.Button("Build Banks"))
+					if (EditorGui.Button("Build Banks"))
 					{
 						BuildBanks(null);
 					}
@@ -305,23 +305,23 @@ namespace LELEngine.Editor.Audio
 						int count = Project.EventsOfBank(bank.Id).Count;
 						bool selected = selection.Is(SelectionKind.Bank, bank.Id);
 						string label = bank.Name + "   (" + count + (count == 1 ? " event" : " events") + (bank.AutoLoad ? ", loads at start" : "") + ")";
-						if (ImGui.Selectable(label + "##bank_" + bank.Id, selected))
+						if (EditorGui.Selectable(label + "##bank_" + bank.Id, selected))
 						{
 							selection = Selection.Of(SelectionKind.Bank, bank.Id);
 						}
 
-						if (ImGui.IsItemHovered() && ImGui.IsMouseDoubleClicked(ImGuiMouseButton.Left) && !isMaster)
+						if (EditorGui.IsItemDoubleClicked() && !isMaster)
 						{
 							RequestRename(Selection.Of(SelectionKind.Bank, bank.Id), bank.Name);
 						}
 
-						if (ImGui.BeginPopupContextItem("##bank_menu_" + bank.Id))
+						if (EditorGui.BeginPopupContextItem("##bank_menu_" + bank.Id))
 						{
-							if (ImGui.MenuItem("Rename...", "", false, !isMaster)) RequestRename(Selection.Of(SelectionKind.Bank, bank.Id), bank.Name);
+							if (EditorMenu.Item("Rename...", "", false, !isMaster)) RequestRename(Selection.Of(SelectionKind.Bank, bank.Id), bank.Name);
 							bool autoLoad = bank.AutoLoad;
-							if (ImGui.MenuItem("Load At Start", "", autoLoad, !isMaster)) Edit("Toggle bank auto load", () => bank.AutoLoad = !autoLoad);
+							if (EditorMenu.Item("Load At Start", "", autoLoad, !isMaster)) Edit("Toggle bank auto load", () => bank.AutoLoad = !autoLoad);
 							ImGui.Separator();
-							if (ImGui.MenuItem("Delete", "", false, !isMaster))
+							if (EditorMenu.Item("Delete", "", false, !isMaster))
 							{
 								Edit("Delete bank", () =>
 								{
@@ -370,7 +370,7 @@ namespace LELEngine.Editor.Audio
 				else
 				{
 					ImGui.TextDisabled("Global parameters: one value for the whole game (AudioSystem.SetGlobalParameter).");
-					if (ImGui.Button("+ Global Parameter"))
+					if (EditorGui.Button("+ Global Parameter"))
 					{
 						var parameter = new AudioParameter { Id = AudioProject.NewId(), Name = UniqueParameterName(null, "Parameter") };
 						Edit("Add global parameter", () => Project.GlobalParameters.Add(parameter));
@@ -382,15 +382,15 @@ namespace LELEngine.Editor.Audio
 					{
 						bool selected = selection.Is(SelectionKind.GlobalParameter, parameter.Id);
 						string label = parameter.Name + "   " + parameter.Min.ToString("0.##") + " .. " + parameter.Max.ToString("0.##") + (parameter.BuiltIn != BuiltInParameter.None ? "  (" + parameter.BuiltIn + ")" : "");
-						if (ImGui.Selectable(label + "##gparam_" + parameter.Id, selected))
+						if (EditorGui.Selectable(label + "##gparam_" + parameter.Id, selected))
 						{
 							selection = Selection.Of(SelectionKind.GlobalParameter, parameter.Id);
 						}
 
-						if (ImGui.BeginPopupContextItem("##gparam_menu_" + parameter.Id))
+						if (EditorGui.BeginPopupContextItem("##gparam_menu_" + parameter.Id))
 						{
-							if (ImGui.MenuItem("Rename...")) RequestRename(Selection.Of(SelectionKind.GlobalParameter, parameter.Id), parameter.Name);
-							if (ImGui.MenuItem("Delete")) Edit("Delete global parameter", () => Project.GlobalParameters.Remove(parameter));
+							if (EditorMenu.Item("Rename...")) RequestRename(Selection.Of(SelectionKind.GlobalParameter, parameter.Id), parameter.Name);
+							if (EditorMenu.Item("Delete")) Edit("Delete global parameter", () => Project.GlobalParameters.Remove(parameter));
 							ImGui.EndPopup();
 						}
 					}
@@ -429,7 +429,7 @@ namespace LELEngine.Editor.Audio
 				else
 				{
 					ImGui.TextDisabled("Mixer snapshots: bus volumes and effect values the game switches on (AudioSystem.StartSnapshot).");
-					if (ImGui.Button("+ Snapshot"))
+					if (EditorGui.Button("+ Snapshot"))
 					{
 						var snapshot = new AudioSnapshot { Id = AudioProject.NewId(), Name = UniqueSnapshotName("Snapshot") };
 						Edit("Add snapshot", () => Project.Snapshots.Add(snapshot));
@@ -445,19 +445,19 @@ namespace LELEngine.Editor.Audio
 						bool selected = selection.Is(SelectionKind.Snapshot, snapshot.Id);
 						bool active = previewSnapshot != null && previewSnapshot.IsActive && previewSnapshot.Definition.Id == snapshot.Id;
 						string label = snapshot.Name + "   (" + (snapshot.Mode == SnapshotMode.Blending ? "blending" : "overriding") + ", " + snapshot.Buses.Count + (snapshot.Buses.Count == 1 ? " bus" : " buses") + (active ? ", active" : "") + ")";
-						if (ImGui.Selectable(label + "##snapshot_" + snapshot.Id, selected, ImGuiSelectableFlags.AllowDoubleClick))
+						if (EditorGui.Selectable(label + "##snapshot_" + snapshot.Id, selected, ImGuiSelectableFlags.AllowDoubleClick))
 						{
 							selection = Selection.Of(SelectionKind.Snapshot, snapshot.Id);
-							if (ImGui.IsMouseDoubleClicked(ImGuiMouseButton.Left))
+							if (EditorGui.IsMouseDoubleClicked(ImGuiMouseButton.Left))
 							{
 								RequestRename(Selection.Of(SelectionKind.Snapshot, snapshot.Id), snapshot.Name);
 							}
 						}
 
-						if (ImGui.BeginPopupContextItem("##snapshot_menu_" + snapshot.Id))
+						if (EditorGui.BeginPopupContextItem("##snapshot_menu_" + snapshot.Id))
 						{
-							if (ImGui.MenuItem("Rename...")) RequestRename(Selection.Of(SelectionKind.Snapshot, snapshot.Id), snapshot.Name);
-							if (ImGui.MenuItem("Move Up (higher priority)", "", false, i > 0))
+							if (EditorMenu.Item("Rename...")) RequestRename(Selection.Of(SelectionKind.Snapshot, snapshot.Id), snapshot.Name);
+							if (EditorMenu.Item("Move Up (higher priority)", "", false, i > 0))
 							{
 								int index = i;
 								Edit("Reorder snapshots", () =>
@@ -467,7 +467,7 @@ namespace LELEngine.Editor.Audio
 								});
 							}
 
-							if (ImGui.MenuItem("Move Down (lower priority)", "", false, i < Project.Snapshots.Count - 1))
+							if (EditorMenu.Item("Move Down (lower priority)", "", false, i < Project.Snapshots.Count - 1))
 							{
 								int index = i;
 								Edit("Reorder snapshots", () =>
@@ -478,14 +478,14 @@ namespace LELEngine.Editor.Audio
 							}
 
 							ImGui.Separator();
-							if (ImGui.MenuItem(active ? "Stop" : "Start"))
+							if (EditorMenu.Item(active ? "Stop" : "Start"))
 							{
 								if (active) StopPreviewSnapshot();
 								else StartPreviewSnapshot(snapshot);
 							}
 
 							ImGui.Separator();
-							if (ImGui.MenuItem("Delete"))
+							if (EditorMenu.Item("Delete"))
 							{
 								if (active) StopPreviewSnapshot();
 								Edit("Delete snapshot", () => Project.Snapshots.Remove(snapshot));
@@ -535,7 +535,7 @@ namespace LELEngine.Editor.Audio
 			if (ImGui.Begin("Assets", ref showAssets))
 			{
 				ImGui.SetNextItemWidth(-1);
-				ImGui.InputTextWithHint("##assetsearch", "Search audio files (wav, ogg, mp3)", ref assetsSearch, 128);
+				EditorGui.InputTextWithHint("##assetsearch", "Search audio files (wav, ogg, mp3)", ref assetsSearch, 128);
 				ImGui.Separator();
 				if (ImGui.BeginChild("##assets_list", NVector2.Zero))
 				{
@@ -567,10 +567,10 @@ namespace LELEngine.Editor.Audio
 			AudioClip clip = AudioClip.Load(path);
 			bool selected = selection.Is(SelectionKind.Asset, path);
 			string info = clip == null || clip.Error != null ? "unreadable" : FormatTime(clip.Duration) + "  " + (clip.Channels == 1 ? "mono" : "stereo") + " " + clip.SampleRate / 1000f + " kHz";
-			if (ImGui.Selectable(Path.GetFileName(path) + "##asset_" + path, selected, ImGuiSelectableFlags.AllowDoubleClick))
+			if (EditorGui.Selectable(Path.GetFileName(path) + "##asset_" + path, selected, ImGuiSelectableFlags.AllowDoubleClick))
 			{
 				selection = Selection.Of(SelectionKind.Asset, path);
-				if (ImGui.IsMouseDoubleClicked(ImGuiMouseButton.Left))
+				if (EditorGui.IsMouseDoubleClicked(ImGuiMouseButton.Left))
 				{
 					PreviewAsset(clip);
 				}
@@ -595,31 +595,31 @@ namespace LELEngine.Editor.Audio
 				ImGui.EndDragDropSource();
 			}
 
-			if (ImGui.BeginPopupContextItem("##asset_menu_" + path))
+			if (EditorGui.BeginPopupContextItem("##asset_menu_" + path))
 			{
-				if (ImGui.MenuItem("Play")) PreviewAsset(clip);
-				if (ImGui.MenuItem("Stop", "", false, assetPreview != null && assetPreview.IsValid)) StopAssetPreview();
+				if (EditorMenu.Item("Play")) PreviewAsset(clip);
+				if (EditorMenu.Item("Stop", "", false, assetPreview != null && assetPreview.IsValid)) StopAssetPreview();
 				ImGui.Separator();
-				if (clip != null && ImGui.BeginMenu("Load Type"))
+				if (clip != null && EditorMenu.Begin("Load Type"))
 				{
 					foreach (AudioLoadType loadType in Enum.GetValues<AudioLoadType>())
 					{
-						if (ImGui.MenuItem(SerializationUtilityName(loadType.ToString()), "", clip.Importer.loadType == loadType))
+						if (EditorMenu.Item(SerializationUtilityName(loadType.ToString()), "", clip.Importer.loadType == loadType))
 						{
 							SetImporter(clip, importer => importer.loadType = loadType);
 						}
 					}
 
-					ImGui.EndMenu();
+					EditorMenu.End();
 				}
 
-				if (clip != null && ImGui.MenuItem("Force Mono", "", clip.Importer.forceMono))
+				if (clip != null && EditorMenu.Item("Force Mono", "", clip.Importer.forceMono))
 				{
 					SetImporter(clip, importer => importer.forceMono = !importer.forceMono);
 				}
 
 				ImGui.Separator();
-				if (ImGui.MenuItem("Show in Project Panel")) editor.Ping(path);
+				if (EditorMenu.Item("Show in Project Panel")) editor.Ping(path);
 				ImGui.EndPopup();
 			}
 		}

@@ -84,7 +84,7 @@ namespace LELEngine.Editor
 		{
 			PrefixLabel(label);
 			ImGui.PushID(label);
-			bool edited = ImGui.SliderFloat("##v", ref value, min, max);
+			bool edited = EditorGui.SliderFloat("##v", ref value, min, max);
 			Context.Track(edited);
 			ImGui.PopID();
 			changed |= edited;
@@ -95,11 +95,48 @@ namespace LELEngine.Editor
 		{
 			PrefixLabel(label);
 			ImGui.PushID(label);
-			bool edited = ImGui.SliderInt("##v", ref value, min, max);
+			bool edited = EditorGui.SliderInt("##v", ref value, min, max);
 			Context.Track(edited);
 			ImGui.PopID();
 			changed |= edited;
 			return value;
+		}
+
+		/// <summary>
+		///     A button (<paramref name="width" /> 0: as wide as its text, -1: the rest of the line); true when pressed. Unlike
+		///     a raw ImGui.Button it is an automation element ("button:Label"): scripts and the CLI can press it.
+		/// </summary>
+		public static bool Button(string label, float width = 0f)
+		{
+			return EditorGui.Button(label, new System.Numerics.Vector2(width, 0f));
+		}
+
+		/// <summary>A checkbox after the label column; returns the (possibly toggled) value. Automation element "checkbox:Label".</summary>
+		public static bool Toggle(string label, bool value)
+		{
+			PrefixLabel(label);
+			bool edited = EditorGui.Checkbox("##" + label, ref value);
+			Context.Track(edited);
+			changed |= edited;
+			return value;
+		}
+
+		/// <summary>A one-line text field after the label column; returns the (possibly edited) text. Automation element "input:Label".</summary>
+		public static string TextField(string label, string text)
+		{
+			text ??= "";
+			PrefixLabel(label);
+			ImGui.SetNextItemWidth(-1f);
+			bool edited = EditorGui.InputText("##" + label, ref text, 4096);
+			Context.Track(edited);
+			changed |= edited;
+			return text;
+		}
+
+		/// <summary>A collapsible header; returns whether it is open. Automation element "header:Label".</summary>
+		public static bool Foldout(string label, bool open = false)
+		{
+			return EditorGui.CollapsingHeader(label, open ? ImGuiTreeNodeFlags.DefaultOpen : ImGuiTreeNodeFlags.None);
 		}
 
 		/// <summary>A read-only line: label column and text.</summary>

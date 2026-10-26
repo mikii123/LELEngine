@@ -301,13 +301,13 @@ namespace LELEngine.Editor
 			{
 				if (ImGui.BeginTabBar("##picker_tabs"))
 				{
-					if (ImGui.BeginTabItem("Assets", ImGuiTabItemFlags.None))
+					if (EditorGui.BeginTabItem("Assets", ImGuiTabItemFlags.None))
 					{
 						showScene = false;
 						ImGui.EndTabItem();
 					}
 
-					if (ImGui.BeginTabItem("Scene", selectSceneTab ? ImGuiTabItemFlags.SetSelected : ImGuiTabItemFlags.None))
+					if (EditorGui.BeginTabItem("Scene", selectSceneTab ? ImGuiTabItemFlags.SetSelected : ImGuiTabItemFlags.None))
 					{
 						showScene = true;
 						ImGui.EndTabItem();
@@ -329,7 +329,7 @@ namespace LELEngine.Editor
 			}
 
 			ImGui.SetNextItemWidth(-1);
-			ImGui.InputTextWithHint("##search", "Search", ref search, 128);
+			EditorGui.InputTextWithHint("##search", "Search", ref search, 128);
 			if (ImGui.IsKeyPressed(ImGuiKey.Escape, false))
 			{
 				Close();
@@ -362,10 +362,10 @@ namespace LELEngine.Editor
 			if (ImGui.BeginChild("##list", new NVector2(0, -ImGui.GetFrameHeightWithSpacing())))
 			{
 				float row = showScene ? ImGui.GetFrameHeight() + 4f : 36f;
-				if (ImGui.Selectable("None", current == null, ImGuiSelectableFlags.AllowDoubleClick, new NVector2(0, row)))
+				if (EditorGui.Selectable("None", current == null, ImGuiSelectableFlags.AllowDoubleClick, new NVector2(0, row)))
 				{
 					Pick(default);
-					if (ImGui.IsMouseDoubleClicked(ImGuiMouseButton.Left))
+					if (EditorGui.IsMouseDoubleClicked(ImGuiMouseButton.Left))
 					{
 						Close();
 						return;
@@ -382,9 +382,9 @@ namespace LELEngine.Editor
 
 					bool selected = entry.Object != null ? ReferenceEquals(entry.Object, current) : current is IAsset asset && string.Equals(entry.Path, asset.AssetPath, StringComparison.OrdinalIgnoreCase) && entry.SubAsset == asset.SubAssetName;
 					NVector2 start = ImGui.GetCursorScreenPos();
-					if (ImGui.Selectable("##entry" + i, selected, ImGuiSelectableFlags.AllowDoubleClick, new NVector2(0, row)))
+					if (EditorGui.Selectable("##entry" + i, selected, ImGuiSelectableFlags.AllowDoubleClick, new NVector2(0, row)))
 					{
-						bool doubleClick = ImGui.IsMouseDoubleClicked(ImGuiMouseButton.Left);
+						bool doubleClick = EditorGui.IsMouseDoubleClicked(ImGuiMouseButton.Left);
 						Pick(entry);
 						if (doubleClick)
 						{

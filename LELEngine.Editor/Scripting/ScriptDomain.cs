@@ -32,6 +32,9 @@ namespace LELEngine.Editor
 
 		public bool HasErrors { get; private set; }
 		public bool IsBuilding => buildTask != null;
+
+		/// <summary>No build running or waiting (sources changed, a requested build) and no reload waiting for play mode to end.</summary>
+		public bool IsIdle => buildTask == null && !sourcesChanged && pendingReload == null;
 		public string StatusText { get; private set; } = "";
 		public Assembly GameAssembly { get; private set; }
 

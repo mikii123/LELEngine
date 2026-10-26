@@ -18,12 +18,17 @@ namespace LELEngine.Editor
 	///     logging wrappers skipped) with the code around each frame's line inline. Double-click opens the source in the
 	///     script editor; the toggles, columns and filters are preferences (<see cref="ConsolePreferences" />).
 	/// </summary>
-	internal sealed class ConsolePanel
+	internal sealed class ConsolePanel : IEditorPanel
 	{
 		#region PublicFields
 
 		/// <summary>The window is shown (its close button and the Window menu toggle it; saved with the editor's windows).</summary>
 		public bool Open = true;
+
+		string IEditorPanel.PanelName => "Console";
+		string IEditorPanel.ImGuiName => "Console";
+		bool IEditorPanel.PanelOpen { get => Open; set => Open = value; }
+		NVector2 IEditorPanel.DefaultCaptureSize => new NVector2(1000, 500);
 
 		#endregion
 
@@ -167,14 +172,14 @@ namespace LELEngine.Editor
 
 		private void DrawToolbar(ConsolePreferences prefs, ConsoleLog log)
 		{
-			if (ImGui.Button("Clear"))
+			if (EditorGui.Button("Clear"))
 			{
 				log.Clear();
 			}
 
 			Tooltip("Clear the messages (script compile errors stay until the next build)");
 			ImGui.SameLine(0, 1);
-			if (ImGui.ArrowButton("##options", ImGuiDir.Down))
+			if (EditorGui.ArrowButton("##options", ImGuiDir.Down))
 			{
 				ImGui.OpenPopup("##consoleoptions");
 			}
@@ -215,7 +220,7 @@ namespace LELEngine.Editor
 				ImGui.PushStyleColor(ImGuiCol.FrameBg, EditorStyle.Error * new NVector4(1f, 1f, 1f, 0.35f));
 			}
 
-			bool changed = ImGui.InputTextWithHint("##search", "Search", ref search, 256);
+			bool changed = EditorGui.InputTextWithHint("##search", "Search", ref search, 256);
 			if (searchInvalid)
 			{
 				ImGui.PopStyleColor();
@@ -256,7 +261,7 @@ namespace LELEngine.Editor
 				ImGui.PushStyleColor(ImGuiCol.Button, EditorStyle.Accent);
 			}
 
-			if (ImGui.Button(label + "##tags"))
+			if (EditorGui.Button(label + "##tags"))
 			{
 				ImGui.OpenPopup("##tagsmenu");
 			}
@@ -272,7 +277,7 @@ namespace LELEngine.Editor
 				return;
 			}
 
-			if (ImGui.MenuItem("Show All", "", false, prefs.HiddenTags.Count > 0))
+			if (EditorMenu.Item("Show All", "", false, prefs.HiddenTags.Count > 0))
 			{
 				prefs.HiddenTags.Clear();
 				Changed();
@@ -282,7 +287,7 @@ namespace LELEngine.Editor
 			foreach (KeyValuePair<string, int> tag in tagCounts)
 			{
 				bool shown = !prefs.HiddenTags.Contains(tag.Key);
-				if (ImGui.MenuItem($"{tag.Key}  {tag.Value}", "", shown))
+				if (EditorMenu.Item($"{tag.Key}  {tag.Value}", "", shown))
 				{
 					if (shown)
 					{
@@ -310,7 +315,7 @@ namespace LELEngine.Editor
 			}
 
 			Flow(ImGui.GetFrameHeight());
-			if (ImGui.Button("+##addfilter", new NVector2(ImGui.GetFrameHeight(), 0)))
+			if (EditorGui.Button("+##addfilter", new NVector2(ImGui.GetFrameHeight(), 0)))
 			{
 				AddFilter(prefs, "", search, prefs.SearchRegex);
 			}
@@ -328,7 +333,7 @@ namespace LELEngine.Editor
 			var size = new NVector2(padding.X * 2f + swatch + 6f + ImGui.CalcTextSize(text).X, ImGui.GetFrameHeight());
 			Flow(size.X);
 			NVector2 pos = ImGui.GetCursorScreenPos();
-			bool clicked = ImGui.InvisibleButton("##chip", size);
+			bool clicked = EditorGui.InvisibleButton("##chip", size);
 			if (TestAnchors.Enabled)
 			{
 				TestAnchors.RecordItem("consolefilter:" + name);
@@ -368,29 +373,29 @@ namespace LELEngine.Editor
 					"Click: show / hide its messages. Alt+click: only its messages. Right-click: edit.");
 			}
 
-			if (ImGui.BeginPopupContextItem("##chipmenu"))
+			if (EditorGui.BeginPopupContextItem("##chipmenu"))
 			{
-				if (ImGui.MenuItem("Edit..."))
+				if (EditorMenu.Item("Edit..."))
 				{
 					editedFilter = filter;
 					openFilterEditor = true;
 				}
 
-				if (ImGui.MenuItem("Only Its Messages", "Alt+Click", solo == filter))
+				if (EditorMenu.Item("Only Its Messages", "Alt+Click", solo == filter))
 				{
 					solo = solo == filter ? null : filter;
 					rowsDirty = true;
 				}
 
 				int index = prefs.Filters.IndexOf(filter);
-				if (ImGui.MenuItem("Move Left", "", false, index > 0))
+				if (EditorMenu.Item("Move Left", "", false, index > 0))
 				{
 					prefs.Filters.RemoveAt(index);
 					prefs.Filters.Insert(index - 1, filter);
 					Changed();
 				}
 
-				if (ImGui.MenuItem("Move Right", "", false, index < prefs.Filters.Count - 1))
+				if (EditorMenu.Item("Move Right", "", false, index < prefs.Filters.Count - 1))
 				{
 					prefs.Filters.RemoveAt(index);
 					prefs.Filters.Insert(index + 1, filter);
@@ -398,7 +403,7 @@ namespace LELEngine.Editor
 				}
 
 				ImGui.Separator();
-				if (ImGui.MenuItem("Delete"))
+				if (EditorMenu.Item("Delete"))
 				{
 					prefs.Filters.Remove(filter);
 					solo = solo == filter ? null : solo;
@@ -444,27 +449,27 @@ namespace LELEngine.Editor
 			ImGui.TextDisabled("Custom filter");
 			bool changed = false;
 			ImGui.SetNextItemWidth(260f);
-			changed |= ImGui.InputTextWithHint("Name", "(the pattern)", ref filter.Name, 64);
+			changed |= EditorGui.InputTextWithHint("Name", "(the pattern)", ref filter.Name, 64);
 			ImGui.SetNextItemWidth(260f);
 			if (ImGui.IsWindowAppearing())
 			{
 				ImGui.SetKeyboardFocusHere();
 			}
 
-			changed |= ImGui.InputTextWithHint("Pattern", "text the message contains", ref filter.Pattern, 256);
-			changed |= ImGui.Checkbox("Regex", ref filter.Regex);
+			changed |= EditorGui.InputTextWithHint("Pattern", "text the message contains", ref filter.Pattern, 256);
+			changed |= EditorGui.Checkbox("Regex", ref filter.Regex);
 			ImGui.SameLine();
-			changed |= ImGui.Checkbox("Match case", ref filter.MatchCase);
+			changed |= EditorGui.Checkbox("Match case", ref filter.MatchCase);
 			ImGui.SameLine();
-			changed |= ImGui.Checkbox("In call stacks", ref filter.InStackTrace);
+			changed |= EditorGui.Checkbox("In call stacks", ref filter.InStackTrace);
 			NVector4 color = ColorHex.Parse(filter.Color, new NVector4(0.3f, 0.6f, 1f, 1f));
-			if (ImGui.ColorEdit4("Color", ref color, ImGuiColorEditFlags.NoInputs | ImGuiColorEditFlags.NoAlpha))
+			if (EditorGui.ColorEdit4("Color", ref color, ImGuiColorEditFlags.NoInputs | ImGuiColorEditFlags.NoAlpha))
 			{
 				filter.Color = ColorHex.ToHex(color);
 				changed = true;
 			}
 
-			changed |= ImGui.Checkbox("Shown", ref filter.Shown);
+			changed |= EditorGui.Checkbox("Shown", ref filter.Shown);
 			int index = prefs.Filters.IndexOf(filter);
 			if (filter.Regex && index >= 0 && index < filterRegexes.Length && filterRegexes[index] == null && filter.Pattern.Length > 0)
 			{
@@ -472,7 +477,7 @@ namespace LELEngine.Editor
 			}
 
 			ImGui.Separator();
-			if (ImGui.Button("Delete"))
+			if (EditorGui.Button("Delete"))
 			{
 				prefs.Filters.Remove(filter);
 				solo = solo == filter ? null : solo;
@@ -481,7 +486,7 @@ namespace LELEngine.Editor
 			}
 
 			ImGui.SameLine();
-			if (ImGui.Button("Done") || ImGui.IsKeyPressed(ImGuiKey.Enter))
+			if (EditorGui.Button("Done") || ImGui.IsKeyPressed(ImGuiKey.Enter))
 			{
 				ImGui.CloseCurrentPopup();
 			}
@@ -507,44 +512,44 @@ namespace LELEngine.Editor
 			changed |= MenuToggle("Timestamps", ref prefs.ShowTimestamps);
 			changed |= MenuToggle("Frame Numbers", ref prefs.ShowFrames);
 			changed |= MenuToggle("Source Column", ref prefs.ShowSourceColumn);
-			if (ImGui.BeginMenu("Lines per Message"))
+			if (EditorMenu.Begin("Lines per Message"))
 			{
 				for (int lines = 1; lines <= 3; lines++)
 				{
-					if (ImGui.MenuItem(lines.ToString(), "", prefs.LinesPerEntry == lines))
+					if (EditorMenu.Item(lines.ToString(), "", prefs.LinesPerEntry == lines))
 					{
 						prefs.LinesPerEntry = lines;
 						changed = true;
 					}
 				}
 
-				ImGui.EndMenu();
+				EditorMenu.End();
 			}
 
 			ImGui.Separator();
 			changed |= MenuToggle("Code in Call Stacks", ref prefs.ShowSourceCode);
 			changed |= MenuToggle("Library Frames", ref prefs.ShowLibraryFrames);
-			if (ImGui.BeginMenu("Stack Traces"))
+			if (EditorMenu.Begin("Stack Traces"))
 			{
 				changed |= StackTraceMenu("Log", ref prefs.LogStackTrace);
 				changed |= StackTraceMenu("Warning", ref prefs.WarningStackTrace);
 				changed |= StackTraceMenu("Error", ref prefs.ErrorStackTrace);
-				ImGui.EndMenu();
+				EditorMenu.End();
 			}
 
 			ImGui.Separator();
-			if (ImGui.MenuItem("Copy Shown Messages"))
+			if (EditorMenu.Item("Copy Shown Messages"))
 			{
 				ImGui.SetClipboardText(ShownText());
 			}
 
-			if (ImGui.MenuItem("Save Shown Messages", "", false, editor.Project != null))
+			if (EditorMenu.Item("Save Shown Messages", "", false, editor.Project != null))
 			{
 				SaveShown();
 			}
 
 			ImGui.Separator();
-			if (ImGui.MenuItem("Preferences..."))
+			if (EditorMenu.Item("Preferences..."))
 			{
 				editor.ShowPreferences(PreferencesWindow.Section.Console);
 			}
@@ -560,18 +565,18 @@ namespace LELEngine.Editor
 		private static bool StackTraceMenu(string label, ref StackTraceLogType value)
 		{
 			bool changed = false;
-			if (ImGui.BeginMenu(label))
+			if (EditorMenu.Begin(label))
 			{
 				foreach (StackTraceLogType type in Enum.GetValues<StackTraceLogType>())
 				{
-					if (ImGui.MenuItem(LELEngine.Serialization.SerializationUtility.NicifyName(type.ToString()), "", value == type))
+					if (EditorMenu.Item(LELEngine.Serialization.SerializationUtility.NicifyName(type.ToString()), "", value == type))
 					{
 						value = type;
 						changed = true;
 					}
 				}
 
-				ImGui.EndMenu();
+				EditorMenu.End();
 			}
 
 			return changed;
@@ -864,10 +869,10 @@ namespace LELEngine.Editor
 			ImGui.PushID((int)entry.Id);
 			NVector2 cell = ImGui.GetCursorScreenPos();
 			float padding = ImGui.GetStyle().CellPadding.Y;
-			if (ImGui.Selectable("##row", entry.Id == selectedId, ImGuiSelectableFlags.SpanAllColumns | ImGuiSelectableFlags.AllowOverlap | ImGuiSelectableFlags.AllowDoubleClick, new NVector2(0, rowHeight - padding * 2f)))
+			if (EditorGui.Selectable("##row", entry.Id == selectedId, ImGuiSelectableFlags.SpanAllColumns | ImGuiSelectableFlags.AllowOverlap | ImGuiSelectableFlags.AllowDoubleClick, new NVector2(0, rowHeight - padding * 2f)))
 			{
 				Select(entry, true);
-				if (ImGui.IsMouseDoubleClicked(ImGuiMouseButton.Left))
+				if (EditorGui.IsMouseDoubleClicked(ImGuiMouseButton.Left))
 				{
 					OpenSource(entry);
 				}
@@ -878,7 +883,7 @@ namespace LELEngine.Editor
 				TestAnchors.Record("console:" + index, ImGui.GetItemRectMin(), ImGui.GetItemRectMax());
 			}
 
-			if (ImGui.BeginPopupContextItem("##rowmenu"))
+			if (EditorGui.BeginPopupContextItem("##rowmenu"))
 			{
 				if (selectedId != entry.Id)
 				{
@@ -966,12 +971,12 @@ namespace LELEngine.Editor
 
 		private void DrawRowMenu(ConsoleEntry entry)
 		{
-			if (ImGui.MenuItem("Copy", "Ctrl+C"))
+			if (EditorMenu.Item("Copy", "Ctrl+C"))
 			{
 				ImGui.SetClipboardText(entry.ToFullText());
 			}
 
-			if (ImGui.MenuItem("Copy Message Only"))
+			if (EditorMenu.Item("Copy Message Only"))
 			{
 				ImGui.SetClipboardText(entry.Text);
 			}
@@ -979,13 +984,13 @@ namespace LELEngine.Editor
 			ImGui.Separator();
 			IReadOnlyList<ConsoleFrame> frames = entry.Frames;
 			int source = ConsoleStackTrace.SourceFrame(frames);
-			if (ImGui.MenuItem(source >= 0 ? "Open " + Path.GetFileName(frames[source].File) + ":" + frames[source].Line : "Open Source", "Enter", false, source >= 0))
+			if (EditorMenu.Item(source >= 0 ? "Open " + Path.GetFileName(frames[source].File) + ":" + frames[source].Line : "Open Source", "Enter", false, source >= 0))
 			{
 				OpenSource(entry);
 			}
 
 			object context = entry.GetContext();
-			if (ImGui.MenuItem("Select " + (context != null ? ContextName(context) : "Context Object"), "", false, context != null))
+			if (EditorMenu.Item("Select " + (context != null ? ContextName(context) : "Context Object"), "", false, context != null))
 			{
 				editor.SelectObject(context);
 			}
@@ -995,26 +1000,26 @@ namespace LELEngine.Editor
 			if (tag != null)
 			{
 				ImGui.Separator();
-				if (ImGui.MenuItem("Hide " + tag + " Messages"))
+				if (EditorMenu.Item("Hide " + tag + " Messages"))
 				{
 					prefs.HiddenTags.Add(tag);
 					Changed();
 				}
 
-				if (ImGui.MenuItem("New Filter for " + tag))
+				if (EditorMenu.Item("New Filter for " + tag))
 				{
 					AddFilter(prefs, tag.Trim('[', ']'), tag, false);
 				}
 			}
 
-			if (ImGui.MenuItem("New Filter from This Message"))
+			if (EditorMenu.Item("New Filter from This Message"))
 			{
 				string line = entry.FirstLine;
 				AddFilter(prefs, "", line.Length > 60 ? line.Substring(0, 60) : line, false);
 			}
 
 			ImGui.Separator();
-			if (ImGui.MenuItem("Clear Console"))
+			if (EditorMenu.Item("Clear Console"))
 			{
 				editor.Log.Clear();
 			}
@@ -1062,14 +1067,14 @@ namespace LELEngine.Editor
 				ImGui.PopStyleColor();
 			}
 
-			if (ImGui.BeginPopupContextItem("##messagemenu"))
+			if (EditorGui.BeginPopupContextItem("##messagemenu"))
 			{
-				if (ImGui.MenuItem("Copy"))
+				if (EditorMenu.Item("Copy"))
 				{
 					ImGui.SetClipboardText(entry.ToFullText());
 				}
 
-				if (ImGui.MenuItem("Copy Message Only"))
+				if (EditorMenu.Item("Copy Message Only"))
 				{
 					ImGui.SetClipboardText(entry.Text);
 				}
@@ -1155,7 +1160,7 @@ namespace LELEngine.Editor
 				{
 					location = EllipsisStart(location, textWidth);
 				}
-				if (ImGui.Selectable("##frame", false, ImGuiSelectableFlags.AllowDoubleClick | ImGuiSelectableFlags.AllowOverlap, new NVector2(available, lineHeight * (twoLines ? 2f : 1f))))
+				if (EditorGui.Selectable("##frame", false, ImGuiSelectableFlags.AllowDoubleClick | ImGuiSelectableFlags.AllowOverlap, new NVector2(available, lineHeight * (twoLines ? 2f : 1f))))
 				{
 					// A click shows or hides the code; a double-click opens it (and leaves the code as it was).
 					if (expandable && !toggledFrames.Remove(i))
@@ -1163,7 +1168,7 @@ namespace LELEngine.Editor
 						toggledFrames.Add(i);
 					}
 
-					if (ImGui.IsMouseDoubleClicked(ImGuiMouseButton.Left) && frame.HasSource)
+					if (EditorGui.IsMouseDoubleClicked(ImGuiMouseButton.Left) && frame.HasSource)
 					{
 						ExternalScriptEditor.Open(frame.File, frame.Line);
 					}
@@ -1180,20 +1185,20 @@ namespace LELEngine.Editor
 						(wrapper ? "\nA logging wrapper (Preferences > Console > Hidden frames)" : "") + (frame.HasSource ? "\nDouble-click: open in the script editor" : ""));
 				}
 
-				if (ImGui.BeginPopupContextItem("##framemenu"))
+				if (EditorGui.BeginPopupContextItem("##framemenu"))
 				{
-					if (ImGui.MenuItem("Open in Script Editor", "", false, frame.HasSource))
+					if (EditorMenu.Item("Open in Script Editor", "", false, frame.HasSource))
 					{
 						ExternalScriptEditor.Open(frame.File, frame.Line);
 					}
 
-					if (ImGui.MenuItem("Copy Frame"))
+					if (EditorMenu.Item("Copy Frame"))
 					{
 						ImGui.SetClipboardText(frame.Method + (frame.File != null ? " in " + frame.File + ":line " + frame.Line : ""));
 					}
 
 					string type = TypeOf(frame.Method);
-					if (ImGui.MenuItem(wrapper ? "Show Frames of " + type : "Hide Frames of " + type + " (logging wrapper)", "", false, type.Length > 0))
+					if (EditorMenu.Item(wrapper ? "Show Frames of " + type : "Hide Frames of " + type + " (logging wrapper)", "", false, type.Length > 0))
 					{
 						if (wrapper)
 						{
@@ -1422,7 +1427,7 @@ namespace LELEngine.Editor
 				ImGui.PushStyleColor(ImGuiCol.ButtonHovered, EditorStyle.Accent * new NVector4(1.15f, 1.15f, 1.15f, 1f));
 			}
 
-			bool clicked = ImGui.Button(label);
+			bool clicked = EditorGui.Button(label);
 			if (on)
 			{
 				ImGui.PopStyleColor(2);
@@ -1443,7 +1448,7 @@ namespace LELEngine.Editor
 			bool on = value;
 			ImGui.PushStyleColor(ImGuiCol.Button, on ? EditorStyle.Accent : ImGui.GetStyle().Colors[(int)ImGuiCol.FrameBg]);
 			ImGui.PushStyleColor(ImGuiCol.Text, on ? ImGui.GetStyle().Colors[(int)ImGuiCol.Text] : ImGui.GetStyle().Colors[(int)ImGuiCol.TextDisabled]);
-			bool clicked = ImGui.Button(label);
+			bool clicked = EditorGui.Button(label);
 			ImGui.PopStyleColor(2);
 			Tooltip(tooltip);
 			if (clicked)
@@ -1464,7 +1469,7 @@ namespace LELEngine.Editor
 			var size = new NVector2(padding.X * 2f + icon + 5f + ImGui.CalcTextSize(text).X, height);
 			Flow(size.X);
 			NVector2 pos = ImGui.GetCursorScreenPos();
-			bool clicked = ImGui.InvisibleButton(id, size);
+			bool clicked = EditorGui.InvisibleButton(id, size);
 			bool on = value;
 			ImGuiCol background = ImGui.IsItemActive() ? ImGuiCol.ButtonActive : ImGui.IsItemHovered() ? ImGuiCol.ButtonHovered : ImGuiCol.Button;
 			ImDrawListPtr draw = ImGui.GetWindowDrawList();
@@ -1484,7 +1489,7 @@ namespace LELEngine.Editor
 
 		private static bool MenuToggle(string label, ref bool value)
 		{
-			if (!ImGui.MenuItem(label, "", value))
+			if (!EditorMenu.Item(label, "", value))
 			{
 				return false;
 			}
@@ -1500,7 +1505,7 @@ namespace LELEngine.Editor
 			length = Math.Max(1f, length);
 			NVector2 size = vertical ? new NVector2(SplitterThickness, length) : new NVector2(length, SplitterThickness);
 			NVector2 pos = ImGui.GetCursorScreenPos();
-			ImGui.InvisibleButton(id, size);
+			EditorGui.InvisibleButton(id, size);
 			bool active = ImGui.IsItemActive();
 			bool hovered = ImGui.IsItemHovered();
 			if (active || hovered)

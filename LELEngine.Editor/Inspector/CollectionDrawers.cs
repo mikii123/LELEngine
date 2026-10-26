@@ -85,7 +85,7 @@ namespace LELEngine.Editor
 				uint id = ImGui.GetID("##count");
 				int shown = countEditId == id ? countEditValue : count;
 				ImGui.SetNextItemWidth(countWidth);
-				if (ImGui.InputInt("##count", ref shown, 0, 0))
+				if (EditorGui.InputInt("##count", ref shown, 0, 0))
 				{
 					countEditId = id;
 					countEditValue = Math.Clamp(shown, 0, 100000);
@@ -165,7 +165,7 @@ namespace LELEngine.Editor
 					}
 				}
 
-				ImGui.TreePop();
+				FieldDrawer.EndHeader();
 			}
 
 			if (changed || created != null)
@@ -238,7 +238,7 @@ namespace LELEngine.Editor
 					}
 				}
 
-				ImGui.TreePop();
+				FieldDrawer.EndHeader();
 			}
 
 			return changed;
@@ -265,7 +265,7 @@ namespace LELEngine.Editor
 				int pageCount = (count + PageSize - 1) / PageSize;
 				pages.TryGetValue(headerId, out int page);
 				page = Math.Clamp(page, 0, pageCount - 1);
-				if (ImGui.SmallButton("<##page") && page > 0)
+				if (EditorGui.SmallButton("<##page") && page > 0)
 				{
 					page--;
 				}
@@ -273,7 +273,7 @@ namespace LELEngine.Editor
 				ImGui.SameLine();
 				ImGui.TextDisabled($"{page * PageSize}..{Math.Min(count, (page + 1) * PageSize) - 1} of {count}");
 				ImGui.SameLine();
-				if (ImGui.SmallButton(">##page") && page < pageCount - 1)
+				if (EditorGui.SmallButton(">##page") && page < pageCount - 1)
 				{
 					page++;
 				}
@@ -302,6 +302,8 @@ namespace LELEngine.Editor
 			{
 				int index = i;
 				ImGui.PushID(i);
+				// The row's elements: "input:Mover/Waypoints/2", "button:Mover/Waypoints/2/remove".
+				TestAnchors.PushScope(index.ToString());
 				NVector2 rowStart = ImGui.GetCursorScreenPos();
 				float rowRight = rowStart.X + ImGui.GetContentRegionAvail().X;
 				context.PendingRow = new RowDecoration
@@ -314,11 +316,11 @@ namespace LELEngine.Editor
 							TestAnchors.RecordItem(anchorPrefix + index);
 						}
 
-						if (ImGui.BeginPopupContextItem("##row_menu"))
+						if (EditorGui.BeginPopupContextItem("##row_menu"))
 						{
-							if (ImGui.MenuItem("Duplicate")) duplicateAt = index;
-							if (ImGui.MenuItem("Insert Above")) insertAt = index;
-							if (ImGui.MenuItem("Remove")) removeAt = index;
+							if (EditorMenu.Item("Duplicate")) duplicateAt = index;
+							if (EditorMenu.Item("Insert Above")) insertAt = index;
+							if (EditorMenu.Item("Remove")) removeAt = index;
 							ImGui.EndPopup();
 						}
 					},
@@ -383,6 +385,7 @@ namespace LELEngine.Editor
 					draw.AddLine(new NVector2(rowStart.X + 2f, rowEnd.Y - 2f), new NVector2(rowRight, rowEnd.Y - 2f), ImGui.GetColorU32(ImGuiCol.Separator, 0.35f));
 				}
 
+				TestAnchors.PopScope();
 				ImGui.PopID();
 			}
 
@@ -419,7 +422,7 @@ namespace LELEngine.Editor
 			float height = ImGui.GetFrameHeight();
 			float width = height * 0.6f;
 			NVector2 start = ImGui.GetCursorScreenPos();
-			ImGui.InvisibleButton("##grip", new NVector2(width, height));
+			EditorGui.InvisibleButton("##grip", new NVector2(width, height));
 			bool hovered = ImGui.IsItemHovered();
 			float icon = Math.Min(width, height) * 0.9f;
 			EditorIcons.Draw(ImGui.GetWindowDrawList(), start + new NVector2((width - icon) * 0.5f, (height - icon) * 0.5f), icon, IconKind.Grip, ImGui.GetColorU32(hovered ? ImGuiCol.Text : ImGuiCol.TextDisabled));
@@ -604,6 +607,8 @@ namespace LELEngine.Editor
 					object key = keys[i];
 					ImGui.TableNextRow();
 					ImGui.PushID(i);
+					// The entry's elements: "input:Mover/Loot/gold/key", "input:Mover/Loot/gold/value".
+					TestAnchors.PushScope(key?.ToString() ?? i.ToString());
 					// The entry's path names its key as the prefab overrides do ("loot{gold}").
 					context.Path = context.Overrides != null
 						? PropertyPath.WithKey(dictionaryPath, GenericValues.KeyString(DocumentValues.ToGeneric(key, SerializationUtility.TagOf(keyType, out _), ValueTag.Null, new SerializationContext { Scene = context.Scene }, 0), SerializationUtility.TagOf(keyType, out _)))
@@ -615,6 +620,7 @@ namespace LELEngine.Editor
 					object editedKey = key;
 					context.PendingRow = new RowDecoration { Label = "" };
 					ImGui.PushID("key");
+					TestAnchors.NameNextElement("key");
 					bool keyChanged = FieldDrawer.DrawValue("Key", keyType, ref editedKey, null, context, depth + 1);
 					ImGui.PopID();
 					context.PendingRow = null;
@@ -650,6 +656,7 @@ namespace LELEngine.Editor
 						SuffixWidth = ImGui.GetFrameHeight()
 					};
 					ImGui.PushID("value");
+					TestAnchors.NameNextElement("value");
 					if (FieldDrawer.DrawValue(ValueLabel(item, valueType), valueType, ref item, null, context, depth + 1))
 					{
 						// The widget captured the state before the change (Track): write it in place.
@@ -659,6 +666,7 @@ namespace LELEngine.Editor
 
 					ImGui.PopID();
 					context.PendingRow = null;
+					TestAnchors.PopScope();
 					ImGui.PopID();
 				}
 
@@ -707,7 +715,7 @@ namespace LELEngine.Editor
 			bool free = DocumentValues.IsUsableKey(key) && !dictionary.Contains(key);
 			ImGui.SameLine();
 			ImGui.BeginDisabled(!free);
-			bool confirm = ImGui.Button("Add##add_entry", new NVector2(button, 0f)) || (free && ImGui.IsKeyPressed(ImGuiKey.Enter, false) && ImGui.IsWindowFocused());
+			bool confirm = EditorGui.Button("Add##add_entry", new NVector2(button, 0f)) || (free && ImGui.IsKeyPressed(ImGuiKey.Enter, false) && ImGui.IsWindowFocused());
 			TestAnchors.RecordItem("button:AddEntry");
 			ImGui.EndDisabled();
 			if (!free && ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
@@ -716,7 +724,7 @@ namespace LELEngine.Editor
 			}
 
 			ImGui.SameLine();
-			if (ImGui.Button("Cancel##cancel_entry", new NVector2(button, 0f)))
+			if (EditorGui.Button("Cancel##cancel_entry", new NVector2(button, 0f)))
 			{
 				pendingOwner = null;
 				pendingKey = null;

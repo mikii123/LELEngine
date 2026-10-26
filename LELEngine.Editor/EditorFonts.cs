@@ -25,6 +25,27 @@ namespace LELEngine.Editor
 			mono[context] = monoFont;
 		}
 
+		/// <summary>A context sharing another's font atlas (window captures) gets the same faces.</summary>
+		public static void Share(nint from, nint to)
+		{
+			if (bold.TryGetValue(from, out ImFontPtr boldFont))
+			{
+				bold[to] = boldFont;
+			}
+
+			if (mono.TryGetValue(from, out ImFontPtr monoFont))
+			{
+				mono[to] = monoFont;
+			}
+		}
+
+		/// <summary>The context is destroyed.</summary>
+		public static void Forget(nint context)
+		{
+			bold.Remove(context);
+			mono.Remove(context);
+		}
+
 		/// <summary>Switches to the bold face at the current size; false (nothing pushed) when the window has none.</summary>
 		public static unsafe bool PushBold()
 		{

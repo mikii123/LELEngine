@@ -38,7 +38,7 @@ namespace LELEngine.Editor
 
 			float boxWidth = Math.Max(24f, width - buttonWidth - ImGui.GetStyle().ItemInnerSpacing.X);
 			NVector2 start = ImGui.GetCursorScreenPos();
-			ImGui.InvisibleButton("##field", new NVector2(boxWidth, height));
+			EditorGui.InvisibleButton("##field", new NVector2(boxWidth, height));
 			bool hovered = ImGui.IsItemHovered();
 			ImDrawListPtr draw = ImGui.GetWindowDrawList();
 			draw.AddRectFilled(start, start + new NVector2(boxWidth, height), ImGui.GetColorU32(hovered ? ImGuiCol.FrameBgHovered : ImGuiCol.FrameBg), ImGui.GetStyle().FrameRounding);
@@ -58,11 +58,11 @@ namespace LELEngine.Editor
 			// Click pings, double click selects.
 			if (value != null && !missing && editor != null)
 			{
-				if (ImGui.IsItemHovered() && ImGui.IsMouseDoubleClicked(ImGuiMouseButton.Left))
+				if (EditorGui.IsItemDoubleClicked())
 				{
 					editor.SelectObject(value);
 				}
-				else if (ImGui.IsItemClicked(ImGuiMouseButton.Left))
+				else if (EditorGui.IsItemClicked(ImGuiMouseButton.Left))
 				{
 					editor.Ping(value);
 				}
@@ -82,20 +82,20 @@ namespace LELEngine.Editor
 				changed = true;
 			}
 
-			if (ImGui.BeginPopupContextItem("##field_context"))
+			if (EditorGui.BeginPopupContextItem("##field_context"))
 			{
-				if (ImGui.MenuItem("Clear", (string)null, false, value != null))
+				if (EditorMenu.Item("Clear", (string)null, false, value != null))
 				{
 					value = null;
 					changed = true;
 				}
 
-				if (ImGui.MenuItem("Show", (string)null, false, value != null && !missing && editor != null))
+				if (EditorMenu.Item("Show", (string)null, false, value != null && !missing && editor != null))
 				{
 					editor.Ping(value);
 				}
 
-				if (ImGui.MenuItem("Select", (string)null, false, value != null && !missing && editor != null))
+				if (EditorMenu.Item("Select", (string)null, false, value != null && !missing && editor != null))
 				{
 					editor.SelectObject(value);
 				}

@@ -54,7 +54,7 @@ namespace LELEngine.Editor.Audio
 			Label(label, tooltip);
 			ImGui.PushID(label);
 			float v = value;
-			bool changed = ImGui.DragFloat("##v", ref v, speed, min, max, format);
+			bool changed = EditorGui.DragFloat("##v", ref v, speed, min, max, format);
 			Track(changed);
 			ImGui.PopID();
 			if (changed)
@@ -70,7 +70,7 @@ namespace LELEngine.Editor.Audio
 			Label(label, tooltip);
 			ImGui.PushID(label);
 			float v = (float)value;
-			bool changed = ImGui.DragFloat("##v", ref v, speed, (float)min, (float)max, format);
+			bool changed = EditorGui.DragFloat("##v", ref v, speed, (float)min, (float)max, format);
 			Track(changed);
 			ImGui.PopID();
 			if (changed)
@@ -86,9 +86,9 @@ namespace LELEngine.Editor.Audio
 			Label(label, tooltip);
 			ImGui.PushID(label);
 			float v = value;
-			bool changed = ImGui.SliderFloat("##v", ref v, AudioMath.SilenceDb, AudioMath.MaxDb, v <= AudioMath.SilenceDb ? "-inf dB" : "%.1f dB");
+			bool changed = EditorGui.SliderFloat("##v", ref v, AudioMath.SilenceDb, AudioMath.MaxDb, v <= AudioMath.SilenceDb ? "-inf dB" : "%.1f dB");
 			Track(changed);
-			if (ImGui.IsItemHovered() && ImGui.IsMouseDoubleClicked(ImGuiMouseButton.Left))
+			if (EditorGui.IsItemDoubleClicked())
 			{
 				v = 0f;
 				changed = true;
@@ -110,7 +110,7 @@ namespace LELEngine.Editor.Audio
 			Label(label, tooltip);
 			ImGui.PushID(label);
 			int v = value;
-			bool changed = ImGui.DragInt("##v", ref v, 0.2f, min, max);
+			bool changed = EditorGui.DragInt("##v", ref v, 0.2f, min, max);
 			Track(changed);
 			ImGui.PopID();
 			if (changed)
@@ -180,7 +180,7 @@ namespace LELEngine.Editor.Audio
 			Label(label, tooltip);
 			ImGui.PushID(label);
 			bool v = value;
-			bool changed = ImGui.Checkbox("##v", ref v);
+			bool changed = EditorGui.Checkbox("##v", ref v);
 			ImGui.PopID();
 			if (changed)
 			{
@@ -215,7 +215,7 @@ namespace LELEngine.Editor.Audio
 			Label(label, tooltip);
 			ImGui.PushID(label);
 			string v = value ?? "";
-			bool changed = ImGui.InputText("##v", ref v, 256);
+			bool changed = EditorGui.InputText("##v", ref v, 256);
 			Track(changed);
 			ImGui.PopID();
 			if (changed)
@@ -231,7 +231,7 @@ namespace LELEngine.Editor.Audio
 			Label(label);
 			ImGui.PushID(label);
 			var v = new NVector4(value.R, value.G, value.B, value.A);
-			bool changed = ImGui.ColorEdit4("##v", ref v, ImGuiColorEditFlags.NoAlpha | ImGuiColorEditFlags.NoInputs);
+			bool changed = EditorGui.ColorEdit4("##v", ref v, ImGuiColorEditFlags.NoAlpha | ImGuiColorEditFlags.NoInputs);
 			Track(changed);
 			ImGui.PopID();
 			if (changed)
@@ -249,9 +249,9 @@ namespace LELEngine.Editor.Audio
 			ImGui.PushID(label);
 			AudioParameter current = Project.FindParameter(context, parameterId);
 			bool changed = false;
-			if (ImGui.BeginCombo("##v", current != null ? current.Name : allowNone ? "(none)" : "(choose)"))
+			if (EditorGui.BeginCombo("##v", current != null ? current.Name : allowNone ? "(none)" : "(choose)"))
 			{
-				if (allowNone && ImGui.Selectable("(none)", current == null))
+				if (allowNone && EditorGui.Selectable("(none)", current == null))
 				{
 					string previous = parameterId;
 					PushUndo();
@@ -263,7 +263,7 @@ namespace LELEngine.Editor.Audio
 				foreach (AudioParameter parameter in Project.ParametersOf(context))
 				{
 					bool global = Project.FindGlobalParameter(parameter.Id) != null;
-					if (ImGui.Selectable(parameter.Name + (global ? "   (global)" : "") + "##p" + parameter.Id, parameter == current) && parameter != current)
+					if (EditorGui.Selectable(parameter.Name + (global ? "   (global)" : "") + "##p" + parameter.Id, parameter == current) && parameter != current)
 					{
 						PushUndo();
 						parameterId = parameter.Id;
@@ -272,7 +272,7 @@ namespace LELEngine.Editor.Audio
 					}
 				}
 
-				ImGui.EndCombo();
+				EditorGui.EndCombo();
 			}
 
 			ImGui.PopID();
@@ -292,12 +292,12 @@ namespace LELEngine.Editor.Audio
 				shown += "  (missing)";
 			}
 
-			if (ImGui.BeginCombo("##clip", shown))
+			if (EditorGui.BeginCombo("##clip", shown))
 			{
 				ImGui.SetNextItemWidth(-1);
 				if (ImGui.IsWindowAppearing()) ImGui.SetKeyboardFocusHere();
-				ImGui.InputTextWithHint("##clipsearch", "Search", ref clipSearch, 128);
-				if (ImGui.Selectable("(none)", clip == null || clip.IsEmpty))
+				EditorGui.InputTextWithHint("##clipsearch", "Search", ref clipSearch, 128);
+				if (EditorGui.Selectable("(none)", clip == null || clip.IsEmpty))
 				{
 					PushUndo();
 					clip.Guid = null;
@@ -314,7 +314,7 @@ namespace LELEngine.Editor.Audio
 					}
 
 					bool selected = clip != null && string.Equals(clip.Path, path, StringComparison.OrdinalIgnoreCase);
-					if (ImGui.Selectable(path + "##c" + path, selected) && !selected)
+					if (EditorGui.Selectable(path + "##c" + path, selected) && !selected)
 					{
 						PushUndo();
 						AudioClipReference picked = AudioClipReference.FromPath(path);
@@ -325,7 +325,7 @@ namespace LELEngine.Editor.Audio
 					}
 				}
 
-				ImGui.EndCombo();
+				EditorGui.EndCombo();
 			}
 
 			if (ImGui.BeginDragDropTarget())
@@ -360,7 +360,7 @@ namespace LELEngine.Editor.Audio
 			ImGui.PushID(label);
 			bool changed = false;
 			AudioEvent current = Project.FindEvent(reference);
-			if (ImGui.BeginCombo("##ev", current != null ? current.Path : reference.IsNull ? "(none)" : reference.Path + " (missing)"))
+			if (EditorGui.BeginCombo("##ev", current != null ? current.Path : reference.IsNull ? "(none)" : reference.Path + " (missing)"))
 			{
 				foreach (AudioEvent audioEvent in Project.Events)
 				{
@@ -369,7 +369,7 @@ namespace LELEngine.Editor.Audio
 						continue;
 					}
 
-					if (ImGui.Selectable(audioEvent.Path + "##e" + audioEvent.Id, audioEvent == current) && audioEvent != current)
+					if (EditorGui.Selectable(audioEvent.Path + "##e" + audioEvent.Id, audioEvent == current) && audioEvent != current)
 					{
 						PushUndo();
 						reference = AudioEventReference.FromEvent(audioEvent);
@@ -378,7 +378,7 @@ namespace LELEngine.Editor.Audio
 					}
 				}
 
-				ImGui.EndCombo();
+				EditorGui.EndCombo();
 			}
 
 			ImGui.PopID();
@@ -528,7 +528,7 @@ namespace LELEngine.Editor.Audio
 				ImGui.EndDisabled();
 				ImGui.SeparatorText("Notes");
 				string notes = current.Notes ?? "";
-				bool notesChanged = ImGui.InputTextMultiline("##notes", ref notes, 4096, new NVector2(-1, 60));
+				bool notesChanged = EditorGui.InputTextMultiline("##notes", ref notes, 4096, new NVector2(-1, 60));
 				Track(notesChanged);
 				if (notesChanged) current.Notes = notes;
 				ImGui.PopID();
@@ -571,34 +571,34 @@ namespace LELEngine.Editor.Audio
 					ImGui.SeparatorText("Routing");
 					Label("Output Bus", "The mixer bus the event feeds.");
 					AudioBus bus = Project.FindBus(current.BusId);
-					if (ImGui.BeginCombo("##bus", bus != null ? Project.BusPath(bus) : "Master"))
+					if (EditorGui.BeginCombo("##bus", bus != null ? Project.BusPath(bus) : "Master"))
 					{
 						foreach (AudioBus candidate in Project.BusesInTreeOrder())
 						{
-							if (ImGui.Selectable(Project.BusPath(candidate) + "##b" + candidate.Id, candidate == bus) && candidate != bus)
+							if (EditorGui.Selectable(Project.BusPath(candidate) + "##b" + candidate.Id, candidate == bus) && candidate != bus)
 							{
 								string id = candidate.Id;
 								Edit("Route event", () => current.BusId = id);
 							}
 						}
 
-						ImGui.EndCombo();
+						EditorGui.EndCombo();
 					}
 
 					Label("Bank", "The bank the event ships in.");
 					AudioBank bank = Project.FindBank(current.BankId);
-					if (ImGui.BeginCombo("##bank", bank != null ? bank.Name : "Master"))
+					if (EditorGui.BeginCombo("##bank", bank != null ? bank.Name : "Master"))
 					{
 						foreach (AudioBank candidate in Project.Banks)
 						{
-							if (ImGui.Selectable(candidate.Name + "##k" + candidate.Id, candidate == bank) && candidate != bank)
+							if (EditorGui.Selectable(candidate.Name + "##k" + candidate.Id, candidate == bank) && candidate != bank)
 							{
 								string id = candidate.Id;
 								Edit("Move event to bank", () => current.BankId = id);
 							}
 						}
 
-						ImGui.EndCombo();
+						EditorGui.EndCombo();
 					}
 				}
 
@@ -665,18 +665,18 @@ namespace LELEngine.Editor.Audio
 					{
 						Label("Snapshot", "The mixer snapshot switched on while the region is triggered.");
 						AudioSnapshot chosen = Project.FindSnapshot(snapshotInstrument.SnapshotId);
-						if (ImGui.BeginCombo("##snap", chosen != null ? chosen.Name : "(choose)"))
+						if (EditorGui.BeginCombo("##snap", chosen != null ? chosen.Name : "(choose)"))
 						{
 							foreach (AudioSnapshot candidate in Project.Snapshots)
 							{
-								if (ImGui.Selectable(candidate.Name + "##s" + candidate.Id, candidate == chosen) && candidate != chosen)
+								if (EditorGui.Selectable(candidate.Name + "##s" + candidate.Id, candidate == chosen) && candidate != chosen)
 								{
 									string id = candidate.Id;
 									Edit("Set snapshot", () => snapshotInstrument.SnapshotId = id);
 								}
 							}
 
-							ImGui.EndCombo();
+							EditorGui.EndCombo();
 						}
 
 						if (Project.Snapshots.Count == 0)
@@ -760,23 +760,23 @@ namespace LELEngine.Editor.Audio
 
 					Label("Destination", "Where the cursor jumps to.");
 					string shown = DestinationName(current, transition.DestinationId);
-					if (ImGui.BeginCombo("##dest", shown))
+					if (EditorGui.BeginCombo("##dest", shown))
 					{
-						if (ImGui.Selectable("End (stop the event)", transition.DestinationId == TransitionMarker.EndDestination))
+						if (EditorGui.Selectable("End (stop the event)", transition.DestinationId == TransitionMarker.EndDestination))
 						{
 							Edit("Set destination", () => transition.DestinationId = TransitionMarker.EndDestination);
 						}
 
 						foreach (AudioMarker candidate in current.Markers)
 						{
-							if (candidate is DestinationMarker && ImGui.Selectable((candidate.Name ?? "marker") + " (" + FormatTime(candidate.Position) + ")##d" + candidate.Id, candidate.Id == transition.DestinationId))
+							if (candidate is DestinationMarker && EditorGui.Selectable((candidate.Name ?? "marker") + " (" + FormatTime(candidate.Position) + ")##d" + candidate.Id, candidate.Id == transition.DestinationId))
 							{
 								string id = candidate.Id;
 								Edit("Set destination", () => transition.DestinationId = id);
 							}
 						}
 
-						ImGui.EndCombo();
+						EditorGui.EndCombo();
 					}
 
 					float probability = transition.Probability;
@@ -786,7 +786,7 @@ namespace LELEngine.Editor.Audio
 					{
 						double crossfade = transition.Crossfade;
 						if (DoubleField("Crossfade", ref crossfade, 0.01f, 0.0, 30.0, "%.2f s", "Without a transition timeline: the sounds before the jump fade out over this time while the new ones fade in (0 = cut).")) transition.Crossfade = crossfade;
-						if (ImGui.Button("Add Transition Timeline", new NVector2(-1f, 0f)))
+						if (EditorGui.Button("Add Transition Timeline", new NVector2(-1f, 0f)))
 						{
 							OpenTransitionTimeline(transition);
 						}
@@ -814,13 +814,13 @@ namespace LELEngine.Editor.Audio
 						float destinationShape = timeline.DestinationFadeIn.Shape;
 						if (FloatField("Destination Fade Shape", ref destinationShape, 0.01f, -1f, 1f, "%.2f", "0 linear, negative comes up late, positive comes up early.")) timeline.DestinationFadeIn.Shape = destinationShape;
 						bool expanded = expandedTransitionId == transition.Id;
-						if (ImGui.Button(expanded ? "Close Transition Timeline" : "Open Transition Timeline", new NVector2(-1f, 0f)))
+						if (EditorGui.Button(expanded ? "Close Transition Timeline" : "Open Transition Timeline", new NVector2(-1f, 0f)))
 						{
 							if (expanded) CloseTransitionTimeline();
 							else OpenTransitionTimeline(transition);
 						}
 
-						if (ImGui.Button("Remove Transition Timeline", new NVector2(-1f, 0f)))
+						if (EditorGui.Button("Remove Transition Timeline", new NVector2(-1f, 0f)))
 						{
 							RemoveTransitionTimeline(transition);
 						}
@@ -870,7 +870,7 @@ namespace LELEngine.Editor.Audio
 				if (TextField("Name", ref name)) bus.Name = name;
 				Label("Parent");
 				AudioBus parent = Project.FindBus(bus.ParentId);
-				if (ImGui.BeginCombo("##parent", parent != null ? Project.BusPath(parent) : "Master"))
+				if (EditorGui.BeginCombo("##parent", parent != null ? Project.BusPath(parent) : "Master"))
 				{
 					foreach (AudioBus candidate in Project.BusesInTreeOrder())
 					{
@@ -879,14 +879,14 @@ namespace LELEngine.Editor.Audio
 							continue;
 						}
 
-						if (ImGui.Selectable(Project.BusPath(candidate) + "##p" + candidate.Id, candidate == parent) && candidate != parent)
+						if (EditorGui.Selectable(Project.BusPath(candidate) + "##p" + candidate.Id, candidate == parent) && candidate != parent)
 						{
 							string id = candidate.Id;
 							Edit("Reparent bus", () => bus.ParentId = id);
 						}
 					}
 
-					ImGui.EndCombo();
+					EditorGui.EndCombo();
 				}
 			}
 
@@ -967,7 +967,7 @@ namespace LELEngine.Editor.Audio
 			ImGui.SeparatorText("Events");
 			foreach (AudioEvent audioEvent in Project.EventsOfBank(bank.Id))
 			{
-				if (ImGui.Selectable(audioEvent.Path + "##be" + audioEvent.Id, selectedEventId == audioEvent.Id))
+				if (EditorGui.Selectable(audioEvent.Path + "##be" + audioEvent.Id, selectedEventId == audioEvent.Id))
 				{
 					SelectEvent(audioEvent.Id);
 					selection = Selection.Of(SelectionKind.Bank, bank.Id);
@@ -1008,13 +1008,13 @@ namespace LELEngine.Editor.Audio
 				bool active = previewSnapshot != null && previewSnapshot.IsActive && previewSnapshot.Definition.Id == snapshot.Id;
 				float width = (ImGui.GetContentRegionAvail().X - ImGui.GetStyle().ItemSpacing.X) * 0.5f;
 				if (active) ImGui.PushStyleColor(ImGuiCol.Button, EditorStyle.Accent);
-				if (ImGui.Button("Start", new NVector2(width, 0f))) StartPreviewSnapshot(snapshot);
+				if (EditorGui.Button("Start", new NVector2(width, 0f))) StartPreviewSnapshot(snapshot);
 				if (active) ImGui.PopStyleColor();
 				ImGui.SameLine();
-				if (ImGui.Button("Stop", new NVector2(width, 0f))) StopPreviewSnapshot();
+				if (EditorGui.Button("Stop", new NVector2(width, 0f))) StopPreviewSnapshot();
 				Label("Intensity");
 				float intensity = previewSnapshotIntensity;
-				if (ImGui.SliderFloat("##intensity", ref intensity, 0f, 1f, "%.2f"))
+				if (EditorGui.SliderFloat("##intensity", ref intensity, 0f, 1f, "%.2f"))
 				{
 					previewSnapshotIntensity = intensity;
 					if (active) previewSnapshot.SetIntensity(intensity);
@@ -1023,7 +1023,7 @@ namespace LELEngine.Editor.Audio
 				ImGui.TextDisabled(active ? "Active: hear it on the events playing now." : "Play an event, then start the snapshot to hear it.");
 				ImGui.SeparatorText("Notes");
 				string notes = snapshot.Notes ?? "";
-				bool notesChanged = ImGui.InputTextMultiline("##snotes", ref notes, 4096, new NVector2(-1, 50));
+				bool notesChanged = EditorGui.InputTextMultiline("##snotes", ref notes, 4096, new NVector2(-1, 50));
 				Track(notesChanged);
 				if (notesChanged) snapshot.Notes = notes;
 				ImGui.PopID();
@@ -1037,12 +1037,12 @@ namespace LELEngine.Editor.Audio
 					ImGui.PushID(bus.Id);
 					SnapshotBusValue value = snapshot.FindBus(bus.Id);
 					bool scopedVolume = value != null && value.SetVolume;
-					bool open = ImGui.CollapsingHeader(Project.BusPath(bus) + (value != null ? "  *" : "") + "###bus", ImGuiTreeNodeFlags.DefaultOpen);
+					bool open = EditorGui.CollapsingHeader(Project.BusPath(bus) + (value != null ? "  *" : "") + "###bus", ImGuiTreeNodeFlags.DefaultOpen);
 					if (open)
 					{
 						Label("Volume");
 						bool tick = scopedVolume;
-						if (ImGui.Checkbox("##scopevol", ref tick) && tick != scopedVolume)
+						if (EditorGui.Checkbox("##scopevol", ref tick) && tick != scopedVolume)
 						{
 							SetSnapshotVolume(snapshot, bus, tick, value?.VolumeDb ?? bus.VolumeDb);
 							value = snapshot.FindBus(bus.Id);
@@ -1052,7 +1052,7 @@ namespace LELEngine.Editor.Audio
 						ImGui.SetNextItemWidth(-1);
 						ImGui.BeginDisabled(value == null || !value.SetVolume);
 						float volume = value != null && value.SetVolume ? value.VolumeDb : bus.VolumeDb;
-						bool changed = ImGui.SliderFloat("##snapvol", ref volume, AudioMath.SilenceDb, AudioMath.MaxDb, volume <= AudioMath.SilenceDb ? "-inf dB" : snapshot.Mode == SnapshotMode.Blending ? "%+.1f dB" : "%.1f dB");
+						bool changed = EditorGui.SliderFloat("##snapvol", ref volume, AudioMath.SilenceDb, AudioMath.MaxDb, volume <= AudioMath.SilenceDb ? "-inf dB" : snapshot.Mode == SnapshotMode.Blending ? "%+.1f dB" : "%.1f dB");
 						Track(changed);
 						if (changed && value != null) value.VolumeDb = volume;
 						ImGui.EndDisabled();
@@ -1066,7 +1066,7 @@ namespace LELEngine.Editor.Audio
 								SnapshotEffectValue effectValue = value?.FindEffect(effect.Id, parameter);
 								Label(effect.DisplayName + " / " + parameter);
 								bool scoped = effectValue != null;
-								if (ImGui.Checkbox("##scopefx", ref scoped) && scoped != (effectValue != null))
+								if (EditorGui.Checkbox("##scopefx", ref scoped) && scoped != (effectValue != null))
 								{
 									SetSnapshotEffect(snapshot, bus, effect, parameter, scoped, effect.GetParameter(parameter));
 									value = snapshot.FindBus(bus.Id);
@@ -1078,7 +1078,7 @@ namespace LELEngine.Editor.Audio
 								effect.GetParameterRange(parameter, out float min, out float max, out string unit);
 								ImGui.BeginDisabled(effectValue == null);
 								float current = effectValue?.Value ?? effect.GetParameter(parameter);
-								bool fxChanged = ImGui.SliderFloat("##fxv", ref current, min, max, unit == "dB" ? "%.1f dB" : unit == "Hz" ? "%.0f Hz" : unit == "s" ? "%.3f s" : "%.2f", unit == "Hz" ? ImGuiSliderFlags.Logarithmic : ImGuiSliderFlags.None);
+								bool fxChanged = EditorGui.SliderFloat("##fxv", ref current, min, max, unit == "dB" ? "%.1f dB" : unit == "Hz" ? "%.0f Hz" : unit == "s" ? "%.3f s" : "%.2f", unit == "Hz" ? ImGuiSliderFlags.Logarithmic : ImGuiSliderFlags.None);
 								Track(fxChanged);
 								if (fxChanged && effectValue != null) effectValue.Value = current;
 								ImGui.EndDisabled();
@@ -1166,9 +1166,9 @@ namespace LELEngine.Editor.Audio
 			}
 
 			ImGui.TextUnformatted($"{Nicify(clip.Format.ToString())}, {FormatTime(clip.Duration)}, {(clip.Channels == 1 ? "mono" : "stereo")}, {clip.SampleRate} Hz");
-			if (ImGui.Button("Play")) PreviewAsset(clip);
+			if (EditorGui.Button("Play")) PreviewAsset(clip);
 			ImGui.SameLine();
-			if (ImGui.Button("Stop")) StopAssetPreview();
+			if (EditorGui.Button("Stop")) StopAssetPreview();
 			ImGui.SeparatorText("Import settings");
 			AudioImporter importer = clip.Importer;
 			int loadType = (int)importer.loadType;
@@ -1180,7 +1180,7 @@ namespace LELEngine.Editor.Audio
 
 			Label("Force Mono", "Mix stereo files down to one channel (spatialized sounds need no stereo).");
 			bool mono = importer.forceMono;
-			if (ImGui.Checkbox("##mono", ref mono) && mono != importer.forceMono)
+			if (EditorGui.Checkbox("##mono", ref mono) && mono != importer.forceMono)
 			{
 				SetImporter(clip, i => i.forceMono = mono);
 			}
@@ -1189,7 +1189,7 @@ namespace LELEngine.Editor.Audio
 			ImGui.SeparatorText("Waveform");
 			NVector2 size = new NVector2(ImGui.GetContentRegionAvail().X, 70f);
 			NVector2 min = ImGui.GetCursorScreenPos();
-			ImGui.InvisibleButton("##wave", size);
+			EditorGui.InvisibleButton("##wave", size);
 			ImDrawListPtr draw = ImGui.GetWindowDrawList();
 			draw.AddRectFilled(min, min + size, Color(0.1f, 0.1f, 0.11f));
 			float[] peaks = clip.GetPeaks(Math.Max(8, (int)size.X / 2));
@@ -1257,7 +1257,7 @@ namespace LELEngine.Editor.Audio
 				if (FloatField("Min", ref min, 0.01f, lower, upper, "%.3f")) condition.Min = min;
 				float max = condition.Max;
 				if (FloatField("Max", ref max, 0.01f, lower, upper, "%.3f")) condition.Max = max;
-				if (ImGui.SmallButton("Remove condition"))
+				if (EditorGui.SmallButton("Remove condition"))
 				{
 					AudioCondition removed = condition;
 					Edit("Remove condition", () => conditions.Remove(removed));
@@ -1269,7 +1269,7 @@ namespace LELEngine.Editor.Audio
 				ImGui.PopID();
 			}
 
-			if (ImGui.SmallButton("+ Condition"))
+			if (EditorGui.SmallButton("+ Condition"))
 			{
 				List<AudioParameter> parameters = Project.ParametersOf(current);
 				if (parameters.Count == 0)
@@ -1299,7 +1299,7 @@ namespace LELEngine.Editor.Audio
 				if (FloatField("Volume", ref volume, 0.1f, AudioMath.SilenceDb, AudioMath.MaxDb, "%.1f dB")) entry.VolumeDb = volume;
 				float pitch = entry.PitchSemitones;
 				if (FloatField("Pitch", ref pitch, 0.05f, -48f, 48f, "%.2f st")) entry.PitchSemitones = pitch;
-				if (ImGui.SmallButton("Remove"))
+				if (EditorGui.SmallButton("Remove"))
 				{
 					AudioPlaylistEntry removed = entry;
 					Edit("Remove playlist entry", () => playlist.Remove(removed));
@@ -1310,7 +1310,7 @@ namespace LELEngine.Editor.Audio
 				if (i > 0)
 				{
 					ImGui.SameLine();
-					if (ImGui.SmallButton("Up"))
+					if (EditorGui.SmallButton("Up"))
 					{
 						int index = i;
 						Edit("Reorder playlist", () =>
@@ -1326,7 +1326,7 @@ namespace LELEngine.Editor.Audio
 				ImGui.PopID();
 			}
 
-			if (ImGui.SmallButton("+ Sound"))
+			if (EditorGui.SmallButton("+ Sound"))
 			{
 				Edit("Add playlist entry", () => playlist.Add(new AudioPlaylistEntry()));
 			}
@@ -1352,12 +1352,12 @@ namespace LELEngine.Editor.Audio
 			{
 				AudioEffect effect = effects[i];
 				ImGui.PushID(effect.Id ?? i.ToString());
-				bool open = ImGui.CollapsingHeader(effect.DisplayName + (effect.Bypass ? " (bypassed)" : "") + "###fx", ImGuiTreeNodeFlags.DefaultOpen);
-				if (ImGui.BeginPopupContextItem("##fx_menu"))
+				bool open = EditorGui.CollapsingHeader(effect.DisplayName + (effect.Bypass ? " (bypassed)" : "") + "###fx", ImGuiTreeNodeFlags.DefaultOpen);
+				if (EditorGui.BeginPopupContextItem("##fx_menu"))
 				{
 					bool bypass = effect.Bypass;
-					if (ImGui.MenuItem("Bypass", "", bypass)) Edit("Toggle bypass", () => effect.Bypass = !bypass);
-					if (i > 0 && ImGui.MenuItem("Move Up"))
+					if (EditorMenu.Item("Bypass", "", bypass)) Edit("Toggle bypass", () => effect.Bypass = !bypass);
+					if (i > 0 && EditorMenu.Item("Move Up"))
 					{
 						int index = i;
 						Edit("Reorder effects", () =>
@@ -1368,7 +1368,7 @@ namespace LELEngine.Editor.Audio
 						});
 					}
 
-					if (ImGui.MenuItem("Remove"))
+					if (EditorMenu.Item("Remove"))
 					{
 						AudioEffect removed = effect;
 						Edit("Remove effect", () => effects.Remove(removed));
@@ -1401,17 +1401,17 @@ namespace LELEngine.Editor.Audio
 				ImGui.PopID();
 			}
 
-			if (ImGui.SmallButton("+ Effect"))
+			if (EditorGui.SmallButton("+ Effect"))
 			{
 				ImGui.OpenPopup("##add_effect");
 			}
 
 			if (ImGui.BeginPopup("##add_effect"))
 			{
-				if (ImGui.MenuItem("Low Pass")) Edit("Add effect", () => effects.Add(new LowPassEffect { Id = AudioProject.NewId(), CutoffHz = 4000f }));
-				if (ImGui.MenuItem("High Pass")) Edit("Add effect", () => effects.Add(new HighPassEffect { Id = AudioProject.NewId(), CutoffHz = 200f }));
-				if (ImGui.MenuItem("Reverb")) Edit("Add effect", () => effects.Add(new ReverbEffect { Id = AudioProject.NewId() }));
-				if (ImGui.MenuItem("Delay")) Edit("Add effect", () => effects.Add(new DelayEffect { Id = AudioProject.NewId() }));
+				if (EditorMenu.Item("Low Pass")) Edit("Add effect", () => effects.Add(new LowPassEffect { Id = AudioProject.NewId(), CutoffHz = 4000f }));
+				if (EditorMenu.Item("High Pass")) Edit("Add effect", () => effects.Add(new HighPassEffect { Id = AudioProject.NewId(), CutoffHz = 200f }));
+				if (EditorMenu.Item("Reverb")) Edit("Add effect", () => effects.Add(new ReverbEffect { Id = AudioProject.NewId() }));
+				if (EditorMenu.Item("Delay")) Edit("Add effect", () => effects.Add(new DelayEffect { Id = AudioProject.NewId() }));
 				ImGui.EndPopup();
 			}
 		}
@@ -1426,10 +1426,10 @@ namespace LELEngine.Editor.Audio
 				ImGui.PushID(i);
 				AudioParameter parameter = Project.FindParameter(current, curve.ParameterId);
 				string title = TargetLabel(track, curve.Target) + " by " + (parameter?.Name ?? "(missing parameter)");
-				bool open = ImGui.CollapsingHeader(title + "###auto", ImGuiTreeNodeFlags.DefaultOpen);
-				if (ImGui.BeginPopupContextItem("##auto_menu"))
+				bool open = EditorGui.CollapsingHeader(title + "###auto", ImGuiTreeNodeFlags.DefaultOpen);
+				if (EditorGui.BeginPopupContextItem("##auto_menu"))
 				{
-					if (ImGui.MenuItem("Remove"))
+					if (EditorMenu.Item("Remove"))
 					{
 						AudioAutomationCurve removed = curve;
 						Edit("Remove automation", () => track.Automation.Remove(removed));
@@ -1451,7 +1451,7 @@ namespace LELEngine.Editor.Audio
 				ImGui.PopID();
 			}
 
-			if (ImGui.SmallButton("+ Automation"))
+			if (EditorGui.SmallButton("+ Automation"))
 			{
 				ImGui.OpenPopup("##add_automation");
 			}
@@ -1468,7 +1468,7 @@ namespace LELEngine.Editor.Audio
 					ImGui.TextDisabled("Property");
 					foreach (string target in Targets(track))
 					{
-						if (ImGui.MenuItem(TargetLabel(track, target)))
+						if (EditorMenu.Item(TargetLabel(track, target)))
 						{
 							AudioParameter parameter = parameters[0];
 							TargetRange(track, target, out float yMin, out float yMax, out _);
@@ -1568,7 +1568,7 @@ namespace LELEngine.Editor.Audio
 		{
 			var size = new NVector2(Math.Max(120f, ImGui.GetContentRegionAvail().X), 110f);
 			NVector2 min = ImGui.GetCursorScreenPos();
-			ImGui.InvisibleButton("##curve", size, ImGuiButtonFlags.MouseButtonLeft | ImGuiButtonFlags.MouseButtonRight);
+			EditorGui.InvisibleButton("##curve", size, ImGuiButtonFlags.MouseButtonLeft | ImGuiButtonFlags.MouseButtonRight);
 			bool hovered = ImGui.IsItemHovered();
 			ImDrawListPtr draw = ImGui.GetWindowDrawList();
 			draw.AddRectFilled(min, min + size, Color(0.1f, 0.1f, 0.11f), 3f);
@@ -1722,18 +1722,18 @@ namespace LELEngine.Editor.Audio
 					ImGui.TextUnformatted(current.Name);
 					ImGui.SameLine();
 					ImGui.TextDisabled(current.Folder.Length > 0 ? "in " + current.Folder : "");
-					if (ImGui.SmallButton("Rename")) RequestRename(Selection.Of(SelectionKind.Event, current.Id), current.Path);
+					if (EditorGui.SmallButton("Rename")) RequestRename(Selection.Of(SelectionKind.Event, current.Id), current.Path);
 					ImGui.SameLine();
-					if (ImGui.SmallButton("Duplicate")) DuplicateEvent(current);
+					if (EditorGui.SmallButton("Duplicate")) DuplicateEvent(current);
 					ImGui.SameLine();
-					if (ImGui.SmallButton("Copy GUID")) ImGui.SetClipboardText(current.Id);
+					if (EditorGui.SmallButton("Copy GUID")) ImGui.SetClipboardText(current.Id);
 					if (ImGui.IsItemHovered()) ImGui.SetTooltip("Components reference the event by this GUID (the inspector's event picker does it for you).");
 					ImGui.TextDisabled("Bank " + (Project.FindBank(current.BankId)?.Name ?? "?") + ", bus " + (Project.FindBus(current.BusId) != null ? Project.BusPath(Project.FindBus(current.BusId)) : "Master") + (current.Spatializer.Enabled ? ", 3D" : ", 2D") + (current.Persistent ? ", persistent" : ""));
 					ImGui.Separator();
 
 					ImGui.SeparatorText("Parameters");
 					DrawParameterSliders(current);
-					if (ImGui.SmallButton("+ Local Parameter"))
+					if (EditorGui.SmallButton("+ Local Parameter"))
 					{
 						var parameter = new AudioParameter { Id = AudioProject.NewId(), Name = UniqueParameterName(current, "Parameter") };
 						Edit("Add parameter", () => current.Parameters.Add(parameter));
@@ -1750,7 +1750,7 @@ namespace LELEngine.Editor.Audio
 					{
 						Label("Distance", "Where the preview instance is placed, relative to the listener (the scene camera in edit mode).");
 						float distance = previewDistance;
-						if (ImGui.SliderFloat("##pdist", ref distance, 0f, Math.Max(1f, current.Spatializer.MaxDistance * 1.2f), "%.1f"))
+						if (EditorGui.SliderFloat("##pdist", ref distance, 0f, Math.Max(1f, current.Spatializer.MaxDistance * 1.2f), "%.1f"))
 						{
 							previewDistance = distance;
 							playing?.Set3DAttributes(PreviewPosition());
@@ -1758,7 +1758,7 @@ namespace LELEngine.Editor.Audio
 
 						Label("Angle");
 						float angle = previewAngle;
-						if (ImGui.SliderFloat("##pangle", ref angle, -180f, 180f, "%.0f deg"))
+						if (EditorGui.SliderFloat("##pangle", ref angle, -180f, 180f, "%.0f deg"))
 						{
 							previewAngle = angle;
 							playing?.Set3DAttributes(PreviewPosition());
@@ -1777,7 +1777,7 @@ namespace LELEngine.Editor.Audio
 						{
 							if (point.Kind == MarkerPointKind.Sustain && playing.State == PlaybackState.Sustaining)
 							{
-								if (ImGui.Button("Key Off (resume from the sustain point)")) playing.KeyOff();
+								if (EditorGui.Button("Key Off (resume from the sustain point)")) playing.KeyOff();
 								break;
 							}
 						}
@@ -1835,21 +1835,21 @@ namespace LELEngine.Editor.Audio
 					SetPreviewParameter(parameter.Id, parameter.Clamp(value));
 				}
 
-				if (ImGui.BeginPopupContextItem("##param_menu"))
+				if (EditorGui.BeginPopupContextItem("##param_menu"))
 				{
-					if (ImGui.MenuItem("Edit Parameter"))
+					if (EditorMenu.Item("Edit Parameter"))
 					{
 						selection = Selection.Of(global ? SelectionKind.GlobalParameter : SelectionKind.LocalParameter, parameter.Id);
 					}
 
-					if (ImGui.MenuItem("Open Sheet"))
+					if (EditorMenu.Item("Open Sheet"))
 					{
 						openSheets.Add(parameter.Id);
 						currentSheet = parameter.Id;
 						tabSwitchRequested = true;
 					}
 
-					if (!global && ImGui.MenuItem("Remove Parameter"))
+					if (!global && EditorMenu.Item("Remove Parameter"))
 					{
 						AudioParameter removed = parameter;
 						Edit("Remove parameter", () => current.Parameters.Remove(removed));
@@ -1859,7 +1859,7 @@ namespace LELEngine.Editor.Audio
 				}
 
 				bool selected = selection.Is(global ? SelectionKind.GlobalParameter : SelectionKind.LocalParameter, parameter.Id);
-				if (ImGui.Selectable((global ? "global" : "local") + "##psel", selected, ImGuiSelectableFlags.None, new NVector2(width, 0f)))
+				if (EditorGui.Selectable((global ? "global" : "local") + "##psel", selected, ImGuiSelectableFlags.None, new NVector2(width, 0f)))
 				{
 					selection = Selection.Of(global ? SelectionKind.GlobalParameter : SelectionKind.LocalParameter, parameter.Id);
 				}

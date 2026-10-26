@@ -3,8 +3,8 @@ using NVector2 = System.Numerics.Vector2;
 
 namespace LELEngine.Editor
 {
-	/// <summary>Small ImGui helpers.</summary>
-	internal static class EditorGui
+	/// <summary>Small ImGui helpers, and the editor's interactive controls (EditorGui.Controls.cs).</summary>
+	internal static partial class EditorGui
 	{
 		#region PublicMethods
 
@@ -32,7 +32,7 @@ namespace LELEngine.Editor
 				ImGui.PushStyleColor(ImGuiCol.Button, EditorStyle.Accent);
 			}
 
-			bool pressed = ImGui.Button("##" + id, new NVector2(height * 1.5f, height));
+			bool pressed = Button("##" + id, new NVector2(height * 1.5f, height));
 			if (active)
 			{
 				ImGui.PopStyleColor();

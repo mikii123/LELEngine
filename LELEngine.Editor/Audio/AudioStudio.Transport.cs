@@ -386,15 +386,15 @@ namespace LELEngine.Editor.Audio
 			ImGui.SetNextItemWidth(width);
 			EventInstance live = Live;
 			string chosen = liveInstances.Count == 0 ? "none playing" : live != null ? DescribeInstance(live) : "not followed";
-			if (ImGui.BeginCombo("##live", chosen))
+			if (EditorGui.BeginCombo("##live", chosen))
 			{
-				if (ImGui.Selectable("Follow the newest", followGame))
+				if (EditorGui.Selectable("Follow the newest", followGame))
 				{
 					followGame = true;
 					liveInstanceId = liveInstances.Count > 0 ? liveInstances[liveInstances.Count - 1].Id : 0;
 				}
 
-				if (ImGui.Selectable("Don't follow", !followGame && liveInstanceId == 0))
+				if (EditorGui.Selectable("Don't follow", !followGame && liveInstanceId == 0))
 				{
 					followGame = false;
 					liveInstanceId = 0;
@@ -407,14 +407,14 @@ namespace LELEngine.Editor.Audio
 
 				foreach (EventInstance instance in liveInstances)
 				{
-					if (ImGui.Selectable(DescribeInstance(instance) + "##i" + instance.Id, !followGame && instance.Id == liveInstanceId))
+					if (EditorGui.Selectable(DescribeInstance(instance) + "##i" + instance.Id, !followGame && instance.Id == liveInstanceId))
 					{
 						followGame = false;
 						liveInstanceId = instance.Id;
 					}
 				}
 
-				ImGui.EndCombo();
+				EditorGui.EndCombo();
 			}
 
 			if (ImGui.IsItemHovered())
@@ -437,7 +437,7 @@ namespace LELEngine.Editor.Audio
 		private void DrawSnapControls(AudioEvent current, float x, float y)
 		{
 			ImGui.SetCursorScreenPos(new NVector2(x, y));
-			ImGui.Checkbox("Snap", ref snap);
+			EditorGui.Checkbox("Snap", ref snap);
 			ImGui.SameLine();
 			ImGui.SetNextItemWidth(96f);
 			string[] intervals = { "Grid", "1/4 Beat", "1/2 Beat", "Beat", "2 Beats", "Bar", "2 Bars", "4 Bars", "8 Bars" };
@@ -455,11 +455,11 @@ namespace LELEngine.Editor.Audio
 			ImGui.SameLine(0f, 14f);
 			ImGui.TextDisabled("Zoom");
 			ImGui.SameLine();
-			if (ImGui.Button("-##zoomout")) ZoomAround((canvasLeft + canvasRight) * 0.5f, 1f / 1.4f);
+			if (EditorGui.Button("-##zoomout")) ZoomAround((canvasLeft + canvasRight) * 0.5f, 1f / 1.4f);
 			ImGui.SameLine();
-			if (ImGui.Button("+##zoomin")) ZoomAround((canvasLeft + canvasRight) * 0.5f, 1.4f);
+			if (EditorGui.Button("+##zoomin")) ZoomAround((canvasLeft + canvasRight) * 0.5f, 1.4f);
 			ImGui.SameLine();
-			if (ImGui.Button("Fit"))
+			if (EditorGui.Button("Fit"))
 			{
 				double length = Math.Max(1.0, current.TimelineLength);
 				if (view.Active)
@@ -491,7 +491,7 @@ namespace LELEngine.Editor.Audio
 					ImGui.SetCursorPos(new NVector2(8f, height * 0.5f - 11f));
 					ImGui.TextDisabled("No parameters");
 					ImGui.SameLine();
-					if (ImGui.SmallButton("+ Parameter"))
+					if (EditorGui.SmallButton("+ Parameter"))
 					{
 						var parameter = new AudioParameter { Id = AudioProject.NewId(), Name = UniqueParameterName(current, "Parameter") };
 						Edit("Add parameter", () => current.Parameters.Add(parameter));
@@ -519,21 +519,21 @@ namespace LELEngine.Editor.Audio
 						SetPreviewParameter(parameter.Id, parameter.Clamp(value));
 					}
 
-					if (ImGui.BeginPopupContextItem("##param_menu"))
+					if (EditorGui.BeginPopupContextItem("##param_menu"))
 					{
-						if (ImGui.MenuItem("Open Sheet"))
+						if (EditorMenu.Item("Open Sheet"))
 						{
 							openSheets.Add(parameter.Id);
 							currentSheet = parameter.Id;
 							tabSwitchRequested = true;
 						}
 
-						if (ImGui.MenuItem("Edit Parameter"))
+						if (EditorMenu.Item("Edit Parameter"))
 						{
 							selection = Selection.Of(global ? SelectionKind.GlobalParameter : SelectionKind.LocalParameter, parameter.Id);
 						}
 
-						if (!global && ImGui.MenuItem("Remove Parameter"))
+						if (!global && EditorMenu.Item("Remove Parameter"))
 						{
 							AudioParameter removed = parameter;
 							Edit("Remove parameter", () => current.Parameters.Remove(removed));

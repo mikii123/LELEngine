@@ -35,7 +35,7 @@ namespace LELEngine.Editor
 			ImGui.PushStyleColor(ImGuiCol.HeaderActive, EditorStyle.Tinted(ImGuiCol.HeaderActive, tint, 0.4f));
 			ImGui.PushStyleVar(ImGuiStyleVar.FramePadding, new NVector2(ImGui.GetStyle().FramePadding.X, 5f));
 			bool bold = EditorFonts.PushBold();
-			bool open = ImGui.CollapsingHeader(padding + title + "###material", ImGuiTreeNodeFlags.DefaultOpen);
+			bool open = EditorGui.CollapsingHeader(padding + title + "###material", ImGuiTreeNodeFlags.DefaultOpen);
 			EditorFonts.Pop(bold);
 			ImGui.PopStyleVar();
 			ImGui.PopStyleColor(3);

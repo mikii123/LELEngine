@@ -16,11 +16,17 @@ namespace LELEngine.Editor
 	///     gamepad maps (bindings per action; Listen binds the next key, button or stick pushed), and Debug (play mode:
 	///     every player's actions live; connected gamepads always). Edits are undo steps and save the asset when they end.
 	/// </summary>
-	internal sealed class InputManagerWindow
+	internal sealed class InputManagerWindow : IEditorPanel
 	{
 		#region PublicFields
 
 		public bool Open;
+
+		string IEditorPanel.PanelName => "Input Manager";
+		string IEditorPanel.ImGuiName => "Input Manager";
+		bool IEditorPanel.PanelOpen { get => Open; set => Open = value; }
+		NVector2 IEditorPanel.DefaultCaptureSize => new NVector2(1000, 700);
+		void IEditorPanel.Focus() => EditorApplication.Instance.OpenInputManager(null);
 
 		/// <summary>The configuration shown (the project's by default).</summary>
 		public string AssetPath => assetPath;
@@ -177,7 +183,7 @@ namespace LELEngine.Editor
 				ImGui.TableSetColumnIndex(0);
 				foreach ((Page item, string label) in Pages)
 				{
-					if (ImGui.Selectable(label, page == item) || requestedPage == item)
+					if (EditorGui.Selectable(label, page == item) || requestedPage == item)
 					{
 						page = item;
 						listening = null;
@@ -214,7 +220,7 @@ namespace LELEngine.Editor
 			ImGui.SameLine();
 			if (configuration == null)
 			{
-				if (ImGui.Button("Create"))
+				if (EditorGui.Button("Create"))
 				{
 					CreateConfiguration();
 				}
@@ -229,7 +235,7 @@ namespace LELEngine.Editor
 			{
 				ImGui.TextDisabled("(the project's configuration)");
 			}
-			else if (ImGui.Button("Use in Project"))
+			else if (EditorGui.Button("Use in Project"))
 			{
 				editor.Edits.Begin(ProjectSettings.Current);
 				ProjectSettings.Current.Input.Configuration = assetPath;
@@ -324,7 +330,7 @@ namespace LELEngine.Editor
 		{
 			string text = value ?? "";
 			ImGui.SetNextItemWidth(width);
-			bool changed = ImGui.InputText(id, ref text, 128);
+			bool changed = EditorGui.InputText(id, ref text, 128);
 			context.Track(changed);
 			if (changed)
 			{
@@ -337,7 +343,7 @@ namespace LELEngine.Editor
 		private bool EditCheckbox(string id, ref bool value)
 		{
 			bool local = value;
-			bool changed = ImGui.Checkbox(id, ref local);
+			bool changed = EditorGui.Checkbox(id, ref local);
 			context.Track(changed);
 			if (changed)
 			{
@@ -361,11 +367,11 @@ namespace LELEngine.Editor
 
 			bool changed = false;
 			ImGui.SetNextItemWidth(width);
-			if (ImGui.BeginCombo(id, current != null ? itemName(current) : "(none)"))
+			if (EditorGui.BeginCombo(id, current != null ? itemName(current) : "(none)"))
 			{
 				foreach (T item in items)
 				{
-					if (ImGui.Selectable(itemName(item) + "##" + itemId(item), itemId(item) == value))
+					if (EditorGui.Selectable(itemName(item) + "##" + itemId(item), itemId(item) == value))
 					{
 						BeginEdit();
 						value = itemId(item);
@@ -374,7 +380,7 @@ namespace LELEngine.Editor
 					}
 				}
 
-				ImGui.EndCombo();
+				EditorGui.EndCombo();
 			}
 
 			return changed;
@@ -385,11 +391,11 @@ namespace LELEngine.Editor
 		{
 			bool changed = false;
 			ImGui.SetNextItemWidth(width);
-			if (ImGui.BeginCombo(id, value.ToString()))
+			if (EditorGui.BeginCombo(id, value.ToString()))
 			{
 				foreach (T item in Enum.GetValues<T>())
 				{
-					if (ImGui.Selectable(item.ToString(), item.Equals(value)))
+					if (EditorGui.Selectable(item.ToString(), item.Equals(value)))
 					{
 						BeginEdit();
 						value = item;
@@ -398,7 +404,7 @@ namespace LELEngine.Editor
 					}
 				}
 
-				ImGui.EndCombo();
+				EditorGui.EndCombo();
 			}
 
 			return changed;
@@ -418,13 +424,13 @@ namespace LELEngine.Editor
 				ImGui.TableSetColumnIndex(0);
 				foreach (InputPlayerDefinition player in configuration.Players)
 				{
-					if (ImGui.Selectable(player.Name + "##player" + player.Id, player.Id == selectedPlayer))
+					if (EditorGui.Selectable(player.Name + "##player" + player.Id, player.Id == selectedPlayer))
 					{
 						selectedPlayer = player.Id;
 					}
 				}
 
-				if (ImGui.Button("Add Player"))
+				if (EditorGui.Button("Add Player"))
 				{
 					BeginEdit();
 					int id = InputConfiguration.NextId(configuration.Players, p => p.Id);
@@ -487,7 +493,7 @@ namespace LELEngine.Editor
 				EndEdit();
 			}
 
-			if (ImGui.Button("Add Starting Map"))
+			if (EditorGui.Button("Add Starting Map"))
 			{
 				BeginEdit();
 				player.StartingMaps.Add(new StartingMap());
@@ -497,7 +503,7 @@ namespace LELEngine.Editor
 			ImGui.Spacing();
 			ImGui.Separator();
 			ImGui.BeginDisabled(configuration.Players.Count <= 1);
-			if (ImGui.Button("Delete Player"))
+			if (EditorGui.Button("Delete Player"))
 			{
 				BeginEdit();
 				configuration.Players.Remove(player);
@@ -514,7 +520,7 @@ namespace LELEngine.Editor
 		{
 			ImGui.TextDisabled("What players do; scripts read them by name: player.GetButtonDown(\"Fire\"), player.GetAxis(\"Move Horizontal\").");
 			ImGui.Spacing();
-			if (ImGui.Button("Add Action"))
+			if (EditorGui.Button("Add Action"))
 			{
 				BeginEdit();
 				int id = InputConfiguration.NextId(configuration.Actions, a => a.Id);
@@ -524,7 +530,7 @@ namespace LELEngine.Editor
 
 			ImGui.SameLine();
 			ImGui.SetNextItemWidth(220f);
-			ImGui.InputTextWithHint("##filter", "Filter", ref actionFilter, 64);
+			EditorGui.InputTextWithHint("##filter", "Filter", ref actionFilter, 64);
 			// Fixed columns, scrolled sideways in a narrow window (a stretched one would be squeezed to nothing).
 			const ImGuiTableFlags flags = ImGuiTableFlags.RowBg | ImGuiTableFlags.BordersInnerH | ImGuiTableFlags.ScrollY | ImGuiTableFlags.ScrollX | ImGuiTableFlags.SizingFixedFit;
 			if (!ImGui.BeginTable("##actions", 9, flags, ImGui.GetContentRegionAvail()))
@@ -605,7 +611,7 @@ namespace LELEngine.Editor
 		{
 			ImGui.TextDisabled(description);
 			ImGui.Spacing();
-			if (ImGui.Button("Add " + char.ToUpperInvariant(kind[0]) + kind.Substring(1)))
+			if (EditorGui.Button("Add " + char.ToUpperInvariant(kind[0]) + kind.Substring(1)))
 			{
 				BeginEdit();
 				int id = InputConfiguration.NextId(list, c => c.Id);
@@ -672,13 +678,13 @@ namespace LELEngine.Editor
 				ImGui.TableSetColumnIndex(0);
 				foreach (InputBehavior behavior in configuration.Behaviors)
 				{
-					if (ImGui.Selectable(behavior.Name + "##behavior" + behavior.Id, behavior.Id == selectedBehavior))
+					if (EditorGui.Selectable(behavior.Name + "##behavior" + behavior.Id, behavior.Id == selectedBehavior))
 					{
 						selectedBehavior = behavior.Id;
 					}
 				}
 
-				if (ImGui.Button("Add Behavior"))
+				if (EditorGui.Button("Add Behavior"))
 				{
 					BeginEdit();
 					int id = InputConfiguration.NextId(configuration.Behaviors, b => b.Id);
@@ -697,7 +703,7 @@ namespace LELEngine.Editor
 					bool inUse = configuration.Actions.Exists(a => a.BehaviorId == selected.Id);
 					ImGui.Spacing();
 					ImGui.BeginDisabled(configuration.Behaviors.Count <= 1 || inUse);
-					if (ImGui.Button("Delete Behavior"))
+					if (EditorGui.Button("Delete Behavior"))
 					{
 						BeginEdit();
 						configuration.Behaviors.Remove(selected);
@@ -741,7 +747,7 @@ namespace LELEngine.Editor
 			ImGui.SameLine();
 			if (map == null)
 			{
-				if (ImGui.Button("Create Map"))
+				if (EditorGui.Button("Create Map"))
 				{
 					BeginEdit();
 					configuration.Maps.Add(new ControllerMap { Id = InputConfiguration.NextId(configuration.Maps, m => m.Id), Type = type, CategoryId = mapCategory[t], LayoutId = mapLayout[t] });
@@ -753,7 +759,7 @@ namespace LELEngine.Editor
 				return;
 			}
 
-			if (ImGui.Button("Delete Map"))
+			if (EditorGui.Button("Delete Map"))
 			{
 				BeginEdit();
 				configuration.Maps.Remove(map);
@@ -855,17 +861,17 @@ namespace LELEngine.Editor
 			InputCategory current = items.Find(c => c.Id == selected) ?? (items.Count > 0 ? items[0] : null);
 			value = current?.Id ?? 0;
 			ImGui.SetNextItemWidth(150f);
-			if (ImGui.BeginCombo(id, current?.Name ?? "(none)"))
+			if (EditorGui.BeginCombo(id, current?.Name ?? "(none)"))
 			{
 				foreach (InputCategory item in items)
 				{
-					if (ImGui.Selectable(item.Name + "##" + item.Id, item.Id == value))
+					if (EditorGui.Selectable(item.Name + "##" + item.Id, item.Id == value))
 					{
 						value = item.Id;
 					}
 				}
 
-				ImGui.EndCombo();
+				EditorGui.EndCombo();
 			}
 		}
 
@@ -879,7 +885,7 @@ namespace LELEngine.Editor
 			}
 
 			string name = ControllerTypes.ElementName(map.Type, binding.Element);
-			if (ImGui.Button(name + "##element", new NVector2(170f, 0f)))
+			if (EditorGui.Button(name + "##element", new NVector2(170f, 0f)))
 			{
 				StartListening(map, action, binding, binding.Contribution);
 			}
@@ -892,7 +898,7 @@ namespace LELEngine.Editor
 
 			ImGui.SameLine();
 			ImGui.SetNextItemWidth(26f);
-			if (ImGui.BeginCombo("##pick", "", ImGuiComboFlags.NoPreview | ImGuiComboFlags.HeightLarge))
+			if (EditorGui.BeginCombo("##pick", "", ImGuiComboFlags.NoPreview | ImGuiComboFlags.HeightLarge))
 			{
 				if (map.Type == ControllerType.Keyboard)
 				{
@@ -902,7 +908,7 @@ namespace LELEngine.Editor
 						ImGui.SetKeyboardFocusHere();
 					}
 
-					ImGui.InputTextWithHint("##keyfilter", "Filter", ref keyFilter, 32);
+					EditorGui.InputTextWithHint("##keyfilter", "Filter", ref keyFilter, 32);
 				}
 
 				foreach (int element in ControllerTypes.Elements(map.Type))
@@ -913,7 +919,7 @@ namespace LELEngine.Editor
 						continue;
 					}
 
-					if (ImGui.Selectable(elementName + "##" + element, element == binding.Element))
+					if (EditorGui.Selectable(elementName + "##" + element, element == binding.Element))
 					{
 						BeginEdit();
 						SetElement(action, map.Type, binding, element, 1f);
@@ -921,7 +927,7 @@ namespace LELEngine.Editor
 					}
 				}
 
-				ImGui.EndCombo();
+				EditorGui.EndCombo();
 			}
 		}
 
@@ -945,23 +951,23 @@ namespace LELEngine.Editor
 				string positive = string.IsNullOrEmpty(action.PositiveName) ? "Positive" : action.PositiveName;
 				string negative = string.IsNullOrEmpty(action.NegativeName) ? "Negative" : action.NegativeName;
 				ImGui.SetNextItemWidth(140f);
-				if (ImGui.BeginCombo("##contribution", binding.Contribution == AxisContribution.Positive ? "+ " + positive : "- " + negative))
+				if (EditorGui.BeginCombo("##contribution", binding.Contribution == AxisContribution.Positive ? "+ " + positive : "- " + negative))
 				{
-					if (ImGui.Selectable("+ " + positive, binding.Contribution == AxisContribution.Positive))
+					if (EditorGui.Selectable("+ " + positive, binding.Contribution == AxisContribution.Positive))
 					{
 						BeginEdit();
 						binding.Contribution = AxisContribution.Positive;
 						EndEdit();
 					}
 
-					if (ImGui.Selectable("- " + negative, binding.Contribution == AxisContribution.Negative))
+					if (EditorGui.Selectable("- " + negative, binding.Contribution == AxisContribution.Negative))
 					{
 						BeginEdit();
 						binding.Contribution = AxisContribution.Negative;
 						EndEdit();
 					}
 
-					ImGui.EndCombo();
+					EditorGui.EndCombo();
 				}
 			}
 		}
@@ -972,7 +978,7 @@ namespace LELEngine.Editor
 			{
 				bool held = (binding.Modifiers & modifier) != 0;
 				bool local = held;
-				bool changed = ImGui.Checkbox(modifier == ModifierKeys.Control ? "Ctrl" : modifier.ToString(), ref local);
+				bool changed = EditorGui.Checkbox(modifier == ModifierKeys.Control ? "Ctrl" : modifier.ToString(), ref local);
 				context.Track(changed);
 				if (changed)
 				{
@@ -995,7 +1001,7 @@ namespace LELEngine.Editor
 				return;
 			}
 
-			if (ImGui.Button("Listen##listen", new NVector2(170f, 0f)))
+			if (EditorGui.Button("Listen##listen", new NVector2(170f, 0f)))
 			{
 				StartListening(map, action, binding, contribution);
 			}
@@ -1014,7 +1020,7 @@ namespace LELEngine.Editor
 		{
 			float pulse = 0.55f + 0.45f * MathF.Sin((float)ImGui.GetTime() * 6f);
 			ImGui.PushStyleColor(ImGuiCol.Button, new NVector4(0.85f * pulse, 0.45f * pulse, 0.15f, 1f));
-			if (ImGui.Button("Press...##listening", new NVector2(170f, 0f)))
+			if (EditorGui.Button("Press...##listening", new NVector2(170f, 0f)))
 			{
 				listening = null;
 			}
@@ -1164,7 +1170,7 @@ namespace LELEngine.Editor
 
 				foreach (InputPlayer player in InputManager.Players)
 				{
-					if (!ImGui.CollapsingHeader(player.DescriptiveName + "##debug" + player.Id, ImGuiTreeNodeFlags.DefaultOpen))
+					if (!EditorGui.CollapsingHeader(player.DescriptiveName + "##debug" + player.Id, ImGuiTreeNodeFlags.DefaultOpen))
 					{
 						continue;
 					}

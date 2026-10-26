@@ -12,7 +12,7 @@ namespace LELEngine.Editor
 	///     instance roots and the roots of nested prefabs (variants marked), a "+" on objects added to an instance, and
 	///     an arrow at the end of a root's row that opens its prefab. In prefab mode a breadcrumb leads back.
 	/// </summary>
-	internal sealed class HierarchyPanel
+	internal sealed class HierarchyPanel : IEditorPanel
 	{
 		#region PublicFields
 
@@ -102,6 +102,11 @@ namespace LELEngine.Editor
 		/// <summary>The window is shown (its close button and the Window menu toggle it; saved with the editor's windows).</summary>
 		public bool Open = true;
 
+		string IEditorPanel.PanelName => "Hierarchy";
+		string IEditorPanel.ImGuiName => "Hierarchy";
+		bool IEditorPanel.PanelOpen { get => Open; set => Open = value; }
+		NVector2 IEditorPanel.DefaultCaptureSize => new NVector2(420, 800);
+
 		public void Draw()
 		{
 			if (!Open)
@@ -190,8 +195,8 @@ namespace LELEngine.Editor
 
 			// Empty area: drop to un-parent, right click to create, click to deselect.
 			NVector2 rest = ImGui.GetContentRegionAvail();
-			ImGui.InvisibleButton("##hierarchy_empty", new NVector2(Math.Max(1, rest.X), Math.Max(30, rest.Y)));
-			if (ImGui.IsItemClicked(ImGuiMouseButton.Left))
+			EditorGui.InvisibleButton("##hierarchy_empty", new NVector2(Math.Max(1, rest.X), Math.Max(30, rest.Y)));
+			if (EditorGui.IsItemClicked(ImGuiMouseButton.Left))
 			{
 				editor.ClearSelection();
 			}
@@ -208,7 +213,7 @@ namespace LELEngine.Editor
 				ImGui.EndDragDropTarget();
 			}
 
-			if (ImGui.BeginPopupContextItem("##hierarchy_context"))
+			if (EditorGui.BeginPopupContextItem("##hierarchy_context"))
 			{
 				editor.DrawCreateMenu(null);
 				ImGui.EndPopup();
@@ -247,7 +252,7 @@ namespace LELEngine.Editor
 		{
 			PrefabStage stage = editor.Stage;
 			var frames = editor.StageFrames;
-			if (ImGui.SmallButton("<##stage_back"))
+			if (EditorGui.SmallButton("<##stage_back"))
 			{
 				editor.ClosePrefabStage();
 				return;
@@ -279,7 +284,7 @@ namespace LELEngine.Editor
 					ImGui.SameLine(0f, 3f);
 					ImGui.TextUnformatted(name + (editor.SceneDirty ? " *" : ""));
 				}
-				else if (ImGui.SmallButton(name + "##crumb" + i))
+				else if (EditorGui.SmallButton(name + "##crumb" + i))
 				{
 					editor.GoToStage(i - 1);
 					return;
@@ -288,14 +293,14 @@ namespace LELEngine.Editor
 
 			bool autoSave = stage.AutoSave;
 			ImGui.BeginDisabled(autoSave || !editor.SceneDirty);
-			if (ImGui.SmallButton("Save##stage_save"))
+			if (EditorGui.SmallButton("Save##stage_save"))
 			{
 				editor.SavePrefabStage();
 			}
 
 			ImGui.EndDisabled();
 			ImGui.SameLine();
-			if (ImGui.Checkbox("Auto Save", ref autoSave))
+			if (EditorGui.Checkbox("Auto Save", ref autoSave))
 			{
 				stage.AutoSave = autoSave;
 			}
@@ -345,7 +350,7 @@ namespace LELEngine.Editor
 			float rowX = ImGui.GetCursorScreenPos().X;
 			if (renaming == go)
 			{
-				open = ImGui.TreeNodeEx(iconPadding + "###node", flags);
+				open = EditorGui.TreeNodeEx(iconPadding + "###node", flags);
 				DrawIcon(go, instance, rowX);
 				ImGui.SameLine();
 				if (focusRename)
@@ -356,7 +361,7 @@ namespace LELEngine.Editor
 
 				ImGui.SetNextItemWidth(-1);
 				renameAge++;
-				if (ImGui.InputText("##rename", ref renameText, 256, ImGuiInputTextFlags.EnterReturnsTrue | ImGuiInputTextFlags.AutoSelectAll))
+				if (EditorGui.InputText("##rename", ref renameText, 256, ImGuiInputTextFlags.EnterReturnsTrue | ImGuiInputTextFlags.AutoSelectAll))
 				{
 					CommitRename();
 				}
@@ -374,7 +379,7 @@ namespace LELEngine.Editor
 					ImGui.PushStyleColor(ImGuiCol.Text, color.Value);
 				}
 
-				open = ImGui.TreeNodeEx(iconPadding + go.Name + "###node", flags);
+				open = EditorGui.TreeNodeEx(iconPadding + go.Name + "###node", flags);
 				// From the label on: the row spans the arrow too, and a click there would fold instead of select.
 				TestAnchors.Record("hierarchy:" + go.Name, new NVector2(rowX + ImGui.GetTreeNodeToLabelSpacing(), ImGui.GetItemRectMin().Y), ImGui.GetItemRectMax());
 				if (color.HasValue)
@@ -390,14 +395,16 @@ namespace LELEngine.Editor
 
 				// Selected when the click ends without a drag (as in Unity): dragging an object on to a field of the
 				// selected object keeps the selection, so the inspector showing the field stays.
-				if (ImGui.IsItemClicked(ImGuiMouseButton.Left) && !ImGui.IsItemToggledOpen())
+				if (EditorGui.IsItemClicked(ImGuiMouseButton.Left) && !ImGui.IsItemToggledOpen())
 				{
 					pressed = go;
 				}
 
-				if (pressed == go && ImGui.IsMouseReleased(ImGuiMouseButton.Left))
+				// A click from automation (EditorGui.IsItemInvoked) ends at once: there is no mouse button to release.
+				bool invoked = EditorGui.IsItemInvoked();
+				if (pressed == go && (ImGui.IsMouseReleased(ImGuiMouseButton.Left) || invoked))
 				{
-					if (ImGui.IsItemHovered() && !ImGuiP.IsMouseDragPastThreshold(ImGuiMouseButton.Left))
+					if (invoked || (ImGui.IsItemHovered() && !ImGuiP.IsMouseDragPastThreshold(ImGuiMouseButton.Left)))
 					{
 						editor.Select(go);
 					}
@@ -405,7 +412,7 @@ namespace LELEngine.Editor
 					pressed = null;
 				}
 
-				if (ImGui.IsItemHovered() && ImGui.IsMouseDoubleClicked(ImGuiMouseButton.Left) && go.transform.childCount == 0)
+				if (EditorGui.IsItemDoubleClicked() && go.transform.childCount == 0)
 				{
 					editor.SceneView.FrameObject(go);
 				}
@@ -452,24 +459,24 @@ namespace LELEngine.Editor
 				ImGui.EndDragDropTarget();
 			}
 
-			if (ImGui.BeginPopupContextItem("##object_context"))
+			if (EditorGui.BeginPopupContextItem("##object_context"))
 			{
 				editor.Select(go);
-				if (ImGui.MenuItem("Rename", "F2"))
+				if (EditorMenu.Item("Rename", "F2"))
 				{
 					StartRename(go);
 				}
 
-				if (ImGui.MenuItem("Duplicate", "Ctrl+D")) editor.DuplicateSelected();
-				if (ImGui.MenuItem("Delete", "Del")) editor.DeleteSelected();
+				if (EditorMenu.Item("Duplicate", "Ctrl+D")) editor.DuplicateSelected();
+				if (EditorMenu.Item("Delete", "Del")) editor.DeleteSelected();
 				ImGui.Separator();
-				if (ImGui.BeginMenu("Create Child"))
+				if (EditorMenu.Begin("Create Child"))
 				{
 					editor.DrawCreateMenu(go.transform);
-					ImGui.EndMenu();
+					EditorMenu.End();
 				}
 
-				if ((instance == null || PrefabUtility.IsPrefabInstanceRoot(go)) && go != editor.StageRoot && ImGui.MenuItem("Save as Prefab", "", false, !editor.IsPlaying))
+				if ((instance == null || PrefabUtility.IsPrefabInstanceRoot(go)) && go != editor.StageRoot && EditorMenu.Item("Save as Prefab", "", false, !editor.IsPlaying))
 				{
 					string folder = editor.ProjectFolder;
 					editor.Defer(() => editor.CreatePrefab(go, folder));
@@ -570,7 +577,7 @@ namespace LELEngine.Editor
 			ImGui.SetCursorScreenPos(new NVector2(rowMax.X - width, rowMin.Y));
 			// The last item of the row: it decides where the next row starts.
 			PushRowStyle();
-			ImGui.InvisibleButton("##open_prefab", new NVector2(width, height));
+			EditorGui.InvisibleButton("##open_prefab", new NVector2(width, height));
 			ImGui.PopStyleVar(2);
 			bool hovered = ImGui.IsItemHovered();
 			if (hovered)
@@ -581,7 +588,7 @@ namespace LELEngine.Editor
 
 			float icon = height * 0.7f;
 			EditorIcons.Draw(ImGui.GetWindowDrawList(), ImGui.GetItemRectMin() + new NVector2((width - icon) * 0.5f, (height - icon) * 0.5f), icon, IconKind.Open, ImGui.GetColorU32(hovered ? ImGuiCol.Text : ImGuiCol.TextDisabled));
-			if (ImGui.IsItemClicked(ImGuiMouseButton.Left) && !editor.IsPlaying)
+			if (EditorGui.IsItemClicked(ImGuiMouseButton.Left) && !editor.IsPlaying)
 			{
 				openPrefab = prefab.AssetPath;
 			}

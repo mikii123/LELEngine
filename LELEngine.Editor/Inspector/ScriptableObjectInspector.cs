@@ -30,7 +30,7 @@ namespace LELEngine.Editor
 			FieldDrawer.Label("Script", null, context);
 			string script = ScriptFiles.Find(type);
 			ImGui.BeginDisabled(script == null);
-			if (ImGui.Button(type.Name + (script != null ? "##script" : " (no script file)##script"), new NVector2(-1f, 0f)) && script != null)
+			if (EditorGui.Button(type.Name + (script != null ? "##script" : " (no script file)##script"), new NVector2(-1f, 0f)) && script != null)
 			{
 				ScriptFiles.Open(type);
 			}

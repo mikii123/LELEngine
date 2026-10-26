@@ -80,7 +80,7 @@ namespace LELEngine.Editor
 			{
 				FieldDrawer.Label("Aniso Level", null, context);
 				int aniso = working.anisoLevel;
-				if (ImGui.SliderInt("##aniso", ref aniso, 1, 16))
+				if (EditorGui.SliderInt("##aniso", ref aniso, 1, 16))
 				{
 					working.anisoLevel = aniso;
 					changed = true;
@@ -144,13 +144,13 @@ namespace LELEngine.Editor
 			ImGui.Spacing();
 			float width = (ImGui.GetContentRegionAvail().X - ImGui.GetStyle().ItemSpacing.X) * 0.5f;
 			ImGui.BeginDisabled(!dirty);
-			if (ImGui.Button("Revert", new NVector2(width, 0)))
+			if (EditorGui.Button("Revert", new NVector2(width, 0)))
 			{
 				Load(assetPath);
 			}
 
 			ImGui.SameLine();
-			if (ImGui.Button("Apply", new NVector2(width, 0)))
+			if (EditorGui.Button("Apply", new NVector2(width, 0)))
 			{
 				Apply(assetPath, context.Editor);
 			}
@@ -218,7 +218,7 @@ namespace LELEngine.Editor
 
 			FieldDrawer.Label("Pixels Per Unit", null, context);
 			float ppu = working.pixelsPerUnit;
-			if (ImGui.DragFloat("##ppu", ref ppu, 1f, 0.01f, 100000f))
+			if (EditorGui.DragFloat("##ppu", ref ppu, 1f, 0.01f, 100000f))
 			{
 				working.pixelsPerUnit = ppu;
 				changed = true;
@@ -226,7 +226,7 @@ namespace LELEngine.Editor
 
 			FieldDrawer.Label("Pivot", null, context);
 			NVector2 pivot = new NVector2(working.spritePivot.X, working.spritePivot.Y);
-			if (ImGui.DragFloat2("##pivot", ref pivot, 0.01f))
+			if (EditorGui.DragFloat2("##pivot", ref pivot, 0.01f))
 			{
 				working.spritePivot = new Vector2(pivot.X, pivot.Y);
 				changed = true;
@@ -234,7 +234,7 @@ namespace LELEngine.Editor
 
 			FieldDrawer.Label("Border (L, B, R, T)", null, context);
 			NVector4 border = new NVector4(working.spriteBorder.X, working.spriteBorder.Y, working.spriteBorder.Z, working.spriteBorder.W);
-			if (ImGui.DragFloat4("##border", ref border, 1f))
+			if (EditorGui.DragFloat4("##border", ref border, 1f))
 			{
 				working.spriteBorder = new Vector4(border.X, border.Y, border.Z, border.W);
 				changed = true;
@@ -250,27 +250,27 @@ namespace LELEngine.Editor
 			int cellX = sliceCell.X, cellY = sliceCell.Y;
 			FieldDrawer.Label("Cell Size", null, context);
 			int[] cell = { cellX, cellY };
-			if (ImGui.DragInt2("##cell", ref cell[0], 1f, 1, 8192))
+			if (EditorGui.DragInt2("##cell", ref cell[0], 1f, 1, 8192))
 			{
 				sliceCell = new Vector2i(Math.Max(1, cell[0]), Math.Max(1, cell[1]));
 			}
 
 			FieldDrawer.Label("Offset", null, context);
 			int[] offset = { sliceOffset.X, sliceOffset.Y };
-			if (ImGui.DragInt2("##offset", ref offset[0], 1f, 0, 8192))
+			if (EditorGui.DragInt2("##offset", ref offset[0], 1f, 0, 8192))
 			{
 				sliceOffset = new Vector2i(offset[0], offset[1]);
 			}
 
 			FieldDrawer.Label("Padding", null, context);
 			int[] padding = { slicePadding.X, slicePadding.Y };
-			if (ImGui.DragInt2("##padding", ref padding[0], 1f, 0, 8192))
+			if (EditorGui.DragInt2("##padding", ref padding[0], 1f, 0, 8192))
 			{
 				slicePadding = new Vector2i(padding[0], padding[1]);
 			}
 
 			ImGui.BeginDisabled(texture == null);
-			if (ImGui.Button("Slice", new NVector2(-1, 0)) && texture != null)
+			if (EditorGui.Button("Slice", new NVector2(-1, 0)) && texture != null)
 			{
 				working.SliceGrid(texture.width, texture.height, sliceCell, sliceOffset, slicePadding, Path.GetFileNameWithoutExtension(path));
 				changed = true;
@@ -340,7 +340,7 @@ namespace LELEngine.Editor
 			if (texture is Texture3D volumeTexture)
 			{
 				ImGui.SetNextItemWidth(-1);
-				ImGui.SliderInt("##slice", ref previewSlice, 0, Math.Max(0, volumeTexture.depth - 1), "slice %d");
+				EditorGui.SliderInt("##slice", ref previewSlice, 0, Math.Max(0, volumeTexture.depth - 1), "slice %d");
 			}
 
 			int handle;
@@ -405,13 +405,13 @@ namespace LELEngine.Editor
 		private static bool Checkbox(string label, ref bool value, InspectorContext context)
 		{
 			FieldDrawer.Label(label, null, context);
-			return ImGui.Checkbox("##" + label, ref value);
+			return EditorGui.Checkbox("##" + label, ref value);
 		}
 
 		private static bool Int(string label, ref int value, InspectorContext context)
 		{
 			FieldDrawer.Label(label, null, context);
-			return ImGui.DragInt("##" + label, ref value, 0.2f, 0, 1 << 14);
+			return EditorGui.DragInt("##" + label, ref value, 0.2f, 0, 1 << 14);
 		}
 
 		#endregion

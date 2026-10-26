@@ -105,7 +105,7 @@ namespace LELEngine.Editor
 				float x = min.X + width * splits[k];
 				ImGui.SetCursorScreenPos(new NVector2(x - HandleWidth * 0.5f, min.Y));
 				ImGui.PushID(k);
-				ImGui.InvisibleButton("##handle", new NVector2(HandleWidth, height));
+				EditorGui.InvisibleButton("##handle", new NVector2(HandleWidth, height));
 				bool hovered = ImGui.IsItemHovered();
 				bool active = ImGui.IsItemActive();
 
@@ -155,7 +155,7 @@ namespace LELEngine.Editor
 
 			if (ImGui.BeginPopup("##splitsmenu"))
 			{
-				if (ImGui.MenuItem("Reset Splits"))
+				if (EditorMenu.Item("Reset Splits"))
 				{
 					var defaults = new ShadowSettings();
 					context.Editor.Edits.Begin(context.UndoTarget);
@@ -189,7 +189,7 @@ namespace LELEngine.Editor
 				FieldDrawer.Label("Cascade " + (k + 1) + " Starts At", null, context);
 				float percent = splits[k] * 100f;
 				string format = "%.1f%%   (" + (splits[k] * distance).ToString("0.0#") + " m)";
-				bool edited = ImGui.DragFloat("##split" + k, ref percent, 0.1f, low * 100f, high * 100f, format);
+				bool edited = EditorGui.DragFloat("##split" + k, ref percent, 0.1f, low * 100f, high * 100f, format);
 				context.Track(edited);
 				if (edited)
 				{

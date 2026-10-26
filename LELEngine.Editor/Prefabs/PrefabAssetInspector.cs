@@ -19,21 +19,21 @@ namespace LELEngine.Editor
 			Prefab prefab = Prefab.Load(assetPath);
 			ResolvedPrefab resolved = prefab?.Resolved;
 			ImGui.BeginDisabled(editor.IsPlaying);
-			if (ImGui.Button("Open Prefab", new NVector2(-1, 0)))
+			if (EditorGui.Button("Open Prefab", new NVector2(-1, 0)))
 			{
 				editor.Defer(() => editor.OpenPrefab(assetPath));
 			}
 
 			ImGui.EndDisabled();
 			float half = (ImGui.GetContentRegionAvail().X - ImGui.GetStyle().ItemSpacing.X) * 0.5f;
-			if (ImGui.Button("Create Variant", new NVector2(half, 0)))
+			if (EditorGui.Button("Create Variant", new NVector2(half, 0)))
 			{
 				editor.Defer(() => editor.CreatePrefabVariant(assetPath));
 			}
 
 			ImGui.SameLine();
 			ImGui.BeginDisabled(editor.Scene == null);
-			if (ImGui.Button("Instantiate in Scene", new NVector2(half, 0)))
+			if (EditorGui.Button("Instantiate in Scene", new NVector2(half, 0)))
 			{
 				editor.Defer(() => editor.InstantiatePrefab(assetPath));
 			}
@@ -58,7 +58,7 @@ namespace LELEngine.Editor
 				ImGui.TextDisabled("Variant of");
 				ImGui.SameLine();
 				ImGui.PushStyleColor(ImGuiCol.Text, EditorStyle.Prefab);
-				if (ImGui.SmallButton(basePrefab.name + "##base"))
+				if (EditorGui.SmallButton(basePrefab.name + "##base"))
 				{
 					editor.SelectAsset(basePrefab.AssetPath);
 					editor.Ping(basePrefab.AssetPath);
@@ -110,7 +110,7 @@ namespace LELEngine.Editor
 				ImGui.PushStyleColor(ImGuiCol.Text, EditorStyle.Prefab);
 			}
 
-			bool open = ImGui.TreeNodeEx("      " + obj.Name + "###node", flags);
+			bool open = EditorGui.TreeNodeEx("      " + obj.Name + "###node", flags);
 			if (nested != null)
 			{
 				ImGui.PopStyleColor();
@@ -136,7 +136,7 @@ namespace LELEngine.Editor
 				ImGui.SetTooltip(string.Join("\n", lines));
 			}
 
-			if (nested != null && ImGui.IsItemHovered() && ImGui.IsMouseDoubleClicked(ImGuiMouseButton.Left))
+			if (nested != null && EditorGui.IsItemDoubleClicked())
 			{
 				string path = nested.PrefabPath;
 				editor.Defer(() => editor.OpenPrefab(path));

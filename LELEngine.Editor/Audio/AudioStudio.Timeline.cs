@@ -508,7 +508,7 @@ namespace LELEngine.Editor.Audio
 				return;
 			}
 
-			if (ImGui.BeginTabItem("Timeline", OnTimeline && tabSwitchRequested ? ImGuiTabItemFlags.SetSelected : ImGuiTabItemFlags.None))
+			if (EditorGui.BeginTabItem("Timeline", OnTimeline && tabSwitchRequested ? ImGuiTabItemFlags.SetSelected : ImGuiTabItemFlags.None))
 			{
 				if (!OnTimeline && !tabSwitchRequested)
 				{
@@ -546,7 +546,7 @@ namespace LELEngine.Editor.Audio
 			foreach (AudioParameter parameter in sheets)
 			{
 				ImGuiTabItemFlags flags = currentSheet == parameter.Id && tabSwitchRequested ? ImGuiTabItemFlags.SetSelected : ImGuiTabItemFlags.None;
-				if (ImGui.BeginTabItem(parameter.Name + "##sheet_" + parameter.Id, flags))
+				if (EditorGui.BeginTabItem(parameter.Name + "##sheet_" + parameter.Id, flags))
 				{
 					if (currentSheet != parameter.Id && !tabSwitchRequested)
 					{
@@ -561,9 +561,9 @@ namespace LELEngine.Editor.Audio
 					ImGui.SetTooltip("Parameter sheet: instruments trigger while '" + parameter.Name + "' is inside their range.\nDrag on the ruler to set the value. Right click: close the sheet.");
 				}
 
-				if (ImGui.BeginPopupContextItem("##sheet_menu_" + parameter.Id))
+				if (EditorGui.BeginPopupContextItem("##sheet_menu_" + parameter.Id))
 				{
-					if (ImGui.MenuItem("Close Sheet"))
+					if (EditorMenu.Item("Close Sheet"))
 					{
 						openSheets.Remove(parameter.Id);
 						if (currentSheet == parameter.Id)
@@ -595,7 +595,7 @@ namespace LELEngine.Editor.Audio
 					}
 
 					any = true;
-					if (ImGui.MenuItem(parameter.Name))
+					if (EditorMenu.Item(parameter.Name))
 					{
 						openSheets.Add(parameter.Id);
 						currentSheet = parameter.Id;
@@ -692,7 +692,7 @@ namespace LELEngine.Editor.Audio
 
 				// The canvas: one invisible button over every lane.
 				ImGui.SetCursorScreenPos(new NVector2(canvasLeft, lanesOrigin.Y));
-				ImGui.InvisibleButton("##lanes_canvas", new NVector2(Math.Max(1f, canvasRight - canvasLeft), Math.Max(1f, totalHeight)), ImGuiButtonFlags.MouseButtonLeft | ImGuiButtonFlags.MouseButtonRight | ImGuiButtonFlags.MouseButtonMiddle);
+				EditorGui.InvisibleButton("##lanes_canvas", new NVector2(Math.Max(1f, canvasRight - canvasLeft), Math.Max(1f, totalHeight)), ImGuiButtonFlags.MouseButtonLeft | ImGuiButtonFlags.MouseButtonRight | ImGuiButtonFlags.MouseButtonMiddle);
 				bool canvasHovered = ImGui.IsItemHovered();
 				var clipMin = new NVector2(canvasLeft, origin.Y + RulerHeight);
 				var clipMax = new NVector2(canvasRight, origin.Y + RulerHeight + lanesHeight);
@@ -957,7 +957,7 @@ namespace LELEngine.Editor.Audio
 			// Below the rows: add a track.
 			float addY = lanesOrigin.Y + (rows.Count > 0 ? rows[rows.Count - 1].Y + rows[rows.Count - 1].Height : 0f) + 6f;
 			ImGui.SetCursorScreenPos(new NVector2(lanesOrigin.X + 8f, addY));
-			if (ImGui.SmallButton("+ Track"))
+			if (EditorGui.SmallButton("+ Track"))
 			{
 				Edit("Add track", () => current.Tracks.Add(AudioProject.CreateTrack("Audio " + (current.Tracks.Count + 1))));
 			}
@@ -973,7 +973,7 @@ namespace LELEngine.Editor.Audio
 			if (view.Active)
 			{
 				ImGui.SetCursorScreenPos(min + new NVector2(10f, 46f));
-				if (ImGui.SmallButton("Close transition"))
+				if (EditorGui.SmallButton("Close transition"))
 				{
 					CloseTransitionTimeline();
 				}
@@ -998,10 +998,10 @@ namespace LELEngine.Editor.Audio
 
 			// Name.
 			ImGui.SetCursorScreenPos(min + new NVector2(10f, 5f));
-			if (ImGui.Selectable(track.Name + "##trackname", selected, ImGuiSelectableFlags.AllowDoubleClick, new NVector2(Math.Max(20f, controlsX - min.X - 16f), 0f)))
+			if (EditorGui.Selectable(track.Name + "##trackname", selected, ImGuiSelectableFlags.AllowDoubleClick, new NVector2(Math.Max(20f, controlsX - min.X - 16f), 0f)))
 			{
 				selection = Selection.Of(SelectionKind.Track, track.Id);
-				if (ImGui.IsMouseDoubleClicked(ImGuiMouseButton.Left))
+				if (EditorGui.IsMouseDoubleClicked(ImGuiMouseButton.Left))
 				{
 					RequestRename(Selection.Of(SelectionKind.Track, track.Id), track.Name);
 				}
@@ -1038,7 +1038,7 @@ namespace LELEngine.Editor.Audio
 				ImGui.EndDragDropTarget();
 			}
 
-			if (ImGui.BeginPopupContextItem("##track_menu"))
+			if (EditorGui.BeginPopupContextItem("##track_menu"))
 			{
 				DrawTrackMenu(current, track);
 				ImGui.EndPopup();
@@ -1092,13 +1092,13 @@ namespace LELEngine.Editor.Audio
 
 		private void DrawTrackMenu(AudioEvent current, AudioTrack track)
 		{
-			if (ImGui.MenuItem("Rename...")) RequestRename(Selection.Of(SelectionKind.Track, track.Id), track.Name);
-			if (ImGui.MenuItem("Add Track Below"))
+			if (EditorMenu.Item("Rename...")) RequestRename(Selection.Of(SelectionKind.Track, track.Id), track.Name);
+			if (EditorMenu.Item("Add Track Below"))
 			{
 				Edit("Add track", () => current.Tracks.Insert(current.Tracks.IndexOf(track) + 1, AudioProject.CreateTrack("Audio " + (current.Tracks.Count + 1))));
 			}
 
-			if (ImGui.MenuItem("Duplicate Track"))
+			if (EditorMenu.Item("Duplicate Track"))
 			{
 				Edit("Duplicate track", () =>
 				{
@@ -1116,7 +1116,7 @@ namespace LELEngine.Editor.Audio
 			}
 
 			ImGui.Separator();
-			if (ImGui.MenuItem("Delete Track")) Edit("Delete track", () => current.Tracks.Remove(track));
+			if (EditorMenu.Item("Delete Track")) Edit("Delete track", () => current.Tracks.Remove(track));
 		}
 
 		private void DrawMasterHeader(AudioEvent current, NVector2 min, NVector2 max, ImDrawListPtr draw)
@@ -1126,7 +1126,7 @@ namespace LELEngine.Editor.Audio
 			draw.AddRectFilled(min, new NVector2(min.X + 4f, max.Y), StudioUi.Rgb(0.6f, 0.6f, 0.62f));
 			float controlsX = max.X - 118f;
 			ImGui.SetCursorScreenPos(min + new NVector2(10f, 5f));
-			if (ImGui.Selectable("Master##master", selected, ImGuiSelectableFlags.None, new NVector2(Math.Max(20f, controlsX - min.X - 16f), 0f)))
+			if (EditorGui.Selectable("Master##master", selected, ImGuiSelectableFlags.None, new NVector2(Math.Max(20f, controlsX - min.X - 16f), 0f)))
 			{
 				selection = Selection.Of(SelectionKind.Master, current.Master.Id);
 			}
@@ -1328,7 +1328,7 @@ namespace LELEngine.Editor.Audio
 
 			// Clicks on the ruler move the playback position (timeline) or the parameter (parameter sheets).
 			ImGui.SetCursorScreenPos(new NVector2(canvasLeft, min.Y));
-			ImGui.InvisibleButton("##ruler", new NVector2(Math.Max(1f, canvasRight - canvasLeft), RulerHeight));
+			EditorGui.InvisibleButton("##ruler", new NVector2(Math.Max(1f, canvasRight - canvasLeft), RulerHeight));
 			if (ImGui.IsItemActive() && ImGui.IsMouseDown(ImGuiMouseButton.Left))
 			{
 				double display = FromX(ImGui.GetMousePos().X);
@@ -2290,7 +2290,7 @@ namespace LELEngine.Editor.Audio
 			}
 
 			ImGui.SetCursorScreenPos(new NVector2(left, min.Y));
-			ImGui.InvisibleButton("##minimap", new NVector2(Math.Max(1f, right - left), MinimapHeight));
+			EditorGui.InvisibleButton("##minimap", new NVector2(Math.Max(1f, right - left), MinimapHeight));
 			if (ImGui.IsItemActive() && ImGui.IsMouseDown(ImGuiMouseButton.Left))
 			{
 				double at = (ImGui.GetMousePos().X - left) / perSecond;
@@ -2527,7 +2527,7 @@ namespace LELEngine.Editor.Audio
 						selection = Selection.Of(SelectionKind.Marker, hit.Id);
 						if (marker != null)
 						{
-							if (marker is TransitionMarker transition && ImGui.IsMouseDoubleClicked(ImGuiMouseButton.Left))
+							if (marker is TransitionMarker transition && EditorGui.IsMouseDoubleClicked(ImGuiMouseButton.Left))
 							{
 								if (expandedTransitionId == transition.Id)
 								{
@@ -2568,7 +2568,7 @@ namespace LELEngine.Editor.Audio
 					}
 					case HitKind.TransitionHeader:
 						selection = Selection.Of(SelectionKind.Marker, hit.Id);
-						if (ImGui.IsMouseDoubleClicked(ImGuiMouseButton.Left))
+						if (EditorGui.IsMouseDoubleClicked(ImGuiMouseButton.Left))
 						{
 							CloseTransitionTimeline();
 						}
@@ -2996,13 +2996,13 @@ namespace LELEngine.Editor.Audio
 					double length = IsTimeSheet ? DefaultLength(current) : (sheetMax - sheetMin) * 0.25;
 					ImGui.TextDisabled(track.Name + (onTransition ? " on the transition timeline at +" : " at ") + (IsTimeSheet ? FormatTime(at) : at.ToString("0.##")));
 					ImGui.Separator();
-					if (ImGui.MenuItem("Add Single Instrument")) AddInstrument(track, new SingleInstrument(), at, length, sheet);
-					if (ImGui.MenuItem("Add Multi Instrument")) AddInstrument(track, new MultiInstrument(), at, length, sheet);
-					if (ImGui.MenuItem("Add Scatterer Instrument")) AddInstrument(track, new ScattererInstrument(), at, Math.Max(length, IsTimeSheet ? 4.0 : length), sheet);
-					if (ImGui.MenuItem("Add Event Instrument")) AddInstrument(track, new EventInstrument(), at, length, sheet);
-					if (ImGui.MenuItem("Add Snapshot Instrument")) AddInstrument(track, new SnapshotInstrument { SnapshotId = Project.Snapshots.Count > 0 ? Project.Snapshots[0].Id : null }, at, length, sheet);
+					if (EditorMenu.Item("Add Single Instrument")) AddInstrument(track, new SingleInstrument(), at, length, sheet);
+					if (EditorMenu.Item("Add Multi Instrument")) AddInstrument(track, new MultiInstrument(), at, length, sheet);
+					if (EditorMenu.Item("Add Scatterer Instrument")) AddInstrument(track, new ScattererInstrument(), at, Math.Max(length, IsTimeSheet ? 4.0 : length), sheet);
+					if (EditorMenu.Item("Add Event Instrument")) AddInstrument(track, new EventInstrument(), at, length, sheet);
+					if (EditorMenu.Item("Add Snapshot Instrument")) AddInstrument(track, new SnapshotInstrument { SnapshotId = Project.Snapshots.Count > 0 ? Project.Snapshots[0].Id : null }, at, length, sheet);
 					ImGui.Separator();
-					if (ImGui.MenuItem("Paste Instrument", "", false, clipboardInstrument != null))
+					if (EditorMenu.Item("Paste Instrument", "", false, clipboardInstrument != null))
 					{
 						AudioInstrument copy = clipboardInstrument.Clone();
 						copy.Id = AudioProject.NewId();
@@ -3025,17 +3025,17 @@ namespace LELEngine.Editor.Audio
 					ImGui.TextDisabled(instrument.DisplayName);
 					ImGui.Separator();
 					bool isAsync = instrument.Async;
-					if (ImGui.MenuItem("Async (plays to its end)", "", isAsync)) Edit("Toggle async", () => instrument.Async = !isAsync);
+					if (EditorMenu.Item("Async (plays to its end)", "", isAsync)) Edit("Toggle async", () => instrument.Async = !isAsync);
 					bool loop = instrument.Loop;
-					if (ImGui.MenuItem("Loop", "", loop)) Edit("Toggle loop", () => instrument.Loop = !loop);
+					if (EditorMenu.Item("Loop", "", loop)) Edit("Toggle loop", () => instrument.Loop = !loop);
 					ImGui.Separator();
-					if (ImGui.MenuItem("Copy")) clipboardInstrument = instrument.Clone();
-					if (ImGui.MenuItem("Duplicate", "Ctrl+D")) DuplicateSelection();
-					if (ImGui.BeginMenu("Move To Track"))
+					if (EditorMenu.Item("Copy")) clipboardInstrument = instrument.Clone();
+					if (EditorMenu.Item("Duplicate", "Ctrl+D")) DuplicateSelection();
+					if (EditorMenu.Begin("Move To Track"))
 					{
 						foreach (AudioTrack track in current.Tracks)
 						{
-							if (track != owner && ImGui.MenuItem(track.Name))
+							if (track != owner && EditorMenu.Item(track.Name))
 							{
 								AudioTrack target = track;
 								Edit("Move instrument", () =>
@@ -3046,17 +3046,17 @@ namespace LELEngine.Editor.Audio
 							}
 						}
 
-						ImGui.EndMenu();
+						EditorMenu.End();
 					}
 
-					if (ImGui.MenuItem("Fit Length To Sound", "", false, IsTimeSheet && instrument is SingleInstrument))
+					if (EditorMenu.Item("Fit Length To Sound", "", false, IsTimeSheet && instrument is SingleInstrument))
 					{
 						AudioClip clip = AudioClip.Load(((SingleInstrument)instrument).Clip);
 						if (clip != null && clip.Duration > 0) Edit("Fit instrument", () => instrument.Length = clip.Duration);
 					}
 
 					ImGui.Separator();
-					if (ImGui.MenuItem("Delete", "Del")) DeleteSelection();
+					if (EditorMenu.Item("Delete", "Del")) DeleteSelection();
 					break;
 				}
 				case HitKind.Logic:
@@ -3070,12 +3070,12 @@ namespace LELEngine.Editor.Audio
 
 					ImGui.TextDisabled("Logic at " + FormatTime(at));
 					ImGui.Separator();
-					if (ImGui.MenuItem("Add Destination Marker")) AddMarker(new DestinationMarker { Position = at, Name = "Marker " + (current.Markers.Count + 1) });
-					if (ImGui.MenuItem("Add Transition Marker")) AddMarker(new TransitionMarker { Position = at, DestinationId = FirstDestination(current), Name = "Transition" });
-					if (ImGui.MenuItem("Add Transition Region")) AddMarker(new TransitionRegion { Position = at, RegionLength = DefaultLength(current), DestinationId = FirstDestination(current), Name = "Transition Region" });
-					if (ImGui.MenuItem("Add Loop Region")) AddMarker(new LoopRegion { Position = at, RegionLength = DefaultLength(current), Name = "Loop" });
-					if (ImGui.MenuItem("Add Tempo Marker")) AddMarker(new TempoMarker { Position = at, Name = "Tempo" });
-					if (ImGui.MenuItem("Add Sustain Point")) AddMarker(new SustainPoint { Position = at, Name = "Sustain" });
+					if (EditorMenu.Item("Add Destination Marker")) AddMarker(new DestinationMarker { Position = at, Name = "Marker " + (current.Markers.Count + 1) });
+					if (EditorMenu.Item("Add Transition Marker")) AddMarker(new TransitionMarker { Position = at, DestinationId = FirstDestination(current), Name = "Transition" });
+					if (EditorMenu.Item("Add Transition Region")) AddMarker(new TransitionRegion { Position = at, RegionLength = DefaultLength(current), DestinationId = FirstDestination(current), Name = "Transition Region" });
+					if (EditorMenu.Item("Add Loop Region")) AddMarker(new LoopRegion { Position = at, RegionLength = DefaultLength(current), Name = "Loop" });
+					if (EditorMenu.Item("Add Tempo Marker")) AddMarker(new TempoMarker { Position = at, Name = "Tempo" });
+					if (EditorMenu.Item("Add Sustain Point")) AddMarker(new SustainPoint { Position = at, Name = "Sustain" });
 					break;
 				}
 				case HitKind.TransitionHeader:
@@ -3102,24 +3102,24 @@ namespace LELEngine.Editor.Audio
 					{
 						if (transition.Timeline == null)
 						{
-							if (ImGui.MenuItem("Add Transition Timeline")) OpenTransitionTimeline(transition);
+							if (EditorMenu.Item("Add Transition Timeline")) OpenTransitionTimeline(transition);
 						}
 						else
 						{
-							if (ImGui.MenuItem(expandedTransitionId == transition.Id ? "Close Transition Timeline" : "Open Transition Timeline"))
+							if (EditorMenu.Item(expandedTransitionId == transition.Id ? "Close Transition Timeline" : "Open Transition Timeline"))
 							{
 								if (expandedTransitionId == transition.Id) CloseTransitionTimeline();
 								else OpenTransitionTimeline(transition);
 							}
 
-							if (ImGui.MenuItem("Remove Transition Timeline")) RemoveTransitionTimeline(transition);
+							if (EditorMenu.Item("Remove Transition Timeline")) RemoveTransitionTimeline(transition);
 						}
 
 						ImGui.Separator();
 					}
 
-					if (ImGui.MenuItem("Duplicate", "Ctrl+D")) DuplicateSelection();
-					if (ImGui.MenuItem("Delete", "Del")) DeleteSelection();
+					if (EditorMenu.Item("Duplicate", "Ctrl+D")) DuplicateSelection();
+					if (EditorMenu.Item("Delete", "Del")) DeleteSelection();
 					break;
 				}
 				default:
@@ -3139,7 +3139,7 @@ namespace LELEngine.Editor.Audio
 
 			ImGui.TextDisabled("Transition timeline to " + DestinationName(current, transition.DestinationId));
 			ImGui.Separator();
-			if (ImGui.MenuItem("Plain crossfade over the whole timeline"))
+			if (EditorMenu.Item("Plain crossfade over the whole timeline"))
 			{
 				Edit("Transition crossfade", () =>
 				{
@@ -3151,7 +3151,7 @@ namespace LELEngine.Editor.Audio
 				});
 			}
 
-			if (ImGui.MenuItem("Cut (no overlap, no fades)"))
+			if (EditorMenu.Item("Cut (no overlap, no fades)"))
 			{
 				Edit("Transition cut", () =>
 				{
@@ -3164,8 +3164,8 @@ namespace LELEngine.Editor.Audio
 			}
 
 			ImGui.Separator();
-			if (ImGui.MenuItem("Close Transition Timeline", "Esc")) CloseTransitionTimeline();
-			if (ImGui.MenuItem("Remove Transition Timeline")) RemoveTransitionTimeline(transition);
+			if (EditorMenu.Item("Close Transition Timeline", "Esc")) CloseTransitionTimeline();
+			if (EditorMenu.Item("Remove Transition Timeline")) RemoveTransitionTimeline(transition);
 		}
 
 		private static string FirstDestination(AudioEvent current)

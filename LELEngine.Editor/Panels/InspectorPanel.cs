@@ -14,7 +14,7 @@ using NVector4 = System.Numerics.Vector4;
 namespace LELEngine.Editor
 {
 	/// <summary>Components of the selected GameObject: serialized fields, enable / remove, Add Component.</summary>
-	internal sealed class InspectorPanel
+	internal sealed class InspectorPanel : IEditorPanel
 	{
 		#region PrivateFields
 
@@ -56,6 +56,11 @@ namespace LELEngine.Editor
 
 		/// <summary>The window is shown (its close button and the Window menu toggle it; saved with the editor's windows).</summary>
 		public bool Open = true;
+
+		string IEditorPanel.PanelName => "Inspector";
+		string IEditorPanel.ImGuiName => "Inspector";
+		bool IEditorPanel.PanelOpen { get => Open; set => Open = value; }
+		NVector2 IEditorPanel.DefaultCaptureSize => new NVector2(520, 900);
 
 		/// <summary>Test runs: the scroll position to set on the next draw (screenshots of long inspectors).</summary>
 		public static float? TestScroll;
@@ -210,7 +215,10 @@ namespace LELEngine.Editor
 			foreach (Behaviour component in new List<Behaviour>(go.Components))
 			{
 				ImGui.PushID(component.Id.ToString());
+				// Its automation elements carry the title the header shows: "header:Mover", "input:Mover/Speed".
+				TestAnchors.PushScope(ComponentTitle(component));
 				DrawComponent(go, component);
+				TestAnchors.PopScope();
 				ImGui.PopID();
 			}
 
@@ -268,7 +276,9 @@ namespace LELEngine.Editor
 			for (int i = 0; i < materials.Count; i++)
 			{
 				ImGui.PushID("material" + i);
+				TestAnchors.PushScope(materials[i].name ?? i.ToString());
 				MaterialSection.Draw(materials[i], materialContext, "material:" + (materials[i].name ?? i.ToString()), true);
+				TestAnchors.PopScope();
 				ImGui.PopID();
 				ImGui.Dummy(new NVector2(0f, 4f));
 			}
@@ -283,7 +293,7 @@ namespace LELEngine.Editor
 			}
 
 			bool active = go.activeSelf;
-			if (ImGui.Checkbox("##active", ref active))
+			if (EditorGui.Checkbox("##active", ref active))
 			{
 				editor.Undo.Push(new GameObjectStateRecord { Name = (active ? "Activate " : "Deactivate ") + go.Name, ObjectId = go.Id, NameBefore = go.Name, NameAfter = go.Name, ActiveBefore = go.activeSelf, ActiveAfter = active });
 				go.SetActive(active);
@@ -294,7 +304,7 @@ namespace LELEngine.Editor
 			ImGui.SameLine();
 			// Room for the lock button at the end of the line.
 			ImGui.SetNextItemWidth(-(ImGui.GetFrameHeight() + ImGui.GetStyle().ItemSpacing.X));
-			ImGui.InputText("##name", ref nameBuffer, 256);
+			EditorGui.InputText("##name", ref nameBuffer, 256);
 			PrefabInspector.MarkHeaderProperty(context, go, LELEngine.Serialization.PropertyModification.NameProperty);
 			if (ImGui.IsItemDeactivatedAfterEdit() && !string.IsNullOrWhiteSpace(nameBuffer) && nameBuffer != go.Name)
 			{
@@ -312,7 +322,7 @@ namespace LELEngine.Editor
 			ImGui.TextDisabled("Layer");
 			ImGui.SameLine();
 			ImGui.SetNextItemWidth(160);
-			if (ImGui.BeginCombo("##layer", LayerMask.DisplayName(go.layer)))
+			if (EditorGui.BeginCombo("##layer", LayerMask.DisplayName(go.layer)))
 			{
 				for (int layer = 0; layer < 32; layer++)
 				{
@@ -322,7 +332,7 @@ namespace LELEngine.Editor
 						continue;
 					}
 
-					if (ImGui.Selectable(LayerMask.DisplayName(layer), layer == go.layer) && layer != go.layer)
+					if (EditorGui.Selectable(LayerMask.DisplayName(layer), layer == go.layer) && layer != go.layer)
 					{
 						int previous = go.layer;
 						editor.RecordStructural("Change layer of " + go.Name, () => go.layer = layer);
@@ -331,12 +341,12 @@ namespace LELEngine.Editor
 				}
 
 				ImGui.Separator();
-				if (ImGui.Selectable("Add Layer..."))
+				if (EditorGui.Selectable("Add Layer..."))
 				{
 					editor.ShowProjectSettings(ProjectSettingsWindow.Tab.Layers);
 				}
 
-				ImGui.EndCombo();
+				EditorGui.EndCombo();
 			}
 
 			PrefabInspector.MarkHeaderProperty(context, go, LELEngine.Serialization.PropertyModification.LayerProperty);
@@ -349,9 +359,7 @@ namespace LELEngine.Editor
 			context.OverrideTarget = component.prefabInstance != null ? component.prefabSourceId : 0;
 			context.Path = "";
 			Type type = component.GetType();
-			string title = component is MissingComponent missing
-				? "Missing script: " + missing.TypeName
-				: SerializationUtility.NicifyName(type.Name);
+			string title = ComponentTitle(component);
 
 			bool added = PrefabUtility.IsAddedComponent(component);
 			bool overridden = added || HasOverrides(component);
@@ -370,7 +378,7 @@ namespace LELEngine.Editor
 			string iconPadding = headerIcon != IconKind.None ? new string(' ', (int)Math.Ceiling((iconSize + 4f) / Math.Max(1f, ImGui.CalcTextSize(" ").X))) : "";
 			ImGui.SetNextItemAllowOverlap();
 			bool bold = overridden && EditorFonts.PushBold();
-			bool open = ImGui.CollapsingHeader((added ? PrefabInspector.AddedTitlePadding() : "") + iconPadding + title + "##header", ImGuiTreeNodeFlags.DefaultOpen);
+			bool open = EditorGui.CollapsingHeader((added ? PrefabInspector.AddedTitlePadding() : "") + iconPadding + title + "##header", ImGuiTreeNodeFlags.DefaultOpen);
 			EditorFonts.Pop(bold);
 			NVector2 headerMin = ImGui.GetItemRectMin();
 			NVector2 headerMax = ImGui.GetItemRectMax();
@@ -396,16 +404,16 @@ namespace LELEngine.Editor
 				ImGui.EndDragDropSource();
 			}
 
-			if (ImGui.BeginPopupContextItem("##component_context"))
+			if (EditorGui.BeginPopupContextItem("##component_context"))
 			{
-				if (!(component is Transform) && ImGui.MenuItem("Remove Component"))
+				if (!(component is Transform) && EditorMenu.Item("Remove Component"))
 				{
 					editor.RecordStructural("Remove " + type.Name, () => GameObject.DestroyImmediate(component));
 					ImGui.EndPopup();
 					return;
 				}
 
-				if (!(component is Transform) && !(component is MissingComponent) && ImGui.MenuItem("Reset"))
+				if (!(component is Transform) && !(component is MissingComponent) && EditorMenu.Item("Reset"))
 				{
 					editor.Edits.Begin(component);
 					ResetFields(component);
@@ -418,7 +426,7 @@ namespace LELEngine.Editor
 				if (script != null)
 				{
 					ImGui.Separator();
-					if (ImGui.MenuItem("Edit Script"))
+					if (EditorMenu.Item("Edit Script"))
 					{
 						ScriptFiles.Open(type);
 					}
@@ -437,7 +445,7 @@ namespace LELEngine.Editor
 			{
 				ImGui.SameLine(ImGui.GetWindowWidth() - 34f);
 				bool enabled = component.enabled;
-				if (ImGui.Checkbox("##enabled", ref enabled))
+				if (EditorGui.Checkbox("##enabled", ref enabled))
 				{
 					editor.Edits.Begin(component);
 					component.enabled = enabled;
@@ -517,6 +525,12 @@ namespace LELEngine.Editor
 			ImGui.Spacing();
 		}
 
+		/// <summary>The component's header title: its class name spaced out ("Mesh Renderer"), or the missing script's.</summary>
+		private static string ComponentTitle(Behaviour component)
+		{
+			return component is MissingComponent missing ? "Missing script: " + missing.TypeName : SerializationUtility.NicifyName(component.GetType().Name);
+		}
+
 		/// <summary>The component's [InspectorColor]: its kind's theme color or its fixed color; null without one.</summary>
 		private static NVector4? ComponentColor(Behaviour component)
 		{
@@ -553,7 +567,7 @@ namespace LELEngine.Editor
 			// The serialized fields' paths: prefab overrides of the transform are marked like other fields.
 			context.Path = "m_LocalPosition";
 			FieldDrawer.Label("Position", null, context);
-			bool changed = ImGui.DragFloat3("##position", ref p, 0.05f);
+			bool changed = EditorGui.DragFloat3("##position", ref p, 0.05f);
 			context.Track(changed);
 			if (changed)
 			{
@@ -576,7 +590,7 @@ namespace LELEngine.Editor
 			NVector3 r = new NVector3(euler.X, euler.Y, euler.Z);
 			context.Path = "m_LocalRotation";
 			FieldDrawer.Label("Rotation", null, context);
-			changed = ImGui.DragFloat3("##rotation", ref r, 0.5f);
+			changed = EditorGui.DragFloat3("##rotation", ref r, 0.5f);
 			context.Track(changed);
 			if (changed)
 			{
@@ -592,7 +606,7 @@ namespace LELEngine.Editor
 			NVector3 s = new NVector3(scale.X, scale.Y, scale.Z);
 			context.Path = "m_LocalScale";
 			FieldDrawer.Label("Scale", null, context);
-			changed = ImGui.DragFloat3("##scale", ref s, 0.02f);
+			changed = EditorGui.DragFloat3("##scale", ref s, 0.02f);
 			context.Track(changed);
 			if (changed)
 			{
@@ -619,7 +633,7 @@ namespace LELEngine.Editor
 			ImGui.Dummy(new NVector2(0f, 10f));
 			float width = Math.Min(avail, Math.Max(200f, avail * 0.6f));
 			ImGui.SetCursorPosX(ImGui.GetCursorPosX() + (avail - width) * 0.5f);
-			bool clicked = ImGui.Button("Add Component", new NVector2(width, ImGui.GetFrameHeight() + 8f));
+			bool clicked = EditorGui.Button("Add Component", new NVector2(width, ImGui.GetFrameHeight() + 8f));
 			ImGui.Dummy(new NVector2(0f, 6f));
 			if (clicked)
 			{
@@ -638,7 +652,7 @@ namespace LELEngine.Editor
 			}
 
 			ImGui.SetNextItemWidth(280);
-			ImGui.InputTextWithHint("##filter", "Search", ref componentFilter, 128);
+			EditorGui.InputTextWithHint("##filter", "Search", ref componentFilter, 128);
 			foreach (Type type in GetComponentTypes())
 			{
 				string name = type.FullName ?? type.Name;
@@ -647,7 +661,7 @@ namespace LELEngine.Editor
 					continue;
 				}
 
-				if (ImGui.Selectable(name))
+				if (EditorGui.Selectable(name))
 				{
 					Type selected = type;
 					editor.RecordStructural("Add " + type.Name, () => go.AddComponent(selected)?.Reset());

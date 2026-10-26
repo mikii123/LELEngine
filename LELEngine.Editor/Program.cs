@@ -14,6 +14,15 @@ namespace LELEngine.Editor
 			CommandLine options = CommandLine.Parse(args);
 			bool help = options.Has("help") || options.Has("h");
 
+			// -command / -script: a client of a running editor's automation server (nothing of the editor starts here).
+			if (options.Has("command") || options.Has("script"))
+			{
+				bool ownConsole = ConsoleHost.Ensure();
+				int code = Automation.AutomationClient.Run(args);
+				ConsoleHost.Release(ownConsole);
+				return code;
+			}
+
 			// Model import: Assimp for the formats beyond .obj, and the imports' materials as project assets.
 			ModelAssets.RegisterBackend(new AssimpModelBackend());
 			ModelAssets.MaterialExtractor = new ModelMaterialExtractor();

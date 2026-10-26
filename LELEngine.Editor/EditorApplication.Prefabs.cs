@@ -560,7 +560,7 @@ namespace LELEngine.Editor
 			{
 				ImGui.Text($"The prefab '{Stage?.Name}' has unsaved changes.");
 				ImGui.Spacing();
-				if (ImGui.Button("Save", new NVector2(110, 0)))
+				if (EditorGui.Button("Save", new NVector2(110, 0)))
 				{
 					ImGui.CloseCurrentPopup();
 					SavePrefabStage();
@@ -570,7 +570,7 @@ namespace LELEngine.Editor
 				}
 
 				ImGui.SameLine();
-				if (ImGui.Button("Don't save", new NVector2(110, 0)))
+				if (EditorGui.Button("Don't save", new NVector2(110, 0)))
 				{
 					ImGui.CloseCurrentPopup();
 					SceneDirty = false;
@@ -580,7 +580,7 @@ namespace LELEngine.Editor
 				}
 
 				ImGui.SameLine();
-				if (ImGui.Button("Cancel", new NVector2(110, 0)))
+				if (EditorGui.Button("Cancel", new NVector2(110, 0)))
 				{
 					ImGui.CloseCurrentPopup();
 					pendingAfterStage = null;
@@ -602,7 +602,7 @@ namespace LELEngine.Editor
 					ImGui.Text($"'{go.Name}' is an instance of the prefab '{go.prefabInstance?.Prefab?.name}'.");
 					ImGui.Text("Create a new original prefab, or a variant of that prefab?");
 					ImGui.Spacing();
-					if (ImGui.Button("Original Prefab", new NVector2(140, 0)))
+					if (EditorGui.Button("Original Prefab", new NVector2(140, 0)))
 					{
 						ImGui.CloseCurrentPopup();
 						string folder = pendingPrefabFolder;
@@ -618,7 +618,7 @@ namespace LELEngine.Editor
 					}
 
 					ImGui.SameLine();
-					if (ImGui.Button("Prefab Variant", new NVector2(140, 0)))
+					if (EditorGui.Button("Prefab Variant", new NVector2(140, 0)))
 					{
 						ImGui.CloseCurrentPopup();
 						string folder = pendingPrefabFolder;
@@ -634,7 +634,7 @@ namespace LELEngine.Editor
 					}
 
 					ImGui.SameLine();
-					if (ImGui.Button("Cancel", new NVector2(100, 0)))
+					if (EditorGui.Button("Cancel", new NVector2(100, 0)))
 					{
 						ImGui.CloseCurrentPopup();
 						pendingPrefabObject = null;

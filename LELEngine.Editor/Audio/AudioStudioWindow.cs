@@ -18,6 +18,9 @@ namespace LELEngine.Editor.Audio
 		#region PublicFields
 
 		public AudioStudio Studio { get; }
+
+		/// <summary>The window's ImGui context (captures share its fonts and copy its layout).</summary>
+		public ImGuiController Controller => imgui;
 		public bool IsOpen => native != null && native.Exists && !closeRequested;
 
 		/// <summary>Set by the test hooks: the next frame is written to this folder.</summary>
@@ -97,6 +100,7 @@ namespace LELEngine.Editor.Audio
 				}
 
 				imgui.NewFrame(deltaTime, size.X, size.Y);
+				Automation.WindowCapture.UIFrameDepth++;
 				try
 				{
 					Studio.Draw();
@@ -104,6 +108,10 @@ namespace LELEngine.Editor.Audio
 				catch (Exception e)
 				{
 					Debug.LogException(e);
+				}
+				finally
+				{
+					Automation.WindowCapture.UIFrameDepth--;
 				}
 
 				imgui.EndFrame();
@@ -158,6 +166,7 @@ namespace LELEngine.Editor.Audio
 
 				native.MakeCurrent();
 				Studio.Dispose();
+				Automation.WindowCapture.Forget(native);
 				imgui.Dispose();
 			}
 

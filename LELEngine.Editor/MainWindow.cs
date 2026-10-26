@@ -94,7 +94,48 @@ namespace LELEngine.Editor
 			imgui = new ImGuiController(this, layout);
 			EditorStyle.Apply();
 			editor = new EditorApplication(this, layoutExisted ? layout : null, args);
+			EditorAutomation.Start(editor, args);
 		}
+
+		private void StartWithoutUI()
+		{
+			MakeCurrent();
+			base.OnLoad();
+			string layout = Path.Combine(RecentProjects.EditorDataFolder, "layout.ini");
+			imgui = new ImGuiController(this, layout);
+			EditorStyle.Apply();
+			editor = new EditorApplication(this, File.Exists(layout) ? layout : null, args, false);
+		}
+
+		/// <summary>
+		///     The editor without UI (batch mode): the window stays hidden and owns the GL context, its ImGui context only
+		///     serves window captures (fonts, style, the user's layout read but never saved), and nothing runs frames but
+		///     <see cref="TickWithoutUI" />.
+		/// </summary>
+		public static MainWindow CreateWithoutUI(string[] args)
+		{
+			Version version = PreferredApiVersion;
+			while (true)
+			{
+				try
+				{
+					var window = new MainWindow(version, args);
+					window.StartWithoutUI();
+					return window;
+				}
+				catch (Exception e) when (version > MinimumApiVersion)
+				{
+					Console.WriteLine($"[Window] OpenGL {version} context unavailable ({e.GetType().Name}), trying an older version");
+					version = version.Minor > 0 ? new Version(version.Major, version.Minor - 1) : MinimumApiVersion;
+				}
+			}
+		}
+
+		/// <summary>The editor (null until the window loaded).</summary>
+		public EditorApplication Editor => editor;
+
+		/// <summary>The main window's ImGui context.</summary>
+		public ImGuiController Controller => imgui;
 
 		/// <summary>Makes this window's GL and ImGui contexts current again (after another editor window used its own).</summary>
 		public void MakeEditorCurrent()
@@ -103,10 +144,21 @@ namespace LELEngine.Editor
 			imgui?.Activate();
 		}
 
+		/// <summary>One tick of the editor without UI: time, the editor's update, what a UI frame does besides drawing, automation.</summary>
+		public void TickWithoutUI(double deltaTime)
+		{
+			ProcessEvents(0);
+			OnUpdateFrame(new FrameEventArgs(deltaTime));
+			editor.FrameWithoutUI();
+		}
+
 		protected override void OnUpdateFrame(FrameEventArgs e)
 		{
 			base.OnUpdateFrame(e);
 			editor.Update((float)e.Time);
+			// Between two frames: the last one is drawn but not presented yet (window captures read it), and no UI frame
+			// is being built (automation drives the editor from here).
+			EditorAutomation.Pump();
 		}
 
 		protected override void OnRenderFrame(FrameEventArgs e)
@@ -121,7 +173,18 @@ namespace LELEngine.Editor
 			PresentPendingFrame();
 
 			imgui.NewFrame((float)e.Time, ClientSize.X, ClientSize.Y);
-			editor.DrawUI();
+			TestAnchors.NextFrame();
+			EditorMenu.NewFrame();
+			Automation.WindowCapture.UIFrameDepth++;
+			try
+			{
+				editor.DrawUI();
+			}
+			finally
+			{
+				Automation.WindowCapture.UIFrameDepth--;
+			}
+
 			imgui.EndFrame();
 
 			// The views shown by this frame's UI render now, so the UI draws their current images.
@@ -181,6 +244,7 @@ namespace LELEngine.Editor
 
 		protected override void OnUnload()
 		{
+			EditorAutomation.Shutdown();
 			editor?.Dispose();
 			imgui?.Dispose();
 			base.OnUnload();

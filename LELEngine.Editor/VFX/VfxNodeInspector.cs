@@ -60,7 +60,7 @@ namespace LELEngine.Editor.VFX
 			{
 				bool enabled = node.Enabled;
 				Label("Enabled");
-				if (ImGui.Checkbox("##enabled", ref enabled))
+				if (EditorGui.Checkbox("##enabled", ref enabled))
 				{
 					document.Edit("Toggle block", () => node.Enabled = enabled);
 				}
@@ -111,7 +111,7 @@ namespace LELEngine.Editor.VFX
 			foreach (VfxProperty property in graph.Properties)
 			{
 				ImGui.PushID(property.Name);
-				bool open = ImGui.TreeNodeEx("##prop", ImGuiTreeNodeFlags.DefaultOpen | ImGuiTreeNodeFlags.AllowOverlap | ImGuiTreeNodeFlags.SpanAvailWidth);
+				bool open = EditorGui.TreeNodeEx("##prop", ImGuiTreeNodeFlags.DefaultOpen | ImGuiTreeNodeFlags.AllowOverlap | ImGuiTreeNodeFlags.SpanAvailWidth);
 				if (ImGui.BeginDragDropSource())
 				{
 					VfxGraphCanvas.DraggedProperty = property.Name;
@@ -133,7 +133,7 @@ namespace LELEngine.Editor.VFX
 					// Name.
 					Label("Name");
 					string name = property.Name;
-					ImGui.InputText("##name", ref name, 64);
+					EditorGui.InputText("##name", ref name, 64);
 					if (ImGui.IsItemDeactivatedAfterEdit() && name != property.Name && !string.IsNullOrWhiteSpace(name))
 					{
 						document.Edit("Rename property", () => graph.RenameProperty(property, name.Trim()));
@@ -165,7 +165,7 @@ namespace LELEngine.Editor.VFX
 					DrawValueEditor(document, "Edit property", property.Value, null);
 					Label("Exposed");
 					bool exposed = property.Exposed;
-					if (ImGui.Checkbox("##exposed", ref exposed))
+					if (EditorGui.Checkbox("##exposed", ref exposed))
 					{
 						document.Edit("Toggle exposed", () => property.Exposed = exposed);
 					}
@@ -177,13 +177,13 @@ namespace LELEngine.Editor.VFX
 
 					Label("Tooltip");
 					string tooltip = property.Tooltip ?? "";
-					ImGui.InputText("##tooltip", ref tooltip, 256);
+					EditorGui.InputText("##tooltip", ref tooltip, 256);
 					if (ImGui.IsItemDeactivatedAfterEdit() && tooltip != (property.Tooltip ?? ""))
 					{
 						document.Edit("Edit tooltip", () => property.Tooltip = tooltip);
 					}
 
-					if (ImGui.SmallButton("Remove property"))
+					if (EditorGui.SmallButton("Remove property"))
 					{
 						remove = property;
 					}
@@ -206,10 +206,10 @@ namespace LELEngine.Editor.VFX
 			ImGui.Spacing();
 			ImGui.SeparatorText("Add property");
 			ImGui.SetNextItemWidth(-1);
-			ImGui.InputText("##newname", ref newPropertyName, 64);
+			EditorGui.InputText("##newname", ref newPropertyName, 64);
 			ImGui.SetNextItemWidth(-1);
 			ImGui.Combo("##newtype", ref newPropertyType, PropertyTypes, PropertyTypes.Length);
-			if (ImGui.Button("Add", new NVector2(-1, 0)) && !string.IsNullOrWhiteSpace(newPropertyName))
+			if (EditorGui.Button("Add", new NVector2(-1, 0)) && !string.IsNullOrWhiteSpace(newPropertyName))
 			{
 				VfxValueType type;
 				Enum.TryParse(PropertyTypes[Math.Clamp(newPropertyType, 0, PropertyTypes.Length - 1)], out type);
@@ -267,7 +267,7 @@ namespace LELEngine.Editor.VFX
 			}
 
 			Label("Name");
-			ImGui.InputTextWithHint("##title", "System name", ref buffer, 64);
+			EditorGui.InputTextWithHint("##title", "System name", ref buffer, 64);
 			titleBuffers[node.Id] = buffer;
 			if (ImGui.IsItemDeactivatedAfterEdit())
 			{
@@ -340,7 +340,7 @@ namespace LELEngine.Editor.VFX
 				case VfxSettingKind.Bool:
 				{
 					bool b = value == "1" || string.Equals(value, "true", StringComparison.OrdinalIgnoreCase);
-					if (ImGui.Checkbox("##v", ref b))
+					if (EditorGui.Checkbox("##v", ref b))
 					{
 						newValue = b ? "1" : "0";
 						changed = true;
@@ -351,7 +351,7 @@ namespace LELEngine.Editor.VFX
 				case VfxSettingKind.Int:
 				{
 					int i = node.GetInt(setting.Name, 0);
-					if (ImGui.InputInt("##v", ref i))
+					if (EditorGui.InputInt("##v", ref i))
 					{
 						newValue = i.ToString(System.Globalization.CultureInfo.InvariantCulture);
 						changed = true;
@@ -362,7 +362,7 @@ namespace LELEngine.Editor.VFX
 				case VfxSettingKind.Float:
 				{
 					float f = node.GetFloat(setting.Name, 0f);
-					if (ImGui.DragFloat("##v", ref f, 0.01f))
+					if (EditorGui.DragFloat("##v", ref f, 0.01f))
 					{
 						newValue = f.ToString(System.Globalization.CultureInfo.InvariantCulture);
 						changed = true;
@@ -373,7 +373,7 @@ namespace LELEngine.Editor.VFX
 				case VfxSettingKind.Code:
 				{
 					string text = value ?? "";
-					ImGui.InputTextMultiline("##v", ref text, 16384, new NVector2(-1, 140), ImGuiInputTextFlags.AllowTabInput);
+					EditorGui.InputTextMultiline("##v", ref text, 16384, new NVector2(-1, 140), ImGuiInputTextFlags.AllowTabInput);
 					if (ImGui.IsItemDeactivatedAfterEdit() && text != value)
 					{
 						newValue = text;
@@ -387,11 +387,11 @@ namespace LELEngine.Editor.VFX
 					string text = value ?? "";
 					if (setting.AffectsSlots && (setting.Name == "Inputs"))
 					{
-						ImGui.InputTextMultiline("##v", ref text, 4096, new NVector2(-1, 70));
+						EditorGui.InputTextMultiline("##v", ref text, 4096, new NVector2(-1, 70));
 					}
 					else
 					{
-						ImGui.InputText("##v", ref text, 256);
+						EditorGui.InputText("##v", ref text, 256);
 					}
 
 					if (ImGui.IsItemDeactivatedAfterEdit() && text != value)
@@ -438,7 +438,7 @@ namespace LELEngine.Editor.VFX
 				VfxNodeDefinition sourceDefinition = source != null ? VfxNodeLibrary.Find(source.Type) : null;
 				ImGui.TextDisabled("<- " + (sourceDefinition?.GetTitle(source) ?? "?") + "." + edge.FromSlot);
 				ImGui.SameLine();
-				if (ImGui.SmallButton("x"))
+				if (EditorGui.SmallButton("x"))
 				{
 					document.Edit("Disconnect", () => graph.Disconnect(node, slot.Name));
 				}

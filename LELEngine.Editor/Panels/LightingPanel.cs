@@ -8,7 +8,7 @@ namespace LELEngine.Editor
 	///     method reads). How shadows and GI are computed is project-wide (<see cref="ProjectSettingsWindow" />); the GI
 	///     method can be chosen here too.
 	/// </summary>
-	internal sealed class LightingPanel
+	internal sealed class LightingPanel : IEditorPanel
 	{
 		#region PrivateFields
 
@@ -31,6 +31,11 @@ namespace LELEngine.Editor
 
 		/// <summary>The window is shown (its close button and the Window menu toggle it; saved with the editor's windows).</summary>
 		public bool Open = true;
+
+		string IEditorPanel.PanelName => "Lighting";
+		string IEditorPanel.ImGuiName => "Lighting";
+		bool IEditorPanel.PanelOpen { get => Open; set => Open = value; }
+		System.Numerics.Vector2 IEditorPanel.DefaultCaptureSize => new System.Numerics.Vector2(520, 800);
 
 		public void Draw()
 		{
@@ -76,21 +81,21 @@ namespace LELEngine.Editor
 			context.LabelWidth = Math.Max(150f, ImGui.GetContentRegionAvail().X * 0.5f);
 
 			bool changed = false;
-			if (ImGui.CollapsingHeader("Environment", ImGuiTreeNodeFlags.DefaultOpen))
+			if (EditorGui.CollapsingHeader("Environment", ImGuiTreeNodeFlags.DefaultOpen))
 			{
 				ImGui.PushID("environment");
 				changed |= FieldDrawer.DrawFields(scene.Settings.Environment, context);
 				ImGui.PopID();
 			}
 
-			if (ImGui.CollapsingHeader("Shadows"))
+			if (EditorGui.CollapsingHeader("Shadows"))
 			{
 				ImGui.PushID("shadows");
 				changed |= FieldDrawer.DrawFields(scene.Settings.Shadows, context);
 				ImGui.PopID();
 			}
 
-			if (ImGui.CollapsingHeader("Global Illumination"))
+			if (EditorGui.CollapsingHeader("Global Illumination"))
 			{
 				ImGui.PushID("gi");
 

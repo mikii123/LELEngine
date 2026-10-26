@@ -39,19 +39,19 @@ namespace LELEngine.Editor.UIBuilder
 					ImGui.TextUnformatted(node.isInstance ? "Template instance" : node.tag);
 					ImGui.SameLine();
 					ImGui.TextDisabled(selectedPath);
-					if (ImGui.CollapsingHeader("Attributes", ImGuiTreeNodeFlags.DefaultOpen))
+					if (EditorGui.CollapsingHeader("Attributes", ImGuiTreeNodeFlags.DefaultOpen))
 					{
 						DrawAttributes(node);
 					}
 
 					// The label carries the count, so a bound element's section starts open (its own stored state).
 					string bindingsHeader = node.bindings.Count > 0 ? "Bindings (" + node.bindings.Count + ")" : "Bindings";
-					if (ImGui.CollapsingHeader(bindingsHeader, node.bindings.Count > 0 ? ImGuiTreeNodeFlags.DefaultOpen : ImGuiTreeNodeFlags.None))
+					if (EditorGui.CollapsingHeader(bindingsHeader, node.bindings.Count > 0 ? ImGuiTreeNodeFlags.DefaultOpen : ImGuiTreeNodeFlags.None))
 					{
 						DrawBindings(node);
 					}
 
-					if (ImGui.CollapsingHeader("Inline Styles", ImGuiTreeNodeFlags.DefaultOpen))
+					if (EditorGui.CollapsingHeader("Inline Styles", ImGuiTreeNodeFlags.DefaultOpen))
 					{
 						DrawInlineStyles(node);
 					}
@@ -140,7 +140,7 @@ namespace LELEngine.Editor.UIBuilder
 			{
 				float value = attribute != null ? ParseFloat(attribute, 0f) : current != null ? Convert.ToSingle(current) : 0f;
 				Label(label);
-				bool changed = ImGui.DragFloat("##" + key, ref value, 0.1f);
+				bool changed = EditorGui.DragFloat("##" + key, ref value, 0.1f);
 				Track(changed, () => node.SetAttribute(key, value.ToString("0.###", CultureInfo.InvariantCulture)));
 			}
 			else if (valueType.IsEnum)
@@ -156,7 +156,7 @@ namespace LELEngine.Editor.UIBuilder
 				if (attribute != null && StyleColorUtility.TryParse(attribute, out parsed)) color = parsed;
 				var n = new NVector4(color.R, color.G, color.B, color.A);
 				Label(label);
-				bool changed = ImGui.ColorEdit4("##" + key, ref n, ImGuiColorEditFlags.AlphaBar);
+				bool changed = EditorGui.ColorEdit4("##" + key, ref n, ImGuiColorEditFlags.AlphaBar);
 				Track(changed, () => node.SetAttribute(key, StyleColorUtility.ToString(new Color4(n.X, n.Y, n.Z, n.W))));
 			}
 			else
@@ -164,7 +164,7 @@ namespace LELEngine.Editor.UIBuilder
 				// Strings, lists (comma separated), asset paths, anything else as text.
 				string text = attribute ?? (current is string s ? s : current is System.Collections.IEnumerable list && !(current is string) ? Join(list) : current?.ToString() ?? "");
 				Label(label);
-				bool changed = ImGui.InputText("##" + key, ref text, 2048u);
+				bool changed = EditorGui.InputText("##" + key, ref text, 2048u);
 				Track(changed, () => node.SetAttribute(key, text));
 			}
 		}
@@ -184,7 +184,7 @@ namespace LELEngine.Editor.UIBuilder
 		{
 			string value = node.GetAttribute(key) ?? "";
 			Label(label);
-			bool changed = ImGui.InputText("##" + key, ref value, 2048u);
+			bool changed = EditorGui.InputText("##" + key, ref value, 2048u);
 			Track(changed, () => node.SetAttribute(key, value));
 		}
 
@@ -193,7 +193,7 @@ namespace LELEngine.Editor.UIBuilder
 			string attribute = node.GetAttribute(key);
 			bool value = attribute != null ? string.Equals(attribute, "true", StringComparison.OrdinalIgnoreCase) : fallback;
 			Label(label);
-			if (ImGui.Checkbox("##" + key, ref value))
+			if (EditorGui.Checkbox("##" + key, ref value))
 			{
 				Apply(() => node.SetAttribute(key, value == fallback && attribute == null ? null : value ? "true" : "false"));
 			}
@@ -204,7 +204,7 @@ namespace LELEngine.Editor.UIBuilder
 			string attribute = node.GetAttribute(key);
 			int value = attribute != null ? (int)ParseFloat(attribute, fallback) : fallback;
 			Label(label);
-			bool changed = ImGui.InputInt("##" + key, ref value);
+			bool changed = EditorGui.InputInt("##" + key, ref value);
 			Track(changed, () => node.SetAttribute(key, value.ToString(CultureInfo.InvariantCulture)));
 		}
 
@@ -212,18 +212,18 @@ namespace LELEngine.Editor.UIBuilder
 		{
 			string current = node.GetAttribute(key) ?? fallback;
 			Label(label);
-			if (ImGui.BeginCombo("##" + key, current))
+			if (EditorGui.BeginCombo("##" + key, current))
 			{
 				foreach (string option in options)
 				{
-					if (ImGui.Selectable(option, string.Equals(option, current, StringComparison.OrdinalIgnoreCase)))
+					if (EditorGui.Selectable(option, string.Equals(option, current, StringComparison.OrdinalIgnoreCase)))
 					{
 						string chosen = option;
 						Apply(() => node.SetAttribute(key, chosen));
 					}
 				}
 
-				ImGui.EndCombo();
+				EditorGui.EndCombo();
 			}
 		}
 
@@ -244,42 +244,42 @@ namespace LELEngine.Editor.UIBuilder
 				string trigger = binding.TryGetValue("update-trigger", out string ut) ? ut : "OnSourceChanged";
 
 				Label("Property");
-				bool changed = ImGui.InputText("##bprop", ref property, 128u);
+				bool changed = EditorGui.InputText("##bprop", ref property, 128u);
 				Track(changed, () => binding["property"] = property);
 				Label("Source Path");
-				changed = ImGui.InputText("##bpath", ref path, 256u);
+				changed = EditorGui.InputText("##bpath", ref path, 256u);
 				Track(changed, () => binding["data-source-path"] = path);
 				Label("Mode");
-				if (ImGui.BeginCombo("##bmode", mode))
+				if (EditorGui.BeginCombo("##bmode", mode))
 				{
 					foreach (string option in BindingModes)
 					{
-						if (ImGui.Selectable(option, option == mode))
+						if (EditorGui.Selectable(option, option == mode))
 						{
 							string chosen = option;
 							Apply(() => binding["binding-mode"] = chosen);
 						}
 					}
 
-					ImGui.EndCombo();
+					EditorGui.EndCombo();
 				}
 
 				Label("Trigger");
-				if (ImGui.BeginCombo("##btrigger", trigger))
+				if (EditorGui.BeginCombo("##btrigger", trigger))
 				{
 					foreach (string option in UpdateTriggers)
 					{
-						if (ImGui.Selectable(option, option == trigger))
+						if (EditorGui.Selectable(option, option == trigger))
 						{
 							string chosen = option;
 							Apply(() => binding["update-trigger"] = chosen);
 						}
 					}
 
-					ImGui.EndCombo();
+					EditorGui.EndCombo();
 				}
 
-				if (ImGui.SmallButton("Remove binding"))
+				if (EditorGui.SmallButton("Remove binding"))
 				{
 					int index = i;
 					Apply(() => node.bindings.RemoveAt(index));
@@ -289,7 +289,7 @@ namespace LELEngine.Editor.UIBuilder
 				ImGui.PopID();
 			}
 
-			if (ImGui.Button("Add binding"))
+			if (EditorGui.Button("Add binding"))
 			{
 				Apply(() => node.bindings.Add(new Dictionary<string, string>(StringComparer.Ordinal)
 				{
@@ -304,7 +304,7 @@ namespace LELEngine.Editor.UIBuilder
 
 		private void DrawInlineStyles(UxmlNode node)
 		{
-			if (ImGui.TreeNodeEx("Display", ImGuiTreeNodeFlags.DefaultOpen))
+			if (EditorGui.TreeNodeEx("Display", ImGuiTreeNodeFlags.DefaultOpen))
 			{
 				StyleCombo(node, "Display", "display", new[] { "flex", "none" });
 				StyleCombo(node, "Visibility", "visibility", new[] { "visible", "hidden" });
@@ -313,14 +313,14 @@ namespace LELEngine.Editor.UIBuilder
 				ImGui.TreePop();
 			}
 
-			if (ImGui.TreeNodeEx("Position", ImGuiTreeNodeFlags.DefaultOpen))
+			if (EditorGui.TreeNodeEx("Position", ImGuiTreeNodeFlags.DefaultOpen))
 			{
 				StyleCombo(node, "Position", "position", new[] { "relative", "absolute" });
 				StyleFour(node, "Offsets", new[] { "left", "top", "right", "bottom" }, new[] { "L", "T", "R", "B" });
 				ImGui.TreePop();
 			}
 
-			if (ImGui.TreeNodeEx("Flex", ImGuiTreeNodeFlags.DefaultOpen))
+			if (EditorGui.TreeNodeEx("Flex", ImGuiTreeNodeFlags.DefaultOpen))
 			{
 				StyleCombo(node, "Direction", "flex-direction", new[] { "column", "column-reverse", "row", "row-reverse" });
 				StyleCombo(node, "Wrap", "flex-wrap", new[] { "nowrap", "wrap", "wrap-reverse" });
@@ -334,7 +334,7 @@ namespace LELEngine.Editor.UIBuilder
 				ImGui.TreePop();
 			}
 
-			if (ImGui.TreeNodeEx("Size", ImGuiTreeNodeFlags.DefaultOpen))
+			if (EditorGui.TreeNodeEx("Size", ImGuiTreeNodeFlags.DefaultOpen))
 			{
 				StyleText(node, "Width", "width");
 				StyleText(node, "Height", "height");
@@ -345,14 +345,14 @@ namespace LELEngine.Editor.UIBuilder
 				ImGui.TreePop();
 			}
 
-			if (ImGui.TreeNodeEx("Margin & Padding"))
+			if (EditorGui.TreeNodeEx("Margin & Padding"))
 			{
 				StyleFour(node, "Margin", new[] { "margin-top", "margin-right", "margin-bottom", "margin-left" }, new[] { "T", "R", "B", "L" });
 				StyleFour(node, "Padding", new[] { "padding-top", "padding-right", "padding-bottom", "padding-left" }, new[] { "T", "R", "B", "L" });
 				ImGui.TreePop();
 			}
 
-			if (ImGui.TreeNodeEx("Background & Border"))
+			if (EditorGui.TreeNodeEx("Background & Border"))
 			{
 				StyleColor(node, "Background", "background-color");
 				StyleText(node, "Image", "background-image");
@@ -364,7 +364,7 @@ namespace LELEngine.Editor.UIBuilder
 				ImGui.TreePop();
 			}
 
-			if (ImGui.TreeNodeEx("Text"))
+			if (EditorGui.TreeNodeEx("Text"))
 			{
 				StyleColor(node, "Color", "color");
 				StyleText(node, "Font Size", "font-size");
@@ -378,7 +378,7 @@ namespace LELEngine.Editor.UIBuilder
 				ImGui.TreePop();
 			}
 
-			if (ImGui.TreeNodeEx("Transform & Transition"))
+			if (EditorGui.TreeNodeEx("Transform & Transition"))
 			{
 				StyleText(node, "Translate", "translate");
 				StyleText(node, "Rotate", "rotate");
@@ -393,7 +393,7 @@ namespace LELEngine.Editor.UIBuilder
 			string raw = node.GetAttribute("style") ?? "";
 			ImGui.TextDisabled("Raw inline style");
 			ImGui.SetNextItemWidth(-1);
-			bool rawChanged = ImGui.InputTextMultiline("##rawstyle", ref raw, 4096u, new NVector2(-1, 60));
+			bool rawChanged = EditorGui.InputTextMultiline("##rawstyle", ref raw, 4096u, new NVector2(-1, 60));
 			Track(rawChanged, () => node.SetAttribute("style", raw.Trim()));
 		}
 
@@ -401,7 +401,7 @@ namespace LELEngine.Editor.UIBuilder
 		{
 			string value = node.GetStyleProperty(property) ?? "";
 			Label(label);
-			bool changed = ImGui.InputTextWithHint("##s_" + property, "inherit", ref value, 256u);
+			bool changed = EditorGui.InputTextWithHint("##s_" + property, "inherit", ref value, 256u);
 			Track(changed, () => node.SetStyleProperty(property, value));
 		}
 
@@ -409,23 +409,23 @@ namespace LELEngine.Editor.UIBuilder
 		{
 			string current = node.GetStyleProperty(property);
 			Label(label);
-			if (ImGui.BeginCombo("##s_" + property, current ?? "(default)"))
+			if (EditorGui.BeginCombo("##s_" + property, current ?? "(default)"))
 			{
-				if (ImGui.Selectable("(default)", current == null))
+				if (EditorGui.Selectable("(default)", current == null))
 				{
 					Apply(() => node.SetStyleProperty(property, null));
 				}
 
 				foreach (string option in options)
 				{
-					if (ImGui.Selectable(option, option == current))
+					if (EditorGui.Selectable(option, option == current))
 					{
 						string chosen = option;
 						Apply(() => node.SetStyleProperty(property, chosen));
 					}
 				}
 
-				ImGui.EndCombo();
+				EditorGui.EndCombo();
 			}
 		}
 
@@ -434,12 +434,12 @@ namespace LELEngine.Editor.UIBuilder
 			string current = node.GetStyleProperty(property);
 			float value = ParseFloat(current, property == "opacity" || property == "flex-shrink" ? 1f : 0f);
 			Label(label);
-			bool changed = ImGui.SliderFloat("##s_" + property, ref value, min, max, current == null ? "default" : "%.2f");
+			bool changed = EditorGui.SliderFloat("##s_" + property, ref value, min, max, current == null ? "default" : "%.2f");
 			Track(changed, () => node.SetStyleProperty(property, value.ToString("0.##", CultureInfo.InvariantCulture) + unit));
 			if (current != null)
 			{
 				ImGui.SameLine();
-				if (ImGui.SmallButton("x##" + property)) Apply(() => node.SetStyleProperty(property, null));
+				if (EditorGui.SmallButton("x##" + property)) Apply(() => node.SetStyleProperty(property, null));
 			}
 		}
 
@@ -456,12 +456,12 @@ namespace LELEngine.Editor.UIBuilder
 			var n = new NVector4(color.R, color.G, color.B, color.A);
 			Label(label);
 			ImGui.SetNextItemWidth(current != null ? -34 : -1);
-			bool changed = ImGui.ColorEdit4("##s_" + property, ref n, ImGuiColorEditFlags.AlphaBar | ImGuiColorEditFlags.NoInputs | ImGuiColorEditFlags.AlphaPreviewHalf);
+			bool changed = EditorGui.ColorEdit4("##s_" + property, ref n, ImGuiColorEditFlags.AlphaBar | ImGuiColorEditFlags.NoInputs | ImGuiColorEditFlags.AlphaPreviewHalf);
 			Track(changed, () => node.SetStyleProperty(property, StyleColorUtility.ToString(new Color4(n.X, n.Y, n.Z, n.W))));
 			if (current != null)
 			{
 				ImGui.SameLine();
-				if (ImGui.SmallButton("x##" + property)) Apply(() => node.SetStyleProperty(property, null));
+				if (EditorGui.SmallButton("x##" + property)) Apply(() => node.SetStyleProperty(property, null));
 			}
 		}
 
@@ -474,7 +474,7 @@ namespace LELEngine.Editor.UIBuilder
 				if (i > 0) ImGui.SameLine();
 				string value = node.GetStyleProperty(properties[i]) ?? "";
 				ImGui.SetNextItemWidth(width);
-				bool changed = ImGui.InputTextWithHint("##s_" + properties[i], hints[i], ref value, 32u);
+				bool changed = EditorGui.InputTextWithHint("##s_" + properties[i], hints[i], ref value, 32u);
 				string property = properties[i];
 				Track(changed, () => node.SetStyleProperty(property, value));
 			}

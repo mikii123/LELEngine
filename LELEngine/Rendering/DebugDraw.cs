@@ -38,6 +38,23 @@ namespace LELEngine.Rendering
 			triangles.Clear();
 		}
 
+		/// <summary>How much is queued now: <see cref="Truncate" /> drops what was added after (one-off renders, window captures).</summary>
+		public static (int lines, int triangles) Mark => (lines.Count, triangles.Count);
+
+		/// <summary>Drops the primitives added since <paramref name="mark" /> was taken.</summary>
+		public static void Truncate((int lines, int triangles) mark)
+		{
+			if (lines.Count > mark.lines)
+			{
+				lines.RemoveRange(mark.lines, lines.Count - mark.lines);
+			}
+
+			if (triangles.Count > mark.triangles)
+			{
+				triangles.RemoveRange(mark.triangles, triangles.Count - mark.triangles);
+			}
+		}
+
 		public static void Line(in Vector3 a, in Vector3 b, in Color4 color)
 		{
 			Push(lines, a, color);

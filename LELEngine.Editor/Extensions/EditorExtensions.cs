@@ -263,6 +263,15 @@ namespace LELEngine.Editor
 		/// <summary>Runs clicked menu items, restores saved windows, then updates and draws every open window.</summary>
 		public void DrawWindows()
 		{
+			UpdateWindows(true);
+		}
+
+		/// <summary>
+		///     The windows' frame: windows restored after a reload, pending menu items, selection events and Update; with
+		///     <paramref name="draw" /> their GUI too (without: the editor in batch mode, which draws nothing).
+		/// </summary>
+		public void UpdateWindows(bool draw)
+		{
 			windowsCaptured = false;
 			if (editor.Project == null)
 			{
@@ -291,6 +300,11 @@ namespace LELEngine.Editor
 				{
 					Guard(window, w => w.InvokeUpdate(), "Update");
 				}
+			}
+
+			if (!draw)
+			{
+				return;
 			}
 
 			foreach (EditorWindow window in windows.ToArray())
@@ -441,10 +455,10 @@ namespace LELEngine.Editor
 		{
 			foreach (MenuNode node in menus)
 			{
-				if (Array.IndexOf(BuiltInMenus, node.Name) < 0 && ImGui.BeginMenu(node.Name))
+				if (Array.IndexOf(BuiltInMenus, node.Name) < 0 && EditorMenu.Begin(node.Name))
 				{
 					DrawMenuChildren(node);
-					ImGui.EndMenu();
+					EditorMenu.End();
 				}
 			}
 		}
@@ -678,9 +692,83 @@ namespace LELEngine.Editor
 			}
 		}
 
-		private void DrawWindow(EditorWindow window)
+		/// <summary>The open windows' GUI only: a capture of the whole editor (no Update, no selection events, no closing).</summary>
+		public void DrawWindowsForCapture()
 		{
-			if (window.FocusRequested)
+			foreach (EditorWindow window in windows.ToArray())
+			{
+				if (window.IsOpen)
+				{
+					DrawWindow(window);
+				}
+			}
+		}
+
+		/// <summary>Game.Editor.dll of the project (null without editor scripts).</summary>
+		public Assembly ScriptsAssembly => assembly;
+
+		/// <summary>The windows of the editor scripts that are open (automation lists them with the editor's own).</summary>
+		public IEnumerable<IEditorPanel> OpenWindowPanels()
+		{
+			foreach (EditorWindow window in windows.ToArray())
+			{
+				yield return PanelOf(window);
+			}
+		}
+
+		/// <summary>The window as automation sees it (<see cref="IEditorPanel" />: open, close, focus, capture).</summary>
+		public IEditorPanel PanelOf(EditorWindow window)
+		{
+			return new Automation.ScriptWindowPanel(this, window);
+		}
+
+		/// <summary>Opens a window of the editor scripts by its class name (full or simple); null when there is no such class.</summary>
+		public EditorWindow OpenWindowOfType(string typeName)
+		{
+			if (assembly == null)
+			{
+				return null;
+			}
+
+			Type type = assembly.GetType(typeName, false);
+			if (type == null)
+			{
+				Type[] types;
+				try
+				{
+					types = assembly.GetTypes();
+				}
+				catch (ReflectionTypeLoadException e)
+				{
+					types = Array.FindAll(e.Types, t => t != null);
+				}
+
+				type = Array.Find(types, t => string.Equals(t.Name, typeName, StringComparison.OrdinalIgnoreCase));
+			}
+
+			if (type == null || type.IsAbstract || !typeof(EditorWindow).IsAssignableFrom(type) || type.GetConstructor(Type.EmptyTypes) == null)
+			{
+				return null;
+			}
+
+			EditorWindow open = windows.Find(w => w.GetType() == type);
+			if (open != null)
+			{
+				open.Focus();
+				return open;
+			}
+
+			var window = (EditorWindow)Activator.CreateInstance(type);
+			OpenWindow(window, null);
+			window.Focus();
+			return window;
+		}
+
+		internal void DrawWindow(EditorWindow window)
+		{
+			// A capture's frames (Automation.WindowCapture) leave the window's focus and its focus request to the editor's.
+			bool capture = Automation.WindowCapture.Active;
+			if (window.FocusRequested && !capture)
 			{
 				window.FocusRequested = false;
 				ImGui.SetNextWindowFocus();
@@ -694,7 +782,10 @@ namespace LELEngine.Editor
 
 			bool open = true;
 			bool visible = ImGui.Begin(window.title + "###" + window.Key, ref open, window.windowFlags);
-			window.hasFocus = ImGui.IsWindowFocused(ImGuiFocusedFlags.RootAndChildWindows);
+			if (!capture)
+			{
+				window.hasFocus = ImGui.IsWindowFocused(ImGuiFocusedFlags.RootAndChildWindows);
+			}
 			if (visible)
 			{
 				// The last error first: what the failing code draws may hide anything below it.
@@ -867,15 +958,15 @@ namespace LELEngine.Editor
 
 				if (node.Method != null)
 				{
-					if (ImGui.MenuItem(node.Name))
+					if (EditorMenu.Item(node.Name))
 					{
 						pendingMenuItems.Add(node.Method);
 					}
 				}
-				else if (ImGui.BeginMenu(node.Name))
+				else if (EditorMenu.Begin(node.Name))
 				{
 					DrawMenuChildren(node);
-					ImGui.EndMenu();
+					EditorMenu.End();
 				}
 			}
 		}

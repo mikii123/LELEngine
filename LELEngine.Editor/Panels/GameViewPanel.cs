@@ -7,7 +7,7 @@ using NVector2 = System.Numerics.Vector2;
 namespace LELEngine.Editor
 {
 	/// <summary>The scene through its main camera, as the game shows it. Receives the game's input while playing.</summary>
-	internal sealed class GameViewPanel : IDisposable
+	internal sealed class GameViewPanel : IDisposable, IEditorPanel
 	{
 		#region PublicFields
 
@@ -65,8 +65,20 @@ namespace LELEngine.Editor
 		/// <summary>The window is shown (its close button and the Window menu toggle it; saved with the editor's windows).</summary>
 		public bool Open = true;
 
+		string IEditorPanel.PanelName => "Game";
+		string IEditorPanel.ImGuiName => "Game";
+		bool IEditorPanel.PanelOpen { get => Open; set => Open = value; }
+		NVector2 IEditorPanel.DefaultCaptureSize => new NVector2(1280, 720);
+		void IEditorPanel.Focus() => Focus();
+
 		public void Draw()
 		{
+			if (Automation.WindowCapture.Active)
+			{
+				DrawCapture();
+				return;
+			}
+
 			if (!Open)
 			{
 				// Closed: nothing to render, no game input.
@@ -105,6 +117,58 @@ namespace LELEngine.Editor
 			{
 				Input.SetCursorLocked(false);
 			}
+		}
+
+		/// <summary>
+		///     The window in a capture (<see cref="Automation.WindowCapture" />): the game at the capture's size, rendered for
+		///     it. Nothing the editor's frames keep (view size, input focus, the mouse's place) changes.
+		/// </summary>
+		private void DrawCapture()
+		{
+			ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, new NVector2(0, 0));
+			bool shown = ImGui.Begin("Game", ref Open);
+			ImGui.PopStyleVar();
+			if (shown && editor.Scene != null)
+			{
+				NVector2 available = ImGui.GetContentRegionAvail();
+				var size = new NVector2(Math.Max(16, available.X), Math.Max(16, available.Y));
+				if (SceneManager.MainCamera == null)
+				{
+					ImGui.SetCursorPos(new NVector2(12, 12));
+					ImGui.TextColored(EditorStyle.Warning, "No base camera in the scene (add a GameObject with a Camera component, Render Type Base).");
+				}
+				else
+				{
+					int texture = Automation.WindowCapture.ViewTexture(this, ViewRenderer, visible, (int)size.X, (int)size.Y, RenderCapture);
+					ImGui.Image(EditorGui.Texture(texture), size, new NVector2(0, 1), new NVector2(1, 0));
+					if (!editor.IsPlaying)
+					{
+						ImGui.SetCursorPos(new NVector2(10, 8));
+						ImGui.TextDisabled("Edit mode - press Play (Ctrl+P) to run the game");
+					}
+				}
+			}
+
+			ImGui.End();
+		}
+
+		/// <summary>One frame of every loaded scene through the main camera's stack into a capture's renderer.</summary>
+		private void RenderCapture(ViewRenderer target)
+		{
+			Camera camera = SceneManager.MainCamera;
+			if (camera == null)
+			{
+				return;
+			}
+
+			camera.GetRenderStack(stack);
+			foreach (Camera view in stack)
+			{
+				view.UpdateMatrices(target.Width / (float)target.Height);
+			}
+
+			stack.Clear();
+			target.RenderLoadedScenes(camera);
 		}
 
 		/// <summary>Renders when the view shows something new (<see cref="ViewRefresh" />) or every frame when continuous.</summary>

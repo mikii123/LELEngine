@@ -690,7 +690,7 @@ namespace LELEngine.Editor
 			return "(field not found)";
 		}
 
-		private static string Describe(object value)
+		internal static string Describe(object value)
 		{
 			switch (value)
 			{
@@ -868,7 +868,7 @@ namespace LELEngine.Editor
 			});
 		}
 
-		private static Behaviour FindComponentByName(GameObject go, string name)
+		internal static Behaviour FindComponentByName(GameObject go, string name)
 		{
 			foreach (Behaviour component in go.Components)
 			{
@@ -882,7 +882,7 @@ namespace LELEngine.Editor
 		}
 
 		/// <summary>Sets a field (through nested fields) from text.</summary>
-		private static void SetPath(object target, string[] path, int index, string text)
+		internal static void SetPath(object target, string[] path, int index, string text)
 		{
 			System.Reflection.FieldInfo field = target.GetType().GetField(path[index], System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic);
 			if (field == null)
@@ -905,7 +905,7 @@ namespace LELEngine.Editor
 			field.SetValue(target, ParseValue(field.FieldType, text));
 		}
 
-		private static object ParseValue(Type type, string text)
+		internal static object ParseValue(Type type, string text)
 		{
 			var culture = System.Globalization.CultureInfo.InvariantCulture;
 			if (text == "null")

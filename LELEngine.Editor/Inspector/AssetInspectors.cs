@@ -89,7 +89,7 @@ namespace LELEngine.Editor
 			}
 			else if (assetPath.EndsWith(SceneSerializer.Extension, StringComparison.OrdinalIgnoreCase))
 			{
-				if (ImGui.Button("Open Scene", new NVector2(-1, 0)))
+				if (EditorGui.Button("Open Scene", new NVector2(-1, 0)))
 				{
 					context.Editor.OpenScene(assetPath);
 				}
@@ -98,7 +98,7 @@ namespace LELEngine.Editor
 			}
 			else if (type == typeof(LELEngine.VFX.VfxGraph))
 			{
-				if (ImGui.Button("Open in VFX Graph", new NVector2(-1, 0)))
+				if (EditorGui.Button("Open in VFX Graph", new NVector2(-1, 0)))
 				{
 					context.Editor.OpenVfxGraph(assetPath);
 				}
@@ -116,12 +116,12 @@ namespace LELEngine.Editor
 			}
 			else if (assetPath.EndsWith(".cs", StringComparison.OrdinalIgnoreCase))
 			{
-				if (ImGui.Button("Open Script", new NVector2(-1, 0)))
+				if (EditorGui.Button("Open Script", new NVector2(-1, 0)))
 				{
 					OpenExternally(absolute);
 				}
 
-				if (ImGui.Button("Open Script Project", new NVector2(-1, 0)) && context.Editor.Scripts != null)
+				if (EditorGui.Button("Open Script Project", new NVector2(-1, 0)) && context.Editor.Scripts != null)
 				{
 					context.Editor.Scripts.OpenInIde();
 				}
@@ -130,7 +130,7 @@ namespace LELEngine.Editor
 			}
 			else if (assetPath.EndsWith(".uxml", StringComparison.OrdinalIgnoreCase) || assetPath.EndsWith(".uss", StringComparison.OrdinalIgnoreCase))
 			{
-				if (ImGui.Button("Open in UI Builder", new NVector2(-1, 0)))
+				if (EditorGui.Button("Open in UI Builder", new NVector2(-1, 0)))
 				{
 					context.Editor.OpenUIBuilder(assetPath);
 				}
@@ -139,7 +139,7 @@ namespace LELEngine.Editor
 			}
 			else
 			{
-				if (ImGui.Button("Open", new NVector2(-1, 0)))
+				if (EditorGui.Button("Open", new NVector2(-1, 0)))
 				{
 					OpenExternally(absolute);
 				}
@@ -199,7 +199,7 @@ namespace LELEngine.Editor
 				ImGui.TextColored(EditorStyle.Error, e.Message);
 			}
 
-			if (ImGui.Button("Open", new NVector2(-1, 0)))
+			if (EditorGui.Button("Open", new NVector2(-1, 0)))
 			{
 				OpenExternally(absolute);
 			}
@@ -257,7 +257,7 @@ namespace LELEngine.Editor
 		/// <summary>An input configuration: what it holds and a button to the Input Manager (its editor).</summary>
 		private static void DrawInputConfiguration(string assetPath, InspectorContext context)
 		{
-			if (ImGui.Button("Open in Input Manager", new NVector2(-1, 0)))
+			if (EditorGui.Button("Open in Input Manager", new NVector2(-1, 0)))
 			{
 				context.Editor.OpenInputManager(assetPath);
 			}

@@ -287,6 +287,7 @@ namespace LELEngine.Editor
 			}
 
 			EditorFonts.Pop(bold);
+			TestAnchors.LineLabel(label);
 			if (overridden)
 			{
 				PrefabInspector.MarkOverride(context);
@@ -427,7 +428,8 @@ namespace LELEngine.Editor
 		///     arrow and label, then <paramref name="valueArea" /> from the label column on (given its width; type
 		///     selectors, counts, buttons), then the row's suffix at the end. <paramref name="onHeaderItem" /> runs right
 		///     after the arrow (the header is the last item then: drop targets, context menus). True when open (call
-		///     TreePop after the body).
+		///     <see cref="EndHeader" /> after the body). The header's line and body are a scope of the automation elements
+		///     (<see cref="TestAnchors.PushScope" />: "input:Mover/Settings/Max Speed").
 		/// </summary>
 		internal static bool Header(string label, FieldInfo info, InspectorContext context, Action<float> valueArea, Action onHeaderItem = null, string tooltip = null)
 		{
@@ -442,6 +444,7 @@ namespace LELEngine.Editor
 
 			float y = ImGui.GetCursorScreenPos().Y;
 			string text = row != null ? row.HeaderLabel ?? row.Label ?? label : label;
+			TestAnchors.PushScope(text);
 			if (ForceOpen)
 			{
 				ImGui.SetNextItemOpen(true, ImGuiCond.Always);
@@ -452,7 +455,7 @@ namespace LELEngine.Editor
 			// Prefab overrides inside (or of) the value: the foldout's label in bold, with the bar and the Apply / Revert menu.
 			bool overridden = context.IsOverridden(true);
 			bool bold = overridden && EditorFonts.PushBold();
-			bool open = ImGui.TreeNodeEx(text + "##header", ImGuiTreeNodeFlags.SpanAvailWidth | ImGuiTreeNodeFlags.FramePadding);
+			bool open = EditorGui.TreeNodeEx(text + "##header", ImGuiTreeNodeFlags.SpanAvailWidth | ImGuiTreeNodeFlags.FramePadding);
 			EditorFonts.Pop(bold);
 			NVector2 headerMin = ImGui.GetItemRectMin();
 			if (ImGui.IsItemHovered() && !DragAndDrop.IsDragging)
@@ -495,7 +498,19 @@ namespace LELEngine.Editor
 				row.Suffix();
 			}
 
+			if (!open)
+			{
+				TestAnchors.PopScope();
+			}
+
 			return open;
+		}
+
+		/// <summary>After the body of an open <see cref="Header" />.</summary>
+		internal static void EndHeader()
+		{
+			TestAnchors.PopScope();
+			ImGui.TreePop();
 		}
 
 		/// <summary>A new instance of a class for a field (its fields copied from <paramref name="previous" /> where they match), or null.</summary>
@@ -607,7 +622,7 @@ namespace LELEngine.Editor
 						InlineEditors.Draw(target, context, depth + 1);
 					}
 
-					ImGui.TreePop();
+					EndHeader();
 				}
 
 				return fieldChanged;
@@ -690,7 +705,7 @@ namespace LELEngine.Editor
 					{
 						NVector2 start = ImGui.GetCursorScreenPos();
 						float height = ImGui.GetFrameHeight();
-						ImGui.InvisibleButton("##none", new NVector2(fieldWidth, height));
+						EditorGui.InvisibleButton("##none", new NVector2(fieldWidth, height));
 						ImGui.GetWindowDrawList().AddRectFilled(start, start + new NVector2(fieldWidth, height), ImGui.GetColorU32(ImGuiCol.FrameBg), ImGui.GetStyle().FrameRounding);
 						ImGui.GetWindowDrawList().AddText(start + new NVector2(5f, (height - ImGui.GetTextLineHeight()) * 0.5f), ImGui.GetColorU32(ImGuiCol.TextDisabled), "None (" + ObjectField.TypeLabel(declaredType) + ")");
 						if (ImGui.IsItemHovered())
@@ -698,7 +713,7 @@ namespace LELEngine.Editor
 							ImGui.SetTooltip(hint);
 						}
 
-						if (ImGui.IsItemClicked() && creatable.Count > 0)
+						if (EditorGui.IsItemClicked() && creatable.Count > 0)
 						{
 							ImGui.OpenPopup(popupId);
 						}
@@ -732,7 +747,7 @@ namespace LELEngine.Editor
 							InlineEditors.Draw(target, context, depth + 1);
 						}
 
-						ImGui.TreePop();
+						EndHeader();
 					}
 				}
 				else
@@ -806,7 +821,7 @@ namespace LELEngine.Editor
 					result = DrawFields(instance, context, depth + 1);
 				}
 
-				ImGui.TreePop();
+				EndHeader();
 			}
 
 			return result;
@@ -835,7 +850,7 @@ namespace LELEngine.Editor
 			ImGui.PushStyleVar(ImGuiStyleVar.ButtonTextAlign, new NVector2(0f, 0.5f));
 			ImGui.PushStyleColor(ImGuiCol.Button, ImGui.GetStyle().Colors[(int)ImGuiCol.FrameBg]);
 			ImGui.PushStyleColor(ImGuiCol.ButtonHovered, ImGui.GetStyle().Colors[(int)ImGuiCol.FrameBgHovered]);
-			bool pressed = ImGui.Button(text + "##type", new NVector2(width, 0f));
+			bool pressed = EditorGui.Button(text + "##type", new NVector2(width, 0f));
 			ImGui.PopStyleColor(2);
 			ImGui.PopStyleVar();
 			NVector2 max = ImGui.GetItemRectMax();
@@ -856,7 +871,7 @@ namespace LELEngine.Editor
 					ImGui.AlignTextToFramePadding();
 					ImGui.TextDisabled("None");
 					ImGui.SameLine();
-					if (ImGui.SmallButton("Create##create"))
+					if (EditorGui.SmallButton("Create##create"))
 					{
 						create = true;
 					}
@@ -880,7 +895,7 @@ namespace LELEngine.Editor
 					changed |= DrawFields(value, context, depth + 1);
 				}
 
-				ImGui.TreePop();
+				EndHeader();
 			}
 
 			return changed;
@@ -894,21 +909,21 @@ namespace LELEngine.Editor
 			if (type == typeof(bool))
 			{
 				bool b = value is bool flag && flag;
-				changed = ImGui.Checkbox("##v", ref b);
+				changed = EditorGui.Checkbox("##v", ref b);
 				context.Track(changed);
 				value = b;
 			}
 			else if (type == typeof(float) || type == typeof(double))
 			{
 				float f = Convert.ToSingle(value);
-				changed = range != null ? ImGui.SliderFloat("##v", ref f, range.Min, range.Max) : ImGui.DragFloat("##v", ref f, DragSpeed(f));
+				changed = range != null ? EditorGui.SliderFloat("##v", ref f, range.Min, range.Max) : EditorGui.DragFloat("##v", ref f, DragSpeed(f));
 				context.Track(changed);
 				value = type == typeof(float) ? (object)f : (double)f;
 			}
 			else if (type.IsPrimitive && type != typeof(char))
 			{
 				int i = Convert.ToInt32(value);
-				changed = range != null ? ImGui.SliderInt("##v", ref i, (int)range.Min, (int)range.Max) : ImGui.DragInt("##v", ref i, 0.2f);
+				changed = range != null ? EditorGui.SliderInt("##v", ref i, (int)range.Min, (int)range.Max) : EditorGui.DragInt("##v", ref i, 0.2f);
 				context.Track(changed);
 				if (changed)
 				{
@@ -918,7 +933,7 @@ namespace LELEngine.Editor
 			else if (type == typeof(string) || type == typeof(char))
 			{
 				string s = value?.ToString() ?? "";
-				changed = ImGui.InputText("##v", ref s, type == typeof(char) ? 2u : 2048u);
+				changed = EditorGui.InputText("##v", ref s, type == typeof(char) ? 2u : 2048u);
 				context.Track(changed);
 				value = type == typeof(char) ? (object)(s.Length > 0 ? s[0] : '\0') : s;
 			}
@@ -931,7 +946,7 @@ namespace LELEngine.Editor
 			{
 				Vector2 v = (Vector2)value;
 				NVector2 n = new NVector2(v.X, v.Y);
-				changed = ImGui.DragFloat2("##v", ref n, 0.05f);
+				changed = EditorGui.DragFloat2("##v", ref n, 0.05f);
 				context.Track(changed);
 				value = new Vector2(n.X, n.Y);
 			}
@@ -939,7 +954,7 @@ namespace LELEngine.Editor
 			{
 				Vector3 v = (Vector3)value;
 				NVector3 n = new NVector3(v.X, v.Y, v.Z);
-				changed = ImGui.DragFloat3("##v", ref n, 0.05f);
+				changed = EditorGui.DragFloat3("##v", ref n, 0.05f);
 				context.Track(changed);
 				value = new Vector3(n.X, n.Y, n.Z);
 			}
@@ -947,7 +962,7 @@ namespace LELEngine.Editor
 			{
 				Vector4 v = (Vector4)value;
 				NVector4 n = new NVector4(v.X, v.Y, v.Z, v.W);
-				changed = ImGui.DragFloat4("##v", ref n, 0.05f);
+				changed = EditorGui.DragFloat4("##v", ref n, 0.05f);
 				context.Track(changed);
 				value = new Vector4(n.X, n.Y, n.Z, n.W);
 			}
@@ -955,7 +970,7 @@ namespace LELEngine.Editor
 			{
 				Vector3 euler = ToEuler((Quaternion)value);
 				NVector3 n = new NVector3(euler.X, euler.Y, euler.Z);
-				changed = ImGui.DragFloat3("##v", ref n, 0.5f);
+				changed = EditorGui.DragFloat3("##v", ref n, 0.5f);
 				context.Track(changed);
 				if (changed)
 				{
@@ -966,7 +981,7 @@ namespace LELEngine.Editor
 			{
 				Color4 c = (Color4)value;
 				NVector4 n = new NVector4(c.R, c.G, c.B, c.A);
-				changed = ImGui.ColorEdit4("##v", ref n, ImGuiColorEditFlags.Float | ImGuiColorEditFlags.Hdr);
+				changed = EditorGui.ColorEdit4("##v", ref n, ImGuiColorEditFlags.Float | ImGuiColorEditFlags.Hdr);
 				context.Track(changed);
 				value = new Color4(n.X, n.Y, n.Z, n.W);
 			}
@@ -997,14 +1012,14 @@ namespace LELEngine.Editor
 		{
 			bool changed = false;
 			bool flags = type.IsDefined(typeof(FlagsAttribute), false);
-			if (ImGui.BeginCombo("##v", value.ToString()))
+			if (EditorGui.BeginCombo("##v", value.ToString()))
 			{
 				long current = Convert.ToInt64(value);
 				foreach (object option in Enum.GetValues(type))
 				{
 					long bits = Convert.ToInt64(option);
 					bool selected = flags ? bits != 0 && (current & bits) == bits : current == bits;
-					if (ImGui.Selectable(option.ToString(), selected))
+					if (EditorGui.Selectable(option.ToString(), selected))
 					{
 						current = flags ? (selected ? current & ~bits : current | bits) : bits;
 						value = Enum.ToObject(type, current);
@@ -1012,7 +1027,7 @@ namespace LELEngine.Editor
 					}
 				}
 
-				ImGui.EndCombo();
+				EditorGui.EndCombo();
 			}
 
 			return changed;
@@ -1023,15 +1038,15 @@ namespace LELEngine.Editor
 		{
 			int mask = ((LayerMask)value).value;
 			bool changed = false;
-			if (ImGui.BeginCombo("##v", LayerMaskPreview(mask)))
+			if (EditorGui.BeginCombo("##v", LayerMaskPreview(mask)))
 			{
-				if (ImGui.Selectable("Nothing", mask == 0))
+				if (EditorGui.Selectable("Nothing", mask == 0))
 				{
 					mask = 0;
 					changed = true;
 				}
 
-				if (ImGui.Selectable("Everything", mask == -1))
+				if (EditorGui.Selectable("Everything", mask == -1))
 				{
 					mask = -1;
 					changed = true;
@@ -1048,14 +1063,14 @@ namespace LELEngine.Editor
 
 					// Checkboxes keep the list open while several layers are ticked.
 					bool on = (mask & (1 << layer)) != 0;
-					if (ImGui.Checkbox(name + "##" + layer, ref on))
+					if (EditorGui.Checkbox(name + "##" + layer, ref on))
 					{
 						mask = on ? mask | (1 << layer) : mask & ~(1 << layer);
 						changed = true;
 					}
 				}
 
-				ImGui.EndCombo();
+				EditorGui.EndCombo();
 			}
 
 			context.Track(changed);
@@ -1074,21 +1089,21 @@ namespace LELEngine.Editor
 			{
 				Vector2i v = (Vector2i)value;
 				int[] values = { v.X, v.Y };
-				changed = ImGui.DragInt2("##v", ref values[0], 0.2f);
+				changed = EditorGui.DragInt2("##v", ref values[0], 0.2f);
 				value = new Vector2i(values[0], values[1]);
 			}
 			else if (type == typeof(Vector3i))
 			{
 				Vector3i v = (Vector3i)value;
 				int[] values = { v.X, v.Y, v.Z };
-				changed = ImGui.DragInt3("##v", ref values[0], 0.2f);
+				changed = EditorGui.DragInt3("##v", ref values[0], 0.2f);
 				value = new Vector3i(values[0], values[1], values[2]);
 			}
 			else
 			{
 				Vector4i v = (Vector4i)value;
 				int[] values = { v.X, v.Y, v.Z, v.W };
-				changed = ImGui.DragInt4("##v", ref values[0], 0.2f);
+				changed = EditorGui.DragInt4("##v", ref values[0], 0.2f);
 				value = new Vector4i(values[0], values[1], values[2], values[3]);
 			}
 

@@ -40,7 +40,7 @@ namespace LELEngine.Editor.Audio
 			AudioEvent current = project?.FindEvent(reference);
 			string shown = current != null ? current.Path : reference.IsNull ? "None (Audio Event)" : (reference.Path ?? reference.Guid) + "  (missing)";
 			bool changed = false;
-			if (ImGui.BeginCombo("##event_ref", shown))
+			if (EditorGui.BeginCombo("##event_ref", shown))
 			{
 				if (project == null)
 				{
@@ -50,8 +50,8 @@ namespace LELEngine.Editor.Audio
 				{
 					ImGui.SetNextItemWidth(-1);
 					if (ImGui.IsWindowAppearing()) ImGui.SetKeyboardFocusHere();
-					ImGui.InputTextWithHint("##event_search", "Search", ref eventSearch, 128);
-					if (ImGui.Selectable("None", reference.IsNull) && !reference.IsNull)
+					EditorGui.InputTextWithHint("##event_search", "Search", ref eventSearch, 128);
+					if (EditorGui.Selectable("None", reference.IsNull) && !reference.IsNull)
 					{
 						value = default(AudioEventReference);
 						changed = true;
@@ -66,7 +66,7 @@ namespace LELEngine.Editor.Audio
 							continue;
 						}
 
-						if (ImGui.Selectable(audioEvent.Path + "##ev" + audioEvent.Id, audioEvent == current) && audioEvent != current)
+						if (EditorGui.Selectable(audioEvent.Path + "##ev" + audioEvent.Id, audioEvent == current) && audioEvent != current)
 						{
 							value = AudioEventReference.FromEvent(audioEvent);
 							changed = true;
@@ -74,7 +74,7 @@ namespace LELEngine.Editor.Audio
 					}
 				}
 
-				ImGui.EndCombo();
+				EditorGui.EndCombo();
 			}
 
 			if (ImGui.IsItemHovered() && current != null)
@@ -82,7 +82,7 @@ namespace LELEngine.Editor.Audio
 				ImGui.SetTooltip(current.Path + "\nGUID " + current.Id + "\n" + current.Tracks.Count + " tracks" + (current.Spatializer.Enabled ? ", 3D" : ", 2D") + "\nDouble click: open in the Audio Studio");
 			}
 
-			if (ImGui.IsItemHovered() && ImGui.IsMouseDoubleClicked(ImGuiMouseButton.Left) && current != null && project != null)
+			if (EditorGui.IsItemDoubleClicked() && current != null && project != null)
 			{
 				context.Editor?.OpenAudioStudio(project.AssetPath, current.Id);
 			}
@@ -103,7 +103,7 @@ namespace LELEngine.Editor.Audio
 
 			float width = (ImGui.GetContentRegionAvail().X - ImGui.GetStyle().ItemSpacing.X) * 0.5f;
 			ImGui.BeginDisabled(emitter.Event.IsNull || !AudioSystem.IsInitialized);
-			if (ImGui.Button("Play", new NVector2(width, 0)))
+			if (EditorGui.Button("Play", new NVector2(width, 0)))
 			{
 				emitter.Play();
 			}
@@ -114,7 +114,7 @@ namespace LELEngine.Editor.Audio
 			}
 
 			ImGui.SameLine();
-			if (ImGui.Button("Stop", new NVector2(width, 0)))
+			if (EditorGui.Button("Stop", new NVector2(width, 0)))
 			{
 				emitter.Stop();
 			}
@@ -126,7 +126,7 @@ namespace LELEngine.Editor.Audio
 				ImGui.TextDisabled(instance.State + " at " + instance.TimelinePosition.ToString("0.00") + " s, " + instance.VoiceCount + " voices");
 			}
 
-			if (audioEvent != null && project != null && ImGui.SmallButton("Open in Audio Studio"))
+			if (audioEvent != null && project != null && EditorGui.SmallButton("Open in Audio Studio"))
 			{
 				context.Editor.OpenAudioStudio(project.AssetPath, audioEvent.Id);
 			}
@@ -141,7 +141,7 @@ namespace LELEngine.Editor.Audio
 			AudioProject project = CurrentProject();
 			FieldDrawer.Label("Pick Snapshot", null, context);
 			AudioSnapshot current = project?.FindSnapshotByName(trigger.Snapshot);
-			if (ImGui.BeginCombo("##pick_snapshot", current != null ? current.Name : string.IsNullOrEmpty(trigger.Snapshot) ? "None" : trigger.Snapshot + "  (missing)"))
+			if (EditorGui.BeginCombo("##pick_snapshot", current != null ? current.Name : string.IsNullOrEmpty(trigger.Snapshot) ? "None" : trigger.Snapshot + "  (missing)"))
 			{
 				if (project == null || project.Snapshots.Count == 0)
 				{
@@ -151,7 +151,7 @@ namespace LELEngine.Editor.Audio
 				{
 					foreach (AudioSnapshot snapshot in project.Snapshots)
 					{
-						if (ImGui.Selectable(snapshot.Name + "##snap" + snapshot.Id, snapshot == current) && snapshot != current)
+						if (EditorGui.Selectable(snapshot.Name + "##snap" + snapshot.Id, snapshot == current) && snapshot != current)
 						{
 							context.BeginEdit();
 							trigger.Snapshot = snapshot.Name;
@@ -160,18 +160,18 @@ namespace LELEngine.Editor.Audio
 					}
 				}
 
-				ImGui.EndCombo();
+				EditorGui.EndCombo();
 			}
 
 			float width = (ImGui.GetContentRegionAvail().X - ImGui.GetStyle().ItemSpacing.X) * 0.5f;
 			ImGui.BeginDisabled(string.IsNullOrEmpty(trigger.Snapshot) || !AudioSystem.IsInitialized);
-			if (ImGui.Button("Start", new NVector2(width, 0)))
+			if (EditorGui.Button("Start", new NVector2(width, 0)))
 			{
 				trigger.StartSnapshot();
 			}
 
 			ImGui.SameLine();
-			if (ImGui.Button("Stop", new NVector2(width, 0)))
+			if (EditorGui.Button("Stop", new NVector2(width, 0)))
 			{
 				trigger.StopSnapshot();
 			}
@@ -208,14 +208,14 @@ namespace LELEngine.Editor.Audio
 
 			float width = (ImGui.GetContentRegionAvail().X - ImGui.GetStyle().ItemSpacing.X) * 0.5f;
 			ImGui.BeginDisabled(clip.Error != null || !AudioSystem.IsInitialized);
-			if (ImGui.Button("Play", new NVector2(width, 0)))
+			if (EditorGui.Button("Play", new NVector2(width, 0)))
 			{
 				clipPreview?.Stop(AudioStopMode.Immediate);
 				clipPreview = AudioSystem.PreviewClip(clip);
 			}
 
 			ImGui.SameLine();
-			if (ImGui.Button("Stop", new NVector2(width, 0)))
+			if (EditorGui.Button("Stop", new NVector2(width, 0)))
 			{
 				clipPreview?.Stop(AudioStopMode.Immediate);
 				clipPreview = null;
@@ -239,7 +239,7 @@ namespace LELEngine.Editor.Audio
 
 			FieldDrawer.Label("Force Mono", null, context);
 			bool mono = importer.forceMono;
-			if (ImGui.Checkbox("##mono", ref mono) && mono != importer.forceMono)
+			if (EditorGui.Checkbox("##mono", ref mono) && mono != importer.forceMono)
 			{
 				SaveImporter(clip, i => i.forceMono = mono);
 			}
@@ -269,7 +269,7 @@ namespace LELEngine.Editor.Audio
 		/// <summary>Inspector of the audio project asset: open it, and a summary.</summary>
 		public static void DrawProject(string assetPath, InspectorContext context)
 		{
-			if (ImGui.Button("Open in Audio Studio", new NVector2(-1, 0)))
+			if (EditorGui.Button("Open in Audio Studio", new NVector2(-1, 0)))
 			{
 				context.Editor.OpenAudioStudio(assetPath, null);
 			}
@@ -313,9 +313,9 @@ namespace LELEngine.Editor.Audio
 			List<string> projects = AssetDatabase.GetAllAssetPaths(AudioProject.Extension);
 			string currentPath = string.IsNullOrEmpty(settings.Project) ? null : AssetDatabase.GetPath(settings.Project);
 			string shown = currentPath ?? (projects.Count > 0 ? "Automatic (" + projects[0] + ")" : "None (create one in the Audio Studio)");
-			if (ImGui.BeginCombo("##audioproject", shown))
+			if (EditorGui.BeginCombo("##audioproject", shown))
 			{
-				if (ImGui.Selectable("Automatic (the only .lelaudio file)", currentPath == null) && currentPath != null)
+				if (EditorGui.Selectable("Automatic (the only .lelaudio file)", currentPath == null) && currentPath != null)
 				{
 					context.BeginEdit();
 					settings.Project = "";
@@ -325,7 +325,7 @@ namespace LELEngine.Editor.Audio
 
 				foreach (string path in projects)
 				{
-					if (ImGui.Selectable(path, string.Equals(path, currentPath, StringComparison.OrdinalIgnoreCase)) && !string.Equals(path, currentPath, StringComparison.OrdinalIgnoreCase))
+					if (EditorGui.Selectable(path, string.Equals(path, currentPath, StringComparison.OrdinalIgnoreCase)) && !string.Equals(path, currentPath, StringComparison.OrdinalIgnoreCase))
 					{
 						context.BeginEdit();
 						settings.Project = AssetDatabase.GetGuid(path) ?? "";
@@ -334,7 +334,7 @@ namespace LELEngine.Editor.Audio
 					}
 				}
 
-				ImGui.EndCombo();
+				EditorGui.EndCombo();
 			}
 
 			changed |= FieldDrawer.DrawFields(settings, context, filter: field => field.Name != nameof(AudioSettings.Project));

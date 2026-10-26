@@ -106,8 +106,9 @@
 - Batch mode (since 2026-10-22) builds the editor project too when the project has editor scripts, loads both
   assemblies into one `ScriptDomain.GameLoadContext` (plain `Assembly.Load(byte[])` gives each its own anonymous
   context, so Game.Editor.dll could not resolve Game.dll) and lets `-executeMethod` find types of Game.Editor.dll
-  (`BatchMode.editorScripts`; not registered in `TypeRegistry`, no `EditorExtensions` in batch: editor windows and
-  menus are not available there, plain static methods are).
+  (`BatchMode.editorScripts`; not registered in `TypeRegistry`). Since 2026-10-26 `-executeMethod` and `-listen` run
+  inside a whole editor without UI (`BatchEditor`, see "Editor automation"): editor windows, menus and
+  `EditorAutomation` work there; a plain `-build` keeps the light path.
 - Whether the built scripts are current (editor start, batch mode; `ScriptDomain.IsAssemblyCurrent`): a successful
   build records the scripts it compiled next to its assemblies (`Game.dll.sources`, `Game.Editor.dll.sources`: a
   SHA-256 of every .cs under Assets with its size and modification time, taken when the build starts), and the build is
@@ -133,6 +134,70 @@
   Begin/Push is reported as an error.
 - Test hook: `menuitem=N;Tools/Item|M;Window/Other` runs `[MenuItem]`s at frames N, M (with `touchscript=` for a
   reload, `playframe=`/`stopframe=` for play mode and `buildgame=` for a player build).
+
+## Editor automation (EditorAutomation, CLI, window screenshots; 2026-10-26)
+
+- The user wants AI to drive the editor natively (no MCP, no mouse simulation): `LELEngine.Editor/Automation`.
+  `EditorAutomation` (public, static) is the C# API: windows (`GetWindows`, `OpenWindow`, `FocusWindow`,
+  `CloseWindow`), `GetScreenshot(window, w, h, layout, viewFrames)` (also `EditorWindow.GetScreenshot(w, h)`), UI
+  elements (`GetElements`, `Click`, `DoubleClick`, `OpenContextMenu`, `Input`, `Scroll`, `Key`, `TypeText`), menus
+  (`GetMenuItems`, `ExecuteMenuItem`), scene and objects (`OpenScene`, `SaveScene`, `FindObject` "A/B" / name / "#id",
+  `Select`, `SelectAsset`, `DescribeHierarchy`, `DescribeObject`, `GetField`, `SetField`, `Reparent`, `Rename`,
+  `AddComponent`), `Play` / `Stop` / `Pause` / `Step` / `Undo` / `Redo` / `RefreshAssets`, console, waits
+  (`NextFrame`, `WaitUntil`, `WaitForIdle`). Everything runs on the main thread between frames (`AutomationContext`,
+  pumped by `EditorAutomation.Pump` from `MainWindow.OnUpdateFrame`); async code continues there.
+- CLI: every editor (GUI or batch with `-listen`) serves a named pipe per project (`LELEngine.Editor.` + 16 hex of the
+  SHA-256 of the lowercased project path; owner and ACL = the user, the client checks the owner). `LELEngine.Editor.Console
+  [-projectPath P] -command <words...>` (everything after `-command` is the command), `-script file`, `-json`; exit 0 /
+  1 failed / 2 no editor. `-command help` lists the commands (`AutomationCommands`). Screenshots default to
+  `<project>/Library/Screenshots/`. Batch: `-batchmode -projectPath P -listen` serves until `quit [--discard]`;
+  `-executeMethod Type.Method` may return void / bool / int / Task / Task<T> (`string[] args` optional).
+- Batch mode draws no UI at all (the user's call): `BatchEditor` makes `EditorApplication(hasUI: false)` in a hidden
+  `MainWindow`, ticks it at 60 Hz without UI frames, waits for `IsBusy` (scripts, assets, settings, window restore,
+  scene loads) to settle. UI elements and keys need the GUI editor (clear error in batch); screenshots and element
+  lists work in batch through layout captures.
+- Screenshots are exclusive (only the asked window, nothing over it). `WindowCapture.Capture`: FrameCapture when the
+  window is on screen at the asked size (re-renders its own draw lists from the last frame: the window, its child
+  windows, popups / menus / tooltips opened from it, the dock host's tab bar clipped to it); else LayoutCapture (a fresh
+  ImGui context sharing the owner's font atlas (`EnsureAtlasReady` first), the owner's ini with the window docked
+  alone in a DockSpaceOverViewport, 4 frames, state and scroll copied from the owner, rendered to an FBO). Scene /
+  Game views render their own image at that size (`viewFrames`). `--layout` forces the layout path. Pixels RGBA
+  top-first, `SavePng`; `Anchors` = the elements with their rectangles in the image.
+- Elements, not the mouse: `EditorGui` wrappers (`EditorGui.Controls.cs`: Button, Checkbox, Selectable, TreeNodeEx,
+  BeginTabItem, BeginCombo, InputText*, CollapsingHeader, IsItemClicked, IsItemDoubleClicked, BeginPopupContextItem,
+  ...) replace the raw ImGui calls in every editor file and record elements `kind:Text` per window (`TestAnchors`:
+  "#2" for repeats; a hidden-label widget after a field's label column takes the label: `checkbox:Cast Shadows`);
+  menus go through `EditorMenu` (`menu:Path`). `UIAutomation` invokes one by ImGui item id in its window and context
+  for up to 4 frames: ImGui's own activation (NavActivateId etc. around that widget call: buttons press, text fields
+  start editing with the text selected), click checks report it, context menus open, tabs get SetSelected. It works
+  when the element is covered or its window is a tab behind another (focused first). Code acting on a release (the
+  hierarchy row) must also accept `EditorGui.IsItemInvoked()`. New editor code: use the `EditorGui` wrappers, not
+  raw `ImGui.Button` etc. Canvases (scene view picking, VFX graph, curve editor, audio timeline, UI Builder canvas)
+  are not elements: use the actions (`select`, `set`, menus) there.
+- Names as the inspector shows them (the user's call, 2026-10-26: every component's fields, the game's own too, as
+  named in the inspector): an element is `kind:path`, the path built from scopes (`TestAnchors.PushScope`: the
+  inspector pushes each component's title, `FieldDrawer.Header` its field (nested objects, lists, dictionaries),
+  list rows their index, dictionary entries their key, materials their name; open combos (`EditorGui.EndCombo`
+  pops) their own name) plus the widget's text (a hidden-label widget takes its line's label column:
+  `input:Mover/Speed`, `input:Mover/Settings/Max Speed`, `input:Mover/Weights/1`, `input:Mover/Loot/gold/value`,
+  `item:Mover/Mode/Fast`). A text equal to its scope's last segment adds none (`header:Mover`). Lookup
+  (`TestAnchors.FindElements`): whole name, path, or the path's end at a `/` ("Speed"), newest drawing first, controls
+  before the hooks' anchors (`row:`, `field:`) when no kind is named, whole paths before ends; several left = an
+  error listing them. Value widgets (`EditorGui.DragFloat/2/3/4`, `DragInt/2/3/4`, `SliderFloat/Int`, `InputInt`,
+  `InputFloat`, `ColorEdit3/4`, `InputText*`, `Checkbox`) record their value (`elements` prints `= value`) and take
+  one: `input <element> <value>` = `UIAutomation.Action.SetValue`, parsed by `ValueText` ("1, 2, 3", "#FF8000",
+  true), written after the widget, which then returns true and reads as edited and deactivated after an edit
+  (`UIAutomation.ValueApplied` sets ImGui's LastItemData / DeactivatedItemData), so `InspectorContext.Track` makes
+  one undo step per input. Combos: click, then the option's element. Verified 2026-10-26 on a scratch `Mover`
+  component (float, int, string, bool, Vector3, Color4, enum, nested class, List, Dictionary, Transform): 10 inputs,
+  values in the inspector, 10 undos back to the start.
+- Editor scripts: `EditorGUILayout.Button / Toggle / TextField / Foldout` (and `Field` / `PropertyField`) are
+  elements; a raw `ImGui.Button` in a script window is not (by design: no hook into raw ImGui).
+- Verify recipe (scratchpad `AutoProbe` of 2026-10-26: `ProbeWindow` + `AutoTest.Run`): GUI editor `project=P focus=0`,
+  then the CLI: `windows`, `elements "Probe Window"`, `click "button:Press me"`, `input "input:Note" text`,
+  `click hierarchy:Sphere` + `status`, `click "checkbox:Cast Shadows"` + `get`, `undo`, screenshots of covered
+  windows; batch `-executeMethod AutoTest.Run` and `-listen` + `quit`. Start / stop test editors from the PowerShell
+  tool (a Bash-run `Start-Process` hangs on inherited handles).
 
 ## Player startup and splash screen
 

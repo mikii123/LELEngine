@@ -53,7 +53,7 @@ namespace LELEngine.Editor
 			bool changed = false;
 			ImGui.Spacing();
 			float width = (ImGui.GetContentRegionAvail().X - ImGui.GetStyle().ItemSpacing.X) * 0.5f;
-			if (ImGui.Button("Bake", new NVector2(width, 0)))
+			if (EditorGui.Button("Bake", new NVector2(width, 0)))
 			{
 				context.Editor.Edits.Begin(context.UndoTarget);
 				var watch = System.Diagnostics.Stopwatch.StartNew();
@@ -65,7 +65,7 @@ namespace LELEngine.Editor
 
 			ImGui.SameLine();
 			ImGui.BeginDisabled(surface.NavMeshData == null || surface.NavMeshData.IsEmpty);
-			if (ImGui.Button("Clear", new NVector2(width, 0)))
+			if (EditorGui.Button("Clear", new NVector2(width, 0)))
 			{
 				context.Editor.Edits.Begin(context.UndoTarget);
 				surface.RemoveNavMeshData();

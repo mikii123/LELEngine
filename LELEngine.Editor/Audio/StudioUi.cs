@@ -185,7 +185,7 @@ namespace LELEngine.Editor.Audio
 			float labelHeight = label != null ? lineHeight + 1f : 0f;
 			float height = labelHeight + diameter + lineHeight + 3f;
 			NVector2 origin = ImGui.GetCursorScreenPos();
-			ImGui.InvisibleButton(id, new NVector2(width, height));
+			EditorGui.InvisibleButton(id, new NVector2(width, height));
 			bool hovered = ImGui.IsItemHovered();
 			bool active = ImGui.IsItemActive();
 			uint itemId = ImGui.GetItemID();
@@ -352,7 +352,7 @@ namespace LELEngine.Editor.Audio
 		public static bool TransportButton(string id, TransportIcon icon, bool active, NVector2 size, string tooltip)
 		{
 			NVector2 min = ImGui.GetCursorScreenPos();
-			bool pressed = ImGui.InvisibleButton(id, size);
+			bool pressed = EditorGui.InvisibleButton(id, size);
 			bool hovered = ImGui.IsItemHovered();
 			bool held = ImGui.IsItemActive();
 			ImDrawListPtr draw = ImGui.GetWindowDrawList();
@@ -373,7 +373,7 @@ namespace LELEngine.Editor.Audio
 		public static bool IconToggle(string id, TransportIcon icon, bool on, NVector2 size, string tooltip)
 		{
 			NVector2 min = ImGui.GetCursorScreenPos();
-			bool pressed = ImGui.InvisibleButton(id, size);
+			bool pressed = EditorGui.InvisibleButton(id, size);
 			bool hovered = ImGui.IsItemHovered();
 			ImDrawListPtr draw = ImGui.GetWindowDrawList();
 			draw.AddRectFilled(min, min + size, hovered ? Rgb(0.2f, 0.2f, 0.21f) : Rgb(0.14f, 0.14f, 0.15f), 3f);
@@ -447,7 +447,7 @@ namespace LELEngine.Editor.Audio
 				ImGui.SetCursorScreenPos(boxMin);
 				ImGui.PushID(id + i);
 				bool enabled = i == 0 || beatsAvailable;
-				if (ImGui.InvisibleButton("##sel", boxMax - boxMin) && enabled && !selected)
+				if (EditorGui.InvisibleButton("##sel", boxMax - boxMin) && enabled && !selected)
 				{
 					beats = i == 1;
 					clicked = true;
@@ -481,7 +481,7 @@ namespace LELEngine.Editor.Audio
 		public static bool TextToggle(string id, string text, bool on, uint onColor, NVector2 size, string tooltip)
 		{
 			NVector2 min = ImGui.GetCursorScreenPos();
-			bool pressed = ImGui.InvisibleButton(id, size);
+			bool pressed = EditorGui.InvisibleButton(id, size);
 			bool hovered = ImGui.IsItemHovered();
 			ImDrawListPtr draw = ImGui.GetWindowDrawList();
 			uint background = on ? onColor : hovered ? Rgb(0.42f, 0.42f, 0.44f) : Rgb(0.34f, 0.34f, 0.36f);

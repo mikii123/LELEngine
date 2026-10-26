@@ -100,6 +100,17 @@ namespace LELEngine.Editor
 			EditorExtensions.Current.CloseWindow(this);
 		}
 
+		/// <summary>
+		///     An image of this window, <paramref name="width" /> x <paramref name="height" /> pixels (0: its size on screen).
+		///     At its size on screen it is the editor's last frame; at another size (and in batch mode, where nothing else is
+		///     drawn) the window is laid out again off screen at that size. Call it between frames (Update, a menu item,
+		///     automation code), not from <see cref="OnGUI" />. See <see cref="EditorAutomation.GetScreenshot" />.
+		/// </summary>
+		public EditorScreenshot GetScreenshot(int width = 0, int height = 0)
+		{
+			return EditorExtensions.Current.PanelOf(this).GetScreenshot(width, height);
+		}
+
 		#endregion
 
 		#region ProtectedMethods

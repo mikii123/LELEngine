@@ -100,7 +100,7 @@ namespace LELEngine.Editor
 
 				any = true;
 				ImGui.PushID(component.Id.ToString());
-				if (ImGui.TreeNodeEx(SerializationUtility.NicifyName(component.GetType().Name) + "##inline", ImGuiTreeNodeFlags.DefaultOpen | ImGuiTreeNodeFlags.SpanAvailWidth))
+				if (EditorGui.TreeNodeEx(SerializationUtility.NicifyName(component.GetType().Name) + "##inline", ImGuiTreeNodeFlags.DefaultOpen | ImGuiTreeNodeFlags.SpanAvailWidth))
 				{
 					changed |= DrawComponent(component, context, depth + 1, preview);
 					ImGui.TreePop();
