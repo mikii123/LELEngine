@@ -1,8 +1,10 @@
 # LELEngine
 
-A C# game engine with a Unity-like workflow: GameObjects and components, an editor with scene/game views and
-play mode, a standalone player for game builds, Lumen-inspired real-time global illumination, a VFX Graph-style
-GPU particle system with a node editor, a UI Toolkit-style UI system and Recast/Detour-style navigation.
+A C# game engine with a Unity-like workflow: GameObjects and components, prefabs and ScriptableObjects, an editor
+with scene/game views and play mode, a standalone player for game builds, Lumen-inspired real-time global
+illumination, a VFX Graph-style GPU particle system with a node editor, an FMOD Studio-style audio system, a
+Rewired-style input system, a UI Toolkit-style UI system and Recast/Detour-style navigation. The editor can be driven
+from code and the command line (automation, window screenshots) and builds games headless on Windows and Linux.
 
 Built on .NET 10, OpenTK 4.9 (GLFW) and OpenGL 4.6 (4.3 minimum), developed and tuned on an Intel integrated GPU.
 
@@ -21,6 +23,20 @@ Built on .NET 10, OpenTK 4.9 (GLFW) and OpenGL 4.6 (4.3 minimum), developed and 
   to the fast binary form (LELB: schema tables, polymorphic values, bulk arrays). The conversion needs no types
   loaded, so a build never runs game code.
 - Assets are referenced by GUID from `.meta` sidecar files (`AssetDatabase`), which also hold import settings.
+  Renaming or moving an asset in the editor keeps every reference.
+- Fields can hold interfaces and abstract types (polymorphic, a type picker in the inspector), dictionaries and nested
+  collections; `[SerializeReference]`-style inline objects need no attribute.
+- Prefabs as in Unity: variants, nested prefabs and per-instance overrides of fields, list elements and dictionary
+  entries, added and removed components and objects; apply and revert per property or per instance, prefab mode with
+  auto save, unpacking. Instances rebuild from the prefab file when it changes. `Prefab.Instantiate` at runtime.
+- `ScriptableObject` data assets (`[CreateAssetMenu]`, edited in the inspector or inline with `[InlineEditor]`),
+  `Resources.Load` / `LoadAll` and `Resources.LoadAsync` (read on a loading thread, uploaded within a frame budget).
+- Scenes load synchronously or with `SceneManager.LoadSceneAsync` (single or additive, activation held until
+  allowed): the document and its assets are read on a loading thread, textures decode on worker threads, shaders
+  compile together, the GPU uploads are spread over frames. Every load logs where its time went.
+- Component lookups take interfaces: `GetComponent<IDamageable>()`, `GetComponentInChildren` / `InParent` (and the
+  plural forms), with inactive objects on request. `AnimationCurve` and `Gradient` with Unity's API and inspector
+  editors (curve editor with tangent handles, presets and wrap modes).
 - Textures: 2D, 3D (slice grids), cubemaps (crosses, strips, panoramas, HDR) and sprites (single or sliced sheets),
   configured per file like Unity's texture importer. Materials are documents of typed properties declared by the
   shader's `//Properties` block.
@@ -128,6 +144,26 @@ point lights.*
   WAV, Ogg Vorbis and MP3. Game builds compile the project into bank files (`Data/Audio/Banks`) that load with one
   read.
 
+![The Audio Studio](docs/images/audio-studio.png)
+*The Audio Studio with a music event: a logic track with a tempo marker, destination markers and a loop region,
+drum, hat (a shuffled multi instrument), bass and pad tracks with waveforms, the Intensity parameter's knob in the
+transport, the event's deck and the mixer with the Music and SFX buses.*
+
+**Input (`LELEngine.InputSystem`)**
+- Modeled on Rewired: the game reads actions of a player (`player.GetAxis("Move Horizontal")`,
+  `GetButtonDown("Fire")`), never keys. Controller maps bind keyboard keys, mouse buttons and axes and the standard
+  gamepad's sticks, triggers and buttons to actions, grouped by map category (what the game is doing) and layout
+  (alternative bindings); input behaviors shape the values (dead zones, digital axis gravity, double,
+  short and long presses).
+- Players get controllers assigned (gamepads auto-assigned and handed back on reconnect), know their last active
+  controller (for prompts that follow the device in use) and name a binding for the UI; players can remap, and their
+  maps are saved per user. A virtual gamepad drives tests.
+- The Input Manager (Window > Input Manager): settings, players, actions, categories, layouts, behaviors, a page per
+  controller type and a live debug view. The project names its configuration in Project Settings > Input.
+
+![The Input Manager](docs/images/input-manager.png)
+*The Input Manager's gamepad map: each action bound to a stick, trigger or button, with the axis range and inversion.*
+
 **GPU particles (`LELEngine.VFX`)**
 - A VFX Graph-style system. A `.vfx` asset is a graph of contexts (Event, Spawn, Initialize, Update, Output
   Quad / Mesh / Point / Line / Strip) that hold blocks, fed by operators and blackboard properties. A
@@ -192,6 +228,11 @@ GPU event, ribbons and soft smoke puffs, all simulated and drawn on the GPU.*
 **Editor (`LELEngine.Editor`)**
 - Project launcher, dockable Dear ImGui interface, hierarchy, inspector, project browser, console, undo/redo and
   gizmos (including 2D collider outlines).
+- Inspector: drag and drop of objects, components and assets onto fields (with an object picker), inline editors of
+  referenced assets, prefabs and components, prefab override marks with apply / revert, colored component headers,
+  an inspector lock.
+- Console in the style of Console Pro: game and editor messages, stack traces, collapsing,
+  regex search, tags and filters; Preferences with color themes.
 - Models: drag a model file into the scene view or onto the hierarchy to build its GameObjects; its inspector shows
   the import settings (Apply reimports and reloads the scene), the size, meshes, materials and node tree. A material
   dropped on an object goes into the slot of the sub-mesh under the mouse.
@@ -219,8 +260,15 @@ blackboard properties wired into the blocks.*
 - Project Settings (Edit > Project Settings...) has tabs for lighting quality (shadow map, GI method and its
   tunables), 2D physics and the build. They are saved to `ProjectSettings/ProjectSettings.asset` and go into
   builds. The Lighting panel keeps what belongs to a scene: its environment, shadow reach and GI volume.
-- The Build tab (File > Build Settings...) produces a standalone game folder. Batch mode (`-batchmode`) covers
-  build machines and scripts.
+- The Build tab (File > Build Settings...) produces a standalone game folder, framework-dependent or self-contained,
+  with a splash screen shown while the game loads in the background. Batch mode (`-batchmode`) covers build machines
+  and scripts; the editor also builds Windows games on Linux (a headless container with Mesa), and texture and
+  distance field bakes are cached by content, so a fresh checkout reuses them.
+- **Automation**: every editor serves its project on a named pipe. `LELEngine.Editor.Console -command ...` (or the C#
+  API `EditorAutomation`, also from `-executeMethod`) lists windows and their UI elements, clicks buttons, types into
+  fields and sets inspector values by the names the inspector shows (`input "Mover/Speed" 2.5`, one undo step), runs
+  menus, opens scenes, selects objects, enters play mode, reads the console and takes screenshots of a single
+  window, even one covered by others or not on screen. `-batchmode -listen` serves the same without drawing any UI.
 
 ![Play mode in the game view](docs/images/play-mode.png)
 *Play mode: the game view runs the scene's scripts (here the orbiting emitters).*

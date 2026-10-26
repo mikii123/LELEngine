@@ -626,6 +626,10 @@ namespace LELEngine.Editor.Audio
 			NVector2 avail = ImGui.GetContentRegionAvail();
 			if (avail.X < 120f || avail.Y < 90f)
 			{
+				// The sheet tabs left the cursor set below them: an item ends that before the window does (ImGui asserts
+				// on a window ending with the cursor set past its content, e.g. on the studio's first frame, before the
+				// dock layout gives the window its size).
+				ImGui.Dummy(NVector2.Zero);
 				return;
 			}
 
