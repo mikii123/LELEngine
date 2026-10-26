@@ -52,6 +52,10 @@ namespace LELEngine.Editor
 
 		private static readonly Regex VersionLine = new Regex(@"^[ \t]*#version[ \t]+(\d+)", RegexOptions.Multiline | RegexOptions.Compiled);
 
+		// Loaded once and never freed: shaderc registers exit handlers inside itself, so unloading it (Dispose) left the
+		// process's exit calling into unmapped code (a segfault after every batch build on Linux).
+		private static readonly Lazy<Shaderc> Api = new Lazy<Shaderc>(Shaderc.GetApi);
+
 		#endregion
 
 		#region PublicMethods
@@ -61,7 +65,7 @@ namespace LELEngine.Editor
 		{
 			var result = new Result();
 			var watch = Stopwatch.StartNew();
-			Shaderc api = Shaderc.GetApi();
+			Shaderc api = Api.Value;
 			Compiler* compiler = api.CompilerInitialize();
 			CompileOptions* options = api.CompileOptionsInitialize();
 			try
@@ -88,7 +92,6 @@ namespace LELEngine.Editor
 			{
 				api.CompileOptionsRelease(options);
 				api.CompilerRelease(compiler);
-				api.Dispose();
 			}
 
 			result.Milliseconds = watch.ElapsedMilliseconds;
