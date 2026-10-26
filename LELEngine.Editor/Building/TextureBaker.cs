@@ -14,7 +14,8 @@ namespace LELEngine.Editor
 	///     textures), BC7-compressed (<see cref="Bc7Encoder" />, or BCnEncoder's slower search for the high quality
 	///     setting) unless the importer asks for no compression (<see cref="TextureCompression" />).
 	///     HDR images stay RGBA16F, volumes RGBA8 (their mip levels come from the GPU). Bakes are cached in
-	///     Library/TextureCache per asset, valid while the image, its meta file and this baker's version are the same.
+	///     Library/TextureCache per asset, valid while the image's content, its meta file and this baker's version are the
+	///     same.
 	/// </summary>
 	internal static class TextureBaker
 	{
@@ -73,13 +74,16 @@ namespace LELEngine.Editor
 
 		#region PrivateMethods
 
-		/// <summary>What the bake depends on: the image (size, time), its meta file (import settings) and this baker.</summary>
+		/// <summary>
+		///     What the bake depends on: the image's content, its meta file (import settings) and this baker. Contents, not
+		///     file times: a fresh checkout (CI) gives every file a new time, which made every cached bake stale.
+		/// </summary>
 		private static string Stamp(string absolute)
 		{
-			var info = new FileInfo(absolute);
 			string meta = absolute + AssetDatabase.MetaExtension;
 			string metaHash = File.Exists(meta) ? Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(meta))) : "";
-			return $"{Version}|{info.Length}|{info.LastWriteTimeUtc.Ticks}|{metaHash}";
+			using FileStream image = File.OpenRead(absolute);
+			return $"{Version}|{image.Length}|{Convert.ToHexString(SHA256.HashData(image))}|{metaHash}";
 		}
 
 		private static byte[] Encode(ImportedTexture imported, TextureCompression compression)

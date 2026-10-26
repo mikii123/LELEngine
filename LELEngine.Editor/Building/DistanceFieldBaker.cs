@@ -117,11 +117,18 @@ namespace LELEngine.Editor
 			DistanceFieldAtlas atlas = null;
 			try
 			{
+				// One stamp per model: its meshes and shapes are requests of their own, and the stamp reads the whole file.
+				var stamps = new Dictionary<string, string>(StringComparer.Ordinal);
 				foreach (Request request in requests.Values)
 				{
 					Vector3i key = request.Shape;
 					string cacheFile = CacheFile(project, request, key);
-					string stamp = Stamp(request.ModelPath);
+					if (!stamps.TryGetValue(request.ModelPath, out string stamp))
+					{
+						stamp = Stamp(request.ModelPath);
+						stamps[request.ModelPath] = stamp;
+					}
+
 					BakedDistanceField field = ReadCache(cacheFile, stamp);
 					if (field != null)
 					{
@@ -381,14 +388,19 @@ namespace LELEngine.Editor
 			return Path.Combine(project.LibraryPath, "DistanceFieldCache", $"{guid}-{Hash(request.MeshName ?? "")}-{key.X}_{key.Y}_{key.Z}{DistanceFieldFile.Extension}");
 		}
 
-		/// <summary>What a field depends on: the model file and its import settings, the field layout and this baker.</summary>
+		/// <summary>
+		///     What a field depends on: the model file's content and its import settings, the field layout and this baker.
+		///     Contents, not file times: a fresh checkout (CI) gives every file a new time, which made every cached field
+		///     stale.
+		/// </summary>
 		private static string Stamp(string modelPath)
 		{
 			string absolute = AssetDatabase.ToAbsolute(modelPath);
-			var info = new FileInfo(absolute);
 			string meta = absolute + AssetDatabase.MetaExtension;
 			string metaHash = File.Exists(meta) ? Hash(File.ReadAllText(meta)) : "";
-			return $"{Version}|{DistanceFieldAtlas.TexelsAlongMaxAxis}|{DistanceFieldAtlas.Padding}|{DistanceFieldAtlas.AtlasXY}|{info.Length}|{info.LastWriteTimeUtc.Ticks}|{metaHash}";
+			using FileStream model = File.OpenRead(absolute);
+			string modelHash = Convert.ToHexString(SHA256.HashData(model));
+			return $"{Version}|{DistanceFieldAtlas.TexelsAlongMaxAxis}|{DistanceFieldAtlas.Padding}|{DistanceFieldAtlas.AtlasXY}|{model.Length}|{modelHash}|{metaHash}";
 		}
 
 		private static BakedDistanceField ReadCache(string file, string stamp)
