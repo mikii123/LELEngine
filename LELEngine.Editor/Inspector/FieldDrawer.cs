@@ -262,9 +262,17 @@ namespace LELEngine.Editor
 			return changed;
 		}
 
-		/// <summary>Label column; the next widget fills the rest of the line.</summary>
+		/// <summary>
+		///     Label column; the next widget fills the rest of the line. A hidden label (ImGui's "##id") draws no column
+		///     and keeps the caller's width (<c>ImGui.SetNextItemWidth</c>), as ImGui's own widgets do.
+		/// </summary>
 		public static void Label(string label, FieldInfo info, InspectorContext context)
 		{
+			if (IsHiddenLabel(label))
+			{
+				return;
+			}
+
 			ImGui.AlignTextToFramePadding();
 			OverrideLabel(label, context, false, false);
 			ShowTooltip(info);
@@ -272,9 +280,23 @@ namespace LELEngine.Editor
 			ImGui.SetNextItemWidth(-1);
 		}
 
+		/// <summary>The label as shown: ImGui's "##" starts the part that is only the widget's id.</summary>
+		private static string ShownLabel(string label)
+		{
+			int hidden = label?.IndexOf("##", StringComparison.Ordinal) ?? -1;
+			return hidden >= 0 ? label.Substring(0, hidden) : label;
+		}
+
+		/// <summary>A label that is only an id ("##id"): nothing to show.</summary>
+		private static bool IsHiddenLabel(string label)
+		{
+			return label != null && label.StartsWith("##", StringComparison.Ordinal);
+		}
+
 		/// <summary>A field's label text; a prefab override's in bold with the override bar and its Apply / Revert menu (right click).</summary>
 		private static void OverrideLabel(string label, InspectorContext context, bool disabled, bool within)
 		{
+			label = ShownLabel(label);
 			bool overridden = context.IsOverridden(within);
 			bool bold = overridden && EditorFonts.PushBold();
 			if (disabled && !overridden)
@@ -386,10 +408,13 @@ namespace LELEngine.Editor
 
 			if (row.Label == null)
 			{
-				ImGui.AlignTextToFramePadding();
-				OverrideLabel(label, context, false, false);
-				ShowTooltip(info);
-				ImGui.SameLine(context.LabelWidth);
+				if (!IsHiddenLabel(label))
+				{
+					ImGui.AlignTextToFramePadding();
+					OverrideLabel(label, context, false, false);
+					ShowTooltip(info);
+					ImGui.SameLine(context.LabelWidth);
+				}
 			}
 			else if (row.Label.Length > 0)
 			{
