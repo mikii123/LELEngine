@@ -713,6 +713,8 @@ Added for New Frontier's port of the FORGE3D planets (Unity shaders reading uv2,
   `exitseconds=` (that is TestGame's): use `exitframe=`, and keep it small: New Frontier's Flight scene runs far
   slower than 1000 fps in the editor (a script reload with the leak check finished well within 2000 frames;
   `exitframe=30000` ran for minutes). Always `WaitForExit(timeout)` and stop the process on a timeout.
+- Scene open last and Edit > Reload Scripts On Play are the user's, per project folder in `%APPDATA%\LELEngine\Editor\windows.json`
+  (`WindowStates.LastScenes` / `ReloadScriptsOnPlay`, saved with the window states on close), not in Project.json (2026-10-27).
 - Automated runs read the user's `layout.ini` (and the other windows' ini files) but never save them
   (`ImGuiController.ReadOnlyLayouts`), and their projects stay out of `recent.json`: a test that docked the console
   elsewhere once moved the user's real console.

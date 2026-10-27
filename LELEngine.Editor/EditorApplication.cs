@@ -141,6 +141,12 @@ namespace LELEngine.Editor
 
 		private static string WindowStatesFile => Path.Combine(RecentProjects.EditorDataFolder, "windows.json");
 
+		/// <summary>The scene open last (saved with the window states, read when the project opens again).</summary>
+		private string lastScene;
+
+		/// <summary>Play mode starts with a full reload of the game scripts (clean statics).</summary>
+		private bool reloadScriptsOnPlay = true;
+
 		#endregion
 
 		#region Constructors
@@ -582,6 +588,11 @@ namespace LELEngine.Editor
 			CloseProject();
 
 			Project = project;
+			// The user's own settings of the project (windows.json, not in the project): Edit > Reload Scripts On Play, the
+			// scene open last.
+			WindowStates states = WindowStates.Load(WindowStatesFile);
+			lastScene = states != null && states.LastScenes.TryGetValue(project.RootPath, out string last) ? last : null;
+			reloadScriptsOnPlay = states == null || !states.ReloadScriptsOnPlay.TryGetValue(project.RootPath, out bool reload) || reload;
 			// Physics and lighting quality of the project; projects from before the file get it with the defaults.
 			project.LoadProjectSettings();
 			projectSettingsStamp = FileStamp.Of(project.ProjectSettingsFile);
@@ -627,7 +638,7 @@ namespace LELEngine.Editor
 			// The windows as they were (not in automated runs: they get the default ones).
 			restoreWindowsPending = !automated;
 
-			string scenePath = project.LastScene ?? project.StartScene;
+			string scenePath = lastScene ?? project.StartScene;
 			if (scenePath != null && File.Exists(AssetDatabase.ToAbsolute(scenePath)))
 			{
 				OpenSceneNow(scenePath);
@@ -937,7 +948,6 @@ namespace LELEngine.Editor
 
 			// The project's scene lists name scenes by path.
 			string startScene = Moved(Project.StartScene);
-			string lastScene = Project.LastScene != null ? Moved(Project.LastScene) : null;
 			List<string> buildScenes = Project.BuildScenes.ConvertAll(Moved);
 			bool buildScenesMoved = false;
 			for (int i = 0; i < buildScenes.Count; i++)
@@ -945,12 +955,16 @@ namespace LELEngine.Editor
 				buildScenesMoved |= buildScenes[i] != Project.BuildScenes[i];
 			}
 
-			if (startScene != Project.StartScene || lastScene != Project.LastScene || buildScenesMoved)
+			if (startScene != Project.StartScene || buildScenesMoved)
 			{
 				Project.StartScene = startScene;
-				Project.LastScene = lastScene;
 				Project.BuildScenes = buildScenes;
 				Project.Save();
+			}
+
+			if (lastScene != null)
+			{
+				lastScene = Moved(lastScene);
 			}
 
 			// Project settings that name assets by path: the audio project, the input configuration.
@@ -1285,7 +1299,7 @@ namespace LELEngine.Editor
 			// Full reload of the game scripts: the play session starts from clean statics.
 			ulong selected = Selected?.Id ?? 0;
 			Scripts?.TrackComponents(Scene);
-			if (Project.ReloadScriptsOnPlay && Scripts != null)
+			if (reloadScriptsOnPlay && Scripts != null)
 			{
 				// Editor windows keep their references to scene objects across the reload.
 				Extensions.CaptureWindowStates();
@@ -1293,7 +1307,7 @@ namespace LELEngine.Editor
 
 			Selected = null;
 			SceneManager.UnloadAll(true);
-			if (Project.ReloadScriptsOnPlay && Scripts != null)
+			if (reloadScriptsOnPlay && Scripts != null)
 			{
 				Scripts.ReloadNow();
 			}
@@ -1639,8 +1653,8 @@ namespace LELEngine.Editor
 				sceneStamp = stamp;
 				sceneChangedOnDisk = false;
 				Undo.Clear();
-				Project.LastScene = assetPath;
-				Project.Save();
+				// Saved with the editor state (on close), read when the project opens again.
+				lastScene = assetPath;
 			}
 			catch (Exception e)
 			{
@@ -1664,13 +1678,13 @@ namespace LELEngine.Editor
 			// The editor's own write: the asset watcher must not reload it.
 			sceneStamp = FileStamp.Of(AssetDatabase.ToAbsolute(assetPath));
 			sceneChangedOnDisk = false;
-			Project.LastScene = assetPath;
+			lastScene = assetPath;
 			if (!Project.BuildScenes.Contains(assetPath))
 			{
 				Project.BuildScenes.Add(assetPath);
+				Project.Save();
 			}
 
-			Project.Save();
 			Debug.Log("[Editor] Saved " + assetPath);
 
 			Action after = pendingAfterSave;
@@ -1861,11 +1875,10 @@ namespace LELEngine.Editor
 				if (EditorMenu.Item("Duplicate", "Ctrl+D", false, Selected != null)) DuplicateSelected();
 				if (EditorMenu.Item("Delete", "Del", false, Selected != null)) DeleteSelected();
 				ImGui.Separator();
-				bool reload = Project.ReloadScriptsOnPlay;
-				if (EditorMenu.Item("Reload Scripts On Play", "", reload))
+				if (EditorMenu.Item("Reload Scripts On Play", "", reloadScriptsOnPlay, Project != null))
 				{
-					Project.ReloadScriptsOnPlay = !reload;
-					Project.Save();
+					reloadScriptsOnPlay = !reloadScriptsOnPlay;
+					SaveWindowStates();
 				}
 
 				ImGui.Separator();
@@ -2510,6 +2523,13 @@ namespace LELEngine.Editor
 				states.VfxGraphs[Project.RootPath] = graph;
 			}
 
+			if (lastScene != null)
+			{
+				states.LastScenes[Project.RootPath] = lastScene;
+			}
+
+			states.ReloadScriptsOnPlay[Project.RootPath] = reloadScriptsOnPlay;
+
 			states.Open["UI Builder"] = uiBuilder != null && uiBuilder.IsOpen;
 			states.Open["Audio Studio"] = audioStudio != null && audioStudio.IsOpen;
 			states.Save(WindowStatesFile);
@@ -2571,6 +2591,12 @@ namespace LELEngine.Editor
 			/// <summary>Per project folder: the graph the VFX Graph window showed.</summary>
 			public Dictionary<string, string> VfxGraphs { get; set; } = new Dictionary<string, string>();
 
+			/// <summary>Per project folder: the scene open last (the user's, so not in Project.json).</summary>
+			public Dictionary<string, string> LastScenes { get; set; } = new Dictionary<string, string>();
+
+			/// <summary>Per project folder: Edit > Reload Scripts On Play.</summary>
+			public Dictionary<string, bool> ReloadScriptsOnPlay { get; set; } = new Dictionary<string, bool>();
+
 			public static WindowStates Load(string file)
 			{
 				try
@@ -2580,6 +2606,8 @@ namespace LELEngine.Editor
 					{
 						states.Open ??= new Dictionary<string, bool>();
 						states.VfxGraphs ??= new Dictionary<string, string>();
+						states.LastScenes ??= new Dictionary<string, string>();
+						states.ReloadScriptsOnPlay ??= new Dictionary<string, bool>();
 					}
 
 					return states;

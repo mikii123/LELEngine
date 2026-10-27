@@ -11,7 +11,9 @@ namespace LELEngine.Editor
 	///     <code>
 	///     Project/
 	///       Assets/            everything the game uses (scenes, scripts, meshes, materials, shaders, textures) + .meta
-	///       ProjectSettings/   Project.json (name, scenes in the build, start scene, build options; editor only),
+	///       ProjectSettings/   Project.json (name, scenes in the build, start scene, build options; editor only;
+	///                          the user's own ones, scene open last and script reload on play,
+	///                          are in %APPDATA%/LELEngine/Editor/windows.json),
 	///                          ProjectSettings.asset (physics, lighting quality; goes into builds)
 	///       Library/           editor caches (build output of the scripts, editor state); safe to delete
 	///       Project.csproj     generated: open it (or Project.sln) in any IDE to edit the scripts
@@ -28,12 +30,6 @@ namespace LELEngine.Editor
 
 		/// <summary>Scenes included in builds (asset paths); the start scene is always included.</summary>
 		public List<string> BuildScenes { get; set; } = new List<string>();
-
-		/// <summary>Scene open when the editor last closed.</summary>
-		public string LastScene { get; set; }
-
-		/// <summary>Play mode starts with a full reload of the game scripts (clean statics).</summary>
-		public bool ReloadScriptsOnPlay { get; set; } = true;
 
 		/// <summary>Builds keep running while their window is not focused.</summary>
 		public bool RunInBackground { get; set; } = true;
@@ -161,8 +157,6 @@ namespace LELEngine.Editor
 			Name = string.IsNullOrEmpty(read.Name) ? Name : read.Name;
 			StartScene = read.StartScene;
 			BuildScenes = read.BuildScenes ?? new List<string>();
-			LastScene = read.LastScene;
-			ReloadScriptsOnPlay = read.ReloadScriptsOnPlay;
 			RunInBackground = read.RunInBackground;
 			BuildSelfContained = read.BuildSelfContained;
 			return true;
