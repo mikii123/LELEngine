@@ -1177,3 +1177,125 @@ wrecks' albedo-tinted highlight):
   this machine; for scene-view screenshots back the file up, delete it for the run, and copy it back afterwards.
 - `uint` uniforms must be set with `ShaderProgram.SetUint`: `SetInt` on a uint uniform is a GL error, the value
   stays 0, and an indirect dispatch sized from it hangs the GPU for seconds per frame.
+
+## Animation system (clips, Animator, state machines; 2026-10-28)
+
+- Runtime in `LELEngine/Animation`: `FloatCurve` (a curve as flat arrays: times, values, tangents, modes; binary
+  documents bulk-copy them; `ToAnimationCurve` / `FromAnimationCurve` for the curve editor), `AnimationClip` (".anim":
+  `bindings` of path + component type + property path + `AnimationValueKind` with one `FloatCurve` per channel, string
+  and reference keys for discrete kinds; `events`; `loop`, `frameRate`, `cycleOffset`, `lengthOverride`, `rootMotion`
+  channels; `Load` cache per path, `Save` + meta, `ToBytes` / `ApplyBytes`, `Version` + `Changed` bump on every edit),
+  `AnimationEvent` (+ `IAnimationEventPayload`: any [Serializable] class as the payload; `AnimationEventDispatcher`
+  calls the method by name on the GameObject's components, picking the most specific overload: event, payload,
+  reference, float, int, string, bool, none; `IAnimationEventReceiver`; a warning once per missing receiver),
+  `AnimationBinder` (resolves a binding to a `BoundProperty` with typed setters: Transform channels direct, depth-one
+  fields through the serializer's `FieldAccessor<T>`, C# properties through compiled expressions, nested paths
+  "a.b", "items[2]" and struct chains through `MemberPath` get-modify-set; specials `active`, `enabled`,
+  `localEulerAngles`; `GetAnimatableProperties` lists what the clip editor offers), `AnimationPose` (`PoseLayout` =
+  union of the bindings of a set of clips as `PoseSlot`s bound to a hierarchy with the objects' values as defaults and
+  last-written values; `Pose` accumulates weighted samples (nlerp for rotations, heaviest-wins for discrete kinds),
+  `Lerp` / `Override` / `Additive` between poses, `Apply` writes touched slots; `ClipSampler` per animator and clip with
+  per-channel segment hints, additive sampling against frame 0, root motion deltas, event collection across loop
+  boundaries), `AnimatorParameters` (`AnimatorValue<T>` subclasses are the parameter types: Float, Int, Bool,
+  Trigger, String, Vector2/3/4, Quaternion, Color, Object (EngineObject reference), Asset, plus any game class
+  deriving from `AnimatorValue<T>`; `ParameterState<T>` is the live slot, no boxing in `Set<T>`), `AnimatorConditions`
+  (`ParameterCondition` with modes compiled per animator into delegates through `AnimatorValue.CompileCondition`
+  (Comparer / EqualityComparer of T; compare with a constant or another parameter), `ConditionGroup` any / all,
+  `ScriptCondition` subclasses evaluated on the main thread), `AnimatorController` (".animator": parameters, layers
+  (weight, Override / Additive, `AnimationMask` by transform paths), `AnimatorStateMachine` (states, sub-machines,
+  any-state / entry transitions, the machine's own exit transitions, default state, notes, groups, node positions and
+  view), `AnimatorState` (motion = `ClipMotion` or `BlendTree` (1D, 2D simple / freeform directional / cartesian,
+  direct; gradient band weights in `BlendTreeMath`), speed + parameter, motion time parameter, cycle offset, write
+  defaults, loop mode, tag, transitions, `StateMachineBehaviour` instances by value, color, note),
+  `AnimatorTransition` (destination state / machine / exit, conditions, exit time in cycles or seconds, fixed or
+  normalized duration, offset, interruption source + ordered, can transition to self, mute, solo),
+  `transitionDefaults`, `Validate` problems), `RuntimeController` (the compiled, immutable form cached per controller
+  version: layers, flattened states, transitions with solo / mute applied, any-state lists per state innermost first,
+  blend trees with parameter indices), `AnimatorPlayer` + `LayerPlayer` + `StatePlayback` (per animator: parameter
+  slots, compiled conditions, pose layout bound to the hierarchy, state machine advance with transitions,
+  interruptions (the blended pose freezes as the new source), entry / exit resolution through sub-machines, blend
+  sampling, events, root motion, behaviour callbacks queued for the main thread), `Animator` (the component: Unity's
+  API `SetFloat` / `GetBool` / `SetTrigger` / `Set<T>` / `Play` / `CrossFade` / `GetCurrentAnimatorStateInfo` /
+  `IsInTransition` / layer weights / `Rebind` / `Update(dt)`; `applyRootMotion` (own frame deltas, or
+  `IAnimatorMoveHandler` / `AnimatorMove` take over), `keepStateOnDisable`, `allowParallelUpdate`, `updateMode`
+  Normal (after Update, before navigation and LateUpdate) / AnimatePhysics (each fixed step before the physics step)),
+  `AnimationSystem` (per scene (`Scene.AnimationSystem`), registered by the animators' OnEnable: rebuilds stale
+  players on the main thread, advances them with `Parallel.For` from `ParallelThreshold` (8) animators on
+  (`LEL_ANIM_PARALLEL=0` off; controllers with script conditions stay serial), applies poses and callbacks in scene
+  order; `LastUpdateMilliseconds` etc.).
+- Sub-machines as assets (the user's ask, 2026-10-28): `AnimatorStateMachine.controller` + `controllerLayer` make a
+  sub-machine node play a layer of another `.animator` asset (its states, transitions, behaviours; the node's own
+  content is ignored), `parameterMappings` (`ParameterMapping` child id -> parent id, same value type and trigger-ness)
+  feed the asset's parameters from the owner's; unmapped ones are private per animator, named "Node/Parameter"
+  (`animator.Set("Combat/Power", ...)`). Compile: `ParameterScope` per asset instance (`RuntimeMachine.Scope` for the
+  node's own exit transitions, `ContentScope` inside), private parameters appended to `RuntimeController.Parameters`
+  as clones with the scoped name, `RuntimeTransition.Scope` resolves condition ids, `RuntimeController.Assets` +
+  `IsCurrent` rebuild the players when any embedded asset changes (`AnimatorController.CombinedVersion`,
+  `CollectControllers`, `Embeds` for loop checks); a loop or a missing layer cuts the node with a `Warnings` entry
+  (logged once per animator). Editor: the node shows "Asset: X", the inspector has the asset field, the layer, the
+  mapping table with "(own value)" / parent parameters of the same type / "+ New ... and map it", and Map by name /
+  Create missing / Unmap all; double click looks inside read-only (`AnimatorPage.External` / `Embedding`,
+  breadcrumbs cross the asset, every edit callback refuses, "Open X" opens the asset as the document); dropping an
+  `.animator` on the canvas or "Sub-State Machine from Asset/..." in the create popup makes such a node.
+- Assets: `.anim` and `.animator` are documents (`Documents.Extensions`, JSON in the project, binary in builds, typeless
+  conversion); registered in `AssetDatabase.RegisterTypes`; caches rekeyed on moves and cleared with the project
+  (`InternalStorage`); `Save` creates the meta file. Clips and controllers may hold script types (behaviours, custom
+  parameter values, event payloads): the editor windows snapshot their open document before a script reload and clear
+  both caches (`AnimatorWindow.OnDomainUnloading` / `OnDomainLoaded`, hooked in `ClearTypeCaches` and `ScriptDomain`).
+- `SerializationUtility.MaxDepth` is 32 (was 10): a controller nests layer / machine / state / transition / group /
+  condition / value, deeper with sub-machines. Values past the limit are written as null with a warning
+  (`WarnDepth`), which is how the loss showed up (thresholds and nested conditions vanished silently).
+- Node graph editor, a system of its own (`LELEngine.Editor/NodeEditor`, namespace `LELEngine.Editor.Graphs`, public
+  for editor scripts): `GraphView` (immediate mode: `Begin`, `AddNode` / `AddEdge` / `AddGroup` / `AddNote`, `End`;
+  pan / zoom / grid / snapping / alignment guides / minimap / rubber band / multi-drag / inline rename (F2) /
+  node handle drags and "Make Transition" for node-to-node edges, port drags for port edges, a searchable create
+  popup (`CreateEntries`), context menus (`ContextMenu` + built-in items), shortcuts, nudging, `DropTarget` for
+  drag and drop; every change is a callback (`NodesMoved`, `ConnectRequested`, `DeleteRequested`,
+  `DuplicateRequested`, `Copy` / `PasteRequested`, `RenameRequested`, `NodeDoubleClicked`), so undo stays the host's),
+  `GraphTypes` (`GraphNode` with header / subtitle / lines / ports / badge / progress bar / outline / custom draw,
+  `GraphEdge` styles Bezier / FlowBezier / Arrow (lanes for both directions, label, progress dot) / Line, groups,
+  notes, menu entries), `GraphLayout` (layered, force-directed, align, distribute). Nodes record `node:<Title>` test
+  anchors (screenshots, `TryGetPoint`); the canvas is not an element. The VFX canvas still has its own code.
+- Animator window (`LELEngine.Editor/Animation`): `AnimatorWindow` (IEditorPanel "Animator": menu, toolbar with
+  breadcrumbs (layer > machines > blend tree) and the LIVE state, sidebar layers + parameters (live values and
+  trigger buttons in play mode), `AnimatorGraph` on `GraphView` (states, sub-machine nodes, Entry / Any State / Exit,
+  transitions grouped per direction with counts, muted dashed, solo yellow, default-state arrow; blend tree pages
+  with live weights; drop .anim assets to make states; `AutoLayout` = breadth first from the default state),
+  `AnimatorInspector` (state, the transitions of an edge (timing, interruption, a two-bar preview, conditions of any
+  parameter type with the inspector's value widgets, groups, script conditions), sub-machine, Entry, Any State, note,
+  group, blend tree + children with a 2D blend space, layer with a mask editor from the selected object's hierarchy,
+  parameter, controller defaults), `AnimatorDocument` (whole-controller undo snapshots as `AnimatorRecord`, layout-only
+  edits do not rebuild the players; `EditTracker` also records `AnimatorController` / `AnimationClip` targets, so the
+  field drawers get undo), `AnimatorComponentInspector` (the Animator component: layers with progress, parameters,
+  unresolved properties; the .animator / .anim asset inspectors). The page re-resolves its machine by id after undo /
+  revert (`ResolvePage`): `ApplyBytes` replaces the controller's objects. The copy buffer is a document
+  (`AnimatorClipboard` bytes), never script-type instances (that leaked the old assembly on reload).
+- Animation window (`AnimationWindow`, IEditorPanel "Animation"): rows per binding (expandable channels, the value at
+  the playhead editable = a key), dope sheet (diamonds, drag with frame snapping, box select, double click adds) or
+  curves (auto-fit range, value drag, tangent handles of the one selected key, Ctrl + wheel zooms values), ruler with
+  frames, events lane (drag, double click adds, inspector with the target's methods as suggestions and a polymorphic
+  payload), Add Property picker (the target hierarchy's GameObjects, components and their animatable properties),
+  Preview (samples on the target in edit mode through `PreviewSession`, restores the defaults when off) and Record
+  (every change of a bound property, inspector or scene view, keys at the playhead), playback, Key All (K), reverse,
+  tangent modes. The target is the selection's Animator object (or the selection), lockable.
+- Hooks: `EditorApplication` (fields, `Draw`, `GetPanels`, `Reset`, `OpenAnimator(path | controller)`,
+  `OpenAnimationWindow`, Window menu, shortcuts, window states with the last asset per project), `ProjectPanel`
+  (Create Animator Controller / Animation Clip, double click opens the window), `EditorIcons` (`AnimatorController`,
+  `AnimationClip`), `AssetInspectors`, `CustomInspectors`.
+- Verify (2026-10-28, scratchpad `AnimProbe` of session 8ce1f98f: `-batchmode -executeMethod AnimProbe.Run` 121
+  checks: curves, clip JSON / binary / typeless round trip, sampling of every kind (nested struct, list element, C#
+  property, GameObject active, enum, string, reference to a ScriptableObject asset), the state machine (exit time,
+  conditions, trigger consumed, any state, script condition, condition group with a custom-typed parameter,
+  sub-machine entry / exit with behaviour callbacks, Play / CrossFade, live edit rebuild, disable reset), root motion
+  along the facing across a loop, parallel = serial bit for bit (30 animators), layers (override with mask, additive),
+  sub-machines playing another asset (reload by GUID, binary round trip, mapped trigger and bool, private "Combat/Power",
+  exit through the node's transitions, rebuild on the asset's edit, a loop cut with a warning);
+  `AnimEditorEdits.Run` 24 checks through the window's model by reflection (create, rename, connect, default state,
+  undo / redo, delete, duplicate, copy / paste, parameters, validate, save / reload, play mode LIVE); `AnimEditorProbe.Run`
+  layout screenshots of both windows; a game build (`-build`) whose player log shows the binary assets loading and
+  the states changing; `TestGame.exe anim=1` (24 animated cubes, `animcount=N`). Headless probes step a scene made
+  with `SceneManager.CreateScene` through `scene.Update(dt)` (it is not in the loaded list, so
+  `SceneManager.UpdateScenes` skips it). `-executeMethod` hands the method the whole command line as `args`.
+- Not done (follow-ups): skinned meshes and bone animation import from models (Assimp has the data), animating
+  material properties per renderer (no property blocks), humanoid retargeting / IK, timeline / cutscene sequencing,
+  moving the VFX canvas onto `GraphView`.

@@ -426,6 +426,7 @@ namespace LELEngine.Serialization
 
 			if (depth >= SerializationUtility.MaxDepth)
 			{
+				SerializationUtility.WarnDepth(value, Context);
 				Json.WriteNullValue();
 				return;
 			}

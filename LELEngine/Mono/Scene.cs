@@ -323,6 +323,12 @@ namespace LELEngine
 				scene.UpdatePhase();
 			}
 
+			// Animators advance after every Update (parameters set there are seen) and before LateUpdate, as in Unity.
+			foreach (Scene scene in scenes)
+			{
+				scene.AnimationPhase(deltaTime, global::LELEngine.Animation.AnimatorUpdateMode.Normal);
+			}
+
 			// Navigation step (agents move, obstacles carve) between Update and LateUpdate, as in Unity.
 			foreach (Scene scene in scenes)
 			{
@@ -352,6 +358,7 @@ namespace LELEngine
 			componentDestroyQueue.Clear();
 			timedDestroys.Clear();
 			pendingStart.Clear();
+			animation?.Clear();
 			physics2D?.Dispose();
 			physics2D = null;
 			dirty = true;
@@ -635,9 +642,35 @@ namespace LELEngine
 				}
 			}
 
+			// AnimatePhysics animators move with the fixed steps, before the physics step sees their transforms.
+			AnimationPhase(step, global::LELEngine.Animation.AnimatorUpdateMode.AnimatePhysics);
+
 			if (IsPlaying && physics2D != null && global::LELEngine.Physics2D.simulationMode == SimulationMode2D.FixedUpdate)
 			{
 				physics2D.Step(step);
+			}
+		}
+
+		/// <summary>The animation system of this scene (created on first use: an Animator registered).</summary>
+		internal global::LELEngine.Animation.AnimationSystem AnimationSystem => animation ?? (animation = new global::LELEngine.Animation.AnimationSystem(this));
+
+		/// <summary>The animation system when an Animator created it (null otherwise).</summary>
+		internal global::LELEngine.Animation.AnimationSystem animation;
+
+		private void AnimationPhase(float deltaTime, global::LELEngine.Animation.AnimatorUpdateMode mode)
+		{
+			if (!LifecycleStarted || animation == null)
+			{
+				return;
+			}
+
+			try
+			{
+				animation.Update(deltaTime, mode);
+			}
+			catch (Exception e)
+			{
+				Debug.LogException(e);
 			}
 		}
 

@@ -437,6 +437,8 @@ namespace LELEngine.Editor
 
 			Version++;
 			editor.Extensions.OnDomainLoaded(EditorAssembly);
+			editor.AnimatorWindow?.OnDomainLoaded();
+			editor.AnimationWindow?.OnDomainLoaded();
 		}
 
 		/// <summary>

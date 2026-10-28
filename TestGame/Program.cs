@@ -212,6 +212,14 @@ namespace TestGame
 				Game.Mono.Renderer.Settings.GpuDriven = options.GpuDriven;
 				GITestScene.InstallHarness(scene, options);
 			}
+			else if (GetBool(args, "anim", false))
+			{
+				// anim=1: the animation showcase (a grid of animated cubes with controllers built in code; animcount=N).
+				scene = Game.Mono.LoadEmptyScene();
+				scene.Name = "AnimationTest";
+				AnimationTestScene.Load(scene, options, GetInt(args, "animcount", 24));
+				Game.Mono.Renderer.Settings.GpuDriven = options.GpuDriven;
+			}
 			else if (GetBool(args, "vfx", false))
 			{
 				// vfx=1: the GPU particle showcase (four effects built in code).

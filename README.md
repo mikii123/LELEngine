@@ -37,6 +37,27 @@ Built on .NET 10, OpenTK 4.9 (GLFW) and OpenGL 4.6 (4.3 minimum), developed and 
 - Component lookups take interfaces: `GetComponent<IDamageable>()`, `GetComponentInChildren` / `InParent` (and the
   plural forms), with inactive objects on request. `AnimationCurve` and `Gradient` with Unity's API and inspector
   editors (curve editor with tangent handles, presets and wrap modes).
+
+**Animation**
+- `AnimationClip` assets (`.anim`) animate any serialized field, C# property or transform channel of a hierarchy
+  (floats, ints, bools, enums, vectors, rotations as Euler angles or quaternions, colors, strings, object references,
+  nested paths like `stats.hp` or `items[2]`), with events carrying a float, int, string, object or any serializable
+  payload class. Curves are flat arrays: builds copy them as blocks, playback samples them with segment hints.
+- `Animator` + `AnimatorController` assets (`.animator`) as in Unity and more: parameters of any serializable type
+  (floats, ints, bools, triggers, vectors, colors, strings, object and asset references, your own classes), layers
+  with masks (override or additive), state machines with sub-machines (nested in place, or any other `.animator`
+  asset playing inside a node, its parameters fed from the owner's by a mapping and the rest private per animator),
+  Any State and Entry transitions, blend trees
+  (1D, 2D directional and cartesian, direct), transitions with exit time (cycles or seconds), durations, offsets,
+  interruptions, solo / mute, conditions comparing a parameter with a value or another parameter, "any of" groups
+  and script conditions, state behaviours (`StateMachineBehaviour` scripts with per-animator fields), root motion,
+  write defaults, speed and motion-time parameters, `Play` / `CrossFade`, live edits that keep the playing state.
+  Animators of a scene evaluate in parallel on worker threads; poses and callbacks are applied in scene order.
+- Editor: the Animator window (a node graph of the state machine with breadcrumbs for sub-machines and blend trees,
+  drag a node's handle to make a transition, drop clips to make states, grouping, notes, auto layout, minimap, undo
+  for everything, problems list, and in play mode the current state, transition progress and blend weights of the
+  selected object's animator, with its parameters live) and the Animation window (dope sheet and curves, events lane,
+  property picker over the target hierarchy, preview on the object in edit mode, record mode that keys what you change).
 - Textures: 2D, 3D (slice grids), cubemaps (crosses, strips, panoramas, HDR) and sprites (single or sliced sheets),
   configured per file like Unity's texture importer. Materials are documents of typed properties declared by the
   shader's `//Properties` block.
@@ -464,6 +485,51 @@ public class SceneStatsWindow : EditorWindow
 	}
 }
 ```
+
+A node graph in an editor window uses `LELEngine.Editor.Graphs.GraphView` (the system behind the Animator window):
+declare the nodes and edges from your own data every frame, and apply the changes it asks for:
+
+```csharp
+using LELEngine.Editor.Graphs;
+
+public class RecipeGraphWindow : EditorWindow
+{
+	private readonly GraphView view = new GraphView { AllowNodeConnections = true };
+	private readonly RecipeBook book = RecipeBook.Load();
+
+	protected override void OnEnable()
+	{
+		view.NodesMoved = moves => { foreach (GraphMove m in moves) book.Find(m.Id).position = m.Position; };
+		view.ConnectRequested = c => book.Link(c.From, c.To);
+		view.DeleteRequested = ids => book.Remove(ids);
+		view.CreateEntries = (at, pending) => new[] { new GraphMenuEntry("Recipe", p => book.Add("New Recipe", p)) };
+	}
+
+	protected override void OnGUI()
+	{
+		view.Begin();
+		foreach (Recipe recipe in book.Recipes)
+		{
+			GraphNode node = view.AddNode(recipe.id, recipe.name, recipe.position);
+			node.AddLine(recipe.ingredients.Count + " ingredients", dim: true);
+			node.Progress = recipe.done ? 1f : -1f;
+		}
+
+		foreach (RecipeLink link in book.Links)
+		{
+			view.AddEdge(link.id, link.from, link.to);       // an arrow between nodes; AddEdge(id, from, "out", to, "in") for ports
+		}
+
+		view.End();                                           // draws, handles the mouse and keys, raises the callbacks
+	}
+}
+```
+
+`GraphView` pans, zooms, snaps, draws a grid and a minimap, selects (click, Ctrl / Shift, rubber band), drags with
+alignment guides, renames inline (F2), opens a searchable create popup (Space, right click) and context menus, copies,
+pastes, nudges with the arrows, frames (F), and lays out (`AutoLayoutLayered`, `AutoLayoutForce`, align and distribute).
+Nodes have a header, subtitle, text rows, ports, a badge, a progress bar and an outline; edges are beziers between ports
+or arrows between nodes (both directions side by side, a label, a travelling dot); groups frame members, notes hold text.
 
 - `Editor`: `target`, `OnInspectorGUI`, `OnSceneGUI`, `OnEnable` / `OnDisable` (while the object stays selected),
   `DrawDefaultInspector`, `PropertyField`. `[CustomEditor(typeof(T), editorForChildClasses: true)]` covers derived

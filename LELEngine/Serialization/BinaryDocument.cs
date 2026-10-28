@@ -348,6 +348,11 @@ namespace LELEngine.Serialization
 		{
 			if (value == null || depth >= SerializationUtility.MaxDepth)
 			{
+				if (value != null)
+				{
+					SerializationUtility.WarnDepth(value, Context);
+				}
+
 				Body.WriteInt32(BinaryDocument.NullObject);
 				return;
 			}

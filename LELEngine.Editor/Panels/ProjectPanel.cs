@@ -494,6 +494,8 @@ namespace LELEngine.Editor
 				if (EditorMenu.Item("Create Material")) StartCreate("Material", "NewMaterial");
 				if (EditorMenu.Item("Create Physics Material 2D")) StartCreate("PhysicsMaterial2D", "NewPhysicsMaterial");
 				if (EditorMenu.Item("Create Visual Effect Graph")) StartCreate("VFX", "NewVisualEffect");
+				if (EditorMenu.Item("Create Animator Controller")) StartCreate("AnimatorController", "NewAnimator");
+				if (EditorMenu.Item("Create Animation Clip")) StartCreate("AnimationClip", "NewClip");
 				if (EditorMenu.Item("Create Audio Project")) StartCreate("AudioProject", "Audio");
 				if (EditorMenu.Item("Create Input Configuration")) StartCreate("InputConfiguration", "Input");
 				if (EditorMenu.Item("Create Scene")) StartCreate("Scene", "NewScene");
@@ -1283,6 +1285,14 @@ namespace LELEngine.Editor
 			{
 				editor.OpenAudioStudio(assetPath, null);
 			}
+			else if (assetPath.EndsWith(LELEngine.Animation.AnimatorController.Extension, StringComparison.OrdinalIgnoreCase))
+			{
+				editor.OpenAnimator(assetPath);
+			}
+			else if (assetPath.EndsWith(LELEngine.Animation.AnimationClip.Extension, StringComparison.OrdinalIgnoreCase))
+			{
+				editor.OpenAnimationWindow(assetPath);
+			}
 			else if (EditorIcons.KindOfFile(assetPath) == IconKind.InputConfiguration)
 			{
 				editor.OpenInputManager(assetPath);
@@ -1444,6 +1454,22 @@ namespace LELEngine.Editor
 					EnsureNew(target);
 					LELEngine.VFX.VfxGraph graph = LELEngine.VFX.VfxGraphBuilder.CreateDefault(name);
 					graph.Save(AssetDatabase.ToAssetPath(target));
+					break;
+				}
+				case "AnimatorController":
+				{
+					target = Absolute(Combine(folder, name + LELEngine.Animation.AnimatorController.Extension));
+					EnsureNew(target);
+					LELEngine.Animation.AnimatorController controller = LELEngine.Animation.AnimatorController.CreateDefault(name);
+					controller.Save(AssetDatabase.ToAssetPath(target));
+					break;
+				}
+				case "AnimationClip":
+				{
+					target = Absolute(Combine(folder, name + LELEngine.Animation.AnimationClip.Extension));
+					EnsureNew(target);
+					var clip = new LELEngine.Animation.AnimationClip { name = name };
+					clip.Save(AssetDatabase.ToAssetPath(target));
 					break;
 				}
 				case "AudioProject":

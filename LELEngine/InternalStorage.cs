@@ -55,6 +55,8 @@ namespace LELEngine
 			Audio.AudioProject.AssetMoved(fromPath, toPath);
 			UIElements.UIAssets.AssetMoved(fromPath, toPath);
 			VFX.VfxGraph.AssetMoved(fromPath, toPath);
+			Animation.AnimationClip.AssetMoved(fromPath, toPath);
+			Animation.AnimatorController.AssetMoved(fromPath, toPath);
 		}
 
 		/// <summary>
@@ -84,6 +86,8 @@ namespace LELEngine
 			Rendering.SkyEnvironment.Clear();
 			VFX.VfxRuntime.Clear();
 			VFX.VfxGraph.ClearCache();
+			Animation.AnimationClip.ClearCache();
+			Animation.AnimatorController.ClearCache();
 		}
 
 		/// <summary>

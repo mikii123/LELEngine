@@ -539,6 +539,17 @@ namespace LELEngine.Editor
 						// after), after the frame, since the scene is loaded again so its instances follow.
 						editor.Defer(() => editor.RecordPrefabFiles(name ?? "Edit " + preview.Name, new[] { preview.AssetPath }, preview.Save));
 						break;
+					case LELEngine.Animation.AnimatorController controller:
+						// Edited in the Animator window (and its inspectors): dirty until saved there, players rebuild live.
+						editor.Undo.Push(new Animation.AnimatorRecord { Name = name ?? "Edit " + controller.name, AssetPath = controller.AssetPath, Before = before, After = after });
+						controller.MarkChanged();
+						editor.AnimatorWindow?.OnControllerEdited(controller);
+						break;
+					case LELEngine.Animation.AnimationClip clip:
+						editor.Undo.Push(new Animation.AnimationClipRecord { Name = name ?? "Edit " + clip.name, AssetPath = clip.AssetPath, Before = before, After = after });
+						clip.MarkChanged();
+						editor.AnimationWindow?.OnClipEdited(clip);
+						break;
 				}
 			}
 
@@ -600,6 +611,10 @@ namespace LELEngine.Editor
 					return Serialization.Documents.WriteObject(scriptableObject, Serialization.DocumentFormat.Binary);
 				case PrefabPreview preview:
 					return preview.Capture();
+				case LELEngine.Animation.AnimatorController controller:
+					return controller.ToBytes();
+				case LELEngine.Animation.AnimationClip clip:
+					return clip.ToBytes();
 				default:
 					return null;
 			}

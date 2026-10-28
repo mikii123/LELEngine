@@ -88,8 +88,12 @@ namespace LELEngine.Serialization
 	{
 		#region PublicFields
 
-		/// <summary>Maximum nesting of [Serializable] objects (guards against reference cycles).</summary>
-		public const int MaxDepth = 10;
+		/// <summary>
+		///     Maximum nesting of [Serializable] objects (guards against reference cycles; values below it are written as
+		///     null with a warning). Deep by design: an animator controller nests layer / machine / state / transition /
+		///     condition group / condition / value, sub-state machines deeper still.
+		/// </summary>
+		public const int MaxDepth = 32;
 
 		#endregion
 
@@ -130,12 +134,31 @@ namespace LELEngine.Serialization
 			GenericValues.ClearCache();
 			UIElements.UxmlRegistry.Clear();
 			PhysicsCallbacks.ClearCache();
+			Animation.AnimationBinder.ClearCache();
+			Animation.AnimationEventDispatcher.ClearCache();
 		}
 
 		public static bool IsSupported(Type type)
 		{
 			return IsSupported(type, 0);
 		}
+
+		/// <summary>A value nested deeper than <see cref="MaxDepth" /> is written as null: said once per type and location.</summary>
+		internal static void WarnDepth(object value, SerializationContext context)
+		{
+			string key = (value?.GetType().FullName ?? "?") + "@" + (context?.Location ?? "");
+			lock (sync)
+			{
+				if (!depthWarnings.Add(key))
+				{
+					return;
+				}
+			}
+
+			Debug.LogWarning($"[Serialization] {context?.Location ?? "document"}: a {value?.GetType().Name} nested deeper than {MaxDepth} levels was written as null (a reference cycle, or data too deep for the format)");
+		}
+
+		private static readonly HashSet<string> depthWarnings = new HashSet<string>();
 
 		public static bool IsReferenceType(Type type)
 		{

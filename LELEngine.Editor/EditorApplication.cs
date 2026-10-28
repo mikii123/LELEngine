@@ -81,6 +81,8 @@ namespace LELEngine.Editor
 		private readonly ProjectSettingsWindow projectSettingsWindow;
 		private readonly PreferencesWindow preferencesWindow = new PreferencesWindow();
 		private readonly VFX.VfxGraphWindow vfxGraphWindow;
+		private readonly Animation.AnimatorWindow animatorWindow;
+		private readonly Animation.AnimationWindow animationWindow;
 
 		/// <summary>The console's error count Error Pause last saw.</summary>
 		private int errorsSeen;
@@ -178,6 +180,8 @@ namespace LELEngine.Editor
 			lightingPanel = new LightingPanel(this);
 			projectSettingsWindow = new ProjectSettingsWindow(this);
 			vfxGraphWindow = new VFX.VfxGraphWindow(this);
+			animatorWindow = new Animation.AnimatorWindow(this);
+			animationWindow = new Animation.AnimationWindow(this);
 			inputManagerWindow = new InputManagerWindow(this);
 
 			gameInput = new GameInputHost(window, () => PlayState == PlayState.Playing && GameView.HasInputFocus);
@@ -390,6 +394,8 @@ namespace LELEngine.Editor
 			projectSettingsWindow.Draw();
 			preferencesWindow.Draw();
 			vfxGraphWindow.Draw();
+			animatorWindow.Draw();
+			animationWindow.Draw();
 			inputManagerWindow.Draw();
 			if (capture)
 			{
@@ -458,7 +464,7 @@ namespace LELEngine.Editor
 			var panels = new List<IEditorPanel>
 			{
 				mainPanel, hierarchy, SceneView, GameView, inspector, projectPanel, consolePanel, lightingPanel,
-				projectSettingsWindow, preferencesWindow, vfxGraphWindow, inputManagerWindow, uiBuilderPanel, audioStudioPanel
+				projectSettingsWindow, preferencesWindow, vfxGraphWindow, animatorWindow, animationWindow, inputManagerWindow, uiBuilderPanel, audioStudioPanel
 			};
 			panels.AddRange(Extensions.OpenWindowPanels());
 			return panels;
@@ -687,6 +693,8 @@ namespace LELEngine.Editor
 			AssetThumbnails.Clear();
 			Automation.WindowCapture.ReleaseViews();
 			vfxGraphWindow.Reset();
+			animatorWindow.Reset();
+			animationWindow.Reset();
 			Undo.Clear();
 			Edits.Cancel();
 			ScriptableObjectAssets.UnloadAll();
@@ -1495,6 +1503,45 @@ namespace LELEngine.Editor
 			vfxGraphWindow.Show(assetPath);
 		}
 
+		/// <summary>The Animator window (dockable; open or not).</summary>
+		public Animation.AnimatorWindow AnimatorWindow => animatorWindow;
+
+		/// <summary>The Animation (clip editor) window (dockable; open or not).</summary>
+		public Animation.AnimationWindow AnimationWindow => animationWindow;
+
+		/// <summary>Opens the Animator window on a .animator asset (null: the controller it last showed).</summary>
+		public void OpenAnimator(string assetPath)
+		{
+			if (Project == null)
+			{
+				return;
+			}
+
+			animatorWindow.Show(assetPath);
+		}
+
+		/// <summary>Opens the Animator window on a loaded controller.</summary>
+		public void OpenAnimator(LELEngine.Animation.AnimatorController controller)
+		{
+			if (Project == null)
+			{
+				return;
+			}
+
+			animatorWindow.Show(controller);
+		}
+
+		/// <summary>Opens the Animation window on a .anim asset (null: the clip it last showed).</summary>
+		public void OpenAnimationWindow(string assetPath)
+		{
+			if (Project == null)
+			{
+				return;
+			}
+
+			animationWindow.Show(assetPath);
+		}
+
 		/// <summary>Opens the UI Builder window (creating it on first use) and loads the asset when given.</summary>
 		public void OpenUIBuilder(string assetPath)
 		{
@@ -1558,6 +1605,9 @@ namespace LELEngine.Editor
 		public void ClearTypeCaches()
 		{
 			Extensions.OnDomainUnloading();
+			// Controllers and clips may hold script types (behaviours, custom parameter values, event payloads).
+			animatorWindow.OnDomainUnloading();
+			animationWindow.OnDomainUnloading();
 			inspector.ClearTypeCaches();
 			HierarchyPanel.ResetDrag();
 			hierarchy.ForgetObjects();
@@ -1928,6 +1978,18 @@ namespace LELEngine.Editor
 					else OpenVfxGraph(null);
 				}
 
+				if (EditorMenu.Item("Animator", "", animatorWindow.Open))
+				{
+					if (animatorWindow.Open) animatorWindow.Close();
+					else OpenAnimator((string)null);
+				}
+
+				if (EditorMenu.Item("Animation", "", animationWindow.Open))
+				{
+					if (animationWindow.Open) animationWindow.Close();
+					else OpenAnimationWindow(null);
+				}
+
 				if (EditorMenu.Item("Input Manager", "", inputManagerWindow.Open))
 				{
 					if (inputManagerWindow.Open) inputManagerWindow.Open = false;
@@ -2179,9 +2241,9 @@ namespace LELEngine.Editor
 
 			bool ctrl = io.KeyCtrl;
 			bool shift = io.KeyShift;
-			if (vfxGraphWindow.IsFocused)
+			if (vfxGraphWindow.IsFocused || animatorWindow.IsFocused || animationWindow.IsFocused)
 			{
-				// The graph window handles save, duplicate and delete itself; undo / redo stay global.
+				// The graph windows handle save, duplicate and delete themselves; undo / redo stay global.
 				if (ctrl && ImGui.IsKeyPressed(ImGuiKey.Z, false))
 				{
 					if (shift) RedoLast();
@@ -2516,11 +2578,25 @@ namespace LELEngine.Editor
 			states.Open["Project Settings"] = projectSettingsWindow.Open;
 			states.ProjectSettingsTab = projectSettingsWindow.CurrentTab.ToString();
 			states.Open["VFX Graph"] = vfxGraphWindow.Open;
+			states.Open["Animator"] = animatorWindow.Open;
+			states.Open["Animation"] = animationWindow.Open;
 			states.Open["Input Manager"] = inputManagerWindow.Open;
 			string graph = vfxGraphWindow.Document?.AssetPath;
 			if (graph != null)
 			{
 				states.VfxGraphs[Project.RootPath] = graph;
+			}
+
+			string animator = animatorWindow.Document?.AssetPath;
+			if (animator != null)
+			{
+				states.Animators[Project.RootPath] = animator;
+			}
+
+			string clip = animationWindow.Document?.AssetPath;
+			if (clip != null)
+			{
+				states.AnimationClips[Project.RootPath] = clip;
 			}
 
 			if (lastScene != null)
@@ -2566,6 +2642,18 @@ namespace LELEngine.Editor
 					OpenVfxGraph(graph);
 				}
 
+				if (Saved("Animator", false))
+				{
+					string controller = states.Animators.TryGetValue(Project.RootPath, out string path) && File.Exists(AssetDatabase.ToAbsolute(path)) ? path : null;
+					OpenAnimator(controller);
+				}
+
+				if (Saved("Animation", false))
+				{
+					string clip = states.AnimationClips.TryGetValue(Project.RootPath, out string path) && File.Exists(AssetDatabase.ToAbsolute(path)) ? path : null;
+					OpenAnimationWindow(clip);
+				}
+
 				if (Saved("UI Builder", false))
 				{
 					OpenUIBuilder(null);
@@ -2591,6 +2679,12 @@ namespace LELEngine.Editor
 			/// <summary>Per project folder: the graph the VFX Graph window showed.</summary>
 			public Dictionary<string, string> VfxGraphs { get; set; } = new Dictionary<string, string>();
 
+			/// <summary>Per project folder: the controller the Animator window showed.</summary>
+			public Dictionary<string, string> Animators { get; set; } = new Dictionary<string, string>();
+
+			/// <summary>Per project folder: the clip the Animation window showed.</summary>
+			public Dictionary<string, string> AnimationClips { get; set; } = new Dictionary<string, string>();
+
 			/// <summary>Per project folder: the scene open last (the user's, so not in Project.json).</summary>
 			public Dictionary<string, string> LastScenes { get; set; } = new Dictionary<string, string>();
 
@@ -2606,6 +2700,8 @@ namespace LELEngine.Editor
 					{
 						states.Open ??= new Dictionary<string, bool>();
 						states.VfxGraphs ??= new Dictionary<string, string>();
+						states.Animators ??= new Dictionary<string, string>();
+						states.AnimationClips ??= new Dictionary<string, string>();
 						states.LastScenes ??= new Dictionary<string, string>();
 						states.ReloadScriptsOnPlay ??= new Dictionary<string, bool>();
 					}

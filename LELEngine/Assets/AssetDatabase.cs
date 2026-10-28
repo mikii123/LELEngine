@@ -846,6 +846,8 @@ namespace LELEngine
 			RegisterAssetType(typeof(PhysicsMaterial2D), new[] { PhysicsMaterial2D.Extension }, (type, path, sub) => PhysicsMaterial2D.Load(path));
 			RegisterAssetType(typeof(VFX.VfxGraph), new[] { VFX.VfxGraph.Extension }, (type, path, sub) => VFX.VfxGraph.Load(path));
 			RegisterAssetType(typeof(Audio.AudioProject), new[] { Audio.AudioProject.Extension }, (type, path, sub) => Audio.AudioProject.Load(path));
+			RegisterAssetType(typeof(Animation.AnimationClip), new[] { Animation.AnimationClip.Extension }, (type, path, sub) => Animation.AnimationClip.Load(path));
+			RegisterAssetType(typeof(Animation.AnimatorController), new[] { Animation.AnimatorController.Extension }, (type, path, sub) => Animation.AnimatorController.Load(path));
 			RegisterAssetType(typeof(Audio.AudioClip), Audio.AudioClip.Extensions, (type, path, sub) => Audio.AudioClip.Load(path));
 			RegisterAssetType(typeof(ScriptableObject), new[] { ScriptableObjectAssets.Extension }, (type, path, sub) => ScriptableObjectAssets.Load(path));
 			RegisterAssetType(typeof(Prefab), new[] { Prefab.Extension }, (type, path, sub) => Prefab.Load(path, AssetLoadScope.Current != null));

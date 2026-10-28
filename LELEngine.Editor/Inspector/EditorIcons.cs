@@ -61,7 +61,13 @@ namespace LELEngine.Editor
 		Font,
 		PhysicsMaterial,
 		InputConfiguration,
-		Text
+		Text,
+
+		/// <summary>Three linked nodes: animator controllers.</summary>
+		AnimatorController,
+
+		/// <summary>A key diamond on a timeline: animation clips.</summary>
+		AnimationClip
 	}
 
 	internal static class EditorIcons
@@ -124,6 +130,10 @@ namespace LELEngine.Editor
 					return IconKind.PhysicsMaterial;
 				case ".vfx":
 					return IconKind.VisualEffect;
+				case ".animator":
+					return IconKind.AnimatorController;
+				case ".anim":
+					return IconKind.AnimationClip;
 				case ".lelaudio":
 					return IconKind.AudioProject;
 				case ".uxml":
@@ -189,6 +199,10 @@ namespace LELEngine.Editor
 					return Rgb(0.98f, 0.66f, 0.25f);
 				case IconKind.VisualEffect:
 					return Rgb(0.98f, 0.45f, 0.7f);
+				case IconKind.AnimatorController:
+					return Rgb(0.95f, 0.6f, 0.3f);
+				case IconKind.AnimationClip:
+					return Rgb(0.45f, 0.85f, 0.75f);
 				case IconKind.UIDocument:
 				case IconKind.StyleSheet:
 					return Rgb(0.38f, 0.75f, 0.95f);
@@ -558,6 +572,34 @@ namespace LELEngine.Editor
 					draw.PathArcTo(center + new NVector2(s * 0.05f, 0f), s * 0.78f, -0.9f, 0.9f, 10);
 					draw.PathStroke(color, ImDrawFlags.None, thickness);
 					return true;
+				case IconKind.AnimatorController:
+				{
+					// Three nodes linked: a state machine.
+					NVector2 nodeA = center + new NVector2(-s * 0.6f, -s * 0.45f);
+					NVector2 nodeB = center + new NVector2(s * 0.6f, -s * 0.45f);
+					NVector2 nodeC = center + new NVector2(0f, s * 0.6f);
+					draw.AddLine(nodeA, nodeB, color, thickness);
+					draw.AddLine(nodeB, nodeC, color, thickness);
+					draw.AddLine(nodeC, nodeA, color, thickness);
+					draw.AddCircleFilled(nodeA, s * 0.3f, color, 10);
+					draw.AddCircleFilled(nodeB, s * 0.3f, color, 10);
+					draw.AddCircleFilled(nodeC, s * 0.3f, color, 10);
+					return true;
+				}
+				case IconKind.AnimationClip:
+				{
+					// A timeline with two key diamonds.
+					draw.AddLine(center + new NVector2(-s * 0.9f, s * 0.1f), center + new NVector2(s * 0.9f, s * 0.1f), color, thickness);
+					void Key(NVector2 at, float r)
+					{
+						draw.AddQuadFilled(at + new NVector2(0f, -r), at + new NVector2(r, 0f), at + new NVector2(0f, r), at + new NVector2(-r, 0f), color);
+					}
+
+					Key(center + new NVector2(-s * 0.45f, s * 0.1f), s * 0.3f);
+					Key(center + new NVector2(s * 0.4f, s * 0.1f), s * 0.3f);
+					draw.AddLine(center + new NVector2(-s * 0.9f, -s * 0.55f), center + new NVector2(-s * 0.9f, s * 0.55f), color, thickness);
+					return true;
+				}
 				case IconKind.VisualEffect:
 				{
 					// Sparkles: a four-pointed star and a small one.
