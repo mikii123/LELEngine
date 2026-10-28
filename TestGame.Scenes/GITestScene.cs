@@ -194,6 +194,9 @@ namespace TestGame.Scenes
 			/// <summary>Trail props (TrailRenderer) close to the player's start; off by default.</summary>
 			public bool Trails;
 
+			/// <summary>Engine/LitTextured.shader props (workflows, maps, tiling) close to the player's start; off by default.</summary>
+			public bool Materials;
+
 			/// <summary>Start position of the player's eye (null = the usual spot by the open side of the room).</summary>
 			public Vector3? CameraPosition;
 
@@ -261,6 +264,10 @@ namespace TestGame.Scenes
 			if (options.Trails)
 			{
 				BuildTrails(scene);
+			}
+			if (options.Materials)
+			{
+				BuildMaterials(scene);
 			}
 			BuildLight(scene);
 			if (options.Emitters)
@@ -874,6 +881,212 @@ namespace TestGame.Scenes
 			MeshRenderer renderer = quad.GetComponent<MeshRenderer>();
 			renderer.SetMaterials(material);
 			renderer.ContributesToGI = false;
+		}
+
+		/// <summary>
+		///     Engine/LitTextured.shader props (materials=1) in front of the player's start, one feature each, left to right:
+		///     the Scene workflow with a normal map (the lighting it always had), a smooth gold metal and a smooth red
+		///     dielectric of the Metallic workflow, a mask map over a checker tiled 2 x 2 with a normal map (metal on the
+		///     left half of each tile, occlusion grooves, smoothness rising upwards), the Specular workflow with a copper
+		///     checker specular map, and an emission map with its own tiling (4 x 1). Behind them a rough dielectric wall
+		///     piece (wide dim highlight) and, on the right, a panel yellow above and blue below with its upper half glowing:
+		///     the GI captures must read it the same way up (cacheview=1, voxels=1).
+		/// </summary>
+		private static void BuildMaterials(Scene scene)
+		{
+			ShaderProgram litTextured = InternalStorage.GetOrCreateShader("Engine/LitTextured.shader");
+			Texture2D bumps = BumpNormalMap(256, 6, 0.35f);
+			Texture2D checker = Checker(256, 8, new Color4(0.8f, 0.8f, 0.8f, 1f), new Color4(0.2f, 0.2f, 0.22f, 1f));
+			const float y = 1.45f;
+			const float z = -5.9f;
+
+			var sceneWorkflow = new Material(litTextured);
+			sceneWorkflow.SetTexture("DiffuseMap", checker);
+			sceneWorkflow.SetTexture("NormalMap", bumps);
+			sceneWorkflow.SetFloat("Roughness", 0.4f);
+			MaterialSphere(scene, "SceneWorkflow", sceneWorkflow, new Vector3(1.55f, y, z));
+
+			var gold = new Material(litTextured);
+			gold.SetFloat("Workflow", 1f);
+			gold.SetColor("Color", new Color4(1f, 0.77f, 0.34f, 1f));
+			gold.SetFloat("Metallic", 1f);
+			gold.SetFloat("Roughness", 0.2f);
+			MaterialSphere(scene, "Gold", gold, new Vector3(0.93f, y, z));
+
+			var plastic = new Material(litTextured);
+			plastic.SetFloat("Workflow", 1f);
+			plastic.SetColor("Color", new Color4(0.6f, 0.05f, 0.04f, 1f));
+			plastic.SetFloat("Roughness", 0.2f);
+			MaterialSphere(scene, "RedPlastic", plastic, new Vector3(0.31f, y, z));
+
+			var masked = new Material(litTextured);
+			masked.SetFloat("Workflow", 1f);
+			masked.SetTexture("DiffuseMap", checker);
+			masked.SetVector("DiffuseMap_ST", new Vector4(2f, 2f, 0f, 0f));
+			masked.SetTexture("NormalMap", bumps);
+			masked.SetTexture("MaskMap", MaskMap(256));
+			MaterialSphere(scene, "MaskMap", masked, new Vector3(-0.31f, y, z));
+
+			var copper = new Material(litTextured);
+			copper.SetFloat("Workflow", 2f);
+			copper.SetColor("Color", new Color4(0.1f, 0.1f, 0.1f, 1f));
+			copper.SetColor("SpecularColor", Color4.White);
+			copper.SetTexture("SpecularMap", Checker(256, 4, new Color4(0.95f, 0.64f, 0.54f, 1f), new Color4(0.04f, 0.04f, 0.04f, 1f)));
+			copper.SetFloat("Roughness", 0.3f);
+			MaterialSphere(scene, "SpecularMap", copper, new Vector3(-0.93f, y, z));
+
+			var glow = new Material(litTextured);
+			glow.SetTexture("DiffuseMap", checker);
+			glow.SetColor("Emissive", new Color4(0.2f, 0.8f, 1f, 3f));
+			glow.SetTexture("EmissionMap", Stripes(128));
+			glow.SetVector("EmissionMap_ST", new Vector4(4f, 1f, 0f, 0f));
+			MaterialSphere(scene, "EmissionMap", glow, new Vector3(-1.55f, y, z));
+
+			var rough = new Material(litTextured);
+			rough.SetFloat("Workflow", 1f);
+			rough.SetTexture("DiffuseMap", checker);
+			rough.SetFloat("Roughness", 0.85f);
+			Box(scene, "RoughBlock", "LitGray.material", new Vector3(0f, 0.75f, -4.6f), new Vector3(1.8f, 0.25f, 0.2f)).GetComponent<MeshRenderer>().SetMaterials(rough);
+
+			var panel = new Material(litTextured);
+			panel.SetTexture("DiffuseMap", TwoTone(64, new Color4(1f, 0.85f, 0.1f, 1f), new Color4(0.1f, 0.25f, 1f, 1f)));
+			panel.SetColor("Emissive", new Color4(1f, 0.85f, 0.1f, 2f));
+			panel.SetTexture("EmissionMap", TwoTone(64, Color4.White, Color4.Black));
+			Box(scene, "VPanel", "LitGray.material", new Vector3(-2.4f, 1f, -4.6f), new Vector3(0.6f, 0.6f, 0.05f)).GetComponent<MeshRenderer>().SetMaterials(panel);
+		}
+
+		private static void MaterialSphere(Scene scene, string name, Material material, Vector3 position)
+		{
+			GameObject sphere = scene.CreateGameObject(name);
+			sphere.transform.position = position;
+			sphere.transform.scale = Vector3.One * 0.28f;
+			MeshRenderer renderer = sphere.AddComponent<MeshRenderer>();
+			renderer.SetMesh(UVSphere());
+			renderer.SetMaterials(material);
+			renderer.IsStatic = markStatic;
+		}
+
+		private static Mesh uvSphere;
+
+		// A smooth UV sphere of radius 1 (the harness spheres are icospheres of 42 vertices): u once around (to the right
+		// seen from outside), v from the lower pole up, tangents from the UV layout.
+		private static Mesh UVSphere()
+		{
+			if (uvSphere != null)
+			{
+				return uvSphere;
+			}
+
+			const int segments = 64;
+			const int rings = 32;
+			var vertices = new System.Collections.Generic.List<Vertex>();
+			for (int r = 0; r <= rings; r++)
+			{
+				float v = (float)r / rings;
+				float latitude = MathF.PI * (v - 0.5f);
+				for (int s = 0; s <= segments; s++)
+				{
+					float u = (float)s / segments;
+					float longitude = 2f * MathF.PI * u;
+					var normal = new Vector3(MathF.Cos(latitude) * MathF.Cos(longitude), MathF.Sin(latitude), MathF.Cos(latitude) * MathF.Sin(longitude));
+					vertices.Add(new Vertex(normal, normal, new Vector2(1f - u, v), Vector3.Zero, Vector3.Zero));
+				}
+			}
+
+			var indices = new System.Collections.Generic.List<uint>();
+			for (int r = 0; r < rings; r++)
+			{
+				for (int s = 0; s < segments; s++)
+				{
+					uint a = (uint)(r * (segments + 1) + s);
+					uint b = a + segments + 1;
+					indices.AddRange(new[] { a, b, a + 1, a + 1, b, b + 1 });
+				}
+			}
+
+			uint[] triangles = indices.ToArray();
+			uvSphere = new Mesh("UVSphere", Mesh.WithTangents(vertices.ToArray(), triangles), triangles);
+			return uvSphere;
+		}
+
+		// An sRGB checker of cells x cells squares.
+		private static Texture2D Checker(int size, int cells, Color4 a, Color4 b)
+		{
+			var pixels = new byte[size * size * 4];
+			for (int y = 0; y < size; y++)
+			{
+				for (int x = 0; x < size; x++)
+				{
+					bool odd = ((x * cells / size) + (y * cells / size)) % 2 == 1;
+					WriteColor(pixels, (y * size + x) * 4, odd ? b : a);
+				}
+			}
+
+			return new Texture2D(size, size, pixels, "checker", true, true);
+		}
+
+		// A mask map (linear): r metallic on the left half, g occlusion grooves along the edges of 4 x 4 cells, a smoothness
+		// from 0.2 at the bottom to 0.95 at the top.
+		private static Texture2D MaskMap(int size)
+		{
+			var pixels = new byte[size * size * 4];
+			for (int y = 0; y < size; y++)
+			{
+				for (int x = 0; x < size; x++)
+				{
+					float u = (x + 0.5f) / size;
+					float v = (y + 0.5f) / size;
+					float cellU = u * 4f - MathF.Floor(u * 4f);
+					float cellV = v * 4f - MathF.Floor(v * 4f);
+					float edge = MathF.Min(MathF.Min(cellU, 1f - cellU), MathF.Min(cellV, 1f - cellV));
+					float occlusion = Math.Clamp(edge * 12f, 0.15f, 1f);
+					int i = (y * size + x) * 4;
+					pixels[i] = u < 0.5f ? (byte)255 : (byte)0;
+					pixels[i + 1] = (byte)MathF.Round(occlusion * 255f);
+					pixels[i + 2] = 0;
+					pixels[i + 3] = (byte)MathF.Round((0.2f + 0.75f * v) * 255f);
+				}
+			}
+
+			return new Texture2D(size, size, pixels, "mask", true);
+		}
+
+		// Two lit bands across u (an emission map: white bands on black).
+		private static Texture2D Stripes(int size)
+		{
+			var pixels = new byte[size * size * 4];
+			for (int y = 0; y < size; y++)
+			{
+				for (int x = 0; x < size; x++)
+				{
+					WriteColor(pixels, (y * size + x) * 4, x * 4 / size % 2 == 0 ? Color4.White : Color4.Black);
+				}
+			}
+
+			return new Texture2D(size, size, pixels, "stripes", true, true);
+		}
+
+		// The upper half of the image (v >= 0.5) one colour, the lower half another.
+		private static Texture2D TwoTone(int size, Color4 upper, Color4 lower)
+		{
+			var pixels = new byte[size * size * 4];
+			for (int y = 0; y < size; y++)
+			{
+				for (int x = 0; x < size; x++)
+				{
+					WriteColor(pixels, (y * size + x) * 4, y >= size / 2 ? upper : lower);
+				}
+			}
+
+			return new Texture2D(size, size, pixels, "two-tone", true, true);
+		}
+
+		private static void WriteColor(byte[] pixels, int index, Color4 color)
+		{
+			pixels[index] = (byte)MathF.Round(Math.Clamp(color.R, 0f, 1f) * 255f);
+			pixels[index + 1] = (byte)MathF.Round(Math.Clamp(color.G, 0f, 1f) * 255f);
+			pixels[index + 2] = (byte)MathF.Round(Math.Clamp(color.B, 0f, 1f) * 255f);
+			pixels[index + 3] = 255;
 		}
 
 		// A tangent-space normal map of round bumps, cells x cells per tile; tilt is the slope scale.

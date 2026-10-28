@@ -16,7 +16,7 @@ void main()
 {
 	gWorldPos = vec3(modelMatrix * vec4(vPosition, 1.0));
 	gNormal = normalize(mat3(transpose(inverse(modelMatrix))) * vNormal);
-	gUV = vec2(vTexCoord.x, 1.0 - vTexCoord.y);
+	gUV = vTexCoord;
 }
 
 /////Vertex
@@ -89,12 +89,7 @@ uniform int voxSamples;    // samples per pixel of the rasterization (0 or 1: fu
 uniform int voxSplatWidth; // 2: linear tent over the two nearest voxels, 3: quadratic B-spline over three
 
 // Material data injected per draw by VoxelGIPass
-uniform vec4 voxAlbedo;
-uniform vec4 voxEmissive;      // rgb color, a intensity
-uniform sampler2D voxAlbedoMap;
-uniform int voxUseAlbedoMap;
-uniform sampler2D voxEmissionMap; // multiplies the emission colour (texture unit 1)
-uniform int voxUseEmissionMap;
+#include "Engine/GISurface.glsl"
 
 centroid in vec3 fWorldPos;
 centroid in vec3 fNormal;
@@ -172,17 +167,9 @@ void main()
 
 	float coverage = voxSamples > 1 ? float(bitCount(gl_SampleMaskIn[0])) / float(voxSamples) : 1.0;
 
-	vec3 albedo = clamp(voxAlbedo.rgb, 0.0, 1.0);
-	if (voxUseAlbedoMap != 0)
-	{
-		albedo *= texture(voxAlbedoMap, fUV).rgb;
-	}
+	vec3 albedo = LelGIAlbedo(clamp(voxAlbedo.rgb, 0.0, 1.0), fUV);
 	vec3 normal01 = normalize(fNormal) * 0.5 + 0.5;
-	vec3 emission = voxEmissive.rgb * voxEmissive.a;
-	if (voxUseEmissionMap != 0)
-	{
-		emission *= texture(voxEmissionMap, fUV).rgb;
-	}
+	vec3 emission = LelGIEmission(fUV) * voxEmissive.a;
 
 	// The pixel is the voxel column; along the axis the surface's depth in voxel centres decides the weights.
 	ivec2 column = ivec2(gl_FragCoord.xy);

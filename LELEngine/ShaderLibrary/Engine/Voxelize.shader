@@ -16,7 +16,7 @@ void main()
 {
 	gWorldPos = vec3(modelMatrix * vec4(vPosition, 1.0));
 	gNormal = normalize(mat3(transpose(inverse(modelMatrix))) * vNormal);
-	gUV = vec2(vTexCoord.x, 1.0 - vTexCoord.y);
+	gUV = vTexCoord;
 }
 
 /////Vertex
@@ -78,12 +78,7 @@ uniform float voxelGridSize;
 uniform int voxelResolution;
 
 // Material data injected per draw by VoxelGIPass
-uniform vec4 voxAlbedo;
-uniform vec4 voxEmissive;      // rgb color, a intensity
-uniform sampler2D voxAlbedoMap;
-uniform int voxUseAlbedoMap;
-uniform sampler2D voxEmissionMap; // multiplies the emission colour (texture unit 1)
-uniform int voxUseEmissionMap;
+#include "Engine/GISurface.glsl"
 
 in vec3 fWorldPos;
 in vec3 fNormal;
@@ -95,20 +90,10 @@ void main()
 	if (any(lessThan(uvw, vec3(0.0))) || any(greaterThanEqual(uvw, vec3(1.0)))) discard;
 	ivec3 coord = ivec3(uvw * float(voxelResolution));
 
-	vec3 albedo = voxAlbedo.rgb;
-	if (voxUseAlbedoMap != 0)
-	{
-		albedo *= texture(voxAlbedoMap, fUV).rgb;
-	}
-
+	vec3 albedo = LelGIAlbedo(voxAlbedo.rgb, fUV);
 	imageStore(AlbedoOut, coord, vec4(albedo, 1.0));
 	imageStore(NormalOut, coord, vec4(normalize(fNormal) * 0.5 + 0.5, 1.0));
-	vec3 emission = voxEmissive.rgb * voxEmissive.a;
-	if (voxUseEmissionMap != 0)
-	{
-		emission *= texture(voxEmissionMap, fUV).rgb;
-	}
-
+	vec3 emission = LelGIEmission(fUV) * voxEmissive.a;
 	imageStore(EmissiveOut, coord, vec4(emission, 0.0));
 	imageStore(BlocksOut, coord >> 3, vec4(1.0));
 }

@@ -926,46 +926,10 @@ namespace LELEngine.Rendering.Passes
 						continue;
 					}
 
-					SetMaterialUniforms(program, material);
+					// Materials describe themselves through conventional uniform names.
+					GISurface.SetUniforms(program, material);
 					renderer.RenderSubMeshWith(program, i);
 				}
-			}
-		}
-
-		// Materials describe themselves through conventional uniform names.
-		private static void SetMaterialUniforms(ShaderProgram program, Material material)
-		{
-			Vector4 albedo;
-			if (!material.TryGetVector4("Color", out albedo))
-			{
-				albedo = Vector4.One;
-			}
-
-			Vector4 emissive;
-			if (!material.TryGetVector4("Emissive", out emissive))
-			{
-				emissive = Vector4.Zero;
-			}
-
-			int albedoMap = material.GetTextureHandle("DiffuseMap");
-			if (albedoMap == 0)
-			{
-				albedoMap = material.GetTextureHandle("AlbedoMap");
-			}
-
-			program.SetVector4("voxAlbedo", albedo);
-			program.SetVector4("voxEmissive", emissive);
-			program.SetInt("voxUseAlbedoMap", albedoMap != 0 ? 1 : 0);
-			if (albedoMap != 0)
-			{
-				program.SetTexture("voxAlbedoMap", TextureTarget.Texture2D, albedoMap, 0);
-			}
-
-			int emissionMap = material.GetTextureHandle("EmissionMap");
-			program.SetInt("voxUseEmissionMap", emissionMap != 0 ? 1 : 0);
-			if (emissionMap != 0)
-			{
-				program.SetTexture("voxEmissionMap", TextureTarget.Texture2D, emissionMap, 1);
 			}
 		}
 

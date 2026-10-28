@@ -1,3 +1,5 @@
+using System;
+using System.Collections.Generic;
 using LELEngine.Shaders;
 using OpenTK.Graphics.OpenGL4;
 using OpenTK.Mathematics;
@@ -10,7 +12,11 @@ namespace LELEngine.Rendering.Passes
 	///     with; camera motion is not in them, the consumers apply their own previous view).
 	///     The opaque pass then shades with depth test LEQUAL and no depth writes (each pixel shaded once),
 	///     and screen-space passes (GI resolve) get geometry without re-rasterizing the scene.
-	///     Shares the depth texture with the scene target. GPU-driven: every visible instance in one indirect call.
+	///     A material whose variant samples a normal map or a mask map (NORMAL_MAP, MASK_MAP: Engine/LitTextured.shader)
+	///     is drawn with the G-buffer's variant of the same keywords and the material's maps, so the screen-space GI sees
+	///     the normals and roughness the shading uses; everything else is drawn with the vertex normal and the material's
+	///     roughness. Shares the depth texture with the scene target. GPU-driven: every visible instance without maps in
+	///     one indirect call, then a call per bucket with maps.
 	/// </summary>
 	public sealed class GeometryPrepass : RenderPass
 	{
@@ -20,9 +26,16 @@ namespace LELEngine.Rendering.Passes
 		public RenderTexture NormalRoughness => normalRoughness;
 		public RenderTexture Motion => motion;
 
+		/// <summary>G-buffer map bits of a material's variant (<see cref="MapsOf" />).</summary>
+		public const int NormalMapBit = 1;
+
+		public const int MaskMapBit = 2;
+
 		#endregion
 
 		#region PrivateFields
+
+		private static readonly string[][] MapKeywords = { null, new[] { "NORMAL_MAP" }, new[] { "MASK_MAP" }, new[] { "MASK_MAP", "NORMAL_MAP" } };
 
 		private Framebuffer gbuffer;
 		private RenderTexture normalRoughness;
@@ -30,9 +43,40 @@ namespace LELEngine.Rendering.Passes
 		private ShaderProgram program;
 		private ShaderProgram instancedProgram;
 
+		// The variants per map bits (index = bits), made on first use; the base program owns and deletes them.
+		private readonly ShaderProgram[] mapPrograms = new ShaderProgram[4];
+		private readonly ShaderProgram[] mapInstancedPrograms = new ShaderProgram[4];
+
 		#endregion
 
 		#region PublicMethods
+
+		/// <summary>
+		///     The G-buffer maps a material's variant samples: <see cref="NormalMapBit" /> for NORMAL_MAP, <see cref="MaskMapBit" />
+		///     for MASK_MAP (the mask's smoothness); 0 for none or no material.
+		/// </summary>
+		public static int MapsOf(Material material)
+		{
+			int maps = 0;
+			if (material == null)
+			{
+				return maps;
+			}
+
+			foreach (string keyword in material.Keywords)
+			{
+				if (keyword == "NORMAL_MAP")
+				{
+					maps |= NormalMapBit;
+				}
+				else if (keyword == "MASK_MAP")
+				{
+					maps |= MaskMapBit;
+				}
+			}
+
+			return maps;
+		}
 
 		public override void Initialize(Renderer renderer)
 		{
@@ -78,18 +122,34 @@ namespace LELEngine.Rendering.Passes
 			GLState.SetCull(true, TriangleFace.Back);
 			GLState.SetColorWrite(true);
 
-			ShaderProgram active = gpuDriven ? instancedProgram : program;
-			active.Use();
-			active.SetMatrix4("viewMatrix", context.View);
-			active.SetMatrix4("projectionMatrix", context.Projection);
-
 			if (gpuDriven)
 			{
-				gpu.DrawCameraAll();
+				Use(instancedProgram, context);
+				gpu.DrawCameraPlainGeometry();
+				IReadOnlyList<OpaqueBucket> buckets = gpu.Buckets;
+				for (int i = 0; i < buckets.Count; i++)
+				{
+					OpaqueBucket bucket = buckets[i];
+					if (bucket.GeometryMaps == 0)
+					{
+						continue;
+					}
+
+					// A variant that does not link still draws the bucket's depth, with the vertex normals.
+					ShaderProgram variant = MapProgram(bucket.GeometryMaps, true) ?? instancedProgram;
+					Use(variant, context);
+					if (variant != instancedProgram)
+					{
+						bucket.Material.SetUniforms(variant);
+					}
+
+					gpu.DrawCameraBucket(i);
+				}
 			}
 			else
 			{
 				ObjectMotion objectMotion = context.Renderer.Motion;
+				ShaderProgram current = null;
 				foreach (MeshRenderer renderer in context.Renderers)
 				{
 					Matrix4 previousModel = objectMotion.GetPrevious(renderer, renderer.transform.LocalToWorld);
@@ -101,15 +161,30 @@ namespace LELEngine.Rendering.Passes
 							continue;
 						}
 
-						Material.ResetStandardUniforms(program);
-						float roughness;
-						if (material != null && material.TryGetFloat("Roughness", out roughness))
+						int maps = MapsOf(material);
+						ShaderProgram target = maps != 0 ? MapProgram(maps, false) ?? program : program;
+						if (target != current)
 						{
-							program.SetFloat("Roughness", roughness);
+							Use(target, context);
+							current = target;
 						}
 
-						program.SetMatrix4("previousModelMatrix", previousModel);
-						renderer.RenderSubMeshWith(program, i);
+						if (target == program)
+						{
+							Material.ResetStandardUniforms(program);
+							float roughness;
+							if (material != null && material.TryGetFloat("Roughness", out roughness))
+							{
+								program.SetFloat("Roughness", roughness);
+							}
+						}
+						else
+						{
+							material.SetUniforms(target);
+						}
+
+						target.SetMatrix4("previousModelMatrix", previousModel);
+						renderer.RenderSubMeshWith(target, i);
 					}
 				}
 			}
@@ -123,10 +198,35 @@ namespace LELEngine.Rendering.Passes
 		{
 			gbuffer?.Delete();
 			gbuffer = null;
-			// Deletes the instanced variant too.
+			// Deletes the instanced variant and the map variants too.
 			program?.Delete();
 			program = null;
 			instancedProgram = null;
+			Array.Clear(mapPrograms);
+			Array.Clear(mapInstancedPrograms);
+		}
+
+		#endregion
+
+		#region PrivateMethods
+
+		private static void Use(ShaderProgram target, RenderContext context)
+		{
+			target.Use();
+			target.SetMatrix4("viewMatrix", context.View);
+			target.SetMatrix4("projectionMatrix", context.Projection);
+		}
+
+		// The variant for the map bits (instanced or per object); null when it does not link.
+		private ShaderProgram MapProgram(int maps, bool instanced)
+		{
+			ShaderProgram variant = mapPrograms[maps] ??= program.GetVariant(MapKeywords[maps]);
+			if (!instanced)
+			{
+				return variant.IsLinked ? variant : null;
+			}
+
+			return mapInstancedPrograms[maps] ??= variant.GetInstancedVariant();
 		}
 
 		#endregion

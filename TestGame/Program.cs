@@ -25,6 +25,7 @@ namespace TestGame
 		///            [dumpafter=seconds] [gpudriven=0|1] [stress=N extra cubes] [focus=0|1] [glass=0|1 transparent props]
 		///            [refraction=1 refracting props: GrabPass glass and particles before the player]
 		///            [trails=1 TrailRenderer props before the player: taper, round corners and caps, ribbon, tiled]
+		///            [materials=1 Engine/LitTextured props before the player: workflows, mask / specular / emission maps, tiling]
 		///            [sdfatlas=1 distance field atlas check: many box shapes in steps, logged as [SdfAtlasProbe]]
 		///            Scenes: [outdoor=1 open-sky yard] [sky=0|1 procedural skybox] [skybox=asset path] [physics=1] [nav=1] [ui=1] [scene=path]
 		///            View: [view=ghost from under the ceiling down at the orbs] [camera=x,y,z] [look=x,y,z] [night=1 emitters only]
@@ -132,6 +133,7 @@ namespace TestGame
 				Glass = GetBool(args, "glass", true),
 				Refraction = GetBool(args, "refraction", false),
 				Trails = GetBool(args, "trails", false),
+				Materials = GetBool(args, "materials", false),
 				EmitterStepFrame = GetInt(args, "emitterstep", 0),
 				EmitterOffFrame = GetInt(args, "emitteroff", 0),
 				MoverFrame = GetInt(args, "mover", 0),

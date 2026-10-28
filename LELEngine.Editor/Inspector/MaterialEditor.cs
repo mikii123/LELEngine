@@ -51,7 +51,7 @@ namespace LELEngine.Editor
 				ImGui.TextDisabled("Variant: " + string.Join(" ", program.Keywords));
 				if (ImGui.IsItemHovered())
 				{
-					ImGui.SetTooltip("The keywords of the material's toggles and keyword enums: a program of its own (game builds compile the ones their materials use).");
+					ImGui.SetTooltip("The keywords of the material's toggles, keyword enums and set maps: a program of its own (game builds compile the ones their materials use).");
 				}
 			}
 
@@ -307,7 +307,13 @@ namespace LELEngine.Editor
 				case ShaderPropertyType.Texture3D:
 					return DrawTexture(material, name, label, typeof(Texture3D), context);
 				default:
-					return DrawTexture(material, name, label, typeof(Texture2D), context);
+					bool changed = DrawTexture(material, name, label, typeof(Texture2D), context);
+					if (declared.IsMapKeyword && ImGui.IsItemHovered())
+					{
+						ImGui.SetTooltip("Keyword " + declared.Keywords[0] + " while a texture is set");
+					}
+
+					return changed;
 			}
 		}
 

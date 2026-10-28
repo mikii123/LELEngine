@@ -69,6 +69,12 @@ namespace LELEngine.Rendering
 		public bool ReceiveShadows { get; internal set; }
 		public bool ReceiveGI { get; internal set; }
 
+		/// <summary>
+		///     The G-buffer maps of the material's variant (<see cref="Passes.GeometryPrepass.MapsOf" />; 0: none): the
+		///     geometry prepass draws such a bucket on its own with them, the others together.
+		/// </summary>
+		public int GeometryMaps { get; internal set; }
+
 		/// <summary>First instance of the bucket in the instance table, and their number.</summary>
 		public int Start { get; internal set; }
 
@@ -91,7 +97,9 @@ namespace LELEngine.Rendering
 	///     uniform state). Rebuilt every frame from the renderers of every camera of the stack; each view (a camera,
 	///     a shadow map) is culled by Engine/InstanceCull.shader against its frustum and its layer mask (an instance
 	///     holds the bit of its object's layer), which writes the draw commands, and drawn by one multi-draw indirect
-	///     call per bucket.
+	///     call per bucket. The instance table holds the buckets whose materials draw maps into the G-buffer
+	///     (<see cref="OpaqueBucket.GeometryMaps" />) last, so the geometry prepass draws everything before them in one
+	///     call (<see cref="DrawCameraPlainGeometry" />).
 	///     Native path: commands compacted in instance order, the draw count read by the GPU
 	///     (glMultiDrawElementsIndirectCount), the instance index from gl_BaseInstance, the culling scan with subgroup
 	///     operations. Fallbacks, each on its own: one command per instance with instance count 0 when culled, a
@@ -143,6 +151,7 @@ namespace LELEngine.Rendering
 
 		private readonly List<OpaqueBucket> bucketPool = new List<OpaqueBucket>();
 		private readonly List<OpaqueBucket> activeBuckets = new List<OpaqueBucket>();
+		private readonly List<OpaqueBucket> mapBuckets = new List<OpaqueBucket>();
 		private readonly List<RendererPart> perObject = new List<RendererPart>();
 		private readonly List<RendererPart> unbucketed = new List<RendererPart>();
 		private readonly List<RendererPart> parts = new List<RendererPart>();
@@ -162,6 +171,9 @@ namespace LELEngine.Rendering
 		private Matrix4 culledViewProjection;
 		private int culledLayerMask;
 		private bool reported;
+
+		// Instances before the first bucket with G-buffer maps (every instance when there is none).
+		private int plainGeometryCount;
 
 		#endregion
 
@@ -218,6 +230,22 @@ namespace LELEngine.Rendering
 
 			parts.Clear();
 
+			// The buckets with G-buffer maps go last (in their order), after the instances drawn one by one.
+			mapBuckets.Clear();
+			activeBuckets.RemoveAll(bucket =>
+			{
+				if (bucket.GeometryMaps == 0)
+				{
+					return false;
+				}
+
+				mapBuckets.Add(bucket);
+				return true;
+			});
+			int plainBuckets = activeBuckets.Count;
+			activeBuckets.AddRange(mapBuckets);
+			mapBuckets.Clear();
+
 			materials.Add(null); // index 0: no material (the standard defaults)
 			int count = unbucketed.Count;
 			foreach (OpaqueBucket bucket in activeBuckets)
@@ -234,6 +262,11 @@ namespace LELEngine.Rendering
 			int index = 0;
 			for (int b = 0; b < activeBuckets.Count; b++)
 			{
+				if (b == plainBuckets)
+				{
+					WriteUnbucketed(ref index);
+				}
+
 				OpaqueBucket bucket = activeBuckets[b];
 				bucket.Start = index;
 				bucket.Count = bucket.Members.Count;
@@ -243,11 +276,12 @@ namespace LELEngine.Rendering
 				}
 			}
 
-			foreach (RendererPart part in unbucketed)
+			if (plainBuckets == activeBuckets.Count)
 			{
-				Write(index++, part, -1);
+				WriteUnbucketed(ref index);
 			}
 
+			plainGeometryCount = plainBuckets < activeBuckets.Count ? activeBuckets[plainBuckets].Start : index;
 			InstanceCount = index;
 			Active = index > 0;
 			cameraCulled = false;
@@ -288,7 +322,15 @@ namespace LELEngine.Rendering
 			}
 
 			cameraView.Segments.Add(new CullSegment { InstanceStart = 0, InstanceCount = (uint)InstanceCount, CommandOffset = (uint)InstanceCount, RequiredFlags = 0 });
-			Dispatch(cameraView, viewProjection, layerMask, InstanceCount * 2);
+			int commandCount = InstanceCount * 2;
+			if (plainGeometryCount < InstanceCount)
+			{
+				// The geometry prepass's call for the instances without G-buffer maps.
+				cameraView.Segments.Add(new CullSegment { InstanceStart = 0, InstanceCount = (uint)plainGeometryCount, CommandOffset = (uint)commandCount, RequiredFlags = 0 });
+				commandCount += plainGeometryCount;
+			}
+
+			Dispatch(cameraView, viewProjection, layerMask, commandCount);
 		}
 
 		/// <summary>Culls the shadow casters (on the layers of <paramref name="layerMask" />) against the light's view.</summary>
@@ -307,7 +349,16 @@ namespace LELEngine.Rendering
 		/// <summary>Every visible instance with the bound program (depth prepass). Needs <see cref="EnsureCameraCulled" />.</summary>
 		public void DrawCameraAll()
 		{
-			Draw(cameraView, cameraView.Segments.Count - 1);
+			Draw(cameraView, activeBuckets.Count);
+		}
+
+		/// <summary>
+		///     The visible instances of the buckets without G-buffer maps and of the parts drawn one by one, with the bound
+		///     program (geometry prepass; the buckets with maps follow with <see cref="DrawCameraBucket" />).
+		/// </summary>
+		public void DrawCameraPlainGeometry()
+		{
+			Draw(cameraView, plainGeometryCount < InstanceCount ? activeBuckets.Count + 1 : activeBuckets.Count);
 		}
 
 		/// <summary>The visible instances of one opaque bucket with the bound program.</summary>
@@ -377,8 +428,17 @@ namespace LELEngine.Rendering
 			bucket.Material = uniformSource;
 			bucket.ReceiveShadows = receiveShadows;
 			bucket.ReceiveGI = receiveGI;
+			bucket.GeometryMaps = Passes.GeometryPrepass.MapsOf(uniformSource);
 			activeBuckets.Add(bucket);
 			return bucket;
+		}
+
+		private void WriteUnbucketed(ref int index)
+		{
+			foreach (RendererPart part in unbucketed)
+			{
+				Write(index++, part, -1);
+			}
 		}
 
 		private void Write(int index, RendererPart part, int bucket)

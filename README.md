@@ -78,7 +78,13 @@ Built on .NET 10, OpenTK 4.9 (GLFW) and OpenGL 4.6 (4.3 minimum), developed and 
   - **Lumen mode** (default): mesh distance fields and a global SDF, surface cache cards with radiosity, a world
     radiance cache, and screen probes with adaptive placement and temporal/spatial filtering.
   - **Voxel cone tracing mode**: an SDF-assisted voxel GI with multi-bounce injection.
-- PBR materials (GGX), shaders with `#include` support from the engine shader library.
+- PBR materials: `Engine/LitTextured.shader` has Unity's Standard lighting (GGX, Disney diffuse) in a Metallic and a
+  Specular workflow next to the scene-wide Blinn-Phong highlight of the other lit shaders, an HDRP-style mask map
+  (metallic, occlusion, smoothness in one texture), a specular map, normal map strength, and Unity's tiling and offset
+  (one for the surface maps, one for the emission map). The GI sees the same surfaces: its captures read the
+  material's tiling, metallic and specular colour (a metal keeps its colour in the bounce light), and the geometry
+  prepass draws the normal map and the mask's smoothness into the G-buffer the screen-space GI integrates with.
+  Shaders get `#include` support from the engine shader library.
 - Transparency: a shader declares its render state next to its properties (`Blend One OneMinusSrcAlpha`,
   `ZWrite Off`, `Cull Off`, `Queue Transparent`); materials can override the queue. Transparent objects draw after
   the opaques and the sky, sorted by queue and back to front, double-sided ones back faces first, and get global
@@ -88,7 +94,8 @@ Built on .NET 10, OpenTK 4.9 (GLFW) and OpenGL 4.6 (4.3 minimum), developed and 
   transmittance map next to every shadow map: a 35% cyan pane casts a 35% cyan shadow), in the camera shadow map
   and in the shadow maps that light the GI.
 - Shader variants (Unity's `shader_feature`, automatic): `[Toggle]` and `[KeywordEnum(...)]` material properties
-  enable keywords, and each keyword combination a material uses is a program of its own with its own render state
+  enable keywords (a `[Toggle]` on a texture while the material sets that map, so materials without a map never sample
+  it), and each keyword combination a material uses is a program of its own with its own render state
   (`#if` blocks in the Properties block), compiled on first use. Game builds check the variants their materials use
   with glslang, the Khronos reference compiler (no GPU needed, the same verdict on every machine; one that does not
   compile stops the build, the messages name the file and line) and list them; the player compiles them while it loads.

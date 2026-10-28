@@ -55,12 +55,11 @@
   longer exists (`Shaders/Lit.shader`) loads `Engine/Lit.shader` (`AssetDatabase.EngineShaderFallback`). Imports cache in `Library/ModelCache`
   (`ModelAssets.CacheFolder`, set when a project opens); player builds write the imported binary (`LELMODEL`
   magic) under the model's own file name, so the player never needs Assimp.
-- `LitTextured`: `DiffuseMap`, `NormalMap`, `EmissionMap` (rgb x `Emissive`, white default). The GI captures read the
-  conventional names (`voxAlbedoMap` unit 0 from DiffuseMap / AlbedoMap, `voxEmissionMap` unit 1 from EmissionMap in
-  `CardCapture`, `Voxelize`, `VoxelizeCoverage`; the card capture key hashes both handles). `Material.SetUniforms`
-  binds the neutral default of every texture the shader declares and the material lacks, and `OpaquePass` does the
-  same (`Material.SetDefaultTextures`) for GPU-driven buckets without a material: an unbound sampler read whatever an
-  earlier draw left on its unit (2026-10-22).
+- `LitTextured`: maps, workflows and what the GI reads of them are in "LitTextured: workflows, maps, GI surfaces"
+  below. `Material.SetUniforms` binds the neutral default of every texture the shader declares and the material lacks,
+  and `OpaquePass` does the same (`Material.SetDefaultTextures`, since 2026-10-28 also the declared defaults of the
+  non-standard numbers) for GPU-driven buckets without a material: an unbound sampler read whatever an earlier draw
+  left on its unit (2026-10-22).
 - `Mesh` is indexed (`Vertices`, `Indices`, `SubMeshes`); `GetTrianglePositions()` serves CPU queries (picking,
   navmesh, SDF build). `MeshRenderer` has one material per sub-mesh (`Materials`, `GetMaterial(i)` repeats the last
   slot); a renderer can be in both the opaque and the transparent list (`HasOpaqueParts` / `HasTransparentParts`),
@@ -363,7 +362,9 @@
 
 - Keyword variants, Unity's `shader_feature` made automatic: `[Toggle]` (keyword NAME_ON), `[Toggle(KEYWORD)]` and
   `[KeywordEnum(A, Soft B)]` (NAME_A, NAME_SOFT_B; the value is the option's index) on Float / Int / Range properties
-  (`ShaderProperty.Keywords`, `KeywordFor`). `Material.Program` is the shader's variant for the keywords of the
+  (`ShaderProperty.Keywords`, `KeywordFor`); since 2026-10-28 a `[Toggle]` on a 2D texture is a map keyword
+  (`IsMapKeyword`): on while the material has a texture in that slot (`Material.KeywordState` / `GetKeywords`), drawn
+  as the texture field (tooltip names the keyword), not a checkbox. `Material.Program` is the shader's variant for the keywords of the
   material's values (`ShaderProgram.GetVariant(keywords)`: a program per sorted keyword set, made on first use from
   the same file with the keywords as defines, kept with the shader, deleted with it); `UsingShader` stays the asset.
   Every draw path uses `Program` (opaque per-object and GPU-driven buckets, transparent pass, skybox, scene-load
@@ -596,6 +597,49 @@ Added for New Frontier's port of the FORGE3D planets (Unity shaders reading uv2,
 - Verified: TestGame A/B against HEAD (lumen, vct, gi=0, refraction, trails): identical or below run-to-run noise;
   ak.fbx / Axe_HighPoly.FBX imported by the old and new backend (same nodes and bounds, flipped bitangents); New
   Frontier's planets against Unity's renders (40 shots, mean difference 0.3..4 / 255, the rest texture compression).
+
+## LitTextured: workflows, maps, GI surfaces (2026-10-28)
+
+Added for New Frontier's ships (Unity Standard materials: metallic / occlusion maps, specular setup, tiling, the burnt
+wrecks' albedo-tinted highlight):
+- `Engine/LitTextured.shader` properties: `Color`, `DiffuseMap` + `DiffuseMap_ST` (Unity's main tiling / offset, shared by
+  the normal, mask and specular maps), `NormalMap` + `NormalScale`, `Emissive`, `EmissionMap` + `EmissionMap_ST` (its own),
+  `Workflow` [KeywordEnum(Scene, Metallic, Specular)], `Roughness` (0 = unset -> 0.6), `Metallic`, `SpecularColor`,
+  `SpecularMap` (rgb x SpecularColor), `MaskMap` (HDRP layout: r metallic in place of Metallic, g occlusion, a smoothness
+  x `SmoothnessScale` in place of Roughness; linear), `OcclusionStrength` (Unity's: lerp 1 -> map, indirect light only).
+  Map keywords NORMAL_MAP, EMISSION_MAP, MASK_MAP, SPECULAR_MAP: a material without a map never samples it (the old
+  shader always sampled the default normal and emission textures). Every material has a WORKFLOW_* keyword (an enum's
+  option 0 is one too), so existing materials now draw with the WORKFLOW_SCENE variant.
+- Scene workflow = the old shader's lighting (Blinn-Phong with the scene's Specular Strength / Shine, indirect specular
+  x specStrength), proved identical: TestGame materials=1 at gi=0, legacy sphere region bit-identical against HEAD.
+  Metallic / Specular = Unity's BRDF1 (`Engine/StandardBRDF.glsl`: Disney diffuse, GGX with roughness^2 clamped 0.002,
+  Unity's Smith joint approximation, x pi in the engine's units, surface reduction, grazing Fresnel lerp; specular
+  colour from metallic (0.04 dielectric) or SpecularColor, monochrome energy conservation). GI terms: gi.diffuse = flat
+  ambient x the GI's occlusion + indirect diffuse, gi.specular = the GI's reflection, both x the mask's occlusion; the
+  scene's specStrength is not applied (the material's reflectance is).
+- Mask smoothness gives roughness max(1 - a x scale, 0.03): the GI reads roughness 0 as "unset" (probe path, G-buffer).
+- GI captures (`Engine/GISurface.glsl`, C# `Rendering/GISurface.cs`, used by `VoxelGIPass` and `SurfaceCachePass`, which
+  had the same code twice): albedo and emission with the material's tiling; for WORKFLOW_METALLIC / SPECULAR the bounce
+  colour is the diffuse colour plus the specular colour x 0.45 (Unreal's EnvBRDFApproxFullyRough for Lumen cards: a metal
+  keeps its colour instead of turning black); `CaptureKey` hashes all of it. Mask / specular maps on units 2 / 3.
+- Fixed: the captures read textures upside down (`1 - v`, a leftover from before 2026-10-16, when images were not yet
+  stored bottom row first). Verified with TestGame materials=1's two-tone panel: cacheview=1 / voxels=1 now match the
+  render (HEAD had the halves swapped).
+- G-buffer: `Engine/GBuffer.shader` variants NORMAL_MAP / MASK_MAP (its Properties block declares the defaults of what
+  they read). `GeometryPrepass.MapsOf(material)` = the bits of those keywords in the material's variant; such buckets
+  (`OpaqueBucket.GeometryMaps`) go last in the GPU scene's instance table (after the per-object parts), the prepass draws
+  everything before them in one call (`GpuScene.DrawCameraPlainGeometry`, an extra cull segment only when map buckets
+  exist) and each map bucket with its variant and `material.SetUniforms`. Per-object path the same per sub-mesh. So the
+  screen-space GI (VCT resolve, Lumen screen probes) integrates with the normal map and the mask's roughness, and the
+  resolve's upsampling compares the shading normal with the same normal (it compared the mapped one with the vertex one).
+- Verified: TestGame lumen (dumpframe=400) / vct / gi=0 against HEAD identical (max 1 / 255; a time-based dump in Lumen
+  differs by convergence alone, use dumpframe); probe project `-executeMethod VariantCheck.Run` (scratchpad `mat/Probe`):
+  glslang on all 48 LitTextured keyword combinations + 4 G-buffer variants + the 3 capture shaders (438 stage sources, 3
+  GPU kinds) and the GL driver links all 109 programs with their instanced ones. GPU cost (TestGame materials=1 close-up,
+  9 samples x 2 runs): geometry prepass 0.166 -> 0.177 ms, opaque 0.584 -> 0.639 ms with the PBR spheres filling the view.
+- TestGame `materials=1` (`BuildMaterials`, code-made 64 x 32 UV sphere, procedural checker / mask / stripes / two-tone
+  textures): Scene workflow + normal map, gold metal, red dielectric, mask map tiled 2 x 2 with a normal map, Specular
+  workflow with a copper checker specular map, emission map tiled 4 x 1, a rough Metallic block, the V-check panel.
 
 ## Input system (Rewired-like, 2026-10-22)
 

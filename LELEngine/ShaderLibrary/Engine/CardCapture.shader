@@ -19,7 +19,7 @@ void main()
 	fLocalPos = vPosition * objectScale;
 	// Normals transform with the inverse transpose of the scale.
 	fLocalNormal = normalize(vNormal / max(objectScale, vec3(1e-5)));
-	fTexCoord = vec2(vTexCoord.x, 1.0 - vTexCoord.y);
+	fTexCoord = vTexCoord;
 	gl_Position = cardViewProjection * vec4(fLocalPos, 1.0);
 }
 
@@ -33,12 +33,9 @@ in vec3 fLocalPos;
 in vec3 fLocalNormal;
 in vec2 fTexCoord;
 
-uniform vec4 voxAlbedo;        // material base color
-uniform vec4 voxEmissive;      // rgb color; the intensity (a) travels with the object table so pulsing never recaptures
-uniform sampler2D voxAlbedoMap;
-uniform int voxUseAlbedoMap;
-uniform sampler2D voxEmissionMap; // multiplies the emission colour (texture unit 1)
-uniform int voxUseEmissionMap;
+// Material inputs (GISurface); the emission's intensity (voxEmissive.a) travels with the object table so pulsing never
+// recaptures.
+#include "Engine/GISurface.glsl"
 uniform int cardIndex;
 
 layout(location = 0) out vec4 OutAlbedo;        // rgb albedo, a = 1 valid
@@ -49,11 +46,7 @@ layout(location = 4) out uint OutCardIndex;
 
 void main()
 {
-	vec3 albedo = voxAlbedo.rgb;
-	if (voxUseAlbedoMap != 0)
-	{
-		albedo *= texture(voxAlbedoMap, fTexCoord).rgb;
-	}
+	vec3 albedo = LelGIAlbedo(voxAlbedo.rgb, fTexCoord);
 
 	// Cards look at the object from outside; a back face means the front face was culled by depth,
 	// so flip the normal towards the viewer to keep lighting consistent.
@@ -62,13 +55,7 @@ void main()
 
 	OutAlbedo = vec4(albedo, 1.0);
 	OutNormal = vec4(n * 0.5 + 0.5, 1.0);
-	vec3 emission = voxEmissive.rgb;
-	if (voxUseEmissionMap != 0)
-	{
-		emission *= texture(voxEmissionMap, fTexCoord).rgb;
-	}
-
-	OutEmissive = vec4(emission, 1.0);
+	OutEmissive = vec4(LelGIEmission(fTexCoord), 1.0);
 	OutLocalPosition = vec4(fLocalPos, 1.0);
 	OutCardIndex = uint(cardIndex);
 }

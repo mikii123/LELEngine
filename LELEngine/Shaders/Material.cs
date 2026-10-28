@@ -60,8 +60,8 @@ namespace LELEngine.Shaders
 
 		/// <summary>
 		///     The program draws use: the shader's variant for the keywords the material's [Toggle] / [KeywordEnum]
-		///     values enable (<see cref="Keywords" />), the shader itself when it has none. Follows value changes
-		///     (scripts and the editor set the values; the variant compiles on first use).
+		///     values and its set map textures enable (<see cref="Keywords" />), the shader itself when it has none. Follows
+		///     value and texture changes (scripts and the editor set them; the variant compiles on first use).
 		/// </summary>
 		public ShaderProgram Program
 		{
@@ -532,8 +532,9 @@ namespace LELEngine.Shaders
 		}
 
 		/// <summary>
-		///     Binds the neutral default of every texture the program declares, for draws without a material of their own
-		///     (GPU-driven buckets of materials with only the standard values).
+		///     Binds the neutral default of every texture the program declares and uploads its other declared values'
+		///     defaults (tiling, scales), for draws without a material of their own (GPU-driven buckets of materials with only
+		///     the standard values, which come from the material table).
 		/// </summary>
 		public static void SetDefaultTextures(ShaderProgram program)
 		{
@@ -717,9 +718,9 @@ namespace LELEngine.Shaders
 		/// <summary>
 		///     Textures the program declares that the material does not set (a material saved before the shader gained the
 		///     property, or no material at all) get the declared kind's neutral default: an unbound sampler would read
-		///     whatever an earlier draw left on its texture unit. A material's missing numbers get their declared defaults
-		///     (the standard parameters have theirs from <see cref="ResetStandardUniforms" />): a program keeps its uniform
-		///     values between draws, so they would show the last material drawn with it.
+		///     whatever an earlier draw left on its texture unit. Missing numbers get their declared defaults (the standard
+		///     parameters have theirs from <see cref="ResetStandardUniforms" /> or the material table): a program keeps its
+		///     uniform values between draws, so they would show the last material drawn with it.
 		/// </summary>
 		private static void ApplyMissingProperties(ShaderProgram program, Material material, ref int textureUnit)
 		{
@@ -732,7 +733,7 @@ namespace LELEngine.Shaders
 
 				if (!declared.IsTexture)
 				{
-					if (material != null && !IsStandardUniform(declared.Name))
+					if (!IsStandardUniform(declared.Name))
 					{
 						declared.DefaultValueProperty.Apply(program, ref textureUnit);
 					}
@@ -755,7 +756,7 @@ namespace LELEngine.Shaders
 		}
 
 		// The keyword each [Toggle] / [KeywordEnum] property picks, packed 6 bits a property (0: none, else option + 1);
-		// -1 (not cached) for more properties or options than that holds.
+		// -1 (not cached) for more properties or options than that holds. A map keyword is on while its texture is set.
 		private long KeywordState(ShaderProgram shader)
 		{
 			long key = 0;
@@ -768,8 +769,17 @@ namespace LELEngine.Shaders
 			for (int i = 0; i < declared.Count; i++)
 			{
 				ShaderProperty property = declared[i];
-				float value = GetFloat(property.Name, property.DefaultValue.X);
-				long state = property.IsKeywordEnum ? property.OptionIndex(value) + 1 : value != 0f ? 1 : 0;
+				long state;
+				if (property.IsMapKeyword)
+				{
+					state = GetTexture(property.Name) != null ? 1 : 0;
+				}
+				else
+				{
+					float value = GetFloat(property.Name, property.DefaultValue.X);
+					state = property.IsKeywordEnum ? property.OptionIndex(value) + 1 : value != 0f ? 1 : 0;
+				}
+
 				if (state > 63)
 				{
 					return -1;
@@ -786,7 +796,9 @@ namespace LELEngine.Shaders
 			var result = new List<string>();
 			foreach (ShaderProperty property in shader.KeywordProperties)
 			{
-				string keyword = property.KeywordFor(GetFloat(property.Name, property.DefaultValue.X));
+				string keyword = property.IsMapKeyword
+					? GetTexture(property.Name) != null ? property.Keywords[0] : null
+					: property.KeywordFor(GetFloat(property.Name, property.DefaultValue.X));
 				if (keyword != null)
 				{
 					result.Add(keyword);

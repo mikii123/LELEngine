@@ -40,7 +40,10 @@ namespace LELEngine.Shaders
 	///     [Toggle] Glow ("Glow", Float) = 0                         // keyword GLOW_ON while the value is not 0
 	///     [Toggle(ALPHA_CLIP)] AlphaClip ("Alpha Clipping", Float) = 0   // keyword ALPHA_CLIP
 	///     [KeywordEnum(Alpha, Soft Additive)] Mode ("Mode", Float) = 0   // MODE_ALPHA or MODE_SOFT_ADDITIVE (value = index)
+	///     [Toggle(NORMAL_MAP)] NormalMap ("Normal Map", 2D) = "bump" {} // keyword NORMAL_MAP while a texture is set
 	///     </code>
+	///     A [Toggle] on a texture is a map keyword: the variant samples the map only when the material has one, so a
+	///     material without it pays nothing for the feature (Unity's Standard shader sets such keywords from its editor).
 	///     The same block takes the shader's render state lines (Blend, ZWrite, ZTest, Cull, Queue, ShadowCaster; see
 	///     <see cref="ShaderRenderState" />), which may sit in #if / #ifdef blocks over the variant's keywords.
 	/// </summary>
@@ -72,8 +75,13 @@ namespace LELEngine.Shaders
 		/// <summary>Display names of a [KeywordEnum]'s options (null otherwise).</summary>
 		public string[] EnumOptions;
 
-		public bool IsToggle => Keywords != null && EnumOptions == null;
+		/// <summary>A [Toggle] on a number: a checkbox whose value switches the keyword.</summary>
+		public bool IsToggle => Keywords != null && EnumOptions == null && !IsTexture;
+
 		public bool IsKeywordEnum => EnumOptions != null;
+
+		/// <summary>A [Toggle] on a texture: its keyword is on while the material has a texture in this slot.</summary>
+		public bool IsMapKeyword => Keywords != null && IsTexture;
 
 		public bool IsTexture => Type == ShaderPropertyType.Texture2D || Type == ShaderPropertyType.Cubemap || Type == ShaderPropertyType.Texture3D;
 
@@ -170,9 +178,10 @@ namespace LELEngine.Shaders
 					return null;
 			}
 
-			if (property.Keywords != null && property.Type != ShaderPropertyType.Float && property.Type != ShaderPropertyType.Int && property.Type != ShaderPropertyType.Range)
+			bool number = property.Type == ShaderPropertyType.Float || property.Type == ShaderPropertyType.Int || property.Type == ShaderPropertyType.Range;
+			if (property.Keywords != null && !number && (property.Type != ShaderPropertyType.Texture2D || property.EnumOptions != null))
 			{
-				// Only numbers pick variants.
+				// Numbers pick variants, and 2D textures switch a [Toggle] keyword by being set.
 				property.Keywords = null;
 				property.EnumOptions = null;
 			}

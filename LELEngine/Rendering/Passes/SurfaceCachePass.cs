@@ -148,7 +148,8 @@ namespace LELEngine.Rendering.Passes
 							continue;
 						}
 
-						SetMaterialUniforms(material);
+						// The same conventional material inputs the voxelizer reads.
+						GISurface.SetUniforms(capture, material);
 						renderer.RenderSubMeshWith(capture, s);
 					}
 				}
@@ -174,84 +175,11 @@ namespace LELEngine.Rendering.Passes
 					Material material = renderer.GetMaterial(s);
 					if (material != null && !material.IsTransparent)
 					{
-						hash = hash * 31 + CaptureKey(material);
+						hash = hash * 31 + GISurface.CaptureKey(material);
 					}
 				}
 
 				return hash;
-			}
-		}
-
-		// Hash of the material inputs baked into the cards (albedo colour, emission colour, albedo and emission maps).
-		private static long CaptureKey(Material material)
-		{
-			Vector4 albedo;
-			if (!material.TryGetVector4("Color", out albedo))
-			{
-				albedo = Vector4.One;
-			}
-
-			Vector4 emissive;
-			if (!material.TryGetVector4("Emissive", out emissive))
-			{
-				emissive = Vector4.Zero;
-			}
-
-			int albedoMap = material.GetTextureHandle("DiffuseMap");
-			if (albedoMap == 0)
-			{
-				albedoMap = material.GetTextureHandle("AlbedoMap");
-			}
-
-			unchecked
-			{
-				long hash = 17;
-				hash = hash * 31 + albedo.X.GetHashCode();
-				hash = hash * 31 + albedo.Y.GetHashCode();
-				hash = hash * 31 + albedo.Z.GetHashCode();
-				hash = hash * 31 + emissive.X.GetHashCode();
-				hash = hash * 31 + emissive.Y.GetHashCode();
-				hash = hash * 31 + emissive.Z.GetHashCode();
-				hash = hash * 31 + albedoMap;
-				hash = hash * 31 + material.GetTextureHandle("EmissionMap");
-				return hash;
-			}
-		}
-
-		// Same conventional material parameters the voxelizer uses.
-		private void SetMaterialUniforms(Material material)
-		{
-			Vector4 albedo;
-			if (!material.TryGetVector4("Color", out albedo))
-			{
-				albedo = Vector4.One;
-			}
-
-			Vector4 emissive;
-			if (!material.TryGetVector4("Emissive", out emissive))
-			{
-				emissive = Vector4.Zero;
-			}
-
-			int albedoMap = material.GetTextureHandle("DiffuseMap");
-			if (albedoMap == 0)
-			{
-				albedoMap = material.GetTextureHandle("AlbedoMap");
-			}
-
-			capture.SetVector4("voxAlbedo", albedo);
-			capture.SetVector4("voxEmissive", emissive);
-			capture.SetInt("voxUseAlbedoMap", albedoMap != 0 ? 1 : 0);
-			if (albedoMap != 0)
-			{
-				capture.SetTexture("voxAlbedoMap", TextureTarget.Texture2D, albedoMap, 0);
-			}
-
-			int emissionMap = material.GetTextureHandle("EmissionMap");
-			capture.SetInt("voxUseEmissionMap", emissionMap != 0 ? 1 : 0);
-			if (emissionMap != 0)
-			{
-				capture.SetTexture("voxEmissionMap", TextureTarget.Texture2D, emissionMap, 1);
 			}
 		}
 
