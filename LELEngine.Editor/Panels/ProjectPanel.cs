@@ -483,6 +483,7 @@ namespace LELEngine.Editor
 				if (EditorMenu.Item("Create Folder")) StartCreate("Folder", "New Folder");
 				if (EditorMenu.Item("Create C# Script")) StartCreate("Script", "NewBehaviour");
 				if (EditorMenu.Item("Create C# ScriptableObject Script")) StartCreate("ScriptableObjectScript", "NewData");
+				if (EditorMenu.Item("Create C# Test Script")) StartCreate("TestScript", "NewTests");
 				if (EditorMenu.Begin("Create ScriptableObject"))
 				{
 					DrawScriptableObjectMenu();
@@ -1397,6 +1398,17 @@ namespace LELEngine.Editor
 					EnsureNew(target);
 					File.WriteAllText(target, ScriptTemplate(className));
 					break;
+				case "TestScript":
+				{
+					// Tests live in a Tests folder (Game.Tests.dll): one is made here when this folder is not in one.
+					string testClass = ScriptClassName(name);
+					string testFolder = BuildDependencies.IsTestAsset(Combine(folder, testClass + ".cs")) ? folder : Combine(folder, ProjectGenerator.TestsFolderName);
+					Directory.CreateDirectory(Absolute(testFolder));
+					target = Absolute(Combine(testFolder, testClass + ".cs"));
+					EnsureNew(target);
+					File.WriteAllText(target, TestRunnerWindow.TestScriptTemplate(testClass));
+					break;
+				}
 				case "ScriptableObjectScript":
 				{
 					string dataClass = ScriptClassName(name);

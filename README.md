@@ -274,6 +274,9 @@ GPU event, ribbons and soft smoke puffs, all simulated and drawn on the GPU.*
 - Editor scripts (any `Editor` folder under `Assets`) extend the editor with Dear ImGui: custom inspectors
   (`[CustomEditor]`), dockable editor windows (`EditorWindow`) and main menu items (`[MenuItem]`). See
   [Editor scripts](#editor-scripts).
+- Unit tests (any `Tests` folder under `Assets`) build into `Game.Tests.dll` against the game scripts and the engine,
+  never into a player build; **Window > Test Runner** runs and debugs them, batch mode runs them on CI (`-runTests`).
+  See [Unit tests](#unit-tests).
 - **UI Builder**: a separate window for editing UXML documents with a live preview, inspector, USS editor and
   canvas picking.
 - **VFX Graph** (Window > VFX Graph, double-click a `.vfx` asset, or Create Visual Effect Graph in the project
@@ -308,6 +311,7 @@ blackboard properties wired into the blocks.*
 | `LELEngine` | Engine runtime: scene model, rendering, GI, GPU particles, UI, navigation, serialization, assets, input |
 | `LELEngine.Editor` | The editor application (and the UI Builder and VFX Graph windows) |
 | `LELEngine.Player` | Generic player executable used by game builds |
+| `LELEngine.TestFramework` | The games' unit test framework and runner (`LELEngine.Testing`), shipped with the editor only |
 | `TestGame` | Test and measurement harness that runs the scenes below from the command line |
 | `TestGame.Scenes` | Test scenes: GI room, navigation, UI showcase, Box2D physics, GPU particles |
 | `LELEngine.Benchmarks` | Headless benchmarks: `dotnet run --project LELEngine.Benchmarks -c Release -- physics2d [scenario] [workers=N] [nosleep=1] [plane=xz]` (pyramid, pyramids, rain, chains, queries, rays, closest, overlaps; each reports a state checksum that must match between the planes), and `physics2d-scene` runs the Box2D test scene without a window |
@@ -548,3 +552,103 @@ or arrows between nodes (both directions side by side, a label, a travelling dot
 
 An exception in editor code is logged once and shown in the window or inspector; the ImGui scopes it left open are
 closed, so the rest of the editor keeps working.
+
+## Unit tests
+
+Scripts in a folder named `Tests` (at any depth under `Assets`, also inside an `Editor` folder) build into
+`Game.Tests.dll` (`<Name>.Tests.csproj` in the generated solution). They see the game scripts (`Game.dll`), the engine
+and the test framework (`LELEngine.Testing`), not the editor. They never reach a player build: the game's project
+excludes Tests folders, and a `Resources` folder inside a Tests folder holds test data the build leaves out.
+
+```csharp
+using System.Threading.Tasks;
+using LELEngine;
+using LELEngine.Testing;
+
+[Category("Inventory")]
+public class InventoryTests
+{
+	private Inventory inventory;
+
+	[SetUp]
+	public void Make() => inventory = new Inventory(capacity: 10);
+
+	[Test]
+	public void AddsItems()
+	{
+		Assert.IsTrue(inventory.Add("gold", 3));
+		Assert.AreEqual(3, inventory.Count("gold"));
+	}
+
+	[TestCase(4, 6, ExpectedResult = 10)]
+	[TestCase(5, 6, ExpectedResult = 5)]
+	public int Total(int a, int b)
+	{
+		inventory.Add("a", a);
+		inventory.Add("b", b);                              // over capacity: refused
+		return inventory.Total;
+	}
+
+	[Test]
+	public void RemovingTooMuchLogsAnError()
+	{
+		LogAssert.Expect(LogType.Error, "Not enough gold");   // else the error logged here fails the test
+		inventory.Remove("gold", 1);
+	}
+
+	[Test]
+	public async Task RegeneratesOverFrames()
+	{
+		Scene scene = SceneManager.CreateScene("Test");      // a scene of the test's own, stepped by hand
+		Health health = new GameObject("Player", scene).AddComponent<Health>();
+		scene.StartLifecycle(true);
+		scene.Update(0.1f);
+		await TestContext.NextFrame();                      // the editor runs a frame, the test continues after it
+		Assert.Greater(health.Current, 50f);
+	}
+}
+```
+
+The tests run in the editor, on its main thread, in edit mode: synchronous tests back to back until a frame's budget is
+spent, async ones (`Task`, `Task<T>`, `ValueTask`) continue in later frames where they await
+(`TestContext.NextFrame()`, `Frames(n)`, `WaitForSeconds(s)`, `WaitUntil(condition)`, `Task.Delay`, loads), so the
+editor stays responsive. A class's tests share one instance: `[OneTimeSetUp]`, then `[SetUp]`, the test, `[TearDown]`
+per test, then `[OneTimeTearDown]`.
+
+- Attributes (NUnit's names): `[Test]` (`ExpectedResult`, `Description`), `[TestCase(args)]` (`ExpectedResult`,
+  `TestName`, `Category`, `Ignore`, `Explicit`), `[TestCaseSource(nameof(Cases))]` (object[], `TestCaseData` or single
+  values), `[SetUp]`, `[TearDown]`, `[OneTimeSetUp]`, `[OneTimeTearDown]`, `[TestFixture]` (optional), `[Ignore("why")]`,
+  `[Category("name")]`, `[Explicit]` (runs only when run itself), `[Timeout(ms)]` (async steps; default 60 s),
+  `[Description]`. Test methods may be instance or static, any access; static classes work too.
+- `Assert`: `AreEqual` (numbers across types, sequences element by element, dictionaries by key; `AreEqual(e, a, delta)`),
+  `AreNotEqual`, `AreSame`, `IsTrue` / `IsFalse` / `That`, `IsNull` / `IsNotNull` (a destroyed engine object is null),
+  `Greater` / `Less` / `...OrEqual`, `IsEmpty`, `Contains`, `IsInstanceOf<T>`, `Throws<T>` / `Catch<T>` /
+  `DoesNotThrow`, `ThrowsAsync<T>` (await it), `AreApproximatelyEqual` (float, Vector2/3/4, Quaternion, Color4),
+  `Pass` / `Fail` / `Ignore` / `Inconclusive`; `CollectionAssert` (`AreEquivalent`, `AllItemsAreUnique`, `IsOrdered`, ...),
+  `StringAssert` (`Contains`, `StartsWith`, `IsMatch`, ...). Failures read "Expected: 5 / But was: 2".
+- `LogAssert` (Unity's): an error or exception logged during a test fails it unless `LogAssert.Expect(type, text or
+  Regex)` expected it; an expected message that never comes fails it too; `LogAssert.ignoreFailingMessages = true`.
+- `TestContext`: `CurrentTest`, `WriteLine` (kept with the result), `FrameCount`, `TemporaryDirectory` (deleted after
+  the test), the waits above.
+
+**Window > Test Runner** shows the tests as a tree (namespace, class, test, cases) with each one's last outcome and
+time; Run All, Run Selected, Run Failed, Stop (after the current test; Abort ends a stuck one), search, outcome filters,
+category filter. The details show the message, the call stack (click shows the code around a line, double-click opens
+it in the script editor) and the test's output and log. **Debug Selected** asks you to attach your IDE's debugger to
+the editor process (or launch the system's debugger) and then stops right before each test method; with **Break on
+Failure** (Options, on by default) an attached debugger stops where a test fails: the failing assert, the throw of an
+exception escaping the test, the call logging an unexpected error. Breakpoints in tests and game scripts work while
+attached. Create a test script from the project browser (Create C# Test Script) or the empty Test Runner.
+
+Editing only tests rebuilds and reloads only the tests (the scene stays); errors in the tests are listed in the
+Test Runner and never keep the game scripts from reloading. A script reload or play mode ends a run.
+
+On a build machine:
+
+```bash
+LELEngine.Editor.Console -batchmode -projectPath MyGame -runTests -testResults results.xml
+```
+
+`-testFilter <text>` (full names containing it; a whole full name also runs an `[Explicit]` test) and
+`-testCategory <name>` pick tests; the console gets one line per test with failures' messages and call stacks,
+`-testResults` writes JUnit XML. The exit code is 1 when a test fails, the tests do not compile or nothing matched.

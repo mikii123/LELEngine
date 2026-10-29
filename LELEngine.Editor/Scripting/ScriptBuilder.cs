@@ -34,6 +34,15 @@ namespace LELEngine.Editor
 		public byte[] EditorAssembly;
 		public byte[] EditorSymbols;
 
+		/// <summary>
+		///     The editor's builds with tests (<see cref="ScriptDomain" />): the build of Game.Tests.dll after the game's
+		///     (null when the project has no tests). Its errors do not fail this build: the game reloads without tests.
+		/// </summary>
+		public BuildResult Tests;
+
+		/// <summary>Only the tests were built (the game scripts were current): the game stays loaded, only the tests reload.</summary>
+		public bool TestsOnly;
+
 		/// <summary>Null checks the weaver rewrote in this build (0 when the assemblies were woven before).</summary>
 		public int WovenChecks;
 		public double Seconds;
@@ -76,12 +85,118 @@ namespace LELEngine.Editor
 			string built = includeEditor ? editorProject : projectFile;
 			// Restore only when a project or its packages changed since the last restore (it costs about a second).
 			bool restored = IsRestored(projectFile, packages) && (!includeEditor || IsRestored(editorProject, packages));
+			int? exitCode = RunDotnet(built, configuration, outputPath, restored, null, result);
+			if (exitCode == null)
+			{
+				return result;
+			}
 
+			string folder = outputPath ?? Path.Combine(projectFolder, "Library", "ScriptAssemblies");
+			string dll = Path.Combine(folder, ProjectGenerator.AssemblyName + ".dll");
+			string editorDll = Path.Combine(folder, ProjectGenerator.EditorAssemblyName + ".dll");
+			result.Success = exitCode == 0 && File.Exists(dll) && (!includeEditor || File.Exists(editorDll));
+			if (result.Success)
+			{
+				result.Success = Weave(dll, folder, result) && (!includeEditor || Weave(editorDll, folder, result));
+			}
+
+			if (result.Success)
+			{
+				result.Assembly = File.ReadAllBytes(dll);
+				result.Symbols = ReadSymbols(dll);
+				if (includeEditor)
+				{
+					result.EditorAssembly = File.ReadAllBytes(editorDll);
+					result.EditorSymbols = ReadSymbols(editorDll);
+				}
+			}
+			else if (result.ErrorCount == 0)
+			{
+				// Failed without a parsable diagnostic: show the raw output.
+				result.Diagnostics.Add(new BuildDiagnostic { IsError = true, Code = "LEL0002", Message = "Build failed:\n" + result.Output.Trim() });
+			}
+
+			result.Seconds = watch.Elapsed.TotalSeconds;
+			return result;
+		}
+
+		/// <summary>
+		///     Builds the tests' project alone (Game.dll must be built already: --no-dependencies) into the project's
+		///     Library/ScriptAssemblies; the result's <see cref="BuildResult.Assembly" /> is Game.Tests.dll.
+		/// </summary>
+		public static BuildResult BuildTests(string projectFile, string configuration)
+		{
+			var result = new BuildResult();
+			var watch = Stopwatch.StartNew();
+			string testsProject = ProjectGenerator.TestsProjectFile(projectFile);
+			string packages = Path.ChangeExtension(projectFile, ".packages.props");
+			bool restored = IsRestored(projectFile, packages) && IsRestored(testsProject, packages);
+			int? exitCode = RunDotnet(testsProject, configuration, null, restored, "--no-dependencies", result);
+			if (exitCode == null)
+			{
+				return result;
+			}
+
+			string folder = Path.Combine(Path.GetDirectoryName(projectFile), "Library", "ScriptAssemblies");
+			string dll = Path.Combine(folder, ProjectGenerator.TestsAssemblyName + ".dll");
+			result.Success = exitCode == 0 && File.Exists(dll) && Weave(dll, folder, result);
+			if (result.Success)
+			{
+				result.Assembly = File.ReadAllBytes(dll);
+				result.Symbols = ReadSymbols(dll);
+			}
+			else if (result.ErrorCount == 0)
+			{
+				result.Diagnostics.Add(new BuildDiagnostic { IsError = true, Code = "LEL0002", Message = "Build of the tests failed:\n" + result.Output.Trim() });
+			}
+
+			result.Seconds = watch.Elapsed.TotalSeconds;
+			return result;
+		}
+
+		/// <summary>
+		///     Rewrites a built script assembly's null checks so destroyed engine objects read as null
+		///     (<see cref="NullCheckWeaver" />); false, with an error diagnostic, when that fails.
+		/// </summary>
+		public static bool Weave(string dll, string folder, BuildResult result)
+		{
+			try
+			{
+				result.WovenChecks += NullCheckWeaver.WeaveFile(dll, new[] { AppContext.BaseDirectory, folder }).Checks;
+				return true;
+			}
+			catch (Exception e)
+			{
+				result.Diagnostics.Add(new BuildDiagnostic
+				{
+					IsError = true,
+					Code = "LEL0003",
+					Message = "Cannot rewrite the null checks of " + Path.GetFileName(dll) + " (destroyed objects would not read as null): " + e.Message
+				});
+				return false;
+			}
+		}
+
+		#endregion
+
+		#region PrivateMethods
+
+		/// <summary>
+		///     Runs "dotnet build" on the project and reads its output and diagnostics into <paramref name="result" />;
+		///     the exit code, or null when dotnet did not start (an error diagnostic says why).
+		/// </summary>
+		private static int? RunDotnet(string project, string configuration, string outputPath, bool restored, string extraArguments, BuildResult result)
+		{
 			var arguments = new StringBuilder();
-			arguments.Append("build \"").Append(built).Append("\" -c ").Append(configuration).Append(" -nologo -v q -clp:NoSummary");
+			arguments.Append("build \"").Append(project).Append("\" -c ").Append(configuration).Append(" -nologo -v q -clp:NoSummary");
 			if (restored)
 			{
 				arguments.Append(" --no-restore");
+			}
+
+			if (extraArguments != null)
+			{
+				arguments.Append(' ').Append(extraArguments);
 			}
 
 			if (outputPath != null)
@@ -91,7 +206,7 @@ namespace LELEngine.Editor
 
 			var start = new ProcessStartInfo("dotnet", arguments.ToString())
 			{
-				WorkingDirectory = projectFolder,
+				WorkingDirectory = Path.GetDirectoryName(project),
 				RedirectStandardOutput = true,
 				RedirectStandardError = true,
 				UseShellExecute = false,
@@ -131,7 +246,7 @@ namespace LELEngine.Editor
 				catch (Exception e)
 				{
 					result.Diagnostics.Add(new BuildDiagnostic { IsError = true, Code = "LEL0001", Message = "Cannot start 'dotnet' (is the .NET SDK installed?): " + e.Message });
-					return result;
+					return null;
 				}
 
 				process.BeginOutputReadLine();
@@ -139,63 +254,9 @@ namespace LELEngine.Editor
 				process.WaitForExit();
 				result.Output = output.ToString();
 				ParseDiagnostics(result);
-
-				string folder = outputPath ?? Path.Combine(projectFolder, "Library", "ScriptAssemblies");
-				string dll = Path.Combine(folder, ProjectGenerator.AssemblyName + ".dll");
-				string editorDll = Path.Combine(folder, ProjectGenerator.EditorAssemblyName + ".dll");
-				result.Success = process.ExitCode == 0 && File.Exists(dll) && (!includeEditor || File.Exists(editorDll));
-				if (result.Success)
-				{
-					result.Success = Weave(dll, folder, result) && (!includeEditor || Weave(editorDll, folder, result));
-				}
-
-				if (result.Success)
-				{
-					result.Assembly = File.ReadAllBytes(dll);
-					result.Symbols = ReadSymbols(dll);
-					if (includeEditor)
-					{
-						result.EditorAssembly = File.ReadAllBytes(editorDll);
-						result.EditorSymbols = ReadSymbols(editorDll);
-					}
-				}
-				else if (result.ErrorCount == 0)
-				{
-					// Failed without a parsable diagnostic: show the raw output.
-					result.Diagnostics.Add(new BuildDiagnostic { IsError = true, Code = "LEL0002", Message = "Build failed:\n" + result.Output.Trim() });
-				}
-			}
-
-			result.Seconds = watch.Elapsed.TotalSeconds;
-			return result;
-		}
-
-		/// <summary>
-		///     Rewrites a built script assembly's null checks so destroyed engine objects read as null
-		///     (<see cref="NullCheckWeaver" />); false, with an error diagnostic, when that fails.
-		/// </summary>
-		public static bool Weave(string dll, string folder, BuildResult result)
-		{
-			try
-			{
-				result.WovenChecks += NullCheckWeaver.WeaveFile(dll, new[] { AppContext.BaseDirectory, folder }).Checks;
-				return true;
-			}
-			catch (Exception e)
-			{
-				result.Diagnostics.Add(new BuildDiagnostic
-				{
-					IsError = true,
-					Code = "LEL0003",
-					Message = "Cannot rewrite the null checks of " + Path.GetFileName(dll) + " (destroyed objects would not read as null): " + e.Message
-				});
-				return false;
+				return process.ExitCode;
 			}
 		}
-
-		#endregion
-
-		#region PrivateMethods
 
 		/// <summary>The project's restore output (Library/obj/&lt;project&gt;/) is newer than the project and its packages.</summary>
 		private static bool IsRestored(string projectFile, string packages)

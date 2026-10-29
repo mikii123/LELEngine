@@ -76,7 +76,8 @@ namespace LELEngine.Editor
 			foreach (string file in Directory.EnumerateFiles(project.AssetsPath, "*", SearchOption.AllDirectories))
 			{
 				string assetPath = AssetDatabase.ToAssetPath(file);
-				if (assetPath != null && IsShippable(assetPath) && Resources.IsInResources(assetPath) && result.Add(assetPath, "Resources"))
+				// A Resources folder inside a Tests folder holds test data: never shipped for being there.
+				if (assetPath != null && IsShippable(assetPath) && Resources.IsInResources(assetPath) && !IsTestAsset(assetPath) && result.Add(assetPath, "Resources"))
 				{
 					result.ResourceCount++;
 				}
@@ -106,6 +107,21 @@ namespace LELEngine.Editor
 		}
 
 		/// <summary>Files the build never ships themselves: scripts, meta files (they go with their asset), dot files.</summary>
+		/// <summary>The asset lies in a Tests folder (any depth): the tests' scripts and data.</summary>
+		public static bool IsTestAsset(string assetPath)
+		{
+			string[] parts = assetPath.Split('/', '\\');
+			for (int i = 0; i < parts.Length - 1; i++)
+			{
+				if (string.Equals(parts[i], ProjectGenerator.TestsFolderName, StringComparison.OrdinalIgnoreCase))
+				{
+					return true;
+				}
+			}
+
+			return false;
+		}
+
 		public static bool IsShippable(string assetPath)
 		{
 			string name = Path.GetFileName(assetPath);

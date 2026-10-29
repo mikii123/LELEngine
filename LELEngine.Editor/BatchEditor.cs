@@ -1,9 +1,11 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using LELEngine.Editor.Automation;
+using LELEngine.Testing;
 
 namespace LELEngine.Editor
 {
@@ -13,9 +15,10 @@ namespace LELEngine.Editor
 	///     but draws no UI: a hidden window holds the GL context, and the editor only ticks (update, the script windows'
 	///     Update, deferred actions, automation). A window is drawn only when captured (<see cref="IEditorPanel.GetScreenshot" />).
 	///     <para>
-	///         Order: the project opens and its scripts build (the run fails on errors), -scene opens, -executeMethod runs
-	///         inside the editor (awaits continue tick by tick; its result is the exit code), then -listen serves automation
-	///         commands until "quit". The caller builds the game afterwards (-build).
+	///         Order: the project opens and its scripts build (the run fails on errors), -scene opens, -runTests runs the
+	///         unit tests (failures end the run), -executeMethod runs inside the editor (awaits continue tick by tick; its
+	///         result is the exit code), then -listen serves automation commands until "quit". The caller builds the game
+	///         afterwards (-build).
 	///     </para>
 	/// </summary>
 	internal static class BatchEditor
@@ -95,7 +98,12 @@ namespace LELEngine.Editor
 				bool listen = options.Has("listen");
 				EditorAutomation.Start(editor, args, listen);
 				int code = 0;
-				string method = options.Get("executemethod");
+				if (options.Has("runtests"))
+				{
+					code = RunTests(editor, options, Tick);
+				}
+
+				string method = code == 0 ? options.Get("executemethod") : null;
 				if (method != null)
 				{
 					Task<int> run = EditorAutomation.ExecuteMethod(method, args);
@@ -139,6 +147,77 @@ namespace LELEngine.Editor
 		#endregion
 
 		#region PrivateMethods
+
+		/// <summary>
+		///     -runTests: the project's tests (-testFilter, -testCategory) run in the editor, one line per test on the
+		///     console, failures with their message and call stack, -testResults as JUnit XML. 0 when every test passed
+		///     (skipped ones count as passed), else 1.
+		/// </summary>
+		private static int RunTests(EditorApplication editor, CommandLine options, Action tick)
+		{
+			ScriptDomain scripts = editor.Scripts;
+			if (scripts != null && scripts.TestDiagnostics.Any(d => d.IsError))
+			{
+				Debug.LogError("[Tests] The tests do not compile (see the errors above).");
+				return 1;
+			}
+
+			EditorTests tests = editor.Tests;
+			if (tests.Root == null)
+			{
+				Console.WriteLine("[Tests] No tests in this project (scripts in a folder named Tests under Assets).");
+				return 0;
+			}
+
+			string filter = options.Get("testfilter");
+			string category = options.Get("testcategory");
+			List<TestNode> selected = tests.Find(filter, category);
+			if (selected.Count == 0)
+			{
+				Debug.LogError($"[Tests] No test matches{(filter != null ? " -testFilter " + filter : "")}{(category != null ? " -testCategory " + category : "")}.");
+				return 1;
+			}
+
+			if (!tests.Start(selected, new TestRunOptions()))
+			{
+				return 1;
+			}
+
+			tests.Run.TestFinished += (test, result) =>
+			{
+				// Written straight to the console: a log message would be the next test's.
+				string line = $"[Tests] {result.Outcome,-12} {test.FullName} ({result.Seconds * 1000:0.#} ms)";
+				Console.WriteLine(result.Outcome == TestOutcome.Failed ? "[Error] " + line : line);
+				if (result.Outcome != TestOutcome.Passed && !string.IsNullOrEmpty(result.Message))
+				{
+					Console.WriteLine("    " + result.Message.Replace("\n", "\n    "));
+				}
+
+				if (result.Outcome == TestOutcome.Failed && result.StackTrace != null)
+				{
+					Console.WriteLine("    " + result.StackTrace.Replace("\n", "\n    "));
+				}
+			};
+			TickUntil(tick, () => !tests.IsRunning, double.MaxValue);
+
+			TestRun run = tests.Run;
+			int fixtureFailures = 0;
+			foreach (TestResult result in run.Results.Values.Where(r => run.Tests.All(t => t.FullName != r.FullName)))
+			{
+				fixtureFailures++;
+				Console.WriteLine($"[Error] [Tests] {result.FullName}: {result.Message}");
+			}
+
+			string resultsFile = options.Get("testresults");
+			if (resultsFile != null)
+			{
+				TestReport.WriteJUnit(run, resultsFile, tests.Root.Name);
+				Console.WriteLine("[Tests] Results written to " + System.IO.Path.GetFullPath(resultsFile));
+			}
+
+			Console.WriteLine("[Tests] " + TestReport.Summary(run));
+			return run.Failed > 0 || fixtureFailures > 0 || run.Completed < run.Tests.Count ? 1 : 0;
+		}
 
 		private static bool TickUntil(Action tick, Func<bool> done, double timeoutSeconds)
 		{

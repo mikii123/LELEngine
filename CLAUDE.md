@@ -95,8 +95,9 @@
   `EditorGUILayout`, `Undo`, `Selection`; the internal host is `EditorExtensions` (`EditorApplication.Extensions`).
   The editor's own main window class is `MainWindow` (the name `EditorWindow` belongs to the public API).
 - Scripts in any `Editor` folder under `Assets` build into `Game.Editor.dll` through a second generated project
-  (`<Name>.Editor.csproj`, ProjectReference to `<Name>.csproj`, which excludes `Assets\**\Editor\**`). Each project
-  has its own obj folder (`Library/obj/<project>/`). Player builds compile only the game project.
+  (`<Name>.Editor.csproj`, ProjectReference to `<Name>.csproj`, which excludes `Assets\**\Editor\**` and
+  `Assets\**\Tests\**`; Tests folders are the third project, see "Unit tests of games"). Each project has its own obj
+  folder (`Library/obj/<project>/`). Player builds compile only the game project.
 - `Game.Editor.dll` loads into the same collectible `GameLoadContext` as `Game.dll` and is not registered in
   `TypeRegistry` (only temporarily while a window state is restored). Everything holding a type of it must be dropped
   in `EditorExtensions.OnDomainUnloading` (called from `EditorApplication.ClearTypeCaches`). `GameLoadContext` must
@@ -133,6 +134,56 @@
   Begin/Push is reported as an error.
 - Test hook: `menuitem=N;Tools/Item|M;Window/Other` runs `[MenuItem]`s at frames N, M (with `touchscript=` for a
   reload, `playframe=`/`stopframe=` for play mode and `buildgame=` for a player build).
+
+## Unit tests of games (Tests folders, Test Runner; 2026-10-29)
+
+- `LELEngine.TestFramework` (new project, namespace `LELEngine.Testing`, referenced by the editor only, never by the
+  player): NUnit-style attributes (`Attributes.cs`), `Assert` / `CollectionAssert` / `StringAssert` (`Assert.cs`, every
+  failure through `Assert.Failed` -> `TestRun.OnAssertionFailing` for Break on Failure), `LogAssert`, `TestContext`
+  (waits, output, `TemporaryDirectory`), `TestDiscovery` (`TestTree.cs`: `TestNode` tree Root > Namespace > Fixture >
+  Method > Case, source lines from the portable PDB; async methods: the state machine's MoveNext), `TestRun`
+  (`TestRun.cs`), `TestReport` (JUnit XML, summary). The user asked for it "like the editor assembly": scripts in any
+  `Tests` folder under Assets (Tests wins over Editor around or inside it) -> `<Name>.Tests.csproj` -> `Game.Tests.dll`
+  against Game.dll (ProjectReference), LELEngine.dll, LELEngine.TestFramework.dll, OpenTK; not the editor.
+- `TestRun` runs on the main thread inside `Tick()` (once per editor frame from `EditorApplication.Update` via
+  `EditorTests.Update`) under its own `SynchronizationContext` (`RunContext`): posted continuations run while the frame
+  budget lasts (`FrameBudgetMilliseconds`, 12; batch 250), `TestContext.NextFrame` ones in the next tick; the whole run
+  is one async method, sync tests run back to back until the budget is spent (`await new FrameAwaitable(this)`).
+  Methods are invoked with `BindingFlags.DoNotWrapExceptions` inside `catch when (BreakOnException(e))` (the filter
+  breaks with the throwing frame still on the stack). `active` is static (awaits on other threads find the run);
+  `End()` clears it, closes the context and unsubscribes `Debug.MessageLogged`: nothing of the test assembly may stay
+  referenced (results are strings only and survive reloads in `EditorTests.results`).
+- Build (`ScriptDomain`): the game's stamp (`SourceStamp(project)`) leaves test scripts out, the tests' stamp
+  (`SourceStamp(project, true)`, `Game.Tests.dll.sources`) covers everything. A build whose game assemblies are current
+  is tests-only (`BuildResult.TestsOnly`: `ScriptBuilder.BuildTests` = `dotnet build <Name>.Tests.csproj
+  --no-dependencies`) and reloads only the tests (`SwapTests`, the scene stays); otherwise the game build runs and the
+  tests build after it (`BuildResult.Tests`). Test errors never fail the game build (logged as `[Tests]`, sticky, listed
+  in the Test Runner; the tests stay unloaded). "Rebuild Scripts" forces a full build (`RequestBuild(true)`).
+  Reloads wait for a test run to end like for play mode (`pendingReload`).
+- `Game.Tests.dll` loads into its own collectible `ScriptDomain.TestLoadContext` that resolves Game.dll (and the game's
+  packages, also lazily through `game.LoadFromAssemblyName`) from the `GameLoadContext`; `UnloadDomain` unloads it
+  first (it holds the game context). Verified: tests-only and full reloads both report "Previous script assembly
+  unloaded" (no leak).
+- Player builds compile only `<Name>.csproj` (Tests excluded); `BuildDependencies.IsTestAsset` keeps `Tests/**/Resources`
+  out. Light batch builds (`-build` alone) never compile the tests.
+- Editor: `Testing/EditorTests.cs` (service: `Root`, `Results`, `Start`, `Stop` / `Abort`, `OutcomeOf`, `Find`; play
+  mode or an unload aborts a run), `Testing/TestRunnerWindow.cs` (Window > Test Runner, `IEditorPanel` "Test Runner";
+  rows are `item:<Name>` selectables with transparent text and drawn content; filters `filter:Passed|Failed|Skipped|Not
+  Run`; Debug asks for a debugger in a modal and starts when `Debugger.IsAttached`, `BreakAtTestStart`). Batch
+  `-runTests [-testFilter] [-testCategory] [-testResults x.xml]` in `BatchEditor.RunTests` (lines via
+  `Console.WriteLine`: a `Debug` message during a run would count as the next test's log). Project panel: Create C#
+  Test Script (into a Tests folder).
+- Verify recipe (scratchpad `TestProbe` of session be6ed329): game `Inventory` + `Health` component, editor menu script,
+  `Assets/Tests/InventoryTests.cs` + `SceneTests.cs` (pass, fail, exception, cases, source, LogAssert expected /
+  unexpected / missing, ignore, explicit, async frames / delay / timeout / Task<int>, ThrowsAsync, scene with a
+  component stepped by `scene.Update`, destroyed object null, temp folder) + `Scripts/Editor/Tests/` (Tests inside
+  Editor) + `Tests/Resources/testdata.txt`. Batch `-runTests -testResults` gave 20 passed / 6 failed / 1 skipped
+  (exactly the designed outcomes, exit 1); filters / category / explicit / no match; `-build` shipped Game.dll without
+  test types and left testdata out; tests-only edit -> "[Tests] Tests reloaded"; a compile error in a test -> exit 1,
+  game scripts fine. GUI (`project=P focus=0` + CLI `menu "Window/Test Runner"`, `click "button:Run All"`,
+  `click item:FailsOnPurpose`, `screenshot "Test Runner" 1000x760 f.png`): running state, details with snippet, debug
+  modal (a size forces the layout path, which does not show live popups: screenshot without a size), play during a run
+  aborts it. Not verified: an IDE debugger actually attached (Debugger.Break paths).
 
 ## Editor automation (EditorAutomation, CLI, window screenshots; 2026-10-26)
 

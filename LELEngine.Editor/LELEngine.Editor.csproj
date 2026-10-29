@@ -30,6 +30,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\LELEngine\LELEngine.csproj" />
+    <!-- The game's unit tests (Tests folders -> Game.Tests.dll reference it next to the editor; the player does not). -->
+    <ProjectReference Include="..\LELEngine.TestFramework\LELEngine.TestFramework.csproj" />
     <!-- Built first; its output is copied to Player/ next to the editor (game builds start from it). -->
     <ProjectReference Include="..\LELEngine.Player\LELEngine.Player.csproj" ReferenceOutputAssembly="false" />
   </ItemGroup>

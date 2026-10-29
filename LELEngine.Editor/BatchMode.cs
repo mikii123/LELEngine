@@ -43,6 +43,11 @@ namespace LELEngine.Editor
 			"                             scripts' windows, menus and inspectors exist, EditorAutomation works (window\n" +
 			"                             screenshots are drawn off screen on request)\n" +
 			"  -listen                    serve editor automation commands until 'quit' (LELEngine.Editor.Console -command help)\n" +
+			"  -runTests                  run the project's unit tests (scripts in Tests folders) inside the editor; a\n" +
+			"                             failed test, a test that does not compile or a filter matching none fails the run\n" +
+			"  -testFilter <text>         only tests whose full name (Namespace.Class.Method(args)) contains the text\n" +
+			"  -testCategory <name>       only tests of this [Category]\n" +
+			"  -testResults <file.xml>    write the results as JUnit XML\n" +
 			"  -build <folder>            build the game into the folder\n" +
 			"  -buildConfig Release|Debug configuration of the build (default Release)\n" +
 			"  -selfContained [true|false]\n" +
@@ -127,9 +132,9 @@ namespace LELEngine.Editor
 				Debug.Log("[Batch] Created project " + projectPath);
 			}
 
-			// A method or automation commands run inside the editor itself, without UI (BatchEditor); a build alone needs
-			// only the project.
-			if (options.Has("executemethod") || options.Has("listen"))
+			// A method, the tests or automation commands run inside the editor itself, without UI (BatchEditor); a build
+			// alone needs only the project (and never compiles the tests).
+			if (options.Has("executemethod") || options.Has("listen") || options.Has("runtests"))
 			{
 				if (options.Has("executemethod") && string.IsNullOrEmpty(options.Get("executemethod")))
 				{

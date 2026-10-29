@@ -49,6 +49,12 @@ namespace LELEngine.Editor
 		/// <summary>Custom inspectors, windows and menu items of the project's editor scripts.</summary>
 		public EditorExtensions Extensions { get; }
 
+		/// <summary>The project's unit tests (Tests folders): discovered tests, results, the run in progress.</summary>
+		public EditorTests Tests { get; }
+
+		/// <summary>Window > Test Runner.</summary>
+		public TestRunnerWindow TestRunner => testRunnerWindow;
+
 		public SceneViewPanel SceneView { get; }
 		public GameViewPanel GameView { get; }
 
@@ -87,6 +93,7 @@ namespace LELEngine.Editor
 		/// <summary>The console's error count Error Pause last saw.</summary>
 		private int errorsSeen;
 		private readonly InputManagerWindow inputManagerWindow;
+		private readonly TestRunnerWindow testRunnerWindow;
 		private readonly GameInputHost gameInput;
 		private readonly TestHooks testHooks;
 		private readonly bool layoutFileExisted;
@@ -166,6 +173,7 @@ namespace LELEngine.Editor
 			automated = !hasUI || IsAutomatedRun(args);
 			Edits = new EditTracker(this);
 			Extensions = new EditorExtensions(this);
+			Tests = new EditorTests(this);
 			Log = ConsoleLog.Install();
 			// The audio device opens on its own thread; the project's audio project and banks follow when it opens.
 			LELEngine.Audio.AudioSystem.Initialize(new LELEngine.Audio.AudioSettings());
@@ -183,6 +191,7 @@ namespace LELEngine.Editor
 			animatorWindow = new Animation.AnimatorWindow(this);
 			animationWindow = new Animation.AnimationWindow(this);
 			inputManagerWindow = new InputManagerWindow(this);
+			testRunnerWindow = new TestRunnerWindow(this);
 
 			gameInput = new GameInputHost(window, () => PlayState == PlayState.Playing && GameView.HasInputFocus);
 			Input.Host = gameInput;
@@ -297,6 +306,9 @@ namespace LELEngine.Editor
 				SceneManager.UpdateResourceLoads();
 			}
 
+			// The project's unit tests run a little per frame (edit mode only; play mode aborts a run).
+			Tests.Update();
+
 			Scene scene = Scene;
 			if (scene == null || PlayState == PlayState.Paused)
 			{
@@ -397,6 +409,7 @@ namespace LELEngine.Editor
 			animatorWindow.Draw();
 			animationWindow.Draw();
 			inputManagerWindow.Draw();
+			testRunnerWindow.Draw();
 			if (capture)
 			{
 				Extensions.DrawWindowsForCapture();
@@ -447,7 +460,7 @@ namespace LELEngine.Editor
 		///     The editor has work in flight: a script build (or one waiting), changed assets or settings not refreshed yet, a
 		///     scene or resource loading in the background. Automation waits for this to end (<see cref="EditorAutomation.WaitForIdle" />).
 		/// </summary>
-		public bool IsBusy => Project != null && (Scripts != null && !Scripts.IsIdle || assetsChanged || settingsChanged || restoreWindowsPending || SceneManager.PendingLoads.Count > 0);
+		public bool IsBusy => Project != null && (Scripts != null && !Scripts.IsIdle || assetsChanged || settingsChanged || restoreWindowsPending || SceneManager.PendingLoads.Count > 0 || Tests.IsRunning);
 
 		/// <summary>The window comes to the front on the next frame (its ImGui name).</summary>
 		public void RequestWindowFocus(string imguiName)
@@ -464,7 +477,7 @@ namespace LELEngine.Editor
 			var panels = new List<IEditorPanel>
 			{
 				mainPanel, hierarchy, SceneView, GameView, inspector, projectPanel, consolePanel, lightingPanel,
-				projectSettingsWindow, preferencesWindow, vfxGraphWindow, animatorWindow, animationWindow, inputManagerWindow, uiBuilderPanel, audioStudioPanel
+				projectSettingsWindow, preferencesWindow, vfxGraphWindow, animatorWindow, animationWindow, inputManagerWindow, testRunnerWindow, uiBuilderPanel, audioStudioPanel
 			};
 			panels.AddRange(Extensions.OpenWindowPanels());
 			return panels;
@@ -695,6 +708,8 @@ namespace LELEngine.Editor
 			vfxGraphWindow.Reset();
 			animatorWindow.Reset();
 			animationWindow.Reset();
+			Tests.Reset();
+			testRunnerWindow.Reset();
 			Undo.Clear();
 			Edits.Cancel();
 			ScriptableObjectAssets.UnloadAll();
@@ -1996,6 +2011,12 @@ namespace LELEngine.Editor
 					else OpenInputManager(null);
 				}
 
+				if (EditorMenu.Item("Test Runner", "", testRunnerWindow.Open))
+				{
+					if (testRunnerWindow.Open) testRunnerWindow.Open = false;
+					else testRunnerWindow.Show();
+				}
+
 				bool builderOpen = uiBuilder != null && uiBuilder.IsOpen;
 				if (EditorMenu.Item("UI Builder", "", builderOpen))
 				{
@@ -2581,6 +2602,7 @@ namespace LELEngine.Editor
 			states.Open["Animator"] = animatorWindow.Open;
 			states.Open["Animation"] = animationWindow.Open;
 			states.Open["Input Manager"] = inputManagerWindow.Open;
+			states.Open["Test Runner"] = testRunnerWindow.Open;
 			string graph = vfxGraphWindow.Document?.AssetPath;
 			if (graph != null)
 			{
@@ -2629,6 +2651,7 @@ namespace LELEngine.Editor
 			consolePanel.Open = Saved("Console", true);
 			lightingPanel.Open = Saved("Lighting", true);
 			inputManagerWindow.Open = Saved("Input Manager", false);
+			testRunnerWindow.Open = Saved("Test Runner", false);
 			if (Saved("Project Settings", false))
 			{
 				projectSettingsWindow.Restore(Enum.TryParse(states.ProjectSettingsTab, out ProjectSettingsWindow.Tab tab) ? tab : ProjectSettingsWindow.Tab.Lighting);

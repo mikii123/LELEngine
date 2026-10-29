@@ -71,7 +71,14 @@ namespace LELEngine.Editor
 				return frames;
 			}
 
-			foreach (string raw in entry.StackTrace.Split('\n'))
+			return Parse(entry.StackTrace);
+		}
+
+		/// <summary>The frames of a .NET stack trace (lines that are no frame become notes).</summary>
+		public static IReadOnlyList<ConsoleFrame> Parse(string stackTrace)
+		{
+			var frames = new List<ConsoleFrame>();
+			foreach (string raw in (stackTrace ?? "").Split('\n'))
 			{
 				string text = raw.TrimEnd('\r');
 				if (text.Trim().Length == 0)

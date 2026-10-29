@@ -9,12 +9,14 @@ namespace LELEngine.Editor
 {
 	/// <summary>
 	///     Writes the C# projects of a game project, so the scripts can be edited (and debugged, by attaching to the
-	///     editor) in any IDE: &lt;Name&gt;.csproj compiling Assets/**/*.cs except Editor folders into Game.dll against
-	///     the editor's engine assemblies, &lt;Name&gt;.Editor.csproj compiling the scripts of every Editor folder
+	///     editor) in any IDE: &lt;Name&gt;.csproj compiling Assets/**/*.cs except Editor and Tests folders into Game.dll
+	///     against the editor's engine assemblies, &lt;Name&gt;.Editor.csproj compiling the scripts of every Editor folder
 	///     (Assets/**/Editor/**/*.cs: custom inspectors, editor windows, menu items) into Game.Editor.dll against the
-	///     game scripts, the editor and Dear ImGui, &lt;Name&gt;.sln, and Directory.Build.props moving obj/ into
-	///     Library/. Editor scripts never reach a player build. The files are regenerated when they change (e.g. the
-	///     editor moved); NuGet packages go into &lt;Name&gt;.packages.props, which is never overwritten.
+	///     game scripts, the editor and Dear ImGui, &lt;Name&gt;.Tests.csproj compiling the scripts of every Tests folder
+	///     (Assets/**/Tests/**/*.cs: unit tests, also inside an Editor folder) into Game.Tests.dll against the game
+	///     scripts, the engine and the test framework, &lt;Name&gt;.sln, and Directory.Build.props moving obj/ into
+	///     Library/. Editor scripts and tests never reach a player build. The files are regenerated when they change
+	///     (e.g. the editor moved); NuGet packages go into &lt;Name&gt;.packages.props, which is never overwritten.
 	/// </summary>
 	internal static class ProjectGenerator
 	{
@@ -22,9 +24,19 @@ namespace LELEngine.Editor
 
 		public const string AssemblyName = "Game";
 		public const string EditorAssemblyName = "Game.Editor";
+		public const string TestsAssemblyName = "Game.Tests";
 
 		/// <summary>Folder name that moves the scripts below it into the editor assembly (any depth under Assets).</summary>
 		public const string EditorFolderName = "Editor";
+
+		/// <summary>
+		///     Folder name that moves the scripts below it into the test assembly (any depth under Assets; it wins over an
+		///     Editor folder around or inside it).
+		/// </summary>
+		public const string TestsFolderName = "Tests";
+
+		/// <summary>The test framework the tests compile against (next to the editor).</summary>
+		public const string TestFrameworkAssembly = "LELEngine.TestFramework.dll";
 
 		#endregion
 
@@ -60,25 +72,32 @@ namespace LELEngine.Editor
 			return Path.Combine(Path.GetDirectoryName(projectFile), Path.GetFileNameWithoutExtension(projectFile) + ".Editor.csproj");
 		}
 
+		/// <summary>The project of the tests (next to the game project).</summary>
+		public static string TestsProjectFile(ProjectInfo project)
+		{
+			return TestsProjectFile(ProjectFile(project));
+		}
+
+		public static string TestsProjectFile(string projectFile)
+		{
+			return Path.Combine(Path.GetDirectoryName(projectFile), Path.GetFileNameWithoutExtension(projectFile) + ".Tests.csproj");
+		}
+
 		public static string SolutionFile(ProjectInfo project)
 		{
 			return Path.Combine(project.RootPath, ProjectName(project) + ".sln");
 		}
 
-		/// <summary>True when the script lies in an Editor folder (somewhere under Assets).</summary>
+		/// <summary>True when the script lies in an Editor folder (somewhere under Assets) and in no Tests folder.</summary>
 		public static bool IsEditorScript(ProjectInfo project, string file)
 		{
-			string relative = Path.GetRelativePath(project.AssetsPath, file);
-			string[] parts = relative.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-			for (int i = 0; i < parts.Length - 1; i++)
-			{
-				if (string.Equals(parts[i], EditorFolderName, StringComparison.OrdinalIgnoreCase))
-				{
-					return true;
-				}
-			}
+			return InFolder(project, file, EditorFolderName) && !IsTestScript(project, file);
+		}
 
-			return false;
+		/// <summary>True when the script lies in a Tests folder (somewhere under Assets).</summary>
+		public static bool IsTestScript(ProjectInfo project, string file)
+		{
+			return InFolder(project, file, TestsFolderName);
 		}
 
 		public static void Generate(ProjectInfo project)
@@ -86,6 +105,7 @@ namespace LELEngine.Editor
 			string name = ProjectName(project);
 			WriteIfChanged(ProjectFile(project), Csproj(name));
 			WriteIfChanged(EditorProjectFile(project), EditorCsproj(name));
+			WriteIfChanged(TestsProjectFile(project), TestsCsproj(name));
 			WriteIfChanged(SolutionFile(project), Sln(name));
 			WriteIfChanged(Path.Combine(project.RootPath, "Directory.Build.props"), BuildProps());
 
@@ -103,6 +123,22 @@ namespace LELEngine.Editor
 
 		#region PrivateMethods
 
+		/// <summary>A folder of the file's path below Assets has this name.</summary>
+		private static bool InFolder(ProjectInfo project, string file, string folderName)
+		{
+			string relative = Path.GetRelativePath(project.AssetsPath, file);
+			string[] parts = relative.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+			for (int i = 0; i < parts.Length - 1; i++)
+			{
+				if (string.Equals(parts[i], folderName, StringComparison.OrdinalIgnoreCase))
+				{
+					return true;
+				}
+			}
+
+			return false;
+		}
+
 		private static string Csproj(string name)
 		{
 			string editor = AppContext.BaseDirectory;
@@ -116,9 +152,9 @@ namespace LELEngine.Editor
 			builder.AppendLine("       Add NuGet packages in " + name + ".packages.props. -->");
 			builder.AppendLine();
 			AppendProperties(builder, AssemblyName, name, false);
-			builder.AppendLine("  <!-- Scripts in Editor folders belong to " + name + ".Editor.csproj. -->");
+			builder.AppendLine("  <!-- Scripts in Editor folders belong to " + name + ".Editor.csproj, scripts in Tests folders to " + name + ".Tests.csproj. -->");
 			builder.AppendLine("  <ItemGroup>");
-			builder.AppendLine("    <Compile Include=\"Assets\\**\\*.cs\" Exclude=\"Assets\\**\\" + EditorFolderName + "\\**\\*.cs\" />");
+			builder.AppendLine("    <Compile Include=\"Assets\\**\\*.cs\" Exclude=\"Assets\\**\\" + EditorFolderName + "\\**\\*.cs;Assets\\**\\" + TestsFolderName + "\\**\\*.cs\" />");
 			builder.AppendLine("  </ItemGroup>");
 			builder.AppendLine();
 			AppendReferences(builder, editor, references, "Engine assemblies of the editor (not copied: the editor and the player provide them).");
@@ -144,10 +180,48 @@ namespace LELEngine.Editor
 			builder.AppendLine("       Editor under Assets. They run in the editor only and never reach a player build. -->");
 			builder.AppendLine();
 			AppendProperties(builder, EditorAssemblyName, name + ".Editor", true);
+			builder.AppendLine("  <!-- Tests folders inside Editor folders belong to " + name + ".Tests.csproj. -->");
 			builder.AppendLine("  <ItemGroup>");
-			builder.AppendLine("    <Compile Include=\"Assets\\**\\" + EditorFolderName + "\\**\\*.cs\" />");
+			builder.AppendLine("    <Compile Include=\"Assets\\**\\" + EditorFolderName + "\\**\\*.cs\" Exclude=\"Assets\\**\\" + TestsFolderName + "\\**\\*.cs\" />");
 			builder.AppendLine("  </ItemGroup>");
 			builder.AppendLine();
+			AppendGameReference(builder, name);
+			AppendReferences(builder, editor, references, "Engine, editor and Dear ImGui assemblies of the editor (not copied: the editor provides them).");
+			builder.AppendLine("  <Import Project=\"" + Escape(name) + ".packages.props\" Condition=\"Exists('" + Escape(name) + ".packages.props')\" />");
+			builder.AppendLine();
+			builder.AppendLine("</Project>");
+			return builder.ToString();
+		}
+
+		/// <summary>Tests: the game scripts, the engine and the test framework (no editor: tests see what the game sees).</summary>
+		private static string TestsCsproj(string name)
+		{
+			string editor = AppContext.BaseDirectory;
+			var references = new List<string> { "LELEngine.dll", TestFrameworkAssembly };
+			references.AddRange(Directory.GetFiles(editor, "OpenTK*.dll").Select(Path.GetFileName).OrderBy(f => f, StringComparer.OrdinalIgnoreCase));
+
+			var builder = new StringBuilder();
+			builder.AppendLine("<Project Sdk=\"Microsoft.NET.Sdk\">");
+			builder.AppendLine();
+			builder.AppendLine("  <!-- Generated by the LELEngine editor; it is rewritten when the editor needs other settings.");
+			builder.AppendLine("       Unit tests: every .cs file in a folder named Tests under Assets ([Test] methods, using LELEngine.Testing).");
+			builder.AppendLine("       They run in the editor (Window > Test Runner, batch mode -runTests) and never reach a player build. -->");
+			builder.AppendLine();
+			AppendProperties(builder, TestsAssemblyName, name + ".Tests", true);
+			builder.AppendLine("  <ItemGroup>");
+			builder.AppendLine("    <Compile Include=\"Assets\\**\\" + TestsFolderName + "\\**\\*.cs\" />");
+			builder.AppendLine("  </ItemGroup>");
+			builder.AppendLine();
+			AppendGameReference(builder, name);
+			AppendReferences(builder, editor, references, "Engine and test framework assemblies of the editor (not copied: the editor provides them).");
+			builder.AppendLine("  <Import Project=\"" + Escape(name) + ".packages.props\" Condition=\"Exists('" + Escape(name) + ".packages.props')\" />");
+			builder.AppendLine();
+			builder.AppendLine("</Project>");
+			return builder.ToString();
+		}
+
+		private static void AppendGameReference(StringBuilder builder, string name)
+		{
 			builder.AppendLine("  <!-- The game scripts (already in the output folder: not copied). -->");
 			builder.AppendLine("  <ItemGroup>");
 			builder.AppendLine("    <ProjectReference Include=\"" + Escape(name) + ".csproj\">");
@@ -155,11 +229,6 @@ namespace LELEngine.Editor
 			builder.AppendLine("    </ProjectReference>");
 			builder.AppendLine("  </ItemGroup>");
 			builder.AppendLine();
-			AppendReferences(builder, editor, references, "Engine, editor and Dear ImGui assemblies of the editor (not copied: the editor provides them).");
-			builder.AppendLine("  <Import Project=\"" + Escape(name) + ".packages.props\" Condition=\"Exists('" + Escape(name) + ".packages.props')\" />");
-			builder.AppendLine();
-			builder.AppendLine("</Project>");
-			return builder.ToString();
 		}
 
 		private static void AppendProperties(StringBuilder builder, string assemblyName, string rootNamespace, bool allowUnsafe)
@@ -218,14 +287,16 @@ namespace LELEngine.Editor
 		{
 			string projectGuid = StableGuid(name).ToString("B").ToUpperInvariant();
 			string editorGuid = StableGuid(name + ".Editor").ToString("B").ToUpperInvariant();
+			string testsGuid = StableGuid(name + ".Tests").ToString("B").ToUpperInvariant();
 			const string csharp = "{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}";
 			var builder = new StringBuilder();
 			builder.Append("\nMicrosoft Visual Studio Solution File, Format Version 12.00\n# Visual Studio Version 17\n");
 			builder.Append("Project(\"" + csharp + "\") = \"" + name + "\", \"" + name + ".csproj\", \"" + projectGuid + "\"\nEndProject\n");
 			builder.Append("Project(\"" + csharp + "\") = \"" + name + ".Editor\", \"" + name + ".Editor.csproj\", \"" + editorGuid + "\"\nEndProject\n");
+			builder.Append("Project(\"" + csharp + "\") = \"" + name + ".Tests\", \"" + name + ".Tests.csproj\", \"" + testsGuid + "\"\nEndProject\n");
 			builder.Append("Global\n\tGlobalSection(SolutionConfigurationPlatforms) = preSolution\n\t\tDebug|Any CPU = Debug|Any CPU\n\t\tRelease|Any CPU = Release|Any CPU\n\tEndGlobalSection\n");
 			builder.Append("\tGlobalSection(ProjectConfigurationPlatforms) = postSolution\n");
-			foreach (string guid in new[] { projectGuid, editorGuid })
+			foreach (string guid in new[] { projectGuid, editorGuid, testsGuid })
 			{
 				builder.Append("\t\t" + guid + ".Debug|Any CPU.ActiveCfg = Debug|Any CPU\n\t\t" + guid + ".Debug|Any CPU.Build.0 = Debug|Any CPU\n");
 				builder.Append("\t\t" + guid + ".Release|Any CPU.ActiveCfg = Release|Any CPU\n\t\t" + guid + ".Release|Any CPU.Build.0 = Release|Any CPU\n");
