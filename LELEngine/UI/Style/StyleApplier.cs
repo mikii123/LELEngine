@@ -642,6 +642,13 @@ namespace LELEngine.UIElements
 			}
 
 			object asset = ReadAsset(v[i]);
+			if (asset is LELEngine.Rendering.RenderTexture renderTexture)
+			{
+				// An inline style showing a camera's image (style.backgroundImage = Background.FromRenderTexture(...)).
+				s.backgroundImage = new Background(renderTexture);
+				return true;
+			}
+
 			Texture texture = asset as Texture;
 			if (texture == null && (v[i].type == StyleValueType.ResourcePath || v[i].type == StyleValueType.Reference))
 			{

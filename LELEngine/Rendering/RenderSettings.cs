@@ -46,6 +46,18 @@ namespace LELEngine.Rendering
 		/// <summary>Draw the scene's UI documents over the image (off for the editor's scene view).</summary>
 		public bool RenderUI = true;
 
+		/// <summary>
+		///     The output keeps the scene's alpha (the clear color's where nothing drew) instead of writing 1: for a
+		///     camera's <see cref="Camera.targetTexture" /> shown over other content.
+		/// </summary>
+		public bool PreserveAlpha;
+
+		/// <summary>
+		///     <see cref="ClearColor" /> is the renderer's own (a camera's background colour for its target texture): the
+		///     scene's background colour does not replace it each frame.
+		/// </summary>
+		public bool KeepClearColor;
+
 		#endregion
 	}
 }

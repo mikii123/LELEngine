@@ -19,7 +19,8 @@ namespace LELEngine.UIElements
 		public static readonly string[] StyleSheetExtensions = { ".uss" };
 		public static readonly string[] VisualTreeExtensions = { ".uxml" };
 		public static readonly string[] FontExtensions = { ".ttf", ".otf" };
-		public static readonly string[] TextureExtensions = { ".png", ".jpg", ".jpeg", ".tga", ".bmp" };
+		/// <summary>Images the UI draws; .svg files are rasterized on load (<see cref="SvgRasterizer" />).</summary>
+		public static readonly string[] TextureExtensions = { ".png", ".jpg", ".jpeg", ".tga", ".bmp", ".svg" };
 
 		/// <summary>Raised after a cached asset was reloaded from its file (editor hot reload).</summary>
 		public static event Action<object> AssetReloaded;

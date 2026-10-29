@@ -98,6 +98,9 @@ namespace LELEngine
 			// Raises the UpdateFrame event (hosts and test hooks subscribe to it).
 			base.OnUpdateFrame(e);
 			double deltaTime = e.Time;
+			Time.unscaledDeltaTimeD = deltaTime;
+			Time.unscaledTimeD += deltaTime;
+			deltaTime *= Time.timeScaleD;
 			Time.deltaTimeD = deltaTime;
 			Time.timeD += deltaTime;
 

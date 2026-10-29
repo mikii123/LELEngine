@@ -65,7 +65,8 @@ namespace LELEngine
 				// Chosen on every call: a camera's render type changes without the scene noticing.
 				foreach (Camera camera in cameras)
 				{
-					if (!camera.dead && camera.RenderType == CameraRenderType.Base)
+					// A camera rendering into a texture is not the screen's camera.
+					if (!camera.dead && camera.RenderType == CameraRenderType.Base && camera.targetTexture == null)
 					{
 						return camera;
 					}

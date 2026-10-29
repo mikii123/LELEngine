@@ -8,6 +8,28 @@
 
 		public static double deltaTimeD;
 
+		/// <summary>
+		///     Scale of the game clock (Unity's timeScale): 0 pauses updates and physics (<see cref="deltaTime" /> is 0 and no
+		///     fixed step runs), 1 is real time. The UI and <see cref="unscaledDeltaTime" /> keep running.
+		/// </summary>
+		public static double timeScaleD = 1;
+
+		public static float timeScale
+		{
+			get => (float)timeScaleD;
+			set => timeScaleD = value < 0 ? 0 : value;
+		}
+
+		/// <summary>Seconds since the last frame, not scaled by <see cref="timeScale" /> (menus, pause screens).</summary>
+		public static double unscaledDeltaTimeD;
+
+		public static float unscaledDeltaTime => (float)unscaledDeltaTimeD;
+
+		/// <summary>Real seconds since the clock started, whatever <see cref="timeScale" /> was.</summary>
+		public static double unscaledTimeD;
+
+		public static float unscaledTime => (float)unscaledTimeD;
+
 		/// <summary>Length of a fixed update / physics step in seconds (0.02 = 50 Hz).</summary>
 		public static double fixedDeltaTimeD = 0.02;
 
@@ -54,6 +76,8 @@
 			timeD = 0;
 			lastFrameD = 0;
 			fixedTimeD = 0;
+			unscaledTimeD = 0;
+			timeScaleD = 1;
 		}
 	}
 }

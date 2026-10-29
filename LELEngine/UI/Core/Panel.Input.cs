@@ -225,32 +225,69 @@ namespace LELEngine.UIElements
 				case Keys.Enter:
 				case Keys.KeyPadEnter:
 				case Keys.Space:
-					using (NavigationSubmitEvent evt = NavigationSubmitEvent.GetPooled())
-					{
-						evt.modifiers = modifiers;
-						evt.target = target;
-						target.SendEvent(evt);
-					}
-
+					SendNavigationSubmit(modifiers);
 					return;
 				case Keys.Escape:
-					using (NavigationCancelEvent evt = NavigationCancelEvent.GetPooled())
-					{
-						evt.modifiers = modifiers;
-						evt.target = target;
-						target.SendEvent(evt);
-					}
-
+					SendNavigationCancel(modifiers);
 					return;
 			}
 
 			if (direction != NavigationMoveEvent.Direction.None)
 			{
-				using (NavigationMoveEvent evt = NavigationMoveEvent.GetPooled(direction, modifiers))
-				{
-					evt.target = target;
-					target.SendEvent(evt);
-				}
+				SendNavigationMove(direction, modifiers);
+			}
+		}
+
+		public void SendNavigationMove(NavigationMoveEvent.Direction direction)
+		{
+			SendNavigationMove(direction, EventModifiers.None);
+		}
+
+		public void SendNavigationSubmit()
+		{
+			SendNavigationSubmit(EventModifiers.None);
+		}
+
+		public void SendNavigationCancel()
+		{
+			SendNavigationCancel(EventModifiers.None);
+		}
+
+		/// <summary>A navigation move from any device (keyboard arrows, a gamepad): the focused element gets it first.</summary>
+		public void SendNavigationMove(NavigationMoveEvent.Direction direction, EventModifiers modifiers)
+		{
+			if (direction == NavigationMoveEvent.Direction.None)
+			{
+				return;
+			}
+
+			VisualElement target = focusController.focusedElement as VisualElement ?? visualTree;
+			using (NavigationMoveEvent evt = NavigationMoveEvent.GetPooled(direction, modifiers))
+			{
+				evt.target = target;
+				target.SendEvent(evt);
+			}
+		}
+
+		public void SendNavigationSubmit(EventModifiers modifiers)
+		{
+			VisualElement target = focusController.focusedElement as VisualElement ?? visualTree;
+			using (NavigationSubmitEvent evt = NavigationSubmitEvent.GetPooled())
+			{
+				evt.modifiers = modifiers;
+				evt.target = target;
+				target.SendEvent(evt);
+			}
+		}
+
+		public void SendNavigationCancel(EventModifiers modifiers)
+		{
+			VisualElement target = focusController.focusedElement as VisualElement ?? visualTree;
+			using (NavigationCancelEvent evt = NavigationCancelEvent.GetPooled())
+			{
+				evt.modifiers = modifiers;
+				evt.target = target;
+				target.SendEvent(evt);
 			}
 		}
 

@@ -134,6 +134,18 @@ namespace LELEngine.UIElements
 			}
 		}
 
+		/// <summary>
+		///     Tells the panel that <paramref name="evt" /> (a navigation move) was dealt with: the focus ring does not move
+		///     for it. For code that moves the focus itself (spatial navigation, a popup keeping the focus inside).
+		/// </summary>
+		public void IgnoreEvent(EventBase evt)
+		{
+			if (evt != null)
+			{
+				evt.isHandled = true;
+			}
+		}
+
 		/// <summary>Moves focus to the next / previous focusable element in the ring (tab navigation).</summary>
 		public void MoveFocus(FocusChangeDirection direction)
 		{

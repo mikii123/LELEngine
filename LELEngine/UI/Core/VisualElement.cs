@@ -184,6 +184,9 @@ namespace LELEngine.UIElements
 		internal bool worldTransformInverseDirty = true;
 		internal Rect worldClipRef = new Rect(float.MinValue * 0.5f, float.MinValue * 0.5f, float.MaxValue, float.MaxValue);
 		internal float worldOpacity = 1f;
+
+		/// <summary>Under a display: none ancestor: drawn with opacity 0 until the subtree's transforms are recomputed.</summary>
+		internal bool hiddenByDisplay;
 		internal bool isWorldTransformIdentityScaleRotation = true;
 
 		/// <summary>The element's slot in the renderer (element data, mesh); -1 while not attached.</summary>

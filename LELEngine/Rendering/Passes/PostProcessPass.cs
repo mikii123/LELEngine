@@ -40,6 +40,7 @@ namespace LELEngine.Rendering.Passes
 			tonemap.SetTexture("SceneColor", TextureTarget.Texture2D, context.SceneColor.Handle, 0);
 			tonemap.SetFloat("Exposure", context.Settings.Exposure);
 			tonemap.SetInt("TonemapEnabled", context.Settings.Tonemap ? 1 : 0);
+			tonemap.SetInt("KeepAlpha", context.Settings.PreserveAlpha ? 1 : 0);
 
 			context.Fullscreen.Draw();
 

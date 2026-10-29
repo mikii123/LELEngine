@@ -527,9 +527,19 @@ namespace LELEngine.UIElements
 	{
 		public Texture texture;
 
+		/// <summary>A render target drawn as the image (a camera's <see cref="Camera.targetTexture" />); rows bottom up, flipped when drawn.</summary>
+		public LELEngine.Rendering.RenderTexture renderTexture;
+
 		public Background(Texture texture)
 		{
 			this.texture = texture;
+			renderTexture = null;
+		}
+
+		public Background(LELEngine.Rendering.RenderTexture renderTexture)
+		{
+			texture = null;
+			this.renderTexture = renderTexture;
 		}
 
 		public static Background FromTexture(Texture texture)
@@ -537,9 +547,23 @@ namespace LELEngine.UIElements
 			return new Background(texture);
 		}
 
+		public static Background FromRenderTexture(LELEngine.Rendering.RenderTexture renderTexture)
+		{
+			return new Background(renderTexture);
+		}
+
+		/// <summary>The background a style value's reference stands for: a texture, a render texture, or none.</summary>
+		public static Background FromReference(object reference)
+		{
+			return reference is LELEngine.Rendering.RenderTexture renderTexture ? new Background(renderTexture) : new Background(reference as Texture);
+		}
+
+		/// <summary>Nothing to draw.</summary>
+		public bool IsEmpty => texture == null && renderTexture == null;
+
 		public bool Equals(Background other)
 		{
-			return ReferenceEquals(texture, other.texture);
+			return ReferenceEquals(texture, other.texture) && ReferenceEquals(renderTexture, other.renderTexture);
 		}
 
 		public override bool Equals(object obj)
@@ -549,7 +573,7 @@ namespace LELEngine.UIElements
 
 		public override int GetHashCode()
 		{
-			return texture != null ? texture.GetHashCode() : 0;
+			return texture != null ? texture.GetHashCode() : renderTexture != null ? renderTexture.GetHashCode() : 0;
 		}
 	}
 

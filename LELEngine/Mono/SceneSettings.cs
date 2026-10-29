@@ -133,7 +133,11 @@ namespace LELEngine
 			Lighting.Specular.Shine = SpecularShine;
 			if (settings != null)
 			{
-				settings.ClearColor = BackgroundColor;
+				if (!settings.KeepClearColor)
+				{
+					settings.ClearColor = BackgroundColor;
+				}
+
 				settings.Exposure = Exposure;
 				settings.Tonemap = Tonemap;
 			}

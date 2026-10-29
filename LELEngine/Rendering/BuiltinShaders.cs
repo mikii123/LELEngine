@@ -68,6 +68,7 @@ out vec4 FragColor;
 uniform sampler2D SceneColor;
 uniform float Exposure;
 uniform int TonemapEnabled;
+uniform int KeepAlpha;
 
 vec3 ACESFilm(vec3 x)
 {
@@ -93,13 +94,15 @@ vec3 LinearToSrgb(vec3 c)
 
 void main()
 {
-	vec3 hdr = texture(SceneColor, fUV).rgb * Exposure;
+	vec4 scene = texture(SceneColor, fUV);
+	vec3 hdr = scene.rgb * Exposure;
 	vec3 color = TonemapEnabled != 0 ? ACESFilm(hdr) : clamp(hdr, 0.0, 1.0);
 	color = LinearToSrgb(color);
 	// Half an 8-bit step of static dither before quantisation: smooth gradients lose their contour bands, and
 	// a slowly drifting GI value no longer shows as a crawling band edge but as a gradual change of the pattern.
 	color += (Dither(gl_FragCoord.xy) - 0.5) / 255.0;
-	FragColor = vec4(color, 1.0);
+	// A render target shown over other content keeps the scene's alpha (0 where only the clear color is).
+	FragColor = vec4(color, KeepAlpha != 0 ? clamp(scene.a, 0.0, 1.0) : 1.0);
 }
 ";
 

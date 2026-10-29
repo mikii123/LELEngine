@@ -26,14 +26,17 @@ namespace LELEngine
 			if (assembly != null && !assemblies.Contains(assembly))
 			{
 				assemblies.Add(assembly);
+				// UXML tags resolve against the registered assemblies: a document parsed before the game's scripts
+				// loaded (the start scene in batch mode) must see their elements on its next instantiation.
+				UIElements.UxmlRegistry.Clear();
 			}
 		}
 
 		public static void Unregister(Assembly assembly)
 		{
-			if (assembly != typeof(TypeRegistry).Assembly)
+			if (assembly != typeof(TypeRegistry).Assembly && assemblies.Remove(assembly))
 			{
-				assemblies.Remove(assembly);
+				UIElements.UxmlRegistry.Clear();
 			}
 		}
 

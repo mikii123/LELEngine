@@ -161,6 +161,7 @@ namespace LELEngine.UIElements
 
 		public static implicit operator StyleBackground(Background value) => new StyleBackground(value);
 		public static implicit operator StyleBackground(Texture texture) => new StyleBackground(texture);
+		public static implicit operator StyleBackground(LELEngine.Rendering.RenderTexture renderTexture) => new StyleBackground(Background.FromRenderTexture(renderTexture));
 		public static implicit operator StyleBackground(StyleKeyword keyword) => new StyleBackground(keyword);
 
 		public bool Equals(StyleBackground other) => keyword == other.keyword && value.Equals(other.value);

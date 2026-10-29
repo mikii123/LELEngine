@@ -23,6 +23,7 @@ namespace LELEngine.Rendering
 		#region PrivateFields
 
 		private readonly List<RenderTexture> colorAttachments = new List<RenderTexture>();
+		private readonly HashSet<RenderTexture> borrowed = new HashSet<RenderTexture>();
 		private bool ownsDepth = true;
 
 		#endregion
@@ -57,6 +58,27 @@ namespace LELEngine.Rendering
 			GL.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
 
 			return texture;
+		}
+
+		/// <summary>
+		///     Attaches a color target made elsewhere (a camera's <see cref="Camera.targetTexture" />). The framebuffer
+		///     neither resizes nor deletes it; it must be this framebuffer's size.
+		/// </summary>
+		public void AttachColor(RenderTexture texture)
+		{
+			if (texture == null || texture.IsDepth)
+			{
+				throw new ArgumentException("A color render texture is needed.", nameof(texture));
+			}
+
+			int index = colorAttachments.Count;
+			colorAttachments.Add(texture);
+			borrowed.Add(texture);
+
+			GL.BindFramebuffer(FramebufferTarget.Framebuffer, Handle);
+			GL.FramebufferTexture2D(FramebufferTarget.Framebuffer, FramebufferAttachment.ColorAttachment0 + index, TextureTarget.Texture2D, texture.Handle, 0);
+			UpdateDrawBuffers();
+			GL.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
 		}
 
 		public RenderTexture AddDepthAttachment(RenderTextureFormat format = RenderTextureFormat.Depth24, bool linearFilter = false, TextureWrapMode wrap = TextureWrapMode.ClampToEdge)
@@ -125,7 +147,10 @@ namespace LELEngine.Rendering
 
 			foreach (RenderTexture texture in colorAttachments)
 			{
-				texture.Resize(width, height);
+				if (!borrowed.Contains(texture))
+				{
+					texture.Resize(width, height);
+				}
 			}
 			if (ownsDepth)
 			{
@@ -166,9 +191,13 @@ namespace LELEngine.Rendering
 		{
 			foreach (RenderTexture texture in colorAttachments)
 			{
-				texture.Delete();
+				if (!borrowed.Contains(texture))
+				{
+					texture.Delete();
+				}
 			}
 			colorAttachments.Clear();
+			borrowed.Clear();
 			if (ownsDepth)
 			{
 				DepthAttachment?.Delete();

@@ -249,7 +249,11 @@ namespace LELEngine.UIElements.Rendering
 				return;
 			}
 
-			foreach (VisualElement element in panel.repaintDirty)
+			// A snapshot: an element's content callback may dirty other elements (they render next frame).
+			repaintBatch.Clear();
+			repaintBatch.AddRange(panel.repaintDirty);
+			panel.repaintDirty.Clear();
+			foreach (VisualElement element in repaintBatch)
 			{
 				if (element.elementPanel != panel || element.renderSlot < 0)
 				{
@@ -260,9 +264,11 @@ namespace LELEngine.UIElements.Rendering
 				GenerateMesh(element);
 			}
 
-			panel.repaintDirty.Clear();
+			repaintBatch.Clear();
 			indexDirty = true;
 		}
+
+		private readonly List<VisualElement> repaintBatch = new List<VisualElement>();
 
 		private void GenerateMesh(VisualElement element)
 		{
@@ -355,7 +361,12 @@ namespace LELEngine.UIElements.Rendering
 			Texture backgroundTexture = style.backgroundImage.texture;
 			if (backgroundTexture != null && backgroundTexture.IsValid)
 			{
-				AddBackgroundImage(element, style, backgroundTexture, w, h);
+				AddBackgroundImage(element, style, backgroundTexture, backgroundTexture.width, backgroundTexture.height, false, w, h);
+			}
+			else if (style.backgroundImage.renderTexture is LELEngine.Rendering.RenderTexture renderTexture && renderTexture.Handle != 0)
+			{
+				// A framebuffer's rows start at the bottom: drawn upside down.
+				AddBackgroundImage(element, style, renderTexture, renderTexture.Width, renderTexture.Height, true, w, h);
 			}
 
 			if (element is TextElement textElement)
@@ -412,23 +423,22 @@ namespace LELEngine.UIElements.Rendering
 
 		// ------------------------------------------------------------------ background images
 
-		private void AddBackgroundImage(VisualElement element, ComputedStyle style, Texture texture, float w, float h)
+		private void AddBackgroundImage(VisualElement element, ComputedStyle style, object textureKey, float tw, float th, bool flipV, float w, float h)
 		{
 			LayoutNodeData node = element.layoutNode;
 			// Images are drawn inside the borders.
 			float boxX = node.borderLeft, boxY = node.borderTop;
 			float boxW = Math.Max(0f, w - node.borderLeft - node.borderRight);
 			float boxH = Math.Max(0f, h - node.borderTop - node.borderBottom);
-			if (boxW <= 0f || boxH <= 0f)
+			if (boxW <= 0f || boxH <= 0f || tw <= 0f || th <= 0f)
 			{
 				return;
 			}
 
-			int textureId = GetTextureId(texture);
+			int textureId = GetTextureId(textureKey);
 			Color4 tint = style.unityBackgroundImageTintColor;
 			bool rounded = HasRadius(style);
 			uint clipFlag = rounded ? FlagClipToBox : 0u;
-			float tw = texture.width, th = texture.height;
 
 			bool sliced = style.unitySliceLeft > 0 || style.unitySliceRight > 0 || style.unitySliceTop > 0 || style.unitySliceBottom > 0;
 			if (sliced)
@@ -570,6 +580,12 @@ namespace LELEngine.UIElements.Rendering
 					float v0 = (clipped.yMin - tile.yMin) / ih;
 					float u1 = (clipped.xMax - tile.xMin) / iw;
 					float v1 = (clipped.yMax - tile.yMin) / ih;
+					if (flipV)
+					{
+						v0 = 1f - v0;
+						v1 = 1f - v1;
+					}
+
 					AddQuad(clipped.x, clipped.y, clipped.width, clipped.height, u0, v0, u1, v1, tint, KindTexture, textureId, 0f, clipFlag);
 				}
 			}
@@ -1081,6 +1097,9 @@ namespace LELEngine.UIElements.Rendering
 					int handle = page.font.GetPageTexture(page.page);
 					return handle != 0 ? handle : whiteTexture;
 				}
+
+				case LELEngine.Rendering.RenderTexture renderTexture:
+					return renderTexture.Handle != 0 ? renderTexture.Handle : whiteTexture;
 				default:
 					return whiteTexture;
 			}

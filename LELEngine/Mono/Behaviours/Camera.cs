@@ -68,6 +68,18 @@ public sealed class Camera : Behaviour
 	/// <summary>Width / height of the view; set by the renderer every frame.</summary>
 	[System.NonSerialized] public float Aspect = 4f / 3f;
 
+	/// <summary>
+	///     Draws into this texture instead of the screen (Unity's targetTexture): every frame the renderer renders the
+	///     camera's layers (opaque, transparent, shadows; no GI, no sky) into it with its own clear color
+	///     (<see cref="backgroundColor" />; alpha kept, so a clear alpha of 0 gives a transparent image), so the UI can
+	///     show it (<c>style.backgroundImage = texture</c>, Background.FromRenderTexture). The camera takes no part in the
+	///     screen's frame while set. Runtime only: made and sized by code (<see cref="RenderTexture" />).
+	/// </summary>
+	[System.NonSerialized] public LELEngine.Rendering.RenderTexture targetTexture;
+
+	/// <summary>Clear color of <see cref="targetTexture" /> (alpha included); the screen's clear color comes from the scene.</summary>
+	[System.NonSerialized] public Color4 backgroundColor = new Color4(0f, 0f, 0f, 0f);
+
 	public Matrix4 ViewMatrix { get; private set; } = Matrix4.Identity;
 	public Matrix4 ProjectionMatrix { get; private set; } = Matrix4.Identity;
 	public Matrix4 ViewProjectionMatrix { get; private set; } = Matrix4.Identity;

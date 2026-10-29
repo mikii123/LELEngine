@@ -22,6 +22,18 @@ namespace LELEngine.UIElements
 
 		/// <summary>Every element under the point, topmost first; returns the topmost.</summary>
 		VisualElement PickAll(Vector2 point, List<VisualElement> picked);
+
+		/// <summary>
+		///     Sends a navigation move to the focused element (or the root), as the arrow keys do: a gamepad's d-pad or
+		///     stick drives the UI through this. The focus ring moves unless a handler takes the event.
+		/// </summary>
+		void SendNavigationMove(NavigationMoveEvent.Direction direction);
+
+		/// <summary>Sends a submit (Enter / the gamepad's A) to the focused element.</summary>
+		void SendNavigationSubmit();
+
+		/// <summary>Sends a cancel (Escape / the gamepad's B) to the focused element.</summary>
+		void SendNavigationCancel();
 	}
 
 	/// <summary>

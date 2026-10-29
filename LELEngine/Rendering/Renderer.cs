@@ -62,6 +62,10 @@ namespace LELEngine.Rendering
 		#region PrivateFields
 
 		private readonly List<RenderPass> passes = new List<RenderPass>();
+		private readonly Dictionary<Camera, TargetRenderer> targetRenderers = new Dictionary<Camera, TargetRenderer>();
+		private readonly Dictionary<Camera, int> targetFrame = new Dictionary<Camera, int>();
+		private readonly List<Camera> staleTargets = new List<Camera>();
+		private bool isTargetRenderer;
 
 		/// <summary>The cameras of the frame being rendered: the base camera, then its overlays.</summary>
 		private readonly List<Camera> stack = new List<Camera>();
@@ -203,6 +207,11 @@ namespace LELEngine.Rendering
 		/// </summary>
 		public void RenderFrame(Camera camera, IReadOnlyList<MeshRenderer> renderers, IReadOnlyList<Behaviour> behaviours, RenderQueue queue)
 		{
+			if (!isTargetRenderer)
+			{
+				RenderTargetCameras(camera, renderers, behaviours, queue);
+			}
+
 			Lighting.BeginFrame(Settings);
 			if (camera == null)
 			{
@@ -512,6 +521,158 @@ namespace LELEngine.Rendering
 			stack.Clear();
 		}
 
+		// ------------------------------------------------------------------ cameras rendering into textures
+
+		/// <summary>A renderer of one camera's <see cref="Camera.targetTexture" />: its own passes and scene target, the texture as the output.</summary>
+		private sealed class TargetRenderer
+		{
+			public Renderer Renderer;
+			public Framebuffer Output;
+			public RenderTexture Texture;
+
+			public void Release()
+			{
+				Output?.Delete();
+				Output = null;
+				Renderer?.Dispose();
+				Renderer = null;
+				Texture = null;
+			}
+		}
+
+		/// <summary>
+		///     The passes of a camera rendering into a texture: shadows, the geometry and the display transform. No GI,
+		///     sky, VFX, debug views or UI: the texture shows the camera's layers lit by the scene's light.
+		/// </summary>
+		public void AddTargetTexturePasses()
+		{
+			AddPass(new ShadowPass());
+			AddPass(new OpaquePass());
+			AddPass(new TransparentPass());
+			AddPass(new PostProcessPass());
+		}
+
+		/// <summary>
+		///     Renders every enabled camera of the frame that has a <see cref="Camera.targetTexture" /> into it, each
+		///     through a renderer of its own (<see cref="AddTargetTexturePasses" />), before the screen's frame. The
+		///     textures are ready for the UI pass of this frame.
+		/// </summary>
+		private void RenderTargetCameras(Camera screenCamera, IReadOnlyList<MeshRenderer> renderers, IReadOnlyList<Behaviour> behaviours, RenderQueue queue)
+		{
+			if (targetRenderers.Count == 0 && !AnyTargetCamera(behaviours))
+			{
+				return;
+			}
+
+			if (behaviours != null)
+			{
+				foreach (Behaviour behaviour in behaviours)
+				{
+					if (!(behaviour is Camera camera) || camera == screenCamera || camera.targetTexture == null || camera.IsDestroyed || !camera.isActiveAndEnabled)
+					{
+						continue;
+					}
+
+					RenderTexture texture = camera.targetTexture;
+					if (texture.Handle == 0 || texture.Width <= 0 || texture.Height <= 0)
+					{
+						continue;
+					}
+
+					TargetRenderer target;
+					if (!targetRenderers.TryGetValue(camera, out target))
+					{
+						target = new TargetRenderer();
+						targetRenderers[camera] = target;
+					}
+
+					if (target.Texture != texture || target.Output == null || target.Output.Width != texture.Width || target.Output.Height != texture.Height)
+					{
+						target.Output?.Delete();
+						target.Output = new Framebuffer(texture.Width, texture.Height);
+						target.Output.AttachColor(texture);
+						target.Output.Validate();
+						target.Texture = texture;
+						if (target.Renderer == null)
+						{
+							target.Renderer = new Renderer(texture.Width, texture.Height) { isTargetRenderer = true };
+							target.Renderer.AddTargetTexturePasses();
+						}
+						else
+						{
+							target.Renderer.Resize(texture.Width, texture.Height);
+						}
+
+						target.Renderer.OutputTarget = target.Output;
+					}
+
+					RenderSettings settings = target.Renderer.Settings;
+					settings.ClearColor = camera.backgroundColor;
+					settings.KeepClearColor = true;
+					settings.PreserveAlpha = true;
+					settings.Tonemap = Settings.Tonemap;
+					settings.Exposure = Settings.Exposure;
+					settings.GpuDriven = Settings.GpuDriven;
+					settings.RenderUI = false;
+					settings.DebugPrimitives = false;
+					target.Renderer.RenderFrame(camera, renderers, Array.Empty<Behaviour>(), queue);
+					targetFrame[camera] = FrameIndex;
+				}
+			}
+
+			// Cameras gone, disabled or without a texture any more: free their renderers.
+			if (targetRenderers.Count > 0)
+			{
+				staleTargets.Clear();
+				foreach (KeyValuePair<Camera, TargetRenderer> pair in targetRenderers)
+				{
+					Camera camera = pair.Key;
+					int lastFrame;
+					bool rendered = targetFrame.TryGetValue(camera, out lastFrame) && lastFrame == FrameIndex;
+					if (!rendered && (camera.IsDestroyed || camera.targetTexture == null || !camera.isActiveAndEnabled))
+					{
+						staleTargets.Add(camera);
+					}
+				}
+
+				foreach (Camera camera in staleTargets)
+				{
+					targetRenderers[camera].Release();
+					targetRenderers.Remove(camera);
+					targetFrame.Remove(camera);
+				}
+			}
+		}
+
+		private static bool AnyTargetCamera(IReadOnlyList<Behaviour> behaviours)
+		{
+			if (behaviours == null)
+			{
+				return false;
+			}
+
+			foreach (Behaviour behaviour in behaviours)
+			{
+				if (behaviour is Camera camera && camera.targetTexture != null)
+				{
+					return true;
+				}
+			}
+
+			return false;
+		}
+
+		private void ReleaseTargetRenderers()
+		{
+			foreach (TargetRenderer target in targetRenderers.Values)
+			{
+				target.Release();
+			}
+
+			targetRenderers.Clear();
+			targetFrame.Clear();
+		}
+
 		private void EnsureDumpTarget()
 		{
 			if (dumpTarget != null && dumpTarget.Width == Width && dumpTarget.Height == Height)
@@ -591,6 +752,7 @@ namespace LELEngine.Rendering
 		public void Dispose()
 		{
 			Lighting.GIUsageChanged -= ReleaseUnusedGI;
+			ReleaseTargetRenderers();
 			foreach (RenderPass pass in passes)
 			{
 				pass.Dispose();

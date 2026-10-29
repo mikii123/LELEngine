@@ -476,7 +476,10 @@ namespace LELEngine
 					return LoadTexture(assetPath ?? AssetDatabase.ToAssetPath(absolute)) as Texture2D;
 				}
 
-				ImageData image = Decode(absolute, false, file);
+				// Vector images are rasterized here (see SvgRasterizer); the rest is decoded as it is.
+				ImageData image = string.Equals(Path.GetExtension(absolute), ".svg", StringComparison.OrdinalIgnoreCase)
+					? SvgRasterizer.Rasterize(System.Text.Encoding.UTF8.GetString(file), assetPath ?? path)
+					: Decode(absolute, false, file);
 				var texture = new Texture2D { name = Path.GetFileName(path), AssetPath = assetPath };
 				texture.SetImage(image.IsHdr ? image.ToLdr() : image, false, false, true);
 				texture.SetSamplerState(FilterMode.Trilinear, TextureWrap.Clamp, 1);

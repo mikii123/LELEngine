@@ -425,12 +425,6 @@ namespace LELEngine.UIElements
 			data.borderTop = LeadingBorder(style, Axis.Column);
 			data.borderBottom = TrailingBorder(style, Axis.Column);
 
-			if (node.requiresMeasure)
-			{
-				MeasureLeaf(node, style, availableWidth, availableHeight, widthMode, heightMode, ownerWidth, ownerHeight, marginAxisRow, marginAxisColumn, paddingAndBorderAxisRow, paddingAndBorderAxisColumn);
-				return;
-			}
-
 			List<VisualElement> children = node.m_Children;
 			int childCount = 0;
 			if (children != null)
@@ -446,6 +440,23 @@ namespace LELEngine.UIElements
 						ZeroLayout(children[i]);
 					}
 				}
+			}
+
+			// A text element (a button, a label) with children lays them out like any container and is at least as big
+			// as its text: decorations, icons and captions inside buttons work as in Unity's UI Toolkit.
+			float textWidth = 0f, textHeight = 0f;
+			bool measuredText = false;
+			if (node.requiresMeasure)
+			{
+				MeasureLeaf(node, style, availableWidth, availableHeight, widthMode, heightMode, ownerWidth, ownerHeight, marginAxisRow, marginAxisColumn, paddingAndBorderAxisRow, paddingAndBorderAxisColumn);
+				if (childCount == 0)
+				{
+					return;
+				}
+
+				textWidth = data.rawWidth;
+				textHeight = data.rawHeight;
+				measuredText = true;
 			}
 
 			if (childCount == 0)
@@ -474,6 +485,12 @@ namespace LELEngine.UIElements
 				Return(lineBuffer);
 				Return(lineCrossSizes);
 				Return(lineCrossOffsets);
+			}
+
+			if (measuredText)
+			{
+				data.rawWidth = Math.Max(data.rawWidth, textWidth);
+				data.rawHeight = Math.Max(data.rawHeight, textHeight);
 			}
 		}
 

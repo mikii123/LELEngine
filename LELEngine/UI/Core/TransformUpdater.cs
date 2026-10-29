@@ -30,8 +30,40 @@ namespace LELEngine.UIElements
 
 		#region PrivateMethods
 
+		/// <summary>
+		///     A subtree under a display: none element: its elements keep their last layout, so the renderer gets opacity 0
+		///     for each of them (once; shown again, the whole subtree recomputes).
+		/// </summary>
+		private static void HideSubtree(VisualElement element)
+		{
+			if (element.hiddenByDisplay)
+			{
+				return;
+			}
+
+			element.hiddenByDisplay = true;
+			element.worldOpacity = 0f;
+			element.renderDataDirty = true;
+			List<VisualElement> children = element.m_Children;
+			if (children == null)
+			{
+				return;
+			}
+
+			for (int i = 0; i < children.Count; i++)
+			{
+				HideSubtree(children[i]);
+			}
+		}
+
 		private static void Visit(VisualElement element, in Matrix2x3 parentWorld, in Rect parentClip, float parentOpacity, bool parentDirty)
 		{
+			// Shown again after display: none: every transform and opacity of the subtree is stale.
+			if (element.hiddenByDisplay)
+			{
+				parentDirty = true;
+			}
+
 			bool dirty = parentDirty || (element.dirtyFlags & VersionChangeType.Transform) != 0;
 			if (!dirty && !element.hasDirtyTransformDescendant)
 			{
@@ -42,6 +74,8 @@ namespace LELEngine.UIElements
 			Rect rect = element.layoutNode.rect;
 			if (dirty)
 			{
+				// Shown again after display: none: the subtree's transforms are recomputed below.
+				element.hiddenByDisplay = false;
 				Matrix2x3 local = element.ComputeLocalTransform();
 				Matrix2x3 world = parentWorld.Multiply(local);
 				element.worldTransformRef = world;
@@ -73,6 +107,8 @@ namespace LELEngine.UIElements
 					{
 						child.dirtyFlags &= ~VersionChangeType.Transform;
 						child.hasDirtyTransformDescendant = false;
+						// Its subtree keeps its last transforms; the renderer must not draw it any more.
+						HideSubtree(child);
 						continue;
 					}
 

@@ -1299,3 +1299,54 @@ wrecks' albedo-tinted highlight):
 - Not done (follow-ups): skinned meshes and bone animation import from models (Assimp has the data), animating
   material properties per renderer (no property blocks), humanoid retargeting / IK, timeline / cutscene sequencing,
   moving the VFX canvas onto `GraphView`.
+
+## UI and runtime additions for New Frontier's station UI (2026-10-29)
+
+Added while porting NF's UI Toolkit screens (station hub, equipment, market, popups, pause and main menu) onto
+`LELEngine.UIElements`; verified with the port's probe (a virtual gamepad driving the panel, screenshots, a render
+texture read back), see the port's `PORTING.md` "UI".
+- `Time.timeScale` (clamped at 0) scales `deltaTime` / `time`; `Time.unscaledDeltaTime` / `unscaledTime` do not
+  (`Window.OnUpdateFrame`; `ResetTime` resets all). `Application.isPlaying` / `Application.Quit()` (closes the game
+  window; logs in the editor). `Screen` (`Mono/Screen.cs`): `width` / `height` / `size`, `fullScreen` (window state),
+  `currentResolution`, `resolutions` (the primary monitor's video modes), `SetResolution(w, h, fullscreen)`.
+- Panel navigation from code: `IPanel.SendNavigationMove(direction)`, `SendNavigationSubmit()`,
+  `SendNavigationCancel()` dispatch the same events the keyboard path makes (`Panel.Input.cs`: target = the focused
+  element or the tree), so a gamepad's d-pad / A / B drive focus like arrows / Enter / Esc. `FocusController.IgnoreEvent(evt)`
+  marks a navigation event handled: `PanelRootElement` then leaves the focus ring alone (a spatial navigation of the
+  game's own, or a popup swallowing the move).
+- Painter2D (`UI/Rendering/MeshGenerationContext.cs`) rewritten: sub paths (`MoveTo` starts one), `LineTo`,
+  `BezierCurveTo`, `QuadraticCurveTo`, `Arc`, `ClosePath`; `Fill(FillRule)` ear-clips each sub path with a 1 px feather
+  for anti-aliasing; `Stroke()` honours `lineCap` (Butt / Round / Square), `lineJoin` (Miter / Bevel / Round),
+  `miterLimit`, feathered sides; `antialiasing` switches the feathers off.
+- SVG as UI textures: `UI/Vector/SvgRasterizer.cs` (`internal`, `Rasterize(svgText, name)` -> `ImageData`): rect
+  (rx) / circle / ellipse / line / polyline / polygon / path (M L H V C S Q T A Z, relative and absolute), groups with
+  transforms (matrix / translate / scale / rotate / skew), solid fills and strokes, linear / radial gradients (stops,
+  href inheritance, objectBoundingBox / userSpaceOnUse), opacities, caps / joins, fill rules; scanline coverage with
+  4 sub-scanlines; raster scale clamp(256 / longest side, 1, 8), at most 1024 px; straight-alpha RGBA. Hooked by
+  `UIAssets.TextureExtensions` (".svg") and `TextureAssets.LoadForUI`. Not covered: text, clip paths, filters, masks.
+- Cameras rendering into textures: `Camera.targetTexture` (a `RenderTexture`, not serialized) and
+  `Camera.backgroundColor` (alpha 0 = transparent). `Renderer.RenderFrame` first renders every enabled camera with a
+  target through a child `TargetRenderer` of its own (`AddTargetTexturePasses`: shadows, opaque, transparent, post
+  process; no sky, GI, VFX or UI; the camera's culling mask), `Framebuffer.AttachColor(RenderTexture)` (borrowed:
+  never resized or deleted with the framebuffer), `RenderSettings.PreserveAlpha` (tonemap uniform `KeepAlpha`: the
+  output keeps the scene colour's alpha, 0 where only the clear colour is) and `RenderSettings.KeepClearColor` (the
+  scene's `EnvironmentSettings.BackgroundColor` is applied to every renderer's settings each frame by
+  `SceneSettings.ApplyTo`; this keeps the camera's own). `SceneManager.MainCamera` skips cameras with a target. The
+  child renderers are released when their camera goes, is disabled or loses its texture, and in `Dispose`.
+- Render textures in the UI: `Background.FromRenderTexture(rt)` / `StyleBackground(RenderTexture)`;
+  `Background.renderTexture`, `IsEmpty`, `FromReference`. Inline styles store the texture or render texture as the
+  value's reference (`InlineStyle.backgroundImage`, `StyleApplier.BackgroundImage`), the renderer draws them flipped
+  vertically (`UIRenderer.AddBackgroundImage` with `flipV`, `ResolveTexture` takes the handle). A view binding a
+  camera's texture must bind again when the texture is created later (NF's `ShipPreviewRig.TextureChanged`).
+- Fixes found by the port: `TypeRegistry.Register / Unregister` clear `UxmlRegistry` (tags of a game assembly loaded
+  after the first UXML parse resolved to "unknown element"); `FlexLayout.ComputeNode` lays out the children of a text
+  element (`requiresMeasure`) and takes the larger of the text and the children (a Button's glyph and label were never
+  placed); `TransformUpdater` marks display: none subtrees (`VisualElement.hiddenByDisplay`: world opacity 0, render
+  data dirty) so the renderer stops drawing them from their last transforms, and recomputes the whole subtree when
+  shown again; `UIRenderer.UpdateMeshes` iterates a snapshot (elements added during a repaint threw "Collection was
+  modified").
+- Layout quirk kept (Yoga's): measuring a column container of known width, a child with `flex-basis: 0` counts as
+  its basis plus padding, not its min-height, so the container measures short and the child overflows at layout
+  time. NF's settings fields give the dropdown input `flex-basis: auto`.
+- Scene documents: objects must follow their parent in the file (`[Scene] 'X': parent N not found ... kept at the
+  root` otherwise); hand-written objects go after the parent's entry.

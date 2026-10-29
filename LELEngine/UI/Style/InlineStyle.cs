@@ -456,13 +456,15 @@ namespace LELEngine.UIElements
 			{
 				StyleValue[] values;
 				StyleKeyword keyword = KeywordOf(StylePropertyId.BackgroundImage, out values);
-				return keyword == StyleKeyword.Undefined ? new StyleBackground(new Background(values[0].reference as Texture)) : new StyleBackground(keyword);
+				return keyword == StyleKeyword.Undefined ? new StyleBackground(Background.FromReference(values[0].reference)) : new StyleBackground(keyword);
 			}
 			set
 			{
 				if (value.keyword == StyleKeyword.Null || value.keyword == StyleKeyword.Undefined)
 				{
-					Set(StylePropertyId.BackgroundImage, null, new[] { value.value.texture != null ? StyleValue.Reference(value.value.texture) : StyleValue.Keyword(StyleKeyword.None) }, false);
+					// A texture or a render texture: both go in as the reference.
+					object reference = value.value.renderTexture != null ? value.value.renderTexture : value.value.texture;
+					Set(StylePropertyId.BackgroundImage, null, new[] { reference != null ? StyleValue.Reference(reference) : StyleValue.Keyword(StyleKeyword.None) }, false);
 				}
 				else
 				{
