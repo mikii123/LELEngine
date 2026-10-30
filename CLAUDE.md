@@ -692,6 +692,47 @@ wrecks' albedo-tinted highlight):
   textures): Scene workflow + normal map, gold metal, red dielectric, mask map tiled 2 x 2 with a normal map, Specular
   workflow with a copper checker specular map, emission map tiled 4 x 1, a rough Metallic block, the V-check panel.
 
+## Detail maps and LOD groups (2026-10-30)
+
+Added for New Frontier's port of Unity's SpaceStonesPack (Standard materials with Detail Albedo x2, LODGroup prefabs):
+- `Engine/LitTextured.shader`: `[Toggle(DETAIL_ALBEDO_MAP)] DetailAlbedoMap` ("gray" default) + `DetailAlbedoMap_ST`,
+  `[Toggle(DETAIL_NORMAL_MAP)] DetailNormalMap` + `DetailNormalScale`, both on the first UV set with the detail tiling
+  (Unity's `_UVSec` 0; no detail mask). Albedo x detail x 4.59479380 (Unity's x2 in gamma space = unity_ColorSpaceDouble
+  of a linear project); the detail normal only with NORMAL_MAP (as Unity's `NormalInTangentSpace`): Unity's
+  UnpackScaleNormal (xy x scale, z rebuilt) and BlendNormals (xy added, z multiplied, normalized) on the normal map's
+  tangent-space normal. 3 x 64 keyword combinations.
+- `Engine/GBuffer.shader` variant DETAIL_NORMAL_MAP: `GeometryPrepass.DetailNormalMapBit` (4, set only with
+  `NormalMapBit`), `MapKeywords` / programs for 8 bit combinations, so the screen-space GI sees the detail bumps.
+- GI captures (`Engine/GISurface.glsl`, `Rendering/GISurface.cs`): the detail albedo on texture unit 4 (`voxDetailAlbedoMap`,
+  `voxDetailST`), the result clamped to 1 (the coverage accumulators are fixed point), `CaptureKey` hashes it.
+- `LODGroup` (`Mono/Behaviours/LODGroup.cs`, global namespace, `[ExecuteAlways]`): Unity's API and serialized names
+  (`m_LocalReferencePoint`, `m_Size`, `m_FadeMode`, `m_AnimateCrossFading`, `m_LODs` of struct `LOD`
+  `screenRelativeTransitionHeight` / `fadeTransitionWidth` / `renderers` (MeshRenderers)); `size`, `localReferencePoint`,
+  `lodCount`, `GetLODs` / `SetLODs` (copies), `ForceLOD`, `RecalculateBounds`, `GetRelativeHeight(camera)` = size x
+  largest |lossyScale| / 2 / (distance to the reference point x tan(FoV / 2)) (Unity's LODGroupGUI formula),
+  `CurrentLOD` / `CurrentRelativeHeight` of the last selection. Enabled groups register themselves (`OnEnable`, a static
+  list, edit mode too: the target-texture renderers get no behaviours list, so the list is the source).
+- Selection (`LODGroup.Select(camera)`, called by `Renderer.RenderFrame` before `Partition` with the stack's lighting
+  camera; target-texture cameras with their own): per group the first level whose height <= relative height x
+  `ProjectSettings.LOD.Bias` (Unity's lodBias), at least `MaximumLevel` (Unity's maximumLODLevel), none below the last
+  level (culled); stamps on the renderers (`MeshRenderer.lodHidden` / `lodOutOfGI` = the selection's number, so nothing
+  has to be reset). `Partition` leaves hidden renderers out of every camera list (so out of drawing, the prepass, shadows
+  and the GPU scene) and builds the lighting camera's `RenderContext.GIRenderers`: level 0 of every group in place of
+  the drawn level (Unity's lighting uses LOD 0; switching levels changes nothing in the GI: VCT's static cache counts
+  renderers, Lumen's cards and fields would be recaptured). `VoxelGIPass`, `SurfaceCachePass`, `GlobalDistanceFieldPass`
+  read `GIRenderers ?? Renderers`. Without active groups the lists are as before. One selection per frame for a camera
+  stack (overlay cameras draw the lighting camera's levels: the GPU scene's tables are shared). No cross-fade.
+- `ProjectSettings.LOD` (`LODSettings`: `Bias` 1, `MaximumLevel` 0), `QualitySettings.lodBias` / `maximumLODLevel`
+  (global `QualitySettings`, Unity's names over the live settings); Project Settings > Lighting > Level of Detail.
+- Editor: `Inspector/LODGroupInspector.cs` (custom part below the fields: the levels as Unity's bar with their heights
+  and the culled part, the level the last frame drew, Recalculate Bounds with undo). `SerializationUtility.NicifyName`
+  keeps an acronym's plural one word ("m_LODs" -> "LODs", was "LO Ds").
+- Verified: probe project (scratchpad `stones/VariantProbe`): glslang + GL link of 192 LitTextured combinations, the 8
+  G-buffer variants and the captures (204 variants, 405 programs with the instanced ones); TestGame lumen / vct / gi=0 /
+  materials=1 (three GI modes) / refraction=1 against HEAD at frame 400: identical (0 of 255); New Frontier's pack shots
+  against Unity (mean 0.75-1.8 / 255); a rock's levels from 10 to 1500 units, bias 1 and 2, GI off and on, forced and
+  disabled (the levels Unity's formula gives).
+
 ## Input system (Rewired-like, 2026-10-22)
 
 - Runtime in `LELEngine/InputSystem`: `InputConfiguration` (a ScriptableObject asset: `Settings`, action categories,

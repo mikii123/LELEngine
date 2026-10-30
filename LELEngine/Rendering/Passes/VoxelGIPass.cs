@@ -176,7 +176,7 @@ namespace LELEngine.Rendering.Passes
 			}
 
 			gi.UpdateGridPlacement(context.CameraPosition, context.CameraForward);
-			PartitionRenderers(context.Renderers);
+			PartitionRenderers(context.GIRenderers ?? context.Renderers);
 			DetectGeometryChanges(gi);
 
 			frameIndex++;
@@ -203,7 +203,7 @@ namespace LELEngine.Rendering.Passes
 				ComputeGridLightMatrices(gi, out lightView, out lightProjection);
 
 				profiler.Split("VoxelGI.shadow");
-				RenderGridShadow(context, context.Renderers, lightView, lightProjection);
+				RenderGridShadow(context, context.GIRenderers ?? context.Renderers, lightView, lightProjection);
 
 				profiler.Split("VoxelGI.blocks");
 				CompactOccupiedBlocks();

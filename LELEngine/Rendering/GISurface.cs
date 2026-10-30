@@ -8,7 +8,8 @@ namespace LELEngine.Rendering
 	///     What the GI captures see of a material (Engine/GISurface.glsl), read from the conventional values every lit
 	///     material shares: Color, Emissive, DiffuseMap (or AlbedoMap) with DiffuseMap_ST, EmissionMap with EmissionMap_ST,
 	///     and for the physically based workflows of Engine/LitTextured.shader (its WORKFLOW_METALLIC /
-	///     WORKFLOW_SPECULAR variants) Metallic or SpecularColor with the MaskMap / SpecularMap its variant samples.
+	///     WORKFLOW_SPECULAR variants) Metallic or SpecularColor with the MaskMap / SpecularMap its variant samples, and
+	///     the detail albedo (DETAIL_ALBEDO_MAP: DetailAlbedoMap with DetailAlbedoMap_ST).
 	///     Shared by the voxelization (VoxelGIPass) and the surface cache capture (SurfaceCachePass).
 	/// </summary>
 	internal static class GISurface
@@ -21,7 +22,7 @@ namespace LELEngine.Rendering
 
 		#region PublicMethods
 
-		/// <summary>Uploads the material's capture inputs (maps on texture units 0 to 3).</summary>
+		/// <summary>Uploads the material's capture inputs (maps on texture units 0 to 4).</summary>
 		public static void SetUniforms(ShaderProgram program, Material material)
 		{
 			Read(material, out Inputs inputs);
@@ -54,6 +55,13 @@ namespace LELEngine.Rendering
 			{
 				program.SetTexture("voxSpecularMap", TextureTarget.Texture2D, inputs.SpecularMap, 3);
 			}
+
+			program.SetInt("voxUseDetailAlbedoMap", inputs.DetailAlbedoMap != 0 ? 1 : 0);
+			if (inputs.DetailAlbedoMap != 0)
+			{
+				program.SetVector4("voxDetailST", inputs.DetailScaleOffset);
+				program.SetTexture("voxDetailAlbedoMap", TextureTarget.Texture2D, inputs.DetailAlbedoMap, 4);
+			}
 		}
 
 		/// <summary>
@@ -80,6 +88,8 @@ namespace LELEngine.Rendering
 				hash = hash * 31 + inputs.Specular.GetHashCode();
 				hash = hash * 31 + inputs.MaskMap;
 				hash = hash * 31 + inputs.SpecularMap;
+				hash = hash * 31 + inputs.DetailAlbedoMap;
+				hash = hash * 31 + inputs.DetailScaleOffset.GetHashCode();
 				return hash;
 			}
 		}
@@ -116,6 +126,7 @@ namespace LELEngine.Rendering
 			bool specular = false;
 			bool maskMap = false;
 			bool specularMap = false;
+			bool detailAlbedoMap = false;
 			foreach (string keyword in material.Keywords)
 			{
 				switch (keyword)
@@ -124,7 +135,14 @@ namespace LELEngine.Rendering
 					case "WORKFLOW_SPECULAR": specular = true; break;
 					case "MASK_MAP": maskMap = true; break;
 					case "SPECULAR_MAP": specularMap = true; break;
+					case "DETAIL_ALBEDO_MAP": detailAlbedoMap = true; break;
 				}
+			}
+
+			if (detailAlbedoMap)
+			{
+				inputs.DetailAlbedoMap = material.GetTextureHandle("DetailAlbedoMap");
+				inputs.DetailScaleOffset = ScaleOffset(material, "DetailAlbedoMap_ST");
 			}
 
 			if (metallic)
@@ -164,6 +182,8 @@ namespace LELEngine.Rendering
 			public Vector4 Specular;
 			public int MaskMap;
 			public int SpecularMap;
+			public int DetailAlbedoMap;
+			public Vector4 DetailScaleOffset;
 		}
 
 		#endregion

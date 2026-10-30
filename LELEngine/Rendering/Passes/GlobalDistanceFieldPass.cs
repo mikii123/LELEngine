@@ -84,7 +84,7 @@ namespace LELEngine.Rendering.Passes
 
 			LumenScene scene = context.Renderer.LumenScene;
 			frameIndex++;
-			scene.Update(context.Renderer.FrameIndex, context.Renderers, gi);
+			scene.Update(context.Renderer.FrameIndex, context.GIRenderers ?? context.Renderers, gi);
 			DetectStaticChanges(gi, scene);
 
 			// The dynamic composite is a pure function of object placement: skip it while nothing moved. A move is

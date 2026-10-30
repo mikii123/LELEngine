@@ -55,7 +55,7 @@ namespace LELEngine.Rendering.Passes
 
 			LumenScene scene = context.Renderer.LumenScene;
 			frameIndex++;
-			scene.Update(context.Renderer.FrameIndex, context.Renderers, gi);
+			scene.Update(context.Renderer.FrameIndex, context.GIRenderers ?? context.Renderers, gi);
 			gridShadow.EnsureSize(gi.GridShadowMapSize);
 
 			GpuProfiler profiler = context.Renderer.Profiler;
@@ -64,7 +64,7 @@ namespace LELEngine.Rendering.Passes
 			CaptureCards(scene);
 
 			profiler.Split("SurfaceCache.shadow");
-			gridShadow.Render(context, context.Renderers, gi);
+			gridShadow.Render(context, context.GIRenderers ?? context.Renderers, gi);
 
 			LightCards(context.Renderer, scene, gi);
 		}

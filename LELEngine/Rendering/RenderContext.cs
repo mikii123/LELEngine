@@ -43,6 +43,13 @@ namespace LELEngine.Rendering
 		/// </summary>
 		public IReadOnlyList<MeshRenderer> Renderers;
 
+		/// <summary>
+		///     What the GI's volumes and caches are made of (voxelization, surface cache, distance fields): the lighting
+		///     camera's <see cref="Renderers" />, but level 0 of every <see cref="LODGroup" /> in place of the level drawn.
+		///     The same list as <see cref="Renderers" /> without LOD groups and for the other cameras.
+		/// </summary>
+		public IReadOnlyList<MeshRenderer> GIRenderers;
+
 		/// <summary>The camera's renderers with transparent sub-meshes (<see cref="MeshRenderer.HasTransparentParts" />), drawn by the transparent pass only.</summary>
 		public IReadOnlyList<MeshRenderer> TransparentRenderers;
 

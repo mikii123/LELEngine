@@ -22,6 +22,13 @@ SpecularColor ("Specular Color", Color) = (0.04, 0.04, 0.04, 1)
 [Toggle(MASK_MAP)] MaskMap ("Mask Map (r metallic, g occlusion, a smoothness)", 2D) = "white" {}
 SmoothnessScale ("Smoothness Scale", Range(0, 1)) = 1
 OcclusionStrength ("Occlusion Strength", Range(0, 1)) = 1
+// Unity's secondary maps (Standard, Detail Albedo x2): the detail albedo multiplies the albedo by twice its value in
+// gamma space (a mid grey leaves it as it is), the detail normal map adds its tilt to the normal map's (only with a
+// normal map, as Unity). Both tiled by DetailAlbedoMap_ST on the mesh's first UV set.
+[Toggle(DETAIL_ALBEDO_MAP)] DetailAlbedoMap ("Detail Albedo x2", 2D) = "gray" {}
+DetailAlbedoMap_ST ("Detail Tiling Offset", Vector) = (1, 1, 0, 0)
+[Toggle(DETAIL_NORMAL_MAP)] DetailNormalMap ("Detail Normal Map", 2D) = "bump" {}
+DetailNormalScale ("Detail Normal Scale", Float) = 1
 /////Properties
 
 //Vertex
@@ -37,6 +44,10 @@ uniform mat4 viewMatrix;
 uniform vec4 DiffuseMap_ST;
 #ifdef EMISSION_MAP
 uniform vec4 EmissionMap_ST;
+#endif
+#if defined(DETAIL_ALBEDO_MAP) || (defined(DETAIL_NORMAL_MAP) && defined(NORMAL_MAP))
+#define LEL_DETAIL_UV 1
+uniform vec4 DetailAlbedoMap_ST;
 #endif
 
 in vec3 vPosition;
@@ -56,6 +67,9 @@ out vec2 fTexCoord;
 #ifdef EMISSION_MAP
 out vec2 fEmissionTexCoord;
 #endif
+#ifdef LEL_DETAIL_UV
+out vec2 fDetailTexCoord;
+#endif
 
 void main()
 {
@@ -70,6 +84,9 @@ void main()
 	fTexCoord = vTexCoord * DiffuseMap_ST.xy + DiffuseMap_ST.zw;
 #ifdef EMISSION_MAP
 	fEmissionTexCoord = vTexCoord * EmissionMap_ST.xy + EmissionMap_ST.zw;
+#endif
+#ifdef LEL_DETAIL_UV
+	fDetailTexCoord = vTexCoord * DetailAlbedoMap_ST.xy + DetailAlbedoMap_ST.zw;
 #endif
 	LelVertexSetup();
 }
@@ -88,7 +105,8 @@ void main()
 // for, a tangent-space normal map, an emission map (multiplies Emissive), a mask map (metallic, occlusion, smoothness)
 // and a specular map. Material: Color, DiffuseMap with DiffuseMap_ST, NormalMap and NormalScale, Emissive (rgb color,
 // a intensity, also fed into the GI), EmissionMap with EmissionMap_ST, Roughness (0 = unset -> 0.6), Workflow (Scene /
-// Metallic / Specular), Metallic, SpecularColor, SpecularMap, MaskMap, SmoothnessScale, OcclusionStrength.
+// Metallic / Specular), Metallic, SpecularColor, SpecularMap, MaskMap, SmoothnessScale, OcclusionStrength, and Unity's
+// detail maps: DetailAlbedoMap with DetailAlbedoMap_ST, DetailNormalMap with DetailNormalScale.
 // The GI sees the same surface: its captures read these values (Engine/GISurface.glsl) and the geometry prepass draws
 // the normal map and the mask's smoothness into the G-buffer the screen-space GI reads (Engine/GBuffer.shader).
 #include "Engine/Instancing.glsl"
@@ -103,11 +121,21 @@ in vec2 fTexCoord;
 #ifdef EMISSION_MAP
 in vec2 fEmissionTexCoord;
 #endif
+#if defined(DETAIL_ALBEDO_MAP) || (defined(DETAIL_NORMAL_MAP) && defined(NORMAL_MAP))
+in vec2 fDetailTexCoord;
+#endif
 
 uniform sampler2D DiffuseMap;
 #ifdef NORMAL_MAP
 uniform sampler2D NormalMap;
 uniform float NormalScale;
+#ifdef DETAIL_NORMAL_MAP
+uniform sampler2D DetailNormalMap;
+uniform float DetailNormalScale;
+#endif
+#endif
+#ifdef DETAIL_ALBEDO_MAP
+uniform sampler2D DetailAlbedoMap;
 #endif
 #ifdef EMISSION_MAP
 uniform sampler2D EmissionMap;
@@ -154,6 +182,10 @@ void main()
 {
 	LelMaterial material = LelMaterialData();
 	vec4 color = material.color * texture(DiffuseMap, fTexCoord);
+#ifdef DETAIL_ALBEDO_MAP
+	// Unity's x2 in gamma space is x 2^2.2 on linear values (unity_ColorSpaceDouble of a linear project).
+	color.rgb *= texture(DetailAlbedoMap, fDetailTexCoord).rgb * 4.59479380;
+#endif
 	vec4 emissive = material.emissive;
 #ifdef EMISSION_MAP
 	emissive.rgb *= texture(EmissionMap, fEmissionTexCoord).rgb;
@@ -176,6 +208,13 @@ void main()
 	vec3 bitangent = fBitangent;
 	vec3 mapped = texture(NormalMap, fTexCoord).xyz * 2.0 - 1.0;
 	mapped.xy *= NormalScale;
+#ifdef DETAIL_NORMAL_MAP
+	// Unity's UnpackScaleNormal (z rebuilt after the scale) and BlendNormals: the tilts add, the heights multiply.
+	vec3 detail;
+	detail.xy = (texture(DetailNormalMap, fDetailTexCoord).xy * 2.0 - 1.0) * DetailNormalScale;
+	detail.z = sqrt(1.0 - clamp(dot(detail.xy, detail.xy), 0.0, 1.0));
+	mapped = normalize(vec3(mapped.xy + detail.xy, mapped.z * detail.z));
+#endif
 	if (dot(tangent, tangent) > 1e-12 && dot(bitangent, bitangent) > 1e-12)
 	{
 		N = normalize(mat3(normalize(tangent), normalize(bitangent), vertexNormal) * mapped);

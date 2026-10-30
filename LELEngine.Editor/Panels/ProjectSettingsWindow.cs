@@ -309,6 +309,13 @@ namespace LELEngine.Editor
 				ImGui.PopID();
 			}
 
+			if (EditorGui.CollapsingHeader("Level of Detail", ImGuiTreeNodeFlags.DefaultOpen))
+			{
+				ImGui.PushID("lod");
+				changed |= FieldDrawer.DrawFields(settings.LOD, context);
+				ImGui.PopID();
+			}
+
 			// Settings both methods read, then those of the selected method only (the header keeps its id, and so
 			// its open state, when the method changes).
 			GIMode mode = gi.Mode;

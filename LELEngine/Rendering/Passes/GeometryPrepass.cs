@@ -31,11 +31,20 @@ namespace LELEngine.Rendering.Passes
 
 		public const int MaskMapBit = 2;
 
+		/// <summary>The detail normal map (DETAIL_NORMAL_MAP), set only with <see cref="NormalMapBit" /> (it tilts the normal map's normal).</summary>
+		public const int DetailNormalMapBit = 4;
+
 		#endregion
 
 		#region PrivateFields
 
-		private static readonly string[][] MapKeywords = { null, new[] { "NORMAL_MAP" }, new[] { "MASK_MAP" }, new[] { "MASK_MAP", "NORMAL_MAP" } };
+		// The G-buffer variant's keywords per map bits, sorted.
+		private static readonly string[][] MapKeywords =
+		{
+			null, new[] { "NORMAL_MAP" }, new[] { "MASK_MAP" }, new[] { "MASK_MAP", "NORMAL_MAP" },
+			new[] { "DETAIL_NORMAL_MAP" }, new[] { "DETAIL_NORMAL_MAP", "NORMAL_MAP" }, new[] { "DETAIL_NORMAL_MAP", "MASK_MAP" },
+			new[] { "DETAIL_NORMAL_MAP", "MASK_MAP", "NORMAL_MAP" }
+		};
 
 		private Framebuffer gbuffer;
 		private RenderTexture normalRoughness;
@@ -44,8 +53,8 @@ namespace LELEngine.Rendering.Passes
 		private ShaderProgram instancedProgram;
 
 		// The variants per map bits (index = bits), made on first use; the base program owns and deletes them.
-		private readonly ShaderProgram[] mapPrograms = new ShaderProgram[4];
-		private readonly ShaderProgram[] mapInstancedPrograms = new ShaderProgram[4];
+		private readonly ShaderProgram[] mapPrograms = new ShaderProgram[8];
+		private readonly ShaderProgram[] mapInstancedPrograms = new ShaderProgram[8];
 
 		#endregion
 
@@ -53,7 +62,8 @@ namespace LELEngine.Rendering.Passes
 
 		/// <summary>
 		///     The G-buffer maps a material's variant samples: <see cref="NormalMapBit" /> for NORMAL_MAP, <see cref="MaskMapBit" />
-		///     for MASK_MAP (the mask's smoothness); 0 for none or no material.
+		///     for MASK_MAP (the mask's smoothness), <see cref="DetailNormalMapBit" /> for DETAIL_NORMAL_MAP with NORMAL_MAP; 0
+		///     for none or no material.
 		/// </summary>
 		public static int MapsOf(Material material)
 		{
@@ -73,9 +83,14 @@ namespace LELEngine.Rendering.Passes
 				{
 					maps |= MaskMapBit;
 				}
+				else if (keyword == "DETAIL_NORMAL_MAP")
+				{
+					maps |= DetailNormalMapBit;
+				}
 			}
 
-			return maps;
+			// The material shader draws the detail normal on top of the normal map only.
+			return (maps & NormalMapBit) != 0 ? maps : maps & ~DetailNormalMapBit;
 		}
 
 		public override void Initialize(Renderer renderer)

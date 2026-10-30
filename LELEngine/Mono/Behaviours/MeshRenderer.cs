@@ -77,6 +77,11 @@ public sealed class MeshRenderer : Behaviour
 	[SerializeField] private Mesh mesh;
 	[SerializeField] private List<Material> materials = new List<Material>();
 
+	// LODGroup's selection stamps: equal to the frame's selection when its group's level leaves the renderer out of
+	// drawing / out of the GI (LODGroup.IsHidden / IsOutOfGI).
+	[System.NonSerialized] internal int lodHidden;
+	[System.NonSerialized] internal int lodOutOfGI;
+
 	/// <summary>Sub-meshes to consider (a renderer without a mesh still reports its material).</summary>
 	private int PartCount => mesh != null ? mesh.SubMeshCount : 1;
 

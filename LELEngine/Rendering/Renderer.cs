@@ -263,7 +263,9 @@ namespace LELEngine.Rendering
 				OutputTarget = dumpTarget;
 			}
 
-			Partition(renderers);
+			// Levels of detail for this frame, seen from the lighting camera: every camera of the stack draws them.
+			bool lods = LODGroup.Select(stack[lightingIndex]);
+			Partition(renderers, lods, lightingIndex);
 			RenderContext lightingContext = CreateContext(lightingIndex, lightingIndex, behaviours, queue);
 
 			Profiler.BeginFrame();
@@ -440,6 +442,7 @@ namespace LELEngine.Rendering
 				Width = Width,
 				Height = Height,
 				Renderers = lists.Opaque,
+				GIRenderers = index == lightingIndex && lists.HasGI ? lists.GI : lists.Opaque,
 				TransparentRenderers = lists.Transparent,
 				Behaviours = behaviours,
 				RenderQueue = queue,
@@ -456,8 +459,11 @@ namespace LELEngine.Rendering
 		///     (the lists are cleared when the frame ends): a renderer with opaque and transparent sub-meshes is in both
 		///     lists of a camera, each pass draws its own sub-meshes. One pass over the renderers whatever the number of
 		///     cameras; with more than one, the opaque renderers of all of them also go to the GPU-driven tables.
+		///     <paramref name="lods" />: LOD groups picked their levels this frame (<see cref="LODGroup.Select" />): the
+		///     levels not drawn are left out of every list, and the lighting camera gets its GI list (the groups' level 0
+		///     instead of the drawn level).
 		/// </summary>
-		private void Partition(IReadOnlyList<MeshRenderer> renderers)
+		private void Partition(IReadOnlyList<MeshRenderer> renderers, bool lods, int lightingIndex)
 		{
 			while (cameraLists.Count < stack.Count)
 			{
@@ -469,9 +475,11 @@ namespace LELEngine.Rendering
 			{
 				cameraLists[i].Clear();
 				cameraLists[i].Mask = stack[i].CullingMask;
+				cameraLists[i].HasGI = lods && i == lightingIndex;
 				union |= cameraLists[i].Mask;
 			}
 
+			CameraLists lighting = cameraLists[lightingIndex];
 			stackOpaqueRenderers.Clear();
 			bool several = stack.Count > 1;
 			foreach (MeshRenderer renderer in renderers)
@@ -484,6 +492,19 @@ namespace LELEngine.Rendering
 
 				bool opaque = renderer.HasOpaqueParts;
 				bool transparent = renderer.HasTransparentParts;
+				if (lods)
+				{
+					if (opaque && (lighting.Mask & bit) != 0 && !LODGroup.IsOutOfGI(renderer))
+					{
+						lighting.GI.Add(renderer);
+					}
+
+					if (LODGroup.IsHidden(renderer))
+					{
+						continue;
+					}
+				}
+
 				for (int i = 0; i < stack.Count; i++)
 				{
 					CameraLists lists = cameraLists[i];
@@ -780,12 +801,18 @@ namespace LELEngine.Rendering
 		{
 			public readonly List<MeshRenderer> Opaque = new List<MeshRenderer>();
 			public readonly List<MeshRenderer> Transparent = new List<MeshRenderer>();
+
+			// The lighting camera's GI world when LOD groups are active (their level 0 in place of the drawn level).
+			public readonly List<MeshRenderer> GI = new List<MeshRenderer>();
+			public bool HasGI;
 			public int Mask = -1;
 
 			public void Clear()
 			{
 				Opaque.Clear();
 				Transparent.Clear();
+				GI.Clear();
+				HasGI = false;
 			}
 		}
 

@@ -615,7 +615,10 @@ namespace LELEngine.Serialization
 			return builder.Append(')').ToString();
 		}
 
-		/// <summary>Name shown in the inspector: "m_LocalPosition" -> "Local Position", "moveSpeed" -> "Move Speed".</summary>
+		/// <summary>
+		///     Name shown in the inspector: "m_LocalPosition" -> "Local Position", "moveSpeed" -> "Move Speed"; an acronym's
+		///     plural stays one word ("m_LODs" -> "LODs", "userIDs" -> "User IDs").
+		/// </summary>
 		public static string NicifyName(string name)
 		{
 			if (name.StartsWith("m_", StringComparison.Ordinal))
@@ -637,7 +640,8 @@ namespace LELEngine.Serialization
 					continue;
 				}
 
-				bool boundary = char.IsUpper(c) && (!char.IsUpper(name[i - 1]) || (i + 1 < name.Length && char.IsLower(name[i + 1])));
+				bool plural = i + 2 == name.Length && name[i + 1] == 's' || i + 2 < name.Length && name[i + 1] == 's' && char.IsUpper(name[i + 2]);
+				bool boundary = char.IsUpper(c) && (!char.IsUpper(name[i - 1]) || (i + 1 < name.Length && char.IsLower(name[i + 1]) && !plural));
 				if (boundary || (char.IsDigit(c) && !char.IsDigit(name[i - 1])))
 				{
 					builder.Append(' ');

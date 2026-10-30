@@ -29,6 +29,9 @@ namespace LELEngine
 		public ShadowSettings Shadows = new ShadowSettings();
 		public GlobalIlluminationSettings GI = new GlobalIlluminationSettings();
 
+		/// <summary>How LOD groups pick their levels (bias, most detailed level).</summary>
+		public LODSettings LOD = new LODSettings();
+
 		/// <summary>What a build shows while its start scene loads (baked into the build's boot.json; the player does not read it from here).</summary>
 		public SplashScreenSettings SplashScreen = new SplashScreenSettings();
 

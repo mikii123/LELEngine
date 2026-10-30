@@ -24,6 +24,9 @@ uniform sampler2D voxMaskMap;     // unit 2: r metallic
 uniform int voxUseMaskMap;
 uniform sampler2D voxSpecularMap; // unit 3: rgb, multiplies the specular colour
 uniform int voxUseSpecularMap;
+uniform sampler2D voxDetailAlbedoMap; // unit 4: Unity's detail albedo x2 (DetailAlbedoMap), multiplies the albedo
+uniform int voxUseDetailAlbedoMap;
+uniform vec4 voxDetailST;             // DetailAlbedoMap_ST
 
 // The diffuse colour the GI bounces for a base colour (Color, clamped by the caller where it must be) at a texture
 // coordinate of the mesh.
@@ -34,6 +37,13 @@ vec3 LelGIAlbedo(vec3 baseColor, vec2 uv)
 	if (voxUseAlbedoMap != 0)
 	{
 		albedo *= texture(voxAlbedoMap, surfaceUV).rgb;
+	}
+
+	if (voxUseDetailAlbedoMap != 0)
+	{
+		// As Engine/LitTextured.shader: x2 in gamma space. Kept at most 1: a bright detail texel may double the albedo,
+		// and the GI's fixed-point accumulators hold reflectances.
+		albedo = min(albedo * texture(voxDetailAlbedoMap, uv * voxDetailST.xy + voxDetailST.zw).rgb * 4.59479380, vec3(1.0));
 	}
 
 	if (voxWorkflow == 1)
