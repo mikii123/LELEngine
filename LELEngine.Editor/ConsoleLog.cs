@@ -44,7 +44,10 @@ namespace LELEngine.Editor
 		/// <summary>The object the message is about (selected when the message is); weak: unloaded scripts' objects can go.</summary>
 		public WeakReference<object> Context;
 
-		/// <summary>Script build diagnostics: Clear keeps them until the next build (Unity's compile errors).</summary>
+		/// <summary>
+		///     Script build diagnostics (Unity's compile errors): no clear and no trimming removes them, only the next
+		///     build's result replaces them.
+		/// </summary>
 		public bool Sticky;
 
 		public bool IsError => Type == LogType.Error || Type == LogType.Exception;
@@ -236,7 +239,8 @@ namespace LELEngine.Editor
 				AddEntry(new ConsoleEntry { Text = text, Type = type, File = file, Line = lineNumber, Sticky = sticky });
 			}
 
-			original.WriteLine(text);
+			// Prefixed as Debug writes its messages ("[Error] ..."): batch logs show these errors like any other.
+			original.WriteLine(type == LogType.Log ? text : "[" + type + "] " + text);
 		}
 
 		public List<ConsoleEntry> Snapshot()
@@ -265,7 +269,7 @@ namespace LELEngine.Editor
 			}
 		}
 
-		/// <summary>The previous build's diagnostics go (a new build reports its own).</summary>
+		/// <summary>The previous build's diagnostics go (called when a build finished, before it reports its own).</summary>
 		public void RemoveSticky()
 		{
 			lock (sync)
@@ -374,7 +378,9 @@ namespace LELEngine.Editor
 			int max = EditorPreferences.Current.Console.MaxEntries;
 			if (entries.Count > max)
 			{
-				entries.RemoveRange(0, entries.Count - max);
+				// The oldest messages go, never the script build's: a flood of game messages cannot push compile errors out.
+				int excess = entries.Count - max;
+				entries.RemoveAll(old => !old.Sticky && excess-- > 0);
 				RemovalVersion++;
 			}
 

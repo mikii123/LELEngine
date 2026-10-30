@@ -352,7 +352,14 @@ namespace LELEngine.Editor.Automation
 
 				case "play":
 					EditorAutomation.Play();
+					// Asked for while the scripts compile, play starts after their build, and not at all with errors.
+					await EditorAutomation.WaitUntil(() => !EditorAutomation.IsWaitingToPlay, 600);
 					await EditorAutomation.NextFrame(2);
+					if (!EditorAutomation.IsPlaying && EditorAutomation.HasScriptErrors)
+					{
+						return CommandResult.Fail("Play mode did not start: the scripts have compile errors (see: console)");
+					}
+
 					break;
 
 				case "stop":

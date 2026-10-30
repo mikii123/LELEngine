@@ -775,8 +775,15 @@ wrecks' albedo-tinted highlight):
   Editor messages hides the editor's plain messages (not counted either); its warnings and errors always show. The
   game's messages are filtered in the console window as before. The details' meta line names the source.
 - `ConsoleLog` entries are `ConsoleEntry` objects (text, stack, type, time, play-mode frame, weak context reference so
-  unloaded script objects can go, `Sticky` for script build diagnostics: Clear keeps them, `RemoveSticky` at the next
-  build). `RemovalVersion` tells the panel to rebuild instead of appending new rows.
+  unloaded script objects can go, `Sticky` for script build diagnostics and the build's failure summaries: no Clear and
+  no `MaxEntries` trim removes them, `ScriptDomain.OnBuildFinished` replaces them with the finished build's (they stay
+  while a build runs), `ScriptDomain.Dispose` drops them). `RemovalVersion` tells the panel to rebuild instead of
+  appending new rows.
+- Compile errors of the game or editor scripts (`ScriptDomain.HasErrors`; test errors only unload the tests) block
+  play mode and game builds (2026-10-30): play asked for while scripts compile (`ScriptDomain.IsCompiling`: a build
+  running or waiting) waits for that build (`EditorApplication.IsWaitingToPlay`, the Play button lit, Ctrl+P again
+  cancels; CLI `play` waits and fails on errors) and starts only without errors; the Build tab's button is disabled
+  while compiling and fails at once with errors (`buildgame=` hook too). Batch `-build` already failed on them.
 - `ConsolePanel` (Console Pro style): toolbar Clear + options (Clear on Recompile, columns, lines per row, source view,
   library frames, stack trace capture, copy / save shown messages to `Logs/Console-*.txt`, Preferences), Collapse,
   Clear on Play, Error Pause (these stay in the console, not in the Preferences window), type toggles with counts,

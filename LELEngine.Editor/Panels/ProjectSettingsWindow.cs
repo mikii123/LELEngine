@@ -723,8 +723,10 @@ namespace LELEngine.Editor
 
 			ImGui.Spacing();
 			bool building = buildTask != null && !buildTask.IsCompleted;
-			ImGui.BeginDisabled(building);
-			if (EditorGui.Button(building ? "Building..." : "Build", new NVector2(140, 0)))
+			// The build waits for the scripts the editor compiles: their errors (the editor scripts' too) fail it.
+			bool compiling = editor.Scripts != null && editor.Scripts.IsCompiling;
+			ImGui.BeginDisabled(building || compiling);
+			if (EditorGui.Button(building ? "Building..." : compiling ? "Compiling..." : "Build", new NVector2(140, 0)))
 			{
 				StartBuild(project);
 			}
@@ -770,6 +772,17 @@ namespace LELEngine.Editor
 
 		private void StartBuild(ProjectInfo project)
 		{
+			if (editor.Scripts != null && editor.Scripts.HasErrors)
+			{
+				lock (lines)
+				{
+					lines.Clear();
+				}
+
+				Append("Error: the scripts have compile errors (see the Console); nothing was built.");
+				return;
+			}
+
 			if (editor.SceneDirty)
 			{
 				editor.SaveScene();

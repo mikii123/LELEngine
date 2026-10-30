@@ -59,13 +59,16 @@ namespace LELEngine.Editor
 		public static bool IsPlaying => Editor.IsPlaying;
 		public static bool IsPaused => Editor.PlayState == PlayState.Paused;
 
+		/// <summary><see cref="Play" /> was called while the scripts compiled: play mode starts after their build, if it has no errors.</summary>
+		public static bool IsWaitingToPlay => Editor.IsWaitingToPlay;
+
 		/// <summary>The scene has unsaved changes.</summary>
 		public static bool IsSceneDirty => Editor.SceneDirty;
 
 		/// <summary>Scripts are building, assets refreshing or a scene loading (see <see cref="WaitForIdle" />).</summary>
 		public static bool IsBusy => Editor.IsBusy;
 
-		/// <summary>The last script build failed (the previous scripts stay loaded).</summary>
+		/// <summary>The last script build failed (the previous scripts stay loaded; no play mode, no game build until one succeeds).</summary>
 		public static bool HasScriptErrors => Editor.Scripts?.HasErrors ?? false;
 
 		/// <summary>The name of the automation server's pipe (null when it is not listening).</summary>

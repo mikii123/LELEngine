@@ -392,7 +392,16 @@ namespace LELEngine.Editor
 				if (parts.Length == 2 && int.TryParse(parts[0], out int at) && at == frame && editor.Project != null)
 				{
 					var settings = new BuildSettings { OutputFolder = parts[1], Release = true, SelfContained = editor.Project.BuildSelfContained, StartScene = editor.Project.StartScene, Scenes = new List<string>(editor.Project.BuildScenes) };
-					bool ok = GameBuilder.Build(editor.Project, settings, line => Console.WriteLine("[Build] " + line));
+					// As the Build button: compile errors in the editor's scripts (editor scripts too) fail the build.
+					bool ok = false;
+					if (editor.Scripts != null && editor.Scripts.HasErrors)
+					{
+						Console.WriteLine("[Build] Error: the scripts have compile errors; nothing was built.");
+					}
+					else
+					{
+						ok = GameBuilder.Build(editor.Project, settings, line => Console.WriteLine("[Build] " + line));
+					}
 					Debug.Log("[Test] Game build " + (ok ? "succeeded" : "failed"));
 				}
 			}

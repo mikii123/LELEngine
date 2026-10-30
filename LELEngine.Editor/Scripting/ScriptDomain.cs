@@ -34,8 +34,13 @@ namespace LELEngine.Editor
 		/// <summary>Bumped on every domain load (caches keyed by script types compare it).</summary>
 		public int Version { get; private set; }
 
+		/// <summary>The last build of the game or editor scripts failed (play mode and game builds wait for a good one).</summary>
 		public bool HasErrors { get; private set; }
+
 		public bool IsBuilding => buildTask != null;
+
+		/// <summary>A build runs or waits to start (scripts changed): <see cref="HasErrors" /> may not tell about them yet.</summary>
+		public bool IsCompiling => buildTask != null || sourcesChanged;
 
 		/// <summary>No build running or waiting (sources changed, a requested build) and no reload waiting for play mode to end.</summary>
 		public bool IsIdle => buildTask == null && !sourcesChanged && pendingReload == null;
@@ -393,6 +398,8 @@ namespace LELEngine.Editor
 			disposed = true;
 			watcher?.Dispose();
 			watcher = null;
+			// The project closes: its build diagnostics go with it (nothing else removes them).
+			editor.Log.RemoveSticky();
 			WeakReference unloaded = UnloadDomain();
 			VerifyUnload(unloaded);
 		}
@@ -409,8 +416,8 @@ namespace LELEngine.Editor
 
 		private void StartBuild()
 		{
-			// The previous build's diagnostics go (this build reports its own); Clear on Recompile clears the rest too.
-			editor.Log.RemoveSticky();
+			// Clear on Recompile clears the other messages: the previous build's diagnostics stay until this build
+			// replaces them (compile errors never leave the console before a build without them).
 			if (EditorPreferences.Current.Console.ClearOnRecompile)
 			{
 				editor.Log.Clear();
@@ -429,15 +436,6 @@ namespace LELEngine.Editor
 			buildSources = SourceStamp(project);
 			buildTestSources = testScripts ? SourceStamp(project, true) : null;
 			buildIncludesEditor = editorScripts;
-			if (testsOnly)
-			{
-				// The console's build entries go with RemoveSticky: the game's come back.
-				foreach (BuildDiagnostic diagnostic in gameDiagnostics)
-				{
-					editor.Log.Add("[Scripts] " + diagnostic, diagnostic.IsError ? LogType.Error : LogType.Warning, diagnostic.File, diagnostic.Line, true);
-				}
-			}
-
 			buildTask = Task.Run(() =>
 			{
 				BuildResult result = testsOnly ? new BuildResult { Success = true, TestsOnly = true } : ScriptBuilder.Build(file, "Debug", null, editorScripts);
@@ -452,12 +450,14 @@ namespace LELEngine.Editor
 
 		private void OnBuildFinished(BuildResult result)
 		{
+			// This build's diagnostics replace the previous build's; a build of the tests alone shows the game's again.
+			editor.Log.RemoveSticky();
 			if (!result.TestsOnly)
 			{
 				gameDiagnostics = new System.Collections.Generic.List<BuildDiagnostic>(result.Diagnostics);
 			}
 
-			foreach (BuildDiagnostic diagnostic in result.Diagnostics)
+			foreach (BuildDiagnostic diagnostic in gameDiagnostics)
 			{
 				editor.Log.Add("[Scripts] " + diagnostic, diagnostic.IsError ? LogType.Error : LogType.Warning, diagnostic.File, diagnostic.Line, true);
 			}
@@ -466,7 +466,7 @@ namespace LELEngine.Editor
 			{
 				HasErrors = true;
 				StatusText = $"Script errors: {Math.Max(1, result.ErrorCount)}";
-				Debug.LogError($"[Scripts] Build failed ({Math.Max(1, result.ErrorCount)} errors); the previous scripts stay loaded.");
+				editor.Log.Add($"[Scripts] Build failed ({Math.Max(1, result.ErrorCount)} errors); the previous scripts stay loaded. Play mode and game builds wait for a build without errors.", LogType.Error, sticky: true);
 				return;
 			}
 
@@ -501,7 +501,7 @@ namespace LELEngine.Editor
 				else
 				{
 					StatusText = (result.TestsOnly ? "" : StatusText + ", ") + $"test errors: {Math.Max(1, result.Tests.ErrorCount)}";
-					Debug.LogError($"[Tests] The tests do not compile ({Math.Max(1, result.Tests.ErrorCount)} errors); they are unloaded until they do.");
+					editor.Log.Add($"[Tests] The tests do not compile ({Math.Max(1, result.Tests.ErrorCount)} errors); they are unloaded until they do.", LogType.Error, sticky: true);
 				}
 			}
 			else if (result.TestsOnly)

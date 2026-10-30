@@ -41,6 +41,10 @@ namespace LELEngine.Editor
 		public bool SceneDirty { get; private set; }
 		public PlayState PlayState { get; private set; } = PlayState.Edit;
 		public bool IsPlaying => PlayState != PlayState.Edit;
+
+		/// <summary>Play was asked for and starts when the scripts being compiled have built without errors.</summary>
+		public bool IsWaitingToPlay => playAfterCompile;
+
 		public UndoStack Undo { get; } = new UndoStack();
 		public EditTracker Edits { get; }
 		public ConsoleLog Log { get; }
@@ -155,6 +159,9 @@ namespace LELEngine.Editor
 
 		/// <summary>Play mode starts with a full reload of the game scripts (clean statics).</summary>
 		private bool reloadScriptsOnPlay = true;
+
+		/// <summary>Play was asked for while the scripts compiled: it starts when they have, unless they have errors.</summary>
+		private bool playAfterCompile;
 
 		#endregion
 
@@ -297,6 +304,12 @@ namespace LELEngine.Editor
 			RefreshSettingsIfChanged();
 			ReloadSceneIfChangedOnDisk();
 			Scripts?.Update();
+			if (playAfterCompile && (Scripts == null || !Scripts.IsCompiling))
+			{
+				playAfterCompile = false;
+				EnterPlayMode();
+			}
+
 			testHooks.Update();
 			UpdatePrefabStage();
 			if (PlayState == PlayState.Edit)
@@ -690,6 +703,7 @@ namespace LELEngine.Editor
 			PrefabCache.Clear();
 			Scripts?.Dispose();
 			Scripts = null;
+			playAfterCompile = false;
 			Extensions.Reset();
 			assetWatcher?.Dispose();
 			assetWatcher = null;
@@ -1246,6 +1260,11 @@ namespace LELEngine.Editor
 			{
 				ExitPlayMode();
 			}
+			else if (playAfterCompile)
+			{
+				// Pressed again while waiting for the scripts: no play after all.
+				playAfterCompile = false;
+			}
 			else
 			{
 				EnterPlayMode();
@@ -1294,6 +1313,15 @@ namespace LELEngine.Editor
 				return;
 			}
 
+			// Scripts being compiled may not compile: play waits for their build and starts only from a good one
+			// (Update calls this again).
+			if (Scripts != null && Scripts.IsCompiling)
+			{
+				playAfterCompile = true;
+				return;
+			}
+
+			playAfterCompile = false;
 			if (Scripts != null && Scripts.HasErrors)
 			{
 				Debug.LogError("[Editor] Fix the script compile errors before entering play mode.");
@@ -2224,7 +2252,8 @@ namespace LELEngine.Editor
 			float width = button * 3f + ImGui.GetStyle().ItemSpacing.X * 2f;
 			ImGui.SetCursorPosX((ImGui.GetWindowWidth() - width) * 0.5f);
 			bool playing = IsPlaying;
-			if (EditorGui.IconButton("play", playing ? Icon.Stop : Icon.Play, playing, playing ? "Stop (Ctrl+P)" : "Play (Ctrl+P)")) TogglePlay();
+			string playTip = playing ? "Stop (Ctrl+P)" : playAfterCompile ? "Plays when the scripts have compiled without errors (Ctrl+P cancels)" : "Play (Ctrl+P)";
+			if (EditorGui.IconButton("play", playing ? Icon.Stop : Icon.Play, playing || playAfterCompile, playTip)) TogglePlay();
 			ImGui.BeginDisabled(!playing);
 			bool paused = PlayState == PlayState.Paused;
 			if (EditorGui.IconButton("pause", Icon.Pause, paused, paused ? "Resume (Ctrl+Shift+P)" : "Pause (Ctrl+Shift+P)")) TogglePause();
