@@ -224,6 +224,14 @@
   hierarchy row) must also accept `EditorGui.IsItemInvoked()`. New editor code: use the `EditorGui` wrappers, not
   raw `ImGui.Button` etc. Canvases (scene view picking, VFX graph, curve editor, audio timeline, UI Builder canvas)
   are not elements: use the actions (`select`, `set`, menus) there.
+- Keys and text by play state (the user's call, 2026-10-31): `key` / `type` go to the game in play mode (playing or
+  paused; a paused game reads nothing, as with the keyboard) and to the editor in edit mode, or with `--window W` /
+  `--editor`; the answer says which ("Pressed Q in the game"). `--hold S` keeps the key down S seconds (at least a frame;
+  NF's undock needs 0.7 s). Game side (`Automation/GameKeyboard.cs`): ImGui key names mapped back through
+  `ImGuiController.MapKey`, the key held in `GameInputHost` (`SetKeyHeld`: down for the game whatever has focus, so the
+  input actions see it) plus `Input.Input_KeyDown / KeyUp / TextInput` events (GetKeyDown, the game's UI); needs no UI,
+  so batch play mode takes keys too. Verified on NF's station (GUI and batch): Q / E switch tabs one per press, U held
+  1.2 s undocks (0.3 s does not), `--editor` leaves the game alone, edit-mode Ctrl+D duplicates the selection.
 - Names as the inspector shows them (the user's call, 2026-10-26: every component's fields, the game's own too, as
   named in the inspector): an element is `kind:path`, the path built from scopes (`TestAnchors.PushScope`: the
   inspector pushes each component's title, `FieldDrawer.Header` its field (nested objects, lists, dictionaries),
@@ -1447,5 +1455,10 @@ texture read back), see the port's `PORTING.md` "UI".
 - Layout quirk kept (Yoga's): measuring a column container of known width, a child with `flex-basis: 0` counts as
   its basis plus padding, not its min-height, so the container measures short and the child overflows at layout
   time. NF's settings fields give the dropdown input `flex-basis: auto`.
+- `FlexLayout.ResolveFlexibleLength` (fixed 2026-10-31) returned a line's free space with every child frozen at its
+  min / max counted twice (the first pass's delta and again the second pass's): a centred row whose growing child
+  stopped at `max-width` shifted left by that child's growth. Seen on NF's SHIP page on wide screens (the hangar capped
+  at 540 px pushed the weapon slot over the ship list). Now Yoga's `original - distributed`; only justify-content and
+  auto margins read it.
 - Scene documents: objects must follow their parent in the file (`[Scene] 'X': parent N not found ... kept at the
   root` otherwise); hand-written objects go after the parent's entry.

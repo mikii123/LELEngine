@@ -317,19 +317,49 @@ namespace LELEngine.Editor
 		}
 
 		/// <summary>
-		///     Presses keys for the focused window: "Enter", "F2", "Ctrl+S", "Ctrl+Shift+Z", "Delete" (ImGui key names; Ctrl /
-		///     Shift / Alt / Super modifiers). <paramref name="window" />: the OS window's editor window to send them to (null:
-		///     the main window).
+		///     Where <see cref="Key" /> and <see cref="TypeText" /> send input: the game in play mode, the editor in edit mode or
+		///     when a <paramref name="window" /> is named or <paramref name="editor" /> asks for it.
 		/// </summary>
-		public static Task Key(string keys, string window = null)
+		public static bool InputGoesToGame(string window = null, bool editor = false)
 		{
-			return Run(async () => await EditorInput.Keys(InputOwner(window), keys));
+			return window == null && !editor && Editor.IsPlaying;
 		}
 
-		/// <summary>Types text into the active text field.</summary>
-		public static Task TypeText(string text, string window = null)
+		/// <summary>
+		///     Presses keys: "Enter", "F2", "Ctrl+S", "Q", "Space", "1" (ImGui key names; Ctrl / Shift / Alt / Super
+		///     modifiers), held <paramref name="holdSeconds" /> (at least a frame). In play mode the game gets them (its
+		///     keyboard, as with the game view focused; batch mode too), otherwise (<see cref="InputGoesToGame" />) the
+		///     focused editor window: <paramref name="window" /> names the OS window's editor window (null: the main one).
+		/// </summary>
+		public static Task Key(string keys, string window = null, double holdSeconds = 0, bool editor = false)
 		{
-			return Run(async () => await EditorInput.Text(InputOwner(window), text));
+			return Run(async () =>
+			{
+				if (InputGoesToGame(window, editor))
+				{
+					await GameKeyboard.Press(Editor.GameInput, keys, holdSeconds);
+				}
+				else
+				{
+					await EditorInput.Keys(InputOwner(window), keys, holdSeconds);
+				}
+			});
+		}
+
+		/// <summary>Types text: in play mode into the game UI's focused text field, else into the editor's active one.</summary>
+		public static Task TypeText(string text, string window = null, bool editor = false)
+		{
+			return Run(async () =>
+			{
+				if (InputGoesToGame(window, editor))
+				{
+					await GameKeyboard.Text(text);
+				}
+				else
+				{
+					await EditorInput.Text(InputOwner(window), text);
+				}
+			});
 		}
 
 		// ---------------------------------------------------------------- menus

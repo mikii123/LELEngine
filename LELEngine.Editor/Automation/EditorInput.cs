@@ -12,23 +12,19 @@ namespace LELEngine.Editor.Automation
 	{
 		#region PublicMethods
 
-		/// <summary>"Ctrl+Shift+S", "F2", "Enter": modifiers down, the key down then up, modifiers up.</summary>
-		public static async Task Keys(ImGuiController owner, string keys)
+		/// <summary>
+		///     "Ctrl+Shift+S", "F2", "Enter": modifiers down, the key down then up, modifiers up. Held for
+		///     <paramref name="holdSeconds" /> (at least a frame).
+		/// </summary>
+		public static async Task Keys(ImGuiController owner, string keys, double holdSeconds = 0)
 		{
-			string[] parts = keys.Split('+', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-			if (parts.Length == 0)
-			{
-				throw new ArgumentException("No key given.");
-			}
-
-			ImGuiKey[] mods = ParseModifiers(string.Join("+", parts, 0, parts.Length - 1));
-			ImGuiKey key = ParseKey(parts[^1]);
+			(ImGuiKey[] mods, ImGuiKey key) = ParseChord(keys);
 			Send(owner, io =>
 			{
 				SetModifiers(io, mods, true);
 				io.AddKeyEvent(key, true);
 			});
-			await EditorAutomation.NextFrame();
+			await Hold(holdSeconds);
 			Send(owner, io =>
 			{
 				io.AddKeyEvent(key, false);
@@ -48,6 +44,29 @@ namespace LELEngine.Editor.Automation
 				}
 			});
 			await EditorAutomation.NextFrame(2);
+		}
+
+		/// <summary>"Ctrl+Shift+S": the modifiers and the key (ImGui key names, Ctrl / Shift / Alt / Super modifiers).</summary>
+		internal static (ImGuiKey[] modifiers, ImGuiKey key) ParseChord(string keys)
+		{
+			string[] parts = keys.Split('+', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+			if (parts.Length == 0)
+			{
+				throw new ArgumentException("No key given.");
+			}
+
+			return (ParseModifiers(string.Join("+", parts, 0, parts.Length - 1)), ParseKey(parts[^1]));
+		}
+
+		/// <summary>Waits a frame, then on until <paramref name="seconds" /> have passed.</summary>
+		internal static async Task Hold(double seconds)
+		{
+			DateTime end = DateTime.UtcNow.AddSeconds(seconds);
+			do
+			{
+				await EditorAutomation.NextFrame();
+			}
+			while (DateTime.UtcNow < end);
 		}
 
 		#endregion

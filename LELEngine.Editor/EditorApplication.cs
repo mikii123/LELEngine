@@ -62,6 +62,9 @@ namespace LELEngine.Editor
 		public SceneViewPanel SceneView { get; }
 		public GameViewPanel GameView { get; }
 
+		/// <summary>The game's keyboard and mouse inside the editor (automation holds keys for the game through it).</summary>
+		internal GameInputHost GameInput => gameInput;
+
 		/// <summary>Bumped when asset files were added, removed or renamed (panels re-list).</summary>
 		public int AssetsVersion { get; private set; }
 

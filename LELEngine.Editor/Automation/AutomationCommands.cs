@@ -59,8 +59,13 @@ namespace LELEngine.Editor.Automation
 			"                                         numbers, vectors \"1, 2, 3\", colors \"#FF8800\" / \"1, 0.5, 0\", checkboxes\n" +
 			"                                         true / false, combos (enums, layers, shaders) by their option's text\n" +
 			"  scroll <window> <pixels|top|bottom>    the window's scrolling part (its list)\n" +
-			"  key <keys> [--window W]                Enter, F2, Ctrl+S, Ctrl+Shift+Z, Delete (ImGui key names)\n" +
-			"  type <text> [--window W]               characters into the active text field\n" +
+			"  key <keys> [--hold S] [--window W | --editor]\n" +
+			"                                         Enter, F2, Ctrl+S, Ctrl+Shift+Z, Q, Space, 1, UpArrow (ImGui key names),\n" +
+			"                                         held S seconds (else a frame). Play mode: the game's keyboard (as with the\n" +
+			"                                         game view focused; a paused game reads nothing); edit mode, --window or\n" +
+			"                                         --editor: the editor's focused window\n" +
+			"  type <text> [--window W | --editor]    characters: play mode the game UI's focused text field, else the\n" +
+			"                                         editor's active text field\n" +
 			"  menus [filter]                         every main menu item with its path (enabled, ticked, shortcut)\n" +
 			"  menu <path>                            run a main menu item: \"GameObject/Create Empty\", \"Window/Reset Layout\"\n" +
 			"  hierarchy                              the open scene's objects (ids, components)\n" +
@@ -101,7 +106,7 @@ namespace LELEngine.Editor.Automation
 				if (word.StartsWith("--", StringComparison.Ordinal) && word.Length > 2)
 				{
 					string name = word.Substring(2);
-					bool takesValue = name is "frames" or "window" or "count" or "timeout";
+					bool takesValue = name is "frames" or "window" or "count" or "timeout" or "hold";
 					options[name] = takesValue && i + 1 < words.Count ? words[++i] : "";
 				}
 				else
@@ -252,14 +257,27 @@ namespace LELEngine.Editor.Automation
 					break;
 
 				case "key":
-					Need(args, 1, "key <keys>");
-					await EditorAutomation.Key(Joined(args), options.GetValueOrDefault("window"));
+				{
+					Need(args, 1, "key <keys> [--hold S] [--window W | --editor]");
+					string window = options.GetValueOrDefault("window");
+					bool toEditor = options.ContainsKey("editor");
+					double hold = options.TryGetValue("hold", out string holdText) ? double.Parse(holdText, CultureInfo.InvariantCulture) : 0;
+					bool game = EditorAutomation.InputGoesToGame(window, toEditor);
+					await EditorAutomation.Key(Joined(args), window, hold, toEditor);
+					text.Append("Pressed ").Append(Joined(args)).Append(game ? " in the game" : " in the editor").Append('\n');
 					break;
+				}
 
 				case "type":
-					Need(args, 1, "type <text>");
-					await EditorAutomation.TypeText(Joined(args), options.GetValueOrDefault("window"));
+				{
+					Need(args, 1, "type <text> [--window W | --editor]");
+					string window = options.GetValueOrDefault("window");
+					bool toEditor = options.ContainsKey("editor");
+					bool game = EditorAutomation.InputGoesToGame(window, toEditor);
+					await EditorAutomation.TypeText(Joined(args), window, toEditor);
+					text.Append("Typed into ").Append(game ? "the game" : "the editor").Append('\n');
 					break;
+				}
 
 				case "menus":
 				{

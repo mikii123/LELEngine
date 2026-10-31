@@ -1259,7 +1259,10 @@ namespace LELEngine.UIElements
 				LayoutNodeInternal(child, childWidth, childHeight, childWidthMode, childHeightMode, availableInnerWidth, availableInnerHeight, performLayout && !requiresStretchLayout);
 			}
 
-			return originalFreeSpace - deltaFreeSpace - usedFreeSpace;
+			// The second pass sizes every child again, the frozen ones included (as Yoga does): usedFreeSpace already holds
+			// what they took, so taking deltaFreeSpace off as well counted it twice (a grown child stopped by max-width
+			// pushed a centred line off to the left).
+			return originalFreeSpace - usedFreeSpace;
 		}
 
 		// ------------------------------------------------------------------ absolute children

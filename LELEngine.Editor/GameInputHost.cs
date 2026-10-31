@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using OpenTK.Mathematics;
 using OpenTK.Windowing.Common;
 using OpenTK.Windowing.Desktop;
@@ -16,6 +17,9 @@ namespace LELEngine.Editor
 
 		private readonly NativeWindow window;
 		private readonly Func<bool> active;
+
+		// Keys held by automation (the CLI's "key" in play mode): down for the game whatever has focus.
+		private readonly HashSet<Keys> heldKeys = new HashSet<Keys>();
 
 		#endregion
 
@@ -46,7 +50,20 @@ namespace LELEngine.Editor
 
 		public bool IsKeyDown(Keys key)
 		{
-			return active() && window.IsKeyDown(key);
+			return heldKeys.Contains(key) || (active() && window.IsKeyDown(key));
+		}
+
+		/// <summary>Holds or releases a key for the game, as if pressed on the keyboard with the game view focused.</summary>
+		public void SetKeyHeld(Keys key, bool held)
+		{
+			if (held)
+			{
+				heldKeys.Add(key);
+			}
+			else
+			{
+				heldKeys.Remove(key);
+			}
 		}
 
 		public bool IsMouseButtonDown(MouseButton button)
