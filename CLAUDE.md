@@ -1464,8 +1464,10 @@ texture read back), see the port's `PORTING.md` "UI".
 - Scene documents: objects must follow their parent in the file (`[Scene] 'X': parent N not found ... kept at the
   root` otherwise); hand-written objects go after the parent's entry.
 
-## Drive cones, MaterialPropertyBlock, [PerRendererData] (2026-10-31)
+## MaterialPropertyBlock, [PerRendererData], ICustomRenderer (2026-10-31)
 
+- Game effects belong in the game's repo, not here (the user's correction, 2026-10-31): a plume component written for
+  one game was moved out; the engine keeps only the general features it needed (below).
 - `MaterialPropertyBlock` (`Shaders/MaterialPropertyBlock.cs`, Unity's): float / int / vector / color / matrix / texture
   / float[] / vec4[] values by uniform name, written in place (no allocations when a block is updated every frame).
   `Material.SetUniforms(program, block)` uploads the material's values, then the block's (textures on the units after
@@ -1477,43 +1479,13 @@ texture read back), see the port's `PORTING.md` "UI".
   by the transparent pass and the per-object opaque draws (`Render`, `RenderSubMesh`); a renderer with a block leaves
   the GPU-driven buckets (`GpuScene.BuildTables`: per object, like shaders without an instanced variant). Depth, shadow
   and GI passes draw geometry only and ignore it.
-- `DriveCone` (`Mono/Behaviours/DriveCone.cs`, global namespace, `[ExecuteAlways]`): an exhaust plume along +Z from the
-  object (the nozzle's exit). Drawn by `TransparentPass` as its own entry kind (like trails: `CollectDriveCones`, from
-  the frame's behaviours on the camera's layers): one shared shell mesh per segment count (`Shells`: unit rings of the
-  flame and the core shell, z = share of the length, second UV x = layer, plus the nozzle's disc, layer 2) drawn with
-  the cone's transform and its `PropertyBlock` (written by `PrepareDraw`: `DriveProfile[17]` radius along the plume,
-  `DriveFlame[8]` gradient x intensity, `DriveShape` / `DriveBend` / `DriveCore` / `DriveParams` / `DriveDiamonds` /
-  `DriveDiamondShape` / `DriveDiamondColor`). Bounds for sorting and grab rectangles: `GetLocalBounds` (the current
-  length, the widest radius with the ripples, the sway).
-- `Engine/DriveCone.shader`: the vertex shader shapes the unit rings (radius from the profile, the core narrowing to a
-  point, ripples from 3D value noise flowing out with `DriveShape.w`, the end bent by the sway, t^2); the noise's
-  coordinates are (ring x `Streaks` (`DriveBend.z`), (z - flow) / `TurbulenceScale`): long thin streaks along the
-  plume. The fragment shader lights them additively (`Blend One One, Zero One`, Cull Off, ZWrite Off, ShadowCaster
-  Off): flame color x density along the plume x `pow(facing, Falloff) * smoothstep(0, 0.45, facing)` (bright where the
-  camera looks through the middle, soft at the silhouette), turbulence (stretched to full contrast with smoothstep(0.25,
-  0.75): plain value noise sits near 0.5 and the streaks did not show), a fade over the last quarter; core fading over `CoreLength`; diamonds as
-  knots along the core (`pow(facing, 1 / DiamondRadius)`, each `DiamondFade` of the last); the nozzle's disc
-  (`NozzleGlow`) seen from behind. `SceneDepth On` for `LelSoftParticleFade(0, SoftFade)` where it meets the hull.
-  Material: `Brightness`, `SoftFade`; built-in `Engine/Materials/Default-DriveCone.material` (Reset, GameObject menu).
-  Ray marching the volume was tried and dropped (the user's call, 2026-10-31: overkill for a drive cone).
-- Animation (`Step(dt)`, from `LateUpdate`, edit mode too; `Snap()` on enable): `level` follows `Throttle` (exponential,
-  `SpoolUpTime` / `SpoolDownTime`), `burn` follows `Burning` (`ShutdownTime`); the ignition (`IgnitionCurve`, seconds)
-  plays when `Burning` turns on, on `PlayIgnition()` / `Ignite()`, and when the throttle goes from idle (< 0.1) to full
-  (>= 0.95) with `IgniteOnFullThrottle`; flicker / pulse / sway are value noise per instance (seed from `Id`); the flow
-  distance is integrated (a throttle change never jumps the pattern) and wraps at 16384 nozzle radii. Presets
-  (`ApplyPreset`, `DriveConePreset`): Afterburner, Rocket, FusionDrive, Ion, TorchDrive; they keep `NozzleRadius` and
-  set `Length` in nozzle radii, the response times, streaks and ignition curve too. TorchDrive (the user's ask: short,
-  snappy, dangerous): 9 nozzle radii, blue, tapering to 0.8 at the end, no diamonds, glowing nozzle, flow 70 radii/s,
-  streaks 3.5, flicker 0.16 at 34 Hz, pulse 0.06 at 24 Hz, spool 0.05 s up / 0.1 s down, shutdown 0.08 s, a 0.3 s
-  ignition flash (x 3.2 at 0.03 s).
-- Editor: GameObject menu "Drive Cone"; `DriveConeInspector` (Apply Preset combo with undo, Play Ignition, the live
-  state) and its scene view outline (`DrawGizmos`, rings along the plume); the inspector's material section lists the
-  cone's material.
-- Verified: TestGame `drivecone=1` (`BuildDriveCones`: one prop per preset on a nozzle block, the afterburner and the
-  rocket cycling with `DriveConeCycler`); frames by `dump=1 dumpafter=2.2 camera=0.25,1.5,-0.9 look=0.25,1.5,-3 gi=0
-  emitters=0 glass=0` (the props stand at z = -3, in front of the room's pillar). A game's ship prefab driven from its
-  engine script: idle, half and full throttle and the spool down in play mode, no console errors.
-
+- `Rendering/ICustomRenderer.cs`: a component (a game's script too) that draws a mesh it builds itself, shaped by its
+  shader from per-draw values: `Material` and `PrepareDraw(out mesh, out block, out boundsMin, out boundsMax)`
+  (false: nothing this frame). `TransparentPass.CollectCustomRenderers` takes them from the frame's behaviours on the
+  camera's layers (active and enabled, a material whose program links), `GeometryPool.Prepare`s the mesh (code-built
+  meshes are fine) and adds one entry each at the centre of its bounds (sorting; grab rectangles from the local bounds
+  with the world matrix); drawn with the component's transform and the block on top of the material, no shadows, no
+  GI. The inspector lists the material in the component's material section (`InspectorPanel`).
 ## Scene changed on disk: reload, merge, conflicts (2026-10-31)
 
 - The user's ask: like Unity, the editor follows the open scene's file changed outside it; when the outside changes

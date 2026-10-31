@@ -17,8 +17,8 @@ namespace LELEngine.Rendering.Passes
 	///     Trails (<see cref="TrailRenderer" />, found among the frame's behaviours on the camera's layers) are built for
 	///     this camera into one stream of world space triangles (<see cref="DynamicGeometry" />), uploaded once, and sort
 	///     like meshes: each material of a trail is an entry at the centre of the trail's bounds (opaque materials too,
-	///     before the transparent queues). Drive cones (<see cref="DriveCone" />) are one entry each: their shell mesh with
-	///     the cone's own shader values. Mesh renderers with a property block get its values after their material's.
+	///     before the transparent queues). Custom renderers (<see cref="ICustomRenderer" />) are one entry each: the mesh they
+	///     build with their own shader values. Mesh renderers with a property block get its values after their material's.
 	///     Materials whose variant declares GrabPass read the scene drawn before them (<see cref="SceneGrab" />, Unity's
 	///     GrabPass, e.g. refraction): the copy they read is taken after the last earlier draw that touched the part of the
 	///     screen they read, and one copy serves a run of such objects whose parts nothing drawn in between overlaps.
@@ -59,22 +59,22 @@ namespace LELEngine.Rendering.Passes
 			/// <summary>A trail's material slot (<see cref="SubMesh" /> is the slot): its triangles are in the trail stream.</summary>
 			public TrailRenderer Trail;
 
-			/// <summary>A drive cone: its shells (<see cref="Mesh" />) with its own values (<see cref="DriveCone.PropertyBlock" />).</summary>
-			public DriveCone Cone;
+			/// <summary>A custom renderer (<see cref="ICustomRenderer" />): its <see cref="Mesh" /> with its <see cref="Block" />.</summary>
+			public Behaviour Custom;
 
-			/// <summary>The drive cone's shell mesh.</summary>
 			public Mesh Mesh;
+			public MaterialPropertyBlock Block;
 
-			/// <summary>The material drawn (mesh, trail and drive cone entries).</summary>
+			/// <summary>The material drawn (mesh, trail and custom entries).</summary>
 			public Material Material;
 			public int Queue;
 			public float DistanceSquared;
 			public ulong Order;
 
-			/// <summary>The renderer's local-to-world matrix (mesh and drive cone entries).</summary>
+			/// <summary>The renderer's local-to-world matrix (mesh and custom entries).</summary>
 			public Matrix4 World;
 
-			/// <summary>Trail entries: world bounds and the range of the trail stream's indices; drive cones: local bounds.</summary>
+			/// <summary>Trail entries: world bounds and the range of the trail stream's indices; custom entries: local bounds.</summary>
 			public Vector3 BoundsMin;
 			public Vector3 BoundsMax;
 			public int FirstIndex;
@@ -118,7 +118,7 @@ namespace LELEngine.Rendering.Passes
 			Grab.BeginFrame();
 			bool grabs = Collect(renderers, context.CameraPosition);
 			grabs |= CollectTrails(context);
-			grabs |= CollectDriveCones(context);
+			grabs |= CollectCustomRenderers(context);
 			vfxEntries.Clear();
 			VFX.VfxRuntime.CollectTransparent(context, vfxEntries);
 			if (entries.Count == 0 && vfxEntries.Count == 0)
@@ -200,11 +200,11 @@ namespace LELEngine.Rendering.Passes
 				afterMesh = true;
 				MeshRenderer renderer = entry.Renderer;
 				TrailRenderer trail = entry.Trail;
-				DriveCone cone = entry.Cone;
+				Behaviour custom = entry.Custom;
 				Material material = entry.Material;
 				ShaderProgram program = material.Program;
-				bool entryShadows = trail != null ? trail.receiveShadows : cone == null && renderer.ReceiveShadows;
-				bool entryGI = trail != null ? trail.receiveGI : cone == null && renderer.ReceiveGI;
+				bool entryShadows = trail != null ? trail.receiveShadows : custom == null && renderer.ReceiveShadows;
+				bool entryGI = trail != null ? trail.receiveGI : custom == null && renderer.ReceiveGI;
 				bool copied = false;
 				if (entry.GrabCopy >= 0)
 				{
@@ -242,9 +242,9 @@ namespace LELEngine.Rendering.Passes
 					// Trail vertices are in world space.
 					program.SetMatrix4("modelMatrix", Matrix4.Identity);
 				}
-				else if (cone != null)
+				else if (custom != null)
 				{
-					cone.transform.SetModelMatrix(program);
+					custom.transform.SetModelMatrix(program);
 				}
 				else
 				{
@@ -252,7 +252,7 @@ namespace LELEngine.Rendering.Passes
 				}
 
 				// The renderer's own values (property block) go on top of the material's.
-				material.SetUniforms(program, cone != null ? cone.PropertyBlock : renderer?.PropertyBlock);
+				material.SetUniforms(program, custom != null ? entry.Block : renderer?.PropertyBlock);
 				if (material.OverridesSharedUniforms())
 				{
 					resend = true;
@@ -408,9 +408,9 @@ namespace LELEngine.Rendering.Passes
 			return grabs;
 		}
 
-		// The drive cones among the frame's behaviours on the camera's layers that show something: one entry each, at the
-		// centre of its bounds. True when one of them grabs.
-		private bool CollectDriveCones(RenderContext context)
+		// The custom renderers among the frame's behaviours on the camera's layers that draw something: one entry each, at
+		// the centre of its bounds. True when one of them grabs.
+		private bool CollectCustomRenderers(RenderContext context)
 		{
 			IReadOnlyList<Behaviour> behaviours = context.Behaviours;
 			if (behaviours == null)
@@ -421,23 +421,22 @@ namespace LELEngine.Rendering.Passes
 			bool grabs = false;
 			foreach (Behaviour behaviour in behaviours)
 			{
-				if (behaviour is not DriveCone cone || !cone.isActiveAndEnabled || (context.CullingMask & (1 << (cone.gameObject.layer & 31))) == 0 || !IsDrawable(cone.Material))
+				if (behaviour is not ICustomRenderer custom || !behaviour.isActiveAndEnabled || (context.CullingMask & (1 << (behaviour.gameObject.layer & 31))) == 0)
 				{
 					continue;
 				}
 
-				if (!cone.PrepareDraw(out Mesh shells) || !GeometryPool.Prepare(shells))
+				Material material = custom.Material;
+				if (!IsDrawable(material) || !custom.PrepareDraw(out Mesh mesh, out MaterialPropertyBlock block, out Vector3 min, out Vector3 max) || mesh == null || !GeometryPool.Prepare(mesh))
 				{
 					continue;
 				}
 
-				Matrix4 world = cone.transform.LocalToWorld;
-				cone.GetLocalBounds(out Vector3 min, out Vector3 max);
+				Matrix4 world = behaviour.transform.LocalToWorld;
 				Vector3 center = Vector3.TransformPosition((min + max) * 0.5f, world);
-				Material material = cone.Material;
 				bool grab = material.RenderState.GrabPass;
 				grabs |= grab;
-				entries.Add(new Entry { Cone = cone, Mesh = shells, Material = material, Queue = material.renderQueue, DistanceSquared = (center - context.CameraPosition).LengthSquared, Order = cone.Id * 64, World = world, BoundsMin = min, BoundsMax = max, Grab = grab, GrabCopy = -1 });
+				entries.Add(new Entry { Custom = behaviour, Mesh = mesh, Block = block, Material = material, Queue = material.renderQueue, DistanceSquared = (center - context.CameraPosition).LengthSquared, Order = behaviour.Id * 64, World = world, BoundsMin = min, BoundsMax = max, Grab = grab, GrabCopy = -1 });
 			}
 
 			return grabs;
@@ -467,7 +466,7 @@ namespace LELEngine.Rendering.Passes
 			{
 				trailGeometry.Draw(entry.FirstIndex, entry.IndexCount);
 			}
-			else if (entry.Cone != null)
+			else if (entry.Custom != null)
 			{
 				GeometryPool.Draw(entry.Mesh);
 			}
@@ -545,7 +544,7 @@ namespace LELEngine.Rendering.Passes
 				return SceneGrab.ScreenRect(context.ViewProjection, entry.BoundsMin, entry.BoundsMax, screen, out rect, out nearestW) ? rect : screen;
 			}
 
-			if (entry.Cone != null)
+			if (entry.Custom != null)
 			{
 				return SceneGrab.ScreenRect(entry.World * context.ViewProjection, entry.BoundsMin, entry.BoundsMax, screen, out rect, out nearestW) ? rect : screen;
 			}

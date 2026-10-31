@@ -2220,12 +2220,6 @@ namespace LELEngine.Editor
 				CreateObject("Trail", go => go.AddComponent<TrailRenderer>().Reset(), parent);
 			}
 
-			if (EditorMenu.Item("Drive Cone"))
-			{
-				// An afterburner with the default drive cone material, along the new object's +Z.
-				CreateObject("Drive Cone", go => go.AddComponent<DriveCone>().Reset(), parent);
-			}
-
 			if (EditorMenu.Begin("Audio"))
 			{
 				if (EditorMenu.Item("Audio Listener")) CreateObject("Audio Listener", go => go.AddComponent<LELEngine.Audio.AudioListener>(), parent);

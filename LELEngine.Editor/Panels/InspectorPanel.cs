@@ -241,7 +241,7 @@ namespace LELEngine.Editor
 				{
 					MeshRenderer renderer => renderer.Materials,
 					TrailRenderer trail => trail.Materials,
-					DriveCone cone => cone.Materials,
+					LELEngine.Rendering.ICustomRenderer custom => custom.Material != null ? new[] { custom.Material } : null,
 					_ => null
 				};
 

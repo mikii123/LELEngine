@@ -131,16 +131,10 @@ Built on .NET 10, OpenTK 4.9 (GLFW) and OpenGL 4.6 (4.3 minimum), developed and 
   tile / per-segment texture modes, autodestruct, emitting) and API (`Clear`, `AddPosition`, `GetPositions`, ...),
   built for every camera and drawn by the transparent pass with any material. `Gradient` is Unity's too (blend,
   fixed and perceptual blend modes), with a gradient editor in the inspector.
-- `DriveCone`: an engine's exhaust plume (a jet's afterburner with its shock diamonds, a rocket's or a torch drive's
-  plume) along the object's +Z, drawn by `Engine/DriveCone.shader` as cone shells the vertex shader shapes and
-  animates. The plume follows a throttle (length, width, brightness, diamonds; spooling up and down), dies down when the
-  engine stops, flashes when it lights, flickers, pulses and sways, and every part of the look is a field: shape (width
-  curve), flame gradient, core, diamonds, turbulence, nozzle glow; presets Afterburner, Rocket, Fusion Drive, Ion and
-  Torch Drive. GameObject menu > Drive Cone; the inspector applies presets, plays the ignition and outlines the plume in
-  the scene view.
 - `MaterialPropertyBlock` (Unity's): shader values of one renderer on top of its materials
   (`MeshRenderer.SetPropertyBlock`), for per-object values without a material copy; `[PerRendererData]` marks the shader
-  properties that come from them.
+  properties that come from them. Custom renderers (`ICustomRenderer`): a component that builds its own mesh and
+  hands the transparent pass its material, per-draw values and bounds (procedural effects shaped by their shaders).
 - Refraction (Unity's GrabPass): a shader declares `GrabPass` and reads a copy of the scene drawn before the object,
   taken right before it draws, so refracting glass also shows the glass and particles behind it. Only the screen
   rectangles the objects read are copied, and one copy serves the objects nothing drawn in between overlaps.

@@ -9,8 +9,9 @@ namespace LELEngine.Shaders
 	///     Shader values of one renderer on top of its materials (Unity's MaterialPropertyBlock): numbers, vectors, colors,
 	///     matrices, textures and float / vector arrays by uniform name, uploaded right after the material's own values at
 	///     every draw of the renderer, so they win over the material's. Renderers sharing a material keep values of their
-	///     own without a copy of the material each (<see cref="MeshRenderer.SetPropertyBlock" />; <see cref="DriveCone" />
-	///     animates its shader through one). Values only: keywords, render state and queue stay the material's.
+	///     own without a copy of the material each (<see cref="MeshRenderer.SetPropertyBlock" />; a
+	///     <see cref="Rendering.ICustomRenderer" /> hands one with each draw). Values only: keywords, render state and queue
+	///     stay the material's.
 	///     Setting a name again writes in place: a block updated every frame allocates nothing (arrays keep their storage
 	///     while they do not grow). Names the shader does not have are ignored.
 	///     A program keeps uniform values between draws, and a material uploads only what its shader declares: a value for

@@ -194,9 +194,6 @@ namespace TestGame.Scenes
 			/// <summary>Trail props (TrailRenderer) close to the player's start; off by default.</summary>
 			public bool Trails;
 
-			/// <summary>Drive cones (DriveCone, one per preset) close to the player's start; off by default.</summary>
-			public bool DriveCones;
-
 			/// <summary>Engine/LitTextured.shader props (workflows, maps, tiling) close to the player's start; off by default.</summary>
 			public bool Materials;
 
@@ -267,10 +264,6 @@ namespace TestGame.Scenes
 			if (options.Trails)
 			{
 				BuildTrails(scene);
-			}
-			if (options.DriveCones)
-			{
-				BuildDriveCones(scene);
 			}
 			if (options.Materials)
 			{
@@ -818,39 +811,6 @@ namespace TestGame.Scenes
 			// The quad faces the player's start, so +X is on the screen's left.
 			RefractionQuad(scene, "SoftParticlesOn", soft, new Vector3(0.35f, 0.45f, -5f), 0.25f);
 			RefractionQuad(scene, "SoftParticlesOff", hard, new Vector3(-0.35f, 0.45f, -5f), 0.25f);
-		}
-
-		/// <summary>
-		///     Drive cones (drivecone=1, DriveCone, Engine/DriveCone.shader) before the player's start, one per preset in a
-		///     column, each on a gray nozzle block, plumes running across the view: afterburner (cycling idle -> full with
-		///     the ignition -> back -> off), rocket (cycling, out of phase), fusion drive, ion thruster and torch drive (full).
-		/// </summary>
-		private static void BuildDriveCones(Scene scene)
-		{
-			Material material = InternalStorage.GetOrCreateMaterial(DriveCone.DefaultMaterialPath);
-			DriveCone afterburner = DriveConeProp(scene, "DriveConeAfterburner", 2.35f, DriveConePreset.Afterburner, material);
-			afterburner.gameObject.AddComponent<DriveConeCycler>();
-			DriveCone rocket = DriveConeProp(scene, "DriveConeRocket", 1.8f, DriveConePreset.Rocket, material);
-			rocket.Length = 2.2f;
-			rocket.gameObject.AddComponent<DriveConeCycler>().Phase = 3f;
-			DriveCone fusion = DriveConeProp(scene, "DriveConeFusion", 1.25f, DriveConePreset.FusionDrive, material);
-			fusion.Length = 2.6f;
-			DriveConeProp(scene, "DriveConeIon", 0.7f, DriveConePreset.Ion, material);
-			DriveConeProp(scene, "DriveConeTorch", 2.9f, DriveConePreset.TorchDrive, material).gameObject.AddComponent<DriveConeCycler>().Phase = 1.5f;
-		}
-
-		// A drive cone at height y leaving a nozzle block on the left of the view (+X), its plume running to -X.
-		private static DriveCone DriveConeProp(Scene scene, string name, float y, DriveConePreset preset, Material material)
-		{
-			Box(scene, name + "Nozzle", "LitGray.material", new Vector3(1.45f, y, -3f), new Vector3(0.12f, 0.13f, 0.13f));
-			GameObject go = scene.CreateGameObject(name);
-			go.transform.position = new Vector3(1.33f, y, -3f);
-			go.transform.rotation = Quaternion.FromAxisAngle(Vector3.UnitY, -MathF.PI * 0.5f);
-			DriveCone cone = go.AddComponent<DriveCone>();
-			cone.NozzleRadius = 0.1f;
-			cone.ApplyPreset(preset);
-			cone.Material = material;
-			return cone;
 		}
 
 		// A small sphere moved by a TrailMover, with a trail of the given material.
