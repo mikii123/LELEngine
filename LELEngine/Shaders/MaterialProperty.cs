@@ -48,6 +48,12 @@ namespace LELEngine.Shaders
 
 		internal override void Apply(ShaderProgram program, ref int textureUnit)
 		{
+			UploadFloat(program, name, value);
+		}
+
+		/// <summary>Uploads a number to a float uniform, or truncated to an int / bool one.</summary>
+		internal static void UploadFloat(ShaderProgram program, string name, float value)
+		{
 			int location = program.GetUniformLocation(name);
 			if (location < 0)
 			{
@@ -169,6 +175,15 @@ namespace LELEngine.Shaders
 		}
 
 		internal override void Apply(ShaderProgram program, ref int textureUnit)
+		{
+			Bind(program, name, value, ref textureUnit);
+		}
+
+		/// <summary>
+		///     Binds a texture (or the sampler kind's neutral default when it is null or of the wrong kind) on the next
+		///     material texture unit and points the sampler uniform at it.
+		/// </summary>
+		internal static void Bind(ShaderProgram program, string name, Texture value, ref int textureUnit)
 		{
 			int location = program.GetUniformLocation(name);
 			if (location < 0)

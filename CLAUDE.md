@@ -1404,7 +1404,8 @@ Added for New Frontier's port of Unity's SpaceStonesPack (Standard materials wit
   with `SceneManager.CreateScene` through `scene.Update(dt)` (it is not in the loaded list, so
   `SceneManager.UpdateScenes` skips it). `-executeMethod` hands the method the whole command line as `args`.
 - Not done (follow-ups): skinned meshes and bone animation import from models (Assimp has the data), animating
-  material properties per renderer (no property blocks), humanoid retargeting / IK, timeline / cutscene sequencing,
+  material properties per renderer (`MaterialPropertyBlock` exists since 2026-10-31; the binder does not write into
+  one yet), humanoid retargeting / IK, timeline / cutscene sequencing,
   moving the VFX canvas onto `GraphView`.
 
 ## UI and runtime additions for New Frontier's station UI (2026-10-29)
@@ -1462,3 +1463,142 @@ texture read back), see the port's `PORTING.md` "UI".
   auto margins read it.
 - Scene documents: objects must follow their parent in the file (`[Scene] 'X': parent N not found ... kept at the
   root` otherwise); hand-written objects go after the parent's entry.
+
+## Drive cones, MaterialPropertyBlock, [PerRendererData] (2026-10-31)
+
+- `MaterialPropertyBlock` (`Shaders/MaterialPropertyBlock.cs`, Unity's): float / int / vector / color / matrix / texture
+  / float[] / vec4[] values by uniform name, written in place (no allocations when a block is updated every frame).
+  `Material.SetUniforms(program, block)` uploads the material's values, then the block's (textures on the units after
+  the material's: `TextureProperty.Bind`, `FloatProperty.UploadFloat` are the shared upload helpers). Names outside the
+  shader's Properties block stay in the program for the next draw (a material uploads only declared names): shaders
+  declare their per-renderer values with `[PerRendererData]` (`ShaderProperty.PerRendererData`; the material editor
+  leaves them out and says how many there are).
+- `MeshRenderer.SetPropertyBlock` / `GetPropertyBlock` / `HasPropertyBlock` (a copy, not serialized, as Unity): applied
+  by the transparent pass and the per-object opaque draws (`Render`, `RenderSubMesh`); a renderer with a block leaves
+  the GPU-driven buckets (`GpuScene.BuildTables`: per object, like shaders without an instanced variant). Depth, shadow
+  and GI passes draw geometry only and ignore it.
+- `DriveCone` (`Mono/Behaviours/DriveCone.cs`, global namespace, `[ExecuteAlways]`): an exhaust plume along +Z from the
+  object (the nozzle's exit). Drawn by `TransparentPass` as its own entry kind (like trails: `CollectDriveCones`, from
+  the frame's behaviours on the camera's layers): one shared shell mesh per segment count (`Shells`: unit rings of the
+  flame and the core shell, z = share of the length, second UV x = layer, plus the nozzle's disc, layer 2) drawn with
+  the cone's transform and its `PropertyBlock` (written by `PrepareDraw`: `DriveProfile[17]` radius along the plume,
+  `DriveFlame[8]` gradient x intensity, `DriveShape` / `DriveBend` / `DriveCore` / `DriveParams` / `DriveDiamonds` /
+  `DriveDiamondShape` / `DriveDiamondColor`). Bounds for sorting and grab rectangles: `GetLocalBounds` (the current
+  length, the widest radius with the ripples, the sway).
+- `Engine/DriveCone.shader`: the vertex shader shapes the unit rings (radius from the profile, the core narrowing to a
+  point, ripples from 3D value noise flowing out with `DriveShape.w`, the end bent by the sway, t^2); the noise's
+  coordinates are (ring x `Streaks` (`DriveBend.z`), (z - flow) / `TurbulenceScale`): long thin streaks along the
+  plume. The fragment shader lights them additively (`Blend One One, Zero One`, Cull Off, ZWrite Off, ShadowCaster
+  Off): flame color x density along the plume x `pow(facing, Falloff) * smoothstep(0, 0.45, facing)` (bright where the
+  camera looks through the middle, soft at the silhouette), turbulence (stretched to full contrast with smoothstep(0.25,
+  0.75): plain value noise sits near 0.5 and the streaks did not show), a fade over the last quarter; core fading over `CoreLength`; diamonds as
+  knots along the core (`pow(facing, 1 / DiamondRadius)`, each `DiamondFade` of the last); the nozzle's disc
+  (`NozzleGlow`) seen from behind. `SceneDepth On` for `LelSoftParticleFade(0, SoftFade)` where it meets the hull.
+  Material: `Brightness`, `SoftFade`; built-in `Engine/Materials/Default-DriveCone.material` (Reset, GameObject menu).
+  Ray marching the volume was tried and dropped (the user's call, 2026-10-31: overkill for a drive cone).
+- Animation (`Step(dt)`, from `LateUpdate`, edit mode too; `Snap()` on enable): `level` follows `Throttle` (exponential,
+  `SpoolUpTime` / `SpoolDownTime`), `burn` follows `Burning` (`ShutdownTime`); the ignition (`IgnitionCurve`, seconds)
+  plays when `Burning` turns on, on `PlayIgnition()` / `Ignite()`, and when the throttle goes from idle (< 0.1) to full
+  (>= 0.95) with `IgniteOnFullThrottle`; flicker / pulse / sway are value noise per instance (seed from `Id`); the flow
+  distance is integrated (a throttle change never jumps the pattern) and wraps at 16384 nozzle radii. Presets
+  (`ApplyPreset`, `DriveConePreset`): Afterburner, Rocket, FusionDrive, Ion, TorchDrive; they keep `NozzleRadius` and
+  set `Length` in nozzle radii, the response times, streaks and ignition curve too. TorchDrive (the user's ask: short,
+  snappy, dangerous): 9 nozzle radii, blue, tapering to 0.8 at the end, no diamonds, glowing nozzle, flow 70 radii/s,
+  streaks 3.5, flicker 0.16 at 34 Hz, pulse 0.06 at 24 Hz, spool 0.05 s up / 0.1 s down, shutdown 0.08 s, a 0.3 s
+  ignition flash (x 3.2 at 0.03 s).
+- Editor: GameObject menu "Drive Cone"; `DriveConeInspector` (Apply Preset combo with undo, Play Ignition, the live
+  state) and its scene view outline (`DrawGizmos`, rings along the plume); the inspector's material section lists the
+  cone's material.
+- Verified: TestGame `drivecone=1` (`BuildDriveCones`: one prop per preset on a nozzle block, the afterburner and the
+  rocket cycling with `DriveConeCycler`); frames by `dump=1 dumpafter=2.2 camera=0.25,1.5,-0.9 look=0.25,1.5,-3 gi=0
+  emitters=0 glass=0` (the props stand at z = -3, in front of the room's pillar). A game's ship prefab driven from its
+  engine script: idle, half and full throttle and the spool down in play mode, no console errors.
+
+## Scene changed on disk: reload, merge, conflicts (2026-10-31)
+
+- The user's ask: like Unity, the editor follows the open scene's file changed outside it; when the outside changes
+  do not collide with the unsaved ones it merges them on its own, else a popup lets the user decide.
+- `LELEngine/Serialization/SceneMerge.cs` (public, no types loaded): `SceneMerge.Merge(mineBase, mine, theirsBase,
+  theirs, resolve, instanceObjects)` on `SceneDocument`s. The editor's changes are mineBase -> mine (both written from
+  live scenes by the same scripts, so a field the scripts gained or lost is no change), the file's are theirsBase ->
+  theirs (both file bytes); the result is theirs with the editor's changes on top. Granularity: scene name; settings
+  and component data property by property, nested `SerializedNode`s of the same class recursively (a property one side
+  lacks compares as the class default, `GenericValues.DefaultProperty`); lists, dictionaries, references and assets
+  are one value; GameObject name / active / parent / layer / hide flags; components by id (added, removed, order);
+  prefab instances: prefab, parent, each `PropertyModification` (by target + `FullPath`), removed objects / components
+  as sets, added components like components; entries by id (added on either side kept; a deletion takes its subtree,
+  and a change inside a subtree the other side deleted is ONE conflict "deleted" for the whole subtree); sibling
+  order (`MergeOrder`: mine's order when only mine reordered, both reordered differently = conflict; keys only one
+  side has go after the key they follow there). Entries are written parents first (`Arrange`: each under the entry
+  that owns its parent: an object entry, or the prefab instance holding that object, found through
+  `instanceObjects` (default: `PrefabCache` ids combined with `PrefabIds.Combine`), fallback the last instance before
+  it). Conflicts (`SceneMergeConflict`: Key, object, component, What, Mine, Theirs) go to `resolve` (null: the file's
+  value) and are listed; `MineKept` = 0 means the result is the file.
+- `SetSiblingIndex` does nothing on a root object (root order is the scene's object order): test sibling order
+  under a parent.
+- Editor (`EditorApplication.SceneMerge.cs`): `sceneFileBase` = the file bytes last read (`OpenSceneNow` reads the
+  bytes itself) or written (`SaveSceneTo` reads them back). `CheckSceneOnDisk` (after an asset refresh; the edit
+  scene's path also in play and prefab mode) notes a new `FileStamp`; `ReloadSceneIfChangedOnDisk` waits for play
+  mode, prefab mode, `Scripts.IsIdle` and a pending merge, skips identical bytes, reloads a clean scene
+  (`ReloadSceneFromDisk`), else merges: mineBase = `NormalizedScene(sceneFileBase)` (a temporary scene loaded and
+  written by the current scripts, then `Unload()`: no callbacks, nothing was awake), mine = `SaveToBytes(Scene)`. No
+  conflicts: `ApplyMerge` (loads the merged document as binary, or the file itself when `MineKept` = 0; one
+  `SceneSnapshotRecord` "Merge Changes From Disk", so undo gives back the scene as it was; dirty when `MineKept` > 0;
+  the file read becomes the base). Conflicts: `pendingMerge` + "Scene changed on disk" popup (`DrawSceneMergeModal`:
+  table Object / Value / Here / On disk / Keep with `radio:Here` / `radio:Disk` per row, Keep all mine / from disk,
+  Merge, Reload from disk, Keep mine (the file's bytes become the base, the scene stays dirty)). Batch mode has nobody
+  to ask: conflicts keep the editor's values and are logged as warnings.
+- Script reloads (`ReloadSceneAround`): an edit scene with a file is rebuilt from the file (`RebuildFromFile`) instead
+  of the in-memory snapshot: clean = the file; dirty = the same merge, mineBase normalized by the OLD scripts before
+  the swap (mine is the snapshot, also old scripts), so the unsaved changes are measured consistently and everything
+  else comes from the file read by the new scripts. Fixes: a field renamed in the scene file and then in the script
+  (the file reloaded first with the old scripts dropped it; the snapshot carried the loss over the reload).
+  Conflicts at that point (the file changed too) load the snapshot and open the popup.
+- Verified: batch probe (scratchpad `MergeProbe`, `-executeMethod MergeProbe.Run`, 31 checks: fields, nested
+  objects, conflicts and resolutions, lists, transform and header, references, objects added on both sides,
+  deletions, delete / change conflicts both ways with subtrees, reparenting, parent conflict, child order with and
+  without conflict, components added / removed / removal conflict, a prefab instance's overrides from both sides, an
+  object added under an instance's child, an override conflict, an instance reparented). GUI editor (CLI `set`, the
+  file edited by PowerShell, `get`, `click radio:Disk`, `click button:Merge`, `undo` / `redo`): auto-merge keeping
+  the scene dirty, the popup, the editor's own saves not merging, a field renamed in the file then in the script
+  (clean: 5 kept, was 1 before; dirty: kept with the unsaved change), a change on disk during play merged after Stop.
+  Not verified: the prefab-mode wait, batch-mode conflicts.
+
+## Files changed on disk: what reloads in the editor (2026-10-31)
+
+- The user's ask: every kind of file changed outside the editor must come back in by itself. Audited and verified in
+  a live editor (scratchpad `MergeProbe`, `ReloadProbe.Setup` / `SetupMore` / `Report` via CLI `exec`, files
+  edited by PowerShell). The asset watcher (debounced 0.5 s) runs `RefreshAssetsIfChanged` -> `AssetDatabase.Refresh`
+  (also drops the meta cache: import settings are read again), then each cache below; the settings watcher runs
+  `RefreshSettingsIfChanged`; `ScriptDomain` has its own watcher.
+- Already worked: `ProjectSettings/Project.json` (`ReloadSettingsFile`, every field), `ProjectSettings.asset`
+  (`ProjectSettings.Use`), models (`ImportChangedModels`), prefabs (`PrefabCache.ReloadChanged`, instances rebuilt),
+  ScriptableObjects (`ScriptableObjectAssets.ReloadChanged`), .uss / .uxml (`UIAssets.ReloadChanged`), audio clips and
+  the audio project, game / editor / test scripts (domain reload), the open scene (see "Scene changed on disk").
+- Did not, now do (all in place: the loaded objects keep their identity, so scenes, components and windows holding
+  them follow; one console line "[Editor] Reloaded (changed on disk): ..." from `EditorApplication.ReloadChangedAssets`):
+  - shaders and their includes: `ShaderProgram` keeps the files it read (`ReadStages(..., files)`: the .shader and
+    every include) and their stamp; `SourceChanged` / `Reload()` read the file again into the same object
+    (properties, render state via `ShaderRenderState.CopyFrom`, instancing support), delete the GL program and start
+    a new build, and reload the keyword variants and the instanced variant in place (a failed instanced variant may
+    link now). `InternalStorage.ReloadChangedShaders` then gives the loaded materials of those shaders the properties
+    they gained (`ResetToShaderDefaults(false)`). A shader that does not build logs "[Editor] ... does not build" with
+    its log (the old program is gone: the objects draw nothing until the file is fixed, then they come back).
+  - materials: `InternalStorage` stamps material files when loaded / registered / saved (`Material.Save` ->
+    `MaterialWritten`), `ReloadChangedMaterials` -> `Material.ApplyBytes` (built-in engine materials skipped).
+  - images: `TextureAssets.Entry.Sources` (the image files of the asset: one, six faces or volume slices, plus the meta
+    file) with their stamp; `ReloadChanged` -> `Reimport` (import settings changed in the meta file too; same shape:
+    the texture object is kept). UI images (`LoadForUI`, png / svg of UI documents) keep stamps too and read the file
+    again into the same `Texture2D` (they ignore import settings).
+  - physics materials 2D, VFX graphs, animation clips, animator controllers: `AssetFileStamps` (new, internal: the
+    stamps of one cache, `Note` on load / save, `Forget`, `Moved`, `ReloadChanged(loaded, apply, tag)`), applied with
+    `Documents.ReadObject` into the object / `ApplyBytes` (which bump `Version` and raise `Changed`: VFX programs
+    recompile, animators re-bind).
+- Not covered: fonts (.ttf, `UIAssets` fonts have no stamps), a prefab open in prefab mode changed on disk.
+- A domain reload drops the clip / controller caches (a report after a script change reads them fresh: Version 1);
+  check in-place reloads in a round without script changes.
+- Verified (live editor, Release build): texture 64 -> 32 -> 16 -> 4 px (material's and component's references, the
+  UI image too), maxSize in the meta 8 -> 2, material color, shader property added (material got it) and the fragment
+  output changed (screenshots: magenta, cyan; GPU-driven instanced variant), a syntax error logged and recovered,
+  ScriptableObject, physics material, clip length / controller duration / graph zoom (Version 2 / 2 / 3), model
+  bounds, prefab field, gravity in ProjectSettings.asset, StartScene in Project.json, an editor script edit.

@@ -905,6 +905,7 @@ namespace LELEngine.Animation
 		#region PrivateFields
 
 		private static readonly Dictionary<string, AnimatorController> cache = new Dictionary<string, AnimatorController>(StringComparer.OrdinalIgnoreCase);
+		private static readonly AssetFileStamps stamps = new AssetFileStamps();
 
 		#endregion
 
@@ -930,6 +931,7 @@ namespace LELEngine.Animation
 			AnimatorController controller = null;
 			try
 			{
+				stamps.Note(assetPath);
 				byte[] data = File.ReadAllBytes(AssetDatabase.ToAbsolute(assetPath));
 				if (Documents.IsDocument(data))
 				{
@@ -975,6 +977,7 @@ namespace LELEngine.Animation
 			AssetPath = assetPath.Replace('\\', '/');
 			name = Path.GetFileNameWithoutExtension(AssetPath);
 			Documents.WriteObjectFile(AssetDatabase.ToAbsolute(AssetPath), this);
+			stamps.Note(AssetPath);
 			AssetDatabase.EnsureMeta(AssetPath);
 			lock (cache)
 			{
@@ -1004,11 +1007,24 @@ namespace LELEngine.Animation
 			return copy;
 		}
 
+		/// <summary>Reads again, into the same objects (marked changed), the loaded controllers whose files changed on disk; returns them.</summary>
+		public static List<AnimatorController> ReloadChanged()
+		{
+			List<KeyValuePair<string, AnimatorController>> loaded;
+			lock (cache)
+			{
+				loaded = new List<KeyValuePair<string, AnimatorController>>(cache);
+			}
+
+			return stamps.ReloadChanged(loaded, (controller, data) => controller.ApplyBytes(data), "[Animation]");
+		}
+
 		public static void ClearCache()
 		{
 			lock (cache)
 			{
 				cache.Clear();
+				stamps.Clear();
 			}
 		}
 
@@ -1016,6 +1032,7 @@ namespace LELEngine.Animation
 		{
 			lock (cache)
 			{
+				stamps.Moved(fromPath, toPath);
 				AssetDatabase.RekeyMoved(cache, fromPath, toPath, (controller, path) =>
 				{
 					controller.AssetPath = path;
@@ -1029,6 +1046,7 @@ namespace LELEngine.Animation
 			lock (cache)
 			{
 				cache.Remove(assetPath);
+				stamps.Forget(assetPath);
 			}
 		}
 

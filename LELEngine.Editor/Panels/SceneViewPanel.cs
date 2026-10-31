@@ -235,6 +235,7 @@ namespace LELEngine.Editor
 			{
 				Physics2DGizmos.Draw(selected);
 				VFX.VisualEffectInspector.DrawGizmos(selected);
+				DriveConeInspector.DrawGizmos(selected);
 				editor.Extensions.DrawSceneGUI(selected);
 			}
 

@@ -278,6 +278,7 @@ namespace LELEngine.Shaders
 			AssetPath = assetPath.Replace('\\', '/');
 			name = Path.GetFileNameWithoutExtension(AssetPath);
 			Documents.WriteObjectFile(AssetDatabase.ToAbsolute(AssetPath), this);
+			InternalStorage.MaterialWritten(AssetPath);
 		}
 
 		/// <summary>The material as a document (undo snapshots, copies).</summary>
@@ -518,6 +519,15 @@ namespace LELEngine.Shaders
 		/// <summary>Uploads this material's values to the given program (e.g. the instanced variant of its shader).</summary>
 		public void SetUniforms(ShaderProgram program)
 		{
+			SetUniforms(program, null);
+		}
+
+		/// <summary>
+		///     Uploads this material's values, then a renderer's own (<paramref name="block" />, may be null or empty), which
+		///     win; the block's textures take the units after the material's.
+		/// </summary>
+		public void SetUniforms(ShaderProgram program, MaterialPropertyBlock block)
+		{
 			ResetStandardUniforms(program);
 			int textureUnit = 0;
 			foreach (MaterialProperty property in m_Properties)
@@ -529,6 +539,10 @@ namespace LELEngine.Shaders
 			}
 
 			ApplyMissingProperties(program, this, ref textureUnit);
+			if (block != null && !block.isEmpty)
+			{
+				block.Apply(program, ref textureUnit);
+			}
 		}
 
 		/// <summary>

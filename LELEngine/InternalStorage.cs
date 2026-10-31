@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.IO;
 using LELEngine.Shaders;
 
 namespace LELEngine
@@ -30,6 +31,9 @@ namespace LELEngine
 
 		private static ShaderProgram[] shaderList = Array.Empty<ShaderProgram>();
 
+		// The material files as read or written here (stamp of time and length), by asset path: changes on disk show.
+		private static readonly Dictionary<string, long> materialStamps = new Dictionary<string, long>();
+
 		#endregion
 
 		#region PublicMethods
@@ -43,6 +47,7 @@ namespace LELEngine
 			lock (Sync)
 			{
 				AssetDatabase.RekeyMoved(Materials, fromPath, toPath, (material, path) => material.AssetPath = path);
+				AssetDatabase.RekeyMoved(materialStamps, fromPath, toPath, (stamp, path) => { });
 				AssetDatabase.RekeyMoved(Shaders, fromPath, toPath, (shader, path) => shader.AssetPath = path);
 			}
 
@@ -74,6 +79,7 @@ namespace LELEngine
 
 				Shaders.Clear();
 				Materials.Clear();
+				materialStamps.Clear();
 				shaderList = Array.Empty<ShaderProgram>();
 			}
 
@@ -142,8 +148,10 @@ namespace LELEngine
 				Material mat;
 				if (!Materials.TryGetValue(assetPath, out mat))
 				{
+					long stamp = FileStampOf(AssetDatabase.ToAbsolute(assetPath));
 					mat = Material.Load(assetPath);
 					Materials.Add(assetPath, mat);
+					materialStamps[assetPath] = stamp;
 				}
 
 				return mat;
@@ -158,6 +166,19 @@ namespace LELEngine
 				lock (Sync)
 				{
 					Materials[material.AssetPath] = material;
+					materialStamps[material.AssetPath] = FileStampOf(AssetDatabase.ToAbsolute(material.AssetPath));
+				}
+			}
+		}
+
+		/// <summary>A material file was written here (<see cref="Material.Save" />): no change on disk to read back.</summary>
+		internal static void MaterialWritten(string assetPath)
+		{
+			lock (Sync)
+			{
+				if (Materials.ContainsKey(assetPath))
+				{
+					materialStamps[assetPath] = FileStampOf(AssetDatabase.ToAbsolute(assetPath));
 				}
 			}
 		}
@@ -168,7 +189,101 @@ namespace LELEngine
 			lock (Sync)
 			{
 				Materials.Remove(assetPath);
+				materialStamps.Remove(assetPath);
 			}
+		}
+
+		/// <summary>
+		///     Reads again, into the same objects, the loaded project materials whose files changed since they were read or
+		///     written here (a checkout, a text editor); returns them.
+		/// </summary>
+		public static List<Material> ReloadChangedMaterials()
+		{
+			var changed = new List<KeyValuePair<string, Material>>();
+			lock (Sync)
+			{
+				foreach (KeyValuePair<string, Material> entry in Materials)
+				{
+					if (materialStamps.TryGetValue(entry.Key, out long known) && !AssetDatabase.IsEngineResource(entry.Key))
+					{
+						string file = AssetDatabase.ToAbsolute(entry.Key);
+						if (File.Exists(file) && FileStampOf(file) != known)
+						{
+							changed.Add(entry);
+						}
+					}
+				}
+			}
+
+			var reloaded = new List<Material>();
+			foreach (KeyValuePair<string, Material> entry in changed)
+			{
+				string file = AssetDatabase.ToAbsolute(entry.Key);
+				long stamp = FileStampOf(file);
+				byte[] data;
+				try
+				{
+					data = File.ReadAllBytes(file);
+				}
+				catch (Exception e) when (e is IOException || e is UnauthorizedAccessException)
+				{
+					// Being written: the next change is noticed again.
+					continue;
+				}
+
+				lock (Sync)
+				{
+					materialStamps[entry.Key] = stamp;
+				}
+
+				try
+				{
+					entry.Value.ApplyBytes(data);
+					entry.Value.name = Path.GetFileNameWithoutExtension(entry.Key);
+					reloaded.Add(entry.Value);
+				}
+				catch (Exception e)
+				{
+					Debug.LogWarning($"[Material] {entry.Key} changed on disk but cannot be read ({e.Message}); it stays as it was");
+				}
+			}
+
+			return reloaded;
+		}
+
+		/// <summary>
+		///     Rebuilds in place the loaded shader programs whose files (the .shader or an include) changed on disk; the
+		///     loaded materials of those shaders get the properties they add. Returns the programs rebuilt.
+		/// </summary>
+		public static List<ShaderProgram> ReloadChangedShaders()
+		{
+			var reloaded = new List<ShaderProgram>();
+			foreach (ShaderProgram shader in shaderList)
+			{
+				if (shader.SourceChanged && shader.Reload())
+				{
+					reloaded.Add(shader);
+				}
+			}
+
+			if (reloaded.Count > 0)
+			{
+				List<Material> materials;
+				lock (Sync)
+				{
+					materials = new List<Material>(Materials.Values);
+				}
+
+				foreach (Material material in materials)
+				{
+					if (reloaded.Contains(material.shader))
+					{
+						material.ResetToShaderDefaults(false);
+					}
+				}
+			}
+
+			return reloaded;
 		}
 
 		/// <summary>Drops a cached shader program and deletes it (no loaded scene uses it any more).</summary>
@@ -194,6 +309,12 @@ namespace LELEngine
 		#endregion
 
 		#region PrivateMethods
+
+		private static long FileStampOf(string file)
+		{
+			var info = new FileInfo(file);
+			return info.Exists ? info.LastWriteTimeUtc.Ticks ^ info.Length : 0;
+		}
 
 		private static string ShaderKey(string name)
 		{

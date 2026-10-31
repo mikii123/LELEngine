@@ -217,6 +217,25 @@ namespace LELEngine.Shaders
 		///     the depth copy exist only in the transparent pass, so such a shader that names an opaque queue draws right
 		///     after the opaques.
 		/// </summary>
+		/// <summary>Takes every value of <paramref name="other" /> (a shader read again keeps its state object).</summary>
+		public void CopyFrom(ShaderRenderState other)
+		{
+			BlendEnabled = other.BlendEnabled;
+			SrcColor = other.SrcColor;
+			DstColor = other.DstColor;
+			SrcAlpha = other.SrcAlpha;
+			DstAlpha = other.DstAlpha;
+			ZWrite = other.ZWrite;
+			ZTest = other.ZTest;
+			Cull = other.Cull;
+			Queue = other.Queue;
+			CastShadows = other.CastShadows;
+			GrabPass = other.GrabPass;
+			GrabOffsetProperty = other.GrabOffsetProperty;
+			SceneDepth = other.SceneDepth;
+			QueueDeclared = other.QueueDeclared;
+		}
+
 		public void Finish()
 		{
 			if ((BlendEnabled || GrabPass || SceneDepth) && !QueueDeclared)

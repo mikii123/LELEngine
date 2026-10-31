@@ -87,7 +87,7 @@ namespace LELEngine.Shaders
 		public string SubAssetName => null;
 
 		/// <summary>The source includes Engine/Instancing.glsl: it can be drawn GPU-driven.</summary>
-		public bool SupportsInstancing { get; }
+		public bool SupportsInstancing { get; private set; }
 
 		/// <summary>This program is the instanced variant (compiled with <see cref="InstancedDefine" />).</summary>
 		public bool IsInstancedVariant { get; }
@@ -137,6 +137,10 @@ namespace LELEngine.Shaders
 		private bool instancedVariantCreated;
 		private string linkLog = "";
 		private string buildLog = "";
+
+		// The files the source was read from (the .shader and every include) and their stamp then (Reload).
+		private string[] sourceFiles = Array.Empty<string>();
+		private long sourceStamp;
 
 		// Started builds (StartBuild): the stage objects the driver compiles, the stages (their types name the log lines)
 		// and the binary cache's key, until EnsureBuilt reads the results.
@@ -190,9 +194,7 @@ namespace LELEngine.Shaders
 			IsInstancedVariant = Array.IndexOf(defines, InstancedDefine) >= 0;
 			this.defines = defines;
 			keywords = defines.Where(define => define != InstancedDefine).OrderBy(define => define, StringComparer.Ordinal).ToArray();
-			pendingStages = ReadStages(path, defines, properties, renderState, out bool includesInstancing);
-			SupportsInstancing = includesInstancing;
-			keywordProperties.AddRange(properties.Where(property => property.Keywords != null));
+			ReadSource();
 			StartBuild();
 		}
 
@@ -383,27 +385,76 @@ namespace LELEngine.Shaders
 			}
 		}
 
+		/// <summary>A file the source was read from (the .shader or one of its includes) changed since, or is gone.</summary>
+		public bool SourceChanged => SourcePath != null && sourceFiles.Length > 0 && StampOf(sourceFiles) != sourceStamp;
+
+		/// <summary>
+		///     Reads the .shader file again and rebuilds the program in place (materials and draws keep this object), its
+		///     keyword and instanced variants too; on the thread with the GL context. False when the file cannot be read: the
+		///     program stays as it was.
+		/// </summary>
+		public bool Reload()
+		{
+			if (SourcePath == null)
+			{
+				return false;
+			}
+
+			var readProperties = new List<ShaderProperty>();
+			var readState = new ShaderRenderState();
+			var files = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+			List<KeyValuePair<ShaderType, string>> stages;
+			bool includesInstancing;
+			try
+			{
+				stages = ReadStages(SourcePath, defines, readProperties, readState, ShaderFeatures.Current, false, out includesInstancing, files);
+			}
+			catch (Exception e) when (e is IOException || e is UnauthorizedAccessException)
+			{
+				Console.WriteLine("[Shader] Cannot read " + Name + " again (" + e.Message + "); it stays as it was");
+				return false;
+			}
+
+			ReleaseProgram();
+			properties.Clear();
+			properties.AddRange(readProperties);
+			keywordProperties.Clear();
+			keywordProperties.AddRange(properties.Where(property => property.Keywords != null));
+			renderState.CopyFrom(readState);
+			SupportsInstancing = includesInstancing;
+			sourceFiles = files.ToArray();
+			sourceStamp = StampOf(sourceFiles);
+			uniformCache.Clear();
+			uniformTypes.Clear();
+			linked = false;
+			linkLog = "";
+			buildLog = "";
+			pendingStages = stages;
+			StartBuild();
+
+			if (instancedVariant != null && !SupportsInstancing)
+			{
+				instancedVariant.Delete();
+				instancedVariant = null;
+			}
+
+			instancedVariant?.Reload();
+			// A variant that did not link may now.
+			instancedVariantCreated = instancedVariant != null;
+			lock (variants)
+			{
+				foreach (ShaderProgram variant in variants.Values)
+				{
+					variant.Reload();
+				}
+			}
+
+			return true;
+		}
+
 		public void Delete()
 		{
-			pendingStages = null;
-			if (startedShaders != null)
-			{
-				foreach (int shader in startedShaders)
-				{
-					GL.DeleteShader(shader);
-				}
-
-				startedShaders = null;
-				startedStages = null;
-				started.Remove(this);
-			}
-
-			if (handle != 0)
-			{
-				GL.DeleteProgram(handle);
-				handle = 0;
-			}
-
+			ReleaseProgram();
 			instancedVariant?.Delete();
 			instancedVariant = null;
 			lock (variants)
@@ -753,6 +804,52 @@ namespace LELEngine.Shaders
 			properties.AddRange(ShaderProperty.Parse(propertyLines, source));
 		}
 
+		/// <summary>Reads the .shader file (stages, properties, render state) and notes the files it came from.</summary>
+		private void ReadSource()
+		{
+			var files = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+			pendingStages = ReadStages(SourcePath, defines, properties, renderState, ShaderFeatures.Current, false, out bool includesInstancing, files);
+			SupportsInstancing = includesInstancing;
+			keywordProperties.AddRange(properties.Where(property => property.Keywords != null));
+			sourceFiles = files.ToArray();
+			sourceStamp = StampOf(sourceFiles);
+		}
+
+		private static long StampOf(string[] files)
+		{
+			long stamp = 17;
+			foreach (string file in files)
+			{
+				var info = new FileInfo(file);
+				stamp = stamp * 31 + (info.Exists ? info.LastWriteTimeUtc.Ticks ^ info.Length : 0);
+			}
+
+			return stamp;
+		}
+
+		/// <summary>Deletes the GL program and a build in flight (the sources waiting for one are dropped too).</summary>
+		private void ReleaseProgram()
+		{
+			pendingStages = null;
+			if (startedShaders != null)
+			{
+				foreach (int shader in startedShaders)
+				{
+					GL.DeleteShader(shader);
+				}
+
+				startedShaders = null;
+				startedStages = null;
+				started.Remove(this);
+			}
+
+			if (handle != 0)
+			{
+				GL.DeleteProgram(handle);
+				handle = 0;
+			}
+		}
+
 		/// <summary>
 		///     Starts compiling and linking the stages read by the constructor (on the thread holding the GL context) without
 		///     waiting; a binary the cache has of them loads (and links) here instead.
@@ -846,12 +943,15 @@ namespace LELEngine.Shaders
 
 		/// <summary>
 		///     <see cref="ReadStages(string, string[], List{ShaderProperty}, ShaderRenderState, out bool)" /> for the given
-		///     native features, with #line directives naming the files when <paramref name="lineDirectives" /> is set.
+		///     native features, with #line directives naming the files when <paramref name="lineDirectives" /> is set;
+		///     <paramref name="files" /> gets every file read (the .shader and its includes).
 		/// </summary>
-		private static List<KeyValuePair<ShaderType, string>> ReadStages(string path, string[] defines, List<ShaderProperty> properties, ShaderRenderState state, ShaderFeatures features, bool lineDirectives, out bool includesInstancing)
+		private static List<KeyValuePair<ShaderType, string>> ReadStages(string path, string[] defines, List<ShaderProperty> properties, ShaderRenderState state, ShaderFeatures features, bool lineDirectives, out bool includesInstancing,
+			HashSet<string> files = null)
 		{
 			var shaders = new List<KeyValuePair<ShaderType, string>>();
 			string fullPath = ResolveShaderPath(path);
+			files?.Add(Path.GetFullPath(fullPath));
 			string instancing = Path.GetFullPath(Path.Combine(ShadersRoot, InstancingInclude));
 			string lineName = lineDirectives ? path.Replace('\\', '/') : null;
 			includesInstancing = false;
@@ -883,6 +983,7 @@ namespace LELEngine.Shaders
 				var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { Path.GetFullPath(fullPath) };
 				string code = ExpandIncludes(stage, fullPath, visited, lineName, stageFirstLine);
 				includesInstancing |= visited.Contains(instancing);
+				files?.UnionWith(visited);
 				stage.Clear();
 				if (code.Trim().Length < 10)
 				{

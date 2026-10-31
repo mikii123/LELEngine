@@ -362,11 +362,19 @@ namespace LELEngine
 			public Sprite Single;
 			public List<Sprite> Sprites;
 			public TextureImporterShape Shape;
+
+			/// <summary>The files it was imported from (absolute: the images and the meta file) and their stamp then.</summary>
+			public string[] Sources;
+
+			public long Stamp;
 		}
 
 		private static readonly object sync = new object();
 		private static readonly Dictionary<string, Entry> entries = new Dictionary<string, Entry>(StringComparer.OrdinalIgnoreCase);
 		private static readonly Dictionary<string, Texture2D> uiTextures = new Dictionary<string, Texture2D>(StringComparer.OrdinalIgnoreCase);
+
+		// The UI textures' files when read (AssetFileStamps), by the uiTextures key.
+		private static readonly Dictionary<string, long> uiStamps = new Dictionary<string, long>(StringComparer.OrdinalIgnoreCase);
 
 		#endregion
 
@@ -467,6 +475,7 @@ namespace LELEngine
 			try
 			{
 				string absolute = File.Exists(path) ? path : AssetDatabase.ToAbsolute(path);
+				long stamp = AssetFileStamps.StampOf(absolute);
 				byte[] file = File.ReadAllBytes(absolute);
 				if (KtxFile.IsKtx(file))
 				{
@@ -476,12 +485,9 @@ namespace LELEngine
 					return LoadTexture(assetPath ?? AssetDatabase.ToAssetPath(absolute)) as Texture2D;
 				}
 
-				// Vector images are rasterized here (see SvgRasterizer); the rest is decoded as it is.
-				ImageData image = string.Equals(Path.GetExtension(absolute), ".svg", StringComparison.OrdinalIgnoreCase)
-					? SvgRasterizer.Rasterize(System.Text.Encoding.UTF8.GetString(file), assetPath ?? path)
-					: Decode(absolute, false, file);
+				ImageData image = DecodeForUI(absolute, file, assetPath ?? path);
 				var texture = new Texture2D { name = Path.GetFileName(path), AssetPath = assetPath };
-				texture.SetImage(image.IsHdr ? image.ToLdr() : image, false, false, true);
+				texture.SetImage(image, false, false, true);
 				texture.SetSamplerState(FilterMode.Trilinear, TextureWrap.Clamp, 1);
 				lock (sync)
 				{
@@ -493,6 +499,7 @@ namespace LELEngine
 					}
 
 					uiTextures[key] = texture;
+					uiStamps[key] = stamp;
 				}
 
 				return texture;
@@ -568,6 +575,60 @@ namespace LELEngine
 			}
 		}
 
+		/// <summary>
+		///     Imports again, in place (<see cref="Reimport" />), the loaded image assets whose files or import settings
+		///     (meta files) changed on disk, and reads again the UI's images that did; returns the asset paths.
+		/// </summary>
+		public static List<string> ReloadChanged()
+		{
+			List<KeyValuePair<string, Entry>> loaded;
+			List<KeyValuePair<string, long>> ui;
+			lock (sync)
+			{
+				loaded = new List<KeyValuePair<string, Entry>>(entries);
+				ui = new List<KeyValuePair<string, long>>(uiStamps);
+			}
+
+			var changed = new List<string>();
+			foreach (KeyValuePair<string, Entry> entry in loaded)
+			{
+				if (entry.Value.Sources != null && File.Exists(AssetDatabase.ToAbsolute(entry.Key)) && StampOf(entry.Value.Sources) != entry.Value.Stamp)
+				{
+					Reimport(entry.Key);
+					changed.Add(entry.Key);
+				}
+			}
+
+			foreach (KeyValuePair<string, long> entry in ui)
+			{
+				string file = Path.IsPathRooted(entry.Key) ? entry.Key : AssetDatabase.ToAbsolute(entry.Key);
+				long stamp = AssetFileStamps.StampOf(file);
+				if (stamp == 0 || stamp == entry.Value)
+				{
+					continue;
+				}
+
+				Texture2D texture;
+				lock (sync)
+				{
+					uiStamps[entry.Key] = stamp;
+					uiTextures.TryGetValue(entry.Key, out texture);
+				}
+
+				try
+				{
+					texture?.SetImage(DecodeForUI(file, File.ReadAllBytes(file), entry.Key), false, false, true);
+					changed.Add(entry.Key);
+				}
+				catch (Exception e)
+				{
+					Debug.LogWarning("[UI] " + entry.Key + " changed on disk but cannot be read (" + e.Message + "); it stays as it was");
+				}
+			}
+
+			return changed;
+		}
+
 		/// <summary>A file or folder moved: the loaded textures and sprites keep their identity under the new path.</summary>
 		internal static void AssetMoved(string fromPath, string toPath)
 		{
@@ -592,6 +653,7 @@ namespace LELEngine
 					}
 				});
 				AssetDatabase.RekeyMoved(uiTextures, fromPath, toPath, (texture, path) => texture.AssetPath = path);
+				AssetDatabase.RekeyMoved(uiStamps, fromPath, toPath);
 			}
 		}
 
@@ -612,6 +674,7 @@ namespace LELEngine
 				}
 
 				uiTextures.Clear();
+				uiStamps.Clear();
 			}
 		}
 
@@ -759,7 +822,8 @@ namespace LELEngine
 			TextureImporter importer = GetImporter(assetPath);
 			try
 			{
-				var entry = new Entry { Shape = importer.shape };
+				string[] sources = SourceFiles(assetPath);
+				var entry = new Entry { Shape = importer.shape, Sources = sources, Stamp = StampOf(sources) };
 				string name = Path.GetFileNameWithoutExtension(assetPath);
 				TextureImportBatch batch = TextureImportBatch.Current;
 				if (batch != null && previous == null && TryDefer(batch, assetPath, absolute, importer, entry, name))
@@ -1080,6 +1144,39 @@ namespace LELEngine
 			}
 
 			return importer;
+		}
+
+		/// <summary>A UI image: vector images rasterized (see SvgRasterizer), the rest decoded as they are, in LDR.</summary>
+		private static ImageData DecodeForUI(string absolute, byte[] file, string name)
+		{
+			ImageData image = string.Equals(Path.GetExtension(absolute), ".svg", StringComparison.OrdinalIgnoreCase)
+				? SvgRasterizer.Rasterize(System.Text.Encoding.UTF8.GetString(file), name)
+				: Decode(absolute, false, file);
+			return image.IsHdr ? image.ToLdr() : image;
+		}
+
+		/// <summary>The files an image asset is built from and its meta file (import settings), absolute.</summary>
+		private static string[] SourceFiles(string assetPath)
+		{
+			var files = new List<string>();
+			foreach (string file in GetSourceFiles(assetPath))
+			{
+				files.Add(AssetDatabase.ToAbsolute(file));
+			}
+
+			files.Add(AssetDatabase.ToAbsolute(assetPath) + AssetDatabase.MetaExtension);
+			return files.ToArray();
+		}
+
+		private static long StampOf(string[] files)
+		{
+			long stamp = 17;
+			foreach (string file in files)
+			{
+				stamp = stamp * 31 + AssetFileStamps.StampOf(file);
+			}
+
+			return stamp;
 		}
 
 		private static readonly string[][] FaceSuffixes =

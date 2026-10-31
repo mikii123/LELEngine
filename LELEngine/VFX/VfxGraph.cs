@@ -64,6 +64,7 @@ namespace LELEngine.VFX
 		#region PrivateFields
 
 		private static readonly Dictionary<string, VfxGraph> cache = new Dictionary<string, VfxGraph>(StringComparer.OrdinalIgnoreCase);
+		private static readonly AssetFileStamps stamps = new AssetFileStamps();
 
 		#endregion
 
@@ -86,6 +87,7 @@ namespace LELEngine.VFX
 			VfxGraph graph = null;
 			try
 			{
+				stamps.Note(assetPath);
 				byte[] data = File.ReadAllBytes(AssetDatabase.ToAbsolute(assetPath));
 				if (Documents.IsDocument(data))
 				{
@@ -134,6 +136,7 @@ namespace LELEngine.VFX
 			AssetPath = assetPath.Replace('\\', '/');
 			name = Path.GetFileNameWithoutExtension(AssetPath);
 			Documents.WriteObjectFile(AssetDatabase.ToAbsolute(AssetPath), this);
+			stamps.Note(AssetPath);
 			lock (cache)
 			{
 				cache[AssetPath] = this;
@@ -176,11 +179,24 @@ namespace LELEngine.VFX
 			return copy;
 		}
 
+		/// <summary>Reads again, into the same objects (marked changed), the loaded graphs whose files changed on disk; returns them.</summary>
+		public static List<VfxGraph> ReloadChanged()
+		{
+			List<KeyValuePair<string, VfxGraph>> loaded;
+			lock (cache)
+			{
+				loaded = new List<KeyValuePair<string, VfxGraph>>(cache);
+			}
+
+			return stamps.ReloadChanged(loaded, (graph, data) => graph.ApplyBytes(data), "[VFX]");
+		}
+
 		public static void ClearCache()
 		{
 			lock (cache)
 			{
 				cache.Clear();
+				stamps.Clear();
 			}
 		}
 
@@ -189,6 +205,7 @@ namespace LELEngine.VFX
 		{
 			lock (cache)
 			{
+				stamps.Moved(fromPath, toPath);
 				AssetDatabase.RekeyMoved(cache, fromPath, toPath, (graph, path) => graph.AssetPath = path);
 			}
 		}
@@ -199,6 +216,7 @@ namespace LELEngine.VFX
 			lock (cache)
 			{
 				cache.Remove(assetPath);
+				stamps.Forget(assetPath);
 			}
 		}
 

@@ -212,7 +212,8 @@ namespace LELEngine.Rendering
 				}
 
 				Material material = part.Material;
-				ShaderProgram instanced = material?.Program?.GetInstancedVariant();
+				// A renderer with shader values of its own (a property block) draws with them, one by one.
+				ShaderProgram instanced = renderer.HasPropertyBlock ? null : material?.Program?.GetInstancedVariant();
 				if (instanced == null)
 				{
 					// Depth passes still draw it from the tables; the opaque pass draws it per object.

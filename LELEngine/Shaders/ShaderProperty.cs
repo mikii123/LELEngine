@@ -33,7 +33,9 @@ namespace LELEngine.Shaders
 	///     Params ("Params", Vector) = (0, 0, 0, 0)
 	///     /////Properties
 	///     </code>
-	///     Attributes: [HDR] (color picker with intensity), [HideInInspector], [NoScaleOffset] and [Normal] (accepted).
+	///     Attributes: [HDR] (color picker with intensity), [HideInInspector], [NoScaleOffset] and [Normal] (accepted),
+	///     [PerRendererData] (Unity's: the value comes from each renderer's <see cref="MaterialPropertyBlock" />; the material
+	///     editor leaves it out, draws without a block use the declared default).
 	///     Keyword attributes (Unity's) on Float / Int / Range properties pick the shader variant a material draws with
 	///     (see <see cref="ShaderProgram.GetVariant" />):
 	///     <code>
@@ -65,6 +67,9 @@ namespace LELEngine.Shaders
 
 		public bool Hdr;
 		public bool HideInInspector;
+
+		/// <summary>[PerRendererData]: set per renderer through a <see cref="MaterialPropertyBlock" />, not on materials.</summary>
+		public bool PerRendererData;
 
 		/// <summary>
 		///     Keywords the value enables, one at a time: [Toggle] has one (on while the value is not 0), [KeywordEnum]
@@ -132,6 +137,7 @@ namespace LELEngine.Shaders
 				string text = attribute.Value.Trim().Trim('[', ']').Trim();
 				if (text.Equals("HDR", StringComparison.OrdinalIgnoreCase)) property.Hdr = true;
 				else if (text.Equals("HideInInspector", StringComparison.OrdinalIgnoreCase)) property.HideInInspector = true;
+				else if (text.Equals("PerRendererData", StringComparison.OrdinalIgnoreCase)) property.PerRendererData = true;
 				else ParseKeywordAttribute(property, text);
 			}
 

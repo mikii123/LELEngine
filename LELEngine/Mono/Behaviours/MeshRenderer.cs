@@ -36,6 +36,9 @@ public sealed class MeshRenderer : Behaviour
 	/// </summary>
 	public bool IsStatic;
 
+	/// <summary>The renderer has shader values of its own (<see cref="SetPropertyBlock" />).</summary>
+	public bool HasPropertyBlock => propertyBlock != null && !propertyBlock.isEmpty;
+
 	/// <summary>Some sub-mesh has a transparent material (it draws in the transparent pass).</summary>
 	public bool HasTransparentParts
 	{
@@ -81,6 +84,9 @@ public sealed class MeshRenderer : Behaviour
 	// drawing / out of the GI (LODGroup.IsHidden / IsOutOfGI).
 	[System.NonSerialized] internal int lodHidden;
 	[System.NonSerialized] internal int lodOutOfGI;
+
+	// The renderer's own shader values (a copy of the block given to SetPropertyBlock); not saved, as in Unity.
+	[System.NonSerialized] private MaterialPropertyBlock propertyBlock;
 
 	/// <summary>Sub-meshes to consider (a renderer without a mesh still reports its material).</summary>
 	private int PartCount => mesh != null ? mesh.SubMeshCount : 1;
@@ -139,6 +145,38 @@ public sealed class MeshRenderer : Behaviour
 	}
 
 	/// <summary>
+	///     Shader values of this renderer on top of its materials (Unity's SetPropertyBlock): the block's values are copied
+	///     and uploaded after the material's at every draw of the renderer, in the opaque and the transparent pass. Null or
+	///     an empty block removes them. A renderer with values of its own draws one by one (not in a GPU-driven bucket).
+	///     Not used by the depth, shadow and GI passes (they draw the geometry only).
+	/// </summary>
+	public void SetPropertyBlock(MaterialPropertyBlock block)
+	{
+		if (block == null || block.isEmpty)
+		{
+			propertyBlock = null;
+			return;
+		}
+
+		propertyBlock ??= new MaterialPropertyBlock();
+		propertyBlock.CopyFrom(block);
+	}
+
+	/// <summary>Copies the renderer's own shader values into <paramref name="destination" /> (cleared when there are none).</summary>
+	public void GetPropertyBlock(MaterialPropertyBlock destination)
+	{
+		if (destination == null)
+		{
+			return;
+		}
+
+		destination.CopyFrom(propertyBlock);
+	}
+
+	/// <summary>The renderer's own values as drawn (null when it has none); read only.</summary>
+	internal MaterialPropertyBlock PropertyBlock => propertyBlock;
+
+	/// <summary>
 	///     Full material draw of the opaque sub-meshes: per sub-mesh its material shader is activated and gets the
 	///     camera, lighting and material uniforms, then the sub-mesh draws.
 	/// </summary>
@@ -163,7 +201,7 @@ public sealed class MeshRenderer : Behaviour
 			transform.SetModelMatrix(shader);
 			(Camera.current ?? Camera.main)?.SetUniforms(shader);
 			Lighting.SetUniforms(shader, ReceiveShadows, ReceiveGI);
-			m.SetUniforms();
+			m.SetUniforms(shader, propertyBlock);
 			DrawSubMesh(i);
 		}
 	}
@@ -183,7 +221,7 @@ public sealed class MeshRenderer : Behaviour
 		}
 
 		transform.SetModelMatrix(program);
-		m.SetUniforms();
+		m.SetUniforms(program, propertyBlock);
 		DrawSubMesh(subMesh);
 	}
 

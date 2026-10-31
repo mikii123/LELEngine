@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using Hexa.NET.ImGui;
 using LELEngine.Rendering;
 using LELEngine.Serialization;
@@ -131,7 +132,10 @@ namespace LELEngine.Editor
 		private FileStamp projectSettingsStamp;
 		private FileStamp sceneStamp;
 
-		/// <summary>The open scene's file changed on disk: reloaded when the scene has no unsaved changes, asked otherwise (after play mode).</summary>
+		/// <summary>
+		///     The open scene's file changed on disk: reloaded when the scene has no unsaved changes, merged otherwise (after
+		///     play mode; EditorApplication.SceneMerge.cs).
+		/// </summary>
 		private bool sceneChangedOnDisk;
 		private bool openSceneChangedPopup;
 
@@ -714,6 +718,8 @@ namespace LELEngine.Editor
 			settingsWatcher = null;
 			settingsChanged = false;
 			sceneChangedOnDisk = false;
+			sceneFileBase = null;
+			pendingMerge = null;
 			Selected = null;
 			SelectedAsset = null;
 			AssetInspectors.Deselected();
@@ -1410,7 +1416,9 @@ namespace LELEngine.Editor
 
 		/// <summary>
 		///     Saves the current scene to memory, unloads it, runs <paramref name="reload" /> (the script domain swap)
-		///     and loads the scene back: every component is re-created from its serialized state.
+		///     and loads the scene back: every component is re-created from its serialized state. An edit scene with a file
+		///     comes back from the file with its unsaved changes on top (<see cref="RebuildFromFile" />): what the old
+		///     scripts could not read of the file (a field the new ones renamed or added) is read now.
 		/// </summary>
 		public void ReloadSceneAround(Action reload)
 		{
@@ -1426,6 +1434,22 @@ namespace LELEngine.Editor
 			string path = scene.Path;
 			ulong selected = Selected?.Id ?? 0;
 			bool playing = IsPlaying;
+			bool fromFile = !playing && Stage == null && pendingMerge == null && sceneFileBase != null && !string.IsNullOrEmpty(path) && File.Exists(AssetDatabase.ToAbsolute(path));
+			byte[] mineBase = null;
+			if (fromFile && SceneDirty)
+			{
+				// The unsaved changes are measured with the old scripts, from the file as they write it.
+				try
+				{
+					mineBase = NormalizedScene(sceneFileBase);
+				}
+				catch (Exception e)
+				{
+					Debug.LogWarning($"[Editor] Cannot read {path} as the scripts wrote it ({e.Message}); the scene comes back as it was.");
+					fromFile = false;
+				}
+			}
+
 			Scripts?.TrackComponents(scene);
 			Extensions.CaptureWindowStates();
 			SceneManager.UnloadAll(true);
@@ -1433,7 +1457,8 @@ namespace LELEngine.Editor
 
 			reload();
 
-			Scene reloaded = SceneSerializer.LoadFromBytes(snapshot);
+			Scene reloaded = fromFile ? RebuildFromFile(path, snapshot, mineBase) : null;
+			reloaded ??= SceneSerializer.LoadFromBytes(snapshot);
 			reloaded.Path = path;
 			ReplaceScene(reloaded, playing);
 			Selected = selected != 0 ? reloaded.FindObjectById(selected) : null;
@@ -1712,6 +1737,8 @@ namespace LELEngine.Editor
 			SceneDirty = false;
 			sceneStamp = default;
 			sceneChangedOnDisk = false;
+			sceneFileBase = null;
+			pendingMerge = null;
 			Undo.Clear();
 		}
 
@@ -1727,11 +1754,13 @@ namespace LELEngine.Editor
 				string file = AssetDatabase.ToAbsolute(assetPath);
 				FileStamp stamp = FileStamp.Of(file);
 				long start = System.Diagnostics.Stopwatch.GetTimestamp();
+				// Kept: the base the file's own changes are measured from when it changes on disk.
+				byte[] data = File.ReadAllBytes(file);
 				Scene scene;
 				string summary;
 				using (AssetLoadScope scope = AssetLoadScope.Begin())
 				{
-					scene = SceneSerializer.Load(file);
+					scene = SceneSerializer.LoadFromBytes(data, Path.GetFileNameWithoutExtension(file));
 					summary = scope.Summary();
 				}
 
@@ -1748,6 +1777,8 @@ namespace LELEngine.Editor
 				SceneDirty = false;
 				sceneStamp = stamp;
 				sceneChangedOnDisk = false;
+				sceneFileBase = data;
+				pendingMerge = null;
 				Undo.Clear();
 				// Saved with the editor state (on close), read when the project opens again.
 				lastScene = assetPath;
@@ -1774,6 +1805,8 @@ namespace LELEngine.Editor
 			// The editor's own write: the asset watcher must not reload it.
 			sceneStamp = FileStamp.Of(AssetDatabase.ToAbsolute(assetPath));
 			sceneChangedOnDisk = false;
+			sceneFileBase = File.ReadAllBytes(AssetDatabase.ToAbsolute(assetPath));
+			pendingMerge = null;
 			lastScene = assetPath;
 			if (!Project.BuildScenes.Contains(assetPath))
 			{
@@ -1816,42 +1849,7 @@ namespace LELEngine.Editor
 				openSaveAsPopup = false;
 			}
 
-			if (openSceneChangedPopup)
-			{
-				ImGui.OpenPopup("Scene changed on disk");
-				openSceneChangedPopup = false;
-			}
-
-			ImGui.SetNextWindowPos(EditorGui.ViewportCenter(), ImGuiCond.Appearing, new NVector2(0.5f, 0.5f));
-			if (ImGui.BeginPopupModal("Scene changed on disk", ImGuiWindowFlags.AlwaysAutoResize))
-			{
-				ImGui.Text($"The scene '{Scene?.Name}' was changed outside the editor (git, Explorer),");
-				ImGui.Text("and it has unsaved changes here.");
-				ImGui.Spacing();
-				if (EditorGui.Button("Reload", new NVector2(110, 0)))
-				{
-					ImGui.CloseCurrentPopup();
-					ReloadSceneFromDisk();
-				}
-
-				if (ImGui.IsItemHovered())
-				{
-					ImGui.SetTooltip("Load the file from disk; the changes made here are lost.");
-				}
-
-				ImGui.SameLine();
-				if (EditorGui.Button("Keep mine", new NVector2(110, 0)))
-				{
-					ImGui.CloseCurrentPopup();
-				}
-
-				if (ImGui.IsItemHovered())
-				{
-					ImGui.SetTooltip("Keep the scene as it is here; saving it overwrites the file on disk.");
-				}
-
-				ImGui.EndPopup();
-			}
+			DrawSceneMergeModal();
 
 			ImGui.SetNextWindowPos(EditorGui.ViewportCenter(), ImGuiCond.Appearing, new NVector2(0.5f, 0.5f));
 			if (ImGui.BeginPopupModal("Unsaved changes", ImGuiWindowFlags.AlwaysAutoResize))
@@ -2222,6 +2220,12 @@ namespace LELEngine.Editor
 				CreateObject("Trail", go => go.AddComponent<TrailRenderer>().Reset(), parent);
 			}
 
+			if (EditorMenu.Item("Drive Cone"))
+			{
+				// An afterburner with the default drive cone material, along the new object's +Z.
+				CreateObject("Drive Cone", go => go.AddComponent<DriveCone>().Reset(), parent);
+			}
+
 			if (EditorMenu.Begin("Audio"))
 			{
 				if (EditorMenu.Item("Audio Listener")) CreateObject("Audio Listener", go => go.AddComponent<LELEngine.Audio.AudioListener>(), parent);
@@ -2421,6 +2425,9 @@ namespace LELEngine.Editor
 			UIElements.UIAssets.ReloadChanged();
 			// ScriptableObject assets changed outside the editor: the loaded instances read their files again.
 			ScriptableObjectAssets.ReloadChanged();
+			// Shaders (their includes too), materials, images, physics materials, VFX graphs, clips and controllers changed
+			// outside: the loaded objects read their files again in place, so scenes and windows holding them follow.
+			ReloadChangedAssets();
 			// Prefab files changed outside the editor: the scene's instances of them are rebuilt.
 			RefreshPrefabsIfChanged();
 			// Audio files and the audio project changed outside: clips re-read on use, the project reloaded (not while the
@@ -2448,74 +2455,73 @@ namespace LELEngine.Editor
 			CheckSceneOnDisk();
 		}
 
+		/// <summary>
+		///     The loaded assets whose files changed on disk read them again into the same objects (shaders first: the
+		///     materials read after them add the properties a shader gained); one console line lists them.
+		/// </summary>
+		private void ReloadChangedAssets()
+		{
+			var reloaded = new List<string>();
+			List<LELEngine.Shaders.ShaderProgram> shaders = InternalStorage.ReloadChangedShaders();
+			if (shaders.Count > 0)
+			{
+				LELEngine.Shaders.ShaderProgram.FinishStartedBuilds();
+				foreach (LELEngine.Shaders.ShaderProgram shader in shaders)
+				{
+					reloaded.Add(shader.AssetPath);
+					if (!shader.IsLinked)
+					{
+						Debug.LogError($"[Editor] {shader.AssetPath} changed on disk and does not build:\n{shader.BuildLog}");
+					}
+				}
+			}
+
+			foreach (LELEngine.Shaders.Material material in InternalStorage.ReloadChangedMaterials())
+			{
+				reloaded.Add(material.AssetPath);
+			}
+
+			reloaded.AddRange(TextureAssets.ReloadChanged());
+			foreach (PhysicsMaterial2D material in PhysicsMaterial2D.ReloadChanged())
+			{
+				reloaded.Add(material.AssetPath);
+			}
+
+			foreach (LELEngine.VFX.VfxGraph graph in LELEngine.VFX.VfxGraph.ReloadChanged())
+			{
+				reloaded.Add(graph.AssetPath);
+			}
+
+			foreach (LELEngine.Animation.AnimationClip clip in LELEngine.Animation.AnimationClip.ReloadChanged())
+			{
+				reloaded.Add(clip.AssetPath);
+			}
+
+			foreach (LELEngine.Animation.AnimatorController controller in LELEngine.Animation.AnimatorController.ReloadChanged())
+			{
+				reloaded.Add(controller.AssetPath);
+			}
+
+			if (reloaded.Count == 0)
+			{
+				return;
+			}
+
+			// An image may be both a texture and a UI image.
+			reloaded = reloaded.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+			foreach (string path in reloaded)
+			{
+				AssetThumbnails.Invalidate(path);
+			}
+
+			Lighting.GI.InvalidateStatic();
+			Debug.Log("[Editor] Reloaded (changed on disk): " + string.Join(", ", reloaded));
+		}
+
 		private void OnSettingsChanged()
 		{
 			settingsChangedAt = Time.timeD;
 			settingsChanged = true;
-		}
-
-		/// <summary>The open scene's file is not the one the editor read or wrote last (git, Explorer): note it for reloading.</summary>
-		private void CheckSceneOnDisk()
-		{
-			// In play mode the scene being played is a copy; the edit scene's file is what matters.
-			string path = IsPlaying ? playScenePath : Scene?.Path;
-			if (string.IsNullOrEmpty(path))
-			{
-				return;
-			}
-
-			string file = AssetDatabase.ToAbsolute(path);
-			if (!File.Exists(file))
-			{
-				return;
-			}
-
-			FileStamp stamp = FileStamp.Of(file);
-			if (stamp != sceneStamp)
-			{
-				sceneStamp = stamp;
-				sceneChangedOnDisk = true;
-			}
-		}
-
-		/// <summary>
-		///     Reloads the open scene changed on disk when it has no unsaved changes (keeping the selection); with
-		///     unsaved changes the user chooses. Waits for play mode to end.
-		/// </summary>
-		private void ReloadSceneIfChangedOnDisk()
-		{
-			if (!sceneChangedOnDisk || IsPlaying)
-			{
-				return;
-			}
-
-			sceneChangedOnDisk = false;
-			if (SceneDirty)
-			{
-				openSceneChangedPopup = true;
-				return;
-			}
-
-			ReloadSceneFromDisk();
-		}
-
-		private void ReloadSceneFromDisk()
-		{
-			string path = Scene?.Path;
-			if (string.IsNullOrEmpty(path))
-			{
-				return;
-			}
-
-			ulong selected = Selected?.Id ?? 0;
-			OpenSceneNow(path);
-			GameObject reselected = selected != 0 ? Scene?.FindObjectById(selected) : null;
-			if (reselected != null)
-			{
-				Select(reselected);
-			}
-
-			Debug.Log("[Editor] Reloaded " + path + " (changed on disk)");
 		}
 
 		/// <summary>Project.json and ProjectSettings.asset changed outside the editor: read them again (debounced).</summary>

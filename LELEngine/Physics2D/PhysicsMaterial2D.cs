@@ -30,6 +30,7 @@ namespace LELEngine
 		#region PrivateFields
 
 		private static readonly Dictionary<string, PhysicsMaterial2D> cache = new Dictionary<string, PhysicsMaterial2D>(StringComparer.OrdinalIgnoreCase);
+		private static readonly AssetFileStamps stamps = new AssetFileStamps();
 
 		#endregion
 
@@ -62,6 +63,7 @@ namespace LELEngine
 			PhysicsMaterial2D material;
 			try
 			{
+				stamps.Note(assetPath);
 				material = Documents.ReadObject(File.ReadAllBytes(AssetDatabase.ToAbsolute(assetPath)), typeof(PhysicsMaterial2D), new PhysicsMaterial2D()) as PhysicsMaterial2D;
 			}
 			catch (Exception e)
@@ -92,10 +94,23 @@ namespace LELEngine
 			AssetPath = assetPath.Replace('\\', '/');
 			name = Path.GetFileNameWithoutExtension(AssetPath);
 			Documents.WriteObjectFile(AssetDatabase.ToAbsolute(AssetPath), this);
+			stamps.Note(AssetPath);
 			lock (cache)
 			{
 				cache[AssetPath] = this;
 			}
+		}
+
+		/// <summary>Reads again, into the same objects, the loaded materials whose files changed on disk; returns them.</summary>
+		public static List<PhysicsMaterial2D> ReloadChanged()
+		{
+			List<KeyValuePair<string, PhysicsMaterial2D>> loaded;
+			lock (cache)
+			{
+				loaded = new List<KeyValuePair<string, PhysicsMaterial2D>>(cache);
+			}
+
+			return stamps.ReloadChanged(loaded, (material, data) => Documents.ReadObject(data, typeof(PhysicsMaterial2D), material), "[Physics2D]");
 		}
 
 		public static void ClearCache()
@@ -103,6 +118,7 @@ namespace LELEngine
 			lock (cache)
 			{
 				cache.Clear();
+				stamps.Clear();
 			}
 		}
 
@@ -111,6 +127,7 @@ namespace LELEngine
 		{
 			lock (cache)
 			{
+				stamps.Moved(fromPath, toPath);
 				AssetDatabase.RekeyMoved(cache, fromPath, toPath, (material, path) => material.AssetPath = path);
 			}
 		}

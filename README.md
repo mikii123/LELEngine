@@ -131,6 +131,16 @@ Built on .NET 10, OpenTK 4.9 (GLFW) and OpenGL 4.6 (4.3 minimum), developed and 
   tile / per-segment texture modes, autodestruct, emitting) and API (`Clear`, `AddPosition`, `GetPositions`, ...),
   built for every camera and drawn by the transparent pass with any material. `Gradient` is Unity's too (blend,
   fixed and perceptual blend modes), with a gradient editor in the inspector.
+- `DriveCone`: an engine's exhaust plume (a jet's afterburner with its shock diamonds, a rocket's or a torch drive's
+  plume) along the object's +Z, drawn by `Engine/DriveCone.shader` as cone shells the vertex shader shapes and
+  animates. The plume follows a throttle (length, width, brightness, diamonds; spooling up and down), dies down when the
+  engine stops, flashes when it lights, flickers, pulses and sways, and every part of the look is a field: shape (width
+  curve), flame gradient, core, diamonds, turbulence, nozzle glow; presets Afterburner, Rocket, Fusion Drive, Ion and
+  Torch Drive. GameObject menu > Drive Cone; the inspector applies presets, plays the ignition and outlines the plume in
+  the scene view.
+- `MaterialPropertyBlock` (Unity's): shader values of one renderer on top of its materials
+  (`MeshRenderer.SetPropertyBlock`), for per-object values without a material copy; `[PerRendererData]` marks the shader
+  properties that come from them.
 - Refraction (Unity's GrabPass): a shader declares `GrabPass` and reads a copy of the scene drawn before the object,
   taken right before it draws, so refracting glass also shows the glass and particles behind it. Only the screen
   rectangles the objects read are copied, and one copy serves the objects nothing drawn in between overlaps.
@@ -256,6 +266,16 @@ GPU event, ribbons and soft smoke puffs, all simulated and drawn on the GPU.*
 **Editor (`LELEngine.Editor`)**
 - Project launcher, dockable Dear ImGui interface, hierarchy, inspector, project browser, console, undo/redo and
   gizmos (including 2D collider outlines).
+- The open scene follows its file when something else changes it (git, a text editor): without unsaved changes it
+  reloads; with them the file's changes merge into the scene value by value (`SceneMerge`, a three-way merge of
+  scene documents: properties, nested objects, objects, components, prefab overrides, the order of siblings) and
+  only values both sides changed differently ask, one by one, in a "Scene changed on disk" window (merge, reload or
+  keep mine; the merge is one undo step). A script reload rebuilds the scene from its file the same way, so data
+  the old scripts could not read (a field renamed in the new ones) is not lost.
+- Every other file changed outside the editor comes back in too, into the objects already loaded: scripts, project
+  settings, models, prefabs, ScriptableObjects, shaders (and their includes, rebuilt in place with their variants),
+  materials, images and their import settings, UI documents, style sheets and images, physics materials, VFX graphs,
+  animation clips and controllers, audio.
 - Inspector: drag and drop of objects, components and assets onto fields (with an object picker), inline editors of
   referenced assets, prefabs and components, prefab override marks with apply / revert, colored component headers,
   an inspector lock.

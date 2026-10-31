@@ -66,10 +66,12 @@ namespace LELEngine.Editor
 			var shown = new HashSet<string>(StringComparer.Ordinal);
 			if (shader.Properties.Count > 0)
 			{
+				int perRenderer = 0;
 				foreach (ShaderProperty declared in shader.Properties)
 				{
 					shown.Add(declared.Name);
-					if (declared.HideInInspector || IsScaleOffsetOfTexture(shader, declared))
+					perRenderer += declared.PerRendererData && !declared.HideInInspector ? 1 : 0;
+					if (declared.HideInInspector || declared.PerRendererData || IsScaleOffsetOfTexture(shader, declared))
 					{
 						continue;
 					}
@@ -83,6 +85,11 @@ namespace LELEngine.Editor
 					}
 
 					ImGui.PopID();
+				}
+
+				if (perRenderer > 0)
+				{
+					ImGui.TextDisabled(perRenderer == 1 ? "1 property is set per renderer ([PerRendererData])." : $"{perRenderer} properties are set per renderer ([PerRendererData]).");
 				}
 			}
 			else

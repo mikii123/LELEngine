@@ -482,6 +482,7 @@ namespace LELEngine.Animation
 		#region PrivateFields
 
 		private static readonly Dictionary<string, AnimationClip> cache = new Dictionary<string, AnimationClip>(StringComparer.OrdinalIgnoreCase);
+		private static readonly AssetFileStamps stamps = new AssetFileStamps();
 		private float cachedLength;
 
 		#endregion
@@ -509,6 +510,7 @@ namespace LELEngine.Animation
 			AnimationClip clip = null;
 			try
 			{
+				stamps.Note(assetPath);
 				byte[] data = File.ReadAllBytes(AssetDatabase.ToAbsolute(assetPath));
 				if (Documents.IsDocument(data))
 				{
@@ -556,6 +558,7 @@ namespace LELEngine.Animation
 			AssetPath = assetPath.Replace('\\', '/');
 			name = Path.GetFileNameWithoutExtension(AssetPath);
 			Documents.WriteObjectFile(AssetDatabase.ToAbsolute(AssetPath), this);
+			stamps.Note(AssetPath);
 			AssetDatabase.EnsureMeta(AssetPath);
 			lock (cache)
 			{
@@ -587,11 +590,24 @@ namespace LELEngine.Animation
 			return copy;
 		}
 
+		/// <summary>Reads again, into the same objects (marked changed), the loaded clips whose files changed on disk; returns them.</summary>
+		public static List<AnimationClip> ReloadChanged()
+		{
+			List<KeyValuePair<string, AnimationClip>> loaded;
+			lock (cache)
+			{
+				loaded = new List<KeyValuePair<string, AnimationClip>>(cache);
+			}
+
+			return stamps.ReloadChanged(loaded, (clip, data) => clip.ApplyBytes(data), "[Animation]");
+		}
+
 		public static void ClearCache()
 		{
 			lock (cache)
 			{
 				cache.Clear();
+				stamps.Clear();
 			}
 		}
 
@@ -600,6 +616,7 @@ namespace LELEngine.Animation
 		{
 			lock (cache)
 			{
+				stamps.Moved(fromPath, toPath);
 				AssetDatabase.RekeyMoved(cache, fromPath, toPath, (clip, path) =>
 				{
 					clip.AssetPath = path;
@@ -614,6 +631,7 @@ namespace LELEngine.Animation
 			lock (cache)
 			{
 				cache.Remove(assetPath);
+				stamps.Forget(assetPath);
 			}
 		}
 
