@@ -1508,6 +1508,11 @@ texture read back), see the port's `PORTING.md` "UI".
   data dirty) so the renderer stops drawing them from their last transforms, and recomputes the whole subtree when
   shown again; `UIRenderer.UpdateMeshes` iterates a snapshot (elements added during a repaint threw "Collection was
   modified").
+- `BaseVisualElementPanel.SettleLayout` (2026-11-02): what `GeometryChangedEvent` callbacks change (an element placing
+  itself by its new size) is laid out in the same `Update` / `ValidateLayout`, up to `MaxLayoutPasses` (5, Unity's limit;
+  past it the rest waits for the next frame and the panel warns once). Before, it waited for the next frame, which drew
+  the state in between: NF's tooltip one frame out of place wherever its side depends on its size. Layout getters do not
+  validate during `Update`, so test this through the geometry events per `Update` (they read nothing lazily), not `layout`.
 - Layout quirk kept (Yoga's): measuring a column container of known width, a child with `flex-basis: 0` counts as
   its basis plus padding, not its min-height, so the container measures short and the child overflows at layout
   time. NF's settings fields give the dropdown input `flex-basis: auto`.

@@ -117,9 +117,13 @@ namespace LELEngine.UIElements
 		private readonly List<GeometryChange> geometryChanges = new List<GeometryChange>();
 		private readonly Stack<int> freeRenderSlots = new Stack<int>();
 		private int nextRenderSlot;
+		/// <summary>Layout passes per update or validation (<see cref="SettleLayout" />; Unity's limit too).</summary>
+		private const int MaxLayoutPasses = 5;
+
 		private bool updating;
 		private bool validating;
 		private bool disposed;
+		private bool warnedUnsettledLayout;
 
 		#endregion
 
@@ -182,6 +186,7 @@ namespace LELEngine.UIElements
 				UpdateStyles();
 				transitions.Update(nowMs);
 				UpdateLayout();
+				SettleLayout();
 				UpdateTransforms();
 				UpdateHierarchy();
 			}
@@ -204,6 +209,7 @@ namespace LELEngine.UIElements
 			{
 				UpdateStyles();
 				UpdateLayout();
+				SettleLayout();
 			}
 			finally
 			{
@@ -435,7 +441,7 @@ namespace LELEngine.UIElements
 			FlexLayout.Layout(visualTree, targetWidth / scale, targetHeight / scale);
 			layoutVersion++;
 			// Layout may have found new text measurements that changed styles (none), but geometry events may change
-			// the tree: run them after the pass, then catch the follow-up dirt on the next Update / Validate.
+			// the tree: run them after the pass, SettleLayout takes the follow-up dirt.
 			if (geometryChanges.Count > 0)
 			{
 				GeometryChange[] changes = geometryChanges.ToArray();
@@ -453,6 +459,30 @@ namespace LELEngine.UIElements
 						change.element.SendEvent(evt);
 					}
 				}
+			}
+		}
+
+		/// <summary>
+		///     What the geometry events of a pass changed (an element placing itself by its new size) is laid out at once, as in
+		///     Unity: no frame draws the state in between. Callbacks that never settle get a few passes per frame and one warning.
+		/// </summary>
+		private void SettleLayout()
+		{
+			for (int pass = 1; layoutDirty || stylesDirty.Count > 0; pass++)
+			{
+				if (pass >= MaxLayoutPasses)
+				{
+					if (!warnedUnsettledLayout)
+					{
+						warnedUnsettledLayout = true;
+						Debug.LogWarning($"[UI] The layout did not settle in {MaxLayoutPasses} passes: a GeometryChangedEvent callback keeps changing styles or sizes.");
+					}
+
+					return;
+				}
+
+				UpdateStyles();
+				UpdateLayout();
 			}
 		}
 
