@@ -39,6 +39,12 @@ namespace LELEngine.Editor
 
 		/// <summary>The GameObject the inspector shows: the selection, or the object the inspector is locked on.</summary>
 		public GameObject InspectedObject => inspector.Shown ?? Selected;
+
+		/// <summary>The component's header is unfolded in the inspector (the scene view draws its gizmos then).</summary>
+		public bool IsExpandedInInspector(Behaviour component)
+		{
+			return inspector.IsExpanded(component);
+		}
 		public bool SceneDirty { get; private set; }
 		public PlayState PlayState { get; private set; } = PlayState.Edit;
 		public bool IsPlaying => PlayState != PlayState.Edit;
@@ -1089,6 +1095,12 @@ namespace LELEngine.Editor
 		public void MarkDirty()
 		{
 			NotifySceneChanged();
+			MarkEdited();
+		}
+
+		/// <summary>An edit no view shows (scene view gizmos draw over the image), e.g. while a handle is dragged: dirty, nothing renders for it.</summary>
+		public void MarkEdited()
+		{
 			lastEditTime = Time.timeD;
 			if (!IsPlaying)
 			{

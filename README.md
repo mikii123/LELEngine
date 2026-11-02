@@ -259,7 +259,7 @@ GPU event, ribbons and soft smoke puffs, all simulated and drawn on the GPU.*
 
 **Editor (`LELEngine.Editor`)**
 - Project launcher, dockable Dear ImGui interface, hierarchy, inspector, project browser, console, undo/redo and
-  gizmos (including 2D collider outlines).
+  gizmos (2D colliders of the selected object, while expanded in the inspector, with handles that edit them).
 - The open scene follows its file when something else changes it (git, a text editor): without unsaved changes it
   reloads; with them the file's changes merge into the scene value by value (`SceneMerge`, a three-way merge of
   scene documents: properties, nested objects, objects, components, prefab overrides, the order of siblings) and

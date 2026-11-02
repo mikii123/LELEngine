@@ -17,7 +17,8 @@ namespace LELEngine.Editor
 	///     drag=N;fromAnchor;toAnchor|M;... (press at N, move, hover at N+10, release at N+12),
 	///     click=N;anchor|..., doubleclick=N;anchor|...; expandinspector=1 opens every inspector foldout;
 	///     wheel=N;anchor;notches|... (mouse wheel over an anchor), mdrag=N;anchor;dx,dy|... (middle button drag by
-	///     pixels; anchor "sceneview" is the scene view's image), logsceneview=N|M logs the scene view camera;
+	///     pixels; anchor "sceneview" is the scene view's image), ldrag=N;anchor;dx,dy|... and altdrag= (the left button,
+	///     Alt held; the anchor may move with the drag: gizmo:BoxCollider2D/Right), logsceneview=N|M logs the scene view camera;
 	///     logfield=N;Object;Component.field|... logs a field's value; pingasset=N;path shows a file in the project panel.
 	///     key=N;F2|M;Enter (ImGuiKey presses), type=N;text (characters), logselection=N|M (what the inspector shows).
 	///     Project panel anchors: project:Folder/File.ext, project:Folder/ (a folder row), tree:Folder, rename (the field).
@@ -42,6 +43,8 @@ namespace LELEngine.Editor
 		private readonly List<(int at, string anchor, bool twice, int button)> clicks = new List<(int, string, bool, int)>();
 		private readonly List<(int at, string anchor, float amount)> wheels = new List<(int, string, float)>();
 		private readonly List<(int start, string anchor, System.Numerics.Vector2 delta)> middleDrags = new List<(int, string, System.Numerics.Vector2)>();
+		private readonly List<(int start, string anchor, System.Numerics.Vector2 delta, bool alt)> leftDrags = new List<(int, string, System.Numerics.Vector2, bool)>();
+		private readonly Dictionary<(int start, string anchor), System.Numerics.Vector2> leftDragStarts = new Dictionary<(int, string), System.Numerics.Vector2>();
 
 		#endregion
 
@@ -116,7 +119,26 @@ namespace LELEngine.Editor
 				}
 			}
 
-			TestAnchors.Enabled = drags.Count > 0 || clicks.Count > 0 || wheels.Count > 0 || middleDrags.Count > 0;
+			// ldrag=N;anchor;dx,dy|...: a left button drag from where the anchor was at N by (dx, dy) pixels (press at N + 1, release at N + 11); altdrag: Alt held.
+			foreach (string name in new[] { "ldrag", "altdrag" })
+			{
+				if (values.TryGetValue(name, out string leftList))
+				{
+					foreach (string entry in leftList.Split('|'))
+					{
+						string[] parts = entry.Split(';');
+						string[] delta = parts.Length == 3 ? parts[2].Split(',') : Array.Empty<string>();
+						if (parts.Length == 3 && delta.Length == 2 && int.TryParse(parts[0], out int at)
+							&& float.TryParse(delta[0], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float dx)
+							&& float.TryParse(delta[1], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float dy))
+						{
+							leftDrags.Add((at, parts[1], new System.Numerics.Vector2(dx, dy), name == "altdrag"));
+						}
+					}
+				}
+			}
+
+			TestAnchors.Enabled = drags.Count > 0 || clicks.Count > 0 || wheels.Count > 0 || middleDrags.Count > 0 || leftDrags.Count > 0;
 			FieldDrawer.ForceOpen = values.TryGetValue("expandinspector", out string expand) && expand == "1";
 		}
 
@@ -493,6 +515,13 @@ namespace LELEngine.Editor
 				Debug.Log("[Test] Redo");
 			}
 
+			// focuslost=N|M: the OS window loses the focus (ImGui lets go of the mouse: its position is invalid until it moves).
+			if (IsListed("focuslost"))
+			{
+				ImGui.GetIO().AddFocusEvent(false);
+				Debug.Log("[Test] Focus lost");
+			}
+
 			// logsceneview=N|M: the scene view camera's position, view direction and focus distance.
 			if (IsListed("logsceneview"))
 			{
@@ -667,6 +696,51 @@ namespace LELEngine.Editor
 				{
 					io.AddMouseButtonEvent(2, false);
 					Debug.Log($"[Test] Middle-dragged {anchor} by {delta}");
+				}
+			}
+
+			foreach ((int start, string anchor, System.Numerics.Vector2 delta, bool alt) in leftDrags)
+			{
+				int step = frame - start;
+				if (step < 0 || step > 12)
+				{
+					continue;
+				}
+
+				if (step == 0)
+				{
+					if (!TestAnchors.TryGetPoint(anchor, out System.Numerics.Vector2 point))
+					{
+						Debug.LogWarning("[Test] Left drag of " + anchor + ": the anchor was not drawn");
+						continue;
+					}
+
+					leftDragStarts[(start, anchor)] = point;
+					io.AddMousePosEvent(point.X, point.Y);
+					if (alt) io.AddKeyEvent(ImGuiKey.ModAlt, true);
+					continue;
+				}
+
+				if (!leftDragStarts.TryGetValue((start, anchor), out System.Numerics.Vector2 a))
+				{
+					continue;
+				}
+
+				// Eight even moves from where it started: a handle's anchor follows the drag.
+				if (step == 1) io.AddMouseButtonEvent(0, true);
+				else if (step <= 10)
+				{
+					System.Numerics.Vector2 p = a + delta * ((step - 2) / 8f);
+					io.AddMousePosEvent(p.X, p.Y);
+				}
+				else if (step == 11)
+				{
+					io.AddMouseButtonEvent(0, false);
+					Debug.Log($"[Test] Left-dragged {anchor} by {delta}");
+				}
+				else if (alt)
+				{
+					io.AddKeyEvent(ImGuiKey.ModAlt, false);
 				}
 			}
 		}

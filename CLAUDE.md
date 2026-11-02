@@ -913,6 +913,52 @@ Added for New Frontier's port of Unity's SpaceStonesPack (Standard materials wit
   the view. Test hooks: `wheel=N;sceneview;notches|...`, `mdrag=N;sceneview;dx,dy|...`, `logsceneview=N|M`
   (position, forward, focus distance); anchor `sceneview`.
 
+## Physics 2D gizmos in the scene view (2026-11-02)
+
+- `Inspector/Physics2DGizmos.cs` (one instance in `SceneViewPanel`). The user's rule: the selected object draws the gizmo
+  of a physics component only while it is expanded in the inspector (as in Unity), and those gizmos edit the component.
+  Only the selection's own components: children are not in the inspector, so they draw nothing (they did before).
+  Disabled components draw nothing. `InspectorPanel.IsExpanded` / `EditorApplication.IsExpandedInInspector`: the
+  panel records each header's state by component id as it draws it (not during a `WindowCapture`, whose fresh ImGui context
+  starts every header open), so the answer survives a hidden or closed inspector; never drawn = expanded.
+- Everything draws on the view window's ImGui draw list, not `DebugDraw`: `DebugDraw` is depth tested (outlines hid inside
+  meshes) and only reaches the screen with a new render. `DrawCapture` calls `Draw` too, so layout captures show them.
+- Outlines are what the physics builds, not the scaled field values: keep them in step with the colliders' `BuildShapes`
+  (`MinExtent`, a circle's radius times the larger scale, a capsule computed in world units, so both stay true shapes
+  under a non-uniform scale; the edge radius as a dim contour around the box or the lines). `ShapeSpace` maps collider-local
+  2D to the world through the plane's U / V axes and back by ray / plane intersection without inverting the matrix (a
+  z scale of 0 would not invert); an edge-on plane or a non-number gives no point, so nothing bad reaches a field.
+- Handles: box 4 sides + 4 corners, capsule 4 sides (the opposite side stays: size and offset change, only on the axes the
+  handle moves; Alt: around the center; a capsule's long side stops at its width, where the physics would stop it),
+  circle 4 radius handles (the center stays), polygon / edge points (a press on a line adds a point and drags it, Ctrl +
+  click removes one down to 3 / 2), a diamond at the center of every shape moves the offset. Values are computed from
+  the state at the press every frame (`Drag`), so Alt can change during a drag. Joints only show their anchors.
+- With the transform gizmo: `Update` runs before `ImGuizmo.Manipulate` and puts one `InvisibleButton` under the mouse when
+  a handle is hot: ImGuizmo's `CanActivate` refuses over a hovered item, so a handle on one of its axes takes the press
+  and no grey "disabled" gizmo flickers (`ImGuizmo.Enable(false)` would). Exceptions: the diamond and the new-point spot give
+  way where `ImGuizmo.IsOver()` (object moves come first; the diamond at the pivot, offset 0, needs Alt). A hot handle
+  blocks the click pick; wheel, middle and right mouse work over handles.
+- Undo: `Edits.Begin` at the press (again every frame: an undo during the drag ended the edit), `RequestCommit` at the release:
+  one step per drag, also for add + drag. During a drag `EditorApplication.MarkEdited` (dirty, prefab stage's "edit settles"
+  clock, no new render: collider values show nowhere in the image, and heavy scenes stay smooth); `MarkDirty` at the end
+  (`PrefabInspector.OverridesOf` caches by `SceneVersion`).
+- `SceneViewPanel.ApplyWorldMatrix` ignores a non-finite matrix: losing the OS window's focus during a transform gizmo drag
+  sets ImGui's mouse to -FLT_MAX (`ClearInputMouse`), ImGuizmo's ray and result become NaN and they used to land in
+  the Transform (position, rotation, scale; seen once by accident, then every time with `focuslost=`).
+- Test hooks: `ldrag=N;anchor;dx,dy|...` (the left button by pixels from where the anchor was at N, press N + 1, release N + 11),
+  `altdrag=` (Alt held), `focuslost=N|M`; anchors `gizmo:BoxCollider2D/Right`, `/Top`, `/TopLeft`, `/Center`, `/Point2`,
+  `/Line1` (middle of a line). Local +X is on the left of a camera looking along +Z (`Right` is on screen left).
+- Verified (scratchpad `GizmoProbe` of session 69059cbb: `GizmoSetup.Run` builds a row of objects, the camera in
+  `Library/EditorState.json`): logged values of every handle against the pixels moved, undo after each; a side handle on
+  the gizmo's axis leaves the Transform alone, the diamond at the pivot moves the object, with Alt the offset; rotated 30
+  degrees + scale (2, 0.5), mirrored, non-uniform circle and capsule, two colliders on one object; collapse / expand one of
+  them (click, CLI `click "header:Box Collider 2 D"`); click on a handle keeps the selection, elsewhere picks; wheel and pan
+  over handles; project with the XZ plane and a tilted camera; play mode (`collider.bounds` of the live shapes follows,
+  stop restores); prefab instance (overrides logged, undo) and prefab stage (Auto Save wrote the file, the instance followed);
+  a script reload with the Scene tab hidden (old assembly unloaded); `screenshot Scene` with and without a size;
+  New Frontier's `PelicanHull` read only (camera almost on the shape: lines cut at the near plane). Not checked by a
+  run: the red colour of a point while Ctrl is held and a hover without a press (no hook holds Ctrl alone).
+
 ## GI volume placement
 
 - `SceneGISettings.FollowCamera` + `FollowCameraLookAhead` (2026-10-22): the volume's centre is the camera position

@@ -39,6 +39,9 @@ namespace LELEngine.Editor
 		private ulong lockedObjectId;
 		private string lockedAsset;
 
+		// Components whose header is folded, by id (they survive scene reloads): the scene view asks before drawing their gizmos.
+		private readonly HashSet<ulong> collapsed = new HashSet<ulong>();
+
 		#endregion
 
 		#region Constructors
@@ -70,6 +73,12 @@ namespace LELEngine.Editor
 
 		/// <summary>The GameObject the inspector shows (the selection, or the locked object), null when none.</summary>
 		public GameObject Shown { get; private set; }
+
+		/// <summary>The component's header is unfolded, or was never drawn (headers start open).</summary>
+		public bool IsExpanded(Behaviour component)
+		{
+			return !collapsed.Contains(component.Id);
+		}
 
 		public void Draw()
 		{
@@ -381,6 +390,19 @@ namespace LELEngine.Editor
 			bool bold = overridden && EditorFonts.PushBold();
 			bool open = EditorGui.CollapsingHeader((added ? PrefabInspector.AddedTitlePadding() : "") + iconPadding + title + "##header", ImGuiTreeNodeFlags.DefaultOpen);
 			EditorFonts.Pop(bold);
+			// A capture draws in a fresh ImGui context, where every header starts open.
+			if (!Automation.WindowCapture.Active)
+			{
+				if (open)
+				{
+					collapsed.Remove(component.Id);
+				}
+				else
+				{
+					collapsed.Add(component.Id);
+				}
+			}
+
 			NVector2 headerMin = ImGui.GetItemRectMin();
 			NVector2 headerMax = ImGui.GetItemRectMax();
 			if (headerIcon != IconKind.None)

@@ -17,7 +17,8 @@ namespace LELEngine.Editor
 	///     Right mouse: look + WASD/QE fly (Shift faster, wheel while flying changes the speed); middle mouse: pan (the
 	///     scene follows the mouse at the depth of what is under it); wheel: dolly a fifth of the way to what the mouse
 	///     points at (an object or the ground plane), as fast far away as close up; F: frame the selection;
-	///     W / E / R: move / rotate / scale gizmo; left click: select.
+	///     W / E / R: move / rotate / scale gizmo; left click: select; handles of the selection's 2D colliders
+	///     (<see cref="Physics2DGizmos" />).
 	/// </summary>
 	internal sealed class SceneViewPanel : IDisposable, IEditorPanel
 	{
@@ -47,6 +48,7 @@ namespace LELEngine.Editor
 		private readonly EditorApplication editor;
 		private readonly GameObject cameraObject;
 		private readonly Camera camera;
+		private readonly Physics2DGizmos physicsGizmos;
 		private Vector3 position = new Vector3(0f, 3f, -9f);
 		private float yaw;
 		private float pitch = 15f;
@@ -76,6 +78,7 @@ namespace LELEngine.Editor
 		public SceneViewPanel(EditorApplication editor)
 		{
 			this.editor = editor;
+			physicsGizmos = new Physics2DGizmos(editor);
 
 			// Detached object: no scene, never saved, invisible to the game.
 			cameraObject = new GameObject("Scene Camera", null) { hideFlags = HideFlags.HideAndDontSave };
@@ -166,8 +169,8 @@ namespace LELEngine.Editor
 
 		/// <summary>
 		///     The window in a capture (<see cref="Automation.WindowCapture" />): the toolbar and the view at the capture's
-		///     size, rendered for it. No camera controls, gizmo, picking or selection outline, and nothing the editor's own
-		///     frames keep (view size, focus, visibility) changes.
+		///     size, rendered for it, with the physics gizmos. No camera controls, transform gizmo, picking or selection
+		///     outline, and nothing the editor's own frames keep (view size, focus, visibility) changes.
 		/// </summary>
 		private void DrawCapture()
 		{
@@ -185,6 +188,9 @@ namespace LELEngine.Editor
 				{
 					int texture = Automation.WindowCapture.ViewTexture(this, ViewRenderer, visible, (int)size.X, (int)size.Y, RenderCapture);
 					ImGui.Image(EditorGui.Texture(texture), size, new NVector2(0, 1), new NVector2(1, 0));
+					camera.UpdateMatrices(size.X / size.Y);
+					physicsGizmos.SetView(camera.ViewProjectionMatrix, min, size);
+					physicsGizmos.Draw(SelectedInScene());
 				}
 			}
 
@@ -230,10 +236,9 @@ namespace LELEngine.Editor
 		/// <summary>World-space gizmos drawn into the view through <see cref="Rendering.DebugDraw" />.</summary>
 		private void DrawGizmos()
 		{
-			GameObject selected = editor.Selected;
-			if (selected != null && selected.scene == editor.Scene)
+			GameObject selected = SelectedInScene();
+			if (selected != null)
 			{
-				Physics2DGizmos.Draw(selected);
 				VFX.VisualEffectInspector.DrawGizmos(selected);
 				editor.Extensions.DrawSceneGUI(selected);
 			}
@@ -244,10 +249,17 @@ namespace LELEngine.Editor
 			}
 
 			Navigation.NavMeshDebug.DrawAll();
-			if (selected != null && selected.scene == editor.Scene)
+			if (selected != null)
 			{
 				Navigation.NavMeshDebug.DrawSurfaceBounds(selected.GetComponent<Navigation.NavMeshSurface>());
 			}
+		}
+
+		/// <summary>The selected object when this view shows its scene.</summary>
+		private GameObject SelectedInScene()
+		{
+			GameObject selected = editor.Selected;
+			return selected != null && selected.scene == editor.Scene ? selected : null;
 		}
 
 		/// <summary>Renders the next frame even if nothing changed (tests, frame dumps).</summary>
@@ -374,13 +386,17 @@ namespace LELEngine.Editor
 			UpdateCameraControls(hovered);
 			ApplyCamera();
 			DrawSelectionBounds();
+			GameObject selected = SelectedInScene();
+			physicsGizmos.SetView(camera.ViewProjectionMatrix, viewMin, viewSize);
+			physicsGizmos.Update(selected, hovered && !flying && !gizmoWasUsing && !ImGui.IsMouseDown(ImGuiMouseButton.Middle));
 			bool gizmoUsed = DrawGizmo();
+			physicsGizmos.Draw(selected);
 
-			// Click (press and release without dragging) selects; presses on the gizmo do not count.
+			// Click (press and release without dragging) selects; presses on the gizmos do not count.
 			if (hovered && ImGui.IsMouseClicked(ImGuiMouseButton.Left))
 			{
 				pressPosition = ImGui.GetMousePos();
-				pressCanPick = !gizmoUsed && !ImGuizmo.IsOver();
+				pressCanPick = !gizmoUsed && !ImGuizmo.IsOver() && !physicsGizmos.IsHot;
 			}
 
 			if (hovered && pressCanPick && ImGui.IsMouseReleased(ImGuiMouseButton.Left))
@@ -621,6 +637,12 @@ namespace LELEngine.Editor
 
 		private static void ApplyWorldMatrix(Transform transform, NMatrix4 world)
 		{
+			// The window lost the focus during a drag: ImGui's mouse position is invalid and ImGuizmo's result not a number.
+			if (!float.IsFinite(world.GetDeterminant()))
+			{
+				return;
+			}
+
 			NMatrix4 local = world;
 			if (transform.parent != null)
 			{
