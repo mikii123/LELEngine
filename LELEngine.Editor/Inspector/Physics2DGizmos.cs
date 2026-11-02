@@ -977,8 +977,11 @@ namespace LELEngine.Editor
 		}
 
 		/// <summary>
-		///     A collider's local 2D space: the simulation plane maps it into the object's local space, the transform into the
-		///     world (the shapes of unrotated objects lie in the plane; the physics works in plane coordinates, as here).
+		///     A collider's local 2D space where the physics puts it: flat in the simulation plane, whatever the object's tilt,
+		///     from the same pose (<see cref="PlaneBasis.PlanarPose" />: the transform's axes projected on the plane give the
+		///     scale, the projected x axis the angle) and the same placement (scaled, rotated, translated: Physics2DMath.Place).
+		///     At the object's height along the plane's normal, which the physics does not have. A body's frame changes nothing
+		///     in the world: the pose is taken without it.
 		/// </summary>
 		private readonly struct ShapeSpace
 		{
@@ -986,7 +989,7 @@ namespace LELEngine.Editor
 			private readonly Vector3 axisU;
 			private readonly Vector3 axisV;
 
-			/// <summary>World units per local unit along 2D x and y.</summary>
+			/// <summary>World units per local unit along 2D x and y (above zero: an edge-on object's shape stays a usable space).</summary>
 			public readonly Vector2 Scale;
 
 			public float LargestScale => Math.Max(Scale.X, Scale.Y);
@@ -994,11 +997,15 @@ namespace LELEngine.Editor
 			public ShapeSpace(Collider2D collider)
 			{
 				PlaneBasis plane = collider.Plane;
-				Matrix4 localToWorld = collider.transform.LocalToWorld;
-				origin = Vector3.TransformPosition(Vector3.Zero, localToWorld);
-				axisU = Vector3.TransformVector(plane.U, localToWorld);
-				axisV = Vector3.TransformVector(plane.V, localToWorld);
-				Scale = new Vector2(Math.Max(axisU.Length, 1e-6f), Math.Max(axisV.Length, 1e-6f));
+				Transform transform = collider.transform;
+				plane.PlanarPose(transform, null, out Vector2 position, out float angle, out Vector2 scale);
+				Scale = new Vector2(Math.Max(Math.Abs(scale.X), 1e-6f), Math.Max(Math.Abs(scale.Y), 1e-6f));
+				var right = new Vector2(MathF.Cos(angle), MathF.Sin(angle));
+				var up = new Vector2(-right.Y, right.X);
+				origin = plane.FromPlane(position, transform.position);
+				axisU = plane.FromPlane(right * Scale.X);
+				// A mirrored transform flips the y axis.
+				axisV = plane.FromPlane(up * (scale.Y < 0f ? -Scale.Y : Scale.Y));
 			}
 
 			public Vector3 ToWorld(Vector2 local)
@@ -1026,15 +1033,8 @@ namespace LELEngine.Editor
 					return false;
 				}
 
-				// The axes are not perpendicular under a parent's non-uniform scale.
 				Vector3 point = from + direction * distance - origin;
-				float uu = Vector3.Dot(axisU, axisU);
-				float uv = Vector3.Dot(axisU, axisV);
-				float vv = Vector3.Dot(axisV, axisV);
-				float pointU = Vector3.Dot(point, axisU);
-				float pointV = Vector3.Dot(point, axisV);
-				float determinant = uu * vv - uv * uv;
-				local = new Vector2((vv * pointU - uv * pointV) / determinant, (uu * pointV - uv * pointU) / determinant);
+				local = new Vector2(Vector3.Dot(point, axisU) / (Scale.X * Scale.X), Vector3.Dot(point, axisV) / (Scale.Y * Scale.Y));
 				return true;
 			}
 		}

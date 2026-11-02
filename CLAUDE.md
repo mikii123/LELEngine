@@ -925,9 +925,13 @@ Added for New Frontier's port of Unity's SpaceStonesPack (Standard materials wit
   meshes) and only reaches the screen with a new render. `DrawCapture` calls `Draw` too, so layout captures show them.
 - Outlines are what the physics builds, not the scaled field values: keep them in step with the colliders' `BuildShapes`
   (`MinExtent`, a circle's radius times the larger scale, a capsule computed in world units, so both stay true shapes
-  under a non-uniform scale; the edge radius as a dim contour around the box or the lines). `ShapeSpace` maps collider-local
-  2D to the world through the plane's U / V axes and back by ray / plane intersection without inverting the matrix (a
-  z scale of 0 would not invert); an edge-on plane or a non-number gives no point, so nothing bad reaches a field.
+  under a non-uniform scale; the edge radius as a dim contour around the box or the lines). `ShapeSpace` is the physics'
+  own space: `PlaneBasis.PlanarPose` (no owner: a body's frame changes nothing in the world) and the placement of
+  `Physics2DMath.Place`, so a tilted object's shape lies flat in the simulation plane at the object's height, scaled by
+  its axes projected on the plane, never in the object's own plane (the first version did that, 2026-11-02: New Frontier's
+  asteroids, rotated in 3D with scale (x, y, z) different per axis, drew tilted up to 87 degrees and up to 39% too large
+  against r x max(projected X, projected Z), which Box2D's bounds match on all 60). Back by ray / plane intersection, no
+  matrix inversion; an edge-on plane or a non-number gives no point, so nothing bad reaches a field.
 - Handles: box 4 sides + 4 corners, capsule 4 sides (the opposite side stays: size and offset change, only on the axes the
   handle moves; Alt: around the center; a capsule's long side stops at its width, where the physics would stop it),
   circle 4 radius handles (the center stays), polygon / edge points (a press on a line adds a point and drags it, Ctrl +
@@ -958,6 +962,11 @@ Added for New Frontier's port of Unity's SpaceStonesPack (Standard materials wit
   a script reload with the Scene tab hidden (old assembly unloaded); `screenshot Scene` with and without a size;
   New Frontier's `PelicanHull` read only (camera almost on the shape: lines cut at the near plane). Not checked by a
   run: the red colour of a point while Ctrl is held and a hover without a press (no hook holds Ctrl alone).
+- Against the physics (scratchpad `GizmoXZ/Assets/Editor/GizmoCheck.cs`, batch `-executeMethod`, XZ plane, a copy of New Frontier's
+  Flight scene and 300 random objects: rotations in 3D, scales per axis, negative ones, tilted parents, static and kinematic
+  bodies): the real handle positions (`AddHandles` through reflection) in play mode, a step of 0.03 outwards must be outside
+  `collider.OverlapPoint`, inwards inside (edges: `ClosestPoint`), and rays must find the same local point: 1706 points and
+  3412 rays, none wrong. The first version's formula on the asteroids as a control: 60 of 60 wrong.
 
 ## GI volume placement
 
