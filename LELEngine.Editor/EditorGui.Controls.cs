@@ -50,6 +50,18 @@ namespace LELEngine.Editor
 
 		public static bool InvisibleButton(string id, NVector2 size, ImGuiButtonFlags flags)
 		{
+			// A window not laid out yet (first frame, a docked tab restored from the layout) gives a zero width or height,
+			// and ImGui asserts on a zero-size invisible button: the assert aborts the process.
+			if (size.X == 0f)
+			{
+				size.X = 1f;
+			}
+
+			if (size.Y == 0f)
+			{
+				size.Y = 1f;
+			}
+
 			bool activated = UIAutomation.BeginActivation(id);
 			bool pressed = ImGui.InvisibleButton(id, size, flags);
 			UIAutomation.EndActivation(activated);
