@@ -497,6 +497,7 @@ namespace LELEngine.Editor
 				if (EditorMenu.Item("Create Visual Effect Graph")) StartCreate("VFX", "NewVisualEffect");
 				if (EditorMenu.Item("Create Animator Controller")) StartCreate("AnimatorController", "NewAnimator");
 				if (EditorMenu.Item("Create Animation Clip")) StartCreate("AnimationClip", "NewClip");
+				if (EditorMenu.Item("Create Timeline")) StartCreate("Timeline", "NewTimeline");
 				if (EditorMenu.Item("Create Audio Project")) StartCreate("AudioProject", "Audio");
 				if (EditorMenu.Item("Create Input Configuration")) StartCreate("InputConfiguration", "Input");
 				if (EditorMenu.Item("Create Scene")) StartCreate("Scene", "NewScene");
@@ -1294,6 +1295,10 @@ namespace LELEngine.Editor
 			{
 				editor.OpenAnimationWindow(assetPath);
 			}
+			else if (assetPath.EndsWith(LELEngine.Animation.TimelineAsset.Extension, StringComparison.OrdinalIgnoreCase))
+			{
+				editor.OpenTimeline(assetPath);
+			}
 			else if (EditorIcons.KindOfFile(assetPath) == IconKind.InputConfiguration)
 			{
 				editor.OpenInputManager(assetPath);
@@ -1482,6 +1487,13 @@ namespace LELEngine.Editor
 					EnsureNew(target);
 					var clip = new LELEngine.Animation.AnimationClip { name = name };
 					clip.Save(AssetDatabase.ToAssetPath(target));
+					break;
+				}
+				case "Timeline":
+				{
+					target = Absolute(Combine(folder, name + LELEngine.Animation.TimelineAsset.Extension));
+					EnsureNew(target);
+					new LELEngine.Animation.TimelineAsset { name = name }.Save(AssetDatabase.ToAssetPath(target));
 					break;
 				}
 				case "AudioProject":

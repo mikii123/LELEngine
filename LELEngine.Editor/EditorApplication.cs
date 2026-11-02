@@ -103,6 +103,7 @@ namespace LELEngine.Editor
 		private readonly VFX.VfxGraphWindow vfxGraphWindow;
 		private readonly Animation.AnimatorWindow animatorWindow;
 		private readonly Animation.AnimationWindow animationWindow;
+		private readonly Animation.TimelineWindow timelineWindow;
 
 		/// <summary>The console's error count Error Pause last saw.</summary>
 		private int errorsSeen;
@@ -122,6 +123,10 @@ namespace LELEngine.Editor
 		// Modal dialogs.
 		private Action pendingAfterSave;
 		private bool openUnsavedPopup;
+		private bool openUnsavedToolsPopup;
+		private bool toolChangesAnswered;
+		private Action pendingAfterTools;
+		private bool keepChangesNotSaved;
 		private bool openSaveAsPopup;
 		private string saveAsPath = "Scenes/NewScene.scene";
 		private bool closeConfirmed;
@@ -165,7 +170,16 @@ namespace LELEngine.Editor
 		private readonly IEditorPanel uiBuilderPanel;
 		private readonly IEditorPanel audioStudioPanel;
 
-		private static string WindowStatesFile => Path.Combine(RecentProjects.EditorDataFolder, "windows.json");
+		private const double EditorStateCheckInterval = 0.5;
+
+		/// <summary>The file of the windows' states; an automated run writes only one of its own (windowsfile=path).</summary>
+		private string WindowStatesFile => namedWindowStatesFile ?? Path.Combine(RecentProjects.EditorDataFolder, "windows.json");
+
+		private bool WindowStatesWritable => !automated || namedWindowStatesFile != null;
+
+		private readonly string namedWindowStatesFile;
+		private string savedWindowStates;
+		private double nextStateCheck;
 
 		/// <summary>The scene open last (saved with the window states, read when the project opens again).</summary>
 		private string lastScene;
@@ -191,6 +205,7 @@ namespace LELEngine.Editor
 			audioStudioPanel = new Automation.AudioStudioPanel(this);
 			// Batch mode is automated too: the user's window states and recent projects stay as they are.
 			automated = !hasUI || IsAutomatedRun(args);
+			namedWindowStatesFile = GetValue(args, "windowsfile");
 			Edits = new EditTracker(this);
 			Extensions = new EditorExtensions(this);
 			Tests = new EditorTests(this);
@@ -210,6 +225,7 @@ namespace LELEngine.Editor
 			vfxGraphWindow = new VFX.VfxGraphWindow(this);
 			animatorWindow = new Animation.AnimatorWindow(this);
 			animationWindow = new Animation.AnimationWindow(this);
+			timelineWindow = new Animation.TimelineWindow(this);
 			inputManagerWindow = new InputManagerWindow(this);
 			testRunnerWindow = new TestRunnerWindow(this);
 
@@ -325,6 +341,8 @@ namespace LELEngine.Editor
 
 			testHooks.Update();
 			UpdatePrefabStage();
+			Edits.UpdateSaves();
+			UpdateEditorState();
 			if (PlayState == PlayState.Edit)
 			{
 				// Resources.LoadAsync requests and code awaiting on the main thread advance in edit mode too (editor
@@ -434,6 +452,7 @@ namespace LELEngine.Editor
 			vfxGraphWindow.Draw();
 			animatorWindow.Draw();
 			animationWindow.Draw();
+			timelineWindow.Draw();
 			inputManagerWindow.Draw();
 			testRunnerWindow.Draw();
 			if (capture)
@@ -503,7 +522,7 @@ namespace LELEngine.Editor
 			var panels = new List<IEditorPanel>
 			{
 				mainPanel, hierarchy, SceneView, GameView, inspector, projectPanel, consolePanel, lightingPanel,
-				projectSettingsWindow, preferencesWindow, vfxGraphWindow, animatorWindow, animationWindow, inputManagerWindow, testRunnerWindow, uiBuilderPanel, audioStudioPanel
+				projectSettingsWindow, preferencesWindow, vfxGraphWindow, animatorWindow, animationWindow, timelineWindow, inputManagerWindow, testRunnerWindow, uiBuilderPanel, audioStudioPanel
 			};
 			panels.AddRange(Extensions.OpenWindowPanels());
 			return panels;
@@ -547,6 +566,19 @@ namespace LELEngine.Editor
 		/// <summary>Window close request: false while unsaved changes wait for an answer.</summary>
 		public bool RequestClose()
 		{
+			// The tools with a Save of their own first: their changes go with the editor, whatever the scene's answer.
+			bool answered = toolChangesAnswered;
+			toolChangesAnswered = false;
+			if (!closeConfirmed && !answered && UnsavedToolFiles().Count > 0)
+			{
+				ConfirmToolChanges(() =>
+				{
+					toolChangesAnswered = true;
+					Window.Close();
+				});
+				return false;
+			}
+
 			if (!closeConfirmed && Stage != null && !IsPlaying)
 			{
 				if (SceneDirty && !Stage.AutoSave)
@@ -737,6 +769,7 @@ namespace LELEngine.Editor
 			vfxGraphWindow.Reset();
 			animatorWindow.Reset();
 			animationWindow.Reset();
+			timelineWindow.Reset();
 			Tests.Reset();
 			testRunnerWindow.Reset();
 			Undo.Clear();
@@ -1329,6 +1362,8 @@ namespace LELEngine.Editor
 
 		public void EnterPlayMode()
 		{
+			// Nothing of the Timeline window's preview goes into the game's copy of the scene.
+			timelineWindow.EndPreview();
 			if (IsPlaying || Scene == null)
 			{
 				return;
@@ -1561,10 +1596,10 @@ namespace LELEngine.Editor
 			string path = assetPath ?? LELEngine.Audio.AudioProject.FindProjectPath();
 			if (path != null && (audioStudio.Studio.Project == null || !string.Equals(audioStudio.Studio.AssetPath, path, StringComparison.OrdinalIgnoreCase)))
 			{
-				audioStudio.Studio.Open(path);
+				// With unsaved changes it asks first: the event waits for the answer.
+				audioStudio.Studio.Open(path, eventId);
 			}
-
-			if (eventId != null)
+			else if (eventId != null)
 			{
 				audioStudio.Studio.ShowEvent(eventId);
 			}
@@ -1591,6 +1626,9 @@ namespace LELEngine.Editor
 
 		/// <summary>The Animation (clip editor) window (dockable; open or not).</summary>
 		public Animation.AnimationWindow AnimationWindow => animationWindow;
+
+		/// <summary>The Timeline window (dockable; open or not).</summary>
+		public Animation.TimelineWindow TimelineWindow => timelineWindow;
 
 		/// <summary>Opens the Animator window on a .animator asset (null: the controller it last showed).</summary>
 		public void OpenAnimator(string assetPath)
@@ -1623,6 +1661,24 @@ namespace LELEngine.Editor
 			}
 
 			animationWindow.Show(assetPath);
+		}
+
+		/// <summary>Opens the Timeline window on a .timeline asset (null: what it last showed).</summary>
+		public void OpenTimeline(string assetPath)
+		{
+			if (Project != null)
+			{
+				timelineWindow.Show(assetPath);
+			}
+		}
+
+		/// <summary>Opens the Timeline window on a Timeline component.</summary>
+		public void OpenTimeline(LELEngine.Animation.Timeline timeline)
+		{
+			if (Project != null)
+			{
+				timelineWindow.Show(timeline);
+			}
 		}
 
 		/// <summary>Opens the UI Builder window (creating it on first use) and loads the asset when given.</summary>
@@ -1691,6 +1747,7 @@ namespace LELEngine.Editor
 			// Controllers and clips may hold script types (behaviours, custom parameter values, event payloads).
 			animatorWindow.OnDomainUnloading();
 			animationWindow.OnDomainUnloading();
+			timelineWindow.OnDomainUnloading();
 			inspector.ClearTypeCaches();
 			HierarchyPanel.ResetDrag();
 			hierarchy.ForgetObjects();
@@ -1811,7 +1868,9 @@ namespace LELEngine.Editor
 
 			Scene.Path = assetPath;
 			Scene.Name = Path.GetFileNameWithoutExtension(assetPath);
+			timelineWindow.BeforeSceneWrite();
 			SceneSerializer.Save(Scene, AssetDatabase.ToAbsolute(assetPath));
+			timelineWindow.AfterSceneWrite();
 			AssetDatabase.EnsureMeta(assetPath);
 			SceneDirty = false;
 			// The editor's own write: the asset watcher must not reload it.
@@ -1833,6 +1892,20 @@ namespace LELEngine.Editor
 			after?.Invoke();
 		}
 
+		/// <summary>Runs <paramref name="continuation" />, which reads the scene's file (a build), now or after the user saved the scene or chose to go on with the file as it is: the changes stay either way.</summary>
+		public void AskToSaveScene(Action continuation)
+		{
+			if (!SceneDirty || IsPlaying || Stage != null)
+			{
+				continuation();
+				return;
+			}
+
+			keepChangesNotSaved = true;
+			pendingAfterSave = continuation;
+			openUnsavedPopup = true;
+		}
+
 		/// <summary>Runs <paramref name="continuation" /> now, or after the user saved / discarded the unsaved scene.</summary>
 		private void ConfirmDiscard(Action continuation)
 		{
@@ -1842,13 +1915,159 @@ namespace LELEngine.Editor
 				return;
 			}
 
+			keepChangesNotSaved = false;
 			pendingAfterSave = continuation;
 			openUnsavedPopup = true;
+		}
+
+		/// <summary>What the tools with a Save of their own (VFX Graph, Audio Studio, UI Builder) hold unsaved, as lines of a question.</summary>
+		private List<string> UnsavedToolFiles()
+		{
+			var files = new List<string>();
+			VFX.VfxGraphDocument graph = vfxGraphWindow.Document;
+			if (graph != null && graph.Dirty)
+			{
+				files.Add("VFX Graph: " + graph.AssetPath);
+			}
+
+			if (audioStudio != null && audioStudio.IsOpen && audioStudio.Studio.Dirty)
+			{
+				files.Add("Audio Studio: " + audioStudio.Studio.AssetPath);
+			}
+
+			if (uiBuilder != null && uiBuilder.IsOpen)
+			{
+				foreach (string file in uiBuilder.Builder.UnsavedFiles())
+				{
+					files.Add("UI Builder: " + file);
+				}
+			}
+
+			return files;
+		}
+
+		/// <summary>Runs <paramref name="continuation" /> now, or after the user saved / discarded what the tools hold unsaved.</summary>
+		private void ConfirmToolChanges(Action continuation)
+		{
+			if (UnsavedToolFiles().Count == 0)
+			{
+				continuation();
+				return;
+			}
+
+			pendingAfterTools = continuation;
+			openUnsavedToolsPopup = true;
+		}
+
+		/// <summary>Saves what the tools hold unsaved; false when something was not written (a new UI document asks for its path in its window).</summary>
+		private bool SaveToolFiles()
+		{
+			bool saved = true;
+			VFX.VfxGraphDocument graph = vfxGraphWindow.Document;
+			if (graph != null && graph.Dirty)
+			{
+				try
+				{
+					graph.Save();
+				}
+				catch (Exception e)
+				{
+					Debug.LogError("[VFX] Cannot save " + graph.AssetPath + ": " + e.Message);
+					saved = false;
+				}
+			}
+
+			if (audioStudio != null && audioStudio.IsOpen && audioStudio.Studio.Dirty)
+			{
+				saved &= audioStudio.Studio.Save();
+			}
+
+			if (uiBuilder != null && uiBuilder.IsOpen && !uiBuilder.Builder.SaveChanges())
+			{
+				uiBuilder.Focus();
+				saved = false;
+			}
+
+			return saved;
+		}
+
+		/// <summary>Drops what the tools hold unsaved: their files are the truth again.</summary>
+		private void DiscardToolFiles()
+		{
+			VFX.VfxGraphDocument graph = vfxGraphWindow.Document;
+			if (graph != null && graph.Dirty)
+			{
+				graph.Revert();
+			}
+
+			if (audioStudio != null && audioStudio.IsOpen && audioStudio.Studio.Dirty)
+			{
+				audioStudio.Studio.Revert();
+			}
+
+			if (uiBuilder != null && uiBuilder.IsOpen)
+			{
+				uiBuilder.Builder.DiscardChanges();
+			}
+		}
+
+		private void DrawUnsavedToolsModal()
+		{
+			if (openUnsavedToolsPopup)
+			{
+				ImGui.OpenPopup("Unsaved assets");
+				openUnsavedToolsPopup = false;
+			}
+
+			ImGui.SetNextWindowPos(EditorGui.ViewportCenter(), ImGuiCond.Appearing, new NVector2(0.5f, 0.5f));
+			if (!ImGui.BeginPopupModal("Unsaved assets", ImGuiWindowFlags.AlwaysAutoResize))
+			{
+				return;
+			}
+
+			ImGui.TextUnformatted("These have unsaved changes:");
+			foreach (string file in UnsavedToolFiles())
+			{
+				ImGui.TextUnformatted("  " + file);
+			}
+
+			ImGui.Spacing();
+			if (EditorGui.Button("Save All", new NVector2(110, 0)))
+			{
+				ImGui.CloseCurrentPopup();
+				Action continuation = pendingAfterTools;
+				pendingAfterTools = null;
+				// Something not written: nothing closes, nothing is lost.
+				if (SaveToolFiles())
+				{
+					continuation?.Invoke();
+				}
+			}
+
+			ImGui.SameLine();
+			if (EditorGui.Button("Don't save", new NVector2(110, 0)))
+			{
+				ImGui.CloseCurrentPopup();
+				Action continuation = pendingAfterTools;
+				pendingAfterTools = null;
+				DiscardToolFiles();
+				continuation?.Invoke();
+			}
+
+			ImGui.SameLine();
+			if (EditorGui.Button("Cancel", new NVector2(110, 0)))
+			{
+				ImGui.CloseCurrentPopup();
+				pendingAfterTools = null;
+			}
+
+			ImGui.EndPopup();
 		}
 
 		private void DrawModals()
 		{
 			DrawPrefabModals();
+			DrawUnsavedToolsModal();
 			if (openUnsavedPopup)
 			{
 				ImGui.OpenPopup("Unsaved changes");
@@ -1890,7 +2109,8 @@ namespace LELEngine.Editor
 					ImGui.CloseCurrentPopup();
 					Action continuation = pendingAfterSave;
 					pendingAfterSave = null;
-					SceneDirty = false;
+					SceneDirty = keepChangesNotSaved && SceneDirty;
+					keepChangesNotSaved = false;
 					continuation?.Invoke();
 				}
 
@@ -1966,7 +2186,7 @@ namespace LELEngine.Editor
 				ImGui.Separator();
 				if (EditorMenu.Item("Build Settings...", "Ctrl+Shift+B")) ShowBuildWindow();
 				ImGui.Separator();
-				if (EditorMenu.Item("Close Project")) LeaveAllStages(() => ConfirmDiscard(CloseProject));
+				if (EditorMenu.Item("Close Project")) ConfirmToolChanges(() => LeaveAllStages(() => ConfirmDiscard(CloseProject)));
 				if (EditorMenu.Item("Exit")) Window.Close();
 				Extensions.DrawMenuItems("File");
 				EditorMenu.End();
@@ -2044,6 +2264,12 @@ namespace LELEngine.Editor
 				{
 					if (animationWindow.Open) animationWindow.Close();
 					else OpenAnimationWindow(null);
+				}
+
+				if (EditorMenu.Item("Timeline", "", timelineWindow.Open))
+				{
+					if (timelineWindow.Open) timelineWindow.Close();
+					else OpenTimeline((string)null);
 				}
 
 				if (EditorMenu.Item("Input Manager", "", inputManagerWindow.Open))
@@ -2304,10 +2530,16 @@ namespace LELEngine.Editor
 
 			bool ctrl = io.KeyCtrl;
 			bool shift = io.KeyShift;
-			if (vfxGraphWindow.IsFocused || animatorWindow.IsFocused || animationWindow.IsFocused)
+			if (vfxGraphWindow.IsFocused || animatorWindow.IsFocused || animationWindow.IsFocused || timelineWindow.IsFocused)
 			{
-				// The graph windows handle save, duplicate and delete themselves; undo / redo stay global.
-				if (ctrl && ImGui.IsKeyPressed(ImGuiKey.Z, false))
+				// The graph windows handle duplicate and delete themselves, the VFX Graph window also its own save; saving the
+				// scene, undo and redo stay global.
+				if (ctrl && !vfxGraphWindow.IsFocused && ImGui.IsKeyPressed(ImGuiKey.S, false))
+				{
+					if (shift) SaveSceneAs();
+					else SaveScene();
+				}
+				else if (ctrl && ImGui.IsKeyPressed(ImGuiKey.Z, false))
 				{
 					if (shift) RedoLast();
 					else UndoLast();
@@ -2508,6 +2740,11 @@ namespace LELEngine.Editor
 				reloaded.Add(controller.AssetPath);
 			}
 
+			foreach (LELEngine.Animation.TimelineAsset timeline in LELEngine.Animation.TimelineAsset.ReloadChanged())
+			{
+				reloaded.Add(timeline.AssetPath);
+			}
+
 			if (reloaded.Count == 0)
 			{
 				return;
@@ -2610,11 +2847,39 @@ namespace LELEngine.Editor
 		{
 			if (Project != null)
 			{
+				Edits.SaveWaiting();
 				SceneView.SaveState(Project);
 				Extensions.SaveOpenWindows(Project);
 				SaveWindowStates();
 				hierarchy.SaveState();
 			}
+		}
+
+		/// <summary>
+		///     Every frame: the editor's own state follows its changes, like its preferences. Checked a few times a second, and
+		///     written once nothing is held down (a camera or a panel being moved writes when it stops).
+		/// </summary>
+		private void UpdateEditorState()
+		{
+			double now = System.Diagnostics.Stopwatch.GetTimestamp() / (double)System.Diagnostics.Stopwatch.Frequency;
+			if (!HasUI || !WindowStatesWritable || Project == null || restoreWindowsPending || now < nextStateCheck)
+			{
+				return;
+			}
+
+			nextStateCheck = now + EditorStateCheckInterval;
+			if (ImGui.IsAnyMouseDown() || ImGui.IsAnyItemActive())
+			{
+				return;
+			}
+
+			SceneView.SaveStateIfChanged(Project);
+			if (!IsPlaying)
+			{
+				Extensions.SaveOpenWindowsIfChanged(Project);
+			}
+
+			SaveWindowStatesIfChanged();
 		}
 
 		// ---------------------------------------------------------------- window states
@@ -2626,13 +2891,37 @@ namespace LELEngine.Editor
 		/// </summary>
 		private void SaveWindowStates()
 		{
-			if (automated || Project == null)
+			if (!WindowStatesWritable || Project == null)
 			{
 				return;
 			}
 
 			// Read first: the graphs other projects showed stay.
 			WindowStates states = WindowStates.Load(WindowStatesFile) ?? new WindowStates();
+			FillWindowStates(states);
+			states.Save(WindowStatesFile);
+			savedWindowStates = CurrentWindowStates();
+		}
+
+		/// <summary>Writes the states when they differ from what was written last.</summary>
+		private void SaveWindowStatesIfChanged()
+		{
+			if (CurrentWindowStates() != savedWindowStates)
+			{
+				SaveWindowStates();
+			}
+		}
+
+		/// <summary>The states as they are now, as text to compare.</summary>
+		private string CurrentWindowStates()
+		{
+			var states = new WindowStates();
+			FillWindowStates(states);
+			return System.Text.Json.JsonSerializer.Serialize(states);
+		}
+
+		private void FillWindowStates(WindowStates states)
+		{
 			states.Open["Scene"] = SceneView.Open;
 			states.Open["Game"] = GameView.Open;
 			states.Open["Hierarchy"] = hierarchy.Open;
@@ -2645,6 +2934,7 @@ namespace LELEngine.Editor
 			states.Open["VFX Graph"] = vfxGraphWindow.Open;
 			states.Open["Animator"] = animatorWindow.Open;
 			states.Open["Animation"] = animationWindow.Open;
+			states.Open["Timeline"] = timelineWindow.Open;
 			states.Open["Input Manager"] = inputManagerWindow.Open;
 			states.Open["Test Runner"] = testRunnerWindow.Open;
 			string graph = vfxGraphWindow.Document?.AssetPath;
@@ -2665,6 +2955,12 @@ namespace LELEngine.Editor
 				states.AnimationClips[Project.RootPath] = clip;
 			}
 
+			string timeline = timelineWindow.Document?.AssetPath;
+			if (timeline != null)
+			{
+				states.Timelines[Project.RootPath] = timeline;
+			}
+
 			if (lastScene != null)
 			{
 				states.LastScenes[Project.RootPath] = lastScene;
@@ -2674,7 +2970,6 @@ namespace LELEngine.Editor
 
 			states.Open["UI Builder"] = uiBuilder != null && uiBuilder.IsOpen;
 			states.Open["Audio Studio"] = audioStudio != null && audioStudio.IsOpen;
-			states.Save(WindowStatesFile);
 		}
 
 		/// <summary>Opens and closes the built-in windows as they were saved (the first frame of a project).</summary>
@@ -2721,6 +3016,12 @@ namespace LELEngine.Editor
 					OpenAnimationWindow(clip);
 				}
 
+				if (Saved("Timeline", false))
+				{
+					string timeline = states.Timelines.TryGetValue(Project.RootPath, out string path) && File.Exists(AssetDatabase.ToAbsolute(path)) ? path : null;
+					OpenTimeline(timeline);
+				}
+
 				if (Saved("UI Builder", false))
 				{
 					OpenUIBuilder(null);
@@ -2750,6 +3051,8 @@ namespace LELEngine.Editor
 			public Dictionary<string, string> Animators { get; set; } = new Dictionary<string, string>();
 
 			/// <summary>Per project folder: the clip the Animation window showed.</summary>
+			public Dictionary<string, string> Timelines { get; set; } = new Dictionary<string, string>();
+
 			public Dictionary<string, string> AnimationClips { get; set; } = new Dictionary<string, string>();
 
 			/// <summary>Per project folder: the scene open last (the user's, so not in Project.json).</summary>
@@ -2769,6 +3072,7 @@ namespace LELEngine.Editor
 						states.VfxGraphs ??= new Dictionary<string, string>();
 						states.Animators ??= new Dictionary<string, string>();
 						states.AnimationClips ??= new Dictionary<string, string>();
+						states.Timelines ??= new Dictionary<string, string>();
 						states.LastScenes ??= new Dictionary<string, string>();
 						states.ReloadScriptsOnPlay ??= new Dictionary<string, bool>();
 					}

@@ -58,6 +58,13 @@ Built on .NET 10, OpenTK 4.9 (GLFW) and OpenGL 4.6 (4.3 minimum), developed and 
   for everything, problems list, and in play mode the current state, transition progress and blend weights of the
   selected object's animator, with its parameters live) and the Animation window (dope sheet and curves, events lane,
   property picker over the target hierarchy, preview on the object in edit mode, record mode that keys what you change).
+- `Timeline` + `.timeline` assets: Unity's Timeline with the logic of an audio tool. A channel per animated object, any
+  object of the scene (bound by its id: renaming or moving it changes nothing), with clips you move, trim and overlap to
+  crossfade; only the properties with keys are written, everything else stays with its owner. Over them a logic track:
+  loop regions, transition regions and markers with conditions, quantization and crossfades, destination markers the
+  game hears, sustain points, and parameters the game sets (`timeline.SetParameter`). The Timeline window previews on
+  the objects in edit mode, follows the game in play mode and records keys, while paused or as it plays, from anything
+  exposed on the objects: your scripts' fields and `[Animatable]` members too.
 - Textures: 2D, 3D (slice grids), cubemaps (crosses, strips, panoramas, HDR) and sprites (single or sliced sheets),
   configured per file like Unity's texture importer. Materials are documents of typed properties declared by the
   shader's `//Properties` block.
@@ -282,6 +289,10 @@ GPU event, ribbons and soft smoke puffs, all simulated and drawn on the GPU.*
   pick the shader variant, texture slots with an object picker and drag and drop), texture import settings with
   previews and Apply/Revert, shader, model and physics material views. Material edits apply live, are undoable and
   save to the asset file; built-in assets show read-only.
+- Saving: the scene changes in memory and goes to its file on Ctrl+S. Asset, project and editor settings are written
+  as soon as they change; undo writes them back. What would hang on a change, or has a window of its own, waits for its
+  own action: import settings of textures and models (Apply), Audio Studio (Save; Build Banks apart), VFX Graph and UI
+  Builder (Save).
 - Scene and game views render through the same renderer as the game. Play, pause and step restore the scene
   snapshot when you stop.
 - Game scripts compile in the background with `dotnet build`, and a full domain reload swaps them in.

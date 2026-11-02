@@ -156,6 +156,15 @@ namespace LELEngine.Editor
 			return true;
 		}
 
+		/// <summary>A ticked item whose state is kept in the preferences under <paramref name="key" />.</summary>
+		public static void Toggle(string label, string key, ref bool selected)
+		{
+			if (Item(label, "", ref selected))
+			{
+				EditorPreferences.SetToggle(key, selected);
+			}
+		}
+
 		/// <summary>Every item <paramref name="drawMenus" /> draws, with its path, without showing anything.</summary>
 		public static List<Entry> List(Action drawMenus)
 		{

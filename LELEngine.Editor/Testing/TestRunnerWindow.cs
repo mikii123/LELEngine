@@ -244,9 +244,9 @@ namespace LELEngine.Editor
 
 			if (ImGui.BeginPopup("##testoptions"))
 			{
-				EditorGui.Checkbox("Break on Failure", ref tests.Options.BreakOnFailure);
+				if (EditorGui.Checkbox("Break on Failure", ref tests.Options.BreakOnFailure)) EditorPreferences.SetToggle("Tests.BreakOnFailure", tests.Options.BreakOnFailure);
 				Tooltip("With a debugger attached: stop where a test fails (the failing assert, the throw of an exception, an unexpected error being logged)");
-				EditorGui.Checkbox("Stop on First Failure", ref tests.Options.StopOnFirstFailure);
+				if (EditorGui.Checkbox("Stop on First Failure", ref tests.Options.StopOnFirstFailure)) EditorPreferences.SetToggle("Tests.StopOnFirstFailure", tests.Options.StopOnFirstFailure);
 				ImGui.Separator();
 				if (EditorMenu.Item("Expand All"))
 				{

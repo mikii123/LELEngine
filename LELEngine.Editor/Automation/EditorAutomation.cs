@@ -881,7 +881,14 @@ namespace LELEngine.Editor
 		{
 			foreach (IEditorPanel panel in Editor.GetPanels())
 			{
-				if (!panel.IsWholeContext && panel.Owner != null && WindowCapture.FindWindow(panel.Owner.Context, panel.ImGuiName).ID == windowId)
+				if (panel.IsWholeContext || panel.Owner == null)
+				{
+					continue;
+				}
+
+				// A panel never drawn has no ImGui window yet.
+				ImGuiWindowPtr window = WindowCapture.FindWindow(panel.Owner.Context, panel.ImGuiName);
+				if (!window.IsNull && window.ID == windowId)
 				{
 					return panel;
 				}

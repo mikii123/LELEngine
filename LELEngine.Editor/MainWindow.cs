@@ -155,6 +155,11 @@ namespace LELEngine.Editor
 		protected override void OnUpdateFrame(FrameEventArgs e)
 		{
 			base.OnUpdateFrame(e);
+			if (rememberPlacement)
+			{
+				placement.Update();
+			}
+
 			editor.Update((float)e.Time);
 			// Between two frames: the last one is drawn but not presented yet (window captures read it), and no UI frame
 			// is being built (automation drives the editor from here).

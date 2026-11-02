@@ -109,6 +109,7 @@ namespace LELEngine.Editor.Audio
 
 		// Popups.
 		private bool openCloseConfirm;
+		private Action pendingAfterAnswer;
 		private bool closeConfirmed;
 		private bool openNewEventPopup;
 		private string newEventPath = "New Event";
@@ -133,6 +134,16 @@ namespace LELEngine.Editor.Audio
 			this.editor = editor;
 			this.window = window;
 			this.layoutFileExisted = layoutFileExisted;
+			showEvents = EditorPreferences.GetToggle("AudioStudio.Events", showEvents);
+			showBanks = EditorPreferences.GetToggle("AudioStudio.Banks", showBanks);
+			showParameters = EditorPreferences.GetToggle("AudioStudio.Parameters", showParameters);
+			showSnapshots = EditorPreferences.GetToggle("AudioStudio.Snapshots", showSnapshots);
+			showAssets = EditorPreferences.GetToggle("AudioStudio.Assets", showAssets);
+			showDeck = EditorPreferences.GetToggle("AudioStudio.Deck", showDeck);
+			showOverview = EditorPreferences.GetToggle("AudioStudio.Overview", showOverview);
+			showMixer = EditorPreferences.GetToggle("AudioStudio.Mixer", showMixer);
+			snap = EditorPreferences.GetToggle("AudioStudio.Snap", snap);
+			followPlayhead = EditorPreferences.GetToggle("AudioStudio.FollowPlayhead", followPlayhead);
 		}
 
 		#endregion
@@ -140,64 +151,28 @@ namespace LELEngine.Editor.Audio
 		#region PublicMethods
 
 		/// <summary>Opens the audio project at an asset path (the audio system's project, so edits apply live).</summary>
-		public void Open(string assetPath)
+		public void Open(string assetPath, string eventId = null)
 		{
-			if (string.IsNullOrEmpty(assetPath))
+			// The project itself, unsaved: nothing to open, its changes stay.
+			if (string.IsNullOrEmpty(assetPath) || (Dirty && string.Equals(AssetPath, assetPath, StringComparison.OrdinalIgnoreCase)))
 			{
 				return;
 			}
 
-			StopPreview();
-			AudioProject project = AudioProject.Load(assetPath);
-			if (project == null)
+			ConfirmUnsaved(() =>
 			{
-				SetStatus("Cannot open " + assetPath);
-				return;
-			}
-
-			Project = project;
-			savedState = project.ToBytes();
-			Dirty = false;
-			undoStack.Clear();
-			redoStack.Clear();
-			editSnapshot = null;
-			selectedEventId = project.Events.Count > 0 ? project.Events[0].Id : null;
-			selection = selectedEventId != null ? Selection.Of(SelectionKind.Event, selectedEventId) : default;
-			currentSheet = null;
-			expandedTransitionId = null;
-			if (AudioSystem.SourceProject != project)
-			{
-				AudioSystem.UseProject(project);
-				AudioSystem.ReloadFromProject();
-			}
-
-			EnsureBanksLoaded();
-			SetStatus("Opened " + assetPath);
+				OpenNow(assetPath);
+				if (eventId != null)
+				{
+					ShowEvent(eventId);
+				}
+			});
 		}
 
 		/// <summary>Creates an audio project at the asset path and opens it.</summary>
 		public void CreateProject(string assetPath)
 		{
-			assetPath = assetPath.Replace('\\', '/').TrimStart('/');
-			if (!assetPath.EndsWith(AudioProject.Extension, StringComparison.OrdinalIgnoreCase))
-			{
-				assetPath += AudioProject.Extension;
-			}
-
-			string absolute = AssetDatabase.ToAbsolute(assetPath);
-			if (File.Exists(absolute))
-			{
-				SetStatus("A file with this name exists already: " + assetPath);
-				return;
-			}
-
-			AudioProject project = AudioProject.CreateDefault(Path.GetFileNameWithoutExtension(assetPath));
-			project.CreateEvent("New Event");
-			project.Save(assetPath);
-			AssetDatabase.EnsureMeta(assetPath);
-			editor.NotifyAssetsChanged();
-			AudioProject.Forget(assetPath);
-			Open(assetPath);
+			ConfirmUnsaved(() => CreateProjectNow(assetPath));
 		}
 
 		public bool Save()
@@ -285,7 +260,11 @@ namespace LELEngine.Editor.Audio
 				return true;
 			}
 
-			openCloseConfirm = true;
+			ConfirmUnsaved(() =>
+			{
+				closeConfirmed = true;
+				window.Close();
+			});
 			return false;
 		}
 
@@ -634,6 +613,80 @@ namespace LELEngine.Editor.Audio
 		#endregion
 
 		#region PrivateMethods
+
+		/// <summary>Runs what would replace the project or close the window: now, or after the user answered about its unsaved changes.</summary>
+		private void ConfirmUnsaved(Action continuation)
+		{
+			if (!Dirty)
+			{
+				continuation();
+				return;
+			}
+
+			pendingAfterAnswer = continuation;
+			openCloseConfirm = true;
+		}
+
+		private void RunAfterAnswer()
+		{
+			Action continuation = pendingAfterAnswer;
+			pendingAfterAnswer = null;
+			continuation?.Invoke();
+		}
+
+		private void OpenNow(string assetPath)
+		{
+			StopPreview();
+			AudioProject project = AudioProject.Load(assetPath);
+			if (project == null)
+			{
+				SetStatus("Cannot open " + assetPath);
+				return;
+			}
+
+			Project = project;
+			savedState = project.ToBytes();
+			Dirty = false;
+			undoStack.Clear();
+			redoStack.Clear();
+			editSnapshot = null;
+			selectedEventId = project.Events.Count > 0 ? project.Events[0].Id : null;
+			selection = selectedEventId != null ? Selection.Of(SelectionKind.Event, selectedEventId) : default;
+			currentSheet = null;
+			expandedTransitionId = null;
+			if (AudioSystem.SourceProject != project)
+			{
+				AudioSystem.UseProject(project);
+				AudioSystem.ReloadFromProject();
+			}
+
+			EnsureBanksLoaded();
+			SetStatus("Opened " + assetPath);
+		}
+
+		private void CreateProjectNow(string assetPath)
+		{
+			assetPath = assetPath.Replace('\\', '/').TrimStart('/');
+			if (!assetPath.EndsWith(AudioProject.Extension, StringComparison.OrdinalIgnoreCase))
+			{
+				assetPath += AudioProject.Extension;
+			}
+
+			string absolute = AssetDatabase.ToAbsolute(assetPath);
+			if (File.Exists(absolute))
+			{
+				SetStatus("A file with this name exists already: " + assetPath);
+				return;
+			}
+
+			AudioProject project = AudioProject.CreateDefault(Path.GetFileNameWithoutExtension(assetPath));
+			project.CreateEvent("New Event");
+			project.Save(assetPath);
+			AssetDatabase.EnsureMeta(assetPath);
+			editor.NotifyAssetsChanged();
+			AudioProject.Forget(assetPath);
+			OpenNow(assetPath);
+		}
 
 		// ---------------------------------------------------------------- edits and undo
 
@@ -1183,17 +1236,17 @@ namespace LELEngine.Editor.Audio
 
 			if (EditorMenu.Begin("View"))
 			{
-				EditorMenu.Item("Events", "", ref showEvents);
-				EditorMenu.Item("Banks", "", ref showBanks);
-				EditorMenu.Item("Parameters", "", ref showParameters);
-				EditorMenu.Item("Snapshots", "", ref showSnapshots);
-				EditorMenu.Item("Assets", "", ref showAssets);
-				EditorMenu.Item("Deck", "", ref showDeck);
-				EditorMenu.Item("Overview", "", ref showOverview);
-				EditorMenu.Item("Mixer", "", ref showMixer);
+				EditorMenu.Toggle("Events", "AudioStudio.Events", ref showEvents);
+				EditorMenu.Toggle("Banks", "AudioStudio.Banks", ref showBanks);
+				EditorMenu.Toggle("Parameters", "AudioStudio.Parameters", ref showParameters);
+				EditorMenu.Toggle("Snapshots", "AudioStudio.Snapshots", ref showSnapshots);
+				EditorMenu.Toggle("Assets", "AudioStudio.Assets", ref showAssets);
+				EditorMenu.Toggle("Deck", "AudioStudio.Deck", ref showDeck);
+				EditorMenu.Toggle("Overview", "AudioStudio.Overview", ref showOverview);
+				EditorMenu.Toggle("Mixer", "AudioStudio.Mixer", ref showMixer);
 				ImGui.Separator();
-				EditorMenu.Item("Snap to Grid", "", ref snap);
-				EditorMenu.Item("Follow Playhead", "", ref followPlayhead);
+				EditorMenu.Toggle("Snap to Grid", "AudioStudio.Snap", ref snap);
+				EditorMenu.Toggle("Follow Playhead", "AudioStudio.FollowPlayhead", ref followPlayhead);
 				ImGui.Separator();
 				if (EditorMenu.Item("Reset Layout"))
 				{
@@ -1387,25 +1440,24 @@ namespace LELEngine.Editor.Audio
 				{
 					if (Save())
 					{
-						closeConfirmed = true;
 						ImGui.CloseCurrentPopup();
-						window.Close();
+						RunAfterAnswer();
 					}
 				}
 
 				ImGui.SameLine();
 				if (EditorGui.Button("Don't save", new NVector2(110, 0)))
 				{
-					closeConfirmed = true;
 					ImGui.CloseCurrentPopup();
 					// The audio system keeps the edited project in memory: the file is the truth again.
 					Revert();
-					window.Close();
+					RunAfterAnswer();
 				}
 
 				ImGui.SameLine();
 				if (EditorGui.Button("Cancel", new NVector2(110, 0)))
 				{
+					pendingAfterAnswer = null;
 					ImGui.CloseCurrentPopup();
 				}
 

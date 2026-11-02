@@ -4,9 +4,9 @@ using LELEngine.Animation;
 namespace LELEngine.Editor.Animation
 {
 	/// <summary>
-	///     The controller open in the Animator window: its asset, dirty state, undo snapshots (one record per edit,
-	///     the whole controller before and after) and saving. Edits apply live: the controller bumps its version and
-	///     every animator playing it rebuilds on its next update, keeping its state and parameter values.
+	///     The controller open in the Animator window: its asset and undo snapshots (one record per edit, the whole
+	///     controller before and after). Edits apply live: the controller bumps its version and every animator playing it
+	///     rebuilds on its next update, keeping its state and parameter values. The file is written when an edit ends.
 	/// </summary>
 	internal sealed class AnimatorDocument
 	{
@@ -14,7 +14,6 @@ namespace LELEngine.Editor.Animation
 
 		public AnimatorController Controller { get; }
 		public string AssetPath => Controller.AssetPath;
-		public bool Dirty { get; private set; }
 		public bool Editing => editBefore != null;
 
 		/// <summary>Raised after an undo or redo restored another state (the window drops stale selections).</summary>
@@ -56,7 +55,7 @@ namespace LELEngine.Editor.Animation
 			editLayoutOnly = layoutOnly;
 		}
 
-		/// <summary>Ends the edit: pushes an undo record when something changed and applies the change to the players.</summary>
+		/// <summary>Ends the edit: when something changed, an undo record, the change applied to the players and the file written.</summary>
 		public void EndEdit()
 		{
 			if (editBefore == null)
@@ -71,6 +70,7 @@ namespace LELEngine.Editor.Animation
 			{
 				editor.Undo.Push(new AnimatorRecord { Name = editName ?? "Edit animator", AssetPath = AssetPath, Before = before, After = after, LayoutOnly = editLayoutOnly });
 				Changed(!editLayoutOnly);
+				editor.Edits.SaveAfterEdit(Controller);
 			}
 		}
 
@@ -102,10 +102,9 @@ namespace LELEngine.Editor.Animation
 			}
 		}
 
-		/// <summary>Marks the controller changed (dirty; with <paramref name="rebuild" /> the players rebuild).</summary>
+		/// <summary>The controller changed: views refresh; with <paramref name="rebuild" /> the players rebuild.</summary>
 		public void Changed(bool rebuild = true)
 		{
-			Dirty = true;
 			if (rebuild)
 			{
 				Controller.MarkChanged();
@@ -114,44 +113,9 @@ namespace LELEngine.Editor.Animation
 			editor.NotifySceneChanged();
 		}
 
-		public void Save()
-		{
-			if (string.IsNullOrEmpty(AssetPath))
-			{
-				return;
-			}
-
-			Controller.Save();
-			Dirty = false;
-			Debug.Log("[Animator] Saved " + AssetPath);
-		}
-
-		/// <summary>Reloads the controller from its file (discarding unsaved changes).</summary>
-		public void Revert()
-		{
-			if (string.IsNullOrEmpty(AssetPath))
-			{
-				return;
-			}
-
-			try
-			{
-				byte[] data = System.IO.File.ReadAllBytes(AssetDatabase.ToAbsolute(AssetPath));
-				Controller.ApplyBytes(data);
-				Dirty = false;
-				editor.NotifySceneChanged();
-				Restored?.Invoke();
-			}
-			catch (Exception e)
-			{
-				Debug.LogError("[Animator] Cannot revert " + AssetPath + ": " + e.Message);
-			}
-		}
-
-		/// <summary>An undo or redo restored another state of the controller: it is dirty again.</summary>
+		/// <summary>An undo or redo restored another state of the controller.</summary>
 		public void OnRestored()
 		{
-			Dirty = true;
 			Restored?.Invoke();
 		}
 
@@ -195,6 +159,7 @@ namespace LELEngine.Editor.Animation
 			}
 
 			controller.ApplyBytes(data);
+			EditTracker.SaveAsset(controller);
 			editor.NotifySceneChanged();
 			editor.AnimatorWindow?.OnControllerRestored(controller);
 		}
@@ -238,6 +203,7 @@ namespace LELEngine.Editor.Animation
 			}
 
 			clip.ApplyBytes(data);
+			EditTracker.SaveAsset(clip);
 			editor.NotifySceneChanged();
 			editor.AnimationWindow?.OnClipRestored(clip);
 		}

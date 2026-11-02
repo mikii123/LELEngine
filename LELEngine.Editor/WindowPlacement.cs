@@ -11,7 +11,8 @@ namespace LELEngine.Editor
 	///     Where an operating-system window of the editor is (the editor's window, the UI Builder's): its bounds while
 	///     not maximized and whether it is maximized, in a file of the editor's data folder, put back the next time the
 	///     window opens. The owner calls <see cref="Track" /> when the window moves or resizes, <see cref="Restore" />
-	///     on the hidden window it created and <see cref="Save" /> when it closes.
+	///     on the hidden window it created, <see cref="Update" /> every frame (written a moment after a change) and
+	///     <see cref="Save" /> when it closes.
 	/// </summary>
 	internal sealed class WindowPlacement
 	{
@@ -24,6 +25,10 @@ namespace LELEngine.Editor
 		private Vector2i normalLocation;
 		private Vector2i normalSize;
 		private bool maximized;
+
+		private const double SaveDelay = 0.5;
+		private bool changed;
+		private double changedAt;
 
 		#endregion
 
@@ -83,10 +88,23 @@ namespace LELEngine.Editor
 					maximized = true;
 					break;
 			}
+
+			changed = true;
+			changedAt = Now;
+		}
+
+		/// <summary>Every frame: writes a moment after the last move or resize.</summary>
+		public void Update()
+		{
+			if (changed && Now - changedAt >= SaveDelay)
+			{
+				Save();
+			}
 		}
 
 		public void Save()
 		{
+			changed = false;
 			if (normalSize.X <= 0 || normalSize.Y <= 0)
 			{
 				return;
@@ -99,6 +117,8 @@ namespace LELEngine.Editor
 		#endregion
 
 		#region PrivateMethods
+
+		private static double Now => System.Diagnostics.Stopwatch.GetTimestamp() / (double)System.Diagnostics.Stopwatch.Frequency;
 
 		/// <summary>A point a little inside the window's top left corner lies on a connected monitor.</summary>
 		private static bool IsOnAMonitor(Vector2i location)

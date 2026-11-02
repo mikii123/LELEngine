@@ -220,6 +220,38 @@ namespace LELEngine
 			return q.Normalized();
 		}
 
+		/// <summary>Euler angles in degrees (x = bank, y = heading, z = attitude) matching <see cref="Euler(float, float, float)" />.</summary>
+		public static Vector3 ToEulerDegrees(Quaternion q)
+		{
+			q.Normalize();
+			double test = q.X * q.Y + q.Z * q.W;
+			double heading, attitude, bank;
+			if (test > 0.4999)
+			{
+				heading = 2 * Math.Atan2(q.X, q.W);
+				attitude = Math.PI / 2;
+				bank = 0;
+			}
+			else if (test < -0.4999)
+			{
+				heading = -2 * Math.Atan2(q.X, q.W);
+				attitude = -Math.PI / 2;
+				bank = 0;
+			}
+			else
+			{
+				double sqx = q.X * q.X;
+				double sqy = q.Y * q.Y;
+				double sqz = q.Z * q.Z;
+				heading = Math.Atan2(2 * q.Y * q.W - 2 * q.X * q.Z, 1 - 2 * sqy - 2 * sqz);
+				attitude = Math.Asin(2 * test);
+				bank = Math.Atan2(2 * q.X * q.W - 2 * q.Y * q.Z, 1 - 2 * sqx - 2 * sqz);
+			}
+
+			const double toDegrees = 180.0 / Math.PI;
+			return new Vector3((float)(bank * toDegrees), (float)(heading * toDegrees), (float)(attitude * toDegrees));
+		}
+
 		public static Vector3 ToEulerAngles(Quaternion q)
 		{
 			// Store the Euler angles in radians

@@ -66,6 +66,9 @@ namespace LELEngine.Editor.UIBuilder
 		private bool openSaveAsPopup;
 		private string saveAsPath = "UI/NewDocument.uxml";
 		private bool openCloseConfirm;
+		private Action pendingAfterAnswer;
+		private bool askDocument;
+		private bool askSheet;
 		private bool closeConfirmed;
 		private bool openNewSheetPopup;
 		private string newSheetName = "NewStyle";
@@ -102,62 +105,28 @@ namespace LELEngine.Editor.UIBuilder
 
 		public void Open(string assetPath)
 		{
-			try
+			// The document itself, unsaved: nothing to open, its changes stay.
+			if (dirty && string.Equals(document.assetPath, assetPath, StringComparison.OrdinalIgnoreCase))
 			{
-				string xml = File.ReadAllText(AssetDatabase.ToAbsolute(assetPath));
-				document = UxmlDocument.Parse(xml, assetPath);
-				savedXml = document.ToXml();
-				selectedPath = null;
-				dirty = false;
-				undoStack.Clear();
-				redoStack.Clear();
-				previewDirty = true;
-				status = "Opened " + assetPath;
-				if (document.styleSheets.Count > 0 && ussAssetPath == null)
-				{
-					string sheet = document.ResolveSource(document.styleSheets[0]);
-					if (sheet != null && File.Exists(AssetDatabase.ToAbsolute(sheet)))
-					{
-						OpenStyleSheet(sheet);
-					}
-				}
+				return;
 			}
-			catch (Exception e)
-			{
-				status = "Cannot open " + assetPath + ": " + e.Message;
-				Debug.LogError("[UI Builder] " + status);
-			}
+
+			AskIfUnsaved(true, false, () => OpenNow(assetPath));
 		}
 
 		public void OpenStyleSheet(string assetPath)
 		{
-			try
+			if (ussDirty && string.Equals(ussAssetPath, assetPath, StringComparison.OrdinalIgnoreCase))
 			{
-				ussText = File.ReadAllText(AssetDatabase.ToAbsolute(assetPath));
-				ussAssetPath = assetPath;
-				ussSheet = UIAssets.LoadStyleSheet(assetPath);
-				ussDirty = false;
-				ussApplied = true;
+				return;
 			}
-			catch (Exception e)
-			{
-				status = "Cannot open " + assetPath + ": " + e.Message;
-			}
+
+			AskIfUnsaved(false, true, () => OpenStyleSheetNow(assetPath));
 		}
 
 		public void NewDocument()
 		{
-			document = new UxmlDocument();
-			var root = new UxmlNode { tag = "VisualElement" };
-			root.SetAttribute("name", "root");
-			root.SetAttribute("style", "flex-grow: 1;");
-			document.root.children.Add(root);
-			savedXml = document.ToXml();
-			selectedPath = "0";
-			dirty = false;
-			undoStack.Clear();
-			redoStack.Clear();
-			previewDirty = true;
+			AskIfUnsaved(true, false, NewDocumentNow);
 		}
 
 		public bool Save()
@@ -174,13 +143,55 @@ namespace LELEngine.Editor.UIBuilder
 		/// <summary>The window asked to close: true to allow it (no unsaved changes, or confirmed).</summary>
 		public bool RequestClose()
 		{
-			if (!dirty && !ussDirty || closeConfirmed)
+			if (closeConfirmed || UnsavedFiles().Count == 0)
 			{
 				return true;
 			}
 
-			openCloseConfirm = true;
+			AskIfUnsaved(true, true, () =>
+			{
+				closeConfirmed = true;
+				window.Close();
+			});
 			return false;
+		}
+
+		/// <summary>The files with unsaved changes (the editor asks about them when it closes).</summary>
+		public List<string> UnsavedFiles()
+		{
+			var files = new List<string>();
+			if (dirty)
+			{
+				files.Add(document.assetPath ?? "Untitled.uxml");
+			}
+
+			if (ussDirty && ussAssetPath != null)
+			{
+				files.Add(ussAssetPath);
+			}
+
+			return files;
+		}
+
+		/// <summary>Saves the document and the style sheet; false when something was not written (a new document opens Save As).</summary>
+		public bool SaveChanges()
+		{
+			if (ussDirty && ussAssetPath != null)
+			{
+				SaveStyleSheet();
+				if (ussDirty)
+				{
+					return false;
+				}
+			}
+
+			return !dirty || Save();
+		}
+
+		/// <summary>Drops the unsaved changes: the files are the truth again (a new document starts over).</summary>
+		public void DiscardChanges()
+		{
+			DiscardChanges(true, true);
 		}
 
 		public void Draw()
@@ -355,6 +366,109 @@ namespace LELEngine.Editor.UIBuilder
 		#endregion
 
 		#region PrivateMethods
+
+		/// <summary>Runs what would drop the document's or the sheet's changes: now, or after the user answered about them.</summary>
+		private void AskIfUnsaved(bool documentChanges, bool sheetChanges, Action continuation)
+		{
+			askDocument = documentChanges && dirty;
+			askSheet = sheetChanges && ussDirty && ussAssetPath != null;
+			if (!askDocument && !askSheet)
+			{
+				continuation();
+				return;
+			}
+
+			pendingAfterAnswer = continuation;
+			openCloseConfirm = true;
+		}
+
+		private void RunAfterAnswer()
+		{
+			Action continuation = pendingAfterAnswer;
+			pendingAfterAnswer = null;
+			continuation?.Invoke();
+		}
+
+		private void DiscardChanges(bool documentChanges, bool sheetChanges)
+		{
+			if (sheetChanges && ussDirty && ussAssetPath != null)
+			{
+				OpenStyleSheetNow(ussAssetPath);
+				ApplyUss();
+			}
+
+			if (documentChanges && dirty)
+			{
+				if (document.assetPath != null)
+				{
+					OpenNow(document.assetPath);
+				}
+				else
+				{
+					NewDocumentNow();
+				}
+			}
+		}
+
+		private void OpenNow(string assetPath)
+		{
+			try
+			{
+				string xml = File.ReadAllText(AssetDatabase.ToAbsolute(assetPath));
+				document = UxmlDocument.Parse(xml, assetPath);
+				savedXml = document.ToXml();
+				selectedPath = null;
+				dirty = false;
+				undoStack.Clear();
+				redoStack.Clear();
+				previewDirty = true;
+				status = "Opened " + assetPath;
+				if (document.styleSheets.Count > 0 && ussAssetPath == null)
+				{
+					string sheet = document.ResolveSource(document.styleSheets[0]);
+					if (sheet != null && File.Exists(AssetDatabase.ToAbsolute(sheet)))
+					{
+						OpenStyleSheetNow(sheet);
+					}
+				}
+			}
+			catch (Exception e)
+			{
+				status = "Cannot open " + assetPath + ": " + e.Message;
+				Debug.LogError("[UI Builder] " + status);
+			}
+		}
+
+		private void OpenStyleSheetNow(string assetPath)
+		{
+			try
+			{
+				ussText = File.ReadAllText(AssetDatabase.ToAbsolute(assetPath));
+				ussAssetPath = assetPath;
+				ussSheet = UIAssets.LoadStyleSheet(assetPath);
+				ussDirty = false;
+				ussApplied = true;
+			}
+			catch (Exception e)
+			{
+				status = "Cannot open " + assetPath + ": " + e.Message;
+			}
+		}
+
+		private void NewDocumentNow()
+		{
+			document = new UxmlDocument();
+			var root = new UxmlNode { tag = "VisualElement" };
+			root.SetAttribute("name", "root");
+			root.SetAttribute("style", "flex-grow: 1;");
+			document.root.children.Add(root);
+			savedXml = document.ToXml();
+			selectedPath = "0";
+			dirty = false;
+			undoStack.Clear();
+			redoStack.Clear();
+			previewDirty = true;
+		}
 
 		// ------------------------------------------------------------------ document edits
 
@@ -1091,9 +1205,14 @@ namespace LELEngine.Editor.UIBuilder
 					ImGui.SameLine();
 					if (EditorGui.SmallButton("Save")) SaveStyleSheet();
 					ImGui.SameLine();
-					if (EditorGui.SmallButton("Revert")) OpenStyleSheet(ussAssetPath);
+					if (EditorGui.SmallButton("Revert"))
+					{
+						OpenStyleSheetNow(ussAssetPath);
+						ApplyUss();
+					}
+
 					ImGui.SameLine();
-					if (EditorGui.SmallButton("Close")) ussAssetPath = null;
+					if (EditorGui.SmallButton("Close")) AskIfUnsaved(false, true, () => ussAssetPath = null);
 					if (ussSheet != null && ussSheet.errors.Count > 0)
 					{
 						ImGui.SameLine();
@@ -1475,39 +1594,68 @@ namespace LELEngine.Editor.UIBuilder
 				if (EditorGui.Button("Save", new NVector2(110, 0)) && !string.IsNullOrWhiteSpace(saveAsPath))
 				{
 					ImGui.CloseCurrentPopup();
-					SaveTo(saveAsPath);
+					// What waited for the question about unsaved changes goes on from here.
+					if (SaveTo(saveAsPath))
+					{
+						RunAfterAnswer();
+					}
+					else
+					{
+						pendingAfterAnswer = null;
+					}
 				}
 
 				ImGui.SameLine();
-				if (EditorGui.Button("Cancel", new NVector2(110, 0))) ImGui.CloseCurrentPopup();
+				if (EditorGui.Button("Cancel", new NVector2(110, 0)))
+				{
+					pendingAfterAnswer = null;
+					ImGui.CloseCurrentPopup();
+				}
+
 				ImGui.EndPopup();
 			}
 
 			ImGui.SetNextWindowPos(EditorGui.ViewportCenter(), ImGuiCond.Appearing, new NVector2(0.5f, 0.5f));
 			if (ImGui.BeginPopupModal("Unsaved changes##builder", ImGuiWindowFlags.AlwaysAutoResize))
 			{
-				ImGui.Text("The document or style sheet has unsaved changes.");
+				ImGui.TextUnformatted((askDocument && askSheet ? "The document and the style sheet have" : askDocument ? "The document '" + (document.assetPath ?? "Untitled.uxml") + "' has" : "The style sheet '" + ussAssetPath + "' has") + " unsaved changes.");
 				if (EditorGui.Button("Save", new NVector2(110, 0)))
 				{
-					if (ussDirty) SaveStyleSheet();
-					if (!dirty || Save())
+					ImGui.CloseCurrentPopup();
+					if (askSheet)
 					{
-						closeConfirmed = true;
-						ImGui.CloseCurrentPopup();
-						window.Close();
+						SaveStyleSheet();
+					}
+
+					if (askSheet && ussDirty)
+					{
+						pendingAfterAnswer = null;
+					}
+					else if (!askDocument || Save())
+					{
+						RunAfterAnswer();
+					}
+					else if (!openSaveAsPopup)
+					{
+						pendingAfterAnswer = null;
 					}
 				}
 
 				ImGui.SameLine();
 				if (EditorGui.Button("Don't save", new NVector2(110, 0)))
 				{
-					closeConfirmed = true;
 					ImGui.CloseCurrentPopup();
-					window.Close();
+					DiscardChanges(askDocument, askSheet);
+					RunAfterAnswer();
 				}
 
 				ImGui.SameLine();
-				if (EditorGui.Button("Cancel", new NVector2(110, 0))) ImGui.CloseCurrentPopup();
+				if (EditorGui.Button("Cancel", new NVector2(110, 0)))
+				{
+					pendingAfterAnswer = null;
+					ImGui.CloseCurrentPopup();
+				}
+
 				ImGui.EndPopup();
 			}
 

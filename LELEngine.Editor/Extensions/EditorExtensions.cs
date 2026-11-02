@@ -28,6 +28,9 @@ namespace LELEngine.Editor
 		private static readonly string[] BuiltInMenus = { "File", "Edit", "GameObject", "Window" };
 		private const string WindowsFile = "EditorWindows.txt";
 
+		// What the file holds (the open windows are written when it changes).
+		private string savedWindowsText;
+
 		private readonly EditorApplication editor;
 		private Assembly assembly;
 
@@ -190,6 +193,7 @@ namespace LELEngine.Editor
 		public void LoadOpenWindows(ProjectInfo project)
 		{
 			savedWindows.Clear();
+			savedWindowsText = null;
 			string file = Path.Combine(project.LibraryPath, WindowsFile);
 			if (!File.Exists(file))
 			{
@@ -225,30 +229,55 @@ namespace LELEngine.Editor
 		/// <summary>Writes the open windows (and the ones still waiting for their scripts) to the project's Library.</summary>
 		public void SaveOpenWindows(ProjectInfo project)
 		{
-			var pending = new List<WindowState>(savedWindows);
-			CaptureWindowStates();
-			windowsCaptured = false;
+			Write(project, OpenWindowsText());
+		}
+
+		/// <summary>Writes the open windows when they differ from what the file holds (not between a capture and the reload it is for).</summary>
+		public void SaveOpenWindowsIfChanged(ProjectInfo project)
+		{
+			if (windowsCaptured)
+			{
+				return;
+			}
+
+			string text = OpenWindowsText();
+			if (text != (savedWindowsText ?? ""))
+			{
+				Write(project, text);
+			}
+		}
+
+		private void Write(ProjectInfo project, string text)
+		{
 			try
 			{
-				var builder = new StringBuilder();
-				foreach (WindowState state in savedWindows)
-				{
-					builder.Append(state.Key).Append('\t').Append(state.TypeName).Append('\t')
-						.Append(state.Title != null ? Convert.ToBase64String(Encoding.UTF8.GetBytes(state.Title)) : "").Append('\t')
-						.Append(state.State != null ? Convert.ToBase64String(state.State) : "").Append('\n');
-				}
-
 				Directory.CreateDirectory(project.LibraryPath);
-				File.WriteAllText(Path.Combine(project.LibraryPath, WindowsFile), builder.ToString());
+				File.WriteAllText(Path.Combine(project.LibraryPath, WindowsFile), text);
+				savedWindowsText = text;
 			}
 			catch (Exception e)
 			{
 				Debug.LogWarning("[Editor] Cannot save the open editor windows: " + e.Message);
 			}
+		}
+
+		private string OpenWindowsText()
+		{
+			var pending = new List<WindowState>(savedWindows);
+			CaptureWindowStates();
+			windowsCaptured = false;
+			var builder = new StringBuilder();
+			foreach (WindowState state in savedWindows)
+			{
+				builder.Append(state.Key).Append('\t').Append(state.TypeName).Append('\t')
+					.Append(state.Title != null ? Convert.ToBase64String(Encoding.UTF8.GetBytes(state.Title)) : "").Append('\t')
+					.Append(state.State != null ? Convert.ToBase64String(state.State) : "").Append('\n');
+			}
 
 			// The open windows stay open; only the states still waiting for their scripts are kept.
 			savedWindows.Clear();
 			savedWindows.AddRange(pending);
+			return builder.ToString();
 		}
 
 		/// <summary>The project closed: nothing waits to be restored.</summary>

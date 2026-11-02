@@ -45,6 +45,7 @@ namespace LELEngine.Editor.VFX
 		private bool frameOnOpen;
 		private bool closeRequested;
 		private bool openUnsavedPopup;
+		private string pendingOpenPath;
 		private int compiledVersion = -1;
 		private readonly List<VfxCompileMessage> messages = new List<VfxCompileMessage>();
 		private readonly List<string> shaderErrors = new List<string>();
@@ -60,28 +61,34 @@ namespace LELEngine.Editor.VFX
 		public VfxGraphWindow(EditorApplication editor)
 		{
 			this.editor = editor;
+			showBlackboard = EditorPreferences.GetToggle("VfxGraph.Blackboard", showBlackboard);
+			showInspector = EditorPreferences.GetToggle("VfxGraph.Inspector", showInspector);
+			showMessages = EditorPreferences.GetToggle("VfxGraph.Messages", showMessages);
+			showCode = EditorPreferences.GetToggle("VfxGraph.Code", showCode);
 		}
 
 		#endregion
 
 		#region PublicMethods
 
-		/// <summary>Opens the window on a graph asset (null keeps the current one).</summary>
+		/// <summary>Opens the window on a graph asset (null keeps the current one); unsaved changes of another graph ask first.</summary>
 		public void Show(string assetPath)
 		{
 			Open = true;
 			focusRequested = true;
-			if (assetPath != null && (document == null || !string.Equals(document.AssetPath, assetPath, StringComparison.OrdinalIgnoreCase)))
+			if (assetPath == null || (document != null && string.Equals(document.AssetPath, assetPath, StringComparison.OrdinalIgnoreCase)))
 			{
-				VfxGraph graph = VfxGraph.Load(assetPath);
-				document = new VfxGraphDocument(editor, graph);
-				canvas.Document = document;
-				canvas.ClearSelection();
-				canvas.Zoom = graph.ViewZoom > 0.01f ? graph.ViewZoom : 1f;
-				canvas.Offset = new NVector2(graph.ViewOffset.X, graph.ViewOffset.Y);
-				frameOnOpen = graph.ViewOffset == OpenTK.Mathematics.Vector2.Zero;
-				compiledVersion = -1;
+				return;
 			}
+
+			if (document != null && document.Dirty)
+			{
+				pendingOpenPath = assetPath;
+				openUnsavedPopup = true;
+				return;
+			}
+
+			LoadDocument(assetPath);
 		}
 
 		/// <summary>Closes the window; unsaved changes ask first.</summary>
@@ -104,6 +111,7 @@ namespace LELEngine.Editor.VFX
 		public void Reset()
 		{
 			document = null;
+			pendingOpenPath = null;
 			canvas.Document = null;
 			canvas.ClearSelection();
 			Open = false;
@@ -155,6 +163,7 @@ namespace LELEngine.Editor.VFX
 				closeRequested = false;
 				if (document != null && document.Dirty)
 				{
+					pendingOpenPath = null;
 					openUnsavedPopup = true;
 					Open = true;
 				}
@@ -281,10 +290,10 @@ namespace LELEngine.Editor.VFX
 
 			if (EditorMenu.Begin("View"))
 			{
-				EditorMenu.Item("Blackboard", "", ref showBlackboard);
-				EditorMenu.Item("Inspector", "", ref showInspector);
-				EditorMenu.Item("Messages", "", ref showMessages);
-				EditorMenu.Item("Generated Code", "", ref showCode);
+				EditorMenu.Toggle("Blackboard", "VfxGraph.Blackboard", ref showBlackboard);
+				EditorMenu.Toggle("Inspector", "VfxGraph.Inspector", ref showInspector);
+				EditorMenu.Toggle("Messages", "VfxGraph.Messages", ref showMessages);
+				EditorMenu.Toggle("Generated Code", "VfxGraph.Code", ref showCode);
 				EditorMenu.End();
 			}
 
@@ -585,7 +594,7 @@ namespace LELEngine.Editor.VFX
 			if (EditorGui.Button("Save", new NVector2(110, 0)))
 			{
 				document.Save();
-				Open = false;
+				AfterUnsavedAnswer();
 				ImGui.CloseCurrentPopup();
 			}
 
@@ -593,17 +602,44 @@ namespace LELEngine.Editor.VFX
 			if (EditorGui.Button("Discard", new NVector2(110, 0)))
 			{
 				document.Revert();
-				Open = false;
+				AfterUnsavedAnswer();
 				ImGui.CloseCurrentPopup();
 			}
 
 			ImGui.SameLine();
 			if (EditorGui.Button("Cancel", new NVector2(110, 0)))
 			{
+				pendingOpenPath = null;
 				ImGui.CloseCurrentPopup();
 			}
 
 			ImGui.EndPopup();
+		}
+
+		/// <summary>The question about unsaved changes was answered: the graph waiting to open opens, else the window closes.</summary>
+		private void AfterUnsavedAnswer()
+		{
+			if (pendingOpenPath == null)
+			{
+				Open = false;
+				return;
+			}
+
+			string assetPath = pendingOpenPath;
+			pendingOpenPath = null;
+			LoadDocument(assetPath);
+		}
+
+		private void LoadDocument(string assetPath)
+		{
+			VfxGraph graph = VfxGraph.Load(assetPath);
+			document = new VfxGraphDocument(editor, graph);
+			canvas.Document = document;
+			canvas.ClearSelection();
+			canvas.Zoom = graph.ViewZoom > 0.01f ? graph.ViewZoom : 1f;
+			canvas.Offset = new NVector2(graph.ViewOffset.X, graph.ViewOffset.Y);
+			frameOnOpen = graph.ViewOffset == OpenTK.Mathematics.Vector2.Zero;
+			compiledVersion = -1;
 		}
 
 		#endregion

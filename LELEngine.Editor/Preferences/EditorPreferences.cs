@@ -23,6 +23,9 @@ namespace LELEngine.Editor
 		public ConsolePreferences Console = new ConsolePreferences();
 		public ExternalToolsPreferences ExternalTools = new ExternalToolsPreferences();
 
+		/// <summary>The toggles of the editor's windows (panels shown, snapping, ...) by name; one not set has the window's default.</summary>
+		public Dictionary<string, bool> Toggles = new Dictionary<string, bool>();
+
 		public static EditorPreferences Current { get; private set; } = new EditorPreferences();
 
 		/// <summary>Bumped on every change (the console re-filters its entries).</summary>
@@ -77,6 +80,17 @@ namespace LELEngine.Editor
 			Current.ApplyToEngine();
 			Version++;
 			ThemeVersion++;
+		}
+
+		public static bool GetToggle(string key, bool fallback)
+		{
+			return Current.Toggles.TryGetValue(key, out bool value) ? value : fallback;
+		}
+
+		public static void SetToggle(string key, bool value)
+		{
+			Current.Toggles[key] = value;
+			MarkChanged();
 		}
 
 		/// <summary>Something changed (saved a moment later); <paramref name="theme" />: the windows apply the theme again.</summary>
@@ -198,6 +212,7 @@ namespace LELEngine.Editor
 		private void Normalize()
 		{
 			Theme ??= new ThemePreferences();
+			Toggles ??= new Dictionary<string, bool>();
 			Console ??= new ConsolePreferences();
 			ExternalTools ??= new ExternalToolsPreferences();
 			Theme.Colors ??= new Dictionary<string, string>();

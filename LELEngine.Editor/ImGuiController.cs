@@ -66,6 +66,8 @@ namespace LELEngine.Editor
 			{
 				iniPath = Marshal.StringToHGlobalAnsi(iniFile);
 				io.IniFilename = (byte*)iniPath;
+				// The layout follows its changes like the rest of the editor's state (ImGui's default waits 5 s).
+				io.IniSavingRate = 0.5f;
 			}
 
 			string font = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Fonts), "segoeui.ttf");

@@ -88,6 +88,11 @@ namespace LELEngine.Editor.UIBuilder
 				return;
 			}
 
+			if (rememberPlacement)
+			{
+				placement.Update();
+			}
+
 			native.MakeCurrent();
 			try
 			{

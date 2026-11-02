@@ -34,6 +34,9 @@ namespace LELEngine.Animation
 		/// <summary>The animators registered in the scene (enabled, on active objects).</summary>
 		public IReadOnlyList<Animator> Animators => animators;
 
+		/// <summary>The timelines registered in the scene (enabled, on active objects).</summary>
+		public IReadOnlyList<Timeline> Timelines => timelines;
+
 		#endregion
 
 		#region PrivateFields
@@ -43,6 +46,8 @@ namespace LELEngine.Animation
 		private readonly List<Animator> frame = new List<Animator>();
 		private readonly List<Animator> parallelBatch = new List<Animator>();
 		private readonly List<Animator> serialBatch = new List<Animator>();
+		private readonly List<Timeline> timelines = new List<Timeline>();
+		private readonly List<Timeline> timelineFrame = new List<Timeline>();
 		private readonly Stopwatch stopwatch = new Stopwatch();
 
 		#endregion
@@ -64,8 +69,64 @@ namespace LELEngine.Animation
 			return scene?.AnimationSystem;
 		}
 
-		/// <summary>Runs one update of the scene's animators of an update mode (called by the scene's phases).</summary>
+		/// <summary>Runs one update of the scene's animators and then timelines of an update mode (called by the scene's phases): timelines write over the animators.</summary>
 		public void Update(float deltaTime, AnimatorUpdateMode mode)
+		{
+			UpdateAnimators(deltaTime, mode);
+			UpdateTimelines(deltaTime, mode);
+		}
+
+		#endregion
+
+		#region InternalMethods
+
+		internal static void Register(Timeline timeline)
+		{
+			AnimationSystem system = timeline?.gameObject?.scene?.AnimationSystem;
+			if (system != null && !system.timelines.Contains(timeline))
+			{
+				system.timelines.Add(timeline);
+			}
+		}
+
+		internal static void Unregister(Timeline timeline)
+		{
+			timeline?.gameObject?.scene?.animation?.timelines.Remove(timeline);
+		}
+
+		#endregion
+
+		#region PrivateMethods
+
+		private void UpdateTimelines(float deltaTime, AnimatorUpdateMode mode)
+		{
+			if (timelines.Count == 0)
+			{
+				return;
+			}
+
+			// A copy: a handler of a marker may enable or disable timelines.
+			timelineFrame.Clear();
+			timelineFrame.AddRange(timelines);
+			foreach (Timeline timeline in timelineFrame)
+			{
+				if (timeline.IsDestroyed || !timeline.isActiveAndEnabled || timeline.updateMode != mode)
+				{
+					continue;
+				}
+
+				try
+				{
+					timeline.Tick(deltaTime);
+				}
+				catch (Exception e)
+				{
+					Debug.LogException(e, timeline);
+				}
+			}
+		}
+
+		private void UpdateAnimators(float deltaTime, AnimatorUpdateMode mode)
 		{
 			if (animators.Count == 0)
 			{
@@ -184,6 +245,8 @@ namespace LELEngine.Animation
 			animators.Clear();
 			registered.Clear();
 			frame.Clear();
+			timelines.Clear();
+			timelineFrame.Clear();
 		}
 
 		#endregion

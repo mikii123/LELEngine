@@ -437,7 +437,7 @@ namespace LELEngine.Editor.Audio
 		private void DrawSnapControls(AudioEvent current, float x, float y)
 		{
 			ImGui.SetCursorScreenPos(new NVector2(x, y));
-			EditorGui.Checkbox("Snap", ref snap);
+			if (EditorGui.Checkbox("Snap", ref snap)) EditorPreferences.SetToggle("AudioStudio.Snap", snap);
 			ImGui.SameLine();
 			ImGui.SetNextItemWidth(96f);
 			string[] intervals = { "Grid", "1/4 Beat", "1/2 Beat", "Beat", "2 Beats", "Bar", "2 Bars", "4 Bars", "8 Bars" };

@@ -194,6 +194,21 @@ namespace LELEngine
 		}
 
 		/// <summary>
+		///     The object with an id (<see cref="GameObject.Id" />: its identity, which stays through renames, moves in the
+		///     hierarchy, saving and loading) in any loaded scene, the active one first; null when none has it.
+		/// </summary>
+		public static GameObject FindObjectById(ulong id)
+		{
+			GameObject found = ActiveScene?.FindObjectById(id);
+			for (int i = 0; found == null && i < loaded.Count; i++)
+			{
+				found = loaded[i].FindObjectById(id);
+			}
+
+			return found;
+		}
+
+		/// <summary>
 		///     Makes the scene active; its settings become the live lighting / GI settings. A scene that is not loaded
 		///     yet joins the loaded scenes (a scene built in code); its lifecycle is the caller's to start. Null: no
 		///     active scene.

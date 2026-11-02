@@ -104,6 +104,10 @@ namespace LELEngine.Editor
 			{
 				Animation.AnimatorComponentInspector.DrawClipAsset(assetPath, context);
 			}
+			else if (type == typeof(LELEngine.Animation.TimelineAsset))
+			{
+				Animation.TimelineComponentInspector.DrawAsset(assetPath, context);
+			}
 			else if (type == typeof(LELEngine.VFX.VfxGraph))
 			{
 				if (EditorGui.Button("Open in VFX Graph", new NVector2(-1, 0)))
@@ -176,6 +180,7 @@ namespace LELEngine.Editor
 			if (type == typeof(LELEngine.VFX.VfxGraph)) return "Visual Effect Graph";
 			if (type == typeof(LELEngine.Animation.AnimatorController)) return "Animator Controller";
 			if (type == typeof(LELEngine.Animation.AnimationClip)) return "Animation Clip";
+			if (type == typeof(LELEngine.Animation.TimelineAsset)) return "Timeline";
 			if (type == typeof(LELEngine.Audio.AudioProject)) return "Audio Project";
 			if (type == typeof(LELEngine.Audio.AudioClip)) return "Audio Clip";
 			if (type == typeof(ScriptableObject)) return (ScriptableObjectAssets.GetStoredType(assetPath)?.Name ?? "missing script") + " asset";

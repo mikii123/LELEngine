@@ -10,14 +10,13 @@ using NVector4 = System.Numerics.Vector4;
 
 namespace LELEngine.Editor.Animation
 {
-	/// <summary>The clip open in the Animation window: dirty state, undo snapshots, saving (as <see cref="AnimatorDocument" />).</summary>
+	/// <summary>The clip open in the Animation window: undo snapshots, the file written when an edit ends (as <see cref="AnimatorDocument" />).</summary>
 	internal sealed class AnimationClipDocument
 	{
 		#region PublicFields
 
 		public AnimationClip Clip { get; }
 		public string AssetPath => Clip.AssetPath;
-		public bool Dirty { get; private set; }
 		public event Action Restored;
 
 		#endregion
@@ -67,6 +66,7 @@ namespace LELEngine.Editor.Animation
 			{
 				editor.Undo.Push(new AnimationClipRecord { Name = editName ?? "Edit clip", AssetPath = AssetPath, Before = before, After = after });
 				Changed();
+				editor.Edits.SaveAfterEdit(Clip);
 			}
 		}
 
@@ -85,46 +85,12 @@ namespace LELEngine.Editor.Animation
 
 		public void Changed()
 		{
-			Dirty = true;
 			Clip.MarkChanged();
 			editor.NotifySceneChanged();
 		}
 
-		public void Save()
-		{
-			if (string.IsNullOrEmpty(AssetPath))
-			{
-				return;
-			}
-
-			Clip.Save();
-			Dirty = false;
-			Debug.Log("[Animation] Saved " + AssetPath);
-		}
-
-		public void Revert()
-		{
-			if (string.IsNullOrEmpty(AssetPath))
-			{
-				return;
-			}
-
-			try
-			{
-				Clip.ApplyBytes(File.ReadAllBytes(AssetDatabase.ToAbsolute(AssetPath)));
-				Dirty = false;
-				editor.NotifySceneChanged();
-				Restored?.Invoke();
-			}
-			catch (Exception e)
-			{
-				Debug.LogError("[Animation] Cannot revert " + AssetPath + ": " + e.Message);
-			}
-		}
-
 		public void OnRestored()
 		{
-			Dirty = true;
 			Restored?.Invoke();
 		}
 
@@ -137,7 +103,7 @@ namespace LELEngine.Editor.Animation
 	///     the property picker or by recording), a dope sheet or the curves on the right with a ruler, the playhead and
 	///     draggable keys, an events lane at the bottom with the event's inspector. Preview samples the clip on the
 	///     target object in edit mode (restored when preview ends); Record keys every change made to animated
-	///     properties (inspector, scene view) at the playhead. Edits are undoable; Ctrl+S saves the asset.
+	///     properties (inspector, scene view) at the playhead. Edits are undoable and written to the file when they end.
 	/// </summary>
 	internal sealed class AnimationWindow : IEditorPanel
 	{
@@ -207,7 +173,6 @@ namespace LELEngine.Editor.Animation
 		private int selectedEvent = -1;
 		private bool focusRequested;
 		private bool closeRequested;
-		private bool openUnsavedPopup;
 		private bool draggingPlayhead;
 		private bool draggingKeys;
 		private bool keysMoved;
@@ -229,8 +194,6 @@ namespace LELEngine.Editor.Animation
 		private string propertySearch = "";
 		private string eventFunctionBuffer;
 		private int eventFunctionFor = -1;
-		private byte[] reloadSnapshot;
-		private bool reloadDirty;
 		private string reloadPath;
 		private float timeInput;
 		private int frameInput;
@@ -249,6 +212,7 @@ namespace LELEngine.Editor.Animation
 		{
 			this.editor = editor;
 			context = new InspectorContext { Editor = editor };
+			snapToFrames = EditorPreferences.GetToggle("Animation.SnapToFrames", snapToFrames);
 		}
 
 		#endregion
@@ -263,6 +227,19 @@ namespace LELEngine.Editor.Animation
 			{
 				SetDocument(AnimationClip.Load(assetPath));
 			}
+		}
+
+		/// <summary>Opens a clip on a given object (a channel's of the Timeline window): the target stays locked on it.</summary>
+		public void Show(string assetPath, GameObject forTarget)
+		{
+			Show(assetPath);
+			if (forTarget != null && forTarget != target)
+			{
+				EndPreview();
+				target = forTarget;
+			}
+
+			lockTarget = forTarget != null;
 		}
 
 		public void Close()
@@ -301,8 +278,8 @@ namespace LELEngine.Editor.Animation
 		public void OnDomainUnloading()
 		{
 			EndPreview();
-			reloadSnapshot = document != null && document.Dirty ? document.Clip.ToBytes() : null;
-			reloadDirty = document != null && document.Dirty;
+			document?.EndEdit();
+			editor.Edits.SaveWaiting();
 			reloadPath = document?.AssetPath;
 			document = null;
 			target = null;
@@ -315,19 +292,7 @@ namespace LELEngine.Editor.Animation
 				return;
 			}
 
-			AnimationClip clip = AnimationClip.Load(reloadPath);
-			if (clip != null && reloadSnapshot != null)
-			{
-				clip.ApplyBytes(reloadSnapshot);
-			}
-
-			SetDocument(clip);
-			if (reloadDirty)
-			{
-				document?.Changed();
-			}
-
-			reloadSnapshot = null;
+			SetDocument(AnimationClip.Load(reloadPath));
 			reloadPath = null;
 		}
 
@@ -352,7 +317,7 @@ namespace LELEngine.Editor.Animation
 			}
 
 			bool open = Open;
-			string title = Title + (document != null ? " - " + Path.GetFileNameWithoutExtension(document.AssetPath ?? "untitled") + (document.Dirty ? " *" : "") : "") + "###animation";
+			string title = Title + (document != null ? " - " + Path.GetFileNameWithoutExtension(document.AssetPath ?? "untitled") : "") + "###animation";
 			bool visible = ImGui.Begin(title, ref open, ImGuiWindowFlags.MenuBar);
 			if (!Automation.WindowCapture.Active)
 			{
@@ -380,19 +345,9 @@ namespace LELEngine.Editor.Animation
 			if (closeRequested)
 			{
 				closeRequested = false;
-				if (document != null && document.Dirty)
-				{
-					openUnsavedPopup = true;
-					Open = true;
-				}
-				else
-				{
-					EndPreview();
-					Open = false;
-				}
+				EndPreview();
+				Open = false;
 			}
-
-			DrawUnsavedPopup();
 		}
 
 		/// <summary>Moves the playhead (seconds), snapped to frames when enabled.</summary>
@@ -451,7 +406,6 @@ namespace LELEngine.Editor.Animation
 			context.UndoTarget = Clip;
 			context.LabelWidth = 110f;
 			UpdateTarget();
-			HandleShortcuts();
 			DrawToolbar();
 			AdvancePlayback();
 			if (record && previewSession != null)
@@ -495,9 +449,6 @@ namespace LELEngine.Editor.Animation
 
 			if (EditorMenu.Begin("File"))
 			{
-				if (EditorMenu.Item("Save", "Ctrl+S", false, document != null && document.Dirty)) document.Save();
-				if (EditorMenu.Item("Revert", "", false, document != null && document.Dirty)) document.Revert();
-				ImGui.Separator();
 				if (EditorMenu.Item("Close")) closeRequested = true;
 				EditorMenu.End();
 			}
@@ -532,7 +483,7 @@ namespace LELEngine.Editor.Animation
 				if (EditorMenu.Item("Dope Sheet", "", mode == ViewMode.DopeSheet)) mode = ViewMode.DopeSheet;
 				if (EditorMenu.Item("Curves", "", mode == ViewMode.Curves)) { mode = ViewMode.Curves; valueRangeDirty = true; }
 				ImGui.Separator();
-				EditorMenu.Item("Snap to Frames", "", ref snapToFrames);
+				EditorMenu.Toggle("Snap to Frames", "Animation.SnapToFrames", ref snapToFrames);
 				if (EditorMenu.Item("Frame All", "F")) FrameAll();
 				EditorMenu.End();
 			}
@@ -543,10 +494,7 @@ namespace LELEngine.Editor.Animation
 		private void DrawToolbar()
 		{
 			AnimationClip clip = Clip;
-			ImGui.BeginDisabled(!document.Dirty);
-			if (EditorGui.Button("Save")) document.Save();
-			ImGui.EndDisabled();
-			ImGui.SameLine();
+			ImGui.AlignTextToFramePadding();
 			ImGui.TextDisabled(document.AssetPath ?? "");
 			ImGui.SameLine();
 			ImGui.Dummy(new NVector2(8, 0));
@@ -2526,63 +2474,6 @@ namespace LELEngine.Editor.Animation
 				case Vector4i v: return new[] { (float)v.X, v.Y, v.Z, v.W };
 				default: return new float[AnimationBinding.ChannelCountOf(kind)];
 			}
-		}
-
-		// ---------------------------------------------------------------- misc
-
-		private void HandleShortcuts()
-		{
-			if (!IsFocused || ImGui.GetIO().WantTextInput)
-			{
-				return;
-			}
-
-			if (ImGui.GetIO().KeyCtrl && ImGui.IsKeyPressed(ImGuiKey.S, false) && document.Dirty)
-			{
-				document.Save();
-			}
-		}
-
-		private void DrawUnsavedPopup()
-		{
-			if (openUnsavedPopup)
-			{
-				ImGui.OpenPopup("Unsaved animation clip");
-				openUnsavedPopup = false;
-			}
-
-			bool open = true;
-			if (!ImGui.BeginPopupModal("Unsaved animation clip", ref open, ImGuiWindowFlags.AlwaysAutoResize))
-			{
-				return;
-			}
-
-			ImGui.TextUnformatted("The clip " + Path.GetFileName(document?.AssetPath ?? "") + " has unsaved changes.");
-			ImGui.Spacing();
-			if (EditorGui.Button("Save", new NVector2(100, 0)))
-			{
-				document.Save();
-				EndPreview();
-				Open = false;
-				ImGui.CloseCurrentPopup();
-			}
-
-			ImGui.SameLine();
-			if (EditorGui.Button("Discard", new NVector2(100, 0)))
-			{
-				document.Revert();
-				EndPreview();
-				Open = false;
-				ImGui.CloseCurrentPopup();
-			}
-
-			ImGui.SameLine();
-			if (EditorGui.Button("Cancel", new NVector2(100, 0)))
-			{
-				ImGui.CloseCurrentPopup();
-			}
-
-			ImGui.EndPopup();
 		}
 
 		#endregion

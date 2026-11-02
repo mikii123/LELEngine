@@ -303,6 +303,7 @@ namespace LELEngine.Editor
 			if (EditorGui.Checkbox("Auto Save", ref autoSave))
 			{
 				stage.AutoSave = autoSave;
+				EditorPreferences.SetToggle("Prefab.AutoSave", autoSave);
 			}
 
 			if (ImGui.IsItemHovered())

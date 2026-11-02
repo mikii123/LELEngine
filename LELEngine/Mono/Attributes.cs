@@ -22,6 +22,24 @@ namespace LELEngine
 	public sealed class ExecuteAlways : Attribute
 	{ }
 
+	/// <summary>
+	///     Exposes a field or property of a script to animation (clips, timelines, recording keys) even when the
+	///     inspector does not show it: private, not serialized, or hidden. Public and serialized values of a script
+	///     are exposed already.
+	/// </summary>
+	/// <example><c>[Animatable] private float thrust; [Animatable("Heat")] public float Temperature { get; set; }</c></example>
+	[AttributeUsage(AttributeTargets.Field | AttributeTargets.Property)]
+	public sealed class AnimatableAttribute : Attribute
+	{
+		/// <summary>The name shown in the editor (null: the member's).</summary>
+		public readonly string DisplayName;
+
+		public AnimatableAttribute(string displayName = null)
+		{
+			DisplayName = displayName;
+		}
+	}
+
 	/// <summary>Inspector slider range for a numeric field.</summary>
 	[AttributeUsage(AttributeTargets.Field)]
 	public sealed class RangeAttribute : Attribute

@@ -62,6 +62,7 @@ namespace LELEngine
 			VFX.VfxGraph.AssetMoved(fromPath, toPath);
 			Animation.AnimationClip.AssetMoved(fromPath, toPath);
 			Animation.AnimatorController.AssetMoved(fromPath, toPath);
+			Animation.TimelineAsset.AssetMoved(fromPath, toPath);
 		}
 
 		/// <summary>
@@ -94,6 +95,7 @@ namespace LELEngine
 			VFX.VfxGraph.ClearCache();
 			Animation.AnimationClip.ClearCache();
 			Animation.AnimatorController.ClearCache();
+			Animation.TimelineAsset.ClearCache();
 		}
 
 		/// <summary>

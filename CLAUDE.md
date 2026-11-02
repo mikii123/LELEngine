@@ -126,7 +126,7 @@
   `UIRuntime.frameDocuments[0] (UIDocument on 'Async').gameObject (GameObject 'Async').components[1] -> AsyncProbe`.
   Not visible to it: thread stacks (a script's running thread), GC handles, native callbacks, libraries' statics (not
   read: their static constructors could fail when run early); the warning then says so. ~60 ms on the probe project.
-- Open windows are saved (type, ImGui id, serialized fields) before a reload, before play mode and on close
+- Open windows are saved (type, ImGui id, serialized fields) before a reload, before play mode and as they change
   (`Library/EditorWindows.txt`), and restored on the next frame. Their capture runs before the scene unloads, since
   references to scene objects are only written for objects of the current scene.
 - User callbacks run guarded: an exception is logged once per message, `ImGuiP.ErrorRecoveryTryToRecoverState`
@@ -852,7 +852,7 @@ Added for New Frontier's port of Unity's SpaceStonesPack (Standard materials wit
   VS Code where they install; Custom with `$(File) $(Line) $(Column) $(ProjectPath) $(SolutionPath)`); script assets
   opened from the project panel and inspectors go through it too.
 - `EditorPreferences` (`%APPDATA%\LELEngine\Editor\preferences.json`, outside projects): Theme, Console, External
-  Tools; saved 0.4 s after `MarkChanged`, re-read when another editor changes the file. Automated runs use defaults and
+  Tools, Toggles (the windows' toggles by name: `EditorMenu.Toggle`, `GetToggle` / `SetToggle`); saved 0.4 s after `MarkChanged`, re-read when another editor changes the file. Automated runs use defaults and
   save nothing unless `preferencesfile=path`. Edit > Preferences... is `PreferencesWindow`.
 - `EditorStyle`: presets Dark / Midnight / Light / Classic, editor colors `EditorColor` (Warning, Error, Link, Code*
   ...) plus every ImGuiCol overridable by name, text size via `style.FontSizeBase`. `ImGuiController.ApplyStyle`
@@ -865,7 +865,7 @@ Added for New Frontier's port of Unity's SpaceStonesPack (Standard materials wit
   slower than 1000 fps in the editor (a script reload with the leak check finished well within 2000 frames;
   `exitframe=30000` ran for minutes). Always `WaitForExit(timeout)` and stop the process on a timeout.
 - Scene open last and Edit > Reload Scripts On Play are the user's, per project folder in `%APPDATA%\LELEngine\Editor\windows.json`
-  (`WindowStates.LastScenes` / `ReloadScriptsOnPlay`, saved with the window states on close), not in Project.json (2026-10-27).
+  (`WindowStates.LastScenes` / `ReloadScriptsOnPlay`, saved with the window states), not in Project.json (2026-10-27).
 - Automated runs read the user's `layout.ini` (and the other windows' ini files) but never save them
   (`ImGuiController.ReadOnlyLayouts`), and their projects stay out of `recent.json`: a test that docked the console
   elsewhere once moved the user's real console.
@@ -1429,8 +1429,8 @@ Added for New Frontier's port of Unity's SpaceStonesPack (Standard materials wit
   parameter, controller defaults), `AnimatorDocument` (whole-controller undo snapshots as `AnimatorRecord`, layout-only
   edits do not rebuild the players; `EditTracker` also records `AnimatorController` / `AnimationClip` targets, so the
   field drawers get undo), `AnimatorComponentInspector` (the Animator component: layers with progress, parameters,
-  unresolved properties; the .animator / .anim asset inspectors). The page re-resolves its machine by id after undo /
-  revert (`ResolvePage`): `ApplyBytes` replaces the controller's objects. The copy buffer is a document
+  unresolved properties; the .animator / .anim asset inspectors). The page re-resolves its machine by id after undo
+  (`ResolvePage`): `ApplyBytes` replaces the controller's objects. The copy buffer is a document
   (`AnimatorClipboard` bytes), never script-type instances (that leaked the old assembly on reload).
 - Animation window (`AnimationWindow`, IEditorPanel "Animation"): rows per binding (expandable channels, the value at
   the playhead editable = a key), dope sheet (diamonds, drag with frame snapping, box select, double click adds) or
@@ -1460,8 +1460,91 @@ Added for New Frontier's port of Unity's SpaceStonesPack (Standard materials wit
   `SceneManager.UpdateScenes` skips it). `-executeMethod` hands the method the whole command line as `args`.
 - Not done (follow-ups): skinned meshes and bone animation import from models (Assimp has the data), animating
   material properties per renderer (`MaterialPropertyBlock` exists since 2026-10-31; the binder does not write into
-  one yet), humanoid retargeting / IK, timeline / cutscene sequencing,
-  moving the VFX canvas onto `GraphView`.
+  one yet), humanoid retargeting / IK, moving the VFX canvas onto `GraphView`.
+
+## Timeline (Unity's Timeline with Audio Studio's logic; 2026-11-02)
+
+- The user's ask: "just Unity's Timeline, extended with what FMOD / Audio Studio has: transitions, regions, markers,
+  parameters"; each animated object a channel, any object of the scene (not only children), identified not by name;
+  during playback only the properties with keys are overridden; recording, values exposed by custom scripts too. Their
+  correction while it was built: not a whole FMOD-style window, no deck, no snapshots; a plain editor panel.
+- Runtime in `LELEngine/Animation`: `TimelineAsset.cs` (".timeline", JSON in the project, binary in builds, same cache /
+  stamps / `ApplyBytes` as clips: `TimelineChannel` (name, color, mute, solo, clips), `TimelineClip` (a clip placed:
+  `start`, `length`, `startOffset` = trim, `speed`, `loop`, `fadeIn` / `fadeOut`, `conditions`), parameters, markers; the
+  markers, parameters, conditions, fades and `BeatGrid` are the audio model's classes (`AudioMarker` etc.: pure data,
+  nothing of sound)), `Timeline.cs` (the component: `asset`, `playOnAwake`, `updateMode`, `ignoreTimeScale`, `speed`,
+  `endBehaviour` Hold / Restore / Loop, `Play` / `Stop(fade)` / `KeyOff` / `SetParameter` / `SetBinding`, events and
+  `ITimelineReceiver`), `TimelinePlayer.cs` (the playback, also the editor's preview). `AnimationSystem` ticks timelines
+  after the scene's animators, so they override them.
+- Identity: `GameObject.Id` (random 64 bits, in the scene file, stays through renames and reparenting) was there
+  already; scene references are written by it. `TimelineBinding` (on the component, not the asset: an asset knows no
+  scene): `channel` id + `target` reference (`{"$ref": id}`: copies of a subtree, prefabs and undo work as for every
+  reference) + `targetId` / `targetName` as plain values (`OnBeforeSerialize`), so a lost reference (another loaded scene,
+  a deletion undone) is found again (`ResolveTarget`, `SceneManager.FindObjectById`, new) and a missing one still has a
+  name. A clip's own bindings keep their paths: a timeline-recorded clip has path "" (the channel's object itself); an
+  existing .anim with child paths still works by name below the channel's object. An object has one channel (the window
+  refuses a second; two channels on one object work, later wins, but their base values mix).
+- Playback (`TimelinePlayer`): a port of `EventPlayback`'s cursor to ticks (48000 per second): `Step` stops at every
+  boundary (`NextBoundary`, `HandleBoundary`), loops first, then transitions, pending quantized transitions, clips ending,
+  clips starting, sustain points. Loop regions (conditions, `MaxLoops` = jumps per pass), transition markers and
+  regions (conditions, probability, quantization on the tempo markers' grid, `Crossfade`: old voices release while new
+  ones attack), destination markers (`MarkerReached`), sustain points (`KeyOff`; clips keep playing), jump to End. A
+  `Voice` per pass of a clip. Not ported on purpose (the user's "no deck etc."): transition timelines (`Crossfade`
+  instead), parameter sheets, automation curves, playlists, scatterers, nested timelines, AHDSR, effects, buses, snapshots.
+- What is written (`ChannelRuntime`, one `PoseLayout` per channel; `ClipSampler.Sample` got an `under` argument: a channel
+  without keys, only x of a position or y of an Euler rotation, samples as the value underneath):
+  - base value = what the property holds without the timeline. `RefreshBase` each frame: current != last written means
+    someone else wrote it: that is the base now and the property is free again (`written` and the hold cleared).
+  - `Write`: playing clips averaged by weight, over the underlying value (hold, else base) as far as they cover it
+    (`cover` = sum of weights, at least 1 is theirs alone). A property never played is never written. Writes read back
+    (setters that clamp or normalize do not look like outside changes).
+  - Hold: a clip ending without a fade out leaves its last value (`CaptureHeld`); `ResolveHeld` recomputes it after every
+    jump, so the pose at a position does not depend on how the cursor got there (a loop back, a seek).
+  - Overlap: partly overlapping clips crossfade (`TimelineChannel.GetFades`), but only between each other: the end of
+    the first is a share (`OverlapShare`), not a fade to the base, so a property only the first has keys for stays at its
+    key and then holds (the first version faded it back to the base: a ship flew back to its start); one only the second
+    has fades in. An explicit fade out does go back to the base. `Restore` / Stop in the editor put back the base values
+    of what was written. A live edit rebuilds (`EnsureCurrent` by asset + clip versions + targets), carrying base values
+    over by channel and slot; what no clip animates any more goes back at once.
+- `[Animatable]` (`Mono/Attributes.cs`, also a display name): private, unserialized or hidden fields and properties
+  exposed to animation (`AnimationBinder.CollectExposed`, `ResolveMember` finds marked private properties). Public and
+  serialized values were exposed already.
+- Editor in `LELEngine.Editor/Animation`: `TimelineWindow` partials (IEditorPanel "Timeline", Window > Timeline, double
+  click a .timeline, or select an object with a Timeline; Project panel: Create Timeline; no asset: "Create Timeline"
+  makes component and asset): `TimelineWindow.cs` (host / document, toolbar, parameters as sliders, preview), `.Canvas.cs`
+  (ruler, logic lane drawn with `StudioUi`'s shapes, channel headers S / M / R + object field + activity bar, clips with
+  curves and key ticks, expanded rows of keyed properties with draggable diamonds, all mouse input), `.Edit.cs` (popups on
+  right or double click instead of a deck: `DrawMarkerPopup`, `DrawClipPopup`, `DrawParameterPopup`; every other
+  command). `TimelineDocument` (+ `TimelineRecord`: one undo step holds the asset, the clips keyed and the component's
+  bindings), `TimelineComponentInspector`. Edit mode: any playhead move starts a preview (`TimelinePlayer.Preview`: no
+  events), Stop restores; the scene save restores around the write (`BeforeSceneWrite`), play mode ends it first. Play
+  mode: the window follows `host.Player`. The timeline and the clips keyed are written when an edit ends; the bindings
+  live in the scene, saved with it. The host is found again by id after play mode, undo and reloads; a script reload
+  clears the cache and loads the document again (`OnDomainUnloading`). Files changed on disk: `ReloadChanged`.
+- Record (`TimelineRecorder`): watches the armed channels' objects: active, transform, serialized fields of every
+  component, [Animatable] members (`GetAnimatableProperties(component, false)`: no C# properties, mostly the same values
+  again), whatever the clips already key. Paused (and the game not running: there scripts change everything): a value
+  that differs from the last pose becomes a key at the playhead, into the clip under it or a new `<Timeline> Clips/<Object>
+  Recorded.anim`; a property new to the clip also gets its old value at the clip's start; the object is put back at
+  once, so the base stays its own value and Stop restores. `Resync` after a seek: a pose written by the window is no
+  change. Playing: the armed channels stop writing (`SetCapture`), `Persistent` keeps the player past the content, keys
+  at the frame rate at the real tick times only while a value changes, `Simplify` thins them when it ends (line within
+  0.2 % of the range), edit mode restores the objects. Works in play mode: the recording lands in the asset and stays.
+- Verified (2026-11-02, probes in two throwaway projects): batch `-executeMethod
+  TimelineProbe.Run`, 121 checks (keyed properties only, a script's writes before / during / after, partial channels,
+  fades, overlaps, loops, transitions, quantization, crossfade, sustain, clip conditions, trim / speed / loop, seeks,
+  end behaviours, [Animatable], events and markers, live edits, discrete kinds, rotations, mute / solo, identity,
+  JSON / binary round trips, scene reload, a copied subtree). GUI editor with `exec` probes injecting `ImGui.GetIO()`
+  mouse events: scrub, move / trim / fade / reassign clips, regions, popups, keys, parameters, playback through loop /
+  transition / sustain, Stop restoring, recording paused and playing, undo of all of it, scene save without preview values
+  (57 checks); play mode (13: play on awake, binding in the game's copy, markers, recording a script in the game,
+  back in edit mode); hierarchy and project drops, a file changed on disk (9); scrubbing while recording, [Animatable]
+  recorded, the logic menu (11); deleted object + undo, rename + reparent, the clip's file after a recording, Create Timeline (12). A built game
+  (`-build`): binary .timeline and clips shipped, loop / transition / sustain and markers in `Player.log`. A real game
+  project's 462 tests pass and the window opens in it. Canvases are not elements: test with injected mouse events and reflection on the window's fields. Play
+  mode reloads the scripts: a probe's types go stale there (`AddComponent("Name")`, not `AddComponent<T>`).
+- Known limits: a Timeline inside a prefab instance shows `targetId` / `targetName` as overrides (hidden fields, harmless);
+  undoing a recording leaves the new .anim file behind (unused).
 
 ## UI and runtime additions for New Frontier's station UI (2026-10-29)
 
@@ -1546,6 +1629,59 @@ texture read back), see the port's `PORTING.md` "UI".
   meshes are fine) and adds one entry each at the centre of its bounds (sorting; grab rectangles from the local bounds
   with the world matrix); drawn with the component's transform and the block on top of the material, no shadows, no
   GI. The inspector lists the material in the component's material section (`InspectorPanel`).
+## When things are written: the scene on its Save, the rest as it changes (2026-11-02)
+
+- The rule (the user's): the scene changes in memory and goes to its file on the user's action (Ctrl+S). Asset settings,
+  project settings and editor settings are written as soon as they change: no Save / Revert buttons, no dirty marks and
+  no question on close for them. Undo is the way back, and writes the file too.
+- Exceptions, on a separate action (the user's correction, the same day): what would hang or compute a lot on a change,
+  and the tools started in a window of their own.
+  - Import settings of textures and models: a working copy until Apply (meta file, reimport; a model also reloads the
+    scene from its current state) or Revert; not undo steps.
+  - VFX Graph (it generates): `VfxGraphDocument` is dirty until Save or Ctrl+S in its window (the graph's, not the scene's);
+    Revert; its close asks. Edits still apply live to the components playing it.
+  - Audio Studio: Save or Ctrl+S, Revert, its close asks. Build Banks is an action of its own: Save builds none.
+  - UI Builder: Save or Ctrl+S, Save As, the USS editor's Save and Revert (typed USS applies live, unwritten); its close asks.
+  - Closing the editor (its window, File > Exit, `quit`) and File > Close Project ask about these three first, one question
+    listing the files (`ConfirmToolChanges`, "Unsaved assets": Save All, Don't save, Cancel); the scene's own question comes
+    after it. Save All that cannot write something stops the close, nothing lost (a new UI document: Save As opens in its
+    window). Don't save reverts them at once, whatever the scene's answer. `quit --discard` asks nothing, as for the scene.
+  - Opening another document over unsaved changes asks too, in the tool's own question: `VfxGraphWindow.Show`,
+    `AudioStudio.Open` / `CreateProject` (also from an inspector: the event to show waits), `UIBuilder.Open` / `NewDocument` /
+    `OpenStyleSheet`, closing a style sheet. What waited runs after the answer (a new UI document goes through Save As
+    first), Cancel keeps everything, the document already open asks nothing and keeps its changes.
+  - Still lost without a question, as before: import settings not applied when the selection changes or the editor closes.
+- Written when an edit ends: `AnimationClipDocument`, `AnimatorDocument`, `TimelineDocument` and the clips it keyed:
+  `EndEdit` -> `EditTracker.SaveAfterEdit`, at once, or at the release while a widget or a drag goes on editing (a recorded
+  or dragged value can be an edit per frame: no write per frame); their undo records -> `EditTracker.SaveAsset`. Inspectors:
+  `EditTracker.Commit` -> `SaveAsset`, for materials and ScriptableObjects as before and now controllers and clips. With
+  these windows in front Ctrl+S saves the scene (only the VFX Graph window keeps it for itself). Audio import settings are
+  written at once as before (one discrete choice: the banks rebuild in memory, only that clip decodes again).
+- Project: `ProjectSettings.asset` when an edit ends (as before), Project.json as it changes, now with the build's
+  `BuildOutputFolder` (relative to the project, empty: `Build/<project>`) and `BuildRelease`.
+- Editor: preferences and hierarchy as before (0.4 s, 0.5 s after a change). `EditorApplication.UpdateEditorState`, twice a
+  second and with nothing held, compares and writes: the scene view (`Library/EditorState.json`, with Nav, gizmo tool and
+  space now), windows.json (`windowsfile=path` gives an automated run a file of its own, and turns these writes on),
+  scripted windows (`Library/EditorWindows.txt`). `WindowPlacement.Update`: 0.5 s after a move or resize. ImGui's
+  layouts: `IniSavingRate` 0.5 s. Toggles that were not kept at all are preferences now (`EditorMenu.Toggle`): the
+  panels and snapping of Animator, VFX Graph, Timeline, Animation, Audio Studio, prefab mode's Auto Save, Test Runner's options.
+- The other direction: Build no longer saves the scene by itself, it asks (`AskToSaveScene`: Save; Don't save goes on
+  with the file and keeps the changes; Cancel). Nothing else writes a scene without the user asking.
+- Left alone on purpose: prefab mode (a stage works like a scene: Auto Save writes as edits settle, on by default; off, the
+  stage asks like a scene), prefab overrides' Apply / Revert (they move values between instance and prefab; they are not
+  saving), an inline editor of a referenced prefab (writes when an edit ends and rebuilds the scene from its state, as
+  before: not measured, a candidate for a separate action if it hitches).
+- Verified in the GUI editor on a demo project (a probe in its `Assets/Editor`, `exec`), the scene holding an unsaved change
+  all along: what is written at once after every kind of edit, undo, redo, an edit held by a button; what waits, with its
+  Save or Apply, Revert, the question on close, Ctrl+S in the VFX Graph window, Save building no banks; every state file;
+  the Build question; the question on closing with each answer, a new UI document stopping it, File > Close Project; the
+  question before another document with each answer in the three tools; the scene's file untouched until Ctrl+S with the
+  Animation window in front (131 checks). Real closes: `quit` and each answer,
+  `quit --discard` (the process gone, the file as the answer said). Then the process killed, not closed, and started again (6: build options, a toggle, the scene view, a scripted window, two assets),
+  and a script reload over edits left open (7: written, the windows back on their documents, the old assembly unloaded).
+  A real game project: 462 tests pass. Not exercised: a real mouse (injected events and scripted clicks instead), Test
+  Runner's and Animator's menu toggles (same `SetToggle` path as the Timeline's checked one).
+
 ## Scene changed on disk: reload, merge, conflicts (2026-10-31)
 
 - The user's ask: like Unity, the editor follows the open scene's file changed outside it; when the outside changes

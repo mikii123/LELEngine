@@ -15,7 +15,7 @@ namespace LELEngine.Editor.Animation
 	///     (<see cref="AnimatorGraph" /> on <see cref="GraphView" />), the inspector of the selection on the right and
 	///     the controller's problems at the bottom. In play mode the window follows the selected object's Animator
 	///     (or the first using the controller): the current state, transition and blend weights are highlighted and
-	///     the parameters show and edit the live values. Edits are undoable and apply live; Ctrl+S saves the asset.
+	///     the parameters show and edit the live values. Edits are undoable, apply live and are written to the file when they end.
 	/// </summary>
 	internal sealed class AnimatorWindow : IEditorPanel
 	{
@@ -59,11 +59,8 @@ namespace LELEngine.Editor.Animation
 		private bool showInspector = true;
 		private bool showProblems = true;
 		private bool closeRequested;
-		private bool openUnsavedPopup;
 		private List<string> problems = new List<string>();
 		private int problemsVersion = -1;
-		private byte[] reloadSnapshot;
-		private bool reloadDirty;
 		private string reloadPath;
 
 		#endregion
@@ -75,6 +72,13 @@ namespace LELEngine.Editor.Animation
 			this.editor = editor;
 			graph = new AnimatorGraph(this);
 			inspector = new AnimatorInspector(editor, this);
+			showSidebar = EditorPreferences.GetToggle("Animator.Sidebar", showSidebar);
+			showInspector = EditorPreferences.GetToggle("Animator.Inspector", showInspector);
+			showProblems = EditorPreferences.GetToggle("Animator.Problems", showProblems);
+			graph.View.SnapToGrid = EditorPreferences.GetToggle("Animator.SnapToGrid", graph.View.SnapToGrid);
+			graph.View.ShowAlignmentGuides = EditorPreferences.GetToggle("Animator.AlignmentGuides", graph.View.ShowAlignmentGuides);
+			graph.View.ShowMinimap = EditorPreferences.GetToggle("Animator.Minimap", graph.View.ShowMinimap);
+			graph.View.ShowGrid = EditorPreferences.GetToggle("Animator.Grid", graph.View.ShowGrid);
 		}
 
 		#endregion
@@ -152,11 +156,11 @@ namespace LELEngine.Editor.Animation
 			liveAnimator = null;
 		}
 
-		/// <summary>Before the scripts reload: the document (which may hold script types) is kept as bytes.</summary>
+		/// <summary>Before the scripts reload: the document (which may hold script types) is dropped, an edit in progress written first.</summary>
 		public void OnDomainUnloading()
 		{
-			reloadSnapshot = document != null && document.Dirty ? document.Controller.ToBytes() : null;
-			reloadDirty = document != null && document.Dirty;
+			document?.EndEdit();
+			editor.Edits.SaveWaiting();
 			reloadPath = document?.AssetPath;
 			document = null;
 			graph.Page = new AnimatorPage();
@@ -166,7 +170,7 @@ namespace LELEngine.Editor.Animation
 			AnimationClip.ClearCache();
 		}
 
-		/// <summary>After the scripts reloaded: the document is loaded again (unsaved edits restored).</summary>
+		/// <summary>After the scripts reloaded: the document is loaded again.</summary>
 		public void OnDomainLoaded()
 		{
 			if (reloadPath == null)
@@ -174,19 +178,7 @@ namespace LELEngine.Editor.Animation
 				return;
 			}
 
-			AnimatorController controller = AnimatorController.Load(reloadPath);
-			if (controller != null && reloadSnapshot != null)
-			{
-				controller.ApplyBytes(reloadSnapshot);
-			}
-
-			SetDocument(controller);
-			if (reloadDirty)
-			{
-				document?.Changed(false);
-			}
-
-			reloadSnapshot = null;
+			SetDocument(AnimatorController.Load(reloadPath));
 			reloadPath = null;
 		}
 
@@ -263,7 +255,7 @@ namespace LELEngine.Editor.Animation
 			}
 
 			bool open = Open;
-			string title = Title + (document != null ? " - " + Path.GetFileNameWithoutExtension(document.AssetPath ?? "untitled") + (document.Dirty ? " *" : "") : "") + "###animator";
+			string title = Title + (document != null ? " - " + Path.GetFileNameWithoutExtension(document.AssetPath ?? "untitled") : "") + "###animator";
 			bool visible = ImGui.Begin(title, ref open, ImGuiWindowFlags.MenuBar);
 			if (!Automation.WindowCapture.Active)
 			{
@@ -291,18 +283,8 @@ namespace LELEngine.Editor.Animation
 			if (closeRequested)
 			{
 				closeRequested = false;
-				if (document != null && document.Dirty)
-				{
-					openUnsavedPopup = true;
-					Open = true;
-				}
-				else
-				{
-					Open = false;
-				}
+				Open = false;
 			}
-
-			DrawUnsavedPopup();
 		}
 
 		#endregion
@@ -346,7 +328,6 @@ namespace LELEngine.Editor.Animation
 			}
 
 			UpdateLive();
-			HandleShortcuts();
 			DrawToolbar();
 			RefreshProblems();
 
@@ -404,9 +385,6 @@ namespace LELEngine.Editor.Animation
 
 			if (EditorMenu.Begin("File"))
 			{
-				if (EditorMenu.Item("Save", "Ctrl+S", false, document != null && document.Dirty)) document.Save();
-				if (EditorMenu.Item("Revert", "", false, document != null && document.Dirty)) document.Revert();
-				ImGui.Separator();
 				if (EditorMenu.Item("Close")) closeRequested = true;
 				EditorMenu.End();
 			}
@@ -424,8 +402,8 @@ namespace LELEngine.Editor.Animation
 				if (EditorMenu.Item("Frame All", "F")) graph.View.PendingFrame = true;
 				if (EditorMenu.Item("Auto Layout", "", false, document != null && !graph.Page.IsTree)) graph.AutoLayout();
 				ImGui.Separator();
-				EditorMenu.Item("Snap to Grid", "", ref graph.View.SnapToGrid);
-				EditorMenu.Item("Alignment Guides", "", ref graph.View.ShowAlignmentGuides);
+				EditorMenu.Toggle("Snap to Grid", "Animator.SnapToGrid", ref graph.View.SnapToGrid);
+				EditorMenu.Toggle("Alignment Guides", "Animator.AlignmentGuides", ref graph.View.ShowAlignmentGuides);
 				EditorMenu.End();
 			}
 
@@ -449,11 +427,11 @@ namespace LELEngine.Editor.Animation
 
 			if (EditorMenu.Begin("View"))
 			{
-				EditorMenu.Item("Layers and Parameters", "", ref showSidebar);
-				EditorMenu.Item("Inspector", "", ref showInspector);
-				EditorMenu.Item("Problems", "", ref showProblems);
-				EditorMenu.Item("Minimap", "", ref graph.View.ShowMinimap);
-				EditorMenu.Item("Grid", "", ref graph.View.ShowGrid);
+				EditorMenu.Toggle("Layers and Parameters", "Animator.Sidebar", ref showSidebar);
+				EditorMenu.Toggle("Inspector", "Animator.Inspector", ref showInspector);
+				EditorMenu.Toggle("Problems", "Animator.Problems", ref showProblems);
+				EditorMenu.Toggle("Minimap", "Animator.Minimap", ref graph.View.ShowMinimap);
+				EditorMenu.Toggle("Grid", "Animator.Grid", ref graph.View.ShowGrid);
 				EditorMenu.End();
 			}
 
@@ -462,14 +440,7 @@ namespace LELEngine.Editor.Animation
 
 		private void DrawToolbar()
 		{
-			ImGui.BeginDisabled(!document.Dirty);
-			if (EditorGui.Button("Save"))
-			{
-				document.Save();
-			}
-
-			ImGui.EndDisabled();
-			ImGui.SameLine();
+			ImGui.AlignTextToFramePadding();
 			ImGui.TextDisabled(document.AssetPath ?? "");
 			ImGui.SameLine();
 			ImGui.Dummy(new NVector2(12, 0));
@@ -679,60 +650,6 @@ namespace LELEngine.Editor.Animation
 					return;
 				}
 			}
-		}
-
-		private void HandleShortcuts()
-		{
-			if (!IsFocused || ImGui.GetIO().WantTextInput)
-			{
-				return;
-			}
-
-			bool ctrl = ImGui.GetIO().KeyCtrl;
-			if (ctrl && ImGui.IsKeyPressed(ImGuiKey.S, false) && document.Dirty)
-			{
-				document.Save();
-			}
-		}
-
-		private void DrawUnsavedPopup()
-		{
-			if (openUnsavedPopup)
-			{
-				ImGui.OpenPopup("Unsaved animator controller");
-				openUnsavedPopup = false;
-			}
-
-			bool open = true;
-			if (!ImGui.BeginPopupModal("Unsaved animator controller", ref open, ImGuiWindowFlags.AlwaysAutoResize))
-			{
-				return;
-			}
-
-			ImGui.TextUnformatted("The controller " + Path.GetFileName(document?.AssetPath ?? "") + " has unsaved changes.");
-			ImGui.Spacing();
-			if (EditorGui.Button("Save", new NVector2(100, 0)))
-			{
-				document.Save();
-				Open = false;
-				ImGui.CloseCurrentPopup();
-			}
-
-			ImGui.SameLine();
-			if (EditorGui.Button("Discard", new NVector2(100, 0)))
-			{
-				document.Revert();
-				Open = false;
-				ImGui.CloseCurrentPopup();
-			}
-
-			ImGui.SameLine();
-			if (EditorGui.Button("Cancel", new NVector2(100, 0)))
-			{
-				ImGui.CloseCurrentPopup();
-			}
-
-			ImGui.EndPopup();
 		}
 
 		#endregion

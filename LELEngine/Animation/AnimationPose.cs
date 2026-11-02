@@ -826,8 +826,12 @@ namespace LELEngine.Animation
 
 		#region PublicMethods
 
-		/// <summary>Adds the clip at <paramref name="time" /> (seconds, within the clip) to the pose with a weight.</summary>
-		public void Sample(float time, float weight, Pose pose)
+		/// <summary>
+		///     Adds the clip at <paramref name="time" /> (seconds, within the clip) to the pose with a weight. A channel of a
+		///     property without keys (only x of a position) samples as 0, or as its value in <paramref name="under" /> (the
+		///     pose values the clip plays over, by the layout's channel offsets) when given.
+		/// </summary>
+		public void Sample(float time, float weight, Pose pose, float[] under = null)
 		{
 			if (weight <= 0f)
 			{
@@ -847,12 +851,17 @@ namespace LELEngine.Animation
 				PoseSlot slot = Layout.Slots[slotIndex];
 				if (slot.IsDiscrete)
 				{
-					object value = binding.kind == AnimationValueKind.String ? binding.EvaluateString(time) : binding.EvaluateReference(time);
-					pose.AddDiscrete(slot, value, weight);
+					// No keys: nothing to say about the property.
+					if ((binding.kind == AnimationValueKind.String ? binding.stringKeys.Count : binding.referenceKeys.Count) > 0)
+					{
+						object value = binding.kind == AnimationValueKind.String ? binding.EvaluateString(time) : binding.EvaluateReference(time);
+						pose.AddDiscrete(slot, value, weight);
+					}
+
 					continue;
 				}
 
-				if (!Evaluate(binding, i, time, sample))
+				if (!Evaluate(binding, i, time, sample, under != null ? slot : null, under))
 				{
 					continue;
 				}
@@ -1011,7 +1020,7 @@ namespace LELEngine.Animation
 
 		#region PrivateMethods
 
-		private bool Evaluate(AnimationBinding binding, int index, float time, float[] result)
+		private bool Evaluate(AnimationBinding binding, int index, float time, float[] result, PoseSlot slot = null, float[] under = null)
 		{
 			List<FloatCurve> channels = binding.channels;
 			int count = binding.ChannelCount;
@@ -1022,12 +1031,14 @@ namespace LELEngine.Animation
 
 			int[] hint = hints[index];
 			bool any = false;
+			bool missing = false;
 			for (int c = 0; c < count; c++)
 			{
 				FloatCurve curve = channels[c];
 				if (curve.Length == 0)
 				{
 					result[c] = 0f;
+					missing = true;
 					continue;
 				}
 
@@ -1040,6 +1051,11 @@ namespace LELEngine.Animation
 				return false;
 			}
 
+			if (missing && slot != null)
+			{
+				FillMissing(binding, slot, under, result);
+			}
+
 			if (binding.kind == AnimationValueKind.Euler)
 			{
 				Quaternion q = QuaternionHelper.Euler(result[0], result[1], result[2]);
@@ -1050,6 +1066,25 @@ namespace LELEngine.Animation
 			}
 
 			return true;
+		}
+
+		/// <summary>The channels without keys take the value the clip plays over (for Euler bindings: its rotation as angles).</summary>
+		private static void FillMissing(AnimationBinding binding, PoseSlot slot, float[] under, float[] result)
+		{
+			int offset = slot.Offset;
+			OpenTK.Mathematics.Vector3 euler = default;
+			if (binding.kind == AnimationValueKind.Euler)
+			{
+				euler = QuaternionHelper.ToEulerDegrees(new Quaternion(under[offset], under[offset + 1], under[offset + 2], under[offset + 3]));
+			}
+
+			for (int c = 0; c < binding.ChannelCount; c++)
+			{
+				if (binding.channels[c].Length == 0)
+				{
+					result[c] = binding.kind == AnimationValueKind.Euler ? euler[c] : under[offset + c];
+				}
+			}
 		}
 
 		private static bool EvaluateNoHint(AnimationBinding binding, float time, float[] result)

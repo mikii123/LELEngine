@@ -629,6 +629,7 @@ namespace LELEngine.Editor
 			editor.Extensions.OnDomainLoaded(EditorAssembly);
 			editor.AnimatorWindow?.OnDomainLoaded();
 			editor.AnimationWindow?.OnDomainLoaded();
+			editor.TimelineWindow?.OnDomainLoaded();
 			LoadTests();
 		}
 

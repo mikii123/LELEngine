@@ -133,7 +133,7 @@ namespace LELEngine.Editor
 
 			stageFrames.Add(new StageFrame
 			{
-				Stage = new PrefabStage { AssetPath = assetPath, Name = Path.GetFileNameWithoutExtension(assetPath), AutoSave = Stage?.AutoSave ?? true },
+				Stage = new PrefabStage { AssetPath = assetPath, Name = Path.GetFileNameWithoutExtension(assetPath), AutoSave = Stage?.AutoSave ?? EditorPreferences.GetToggle("Prefab.AutoSave", true) },
 				Snapshot = SceneSerializer.SaveToBytes(Scene),
 				Path = Scene.Path,
 				Name = Scene.Name,

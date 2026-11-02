@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using Hexa.NET.ImGui;
 
 namespace LELEngine.Editor
 {
@@ -449,6 +450,7 @@ namespace LELEngine.Editor
 		private byte[] before;
 		private string name;
 		private bool commitRequested;
+		private readonly HashSet<object> savesWaiting = new HashSet<object>();
 
 		#endregion
 
@@ -540,14 +542,16 @@ namespace LELEngine.Editor
 						editor.Defer(() => editor.RecordPrefabFiles(name ?? "Edit " + preview.Name, new[] { preview.AssetPath }, preview.Save));
 						break;
 					case LELEngine.Animation.AnimatorController controller:
-						// Edited in the Animator window (and its inspectors): dirty until saved there, players rebuild live.
+						// Edited in the Animator window (and its inspectors): players rebuild live, the file follows.
 						editor.Undo.Push(new Animation.AnimatorRecord { Name = name ?? "Edit " + controller.name, AssetPath = controller.AssetPath, Before = before, After = after });
 						controller.MarkChanged();
+						SaveAsset(controller);
 						editor.AnimatorWindow?.OnControllerEdited(controller);
 						break;
 					case LELEngine.Animation.AnimationClip clip:
 						editor.Undo.Push(new Animation.AnimationClipRecord { Name = name ?? "Edit " + clip.name, AssetPath = clip.AssetPath, Before = before, After = after });
 						clip.MarkChanged();
+						SaveAsset(clip);
 						editor.AnimationWindow?.OnClipEdited(clip);
 						break;
 				}
@@ -558,7 +562,44 @@ namespace LELEngine.Editor
 			name = null;
 		}
 
-		private static void SaveAsset(object asset)
+		/// <summary>
+		///     An edit of a window's asset ended: the file follows now, or when nothing is held down any more if a widget or
+		///     a drag goes on editing it (recording a dragged value is an edit per frame).
+		/// </summary>
+		public void SaveAfterEdit(object asset)
+		{
+			if (editor.HasUI && (ImGui.IsAnyItemActive() || ImGui.IsAnyMouseDown()))
+			{
+				savesWaiting.Add(asset);
+			}
+			else
+			{
+				SaveAsset(asset);
+			}
+		}
+
+		/// <summary>Every frame: the files waiting for a release.</summary>
+		public void UpdateSaves()
+		{
+			if (savesWaiting.Count > 0 && !ImGui.IsAnyItemActive() && !ImGui.IsAnyMouseDown())
+			{
+				SaveWaiting();
+			}
+		}
+
+		/// <summary>The files waiting for a release, now (the scripts reload, the project closes).</summary>
+		public void SaveWaiting()
+		{
+			foreach (object asset in savesWaiting)
+			{
+				SaveAsset(asset);
+			}
+
+			savesWaiting.Clear();
+		}
+
+		/// <summary>Writes an asset's file: most assets save as soon as an edit of them ends (see "When things are written" in CLAUDE.md for those that wait).</summary>
+		public static void SaveAsset(object asset)
 		{
 			try
 			{
@@ -572,6 +613,15 @@ namespace LELEngine.Editor
 						break;
 					case ScriptableObject scriptableObject when scriptableObject.AssetPath != null:
 						ScriptableObjectAssets.Save(scriptableObject);
+						break;
+					case LELEngine.Animation.AnimatorController controller when !string.IsNullOrEmpty(controller.AssetPath):
+						controller.Save();
+						break;
+					case LELEngine.Animation.AnimationClip clip when !string.IsNullOrEmpty(clip.AssetPath):
+						clip.Save();
+						break;
+					case LELEngine.Animation.TimelineAsset timeline when !string.IsNullOrEmpty(timeline.AssetPath):
+						timeline.Save();
 						break;
 				}
 			}

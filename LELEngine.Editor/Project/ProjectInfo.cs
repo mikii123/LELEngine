@@ -37,6 +37,12 @@ namespace LELEngine.Editor
 		/// <summary>Builds ship the .NET runtime (the self-contained player): they run on machines without .NET installed.</summary>
 		public bool BuildSelfContained { get; set; }
 
+		/// <summary>Where builds go: relative to the project folder, or absolute (empty: Build/&lt;project&gt;).</summary>
+		public string BuildOutputFolder { get; set; }
+
+		/// <summary>Builds use the Release configuration (off: Debug).</summary>
+		public bool BuildRelease { get; set; } = true;
+
 		[JsonIgnore] public string RootPath { get; private set; }
 		[JsonIgnore] public string AssetsPath => Path.Combine(RootPath, "Assets");
 		[JsonIgnore] public string LibraryPath => Path.Combine(RootPath, "Library");
@@ -159,6 +165,8 @@ namespace LELEngine.Editor
 			BuildScenes = read.BuildScenes ?? new List<string>();
 			RunInBackground = read.RunInBackground;
 			BuildSelfContained = read.BuildSelfContained;
+			BuildOutputFolder = read.BuildOutputFolder;
+			BuildRelease = read.BuildRelease;
 			return true;
 		}
 

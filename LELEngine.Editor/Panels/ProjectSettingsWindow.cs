@@ -58,8 +58,6 @@ namespace LELEngine.Editor
 		private bool focus;
 
 		// ---- build
-		private string outputFolder;
-		private bool release = true;
 		private Task<bool> buildTask;
 		private readonly List<string> lines = new List<string>();
 		private string lastOutput;
@@ -637,11 +635,9 @@ namespace LELEngine.Editor
 
 		// ---------------------------------------------------------------- build
 
-		/// <summary>Scenes in the build, start scene, Self-contained and Run In Background (saved in Project.json), output folder, configuration, Build / Open Folder / Run and the log.</summary>
+		/// <summary>Scenes in the build, start scene, output folder, configuration, Self-contained and Run In Background (saved in Project.json as they change), Build / Open Folder / Run and the log.</summary>
 		private void DrawBuild(ProjectInfo project)
 		{
-			outputFolder ??= Path.Combine(project.RootPath, "Build", ProjectGenerator.ProjectName(project));
-
 			ImGui.Text("Scenes in the build");
 			bool changed = false;
 			List<string> scenes = AssetDatabase.GetAllAssetPaths(SceneSerializer.Extension);
@@ -683,14 +679,29 @@ namespace LELEngine.Editor
 			ImGui.Text("Output folder");
 			ImGui.SameLine(120);
 			ImGui.SetNextItemWidth(-1);
-			EditorGui.InputText("##output", ref outputFolder, 512);
+			string outputFolder = OutputFolderOf(project);
+			if (EditorGui.InputText("##output", ref outputFolder, 512))
+			{
+				project.BuildOutputFolder = outputFolder;
+			}
+
+			changed |= ImGui.IsItemDeactivatedAfterEdit();
 
 			ImGui.AlignTextToFramePadding();
 			ImGui.Text("Configuration");
 			ImGui.SameLine(120);
-			if (EditorGui.RadioButton("Release", release)) release = true;
+			if (EditorGui.RadioButton("Release", project.BuildRelease))
+			{
+				project.BuildRelease = true;
+				changed = true;
+			}
+
 			ImGui.SameLine();
-			if (EditorGui.RadioButton("Debug", !release)) release = false;
+			if (EditorGui.RadioButton("Debug", !project.BuildRelease))
+			{
+				project.BuildRelease = false;
+				changed = true;
+			}
 
 			bool selfContained = project.BuildSelfContained;
 			if (EditorGui.Checkbox("Self-contained", ref selfContained))
@@ -735,7 +746,8 @@ namespace LELEngine.Editor
 			ImGui.BeginDisabled(building || compiling);
 			if (EditorGui.Button(building ? "Building..." : compiling ? "Compiling..." : "Build", new NVector2(140, 0)))
 			{
-				StartBuild(project);
+				// The build reads the scenes' files: the user decides about changes they do not have yet.
+				editor.AskToSaveScene(() => StartBuild(project));
 			}
 
 			ImGui.EndDisabled();
@@ -777,6 +789,11 @@ namespace LELEngine.Editor
 			ImGui.EndChild();
 		}
 
+		private static string OutputFolderOf(ProjectInfo project)
+		{
+			return string.IsNullOrEmpty(project.BuildOutputFolder) ? "Build/" + ProjectGenerator.ProjectName(project) : project.BuildOutputFolder;
+		}
+
 		private void StartBuild(ProjectInfo project)
 		{
 			if (editor.Scripts != null && editor.Scripts.HasErrors)
@@ -790,16 +807,12 @@ namespace LELEngine.Editor
 				return;
 			}
 
-			if (editor.SceneDirty)
-			{
-				editor.SaveScene();
-			}
-
 			// The build copies the settings file; an edit still in progress is committed (and saved) first.
 			editor.Edits.Commit();
 			editor.SaveProjectSettings();
 
-			var settings = new BuildSettings { OutputFolder = outputFolder, Release = release, SelfContained = project.BuildSelfContained, StartScene = project.StartScene, Scenes = new List<string>(project.BuildScenes) };
+			string output = Path.GetFullPath(Path.Combine(project.RootPath, OutputFolderOf(project)));
+			var settings = new BuildSettings { OutputFolder = output, Release = project.BuildRelease, SelfContained = project.BuildSelfContained, StartScene = project.StartScene, Scenes = new List<string>(project.BuildScenes) };
 			lock (lines)
 			{
 				lines.Clear();
@@ -822,7 +835,6 @@ namespace LELEngine.Editor
 				Append("Warning: the distance fields could not be baked (" + e.Message + "); the player builds them.");
 			}
 
-			string output = Path.GetFullPath(outputFolder);
 			buildTask = Task.Run(() =>
 			{
 				bool ok;

@@ -37,7 +37,11 @@ namespace LELEngine.Editor
 		/// <summary>A test (or a class's set up / tear down) failed in the last finished run.</summary>
 		public bool LastRunFailed { get; private set; }
 
-		public readonly TestRunOptions Options = new TestRunOptions { BreakOnFailure = true };
+		public readonly TestRunOptions Options = new TestRunOptions
+		{
+			BreakOnFailure = EditorPreferences.GetToggle("Tests.BreakOnFailure", true),
+			StopOnFirstFailure = EditorPreferences.GetToggle("Tests.StopOnFirstFailure", false)
+		};
 
 		/// <summary>A run ended (finished, stopped or aborted).</summary>
 		public event Action<TestRun> RunFinished;

@@ -67,7 +67,10 @@ namespace LELEngine.Editor
 		AnimatorController,
 
 		/// <summary>A key diamond on a timeline: animation clips.</summary>
-		AnimationClip
+		AnimationClip,
+
+		/// <summary>Staggered clips on lanes: timelines.</summary>
+		Timeline
 	}
 
 	internal static class EditorIcons
@@ -134,6 +137,8 @@ namespace LELEngine.Editor
 					return IconKind.AnimatorController;
 				case ".anim":
 					return IconKind.AnimationClip;
+				case ".timeline":
+					return IconKind.Timeline;
 				case ".lelaudio":
 					return IconKind.AudioProject;
 				case ".uxml":
@@ -203,6 +208,8 @@ namespace LELEngine.Editor
 					return Rgb(0.95f, 0.6f, 0.3f);
 				case IconKind.AnimationClip:
 					return Rgb(0.45f, 0.85f, 0.75f);
+				case IconKind.Timeline:
+					return Rgb(0.4f, 0.75f, 0.95f);
 				case IconKind.UIDocument:
 				case IconKind.StyleSheet:
 					return Rgb(0.38f, 0.75f, 0.95f);
@@ -598,6 +605,14 @@ namespace LELEngine.Editor
 					Key(center + new NVector2(-s * 0.45f, s * 0.1f), s * 0.3f);
 					Key(center + new NVector2(s * 0.4f, s * 0.1f), s * 0.3f);
 					draw.AddLine(center + new NVector2(-s * 0.9f, -s * 0.55f), center + new NVector2(-s * 0.9f, s * 0.55f), color, thickness);
+					return true;
+				}
+				case IconKind.Timeline:
+				{
+					// Three lanes with staggered clips.
+					draw.AddRectFilled(center + new NVector2(-s * 0.9f, -s * 0.8f), center + new NVector2(s * 0.1f, -s * 0.35f), color);
+					draw.AddRectFilled(center + new NVector2(-s * 0.4f, -s * 0.2f), center + new NVector2(s * 0.9f, s * 0.25f), color);
+					draw.AddRectFilled(center + new NVector2(-s * 0.9f, s * 0.4f), center + new NVector2(s * 0.35f, s * 0.85f), color);
 					return true;
 				}
 				case IconKind.VisualEffect:

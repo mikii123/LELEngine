@@ -90,6 +90,11 @@ namespace LELEngine.Editor.Audio
 				return;
 			}
 
+			if (rememberPlacement)
+			{
+				placement.Update();
+			}
+
 			native.MakeCurrent();
 			try
 			{

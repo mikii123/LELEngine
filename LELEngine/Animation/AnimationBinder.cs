@@ -543,6 +543,8 @@ namespace LELEngine.Animation
 				{
 					CollectProperties(target, result);
 				}
+
+				CollectExposed(target, result);
 			}
 
 			return result;
@@ -878,6 +880,63 @@ namespace LELEngine.Animation
 			}
 		}
 
+		/// <summary>Members marked [Animatable] the inspector rules left out: private, not serialized, hidden.</summary>
+		private static void CollectExposed(object target, List<AnimatableProperty> result)
+		{
+			const BindingFlags Flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+			var listed = new HashSet<string>(StringComparer.Ordinal);
+			foreach (AnimatableProperty existing in result)
+			{
+				listed.Add(existing.Property);
+			}
+
+			for (Type type = target.GetType(); type != null && type != typeof(Behaviour) && type != typeof(object); type = type.BaseType)
+			{
+				foreach (FieldInfo field in type.GetFields(Flags | BindingFlags.DeclaredOnly))
+				{
+					AddExposed(target, field, field.FieldType, () => field.GetValue(target), listed, result);
+				}
+
+				foreach (PropertyInfo property in type.GetProperties(Flags | BindingFlags.DeclaredOnly))
+				{
+					if (property.CanRead && property.CanWrite && property.GetIndexParameters().Length == 0)
+					{
+						AddExposed(target, property, property.PropertyType, () => property.GetValue(target), listed, result);
+					}
+				}
+			}
+		}
+
+		private static void AddExposed(object target, MemberInfo member, Type valueType, Func<object> read, HashSet<string> listed, List<AnimatableProperty> result)
+		{
+			var attribute = member.GetCustomAttribute<AnimatableAttribute>();
+			AnimationValueKind? kind = attribute != null ? AnimationBinding.KindOf(valueType) : null;
+			if (kind == null || !listed.Add(member.Name))
+			{
+				return;
+			}
+
+			object value = null;
+			try
+			{
+				value = read();
+			}
+			catch (Exception)
+			{
+				// A getter that throws is not worth listing.
+				return;
+			}
+
+			string display = attribute.DisplayName ?? SerializationUtility.NicifyName(member.Name);
+			if (valueType == typeof(Quaternion))
+			{
+				result.Add(new AnimatableProperty { Property = member.Name, DisplayName = display, Kind = AnimationValueKind.Euler, ValueType = valueType, CurrentValue = value });
+				display += " (quaternion)";
+			}
+
+			result.Add(new AnimatableProperty { Property = member.Name, DisplayName = display, Kind = kind.Value, ValueType = valueType, CurrentValue = value });
+		}
+
 		private static object SafeGet(SerializedField field, object owner)
 		{
 			try
@@ -1076,6 +1135,13 @@ namespace LELEngine.Animation
 					}
 
 					return step;
+				}
+
+				// Private properties only when a script exposed them.
+				property = type.GetProperty(name, BindingFlags.Instance | BindingFlags.NonPublic);
+				if (property != null && property.CanRead && property.CanWrite && property.GetIndexParameters().Length == 0 && property.IsDefined(typeof(AnimatableAttribute), true))
+				{
+					return new Step { Property = property, ValueType = property.PropertyType };
 				}
 
 				FieldInfo plain = type.GetField(name, BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);

@@ -64,6 +64,7 @@ namespace LELEngine.Editor
 		private bool focusRequested;
 		private NVector2 viewMin;
 		private NVector2 viewSize = new NVector2(640, 360);
+		private string savedState;
 		private ImGuizmoOperation operation = ImGuizmoOperation.Translate;
 		private ImGuizmoMode mode = ImGuizmoMode.Local;
 		private bool gizmoWasUsing;
@@ -300,6 +301,7 @@ namespace LELEngine.Editor
 
 		public void LoadState(ProjectInfo project)
 		{
+			savedState = null;
 			try
 			{
 				string file = StateFile(project);
@@ -318,9 +320,20 @@ namespace LELEngine.Editor
 					flySpeed = root.TryGetProperty("flySpeed", out JsonElement speed) ? speed.GetSingle() : flySpeed;
 					focusDistance = root.TryGetProperty("focusDistance", out JsonElement focus) ? Math.Max(MinFocusDistance, focus.GetSingle()) : focusDistance;
 					AlwaysRefresh = root.TryGetProperty("alwaysRefresh", out JsonElement always) && always.ValueKind == JsonValueKind.True;
+					ShowNavigation = !root.TryGetProperty("showNavigation", out JsonElement navigation) || navigation.ValueKind != JsonValueKind.False;
+					if (root.TryGetProperty("gizmoOperation", out JsonElement tool) && Enum.TryParse(tool.GetString(), out ImGuizmoOperation savedOperation))
+					{
+						operation = savedOperation;
+					}
+
+					if (root.TryGetProperty("gizmoMode", out JsonElement space) && Enum.TryParse(space.GetString(), out ImGuizmoMode savedMode))
+					{
+						mode = savedMode;
+					}
 				}
 
 				ApplyCamera();
+				savedState = StateText();
 			}
 			catch (Exception e)
 			{
@@ -333,12 +346,22 @@ namespace LELEngine.Editor
 			try
 			{
 				Directory.CreateDirectory(project.LibraryPath);
-				string json = "{\n  \"cameraPosition\": [" + F(position.X) + ", " + F(position.Y) + ", " + F(position.Z) + "],\n  \"cameraYaw\": " + F(yaw) + ",\n  \"cameraPitch\": " + F(pitch) + ",\n  \"flySpeed\": " + F(flySpeed) + ",\n  \"focusDistance\": " + F(focusDistance) + ",\n  \"alwaysRefresh\": " + (AlwaysRefresh ? "true" : "false") + "\n}\n";
+				string json = StateText();
 				File.WriteAllText(StateFile(project), json);
+				savedState = json;
 			}
 			catch (Exception e)
 			{
 				Debug.LogWarning("[Editor] Cannot write the editor state: " + e.Message);
+			}
+		}
+
+		/// <summary>Writes the state when it differs from what the file holds.</summary>
+		public void SaveStateIfChanged(ProjectInfo project)
+		{
+			if (StateText() != savedState)
+			{
+				SaveState(project);
 			}
 		}
 
@@ -916,6 +939,11 @@ namespace LELEngine.Editor
 			{
 				editor.OpenScene(assetPath);
 			}
+		}
+
+		private string StateText()
+		{
+			return "{\n  \"cameraPosition\": [" + F(position.X) + ", " + F(position.Y) + ", " + F(position.Z) + "],\n  \"cameraYaw\": " + F(yaw) + ",\n  \"cameraPitch\": " + F(pitch) + ",\n  \"flySpeed\": " + F(flySpeed) + ",\n  \"focusDistance\": " + F(focusDistance) + ",\n  \"alwaysRefresh\": " + (AlwaysRefresh ? "true" : "false") + ",\n  \"showNavigation\": " + (ShowNavigation ? "true" : "false") + ",\n  \"gizmoOperation\": \"" + operation + "\",\n  \"gizmoMode\": \"" + mode + "\"\n}\n";
 		}
 
 		private static string StateFile(ProjectInfo project)
