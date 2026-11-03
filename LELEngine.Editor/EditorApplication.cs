@@ -675,6 +675,7 @@ namespace LELEngine.Editor
 			projectSettingsStamp = FileStamp.Of(project.ProjectSettingsFile);
 			AssetDatabase.Initialize(project.AssetsPath, true);
 			ModelAssets.CacheFolder = project.ModelCachePath;
+			AssetThumbnails.CacheFolder = project.ThumbnailCachePath;
 			ImportChangedModels(true);
 			// Remapped controls of play mode are the project's, not the user's (a built game keeps them in AppData).
 			LELEngine.InputSystem.InputManager.UserDataPath = Path.Combine(project.LibraryPath, "InputUserData.json");
@@ -777,6 +778,7 @@ namespace LELEngine.Editor
 			ScriptableObjectAssets.UnloadAll();
 			InternalStorage.Clear();
 			ModelAssets.CacheFolder = null;
+			AssetThumbnails.CacheFolder = null;
 			// Audio: the studio closes with the project, every bank and clip goes.
 			audioStudio?.Dispose();
 			audioStudio = null;

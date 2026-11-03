@@ -457,6 +457,29 @@ namespace LELEngine
 		}
 
 		/// <summary>
+		///     The sprites an image file gives, by the sub-asset names <see cref="LoadSprites" /> would give them (one null for
+		///     the single sprite), from its import settings: the image is not loaded.
+		/// </summary>
+		public static List<string> SpriteNames(string assetPath)
+		{
+			var names = new List<string>();
+			TextureImporter importer = GetImporter(assetPath);
+			if (HasSpriteSheet(importer))
+			{
+				foreach (SpriteMetaData data in importer.sprites)
+				{
+					names.Add(data.name);
+				}
+			}
+			else
+			{
+				names.Add(null);
+			}
+
+			return names;
+		}
+
+		/// <summary>
 		///     Loads an image for the UI (top row first, gamma storage, trilinear, clamped): the UI composes in display
 		///     space and draws images with top-down texture coordinates. Separate from the material cache.
 		/// </summary>
@@ -1116,9 +1139,14 @@ namespace LELEngine
 			return texture;
 		}
 
+		private static bool HasSpriteSheet(TextureImporter importer)
+		{
+			return importer.textureType == TextureImporterType.Sprite && importer.spriteMode == SpriteImportMode.Multiple && importer.sprites.Count > 0;
+		}
+
 		private static void BuildSprites(Entry entry, Texture2D texture, TextureImporter importer, string assetPath, string name)
 		{
-			if (importer.textureType == TextureImporterType.Sprite && importer.spriteMode == SpriteImportMode.Multiple && importer.sprites.Count > 0)
+			if (HasSpriteSheet(importer))
 			{
 				entry.Sprites = new List<Sprite>(importer.sprites.Count);
 				foreach (SpriteMetaData data in importer.sprites)

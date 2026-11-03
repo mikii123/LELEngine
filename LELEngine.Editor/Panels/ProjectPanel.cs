@@ -883,7 +883,7 @@ namespace LELEngine.Editor
 		/// <summary>A file's icon at <paramref name="min" />: the image itself for pictures (when it has a preview), else the icon of its kind.</summary>
 		private static void DrawFileIcon(ImDrawListPtr draw, NVector2 min, float iconSize, string assetPath, IconKind kind)
 		{
-			if (kind == IconKind.Texture && AssetThumbnails.TryGet(assetPath, out int handle, out NVector2 uv0, out NVector2 uv1))
+			if (kind == IconKind.Texture && ImGui.IsRectVisible(min, min + new NVector2(iconSize)) && AssetThumbnails.TryGet(assetPath, out int handle, out NVector2 uv0, out NVector2 uv1))
 			{
 				draw.AddImage(EditorGui.Texture(handle), min, min + new NVector2(iconSize), uv0, uv1);
 				return;

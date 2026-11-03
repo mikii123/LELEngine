@@ -810,6 +810,26 @@ Added for New Frontier's port of Unity's SpaceStonesPack (Standard materials wit
 - The inspector draws the materials of the selected object's renderers below its components (full material editors, as
   Unity); engine and runtime materials are shown disabled.
 
+## Thumbnails (2026-11-03)
+
+- Lists and object fields never load a texture for its icon (`AssetThumbnails.TryGet(path)`, `Inspector/ObjectPicker.cs`):
+  a 32 x 32 RGBA thumbnail (4 KB) from `Library/ThumbnailCache/<hash of the path>.thumb` (the header holds the file's
+  stamp, so a changed file makes a new one), made when missing on a worker thread, one at a time (a 4K image decodes to
+  64 MB). Only visible rows ask (`ImGui.IsRectVisible`), so nothing queues: a row scrolled away starts no work; until it
+  is ready a row draws its icon. The stamp is checked once a second per thumbnail (no asset reload sees a file nobody loaded).
+- Why (the user's report, 2026-11-03: pinging a texture in a material's inspector took the editor down, and the whole GPU
+  on another machine): `TryGet(path)` was `TextureAssets.LoadTexture`, and the file list has no clipper, so the ping's
+  folder went whole to the GPU in one frame, mips included, and stayed there: New Frontier's `SpaceStonesPack/Textures/MainMaps/Emission`
+  is 225 images, ~19 GB. The same in the picker of any texture field (every texture of the project: ~29 GB).
+- The texture importer's inspector still shows the real texture (the preview is its point); so do runtime textures in fields.
+- Verified on a scratch project with a copy of that folder, under a memory guard (never against the old code at full
+  size, nor on New Frontier itself: it can hurt the GPU): `click "button:Albedo"` in the material's inspector, then
+  `button:pick`. GPU memory of the process unchanged, 21 thumbnails for the rows shown, no other full texture loaded; cold 3 s
+  for the 10 visible rows and +400 MB of transient RAM, warm no decode and +15 MB. The picker of a Sprite field lists by the import settings
+  (`TextureAssets.SpriteNames`), not `LoadSprites`, which loaded every image of the project: on the same copy 266 entries,
+  no image loaded, no GPU or RAM change, picking one loads that one; names equal to `LoadSprites` for a sheet and a single
+  sprite. Object fields draw a whole-file sprite by its thumbnail; a sprite of a sheet still needs the sheet's texture.
+
 ## Console, editor preferences, theme (2026-10-22)
 
 - `Debug` records the caller's stack for every message (`Debug.SetStackTraceLogType(LogType, StackTraceLogType)`,

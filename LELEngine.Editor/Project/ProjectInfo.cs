@@ -49,6 +49,7 @@ namespace LELEngine.Editor
 
 		/// <summary>Imported models (see <see cref="ModelAssets" />), per asset GUID.</summary>
 		[JsonIgnore] public string ModelCachePath => Path.Combine(LibraryPath, "ModelCache");
+		[JsonIgnore] public string ThumbnailCachePath => Path.Combine(LibraryPath, "ThumbnailCache");
 		[JsonIgnore] public string SettingsPath => Path.Combine(RootPath, "ProjectSettings");
 		[JsonIgnore] public string SettingsFile => Path.Combine(SettingsPath, "Project.json");
 

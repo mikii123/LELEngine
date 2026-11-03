@@ -1,24 +1,62 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Security.Cryptography;
+using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
 using Hexa.NET.ImGui;
 using LELEngine.Serialization;
 using NVector2 = System.Numerics.Vector2;
 
 namespace LELEngine.Editor
 {
-	/// <summary>Preview images of texture assets for object fields, the picker and the inspector (cubemaps as a cross, volumes as a slice).</summary>
+	/// <summary>
+	///     Preview images: small thumbnails of image files for the lists (project panel, picker), and the texture objects
+	///     themselves for object fields and the inspector (cubemaps as a cross, volumes as a slice).
+	/// </summary>
 	internal static class AssetThumbnails
 	{
 		#region PrivateFields
 
+		private sealed class Thumbnail
+		{
+			/// <summary>The shrunk pixels, from the worker until the main thread uploads them.</summary>
+			public ImageData Image;
+
+			public Texture2D Texture;
+			public long Stamp;
+			public double NextCheck;
+		}
+
+		// 32 x 32 RGBA: 4 KB. The rows draw it at about 17 pixels, the picker at 32.
+		private const int ThumbnailSize = 32;
+		private const int CacheHeaderSize = 12;
+		private const double StampCheckSeconds = 1.0;
+
 		private static readonly Dictionary<string, Texture2D> previews = new Dictionary<string, Texture2D>(StringComparer.OrdinalIgnoreCase);
+		private static readonly Dictionary<string, Thumbnail> thumbnails = new Dictionary<string, Thumbnail>(StringComparer.OrdinalIgnoreCase);
+
+		// 1 while the worker makes or reads a thumbnail: a 4K image decodes to 64 MB, so one at a time.
+		private static int working;
+
+		#endregion
+
+		#region PublicFields
+
+		/// <summary>Where thumbnails are kept (the project's Library); null: made again every time.</summary>
+		public static string CacheFolder;
 
 		#endregion
 
 		#region PublicMethods
 
-		/// <summary>GL texture and texture coordinates showing an image asset (or a texture object) the right way up; false when there is none.</summary>
+		/// <summary>
+		///     A list row's thumbnail of an image file: a few kilobytes read from <see cref="CacheFolder" />, or made from the
+		///     file when missing or outdated, never the texture itself (a folder of 4K images would go to the GPU whole, in one
+		///     frame). One at a time on a worker thread. False until it is ready, or when the file has none: the row draws its
+		///     icon. Ask only for visible rows: a row that stops asking starts no work.
+		/// </summary>
 		public static bool TryGet(string assetPath, out int handle, out NVector2 uv0, out NVector2 uv1)
 		{
 			handle = 0;
@@ -29,14 +67,45 @@ namespace LELEngine.Editor
 				return false;
 			}
 
-			try
+			string file = AssetDatabase.ToAbsolute(assetPath);
+			Thumbnail thumbnail;
+			if (thumbnails.TryGetValue(assetPath, out thumbnail) && ImGui.GetTime() >= thumbnail.NextCheck)
 			{
-				return TryGet(TextureAssets.LoadTexture(assetPath), out handle, out uv0, out uv1);
+				// Files changed on disk: a thumbnail is no loaded asset, so the asset reload does not see it.
+				thumbnail.NextCheck = ImGui.GetTime() + StampCheckSeconds;
+				if (AssetFileStamps.StampOf(file) != thumbnail.Stamp)
+				{
+					Invalidate(assetPath);
+					thumbnail = null;
+				}
 			}
-			catch (Exception)
+
+			if (thumbnail == null || !thumbnails.ContainsKey(assetPath))
 			{
+				if (Volatile.Read(ref working) != 0)
+				{
+					return false;
+				}
+
+				thumbnail = new Thumbnail { Stamp = AssetFileStamps.StampOf(file), NextCheck = ImGui.GetTime() + StampCheckSeconds };
+				thumbnails[assetPath] = thumbnail;
+				Volatile.Write(ref working, 1);
+				string cacheFile = CacheFileOf(assetPath);
+				Task.Run(() => Produce(thumbnail, file, cacheFile));
 				return false;
 			}
+
+			ImageData image = Interlocked.Exchange(ref thumbnail.Image, null);
+			if (image != null)
+			{
+				thumbnail.Texture = new Texture2D();
+				thumbnail.Texture.name = assetPath + " (thumbnail)";
+				thumbnail.Texture.SetImage(image, false, false, false);
+				thumbnail.Texture.SetSamplerState(FilterMode.Bilinear, TextureWrap.Clamp, 1);
+			}
+
+			handle = thumbnail.Texture?.Handle ?? 0;
+			return handle != 0;
 		}
 
 		public static bool TryGet(Texture texture, out int handle, out NVector2 uv0, out NVector2 uv1)
@@ -88,6 +157,13 @@ namespace LELEngine.Editor
 				preview.Release();
 				previews.Remove(assetPath);
 			}
+
+			Thumbnail thumbnail;
+			if (thumbnails.TryGetValue(assetPath, out thumbnail))
+			{
+				thumbnail.Texture?.Release();
+				thumbnails.Remove(assetPath);
+			}
 		}
 
 		public static void Clear()
@@ -98,11 +174,157 @@ namespace LELEngine.Editor
 			}
 
 			previews.Clear();
+			foreach (Thumbnail thumbnail in thumbnails.Values)
+			{
+				thumbnail.Texture?.Release();
+			}
+
+			thumbnails.Clear();
 		}
 
 		#endregion
 
 		#region PrivateMethods
+
+		private static string CacheFileOf(string assetPath)
+		{
+			if (CacheFolder == null)
+			{
+				return null;
+			}
+
+			byte[] hash = SHA256.HashData(Encoding.UTF8.GetBytes(assetPath.Replace('\\', '/').ToLowerInvariant()));
+			return Path.Combine(CacheFolder, Convert.ToHexString(hash, 0, 16) + ".thumb");
+		}
+
+		/// <summary>On the worker thread: the cached thumbnail, or a new one from the file; a file that cannot be read stays without an image.</summary>
+		private static void Produce(Thumbnail thumbnail, string file, string cacheFile)
+		{
+			try
+			{
+				ImageData image = ReadCached(cacheFile, thumbnail.Stamp);
+				if (image == null)
+				{
+					ImageData decoded = TextureAssets.Decode(file, false);
+					image = Shrink(decoded.IsHdr ? decoded.ToLdr() : decoded);
+					WriteCached(cacheFile, thumbnail.Stamp, image);
+				}
+
+				Volatile.Write(ref thumbnail.Image, image);
+			}
+			catch (Exception)
+			{
+				// Unreadable or unsupported: the row keeps its icon until the file changes.
+			}
+			finally
+			{
+				Volatile.Write(ref working, 0);
+			}
+		}
+
+		/// <summary>The thumbnail stored for this version of the file; null when there is none.</summary>
+		private static ImageData ReadCached(string cacheFile, long stamp)
+		{
+			if (cacheFile == null || !File.Exists(cacheFile))
+			{
+				return null;
+			}
+
+			try
+			{
+				byte[] data = File.ReadAllBytes(cacheFile);
+				if (data.Length < CacheHeaderSize || BitConverter.ToInt64(data, 0) != stamp)
+				{
+					return null;
+				}
+
+				int width = BitConverter.ToUInt16(data, 8);
+				int height = BitConverter.ToUInt16(data, 10);
+				if (data.Length != CacheHeaderSize + width * height * 4)
+				{
+					return null;
+				}
+
+				var pixels = new byte[width * height * 4];
+				Buffer.BlockCopy(data, CacheHeaderSize, pixels, 0, pixels.Length);
+				return new ImageData(width, height, pixels);
+			}
+			catch (IOException)
+			{
+				return null;
+			}
+		}
+
+		/// <summary>Stores a thumbnail (written aside and moved in); a folder that cannot be written only costs making it again.</summary>
+		private static void WriteCached(string cacheFile, long stamp, ImageData image)
+		{
+			if (cacheFile == null)
+			{
+				return;
+			}
+
+			try
+			{
+				Directory.CreateDirectory(Path.GetDirectoryName(cacheFile));
+				var data = new byte[CacheHeaderSize + image.Pixels.Length];
+				BitConverter.TryWriteBytes(data.AsSpan(0), stamp);
+				BitConverter.TryWriteBytes(data.AsSpan(8), (ushort)image.Width);
+				BitConverter.TryWriteBytes(data.AsSpan(10), (ushort)image.Height);
+				Buffer.BlockCopy(image.Pixels, 0, data, CacheHeaderSize, image.Pixels.Length);
+				string aside = cacheFile + ".tmp";
+				File.WriteAllBytes(aside, data);
+				File.Move(aside, cacheFile, true);
+			}
+			catch (Exception e) when (e is IOException || e is UnauthorizedAccessException)
+			{
+				Debug.LogWarning("[Editor] Cannot store a thumbnail: " + e.Message);
+			}
+		}
+
+		/// <summary>Averages the image down to <see cref="ThumbnailSize" /> on its longer side.</summary>
+		private static ImageData Shrink(ImageData image)
+		{
+			int longer = Math.Max(image.Width, image.Height);
+			if (longer <= ThumbnailSize)
+			{
+				return image;
+			}
+
+			int width = Math.Max(1, image.Width * ThumbnailSize / longer);
+			int height = Math.Max(1, image.Height * ThumbnailSize / longer);
+			var pixels = new byte[width * height * 4];
+			for (int y = 0; y < height; y++)
+			{
+				int top = y * image.Height / height;
+				int bottom = Math.Max(top + 1, (y + 1) * image.Height / height);
+				for (int x = 0; x < width; x++)
+				{
+					int left = x * image.Width / width;
+					int right = Math.Max(left + 1, (x + 1) * image.Width / width);
+					long r = 0, g = 0, b = 0, a = 0;
+					for (int sy = top; sy < bottom; sy++)
+					{
+						int source = (sy * image.Width + left) * 4;
+						for (int sx = left; sx < right; sx++, source += 4)
+						{
+							r += image.Pixels[source];
+							g += image.Pixels[source + 1];
+							b += image.Pixels[source + 2];
+							a += image.Pixels[source + 3];
+						}
+					}
+
+					int count = (bottom - top) * (right - left);
+					int target = (y * width + x) * 4;
+					pixels[target] = (byte)(r / count);
+					pixels[target + 1] = (byte)(g / count);
+					pixels[target + 2] = (byte)(b / count);
+					pixels[target + 3] = (byte)(a / count);
+				}
+			}
+
+			return new ImageData(width, height, pixels);
+		}
 
 		private static Texture2D Preview(string key, Func<Texture2D> create)
 		{
@@ -404,7 +626,7 @@ namespace LELEngine.Editor
 					NVector2 uv0;
 					NVector2 uv1;
 					ImDrawListPtr draw = ImGui.GetWindowDrawList();
-					if (!showScene && AssetThumbnails.TryGet(entry.Path, out handle, out uv0, out uv1))
+					if (!showScene && ImGui.IsRectVisible(start, start + new NVector2(4f + iconSize, 2f + iconSize)) && AssetThumbnails.TryGet(entry.Path, out handle, out uv0, out uv1))
 					{
 						draw.AddImage(EditorGui.Texture(handle), start + new NVector2(4f, 2f), start + new NVector2(4f + iconSize, 2f + iconSize), uv0, uv1);
 					}
@@ -502,10 +724,10 @@ namespace LELEngine.Editor
 
 				if (type == typeof(Sprite))
 				{
-					IReadOnlyList<Sprite> sprites = TextureAssets.LoadSprites(path);
-					foreach (Sprite sprite in sprites)
+					// By the import settings: listing must not load every image of the project.
+					foreach (string spriteName in TextureAssets.SpriteNames(path))
 					{
-						entries.Add(new Entry { Path = path, SubAsset = sprite.SubAssetName, Label = Path.GetFileName(path) + (sprite.SubAssetName != null ? " / " + sprite.SubAssetName : ""), Detail = path, Icon = IconKind.Asset });
+						entries.Add(new Entry { Path = path, SubAsset = spriteName, Label = Path.GetFileName(path) + (spriteName != null ? " / " + spriteName : ""), Detail = path, Icon = IconKind.Asset });
 					}
 
 					continue;
