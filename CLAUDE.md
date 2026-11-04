@@ -784,7 +784,7 @@ Added for New Frontier's port of Unity's SpaceStonesPack (Standard materials wit
   `AssetPath` (setters made internal): loaded assets keep their identity and save to the new path. `MovedPath` maps a
   path. `EditorApplication.MoveAsset` also moves the scene path, prefab stages, the selection, the inspector lock,
   Project.json scene lists and the project settings' audio project / input configuration paths; not in play mode.
-- `ProjectPanel`: folder tree with folder icons (open / closed), the shown folder's parents opened, a breadcrumb; the
+- `ProjectPanel`: folder tree with folder icons (open / closed), the shown folder's parents opened, a breadcrumb above the list (it never scrolls); the
   file list shows folders first as rows (click selects, double click opens, context menu Open / Rename / Show in Explorer),
   files with icons per kind (`EditorIcons.KindOfFile` / `ColorOf`: folder, scene, script, shader, material, texture (its
   thumbnail), model, audio clip / project, VFX, UXML, USS, font, physics material, input configuration, text, prefab /

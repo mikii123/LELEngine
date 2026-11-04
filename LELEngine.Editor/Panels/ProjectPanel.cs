@@ -215,6 +215,9 @@ namespace LELEngine.Editor
 				ImGui.EndChild();
 
 				ImGui.TableSetColumnIndex(1);
+				// Above the child: only the files scroll, the breadcrumb stays.
+				DrawBreadcrumb();
+				ImGui.Separator();
 				if (ImGui.BeginChild("##files"))
 				{
 					DrawFiles();
@@ -388,9 +391,6 @@ namespace LELEngine.Editor
 					expanded.Add(pair.Key);
 				}
 			}
-
-			DrawBreadcrumb();
-			ImGui.Separator();
 
 			float iconSize = ImGui.GetTextLineHeight();
 			ImDrawListPtr draw = ImGui.GetWindowDrawList();
