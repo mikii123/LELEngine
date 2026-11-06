@@ -229,6 +229,8 @@ namespace LELEngine.VFX
 				b => One(VfxExpression.Builtin(VfxBuiltins.LocalToWorld)));
 			Fixed("Operator.WorldToLocal", "World To Local", transform, "The inverse of the component's transform.", new VfxSlotDefinition[0], new[] { Of("Matrix", VfxValueType.Matrix) },
 				b => One(VfxExpression.Builtin(VfxBuiltins.WorldToLocal)));
+			Fixed("Operator.PreviousLocalToWorld", "Previous Local To World", transform, "The component's transform of the previous simulated frame (where the effect was a frame ago).", new VfxSlotDefinition[0], new[] { Of("Matrix", VfxValueType.Matrix) },
+				b => One(VfxExpression.Builtin(VfxBuiltins.PreviousLocalToWorld)));
 			Fixed("Operator.TransformPosition", "Transform Position", transform, "A position transformed by a matrix.", new[] { Of("Matrix", VfxValueType.Matrix), V3("Position") }, new[] { V3("Out") },
 				b => One(VfxExpression.TransformPoint(b.Input(0), b.Input(1))));
 			Fixed("Operator.TransformDirection", "Transform Direction", transform, "A direction turned by a matrix (normalized).", new[] { Of("Matrix", VfxValueType.Matrix), V3("Direction", 0f, 0f, 1f) }, new[] { V3("Out") },

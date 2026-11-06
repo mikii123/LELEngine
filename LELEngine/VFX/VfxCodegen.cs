@@ -684,7 +684,41 @@ namespace LELEngine.VFX
 				writer.Line("vec3 outNormal = axisZ;");
 			}
 
-			writer.Line("vec2 outUv = cornerUv;");
+			EmitUv(output, writer, "cornerUv");
+		}
+
+		/// <summary>
+		///     Declares outUv from a base coordinate: turned by the output's UvRotation (quarter turns, so a wide texture
+		///     can run along a stretched quad or a strip) and tiled or scrolled by its UV Scale and UV Offset inputs (Simple UVs only).
+		/// </summary>
+		private static void EmitUv(VfxOutputDescription output, VfxGlslWriter writer, string baseUv)
+		{
+			writer.Line("vec2 baseUv = " + baseUv + ";");
+			string uv;
+			switch (output.UvRotation)
+			{
+				case 1:
+					uv = "vec2(baseUv.y, 1.0 - baseUv.x)";
+					break;
+				case 2:
+					uv = "vec2(1.0 - baseUv.x, 1.0 - baseUv.y)";
+					break;
+				case 3:
+					uv = "vec2(1.0 - baseUv.y, baseUv.x)";
+					break;
+				default:
+					uv = "baseUv";
+					break;
+			}
+
+			bool scaled = output.Locals.ContainsKey("UV Scale");
+			bool offset = output.Locals.ContainsKey("UV Offset");
+			if (scaled || offset)
+			{
+				uv = "(" + uv + ")" + (scaled ? " * " + output.Locals["UV Scale"] : "") + (offset ? " + " + output.Locals["UV Offset"] : "");
+			}
+
+			writer.Line("vec2 outUv = " + uv + ";");
 		}
 
 		private static void EmitMesh(VfxSystemDescription system, VfxOutputDescription output, VfxGlslWriter writer)
@@ -765,7 +799,7 @@ namespace LELEngine.VFX
 			writer.Line("float w = outScale.x * 0.5" + (widthCurve != null ? " * " + widthCurve : "") + ";");
 			writer.Line("vec3 worldPos = h0 + side * ((float(corner) * 2.0 - 1.0) * w);");
 			writer.Line("vec3 outNormal = VfxSafeNormalize(vfxCameraPosition - h0);");
-			writer.Line("vec2 outUv = vec2(float(corner), " + (output.StripTile ? "float(point)" : "along") + ");");
+			EmitUv(output, writer, "vec2(float(corner), " + (output.StripTile ? "float(point)" : "along") + ")");
 		}
 
 		private static string Space(VfxGlslWriter writer, string direction)

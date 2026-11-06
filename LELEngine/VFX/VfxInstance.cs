@@ -291,6 +291,7 @@ namespace LELEngine.VFX
 		private bool disposed;
 		private Vector3 lastPosition;
 		private bool hasLastPosition;
+		private Matrix4 previousLocalToWorld = Matrix4.Identity;
 		private bool pendingPlay;
 		private float pendingDelta;
 		private bool simulationQueued;
@@ -724,6 +725,9 @@ namespace LELEngine.VFX
 
 			Vector3 position = LocalToWorld.ExtractTranslation();
 			float moved = hasLastPosition ? (position - lastPosition).Length : 0f;
+			// The first simulated frame (and the first after Reinit) has no previous transform: the current one stands in.
+			Matrix4 previous = hasLastPosition ? previousLocalToWorld : LocalToWorld;
+			previousLocalToWorld = LocalToWorld;
 			lastPosition = position;
 			hasLastPosition = true;
 
@@ -733,6 +737,7 @@ namespace LELEngine.VFX
 			context.PlayRate = PlayRate;
 			context.LocalToWorld = LocalToWorld;
 			context.WorldToLocal = LocalToWorld.Inverted();
+			context.PreviousLocalToWorld = previous;
 			context.ComponentSeed = Seed;
 			SetCamera(context, Camera.main ?? VfxRuntime.FallbackCamera);
 
@@ -1338,6 +1343,7 @@ namespace LELEngine.VFX
 			WriteVector(data, VfxUniformTable.ReservedSlot, Bits((uint)state.CounterBase), Bits(state.Dense ? 1u : 0u), 0f, 0f);
 			WriteMatrix(data, matrixBase, VfxUniformTable.LocalToWorldSlot, context.LocalToWorld);
 			WriteMatrix(data, matrixBase, VfxUniformTable.WorldToLocalSlot, context.WorldToLocal);
+			WriteMatrix(data, matrixBase, VfxUniformTable.PreviousLocalToWorldSlot, context.PreviousLocalToWorld);
 			bool refreshStatic = state.StaticVersion != PropertyVersion;
 			foreach (VfxUniformTable.Entry entry in description.Uniforms.Entries)
 			{

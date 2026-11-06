@@ -1359,6 +1359,22 @@ Added for New Frontier's port of Unity's SpaceStonesPack (Standard materials wit
   this machine; for scene-view screenshots back the file up, delete it for the run, and copy it back afterwards.
 - `uint` uniforms must be set with `ShaderProgram.SetUint`: `SetInt` on a uint uniform is a GL error, the value
   stays 0, and an indirect dispatch sized from it hangs the GPU for seconds per frame.
+- Added 2026-11-06 (ports of Shuriken effects need them): builtin `previousLocalToWorld` (`Operator.PreviousLocalToWorld`;
+  uniform matrix slot 2 `vfxPreviousLocalToWorld`, `VfxEvalContext.PreviousLocalToWorld` = the transform of the last
+  simulated frame, the current one on the first) and `Block.SpreadAlongPath` (Initialize: this frame's spawns spread
+  evenly from the previous to the current emitter position, so a trail emitted per unit of distance does not bunch per
+  frame); `Block.RandomForce` (Min / Max, PerFrame or PerParticle, World or Local); `Block.LimitSpeed` (Max Speed,
+  Dampen as `1 - pow(1 - dampen, dt * 60)`); `Block.FlipbookOverLife` rewritten (Frame Count, Cycles, Start Frame;
+  WholeSheet, or RandomRow with Rows: a sheet whose rows are variants). Quad and strip outputs: `UvRotation` (0 / 90 /
+  180 / 270, turns the texture's u axis along the quad's up or the strip: wide spark textures on stretched quads) and,
+  in Simple UV mode, `UV Scale` / `UV Offset` inputs (per particle, e.g. a custom attribute; Time x speed into UV
+  Offset scrolls a beam); `VfxCodegen.EmitUv`.
+- A block's locals carry its salt (`triggerAmount_<salt>`, `randomForce_<salt>`): two blocks of one kind in a context
+  compiled to a GLSL redefinition before; a CustomCode block opens its scope before its input declarations for the
+  same reason (two CustomCode blocks declaring `Length` in one Update).
+- A texture whose shape lives in alpha or packed channels with black RGB draws nothing through an additive output
+  (`FragColor = rgb * a`); such textures come from shaders that compute the colour from the channels (KriptoFX's
+  `Tint * G + Core * R`): bake that into the texture before using it in a graph.
 
 ## Animation system (clips, Animator, state machines; 2026-10-28)
 

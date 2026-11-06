@@ -190,6 +190,9 @@ namespace LELEngine.VFX
 		/// <summary>Quad outputs: the shape drawn per particle.</summary>
 		public VfxQuadPrimitive Primitive;
 
+		/// <summary>Quad and strip outputs: quarter turns the texture is rotated (1: its u axis runs along the quad's up / velocity axis, or along the strip).</summary>
+		public int UvRotation;
+
 		public bool IsTransparent => Blend != VfxBlendMode.Opaque && Blend != VfxBlendMode.AlphaClip;
 		public bool Sorted => IsTransparent && (Sort == VfxSortMode.ByDistance || (Sort == VfxSortMode.Auto && Blend != VfxBlendMode.Additive));
 
@@ -1003,7 +1006,8 @@ namespace LELEngine.VFX
 				StripLength = Math.Clamp(node.GetInt("StripLength", 16), 2, 64),
 				StripTile = node.GetBool("StripTile", false),
 				LineMode = node.GetSetting("LineMode", "Velocity"),
-				Primitive = Parse(node.GetSetting("Primitive"), VfxQuadPrimitive.Quad)
+				Primitive = Parse(node.GetSetting("Primitive"), VfxQuadPrimitive.Quad),
+				UvRotation = (node.GetInt("UvRotation", 0) / 90) & 3
 			};
 			output.Queue = node.GetInt("Queue", output.IsTransparent ? Shaders.MaterialQueue.Transparent : Shaders.MaterialQueue.Geometry);
 			if (output.Blend == VfxBlendMode.Opaque || output.Blend == VfxBlendMode.AlphaClip)

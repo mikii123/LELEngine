@@ -127,6 +127,10 @@ namespace LELEngine.VFX
 				{
 					inputs.Add(new VfxSlotDefinition("Flipbook Size", VfxValueType.Vector2, VfxValue.FromVector2(new Vector2(4f, 4f)), "Columns and rows of the texture sheet (texIndex picks the frame)."));
 				}
+				else
+				{
+					AddUvInputs(inputs);
+				}
 
 				if (node.GetBool("SoftParticles", false))
 				{
@@ -194,11 +198,17 @@ namespace LELEngine.VFX
 				}
 
 				inputs.Add(new VfxSlotDefinition("Width Over Strip", VfxValueType.Float, VfxValue.FromFloat(1f), "Multiplier of the strip width."));
+				if (node.GetSetting("UvMode", "Simple") == "Simple")
+				{
+					AddUvInputs(inputs);
+				}
+
 				return inputs;
 			});
 			strip.Settings.Insert(0, VfxSettingDefinition.Int("StripLength", 16, "Recorded positions per particle; the ribbon has one segment less."));
 			strip.Settings.Insert(1, VfxSettingDefinition.Float("StripSpacing", 0.05f, "Distance the particle travels between two recorded positions (0: one per frame); the tip always follows the particle."));
 			strip.Settings.Insert(2, VfxSettingDefinition.Bool("StripTile", false, "Repeat the texture per segment instead of stretching it along the strip."));
+			strip.Settings.Insert(3, VfxSettingDefinition.Enum("UvRotation", "0", "0", "90", "180", "270").WithTooltip("Turns the texture on the strip: 90 puts its u axis along the strip, for wide trail textures."));
 			VfxNodeLibrary.Register(strip);
 		}
 
@@ -237,6 +247,13 @@ namespace LELEngine.VFX
 
 		#region PrivateMethods
 
+		/// <summary>Tiling and scrolling of a Simple-UV texture (connect Time to the offset for a flowing beam).</summary>
+		private static void AddUvInputs(List<VfxSlotDefinition> inputs)
+		{
+			inputs.Add(new VfxSlotDefinition("UV Scale", VfxValueType.Vector2, VfxValue.FromVector2(new Vector2(1f, 1f)), "Repeats of the texture across (x) and along (y) the particle."));
+			inputs.Add(new VfxSlotDefinition("UV Offset", VfxValueType.Vector2, VfxValue.FromVector2(Vector2.Zero), "Shift of the texture in UV units (animate it with Time to scroll)."));
+		}
+
 		private static VfxNodeDefinition Output(string type, string name, VfxOutputKind kind, string description, bool textured, bool lit, System.Func<VfxNodeData, List<VfxSlotDefinition>> inputs, string defaultBlend = "Alpha", string defaultLighting = "Unlit", bool cullBack = false)
 		{
 			var definition = new VfxNodeDefinition
@@ -266,6 +283,7 @@ namespace LELEngine.VFX
 			{
 				definition.Settings.Add(VfxSettingDefinition.Enum("Primitive", "Quad", PrimitiveOptions).WithTooltip("Quad: two triangles. Triangle: one triangle around the texture (fewer vertices, more fill). Octagon: the corners cut off (less fill where round textures are transparent)."));
 				definition.Settings.Add(VfxSettingDefinition.Enum("Orient", "FaceCameraPlane", OrientOptions));
+				definition.Settings.Add(VfxSettingDefinition.Enum("UvRotation", "0", "0", "90", "180", "270").WithTooltip("Turns the texture on the quad: 90 puts its u axis along the quad's up (the velocity of stretched particles), for wide spark textures."));
 				definition.Settings.Add(VfxSettingDefinition.Float("NormalBending", 0f, "Lit quads: bend the normal towards the quad's edges (0 flat, 1 spherical)."));
 			}
 

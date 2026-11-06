@@ -400,6 +400,18 @@ namespace LELEngine.VFX
 					}
 				},
 				VfxSettingDefinition.Enum("Selection", "Random", "Random", "ParticleId"), SpaceSetting(), CompositionSetting(), VfxSettingDefinition.Bool("SetDirection", true));
+
+			// Particles spawned over distance (or at a high rate) by a fast-moving effect would all appear at the frame's
+			// position; this spreads the frame's spawns between where the component was a frame ago and where it is.
+			Block("Block.SpreadAlongPath", "Spread Along Path", category, "Moves each particle spawned this frame back along the component's movement since the previous frame (the first spawn near the old position, the last at the new one), so a moving emitter leaves an even trail instead of one clump per frame.", VfxContextMask.Initialize,
+				node => Slots(F("Amount", 1f, "1: the whole way back to the previous position; 0: no spread.")),
+				b =>
+				{
+					string s = "_" + b.Salt;
+					b.Line("vec3 spreadDelta" + s + " = vfxPreviousLocalToWorld[3].xyz - vfxLocalToWorld[3].xyz;");
+					b.Line("float spreadT" + s + " = (1.0 - (float(spawnIndex) + 0.5) / max(float(spawnCount), 1.0)) * " + b.Emit("Amount") + ";");
+					b.Write(VfxAttributes.Position, b.Read(VfxAttributes.Position) + " + " + VectorFromWorld(b, "spreadDelta" + s) + " * spreadT" + s);
+				});
 		}
 
 		private static void EmitPositionShape(VfxBlockBuild b)
@@ -570,6 +582,27 @@ namespace LELEngine.VFX
 				node => Slots(V3("Force", 0f, -9.81f, 0f)),
 				b => b.Write(VfxAttributes.Velocity, b.Read(VfxAttributes.Velocity) + " + " + VectorToSystem(b, b.Emit("Force"), BlockWorld(b)) + " * vfxDeltaTime"),
 				SpaceSetting("World"));
+			Block("Block.RandomForce", "Random Force", category, "A force drawn between Min and Max per component, divided by the mass: new every frame (a jitter that scatters sparks) or fixed per particle (every particle drifts its own way).", VfxContextMask.Update,
+				node => Slots(V3("Min", -1f, -1f, -1f), V3("Max", 1f, 1f, 1f)),
+				b =>
+				{
+					string seed = b.Setting("Mode", "PerFrame") == "PerFrame" ? "attr_seed ^ (vfxFrameIndex * 0x9E3779B9u)" : "attr_seed";
+					string force = "randomForce_" + b.Salt;
+					b.Line("vec3 " + force + " = mix(" + b.Emit("Min") + ", " + b.Emit("Max") + ", VfxRandom3(" + seed + ", " + b.Salt + "u));");
+					b.Writer.ReadAttribute(VfxAttributes.Seed);
+					b.Write(VfxAttributes.Velocity, b.Read(VfxAttributes.Velocity) + " + " + VectorToSystem(b, force, BlockWorld(b)) + " * vfxDeltaTime / max(" + b.Read(VfxAttributes.Mass) + ", 1e-4)");
+				}, VfxSettingDefinition.Enum("Mode", "PerFrame", "PerFrame", "PerParticle"), SpaceSetting("World"));
+			Block("Block.LimitSpeed", "Limit Speed", category, "Slows particles faster than a limit towards it: Dampen is the share of the excess taken away per 1/60 s (1 clamps at once).", VfxContextMask.Update,
+				node => Slots(F("Max Speed", 5f), F("Dampen", 0.1f, "0: nothing, 1: the speed never exceeds the limit.")),
+				b =>
+				{
+					string s = "_" + b.Salt;
+					b.Line("float limitSpeed" + s + " = length(" + b.Read(VfxAttributes.Velocity) + ");");
+					b.Line("float limitMax" + s + " = max(" + b.Emit("Max Speed") + ", 0.0);");
+					b.Line("float limitK" + s + " = 1.0 - pow(clamp(1.0 - " + b.Emit("Dampen") + ", 0.0, 1.0), vfxDeltaTime * 60.0);");
+					b.Line("float limitFactor" + s + " = limitSpeed" + s + " > limitMax" + s + " && limitSpeed" + s + " > 1e-5 ? mix(limitSpeed" + s + ", limitMax" + s + ", limitK" + s + ") / limitSpeed" + s + " : 1.0;");
+					b.Write(VfxAttributes.Velocity, b.Read(VfxAttributes.Velocity) + " * limitFactor" + s);
+				});
 			Block("Block.Force", "Force", category, "A force divided by the mass (Absolute), or a force towards a target velocity (Relative: force * (target - velocity)).", VfxContextMask.Update,
 				node => Slots(V3("Force", 0f, 1f, 0f), node.GetSetting("Mode", "Absolute") == "Relative" ? F("Drag", 1f, "How fast the velocity follows the target.") : F("Multiplier", 1f)),
 				b =>
@@ -923,9 +956,33 @@ namespace LELEngine.VFX
 							break;
 					}
 				}, VfxSettingDefinition.Enum("Mode", "Loop", "Loop", "Once", "PingPong"));
-			Block("Block.FlipbookOverLife", "Flipbook Over Life", "Flipbook", "Plays the whole sheet once over the particle's life.", VfxContextMask.Particle,
-				node => Slots(F("Frame Count", 16f)),
-				b => b.Write(VfxAttributes.TexIndex, AgeRatio(b) + " * (max(" + b.Emit("Frame Count") + ", 1.0) - 0.001)"));
+			Block("Block.FlipbookOverLife", "Flipbook Over Life", "Flipbook", "Plays the sheet's frames over the particle's life, Cycles times; in RandomRow mode each particle plays one row of the sheet picked at random (Frame Count is then the columns).", VfxContextMask.Particle,
+				node =>
+				{
+					var slots = Slots(F("Frame Count", 16f, "Frames played: the whole sheet, or one row's columns."), F("Cycles", 1f, "How many times the frames play over the life."), F("Start Frame", 0f, "Added to the frame (the first frame played)."));
+					if (node.GetSetting("Mode", "WholeSheet") == "RandomRow")
+					{
+						slots.Add(I("Rows", 4, "Rows of the sheet one of which the particle plays."));
+					}
+
+					return slots;
+				},
+				b =>
+				{
+					string s = "_" + b.Salt;
+					b.Line("float flipFrames" + s + " = max(" + b.Emit("Frame Count") + ", 1.0);");
+					b.Line("float flipFrame" + s + " = min(mod(min(" + AgeRatio(b) + ", 0.99999) * " + b.Emit("Cycles") + " * flipFrames" + s + ", flipFrames" + s + "), flipFrames" + s + " - 0.001);");
+					if (b.Setting("Mode", "WholeSheet") == "RandomRow")
+					{
+						b.Line("float flipRow" + s + " = floor(VfxRandom01(attr_seed, " + b.Salt + "u ^ 0x7Fu) * max(float(" + b.Emit("Rows") + "), 1.0));");
+						b.Writer.ReadAttribute(VfxAttributes.Seed);
+						b.Write(VfxAttributes.TexIndex, b.Emit("Start Frame") + " + flipRow" + s + " * flipFrames" + s + " + flipFrame" + s);
+					}
+					else
+					{
+						b.Write(VfxAttributes.TexIndex, b.Emit("Start Frame") + " + flipFrame" + s);
+					}
+				}, VfxSettingDefinition.Enum("Mode", "WholeSheet", "WholeSheet", "RandomRow"));
 
 			const string trigger = "GPU Event";
 			VfxNodeDefinition onDie = Block("Block.TriggerOnDie", "Trigger Event On Die", trigger, "Raises a GPU event when the particle dies; a child system connected to the Update context's event port spawns from it.", VfxContextMask.Update,
@@ -945,10 +1002,12 @@ namespace LELEngine.VFX
 					string amount = b.Setting("Mode", "OverTime") == "OverDistance"
 						? b.Emit("Rate") + " * length(" + b.Read(VfxAttributes.Position) + " - " + b.Read(VfxAttributes.OldPosition) + ")"
 						: b.Emit("Rate") + " * vfxDeltaTime";
-					b.Line("float triggerAmount = " + amount + ";");
-					b.Line("uint triggerCount = uint(floor(triggerAmount + VfxRandom01(attr_seed ^ (vfxFrameIndex * 0x9E3779B9u), " + b.Salt + "u)));");
+					// Locals carry the block's salt: a context may hold several rate triggers.
+					string count = "triggerCount_" + b.Salt;
+					b.Line("float triggerAmount_" + b.Salt + " = " + amount + ";");
+					b.Line("uint " + count + " = uint(floor(triggerAmount_" + b.Salt + " + VfxRandom01(attr_seed ^ (vfxFrameIndex * 0x9E3779B9u), " + b.Salt + "u)));");
 					b.Writer.ReadAttribute(VfxAttributes.Seed);
-					b.TriggerEvent(b.Setting("Event", "OnRate"), "triggerCount > 0u", "triggerCount");
+					b.TriggerEvent(b.Setting("Event", "OnRate"), count + " > 0u", count);
 				}, VfxSettingDefinition.Text("Event", "OnRate", null, true), VfxSettingDefinition.Enum("Mode", "OverTime", "OverTime", "OverDistance"));
 			rate.Keywords = "trigger";
 			rate.TitleFactory = node => "Trigger Rate: " + node.GetSetting("Event", "OnRate");
@@ -1000,6 +1059,8 @@ namespace LELEngine.VFX
 				},
 				b =>
 				{
+					// The inputs are locals of the block's own scope: two custom blocks in one context may declare the same names.
+					b.Writer.BeginBlock("");
 					foreach (VfxSlotDefinition slot in b.InputSlots)
 					{
 						VfxExpression input = b.Input(slot.Name);
@@ -1036,7 +1097,6 @@ namespace LELEngine.VFX
 					if (code.Contains("VfxPerlin") || code.Contains("VfxCurlNoise") || code.Contains("VfxValueNoise")) b.Writer.UsesNoise = true;
 					if (code.Contains("VfxSampleGlobalSdf") || code.Contains("VfxGlobalSdf")) b.Writer.UsesSdf = true;
 					if (code.Contains("VfxRandom")) b.Read(VfxAttributes.Seed);
-					b.Writer.BeginBlock("");
 					foreach (string line in code.Replace("\r", "").Split('\n'))
 					{
 						b.Line(line);

@@ -29,7 +29,7 @@ namespace LELEngine.VFX
 		#region PublicFields
 
 		public const int HeaderVectors = 8;
-		public const int HeaderMatrices = 2;
+		public const int HeaderMatrices = 3;
 		public const int MaxVectors = 240;
 		public const int MaxMatrices = 16;
 
@@ -44,6 +44,7 @@ namespace LELEngine.VFX
 		public const int ReservedSlot = 7;
 		public const int LocalToWorldSlot = 0;
 		public const int WorldToLocalSlot = 1;
+		public const int PreviousLocalToWorldSlot = 2; // the component's transform of the previous simulated frame
 
 		public sealed class Entry
 		{
@@ -603,6 +604,7 @@ namespace LELEngine.VFX
 				case VfxBuiltins.EventCount: return Kernel == VfxKernelKind.Initialize ? "spawnCount" : "0u";
 				case VfxBuiltins.LocalToWorld: return "vfxLocalToWorld";
 				case VfxBuiltins.WorldToLocal: return "vfxWorldToLocal";
+				case VfxBuiltins.PreviousLocalToWorld: return "vfxPreviousLocalToWorld";
 				case VfxBuiltins.CameraPosition: return "vfxCameraPosition";
 				case VfxBuiltins.CameraForward: return "vfxCameraForward";
 				case VfxBuiltins.CameraUp: return "vfxCameraUp";

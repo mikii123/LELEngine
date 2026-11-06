@@ -65,6 +65,10 @@ namespace LELEngine.VFX
 		public const string PlayRate = "playRate";
 		public const string LocalToWorld = "localToWorld";
 		public const string WorldToLocal = "worldToLocal";
+
+		/// <summary>The component's transform of the previous simulated frame (where the effect was): sub-frame spawning along its path.</summary>
+		public const string PreviousLocalToWorld = "previousLocalToWorld";
+
 		public const string CameraPosition = "cameraPosition";
 		public const string CameraForward = "cameraForward";
 		public const string CameraUp = "cameraUp";
@@ -107,6 +111,7 @@ namespace LELEngine.VFX
 					return VfxValueType.Uint;
 				case LocalToWorld:
 				case WorldToLocal:
+				case PreviousLocalToWorld:
 					return VfxValueType.Matrix;
 				default:
 					return VfxValueType.Vector3;
@@ -615,6 +620,7 @@ namespace LELEngine.VFX
 		public float PlayRate = 1f;
 		public Matrix4 LocalToWorld = Matrix4.Identity;
 		public Matrix4 WorldToLocal = Matrix4.Identity;
+		public Matrix4 PreviousLocalToWorld = Matrix4.Identity;
 		public Vector3 CameraPosition;
 		public Vector3 CameraForward = -Vector3.UnitZ;
 		public Vector3 CameraUp = Vector3.UnitY;
@@ -652,6 +658,7 @@ namespace LELEngine.VFX
 				case VfxBuiltins.PlayRate: return VfxValue.FromFloat(PlayRate);
 				case VfxBuiltins.LocalToWorld: return VfxValue.FromMatrix(LocalToWorld);
 				case VfxBuiltins.WorldToLocal: return VfxValue.FromMatrix(WorldToLocal);
+				case VfxBuiltins.PreviousLocalToWorld: return VfxValue.FromMatrix(PreviousLocalToWorld);
 				case VfxBuiltins.CameraPosition: return VfxValue.FromVector3(CameraPosition);
 				case VfxBuiltins.CameraForward: return VfxValue.FromVector3(CameraForward);
 				case VfxBuiltins.CameraUp: return VfxValue.FromVector3(CameraUp);

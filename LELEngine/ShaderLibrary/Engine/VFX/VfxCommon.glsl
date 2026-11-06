@@ -26,6 +26,8 @@ layout(std140, binding = 1) uniform VfxParams
 #define vfxDenseUpdate (floatBitsToUint(vfxU[7].y) != 0u)
 #define vfxLocalToWorld (vfxM[0])
 #define vfxWorldToLocal (vfxM[1])
+// The component's transform of the previous simulated frame (sub-frame spawning along the path it moved).
+#define vfxPreviousLocalToWorld (vfxM[2])
 
 #ifdef VFX_DRAW
 // Draws face and fade towards the view that draws them (the camera, or the light of a shadow map): one block per
