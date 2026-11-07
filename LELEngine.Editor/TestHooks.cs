@@ -17,7 +17,9 @@ namespace LELEngine.Editor
 	///     drag=N;fromAnchor;toAnchor|M;... (press at N, move, hover at N+10, release at N+12),
 	///     click=N;anchor|..., doubleclick=N;anchor|...; expandinspector=1 opens every inspector foldout;
 	///     wheel=N;anchor;notches|... (mouse wheel over an anchor), mdrag=N;anchor;dx,dy|... (middle button drag by
-	///     pixels; anchor "sceneview" is the scene view's image), ldrag=N;anchor;dx,dy|... and altdrag= (the left button,
+	///     pixels; anchor "sceneview" is the scene view's image), rfly=N;anchor;keys;frames (the right button held and keys
+	///     such as D flying the scene view, with each frame's time and camera logged), movecamera=N;dx,dy,dz;frames (the
+	///     scene view camera moved steadily along its axes), ldrag=N;anchor;dx,dy|... and altdrag= (the left button,
 	///     Alt held; the anchor may move with the drag: gizmo:BoxCollider2D/Right), logsceneview=N|M logs the scene view camera;
 	///     logfield=N;Object;Component.field|... logs a field's value; pingasset=N;path shows a file in the project panel.
 	///     key=N;F2|M;Enter (ImGuiKey presses), type=N;text (characters), logselection=N|M (what the inspector shows).
@@ -43,6 +45,7 @@ namespace LELEngine.Editor
 		private readonly List<(int at, string anchor, bool twice, int button)> clicks = new List<(int, string, bool, int)>();
 		private readonly List<(int at, string anchor, float amount)> wheels = new List<(int, string, float)>();
 		private readonly List<(int start, string anchor, System.Numerics.Vector2 delta)> middleDrags = new List<(int, string, System.Numerics.Vector2)>();
+		private readonly List<(int start, string anchor, string keys, int length)> rightFlights = new List<(int, string, string, int)>();
 		private readonly List<(int start, string anchor, System.Numerics.Vector2 delta, bool alt)> leftDrags = new List<(int, string, System.Numerics.Vector2, bool)>();
 		private readonly Dictionary<(int start, string anchor), System.Numerics.Vector2> leftDragStarts = new Dictionary<(int, string), System.Numerics.Vector2>();
 
@@ -119,6 +122,21 @@ namespace LELEngine.Editor
 				}
 			}
 
+			// rfly=N;anchor;keys;frames|...: flying the scene view as a user does: the right button held over the anchor from
+			// N + 1 and the keys (letters, e.g. D or WD) held for that many frames from N + 2; every frame of it logs the
+			// frame time and the camera position (camera motion tests at the editor's real frame times).
+			if (values.TryGetValue("rfly", out string flyList))
+			{
+				foreach (string entry in flyList.Split('|'))
+				{
+					string[] parts = entry.Split(';');
+					if (parts.Length == 4 && int.TryParse(parts[0], out int at) && int.TryParse(parts[3], out int length) && length > 0)
+					{
+						rightFlights.Add((at, parts[1], parts[2], length));
+					}
+				}
+			}
+
 			// ldrag=N;anchor;dx,dy|...: a left button drag from where the anchor was at N by (dx, dy) pixels (press at N + 1, release at N + 11); altdrag: Alt held.
 			foreach (string name in new[] { "ldrag", "altdrag" })
 			{
@@ -138,7 +156,7 @@ namespace LELEngine.Editor
 				}
 			}
 
-			TestAnchors.Enabled = drags.Count > 0 || clicks.Count > 0 || wheels.Count > 0 || middleDrags.Count > 0 || leftDrags.Count > 0;
+			TestAnchors.Enabled = drags.Count > 0 || clicks.Count > 0 || wheels.Count > 0 || middleDrags.Count > 0 || leftDrags.Count > 0 || rightFlights.Count > 0;
 			FieldDrawer.ForceOpen = values.TryGetValue("expandinspector", out string expand) && expand == "1";
 		}
 
@@ -379,6 +397,23 @@ namespace LELEngine.Editor
 				}
 			}
 			if (Is("nudgecamera")) editor.SceneView.RotateView(20f);
+
+			// movecamera=N;dx,dy,dz;frames: from frame N on, the scene view camera moves by (dx, dy, dz) along its own axes
+			// (x screen right, y up, z forward) in even steps over that many frames (steady camera motion tests).
+			if (values.TryGetValue("movecamera", out string moveCamera))
+			{
+				string[] parts = moveCamera.Split(';');
+				string[] delta = parts.Length == 3 ? parts[1].Split(',') : Array.Empty<string>();
+				var invariant = System.Globalization.CultureInfo.InvariantCulture;
+				if (parts.Length == 3 && delta.Length == 3 && int.TryParse(parts[0], out int start) && int.TryParse(parts[2], out int steps) && steps > 0
+					&& frame >= start && frame < start + steps
+					&& float.TryParse(delta[0], System.Globalization.NumberStyles.Float, invariant, out float dx)
+					&& float.TryParse(delta[1], System.Globalization.NumberStyles.Float, invariant, out float dy)
+					&& float.TryParse(delta[2], System.Globalization.NumberStyles.Float, invariant, out float dz))
+				{
+					editor.SceneView.MoveView(new OpenTK.Mathematics.Vector3(dx, dy, dz) / steps);
+				}
+			}
 
 			// projectsettings=N;Tab: the Project Settings window on that tab (Lighting, Physics2D, Build) at frame N.
 			if (values.TryGetValue("projectsettings", out string settingsTab))
@@ -676,6 +711,39 @@ namespace LELEngine.Editor
 				else io.AddMouseWheelEvent(0f, amount);
 			}
 
+			foreach ((int start, string anchor, string keys, int length) in rightFlights)
+			{
+				int step = frame - start;
+				if (step < 0 || step > length + 2 || !TestAnchors.TryGetPoint(anchor, out System.Numerics.Vector2 point))
+				{
+					continue;
+				}
+
+				if (step == 0) io.AddMousePosEvent(point.X, point.Y);
+				else if (step == 1) io.AddMouseButtonEvent(1, true);
+				else if (step == 2)
+				{
+					foreach (char key in keys.ToUpperInvariant())
+					{
+						io.AddKeyEvent(ImGuiKey.A + (key - 'A'), true);
+					}
+				}
+				else if (step == length + 2)
+				{
+					foreach (char key in keys.ToUpperInvariant())
+					{
+						io.AddKeyEvent(ImGuiKey.A + (key - 'A'), false);
+					}
+
+					io.AddMouseButtonEvent(1, false);
+				}
+
+				if (step >= 2)
+				{
+					Debug.Log($"[Test] Fly frame {frame}: dt {io.DeltaTime * 1000f:0.0} ms, camera {editor.SceneView.CameraPosition}");
+				}
+			}
+
 			foreach ((int start, string anchor, System.Numerics.Vector2 delta) in middleDrags)
 			{
 				int step = frame - start;
@@ -936,7 +1004,9 @@ namespace LELEngine.Editor
 			{
 				GameObject go = Find(scene, parts[1]);
 				string[] path = parts[2].Split('.');
-				Behaviour component = go.GetComponent(TypeRegistry.Resolve(path[0])) ?? FindComponentByName(go, path[0]);
+				// A short name (VolumetricObject) the registry does not resolve is found among the object's components by name.
+				Type componentType = TypeRegistry.Resolve(path[0]);
+				Behaviour component = (componentType != null ? go.GetComponent(componentType) : null) ?? FindComponentByName(go, path[0]);
 				editor.Edits.Begin(component);
 				SetPath(component, path, 1, parts[3]);
 				editor.Edits.RequestCommit();

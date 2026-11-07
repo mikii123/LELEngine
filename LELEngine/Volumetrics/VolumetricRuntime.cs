@@ -44,7 +44,7 @@ namespace LELEngine.Volumetrics
 
 				foreach (KeyValuePair<(Rendering.Renderer, Camera, VolumetricObjectBase), History> pair in histories)
 				{
-					if (pair.Value.Stamp >= frameStamp - 1 && pair.Value.Settled < SettleFrames && pair.Key.Item3.TemporalFilter)
+					if (pair.Value.Stamp >= pair.Key.Item1.FrameIndex - 1 && pair.Value.Settled < SettleFrames && pair.Key.Item3.TemporalFilter)
 					{
 						return true;
 					}
@@ -103,6 +103,9 @@ namespace LELEngine.Volumetrics
 			public Matrix4 PreviousViewProjection;
 			public Matrix4 PreviousLocalToWorld;
 			public uint Frame;
+
+			// The renderer's frame it was last continued in (its own count: the editor's scene and game views render in one
+			// frame, and a count shared by them restarted every history each frame).
 			public long Stamp;
 
 			// Frames in a row with the same view and object transform.
@@ -402,7 +405,7 @@ namespace LELEngine.Volumetrics
 				history.PreviousViewProjection = context.ViewProjection;
 				history.PreviousLocalToWorld = localToWorld;
 				history.Frame++;
-				history.Stamp = frameStamp;
+				history.Stamp = context.Renderer.FrameIndex;
 				result = next.ColorAttachments[0];
 			}
 
@@ -543,8 +546,8 @@ namespace LELEngine.Volumetrics
 				histories[key] = history;
 			}
 
-			// A history not continued last frame (the object was off screen, the view not drawn) starts over.
-			if (history.Stamp < frameStamp - 1)
+			// A history not continued in this renderer's last frame (the object was off screen) starts over.
+			if (history.Stamp < context.Renderer.FrameIndex - 1)
 			{
 				history.Valid = false;
 			}

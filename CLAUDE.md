@@ -934,6 +934,20 @@ Added for New Frontier's port of Unity's SpaceStonesPack (Standard materials wit
   2 * focusDistance * tan(fov / 2) / view height). `FocusDistance` follows wheel, pick, frame (F) and is saved with
   the view. Test hooks: `wheel=N;sceneview;notches|...`, `mdrag=N;sceneview;dx,dy|...`, `logsceneview=N|M`
   (position, forward, focus distance); anchor `sceneview`.
+- Flying (right button + WASD/QE) moves by the frame time averaged over about ten frames (`smoothDeltaTime`, Unity's
+  smoothDeltaTime), not the raw one (2026-11-07). The user saw New Frontier's storm and the position gizmo "jump in
+  random directions" when flying sideways, more the farther away, never when turning: with a volume filling the view
+  the editor is GPU bound and its measured frame times alternate (11 / 23 ms, mean 17.5) while the display shows frames
+  at an even rate, so raw steps came out uneven (camera steps 1.0-2.7 units, image steps 0.4-1.1 px); turning follows
+  the mouse per frame. Smoothed: camera steps 1.55-2.03, image steps changing 0.05 px a frame instead of 0.33. Not a
+  rendering fault: the volume, an opaque cube beside it and the camera's logged path agreed in every capture.
+- Motion tests: `movecamera=N;dx,dy,dz;frames` (the camera moved evenly along its own axes: x screen right, y up, z
+  forward), `rfly=N;sceneview;keys;frames` (the right button and keys such as D held: a real flight at the editor's
+  frame times, each frame's dt and camera position logged), `dumpview=f1,...;folder` for every frame of it; measure the
+  image's shift per frame by correlating column / row luminance profiles of a region (sub-pixel; still frames give 0.00
+  px, so the method's own noise is nil). `reportframes=` tells whether the game view rendered too (with Scene and Game
+  as tabs of one dock only the shown one renders). `setfield=N;Object;Component.field;value` takes short component
+  names (`VolumetricObject`): an unresolved type no longer throws.
 
 ## Physics 2D gizmos in the scene view (2026-11-02)
 
@@ -1386,7 +1400,9 @@ Added for New Frontier's port of Unity's SpaceStonesPack (Standard materials wit
   `MinStep` 0.25 voxel). Both march with a jitter (interleaved gradient noise, a golden-ratio offset per frame) under a
   temporal filter (`TemporalFilter`, `HistoryWeight` 0.9: reprojected at the march's light-weighted mean distance
   (`FragDistance`) through the previous view-projection and the object's previous transform, the history clamped to the
-  3 x 3 range; the editor keeps refreshing until a history held 32 frames, `SettleFrames`). Without it a reduced
+  3 x 3 range; the editor keeps refreshing until a history held 32 frames, `SettleFrames`; a history is continued by
+  its renderer's own frame count, `Renderer.FrameIndex`: the volumetric pass's shared count went up once per renderer,
+  so an editor drawing its scene and game views in one frame restarted every history each frame). Without it a reduced
   resolution shows the dither raw: the user found it unacceptable at Quarter (2026-11-07), so it is on for both presets.
 - The user's direction (2026-11-07): general, physically consistent features that can each be tuned and switched off
   come before matching New Frontier's Unity look ("too much likeness to NF, too little functionality").
@@ -1458,7 +1474,8 @@ Added for New Frontier's port of Unity's SpaceStonesPack (Standard materials wit
   and their march's centre texel (a readback: it stalls).
 - TestGame `volumetrics=1` (`VolumetricTestScene`: a storm cylinder with two flickering lights, an HQ fog bank box, a
   glowing sphere with a light inside, a ridged wisp at a quarter resolution); `volcube=1` a cube in the fog, `volhq=1` the
-  storm as the HQ preset, `volgi=0` the volumes without GI.
+  storm as the HQ preset, `volgi=0` the volumes without GI, `voltemporal=0` without their temporal filter; `vsync=1`
+  paces TestGame by the display as the editor is (motion tests at a game's frame rate, with `autocam=1` and `dump=N`).
 - Measured on this machine's AMD Radeon 780M (OpenGL, 1280 x 720): the four test volumes 0.33-0.43 ms, inside the fog bank
   0.35 ms, HQ at the dense storm's centre 2.5 ms (5.1 ms with `MinStep` 0.1, the same image); a backdrop cylinder of
   3740 x 892 x 3740 at 10-unit voxels (12.6 M voxels, about 69 MB) filling a 1253 x 709 view 0.54 ms, 0.61 ms with its

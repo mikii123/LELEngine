@@ -12,7 +12,7 @@ namespace TestGame
 
 		/// <summary>
 		///     Usage: TestGame [gi=lumen|vct|0] [voxels=0|1] [sdfview=0|1] [cacheview=0|1] [probeview=0|1] [emitters=0|1] [animate=0|1]
-		///            [stats=0|1] [autocam=0|1] [dump=N] [dumpdir=path] [jitter=0|1] [resolve=0|1] [static=0|1]
+		///            [stats=0|1] [autocam=0|1] [dump=N] [dumpdir=path] [vsync=0|1 paced by the display] [jitter=0|1] [resolve=0|1] [static=0|1]
 		///            [bounce=0|1] [trace=voxel|sdf] [voxres=64|128|256] [sdfres=64|128|256]
 		///            Voxel GI: [bounces=N in-frame bounce iterations] [shadowtaps=1|4] [voxcoverage=0|1] [voxmips=iso|aniso|sh] [anisolevels=N] [bouncecells=0|1]
 		///            [conejitter=0|1 world-anchored cone rotation + step jitter] [jittercell=meters] [gifilter=N a-trous passes over the resolve]
@@ -28,7 +28,7 @@ namespace TestGame
 		///            [materials=1 Engine/LitTextured props before the player: workflows, mask / specular / emission maps, tiling]
 		///            [sdfatlas=1 distance field atlas check: many box shapes in steps, logged as [SdfAtlasProbe]]
 		///            Scenes: [outdoor=1 open-sky yard] [sky=0|1 procedural skybox] [skybox=asset path] [physics=1] [nav=1] [ui=1] [scene=path]
-		///            [volumetrics=1 volumetric objects: storm with flashes, HQ fog bank, glowing ball, nebula wisp] [volcube=1 a cube in the fog] [volhq=1 the storm as the high quality preset]
+		///            [volumetrics=1 volumetric objects: storm with flashes, HQ fog bank, glowing ball, nebula wisp] [volcube=1 a cube in the fog] [volhq=1 the storm as the high quality preset] [volgi=0 volumes without GI] [voltemporal=0 volumes without their temporal filter]
 		///            [lights=1 local lights in the room: a point light, a spot, a lamp in a patch of fog (night=1: the sun down)]
 		///            View: [view=ghost from under the ceiling down at the orbs] [camera=x,y,z] [look=x,y,z] [night=1 emitters only]
 		///            Ghosting measurements (GhostTest): [emitterstep=frame] [emitteroff=frame]
@@ -138,6 +138,7 @@ namespace TestGame
 				Materials = GetBool(args, "materials", false),
 				Lights = GetBool(args, "lights", false),
 				VolumeGI = GetBool(args, "volgi", true),
+				VolumeTemporal = GetBool(args, "voltemporal", true),
 				EmitterStepFrame = GetInt(args, "emitterstep", 0),
 				EmitterOffFrame = GetInt(args, "emitteroff", 0),
 				MoverFrame = GetInt(args, "mover", 0),
@@ -295,6 +296,12 @@ namespace TestGame
 						Game.Mono.Close();
 					}
 				};
+			}
+
+			// vsync=1: frames paced by the display, as the editor's (motion tests at a game's frame rate).
+			if (GetBool(args, "vsync", false))
+			{
+				Game.Mono.VSync = OpenTK.Windowing.Common.VSyncMode.On;
 			}
 
 			Game.Mono.Run();

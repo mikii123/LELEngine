@@ -25,6 +25,7 @@ namespace TestGame.Scenes
 		{
 			options.Sky = true;
 			receiveGI = options.VolumeGI;
+			temporal = options.VolumeTemporal;
 			VfxTestScene.BuildEnvironment(scene, options);
 			Lighting.Shadows.Distance = 60f;
 
@@ -121,11 +122,13 @@ namespace TestGame.Scenes
 			go.transform.position = position;
 			T volume = go.AddComponent<T>();
 			volume.ReceiveGI = receiveGI;
+			volume.TemporalFilter = temporal;
 			return volume;
 		}
 
-		// volgi=0: the volumes do not receive the GI (comparisons).
+		// volgi=0: the volumes do not receive the GI; voltemporal=0: no temporal filter (comparisons).
 		private static bool receiveGI = true;
+		private static bool temporal = true;
 
 		#endregion
 	}

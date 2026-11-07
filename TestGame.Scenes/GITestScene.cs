@@ -203,6 +203,9 @@ namespace TestGame.Scenes
 			/// <summary>The volumetric objects of the test scenes receive the GI (volgi=0: off, for comparisons).</summary>
 			public bool VolumeGI = true;
 
+			/// <summary>The volumetric objects of the test scenes use their temporal filter (voltemporal=0: off, for comparisons).</summary>
+			public bool VolumeTemporal = true;
+
 			/// <summary>Start position of the player's eye (null = the usual spot by the open side of the room).</summary>
 			public Vector3? CameraPosition;
 

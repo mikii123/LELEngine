@@ -54,6 +54,16 @@ namespace LELEngine.Editor
 		private float pitch = 15f;
 		private float flySpeed = 6f;
 
+		/// <summary>
+		///     The frame time flying moves by, averaged over about ten frames (Unity's smoothDeltaTime). An editor bound by the
+		///     GPU (a volume filling the view) measures frame times that alternate, 11 / 23 ms, while the display shows its
+		///     frames at an even rate: moving by the raw time made every flight sideways judder, the gizmo with it
+		///     (2026-11-07). Turning follows the mouse per frame and never had it.
+		/// </summary>
+		private float smoothDeltaTime = 1f / 60f;
+
+		private const float DeltaTimeSmoothing = 0.1f;
+
 		/// <summary>Depth of what the view looks at (last mouse pick or framed object): pans move the scene at it.</summary>
 		private float focusDistance = 10f;
 
@@ -116,6 +126,16 @@ namespace LELEngine.Editor
 		public void RotateView(float yawDegrees)
 		{
 			yaw += yawDegrees;
+			ApplyCamera();
+		}
+
+		/// <summary>Moves the camera along its own axes (x screen right, y up, z forward; tests of camera motion).</summary>
+		public void MoveView(Vector3 local)
+		{
+			Vector3 forward = Forward();
+			Vector3 right = Vector3.Cross(forward, Vector3.UnitY).Normalized();
+			Vector3 up = Vector3.Cross(right, forward).Normalized();
+			position += right * local.X + up * local.Y + forward * local.Z;
 			ApplyCamera();
 		}
 
@@ -507,7 +527,8 @@ namespace LELEngine.Editor
 		private void UpdateCameraControls(bool hovered)
 		{
 			ImGuiIOPtr io = ImGui.GetIO();
-			float dt = Math.Min(io.DeltaTime, 0.1f);
+			smoothDeltaTime += (Math.Min(io.DeltaTime, 0.1f) - smoothDeltaTime) * DeltaTimeSmoothing;
+			float dt = smoothDeltaTime;
 
 			if (hovered && ImGui.IsMouseClicked(ImGuiMouseButton.Right))
 			{
