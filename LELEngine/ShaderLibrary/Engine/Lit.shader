@@ -44,6 +44,7 @@ void main()
 
 #include "Engine/Shadows.glsl"
 #include "Engine/VoxelConeTracing.glsl"
+#include "Engine/Lights.glsl"
 
 // Material: Color, Emissive (rgb color, a intensity, also fed into the GI), Roughness (0 = unset -> 0.6).
 #include "Engine/Instancing.glsl"
@@ -112,6 +113,19 @@ void main()
 		+ indirectSpecular * LSpecular.specStrength
 		+ (diffuse + specular) * shadow
 		+ emissive.rgb * emissive.a;
+
+	// The local lights (Engine/Lights.glsl), lit as the sun, unshadowed.
+	for (int i = 0; i < LelLightCount(); i++)
+	{
+		vec3 Li;
+		vec3 radiance;
+		if (LelLightAt(i, fPosition, Li, radiance))
+		{
+			float specularI = pow(max(dot(N, normalize(Li + V)), 0.0), LSpecular.specShine) * LSpecular.specStrength;
+			result += (albedo + specularI) * radiance * max(dot(N, Li), 0.0);
+		}
+	}
+
 	FragColor = vec4(result, color.a);
 }
 

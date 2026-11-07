@@ -2480,6 +2480,21 @@ namespace LELEngine.Editor
 					go.AddComponent<DirectionalLight>();
 				}, parent);
 			}
+
+			if (EditorMenu.Item("Point Light"))
+			{
+				CreateObject("Point Light", go => go.AddComponent<Light>(), parent);
+			}
+
+			if (EditorMenu.Item("Spot Light"))
+			{
+				CreateObject("Spot Light", go =>
+				{
+					// Shining down at what is in front of it.
+					go.transform.rotation = QuaternionHelper.LookRotation(new Vector3(0f, -1f, 0.35f).Normalized(), Vector3.UnitZ);
+					go.AddComponent<Light>().Type = LightType.Spot;
+				}, parent);
+			}
 		}
 
 		/// <summary>A vector of the 2D physics plane (x and y in the plane, depth along its normal): XY → (x, y, depth), XZ → (x, depth, y).</summary>

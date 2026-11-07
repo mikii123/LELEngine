@@ -24,6 +24,7 @@ namespace TestGame.Scenes
 		public static void Load(Scene scene, GITestScene.Options options, bool cubeInFog, bool stormHQ)
 		{
 			options.Sky = true;
+			receiveGI = options.VolumeGI;
 			VfxTestScene.BuildEnvironment(scene, options);
 			Lighting.Shadows.Distance = 60f;
 
@@ -118,8 +119,13 @@ namespace TestGame.Scenes
 		{
 			GameObject go = scene.CreateGameObject(name);
 			go.transform.position = position;
-			return go.AddComponent<T>();
+			T volume = go.AddComponent<T>();
+			volume.ReceiveGI = receiveGI;
+			return volume;
 		}
+
+		// volgi=0: the volumes do not receive the GI (comparisons).
+		private static bool receiveGI = true;
 
 		#endregion
 	}

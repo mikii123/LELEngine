@@ -22,6 +22,7 @@ namespace LELEngine.Editor
 			{ typeof(Camera), (component, context) => CameraInspector.Draw((Camera)component, context) },
 			{ typeof(LODGroup), (component, context) => LODGroupInspector.Draw((LODGroup)component, context) },
 			{ typeof(LELEngine.Volumetrics.VolumetricObjectBase), (component, context) => VolumetricObjectInspector.Draw((LELEngine.Volumetrics.VolumetricObjectBase)component, context) },
+			{ typeof(Light), (component, context) => LightInspector.Draw((Light)component, context) },
 			{ typeof(LELEngine.Animation.Animator), (component, context) => Animation.AnimatorComponentInspector.Draw((LELEngine.Animation.Animator)component, context) },
 			{ typeof(LELEngine.Animation.Timeline), (component, context) => Animation.TimelineComponentInspector.Draw((LELEngine.Animation.Timeline)component, context) },
 			{ typeof(LELEngine.Audio.AudioEventEmitter), (component, context) => Audio.AudioInspectors.DrawEmitter((LELEngine.Audio.AudioEventEmitter)component, context) },

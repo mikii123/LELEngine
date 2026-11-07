@@ -4,9 +4,11 @@
 
 #include "Engine/Shadows.glsl"
 #include "Engine/VoxelConeTracingCore.glsl"
+#include "Engine/Lights.glsl"
 
 // Voxel light injection: turns the cached geometry volumes into a radiance volume.
-//   radiance = albedo * (direct sun light with shadows + bounce traced from the source volume) + emission
+//   radiance = albedo * (direct sun light with shadows + the local lights that go into the GI, blocked by the voxels
+//              towards them when they ask + bounce traced from the source volume) + emission
 // VoxelGIPass runs it several times per frame: first without the bounce, then each time tracing the result of the
 // pass before (one more bounce per pass, nothing carried over between frames). Where static and dynamic geometry
 // share a voxel their attributes are averaged by occupancy. The radiance is stored premultiplied by the occupancy.
@@ -70,6 +72,36 @@ vec3 VoxelShadow(vec3 surface, vec3 N, vec3 L, float voxelSize)
 		+ SampleShadowRGB(surface - tangent + bitangent, N, L) + SampleShadowRGB(surface - tangent - bitangent, N, L));
 }
 
+// How much of a local light reaches a voxel's surface through the geometry: a march through the voxels' occupancy
+// towards the light, a voxel a step near the surface and growing steps (an eighth of the distance) further out, at most
+// 48 steps; leaving the volume, the light gets through.
+float VoxelLightVisibility(vec3 surface, vec3 lightPosition, float voxelSize)
+{
+	vec3 toLight = lightPosition - surface;
+	float distanceToLight = length(toLight);
+	vec3 dir = toLight / max(distanceToLight, 1e-6);
+	float visibility = 1.0;
+	float t = voxelSize;
+	for (int s = 0; s < 48 && t < distanceToLight - voxelSize; s++)
+	{
+		ivec3 c = ivec3(floor((surface + dir * t - voxelGridMin) / voxelSize));
+		if (any(lessThan(c, ivec3(0))) || any(greaterThanEqual(c, ivec3(voxelResolution))))
+		{
+			break;
+		}
+
+		visibility *= 1.0 - min(1.0, imageLoad(StaticAlbedo, c).a + imageLoad(DynamicAlbedo, c).a);
+		if (visibility < 0.01)
+		{
+			return 0.0;
+		}
+
+		t += max(voxelSize, t * 0.125);
+	}
+
+	return visibility;
+}
+
 void main()
 {
 	uint packedBlock = blocks[gl_WorkGroupID.x];
@@ -101,6 +133,26 @@ void main()
 	// Per channel: light through tinted transparent casters keeps their colour in the bounce.
 	vec3 shadow = ndl > 0.0 && LDirectional.dirStrength > 0.0 ? VoxelShadow(position + N * voxelSize * 0.5, N, L, voxelSize) : vec3(1.0);
 	vec3 direct = LDirectional.dirColor.rgb * LDirectional.dirStrength * ndl * shadow;
+
+	// The local lights that go into the GI (Engine/Lights.glsl), times their indirect strength, at the voxel's surface.
+	vec3 surface = position + N * voxelSize * 0.5;
+	for (int i = 0; i < LelLightCount(); i++)
+	{
+		float giStrength = lelLights[i].radiance.w;
+		vec3 Li;
+		vec3 radiance;
+		if (giStrength <= 0.0 || !LelLightAt(i, surface, Li, radiance))
+		{
+			continue;
+		}
+
+		float nli = max(dot(N, Li), 0.0);
+		if (nli > 0.0)
+		{
+			float visibility = LelLightHas(i, LEL_LIGHT_GI_SHADOWS) ? VoxelLightVisibility(surface, lelLights[i].positionRange.xyz, voxelSize) : 1.0;
+			direct += radiance * (giStrength * nli * visibility);
+		}
+	}
 
 	// Indirect light arriving at this voxel, from the previous pass's volume.
 	vec3 bounce = vec3(0.0);

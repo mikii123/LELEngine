@@ -50,9 +50,17 @@ namespace LELEngine.Volumetrics
 		/// <summary>Local units per voxel (the coarsest axis).</summary>
 		public float Voxel;
 
-		/// <summary>Lights 0..7 as the light volume was worked out (position, core radius); the count of them.</summary>
-		public readonly Vector4[] LightPoints = new Vector4[VolumetricObjectBase.MaxLights];
+		/// <summary>The lights 0..7 as their transport was worked out (the draw applies their colour and intensity); the count of them.</summary>
+		public readonly VolumeLightSlot[] LightSlots = new VolumeLightSlot[VolumetricObjectBase.MaxLights];
 		public int LightCount;
+
+		/// <summary>The GI the cloud receives (Engine/Volumetrics/VolumetricGI.shader): rgba16f mean radiance + 1, its directional term.</summary>
+		public int GIA;
+		public int GIB;
+		public Vector3i GIResolution;
+
+		/// <summary>Every cell of the GI grid has been worked out at least once since it was made.</summary>
+		public bool GIValid;
 
 		#endregion
 
@@ -89,7 +97,7 @@ namespace LELEngine.Volumetrics
 			public int LightHash;
 			public int LightsHash;
 			public Vector3 Sun;
-			public readonly Vector4[] Lights = new Vector4[VolumetricObjectBase.MaxLights];
+			public readonly VolumeLightSlot[] Lights = new VolumeLightSlot[VolumetricObjectBase.MaxLights];
 			public int LightCount;
 		}
 
@@ -108,6 +116,11 @@ namespace LELEngine.Volumetrics
 		private bool invalidated = true;
 		private byte[] cpuDensity;
 		private bool disposed;
+		private readonly System.Collections.Generic.List<VolumeLightSlot> captureSlots = new System.Collections.Generic.List<VolumeLightSlot>();
+		private readonly Vector4[] slotPositions = new Vector4[VolumetricObjectBase.MaxLights];
+		private readonly Vector4[] slotParams = new Vector4[VolumetricObjectBase.MaxLights];
+		private readonly Vector4[] slotSpots = new Vector4[VolumetricObjectBase.MaxLights];
+		private int giSlice;
 
 		#endregion
 
@@ -244,6 +257,73 @@ namespace LELEngine.Volumetrics
 		}
 
 		/// <summary>
+		///     Works out a share of the GI the cloud receives (a full pass every GIUpdateFrames frames): per cell of a grid
+		///     GICellSize voxels coarse, the GI's light from the six local directions, dimmed by the cloud towards each
+		///     (Engine/Volumetrics/VolumetricGI.shader). Made again when the cloud's grid changes.
+		/// </summary>
+		public void UpdateGI()
+		{
+			if (!Ready || Density == 0)
+			{
+				return;
+			}
+
+			// Cells of GICellSize voxels, at most 64 a side.
+			int cell = Math.Clamp(owner.GICellSize, 2, 32);
+			var resolution = new Vector3i(Math.Clamp((Resolution.X + cell - 1) / cell, 1, 64), Math.Clamp((Resolution.Y + cell - 1) / cell, 1, 64), Math.Clamp((Resolution.Z + cell - 1) / cell, 1, 64));
+			if (GIA == 0 || resolution != GIResolution)
+			{
+				DeleteTexture(ref GIA);
+				DeleteTexture(ref GIB);
+				GIA = CreateTexture(SizedInternalFormat.Rgba16f, resolution, false, false);
+				GIB = CreateTexture(SizedInternalFormat.Rgba16f, resolution, false, false);
+				// A coarse grid read between its cells: linear, never the cells' blocks.
+				foreach (int texture in new[] { GIA, GIB })
+				{
+					GL.BindTexture(TextureTarget.Texture3D, texture);
+					GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Linear);
+					GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Linear);
+				}
+
+				GL.BindTexture(TextureTarget.Texture3D, 0);
+				GIResolution = resolution;
+				GIValid = false;
+				giSlice = 0;
+			}
+
+			int slices = Math.Max(1, (resolution.Z + Math.Clamp(owner.GIUpdateFrames, 1, 16) - 1) / Math.Clamp(owner.GIUpdateFrames, 1, 16));
+			slices = Math.Min(slices, resolution.Z - giSlice);
+			ShaderProgram program = VolumetricRuntime.GIShader.Program;
+			program.Use();
+			// The GI's samplers keep units of their own (unused ones too: two sampler types on one unit fail the dispatch).
+			program.SetInt("RadianceCacheSH", Lighting.VolumeProbeSHTextureUnit);
+			program.SetInt("RadianceCacheAtlas", Lighting.VolumeProbeTextureUnit);
+			program.SetInt("GlobalSdfObjectIds", Lighting.GlobalSdfObjectIdTextureUnit);
+			program.SetInt("giSkybox", Lighting.SkyboxTextureUnit);
+			Lighting.SetVolumeGIUniforms(program, true);
+			program.SetTexture("Density", TextureTarget.Texture3D, Density, 0);
+			program.SetInt3("volResolution", resolution.X, resolution.Y, resolution.Z);
+			program.SetInt("volSliceOffset", giSlice);
+			program.SetVector3("volSize", Size);
+			program.SetFloat("volSigma", Sigma);
+			program.SetFloat("volVoxel", Voxel);
+			program.SetFloat("volReach", MathF.Max(owner.ShadowReach, 0.05f) * MathF.Max(owner.NoiseSize, 0.01f));
+			program.SetMatrix4("volLocalToWorld", owner.transform.LocalToWorld);
+			GL.BindImageTexture(0, GIA, 0, true, 0, TextureAccess.WriteOnly, SizedInternalFormat.Rgba16f);
+			GL.BindImageTexture(1, GIB, 0, true, 0, TextureAccess.WriteOnly, SizedInternalFormat.Rgba16f);
+			GL.DispatchCompute((resolution.X + 7) / 8, (resolution.Y + 7) / 8, slices);
+			GL.BindImageTexture(0, 0, 0, true, 0, TextureAccess.WriteOnly, SizedInternalFormat.Rgba16f);
+			GL.BindImageTexture(1, 0, 0, true, 0, TextureAccess.WriteOnly, SizedInternalFormat.Rgba16f);
+			GL.MemoryBarrier(MemoryBarrierFlags.TextureFetchBarrierBit);
+			giSlice += slices;
+			if (giSlice >= resolution.Z)
+			{
+				giSlice = 0;
+				GIValid = true;
+			}
+		}
+
+		/// <summary>
 		///     The density (0..1) exactly at local points, from the noise the cloud is made of (the generate kernel's points
 		///     variant, with the drawn cloud's grid), not read from the voxels: no interpolation, no 8-bit steps. On the GPU;
 		///     waits for the result. False before the cloud is made.
@@ -308,6 +388,8 @@ namespace LELEngine.Volumetrics
 			DeleteTexture(ref Lit);
 			DeleteTexture(ref LightsA);
 			DeleteTexture(ref LightsB);
+			DeleteTexture(ref GIA);
+			DeleteTexture(ref GIB);
 			cpuDensity = null;
 		}
 
@@ -408,16 +490,11 @@ namespace LELEngine.Volumetrics
 
 		private void CaptureLights(Build b)
 		{
-			int count = Math.Min(owner.Lights.Count, VolumetricObjectBase.MaxLights);
-			b.LightCount = 0;
+			owner.GatherLightSlots(captureSlots);
+			b.LightCount = Math.Min(captureSlots.Count, VolumetricObjectBase.MaxLights);
 			for (int i = 0; i < VolumetricObjectBase.MaxLights; i++)
 			{
-				VolumeLight light = i < count ? owner.Lights[i] : null;
-				b.Lights[i] = light != null && light.Radius > 0f ? new Vector4(light.Position, light.Radius) : Vector4.Zero;
-				if (light != null)
-				{
-					b.LightCount = i + 1;
-				}
+				b.Lights[i] = i < b.LightCount ? captureSlots[i] : default;
 			}
 		}
 
@@ -457,13 +534,14 @@ namespace LELEngine.Volumetrics
 							break;
 						}
 
+						// Linear light in half floats: a scene light's falloff spans more than 8 bits hold.
 						if (build.LightsA == 0)
 						{
-							build.LightsA = CreateTexture(SizedInternalFormat.Rgba8, build.LightsResolution, true, false);
-							build.LightsB = CreateTexture(SizedInternalFormat.Rgba8, build.LightsResolution, true, false);
+							build.LightsA = CreateTexture(SizedInternalFormat.Rgba16f, build.LightsResolution, true, false);
+							build.LightsB = CreateTexture(SizedInternalFormat.Rgba16f, build.LightsResolution, true, false);
 						}
 
-						used += DispatchSlices(VolumetricRuntime.LightTransport, build.LightsResolution, budget - used, SetLightsUniforms, build.LightsA, SizedInternalFormat.Rgba8, build.LightsB, 1);
+						used += DispatchSlices(VolumetricRuntime.LightTransport, build.LightsResolution, budget - used, SetLightsUniforms, build.LightsA, SizedInternalFormat.Rgba16f, build.LightsB, 1);
 						if (build.NextSlice >= build.LightsResolution.Z)
 						{
 							GL.MemoryBarrier(MemoryBarrierFlags.AllBarrierBits);
@@ -583,7 +661,18 @@ namespace LELEngine.Volumetrics
 			program.SetVector3("volSize", build.Size);
 			program.SetFloat("volSigma", Sigma);
 			program.SetFloat("volVoxel", build.Voxel);
-			program.SetVector4Array("volLights", build.Lights);
+			for (int i = 0; i < VolumetricObjectBase.MaxLights; i++)
+			{
+				bool used = i < build.LightCount;
+				slotPositions[i] = used ? build.Lights[i].PositionSize : Vector4.Zero;
+				slotParams[i] = used ? build.Lights[i].Params : new Vector4(0f, 0f, -2f, 0f);
+				slotSpots[i] = used ? build.Lights[i].Spot : new Vector4(0f, 0f, 0f, 1f);
+			}
+
+			program.SetVector4Array("volLights", slotPositions);
+			program.SetVector4Array("volLightParams", slotParams);
+			program.SetVector4Array("volLightSpots", slotSpots);
+			program.SetFloat("volWorldScale", owner.WorldScale);
 			program.SetFloat("volLightGlow", owner.LightGlow);
 		}
 
@@ -650,7 +739,7 @@ namespace LELEngine.Volumetrics
 				LightsA = b.LightsA;
 				LightsB = b.LightsB;
 				lightsHash = b.LightsHash;
-				Array.Copy(b.Lights, LightPoints, LightPoints.Length);
+				Array.Copy(b.Lights, LightSlots, LightSlots.Length);
 				LightCount = b.LightCount;
 			}
 

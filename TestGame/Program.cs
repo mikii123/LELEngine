@@ -29,6 +29,7 @@ namespace TestGame
 		///            [sdfatlas=1 distance field atlas check: many box shapes in steps, logged as [SdfAtlasProbe]]
 		///            Scenes: [outdoor=1 open-sky yard] [sky=0|1 procedural skybox] [skybox=asset path] [physics=1] [nav=1] [ui=1] [scene=path]
 		///            [volumetrics=1 volumetric objects: storm with flashes, HQ fog bank, glowing ball, nebula wisp] [volcube=1 a cube in the fog] [volhq=1 the storm as the high quality preset]
+		///            [lights=1 local lights in the room: a point light, a spot, a lamp in a patch of fog (night=1: the sun down)]
 		///            View: [view=ghost from under the ceiling down at the orbs] [camera=x,y,z] [look=x,y,z] [night=1 emitters only]
 		///            Ghosting measurements (GhostTest): [emitterstep=frame] [emitteroff=frame]
 		///            [mover=frame] [moverz=path depth] [moveremission=intensity] [regions=x,y,z;x,y,z;...] [regionsize=px] [regionstart=frame] [regionsource=scene|gi]
@@ -135,6 +136,8 @@ namespace TestGame
 				Refraction = GetBool(args, "refraction", false),
 				Trails = GetBool(args, "trails", false),
 				Materials = GetBool(args, "materials", false),
+				Lights = GetBool(args, "lights", false),
+				VolumeGI = GetBool(args, "volgi", true),
 				EmitterStepFrame = GetInt(args, "emitterstep", 0),
 				EmitterOffFrame = GetInt(args, "emitteroff", 0),
 				MoverFrame = GetInt(args, "mover", 0),

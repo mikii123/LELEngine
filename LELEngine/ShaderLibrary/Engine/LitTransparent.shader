@@ -71,6 +71,7 @@ void main()
 // Transparent surfaces are not in the depth buffer: the indirect light comes from the GI volume (cones or the
 // radiance cache probes), never from the screen-space resolve of the opaque surface behind them.
 #include "Engine/VolumeLighting.glsl"
+#include "Engine/Lights.glsl"
 
 // Material: Color (a = opacity), Emissive (rgb color, a intensity), Roughness (0 = unset -> 0.2).
 #include "Engine/Instancing.glsl"
@@ -171,6 +172,19 @@ void main()
 
 	vec3 scattered = ambient * occlusion + indirectDiffuse * albedo + diffuse * shadow;
 	vec3 reflected = indirectSpecular * reflectance + specular * shadow + emissive.rgb * emissive.a;
+
+	// The local lights (Engine/Lights.glsl), lit as the sun, unshadowed.
+	for (int i = 0; i < LelLightCount(); i++)
+	{
+		vec3 Li;
+		vec3 radiance;
+		if (LelLightAt(i, fPosition, Li, radiance))
+		{
+			float nli = max(dot(N, Li), 0.0);
+			scattered += albedo * radiance * nli;
+			reflected += radiance * pow(max(dot(N, normalize(Li + V)), 0.0), LSpecular.specShine) * LSpecular.specStrength * nli;
+		}
+	}
 #ifdef REFRACTION
 	// What the surface lets through is the scene behind it, shifted by the normal's tilt across the surface: the image
 	// the blending below makes, refracted (a flat normal map lets the scene through unshifted).

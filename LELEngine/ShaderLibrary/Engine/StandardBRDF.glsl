@@ -76,4 +76,30 @@ vec3 LelStandardBRDF(vec3 diffColor, vec3 specColor, float oneMinusReflectivity,
 		+ surfaceReduction * gi.specular * fresnelLerp;
 }
 
+// The direct part alone, for the local lights (Unity's forward-add pass: the same BRDF without the GI).
+vec3 LelStandardBRDFDirect(vec3 diffColor, vec3 specColor, float perceptualRoughness, vec3 N, vec3 V, vec3 L, vec3 lightColor)
+{
+	vec3 H = normalize(L + V);
+	float nv = abs(dot(N, V));
+	float nl = clamp(dot(N, L), 0.0, 1.0);
+	float nh = clamp(dot(N, H), 0.0, 1.0);
+	float lh = clamp(dot(L, H), 0.0, 1.0);
+
+	float fd90 = 0.5 + 2.0 * lh * lh * perceptualRoughness;
+	float diffuseTerm = (1.0 + (fd90 - 1.0) * LelPow5(1.0 - nl)) * (1.0 + (fd90 - 1.0) * LelPow5(1.0 - nv)) * nl;
+
+	float roughness = max(perceptualRoughness * perceptualRoughness, 0.002);
+	float lambdaV = nl * (nv * (1.0 - roughness) + roughness);
+	float lambdaL = nv * (nl * (1.0 - roughness) + roughness);
+	float visibility = 0.5 / (lambdaV + lambdaL + 1e-5);
+	float a2 = roughness * roughness;
+	float d = (nh * a2 - nh) * nh + 1.0;
+	float distribution = 0.31830988618 * a2 / (d * d + 1e-7);
+	float specularTerm = max(0.0, visibility * distribution * 3.14159265359 * nl);
+	specularTerm *= any(greaterThan(specColor, vec3(0.0))) ? 1.0 : 0.0;
+	vec3 fresnel = specColor + (1.0 - specColor) * LelPow5(1.0 - lh);
+
+	return diffColor * lightColor * diffuseTerm + specularTerm * lightColor * fresnel;
+}
+
 #endif

@@ -26,14 +26,25 @@ namespace LELEngine.Volumetrics
 		/// <summary>The enabled volumetric objects (edit mode too).</summary>
 		public static IReadOnlyList<VolumetricObjectBase> Objects => objects;
 
-		/// <summary>True while a cloud is being made or a high quality one is still settling: the editor keeps its views refreshing.</summary>
+		/// <summary>
+		///     True while a cloud is being made, or a temporal filter has not yet blended enough frames since its view or
+		///     object last moved: the editor keeps its views refreshing until the cloud is complete and smooth.
+		/// </summary>
 		public static bool NeedsRefresh
 		{
 			get
 			{
 				foreach (VolumetricObjectBase volume in objects)
 				{
-					if (volume.isActiveAndEnabled && (!volume.Ready || volume.Data.Pending || volume.HighQuality && volume is VolumetricObjectHQ hq && hq.TemporalFilter))
+					if (volume.isActiveAndEnabled && (!volume.Ready || volume.Data.Pending))
+					{
+						return true;
+					}
+				}
+
+				foreach (KeyValuePair<(Rendering.Renderer, Camera, VolumetricObjectBase), History> pair in histories)
+				{
+					if (pair.Value.Stamp >= frameStamp - 1 && pair.Value.Settled < SettleFrames && pair.Key.Item3.TemporalFilter)
 					{
 						return true;
 					}
@@ -52,6 +63,9 @@ namespace LELEngine.Volumetrics
 
 		private const int DetailResolution = 96;
 
+		// Frames a temporal filter blends with a still view before the editor may stop refreshing it.
+		private const int SettleFrames = 32;
+
 		/// <summary>
 		///     LEL_VOL_DEBUG=1: every 120th frame the draws log their rectangles and the centre texel of their march (a
 		///     readback: it stalls the GPU, debugging only).
@@ -65,6 +79,8 @@ namespace LELEngine.Volumetrics
 		private const int LightsAUnit = 3;
 		private const int LightsBUnit = 4;
 		private const int DepthUnit = 5;
+		private const int GIAUnit = 6;
+		private const int GIBUnit = 7;
 		private const int ResultUnit = 0;
 		private const int ResultDepthUnit = 1;
 		private const int SceneDepthUnit = 2;
@@ -75,7 +91,6 @@ namespace LELEngine.Volumetrics
 		private sealed class ViewTargets
 		{
 			public readonly Framebuffer[] March = new Framebuffer[3];
-			public readonly Framebuffer[] MarchHQ = new Framebuffer[3];
 			public readonly Framebuffer[] Depth = new Framebuffer[3];
 			public readonly long[] DepthStamp = { -1, -1, -1 };
 		}
@@ -89,6 +104,9 @@ namespace LELEngine.Volumetrics
 			public Matrix4 PreviousLocalToWorld;
 			public uint Frame;
 			public long Stamp;
+
+			// Frames in a row with the same view and object transform.
+			public int Settled;
 		}
 
 		private static readonly List<VolumetricObjectBase> objects = new List<VolumetricObjectBase>();
@@ -102,6 +120,7 @@ namespace LELEngine.Volumetrics
 		private static ComputeShader light;
 		private static ComputeShader lightTransport;
 		private static ComputeShader occupancy;
+		private static ComputeShader giShader;
 		private static ShaderProgram march;
 		private static ShaderProgram marchHQ;
 		private static ShaderProgram depthDownsample;
@@ -120,6 +139,11 @@ namespace LELEngine.Volumetrics
 		internal static ComputeShader Light => light ??= new ComputeShader("Engine/Volumetrics/VolumetricLight.shader");
 		internal static ComputeShader LightTransport => lightTransport ??= new ComputeShader("Engine/Volumetrics/VolumetricLightTransport.shader");
 		internal static ComputeShader OccupancyShader => occupancy ??= new ComputeShader("Engine/Volumetrics/VolumetricOccupancy.shader");
+		internal static ComputeShader GIShader => giShader ??= new ComputeShader("Engine/Volumetrics/VolumetricGI.shader");
+
+		/// <summary>The scene has GI this frame that a volume can read (voxel cone tracing's volume or Lumen's radiance cache).</summary>
+		internal static bool SceneGIAvailable => Lighting.GI.Enabled
+			&& (Lighting.GIMethod == GIMode.VoxelConeTracing && Lighting.GI.VoxelTexture != 0 || Lighting.GIMethod == GIMode.Lumen && Lighting.RadianceCache.Valid);
 
 		#endregion
 
@@ -178,7 +202,59 @@ namespace LELEngine.Volumetrics
 				}
 			}
 
+			// The clouds that receive the GI: a share of their GI grid (last frame's GI).
+			if (SceneGIAvailable)
+			{
+				foreach (VolumetricObjectBase volume in objects)
+				{
+					if (volume.ReceiveGI && volume.isActiveAndEnabled && volume.Ready)
+					{
+						volume.Data.UpdateGI();
+					}
+				}
+			}
+
 			GL.UseProgram(0);
+		}
+
+		/// <summary>
+		///     For each light with volumetric shadows: how much of it gets through the clouds towards +x, -x, +y, -y, +z, -z
+		///     within its range (<see cref="global::Light.CloudTransmittance" />), through every ready object its range reaches,
+		///     on the CPU from their voxels (Rendering.LightBuffer, every frame). The lit materials and the GI dim the light by
+		///     it in the direction of what they light: a flash deep in a cloud lights what is around the cloud less.
+		/// </summary>
+		public static void UpdateLightTransmittance(IReadOnlyList<global::Light> lights)
+		{
+			foreach (global::Light light in lights)
+			{
+				float[] transmittance = light.CloudTransmittance;
+				for (int k = 0; k < 6; k++)
+				{
+					transmittance[k] = 1f;
+				}
+
+				if (!light.VolumetricShadows || objects.Count == 0)
+				{
+					continue;
+				}
+
+				Vector3 origin = light.transform.position;
+				foreach (VolumetricObjectBase volume in objects)
+				{
+					if (!volume.isActiveAndEnabled || !volume.Ready || !Reaches(volume, origin, light.Range))
+					{
+						continue;
+					}
+
+					for (int k = 0; k < 6; k++)
+					{
+						// The straight path, and the light scattered on through the cloud that gets further (the cloud's glow, as
+						// its own light transport has it: e^-tau + glow e^-0.15 tau).
+						float straight = volume.Transmittance(origin, origin + Axes[k] * light.Range, 24);
+						transmittance[k] *= MathF.Min(1f, straight + volume.LightGlow * MathF.Pow(straight, 0.15f));
+					}
+				}
+			}
 		}
 
 		/// <summary>The objects a camera draws: enabled, ready, on its layers, their bounds in its view.</summary>
@@ -243,7 +319,6 @@ namespace LELEngine.Volumetrics
 			}
 
 			bool hq = volume is VolumetricObjectHQ;
-			VolumetricObjectHQ high = volume as VolumetricObjectHQ;
 			int level = volume.Resolution switch { VolumetricResolution.Half => 1, VolumetricResolution.Quarter => 2, _ => 0 };
 			int scale = 1 << level;
 			int lowWidth = (width + scale - 1) / scale;
@@ -274,21 +349,13 @@ namespace LELEngine.Volumetrics
 				}
 			}
 
-			// The march, inside the object's rectangle at its resolution.
-			Framebuffer target;
-			if (hq)
-			{
-				Ensure(ref view.MarchHQ[level], lowWidth, lowHeight, RenderTextureFormat.RGBA16F, true, RenderTextureFormat.R32F);
-				target = view.MarchHQ[level];
-			}
-			else
-			{
-				Ensure(ref view.March[level], lowWidth, lowHeight, RenderTextureFormat.RGBA16F, true, null);
-				target = view.March[level];
-			}
+			// The march, inside the object's rectangle at its resolution: light and transmittance, and the light's mean
+			// distance along the ray (the temporal filter reprojects with it).
+			Ensure(ref view.March[level], lowWidth, lowHeight, RenderTextureFormat.RGBA16F, true, RenderTextureFormat.R32F);
+			Framebuffer target = view.March[level];
 
 			var lowRect = new PixelRect(rect.X0 / scale, rect.Y0 / scale, Math.Min(lowWidth, (rect.X1 + scale - 1) / scale + 1), Math.Min(lowHeight, (rect.Y1 + scale - 1) / scale + 1));
-			History history = hq && high.TemporalFilter ? HistoryOf(context, volume, lowWidth, lowHeight) : null;
+			History history = volume.TemporalFilter ? HistoryOf(context, volume, lowWidth, lowHeight) : null;
 			target.Bind();
 			GL.Enable(EnableCap.ScissorTest);
 			// A temporal filter reads the march around each pixel: march a texel more on every side.
@@ -326,9 +393,10 @@ namespace LELEngine.Volumetrics
 				temporal.SetTexture("volHistory", TextureTarget.Texture2D, history.Targets[history.Current].ColorAttachments[0].Handle, HistoryUnit);
 				temporal.SetMatrix4("volPreviousViewProjection", history.PreviousViewProjection);
 				temporal.SetMatrix4("volPreviousLocalToWorld", history.PreviousLocalToWorld);
-				temporal.SetFloat("volHistoryWeight", high.HistoryWeight);
+				temporal.SetFloat("volHistoryWeight", Math.Clamp(volume.HistoryWeight, 0f, 0.98f));
 				temporal.SetInt("volHistoryValid", history.Valid ? 1 : 0);
 				context.Fullscreen.Draw();
+				history.Settled = history.Valid && history.PreviousViewProjection == context.ViewProjection && history.PreviousLocalToWorld == localToWorld ? history.Settled + 1 : 0;
 				history.Current = 1 - history.Current;
 				history.Valid = true;
 				history.PreviousViewProjection = context.ViewProjection;
@@ -356,7 +424,7 @@ namespace LELEngine.Volumetrics
 			GLState.SetBlend(false);
 			GLState.SetDepth(true, false, DepthFunction.Lequal);
 			GLState.SetCull(true, TriangleFace.Back);
-			for (int unit = 0; unit <= DepthUnit; unit++)
+			for (int unit = 0; unit <= GIBUnit; unit++)
 			{
 				GL.ActiveTexture(TextureUnit.Texture0 + unit);
 				GL.BindTexture(TextureTarget.Texture3D, 0);
@@ -385,7 +453,6 @@ namespace LELEngine.Volumetrics
 				for (int i = 0; i < 3; i++)
 				{
 					view.March[i]?.Delete();
-					view.MarchHQ[i]?.Delete();
 					view.Depth[i]?.Delete();
 				}
 
@@ -564,19 +631,18 @@ namespace LELEngine.Volumetrics
 			{
 				program.SetFloat("volMinStep", data.Voxel * Math.Clamp(hq.MinStep, 0.01f, 4f));
 				program.SetFloat("volNearStepScale", Math.Clamp(hq.NearStepScale, 0.0001f, 1f));
-				program.SetInt("volReceiveShadows", hq.ReceiveShadows ? 1 : 0);
-				// A new pattern every frame (golden ratio steps), so the temporal filter sees every offset.
-				program.SetFloat("volJitterOffset", history != null ? history.Frame * 0.618034f % 1f : 0f);
-				Lighting.SetShadowUniforms(program, hq.ReceiveShadows);
-			}
-			else
-			{
-				program.SetFloat("volJitterOffset", 0f);
-				program.SetInt("volReceiveShadows", 0);
 			}
 
-			// The sun, the sky and the flat ambient light (the scene's, or the volume's own).
+			// A new sampling pattern every frame under the temporal filter (golden ratio steps: every offset in turn).
+			program.SetFloat("volJitterOffset", history != null ? history.Frame * 0.618034f % 1f : 0f);
+
+			// The sun, the sky and the flat ambient light (the scene's, or the volume's own). The scene's shadow map is its
+			// main light's: only a cloud lit by that light receives it.
 			DirectionalLight sun = volume.EffectiveSun;
+			bool shadows = volume.ReceiveShadows && sun != null && sun == DirectionalLight.This;
+			program.SetInt("volReceiveShadows", shadows ? 1 : 0);
+			program.SetFloat("volShadowStrength", Math.Clamp(volume.ShadowStrength, 0f, 1f));
+			Lighting.SetShadowUniforms(program, shadows);
 			Vector3 towards = sun != null ? -sun.transform.forward : Vector3.UnitY;
 			Vector3 sunLocal = Vector3.TransformVector(towards, localToWorld.Inverted());
 			sunLocal = sunLocal.LengthSquared > 1e-12f ? sunLocal.Normalized() : Vector3.UnitY;
@@ -594,6 +660,13 @@ namespace LELEngine.Volumetrics
 			program.SetFloat("volPhaseG", Math.Clamp(volume.PhaseG, -0.95f, 0.95f));
 			program.SetFloat("volMultipleScattering", volume.MultipleScattering);
 
+			// The GI it receives, once its grid has been worked out whole.
+			bool gi = volume.ReceiveGI && data.GIValid && SceneGIAvailable;
+			program.SetInt("volGIActive", gi ? 1 : 0);
+			program.SetTexture("volGIA", TextureTarget.Texture3D, gi ? data.GIA : 0, GIAUnit);
+			program.SetTexture("volGIB", TextureTarget.Texture3D, gi ? data.GIB : 0, GIBUnit);
+			program.SetFloat("volGIStrength", volume.GIStrength);
+
 			// The detail: its tile in local units, drifting with the wind.
 			float detailTile = MathF.Max(volume.DetailSize, 0.01f) * noiseSize;
 			float time = (float)Time.timeD;
@@ -604,18 +677,13 @@ namespace LELEngine.Volumetrics
 			program.SetFloat("volDetailVoxel", detailTile / DetailResolution);
 			program.SetVector3("volDetailOffset", -volume.DetailWind * time);
 
-			// The lights inside: colour x intensity, times their encoding's scale.
+			// The lights (its own and the scene's, as their transport was worked out): colour x intensity right now.
 			program.SetInt("volLightsActive", lights ? 1 : 0);
 			if (lights)
 			{
-				float scaleUp = 1f + volume.LightGlow;
-				int count = Math.Min(volume.Lights.Count, VolumetricObjectBase.MaxLights);
 				for (int i = 0; i < lightColors.Length; i++)
 				{
-					VolumeLight inside = i < count ? volume.Lights[i] : null;
-					lightColors[i] = inside != null && i < data.LightCount && data.LightPoints[i].W > 0f
-						? new Vector4(inside.Color.R, inside.Color.G, inside.Color.B, 0f) * (inside.Intensity * scaleUp)
-						: Vector4.Zero;
+					lightColors[i] = i < data.LightCount ? new Vector4(data.LightSlots[i].Color, 0f) : Vector4.Zero;
 				}
 
 				program.SetVector4Array("volLightColors", lightColors);
@@ -626,13 +694,23 @@ namespace LELEngine.Volumetrics
 			program.SetFloat("volOpacity", Math.Clamp(volume.Opacity, 0f, 1f));
 		}
 
+		private static readonly Vector3[] Axes = { Vector3.UnitX, -Vector3.UnitX, Vector3.UnitY, -Vector3.UnitY, Vector3.UnitZ, -Vector3.UnitZ };
+
+		// Whether a sphere (world) reaches the object's box.
+		private static bool Reaches(VolumetricObjectBase volume, Vector3 center, float radius)
+		{
+			Vector3 local = Vector3.TransformPosition(center, volume.transform.WorldToLocal);
+			Vector3 half = volume.Data.Size * 0.5f;
+			Vector3 outside = Vector3.ComponentMax(Vector3.ComponentMax(-half - local, local - half), Vector3.Zero);
+			return outside.Length * volume.WorldScale < radius;
+		}
+
 		private static bool AnyLightLit(VolumetricObjectBase volume, VolumetricData data)
 		{
-			int count = Math.Min(Math.Min(volume.Lights.Count, data.LightCount), VolumetricObjectBase.MaxLights);
-			for (int i = 0; i < count; i++)
+			for (int i = 0; i < data.LightCount; i++)
 			{
-				VolumeLight light = volume.Lights[i];
-				if (light != null && light.Intensity > 1e-4f)
+				Vector3 color = data.LightSlots[i].Color;
+				if (color.X + color.Y + color.Z > 1e-6f)
 				{
 					return true;
 				}

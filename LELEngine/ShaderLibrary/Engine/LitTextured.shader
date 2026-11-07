@@ -100,6 +100,7 @@ void main()
 #include "Engine/Shadows.glsl"
 #include "Engine/VoxelConeTracing.glsl"
 #include "Engine/StandardBRDF.glsl"
+#include "Engine/Lights.glsl"
 
 // Lit with an albedo map (multiplies Color) and, each in a variant of its own that only the materials setting it pay
 // for, a tangent-space normal map, an emission map (multiplies Emissive), a mask map (metallic, occlusion, smoothness)
@@ -267,6 +268,17 @@ void main()
 
 	vec3 result = LelStandardBRDF(diffColor, specColor, oneMinusReflectivity, roughness, N, V, L, lightColor * shadow, gi)
 		+ emissive.rgb * emissive.a;
+
+	// The local lights (Engine/Lights.glsl): the same BRDF, unshadowed.
+	for (int i = 0; i < LelLightCount(); i++)
+	{
+		vec3 Li;
+		vec3 radiance;
+		if (LelLightAt(i, fPosition, Li, radiance))
+		{
+			result += LelStandardBRDFDirect(diffColor, specColor, roughness, N, V, Li, radiance);
+		}
+	}
 #else
 	// Scene specular: Blinn-Phong with the scene's strength and shine (as Lit).
 	vec3 H = normalize(L + V);
@@ -286,6 +298,18 @@ void main()
 	vec3 result = indirect
 		+ (diffuse + specular) * shadow
 		+ emissive.rgb * emissive.a;
+
+	// The local lights (Engine/Lights.glsl), lit as the sun, unshadowed.
+	for (int i = 0; i < LelLightCount(); i++)
+	{
+		vec3 Li;
+		vec3 radiance;
+		if (LelLightAt(i, fPosition, Li, radiance))
+		{
+			float specularI = pow(max(dot(N, normalize(Li + V)), 0.0), LSpecular.specShine) * LSpecular.specStrength;
+			result += (albedo + specularI) * radiance * max(dot(N, Li), 0.0);
+		}
+	}
 #endif
 	FragColor = vec4(result, color.a);
 }

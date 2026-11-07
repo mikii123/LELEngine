@@ -249,6 +249,7 @@ namespace LELEngine
 
 			SetShadowUniforms(program, receiveShadows);
 			SetGIUniforms(program, receiveGI);
+			LightBuffer.EnsureBound();
 		}
 
 		/// <summary>

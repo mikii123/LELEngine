@@ -19,13 +19,12 @@ void main()
 // cloud's density, the sun's optical depth towards the point and the ambient light's openness there; the tiling detail
 // eats into the cloud's edges (the relief the voxels lack), the lights inside add their light while lit. Empty blocks of
 // 4 voxels (the occupancy volume) are crossed in one step. Output: the in-scattered light, premultiplied (rgb), and
-// 1 - transmittance (a).
-//   default   seen from outside (VolumetricObject): even steps through the shape, at most volMaxSteps of them, the start
-//             jittered per pixel with a fixed pattern (no flicker; the upsampling softens it).
+// 1 - transmittance (a), and the light's mean distance along the ray (the temporal filter reprojects with it). The start
+// of the steps is jittered per pixel, with a pattern that changes every frame under the temporal filter (fixed without);
+// the scene's sun shadows fall into the cloud when it receives them.
+//   default   seen from outside (VolumetricObject): even steps through the shape, at most volMaxSteps of them.
 //   VOL_HQ    high quality, good inside (VolumetricObjectHQ): steps that grow with the distance from the camera (fine
-//             near the camera, where the cloud fills the view when it is inside), the jitter changing every frame for
-//             the temporal filter, the scene's sun shadows on the cloud, and the light's mean distance along the ray (the
-//             temporal filter reprojects with it).
+//             near the camera, where the cloud fills the view when it is inside).
 
 #include "Engine/Volumetrics/VolumetricCommon.glsl"
 #include "Engine/Shadows.glsl"
@@ -34,8 +33,12 @@ void main()
 uniform sampler3D volLit;            // rgba8: density, sqrt(sun optical depth / volTauMax), ambient openness
 uniform sampler3D volOccupancy;      // r8: densest voxel per 4^3 block (and the voxel around it)
 uniform sampler3D volDetail;         // r8, tiling
-uniform sampler3D volLightsA;        // lights 0-3: sqrt(light / (1 + glow)), half resolution
+uniform sampler3D volLightsA;        // lights 0-3: linear light at unit brightness (times the slot's factor), half resolution
 uniform sampler3D volLightsB;        // lights 4-7
+uniform sampler3D volGIA;            // the GI received (VolumetricGI.shader): mean radiance, a coarse grid
+uniform sampler3D volGIB;            // its directional term (luminance, local axes)
+uniform int volGIActive;             // 1: the GI in place of the sky light
+uniform float volGIStrength;
 uniform sampler2D volDepth;          // the opaque scene: eye depth (volDepthIsWindow 0) or window depth (1)
 uniform int volDepthIsWindow;
 uniform vec4 volDepthParams;
@@ -64,16 +67,15 @@ uniform float volDetailFrequency;    // detail tiles per local unit
 uniform float volDetailVoxel;        // local units per detail voxel
 uniform vec3 volDetailOffset;        // the detail's drift (wind x time), local units
 uniform int volLightsActive;
-uniform vec4 volLightColors[8];      // rgb: colour x intensity x (1 + glow)
+uniform vec4 volLightColors[8];      // rgb: colour x intensity / the slot's factor
 uniform mat4 volLocalToWorld;
 uniform int volReceiveShadows;
+uniform float volShadowStrength;     // 1: the scene's shadows block the sun fully
 uniform float volExposure;
 uniform float volOpacity;
 
 layout(location = 0) out vec4 FragColor;
-#ifdef VOL_HQ
 layout(location = 1) out float FragDistance;
-#endif
 
 // Henyey-Greenstein, scaled so isotropic scattering is 1.
 float VolPhase(float cosTheta, float g)
@@ -82,8 +84,8 @@ float VolPhase(float cosTheta, float g)
 	return (1.0 - g2) / pow(max(1e-4, 1.0 + g2 - 2.0 * g * cosTheta), 1.5);
 }
 
-// The scene's sun shadow at a point inside the cloud (VOL_HQ): one comparison in the cascade it falls in, faded out
-// towards the shadow distance; lit outside the cascades.
+// The scene's sun shadow at a point inside the cloud: one comparison in the cascade it falls in, faded out towards the
+// shadow distance; lit outside the cascades.
 float VolSceneShadow(vec3 worldPos)
 {
 	if (shadowsEnabled == 0 || shadowCascadeCount <= 0)
@@ -133,9 +135,7 @@ void main()
 	float cosForward = max(dot(ray.worldDir, volCameraForward), 1e-4);
 	range.y = min(range.y, eye / cosForward * ray.scale);
 
-#ifdef VOL_HQ
 	FragDistance = 0.0;
-#endif
 	if (range.y <= range.x)
 	{
 		FragColor = vec4(0.0);
@@ -154,14 +154,14 @@ void main()
 			+ SkyRadiance(vec3(0.0, -1.0, 0.0)) + SkyRadiance(vec3(0.0, 0.0, 1.0)) + SkyRadiance(vec3(0.0, 0.0, -1.0))) * (volSkyStrength / 6.0);
 	}
 
-	vec3 ambient = sky + volAmbientColor;
 	float jitter = fract(VolNoise(pixel) + volJitterOffset);
+	vec3 rayDir = normalize(ray.dir);
 
+	float distanceSum = 0.0;
+	float weightSum = 0.0;
 #ifdef VOL_HQ
 	float t = range.x;
 	t += jitter * clamp(t * volNearStepScale, volMinStep, volStep);
-	float distanceSum = 0.0;
-	float weightSum = 0.0;
 #else
 	float span = range.y - range.x;
 	float steps = clamp(ceil(span / volStep), 4.0, float(volMaxSteps));
@@ -221,28 +221,37 @@ void main()
 			{
 				float tau = lit.g * lit.g * volTauMax;
 				vec3 sun = volSunColor * (phase0 * exp(-tau) + phase1 * exp(-tau * 0.5) + phase2 * exp(-tau * 0.25));
-#ifdef VOL_HQ
 				if (volReceiveShadows != 0)
 				{
-					sun *= VolSceneShadow((volLocalToWorld * vec4(p, 1.0)).xyz);
+					sun *= mix(1.0, VolSceneShadow((volLocalToWorld * vec4(p, 1.0)).xyz), volShadowStrength);
 				}
-#endif
-				vec3 light = volAlbedo * (sun + ambient * lit.b) * shade + volEmission * clamp(density * 1.5, 0.0, 1.0);
+				// The light around: the flat ambient through the cloud's openness, and the GI (from every side, dimmed by the
+				// cloud towards each, scattered towards the eye with the phase: a + g (b . ray)) or else the sky.
+				vec3 around = volAmbientColor * lit.b;
+				if (volGIActive != 0)
+				{
+					vec3 gi = textureLod(volGIA, uvw, 0.0).rgb;
+					vec3 giDirection = textureLod(volGIB, uvw, 0.0).xyz;
+					float giLuminance = max(dot(gi, vec3(0.2126, 0.7152, 0.0722)), 1e-6);
+					around += gi * (max(1.0 + volPhaseG * dot(giDirection, rayDir) / giLuminance, 0.0) * volGIStrength);
+				}
+				else
+				{
+					around += sky * lit.b;
+				}
+
+				vec3 light = volAlbedo * (sun + around) * shade + volEmission * clamp(density * 1.5, 0.0, 1.0);
 				if (volLightsActive != 0)
 				{
 					vec4 a = textureLod(volLightsA, uvw, max(lod - 1.0, 0.0));
 					vec4 b = textureLod(volLightsB, uvw, max(lod - 1.0, 0.0));
-					a *= a;
-					b *= b;
 					light += a.x * volLightColors[0].rgb + a.y * volLightColors[1].rgb + a.z * volLightColors[2].rgb + a.w * volLightColors[3].rgb
 						+ b.x * volLightColors[4].rgb + b.y * volLightColors[5].rgb + b.z * volLightColors[6].rgb + b.w * volLightColors[7].rgb;
 				}
 
 				color += weight * light;
-#ifdef VOL_HQ
 				distanceSum += weight * t;
 				weightSum += weight;
-#endif
 				transmittance *= stepT;
 				if (transmittance < 0.005)
 				{
@@ -255,10 +264,8 @@ void main()
 		t += dt;
 	}
 
-#ifdef VOL_HQ
 	// World units along the ray (the temporal filter reprojects the light from there).
 	FragDistance = (weightSum > 1e-4 ? distanceSum / weightSum : (range.x + range.y) * 0.5) / ray.scale;
-#endif
 	FragColor = vec4(color * volExposure, 1.0 - transmittance) * volOpacity;
 }
 

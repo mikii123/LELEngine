@@ -8,7 +8,9 @@
 - Debug outputs land in `<project>/bin/Debug/net10.0/` (Release in `bin/Release/net10.0/`). Shader library files
   are copied to `bin/.../Shaders/Engine/...` at build time. Python is not installed; use PowerShell with
   `System.Drawing` for image work (BMP to PNG, cropping).
-- Development GPU: NVIDIA RTX 3080 Ti, OpenGL 4.6. Small test scenes run at 1000+ fps with vsync off, so
+- GPUs: the C:\NewFrontier machine has only an AMD Radeon 780M (OpenGL 4.6; the volumetrics and lights measurements of
+  2026-11 are from it); other notes measured on an NVIDIA RTX 3080 Ti, an RTX 5070 Ti or an Intel iGPU, as they say.
+  On the NVIDIA card small test scenes run at 1000+ fps with vsync off, so
   frame-count based automation (`exitframe`, `dumpframe`) covers well under a second: prefer `exitseconds=S` and
   `dump=1 dumpafter=S` for anything time dependent.
 - Never run `git commit` or `git push`; the user does that.
@@ -1381,28 +1383,52 @@ Added for New Frontier's port of Unity's SpaceStonesPack (Standard materials wit
 - Two components, both `VolumetricObjectBase` (`LELEngine/Volumetrics`, `[ExecuteAlways]`, every setting): `VolumetricObject`
   for volumes seen from outside (marched at `Resolution` Half, even steps, `MaxSteps` 64) and `VolumetricObjectHQ`, which
   also looks right from inside (Full resolution, `MaxSteps` 160, steps growing with the distance: `NearStepScale` 0.02,
-  `MinStep` 0.25 voxel; a jitter per frame and a temporal filter (`TemporalFilter`, `HistoryWeight` 0.9: reprojected
-  through the previous view-projection and the object's previous transform, the history clamped to the 3 x 3 range);
-  the scene's sun shadows with `ReceiveShadows`).
+  `MinStep` 0.25 voxel). Both march with a jitter (interleaved gradient noise, a golden-ratio offset per frame) under a
+  temporal filter (`TemporalFilter`, `HistoryWeight` 0.9: reprojected at the march's light-weighted mean distance
+  (`FragDistance`) through the previous view-projection and the object's previous transform, the history clamped to the
+  3 x 3 range; the editor keeps refreshing until a history held 32 frames, `SettleFrames`). Without it a reduced
+  resolution shows the dither raw: the user found it unacceptable at Quarter (2026-11-07), so it is on for both presets.
+- The user's direction (2026-11-07): general, physically consistent features that can each be tuned and switched off
+  come before matching New Frontier's Unity look ("too much likeness to NF, too little functionality").
 - Settings: `Shape` Box / Cylinder (axis local y) / Sphere (ellipsoid) with `Size` in local units, the boundary's fade and
   wandering (`SideSoftness`, `CapSoftness`, `Top/Bottom/SideRoughness`); `Noise` Perlin / Billow / Ridged / Worley /
   PerlinWorley, `NoiseSize` (local units of the big shapes: a bigger shape holds more of the same cloud), `Octaves`
   (capped down to about three voxels), `Roughness`, `Warp`, `Seed`, `Coverage`, `Softness`, clumps (`ClumpSize` x noise
   size, `ClumpCoverage`, `ClumpSoftness`); `Density` (optical depth through one noise size of full cloud), `ShadowReach`
   (x noise size); detail (`DetailStrength`, `DetailSize`, `EdgeBand`, `DetailShade`, `DetailWind`: a tiling 96^3 texture
-  eats the edges); lighting (`Sun`, `SunStrength`, `SkyStrength`, `AmbientStrength`, `OwnAmbient` + `AmbientColor`,
-  `Albedo`, `PhaseG`, `MultipleScattering`: second and third orders at half and quarter optical depth, emission,
-  `Exposure`, `Opacity`); up to 8 `Lights` inside (`VolumeLight`: position, core radius, colour, intensity) with
-  `LightGlow`; quality (`VoxelSize` kept when the shape grows, up to 256^3 voxels and 512 per axis, then the voxel grows;
-  `StepSize` in voxels; `RenderQueue`).
+  eats the edges); lighting (`Sun`, `SunStrength`, `ReceiveShadows` + `ShadowStrength`, `SkyStrength`,
+  `AmbientStrength`, `OwnAmbient` + `AmbientColor`, `Albedo`, `PhaseG`, `MultipleScattering`: second and third orders at
+  half and quarter optical depth, emission, `Exposure`, `Opacity`); GI (`ReceiveGI`, `GIStrength`, `GICellSize`,
+  `GIUpdateFrames`); lights (`SceneLights`, up to 8 `Lights` inside: `VolumeLight` position, core radius, colour,
+  intensity; `LightGlow`); quality (`VoxelSize` kept when the shape grows, up to 256^3 voxels and 512 per axis, then the
+  voxel grows; `StepSize` in voxels; `TemporalFilter`, `HistoryWeight`; `RenderQueue`).
 - A light of its own: `Sun` may be a disabled `DirectionalLight`, which lights only the cloud (the scene's main light is
-  its first enabled one): a backdrop's own sun. `OwnAmbient` replaces the scene's flat ambient light by `AmbientColor`: a
-  script lighting the scene through its ambient light (flashes on ships) must not light a cloud taking the scene's.
+  its first enabled one): a backdrop's own sun, but then no scene shadows (the shadow map is the main light's).
+  `OwnAmbient` replaces the scene's flat ambient light by `AmbientColor`.
+- Scene shadows (`ReceiveShadows`, `ShadowStrength` 1 = the sun fully blocked): per step one comparison in the main
+  light's cascade the point falls in (`VolSceneShadow`, faded out towards the shadow distance, lit outside the cascades),
+  on the sun term only; only for a cloud whose sun is the main light (`Sun` null or `DirectionalLight.This`). The scene's
+  shadow `Distance` must reach the cloud: New Frontier's Flight went from 250 to 600 (its storm lies 200-450 units from
+  the camera; before, the shadows existed and were never seen there).
+- GI (`ReceiveGI`): a coarse grid in the object's space (`GICellSize` voxels a cell, at most 64 a side, a full pass over
+  `GIUpdateFrames` frames, `VolumetricGI.shader`): per cell the GI's light from the six local axes (VCT: one cone of
+  aperture 1; Lumen: the radiance cache's SH, `SampleRadianceCacheSH`; outside the GI volume or without GI: the sky),
+  each dimmed by the cloud towards that side (openness 0.08 + 0.92 e^-tau/2 within `ShadowReach`), stored as a
+  first-order SH in two RGBA16F textures with linear filtering (A = the mean radiance, B = the luminance's directional
+  term 5/12 sum L e). The march scatters it towards the eye with the phase, a + g (b . ray) (b's colour from a), x
+  `GIStrength`, in place of the sky term (`SkyStrength` applies while the GI is off or unavailable:
+  `VolumetricRuntime.SceneGIAvailable`). The grid update is ~0.1 ms (`Volumetrics` pass).
+- Scene lights (`SceneLights`): `Light` components whose range reaches the shape take the transport's slots left after
+  the cloud's own `Lights`, nearest first, whatever their intensity (a flash going dark keeps its slot: no rework when it
+  flickers); `Light.VolumetricStrength` scales what the cloud takes (see "Local lights").
 - Made on the GPU from the settings, no bake (`VolumetricData`, compute shaders in `ShaderLibrary/Engine/Volumetrics`):
   density R8 with mips (`VolumetricGenerate.shader`, noise in `VolumetricNoise.glsl`), occupancy (densest voxel per 4^3
   block plus a voxel's border: the march jumps empty blocks), lit RGBA8 with mips (density, sqrt(sun optical depth / 16),
-  ambient openness: one fetch a step; `VolumetricLight.shader`), the lights' transport at half resolution (2 x RGBA8,
-  core x e^-tau + glow x e^-0.15 tau; their intensity and colour stay free every frame), the shared detail. Work goes in
+  ambient openness: one fetch a step; `VolumetricLight.shader`), the lights' transport at half resolution (2 x RGBA16F,
+  linear, `VolumetricLightTransport.shader`: an own light's core 1 / (1 + (d / r)^2) x e^-tau + glow (four times as wide)
+  x e^-0.15 tau; a scene light's physical falloff in world units, its cone and (e^-tau + glow x e^-0.15 tau), held times
+  (range / 4)^2 so half floats keep it; their intensity and colour stay free every frame: `VolumeLightSlot.Color`), the
+  GI grid, the shared detail. Work goes in
   z slices within `VolumetricRuntime.WorkPerFrame` (8 M voxels a frame, at most 1 M a dispatch) into new textures that
   swap in when complete: a changed shape or noise rebuilds after the settings held 0.2 s (edit mode), the sun turning
   against the object relights (at most every 0.1 s), a moved light reworks its transport. Seed offset: `new
@@ -1410,10 +1436,12 @@ Added for New Frontier's port of Unity's SpaceStonesPack (Standard materials wit
 - Drawing: `VolumetricPass` (Frame scope) advances the builds; `TransparentPass` sorts each volume with the other
   transparents (centre distance, `RenderQueue`; the camera's culling mask applies); `VolumetricRuntime.Draw`: the opaque
   depth at the march's resolution (`VolumetricDepth.shader`, checkerboard of nearest and farthest), the march
-  (`VolumetricMarch.shader`, variant `VOL_HQ`), the temporal filter (HQ), the composite (`VolumetricComposite.shader`:
-  nothing where the shape's entry is behind the scene, 2 x 2 depth-aware weights at reduced resolutions,
-  premultiplied). The march samples on units 0..5 and keeps the lighting's units free (shadow map 15, transmittance 10,
-  GI sky 16): every sampler needs a unit of its own.
+  (`VolumetricMarch.shader`, variant `VOL_HQ`; RGBA16F colour + R32F distance), the temporal filter, the composite
+  (`VolumetricComposite.shader`: nothing where the shape's entry is behind the scene, 2 x 2 depth-aware weights at
+  reduced resolutions, premultiplied). The march samples on units 0..5 and the GI grid on 6 / 7 (`GIAUnit`, `GIBUnit`)
+  and keeps the lighting's units free (shadow map 15, transmittance 10, GI sky 16); the GI grid's compute pins
+  `RadianceCacheSH` 12, `RadianceCacheAtlas` 13, `GlobalSdfObjectIds` 8, `giSkybox` 16: every sampler type needs a unit
+  of its own (two types on one unit fail the dispatch).
 - API: `Ready`, `DensityAt(world)` / `DensityAtLocal(local)` (CPU, trilinear from the R8 voxels, read back once per
   build), `EvaluateDensity(localPoints, densities)` (the noise exactly at those points through the generate kernel's
   `VOL_POINTS` variant, a GPU round trip: picking places by density without the voxels' 8-bit ties), `Transmittance(from,
@@ -1430,12 +1458,56 @@ Added for New Frontier's port of Unity's SpaceStonesPack (Standard materials wit
   and their march's centre texel (a readback: it stalls).
 - TestGame `volumetrics=1` (`VolumetricTestScene`: a storm cylinder with two flickering lights, an HQ fog bank box, a
   glowing sphere with a light inside, a ridged wisp at a quarter resolution); `volcube=1` a cube in the fog, `volhq=1` the
-  storm as the HQ preset.
+  storm as the HQ preset, `volgi=0` the volumes without GI.
 - Measured on this machine's AMD Radeon 780M (OpenGL, 1280 x 720): the four test volumes 0.33-0.43 ms, inside the fog bank
   0.35 ms, HQ at the dense storm's centre 2.5 ms (5.1 ms with `MinStep` 0.1, the same image); a backdrop cylinder of
   3740 x 892 x 3740 at 10-unit voxels (12.6 M voxels, about 69 MB) filling a 1253 x 709 view 0.54 ms, 0.61 ms with its
   8 lights lit. TestGame lumen, vct, gi=0, refraction, materials against the commit before: identical (max 1 / 255;
   trails differ from run to run).
+- Since 2026-11-07 (temporal filter on both presets, scene shadows, GI, scene lights, RGBA16F transport) that backdrop
+  (New Frontier's storm, Lumen) costs 0.90 ms calm and 1.04 ms with its 8 flash lights lit: the temporal filter 0.08 ms,
+  GI + shadows 0.18 ms, the rest the wider transport and the distance target; the GI grid 0.11-0.15 ms in the
+  `Volumetrics` pass. TestGame lumen, vct, gi=0, refraction, materials against the commit before: identical (max 2 / 255).
+
+## Local lights (Light component; 2026-11-07)
+
+- `Light` (`Mono/Behaviours/Light.cs`, global namespace, `[ExecuteAlways]`): `Type` Point / Spot (`SpotAngle`,
+  `InnerSpot`), `Color`, `Intensity` (radiance units as a directional light's Strength: a white surface facing the light one
+  unit away reflects Intensity), `Range`, `SourceRadius`; GI: `AffectsGI`, `IndirectStrength`, `GIShadows`; volumes:
+  `AffectsVolumes`, `VolumetricStrength` (HDRP's Volumetric Multiplier: a flash can light the ships around brightly and
+  its cloud less), `VolumetricShadows` (clouds between the light and what it lights dim it). Falloff (`Falloff(d)`, the
+  shaders' formula): fade^2 / max(d^2, SourceRadius^2), fade = saturate(1 - d^4 / range^4) (Frostbite's window); a spot's
+  cone saturate((dot(-L, forward) - cos outer) x 1 / (cos inner - cos outer))^2. The direct light has no shadow maps
+  (geometry does not block it on surfaces); the GI's injection does block it.
+- `Rendering/LightBuffer` (static): every frame (`Renderer.RenderFrame`, after `Lighting.BeginFrame`) the lights that shine
+  (enabled, intensity, range, colour), at most `Light.MaxLights` = 32, those whose range comes nearest to the camera first;
+  a std140 uniform block at binding 7, 6 vec4 per light (position + range, radiance + GI strength, spot direction + cos
+  outer, spot scale / flags / source radius, the clouds' transmittance towards +x -x +y and -y +z -z);
+  `Lighting.SetUniforms` calls `EnsureBound` (programs drawn before the first frame never read an unbound block).
+  `Engine/Lights.glsl`: `LelLight`, `LelLightCount`, `LelLightHas`, `LelLightFalloff`, `LelLightCloudTransmittance` (the
+  six axes blended by dir^2), `LelLightShape`, `LelLightAt`.
+- Lit materials: `Lit`, `LitTextured` (Scene workflow: Blinn-Phong as the sun; Metallic / Specular:
+  `LelStandardBRDFDirect` in `StandardBRDF.glsl`) and `LitTransparent` add every light after the sun (unshadowed).
+- GI: VCT's `VoxelInject.shader` adds each GI light to the voxels (`VoxelLightVisibility`: a march through the voxels'
+  occupancy towards it, voxel steps growing to an eighth of the distance, at most 48; none with `GIShadows` off); Lumen's
+  `CardLighting.shader` to the cards (`CardLightVisibility`: `TraceSdf` through the global distance field;
+  `SurfaceCachePass` sets the SDF uniforms of the lighting program). `radiance.w` = `IndirectStrength` (0: not in the GI).
+- Lumen's idle budgets: `LightBuffer.GIVersion` goes up when a GI light's list entry changes (on / off, moved, brightness,
+  colour, cone, transmittance: a hash per light), `GIChanges` = the boxes of their reach before and after (kept until the
+  next change, so every renderer of a frame reads the same); `LumenScene.LightsChanged` restarts the quiet count and adds
+  them as change regions. Before, a light changing alone left the radiosity and the radiance cache at their idle budgets
+  (a flash would have reached the GI late). Verified on New Frontier's storm running 600 frames: 497 flash changes, 497
+  frames with `LightsChanged`, none missed; steady lights raise nothing.
+- Volumes: `VolumetricRuntime.UpdateLightTransmittance(shining)` gives each light with `VolumetricShadows` the
+  transmittance of the volumes within its range towards the six axes (CPU, 24 samples through the voxels to its range:
+  e^-tau plus the cloud's glow, LightGlow x (e^-tau)^0.15, at most 1) in `Light.CloudTransmittance`; volumes take scene
+  lights into their transport (`SceneLights`, see "Volumetric objects").
+- Editor: `LightInspector` (below the fields: whether it shines and how bright across its range; the selected light's reach
+  as a wire outline in the scene view while the component is expanded: a point light's range sphere, a spot's cone),
+  GameObject > Point Light / Spot Light.
+- TestGame `lights=1` (`GITestScene.BuildLocalLights`: a point light, a spot, a lamp in a patch of fog; `night=1` puts the
+  sun down). Measured (780M, 1280 x 720, night): whole frame on the GPU gi=0 1.79 ms, VCT ~9.3 ms, Lumen ~6.8 ms. Without
+  lights TestGame lumen, vct, gi=0, refraction, materials match the commit before (max 2 / 255).
 
 ## Animation system (clips, Animator, state machines; 2026-10-28)
 

@@ -132,6 +132,13 @@ namespace LELEngine.Volumetrics
 		[Range(0f, 10f)]
 		public float SunStrength = 1f;
 
+		[Tooltip("The scene's sun shadows fall into the cloud (ships shading a fog bank, a cloud layer below them). The shadow map is the scene's main light's: with a light of the cloud's own as its sun there are none")]
+		public bool ReceiveShadows = true;
+
+		[Tooltip("How dark those shadows are in the cloud: 1 blocks the sun fully, less lets some through (light scattered in from the lit cloud around)")]
+		[Range(0f, 1f)]
+		public float ShadowStrength = 1f;
+
 		[Tooltip("How much of the sky (the environment's skybox, or the GI's sky colour) lights the cloud")]
 		[Range(0f, 10f)]
 		public float SkyStrength = 1f;
@@ -169,11 +176,30 @@ namespace LELEngine.Volumetrics
 		[Range(0f, 1f)]
 		public float Opacity = 1f;
 
-		[Header("Lights inside")]
-		[Tooltip("Lights inside the cloud (at most 8): flashes, lamps, fires. Moving one works the light volume out again; intensity and colour are free")]
+		[Header("Global illumination")]
+		[Tooltip("The scene's GI lights the cloud: the light bounced off everything around it, from every side, dimmed by the cloud towards each side and scattered towards the eye by the phase (forward scattering shows what lies behind the cloud). It takes the place of the sky light (a cone leaving the GI's volume sees the sky). Off, or where the scene has no GI: the sky (Sky Strength)")]
+		public bool ReceiveGI = true;
+
+		[Tooltip("How much of the GI lights the cloud")]
+		[Range(0f, 10f)]
+		public float GIStrength = 1f;
+
+		[Tooltip("Size of a cell of the cloud's GI, in voxels: the light around a cloud changes slowly, a coarse grid of it is enough (at most 64^3 cells)")]
+		[Range(2, 32)]
+		public int GICellSize = 8;
+
+		[Tooltip("Frames a full update of the cloud's GI is spread over (1: all of it every frame; more: cheaper, slower to follow changes)")]
+		[Range(1, 16)]
+		public int GIUpdateFrames = 4;
+
+		[Header("Lights")]
+		[Tooltip("The scene's Light components that reach the shape (with Affects Volumes) light the cloud, through it: up to 8 lights with its own, the nearest first. Moving one works its light volume out again; intensity and colour are free")]
+		public bool SceneLights = true;
+
+		[Tooltip("Lights of its own inside the cloud (flashes, lamps, fires), lighting only the cloud. Moving one works the light volume out again; intensity and colour are free")]
 		public List<VolumeLight> Lights = new List<VolumeLight>();
 
-		[Tooltip("Light scattered far through the cloud around each light inside")]
+		[Tooltip("Light scattered far through the cloud around each light (its own and the scene's)")]
 		[Range(0f, 2f)]
 		public float LightGlow = 0.7f;
 
@@ -192,6 +218,13 @@ namespace LELEngine.Volumetrics
 		[Tooltip("Resolution the cloud is marched at (then upsampled, keeping silhouettes in front of it sharp)")]
 		public VolumetricResolution Resolution = VolumetricResolution.Half;
 
+		[Tooltip("Blend the frames: the march's sampling pattern changes every frame and the frames before (moved with the camera and the object) fill in, so the cloud is smooth even marched at a reduced resolution with few steps. Off: a fixed pattern, grainy at reduced resolutions")]
+		public bool TemporalFilter = true;
+
+		[Tooltip("How much of the frames before a frame keeps (higher: smoother, slower to follow fast changes such as flashes)")]
+		[Range(0f, 0.98f)]
+		public float HistoryWeight = 0.9f;
+
 		[Tooltip("Draw order against the other transparent objects (their material queues)")]
 		public int RenderQueue = 3000;
 
@@ -200,6 +233,8 @@ namespace LELEngine.Volumetrics
 		#region PrivateFields
 
 		private VolumetricData data;
+		private readonly List<VolumeLightSlot> hashSlots = new List<VolumeLightSlot>();
+		private readonly List<(global::Light light, float distance)> sceneCandidates = new List<(global::Light, float)>();
 
 		#endregion
 
@@ -383,22 +418,114 @@ namespace LELEngine.Volumetrics
 			return HashCode.Combine(Density, ShadowReach, NoiseSize);
 		}
 
-		/// <summary>A hash of where the lights inside are (their colour and intensity are applied when the cloud is drawn).</summary>
+		/// <summary>
+		///     A hash of the lights' transport: which lights, where, how far they reach (their colour and intensity are
+		///     applied when the cloud is drawn).
+		/// </summary>
 		internal int LightsHash()
 		{
+			GatherLightSlots(hashSlots);
 			var hash = new HashCode();
 			hash.Add(LightGlow);
 			hash.Add(Density);
-			int count = Math.Min(Lights.Count, MaxLights);
-			hash.Add(count);
-			for (int i = 0; i < count; i++)
+			hash.Add(NoiseSize);
+			hash.Add(hashSlots.Count);
+			foreach (VolumeLightSlot slot in hashSlots)
 			{
-				VolumeLight light = Lights[i];
-				hash.Add(light?.Position ?? Vector3.Zero);
-				hash.Add(light?.Radius ?? 0f);
+				hash.Add(slot.PositionSize);
+				hash.Add(slot.Params);
+				hash.Add(slot.Spot);
 			}
 
 			return hash.ToHashCode();
+		}
+
+		/// <summary>World units per local unit (the object's average scale): the scene lights' falloff is in world units.</summary>
+		internal float WorldScale
+		{
+			get
+			{
+				Vector3 scale = transform.lossyScale;
+				return MathF.Max((MathF.Abs(scale.X) + MathF.Abs(scale.Y) + MathF.Abs(scale.Z)) / 3f, 1e-6f);
+			}
+		}
+
+		/// <summary>
+		///     The lights the cloud's light transport is worked out for: its own lights first, then the scene's lights that
+		///     reach the shape (with <see cref="SceneLights" />; nearest first), at most <see cref="MaxLights" />. A scene
+		///     light is in the set whatever its intensity (a flash going dark and bright again keeps its transport).
+		/// </summary>
+		internal void GatherLightSlots(List<VolumeLightSlot> slots)
+		{
+			slots.Clear();
+			int own = Math.Min(Lights.Count, MaxLights);
+			for (int i = 0; i < own; i++)
+			{
+				VolumeLight light = Lights[i];
+				if (light != null && light.Radius > 0f)
+				{
+					slots.Add(new VolumeLightSlot { PositionSize = new Vector4(light.Position, light.Radius), Params = new Vector4(0f, 0f, -2f, 0f), Spot = new Vector4(0f, 0f, 0f, 1f), Own = light });
+				}
+			}
+
+			if (!SceneLights || slots.Count >= MaxLights || global::Light.Active.Count == 0)
+			{
+				return;
+			}
+
+			Matrix4 worldToLocal = transform.WorldToLocal;
+			float worldScale = WorldScale;
+			Vector3 half = Size * 0.5f;
+			sceneCandidates.Clear();
+			foreach (global::Light light in global::Light.Active)
+			{
+				if (light == null || light.IsDestroyed || !light.isActiveAndEnabled || !light.AffectsVolumes || light.VolumetricStrength <= 0f || light.Range <= 0f)
+				{
+					continue;
+				}
+
+				// How far the light is from the shape's box, in world units: it takes part when its range reaches the box.
+				Vector3 local = Vector3.TransformPosition(light.transform.position, worldToLocal);
+				Vector3 outside = Vector3.ComponentMax(Vector3.ComponentMax(-half - local, local - half), Vector3.Zero);
+				float distance = outside.Length * worldScale;
+				if (distance < light.Range)
+				{
+					sceneCandidates.Add((light, distance));
+				}
+			}
+
+			sceneCandidates.Sort((a, b) => a.distance.CompareTo(b.distance));
+			foreach ((global::Light light, float _) in sceneCandidates)
+			{
+				if (slots.Count >= MaxLights)
+				{
+					break;
+				}
+
+				Vector3 local = Vector3.TransformPosition(light.transform.position, worldToLocal);
+				Vector3 spot = Vector3.TransformVector(light.transform.forward, worldToLocal);
+				spot = spot.LengthSquared > 1e-12f ? spot.Normalized() : Vector3.UnitZ;
+				float cosOuter = -2f;
+				float spotScale = 0f;
+				if (light.Type == LightType.Spot)
+				{
+					float outer = MathHelper.DegreesToRadians(Math.Clamp(light.SpotAngle, 1f, 179f) * 0.5f);
+					float inner = outer * Math.Clamp(light.InnerSpot, 0f, 0.999f);
+					cosOuter = MathF.Cos(outer);
+					spotScale = 1f / MathF.Max(MathF.Cos(inner) - cosOuter, 1e-4f);
+				}
+
+				// The transport holds the falloff x (range / 4)^2: values about 1 across the light's reach, which half floats
+				// keep from the light to its range.
+				float normalization = light.Range * light.Range / 16f;
+				slots.Add(new VolumeLightSlot
+				{
+					PositionSize = new Vector4(local, light.Range),
+					Params = new Vector4(1f, MathF.Max(light.SourceRadius, 1e-3f), cosOuter, spotScale),
+					Spot = new Vector4(spot, normalization),
+					Scene = light
+				});
+			}
 		}
 
 		#endregion

@@ -61,4 +61,46 @@ namespace LELEngine.Volumetrics
 		[Tooltip("Brightness right now (0: off); set it every frame to make the light flicker")]
 		public float Intensity;
 	}
+
+	/// <summary>
+	///     One of the (up to 8) lights a cloud's light transport is worked out for: a light of its own
+	///     (<see cref="VolumetricObjectBase.Lights" />: a core and a glow) or a scene <see cref="global::Light" /> that
+	///     reaches the shape (physical falloff, its range and cone). The transport holds where the light goes through the
+	///     cloud at unit brightness (times <see cref="Normalization" />); the light's colour and intensity are applied when the
+	///     cloud is drawn.
+	/// </summary>
+	internal struct VolumeLightSlot
+	{
+		/// <summary>Local position; w: the core's radius (local units, own light) or the range (world units, scene light).</summary>
+		public Vector4 PositionSize;
+
+		/// <summary>x: 0 own light, 1 scene light; y: the source's radius (world); z: cos of the outer half angle (-2: no cone); w: 1 / (cos inner - cos outer).</summary>
+		public Vector4 Params;
+
+		/// <summary>xyz: the spot's direction (local); w: the factor the transport holds the light times (the colour is divided by it).</summary>
+		public Vector4 Spot;
+
+		/// <summary>The light of its own (null for a scene light).</summary>
+		public VolumeLight Own;
+
+		/// <summary>The scene light (null for a light of its own).</summary>
+		public global::Light Scene;
+
+		/// <summary>
+		///     The light's colour x intensity right now (a scene light's times its volumetric strength), divided by the
+		///     transport's factor (what the march multiplies the transport by).
+		/// </summary>
+		public Vector3 Color
+		{
+			get
+			{
+				if (Scene != null)
+				{
+					return Scene.IsDestroyed || !Scene.isActiveAndEnabled ? Vector3.Zero : Scene.Radiance * System.MathF.Max(Scene.VolumetricStrength, 0f) / System.MathF.Max(Spot.W, 1e-12f);
+				}
+
+				return Own != null ? new Vector3(Own.Color.R, Own.Color.G, Own.Color.B) * Own.Intensity : Vector3.Zero;
+			}
+		}
+	}
 }

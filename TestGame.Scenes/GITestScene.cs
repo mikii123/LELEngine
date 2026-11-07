@@ -197,6 +197,12 @@ namespace TestGame.Scenes
 			/// <summary>Engine/LitTextured.shader props (workflows, maps, tiling) close to the player's start; off by default.</summary>
 			public bool Materials;
 
+			/// <summary>Local lights (Light): a point light, a spot, a lamp in a patch of fog; off by default.</summary>
+			public bool Lights;
+
+			/// <summary>The volumetric objects of the test scenes receive the GI (volgi=0: off, for comparisons).</summary>
+			public bool VolumeGI = true;
+
 			/// <summary>Start position of the player's eye (null = the usual spot by the open side of the room).</summary>
 			public Vector3? CameraPosition;
 
@@ -268,6 +274,10 @@ namespace TestGame.Scenes
 			if (options.Materials)
 			{
 				BuildMaterials(scene);
+			}
+			if (options.Lights)
+			{
+				BuildLocalLights(scene, options.VolumeGI);
 			}
 			BuildLight(scene);
 			if (options.Emitters)
@@ -1139,6 +1149,49 @@ namespace TestGame.Scenes
 			pixels[index + 1] = (byte)Math.Clamp((int)MathF.Round((normal.Y * 0.5f + 0.5f) * 255f), 0, 255);
 			pixels[index + 2] = (byte)Math.Clamp((int)MathF.Round((normal.Z * 0.5f + 0.5f) * 255f), 0, 255);
 			pixels[index + 3] = 255;
+		}
+
+		/// <summary>
+		///     lights=1: local lights (Light): a warm point light by the left wall, a blue spot on the short box from above,
+		///     and a lamp inside a patch of fog (a high quality volumetric sphere) that lights the fog through it and the room
+		///     through the fog. With night=1 the sun is down and they light the room alone (the GI bounces them).
+		/// </summary>
+		private static void BuildLocalLights(Scene scene, bool volumeGI)
+		{
+			AddLight(scene, "WarmLamp", new Vector3(-7.5f, 2.5f, 1.5f), LightType.Point, new Color4(1f, 0.62f, 0.32f, 1f), 14f, 9f);
+
+			Light spot = AddLight(scene, "BlueSpot", new Vector3(5f, 5.2f, -1f), LightType.Spot, new Color4(0.45f, 0.65f, 1f, 1f), 60f, 12f);
+			spot.transform.rotation = QuaternionHelper.LookRotation((new Vector3(3f, 0f, 1.5f) - spot.transform.position).Normalized(), Vector3.UnitY);
+			spot.SpotAngle = 50f;
+
+			GameObject fogObject = scene.CreateGameObject("LampFog");
+			fogObject.transform.position = new Vector3(-1.5f, 1.3f, -1.5f);
+			LELEngine.Volumetrics.VolumetricObjectHQ fog = fogObject.AddComponent<LELEngine.Volumetrics.VolumetricObjectHQ>();
+			fog.Shape = LELEngine.Volumetrics.VolumeShape.Sphere;
+			fog.Size = new Vector3(3.2f, 2.4f, 3.2f);
+			fog.Noise = LELEngine.Volumetrics.VolumeNoise.Perlin;
+			fog.NoiseSize = 1.4f;
+			fog.Coverage = 0.75f;
+			fog.Softness = 0.4f;
+			fog.ClumpSize = 0f;
+			fog.Density = 2.5f;
+			fog.VoxelSize = 0.05f;
+			fog.Albedo = new Color4(0.9f, 0.9f, 0.92f, 1f);
+			fog.ReceiveGI = volumeGI;
+			Light lamp = AddLight(scene, "FogLamp", fogObject.transform.position, LightType.Point, new Color4(1f, 0.85f, 0.6f, 1f), 0.6f, 6f);
+			lamp.SourceRadius = 0.35f;
+		}
+
+		private static Light AddLight(Scene scene, string name, Vector3 position, LightType type, Color4 color, float intensity, float range)
+		{
+			GameObject go = scene.CreateGameObject(name);
+			go.transform.position = position;
+			Light light = go.AddComponent<Light>();
+			light.Type = type;
+			light.Color = color;
+			light.Intensity = intensity;
+			light.Range = range;
+			return light;
 		}
 
 		private static void BuildLight(Scene scene)

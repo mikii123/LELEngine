@@ -46,7 +46,10 @@ namespace LELEngine.Rendering.Lumen
 		/// <summary>True when the directional light moved or changed colour or strength since the previous update.</summary>
 		public bool SunChanged { get; private set; } = true;
 
-		/// <summary>Frames in a row without object, material or sun changes; caches drop to idle budgets when high.</summary>
+		/// <summary>True when a local light the GI sees changed since the previous update (<see cref="LightBuffer.GIVersion" />).</summary>
+		public bool LightsChanged { get; private set; } = true;
+
+		/// <summary>Frames in a row without object, material, sun or light changes; caches drop to idle budgets when high.</summary>
 		public int QuietFrames { get; private set; }
 
 		public bool IsQuiet(int frames)
@@ -90,6 +93,7 @@ namespace LELEngine.Rendering.Lumen
 		private readonly List<ChangeRegion> changeRegions = new List<ChangeRegion>();
 		private int lastDynamicCount = -1;
 		private int lastStaticVersion = -1;
+		private int lastLightVersion = -1;
 		private Vector3 lastSunDirection;
 		private float lastSunStrength;
 		private Color4 lastSunColor;
@@ -153,7 +157,18 @@ namespace LELEngine.Rendering.Lumen
 			// A static invalidation (objects moved via InvalidateStatic) changes the lighting as much as a dynamic move.
 			bool staticChanged = gi.StaticVersion != lastStaticVersion;
 			lastStaticVersion = gi.StaticVersion;
-			QuietFrames = DynamicChanged || MaterialChanged || SunChanged || staticChanged ? 0 : QuietFrames + 1;
+			// Local lights (Light components) turning on or off, moving or flickering change the lighting within their reach.
+			LightsChanged = LightBuffer.GIVersion != lastLightVersion;
+			lastLightVersion = LightBuffer.GIVersion;
+			if (LightsChanged)
+			{
+				foreach ((Vector3 min, Vector3 max) in LightBuffer.GIChanges)
+				{
+					changeRegions.Add(new ChangeRegion(min, max));
+				}
+			}
+
+			QuietFrames = DynamicChanged || MaterialChanged || SunChanged || staticChanged || LightsChanged ? 0 : QuietFrames + 1;
 		}
 
 		/// <summary>Something outside the tracked state changed the lighting (static field rebuilt): restart the quiet count.</summary>

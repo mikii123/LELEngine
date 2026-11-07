@@ -214,6 +214,7 @@ namespace LELEngine.Rendering
 			}
 
 			Lighting.BeginFrame(Settings);
+			LightBuffer.Update(camera);
 			if (camera == null)
 			{
 				// Nothing to render from; present the clear color and the screen-space passes (UI).

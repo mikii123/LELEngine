@@ -3,11 +3,14 @@
 #version 430
 
 #include "Engine/Shadows.glsl"
+#include "Engine/DistanceField.glsl"
 #include "Engine/SceneObjects.glsl"
 #include "Engine/SurfaceCache.glsl"
+#include "Engine/Lights.glsl"
 
 // Surface cache lighting, Lumen style, one thread per atlas texel:
-//   direct   = sun with shadows at the captured surface point (recomputed every frame)
+//   direct   = sun with shadows at the captured surface point, and the local lights that go into the GI, blocked by
+//              the global distance field towards them when they ask (recomputed every frame)
 //   indirect = radiosity interpolated from the card's probes (CardRadiosityProbes.shader: one probe per 4x4
 //              texels, 16 rays per frame, accumulated over frames so multi-bounce lighting converges)
 //   final    = albedo * (direct + indirect) + emission
@@ -63,6 +66,23 @@ vec3 InterpolateRadiosity(ivec2 texel, Card card)
 	return own.a > 0.5 ? own.rgb : vec3(0.0);
 }
 
+// How much of a local light reaches a texel: a sphere trace through the global distance field towards it (a surface
+// before the light blocks it; a ray leaving the field gets through).
+float CardLightVisibility(vec3 position, vec3 N, vec3 lightPosition)
+{
+	float voxel = SdfVoxelSize();
+	vec3 origin = position + N * voxel;
+	vec3 toLight = lightPosition - origin;
+	float distanceToLight = length(toLight);
+	if (distanceToLight <= voxel * 2.0)
+	{
+		return 1.0;
+	}
+
+	float hitT;
+	return TraceSdf(origin, toLight / distanceToLight, distanceToLight - voxel, hitT) ? 0.0 : 1.0;
+}
+
 void main()
 {
 	ivec2 texel = ivec2(gl_GlobalInvocationID.xy);
@@ -90,6 +110,25 @@ void main()
 	// Per channel: light through tinted transparent casters keeps their colour in the bounce.
 	vec3 shadow = ndl > 0.0 ? SampleShadowRGB(position, N, L) : vec3(1.0);
 	vec3 direct = LDirectional.dirColor.rgb * LDirectional.dirStrength * ndl * shadow;
+
+	// ---- the local lights that go into the GI (Engine/Lights.glsl), times their indirect strength
+	for (int i = 0; i < LelLightCount(); i++)
+	{
+		float giStrength = lelLights[i].radiance.w;
+		vec3 Li;
+		vec3 radiance;
+		if (giStrength <= 0.0 || !LelLightAt(i, position, Li, radiance))
+		{
+			continue;
+		}
+
+		float nli = max(dot(N, Li), 0.0);
+		if (nli > 0.0)
+		{
+			float visibility = LelLightHas(i, LEL_LIGHT_GI_SHADOWS) ? CardLightVisibility(position, N, lelLights[i].positionRange.xyz) : 1.0;
+			direct += radiance * (giStrength * nli * visibility);
+		}
+	}
 
 	// ---- indirect: the card's radiosity probes
 	vec3 indirect = InterpolateRadiosity(texel, card);
