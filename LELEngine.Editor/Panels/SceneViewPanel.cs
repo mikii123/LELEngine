@@ -86,7 +86,8 @@ namespace LELEngine.Editor
 			camera = cameraObject.AddComponent<Camera>();
 			camera.FoV = 60f;
 			camera.NearClip = 0.05f;
-			camera.FarClip = 1000f;
+			// Far enough for backdrops kilometres away (a storm thousands of units across); the depth's precision limits it.
+			camera.FarClip = 100000f;
 			ApplyCamera();
 		}
 
@@ -241,6 +242,7 @@ namespace LELEngine.Editor
 			if (selected != null)
 			{
 				VFX.VisualEffectInspector.DrawGizmos(selected);
+				VolumetricObjectInspector.DrawGizmos(editor, selected);
 				editor.Extensions.DrawSceneGUI(selected);
 			}
 

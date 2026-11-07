@@ -1,0 +1,406 @@
+using System;
+using System.Collections.Generic;
+using OpenTK.Mathematics;
+
+namespace LELEngine.Volumetrics
+{
+	/// <summary>
+	///     A volumetric object: a cloud (fog, smoke, a storm, a nebula) filling a shape (box, cylinder, sphere) in the
+	///     object's local space, cut out of procedural noise. The engine makes the cloud on the GPU when the object
+	///     appears and again when its shape or noise change (no bake, nothing stored), and works out how the sun, the sky
+	///     and the lights inside light it whenever the sun turns against the object. Two presets draw it, each a component:
+	///     <see cref="VolumetricObject" /> for clouds seen from outside (cheap: marched at half resolution with even steps)
+	///     and <see cref="VolumetricObjectHQ" /> for clouds the camera also goes into (full resolution, fine steps near the
+	///     camera, a temporal filter, the scene's shadows). It draws in the transparent pass, sorted with the other
+	///     transparent objects at the centre of its bounds, and ends at the opaque scene. Moving, turning and scaling the
+	///     object moves, turns and scales the same cloud; growing <see cref="Size" /> shows more of it (the noise is in
+	///     local units).
+	/// </summary>
+	[ExecuteAlways]
+	[InspectorColor(InspectorColorKind.Rendering)]
+	public abstract class VolumetricObjectBase : Behaviour
+	{
+		#region PublicFields
+
+		/// <summary>Most voxels a cloud may have (256^3, 16 MB of density); past it the voxels grow.</summary>
+		public const int MaxVoxels = 256 * 256 * 256;
+
+		/// <summary>Most voxels along one axis.</summary>
+		public const int MaxVoxelsAlong = 512;
+
+		/// <summary>Most lights inside (<see cref="Lights" />).</summary>
+		public const int MaxLights = 8;
+
+		[Header("Shape")]
+		public VolumeShape Shape = VolumeShape.Box;
+
+		[Tooltip("The shape's extents in local units: the box; the cylinder's diameters along X and Z and its height along Y; the sphere's diameters")]
+		public Vector3 Size = new Vector3(100f, 40f, 100f);
+
+		[Tooltip("How far in from the side the cloud fades out, as a share of the half size (the radius)")]
+		[Range(0.01f, 1f)]
+		public float SideSoftness = 0.2f;
+
+		[Tooltip("How far in from the top and the bottom the cloud fades out, as a share of the height (box and cylinder)")]
+		[Range(0.01f, 0.5f)]
+		public float CapSoftness = 0.15f;
+
+		[Tooltip("How far the top dips in places, as a share of the height: towers instead of a flat lid (box and cylinder)")]
+		[Range(0f, 1f)]
+		public float TopRoughness = 0.3f;
+
+		[Tooltip("How far the bottom rises in places, as a share of the height (box and cylinder)")]
+		[Range(0f, 1f)]
+		public float BottomRoughness = 0.2f;
+
+		[Tooltip("How far the side pulls in in places, as a share of the half size")]
+		[Range(0f, 1f)]
+		public float SideRoughness = 0.2f;
+
+		[Header("Noise")]
+		public VolumeNoise Noise = VolumeNoise.PerlinWorley;
+
+		[Tooltip("Size of the large cloud shapes in local units. A bigger shape holds more of them; it does not stretch them")]
+		public float NoiseSize = 20f;
+
+		[Tooltip("Octaves of the noise (fewer are used when the voxels cannot hold the finer ones: the detail adds those)")]
+		[Range(1f, 8f)]
+		public int Octaves = 5;
+
+		[Tooltip("How much each finer octave counts against the one before (0.5: the usual fractal)")]
+		[Range(0.1f, 0.9f)]
+		public float Roughness = 0.5f;
+
+		[Tooltip("How much the noise is twisted by noise (swirls instead of round blobs)")]
+		[Range(0f, 2f)]
+		public float Warp = 0.6f;
+
+		public int Seed = 1;
+
+		[Tooltip("How much of the shape the cloud fills (0: nothing, 1: nearly all of it)")]
+		[Range(0f, 1f)]
+		public float Coverage = 0.6f;
+
+		[Tooltip("How soon the cloud is dense past its edge: small values give crisp, defined clouds, large ones soft haze")]
+		[Range(0.02f, 1f)]
+		public float Softness = 0.2f;
+
+		[Tooltip("Size of the clumps that decide which parts of the shape hold cloud at all, as a share of the noise size (0: no clumps, the cloud fills the shape evenly)")]
+		[Range(0f, 10f)]
+		public float ClumpSize = 2f;
+
+		[Tooltip("How much of the shape the clumps fill (higher: more)")]
+		[Range(-1f, 2f)]
+		public float ClumpCoverage = 0.8f;
+
+		[Range(0.05f, 1f)]
+		public float ClumpSoftness = 0.35f;
+
+		[Header("Density")]
+		[Tooltip("How opaque the cloud is: its optical depth through one noise size of full cloud (1: light haze, 10: thick, 50: solid)")]
+		[Range(0.1f, 200f)]
+		public float Density = 20f;
+
+		[Tooltip("How far the cloud shadows itself, as a share of the noise size (short: soft, glowing insides; long: dark cores)")]
+		[Range(0.05f, 10f)]
+		public float ShadowReach = 2.6f;
+
+		[Header("Detail")]
+		[Tooltip("How much the fine tiling detail eats into the cloud's edges (the relief the voxels are too coarse for)")]
+		[Range(0f, 1f)]
+		public float DetailStrength = 0.5f;
+
+		[Tooltip("Size of one tile of the detail (four puffs across), as a share of the noise size")]
+		[Range(0.05f, 3f)]
+		public float DetailSize = 0.6f;
+
+		[Tooltip("Densities below this count as the cloud's edge, where the detail eats in (wider: deeper billows)")]
+		[Range(0.1f, 1f)]
+		public float EdgeBand = 0.6f;
+
+		[Tooltip("How much darker the pockets the detail eats are")]
+		[Range(0f, 1f)]
+		public float DetailShade = 0.35f;
+
+		[Tooltip("How fast the detail drifts through the cloud (local units per second)")]
+		public Vector3 DetailWind;
+
+		[Header("Lighting")]
+		[Tooltip("The directional light that lights the cloud (its colour, strength and direction, live); empty: the scene's main light. A disabled light lights only the cloud (it never becomes the scene's main light): a background's own sun")]
+		public DirectionalLight Sun;
+
+		[Range(0f, 10f)]
+		public float SunStrength = 1f;
+
+		[Tooltip("How much of the sky (the environment's skybox, or the GI's sky colour) lights the cloud")]
+		[Range(0f, 10f)]
+		public float SkyStrength = 1f;
+
+		[Tooltip("How much of the flat ambient light (the scene's, or the cloud's own with Own Ambient) lights the cloud")]
+		[Range(0f, 10f)]
+		public float AmbientStrength = 1f;
+
+		[Tooltip("An ambient light of its own in place of the scene's flat ambient light: for a volume lit apart from the scene (a backdrop with its own sun), which changes of the scene's ambient light (a script lighting the ships with it) must not reach")]
+		public bool OwnAmbient;
+
+		[Tooltip("The cloud's own ambient light (linear), with Own Ambient on")]
+		public Color4 AmbientColor = new Color4(0.05f, 0.05f, 0.06f, 1f);
+
+		[Tooltip("How much of the light the cloud gives back, per colour")]
+		public Color4 Albedo = new Color4(0.9f, 0.9f, 0.92f, 1f);
+
+		[Tooltip("How much of the sun's light goes on forward: bright edges with the sun behind the cloud (0: even in every direction)")]
+		[Range(-0.9f, 0.9f)]
+		public float PhaseG = 0.55f;
+
+		[Tooltip("Light scattered on through the cloud (softer, brighter insides; 0: single scattering only)")]
+		[Range(0f, 2f)]
+		public float MultipleScattering = 1f;
+
+		[Tooltip("Light the cloud gives off itself, where it is dense")]
+		public Color4 EmissionColor = new Color4(0f, 0f, 0f, 1f);
+
+		[Range(0f, 10f)]
+		public float EmissionStrength;
+
+		[Range(0f, 10f)]
+		public float Exposure = 1f;
+
+		[Range(0f, 1f)]
+		public float Opacity = 1f;
+
+		[Header("Lights inside")]
+		[Tooltip("Lights inside the cloud (at most 8): flashes, lamps, fires. Moving one works the light volume out again; intensity and colour are free")]
+		public List<VolumeLight> Lights = new List<VolumeLight>();
+
+		[Tooltip("Light scattered far through the cloud around each light inside")]
+		[Range(0f, 2f)]
+		public float LightGlow = 0.7f;
+
+		[Header("Quality")]
+		[Tooltip("Size of one voxel of the cloud in local units. It stays when the shape grows (more voxels, not bigger ones), up to 256^3 voxels")]
+		public float VoxelSize = 1f;
+
+		[Tooltip("Marching step through the cloud, in voxels")]
+		[Range(0.25f, 4f)]
+		public float StepSize = 1f;
+
+		[Tooltip("Most steps a pixel's ray takes")]
+		[Range(8f, 512f)]
+		public int MaxSteps = 64;
+
+		[Tooltip("Resolution the cloud is marched at (then upsampled, keeping silhouettes in front of it sharp)")]
+		public VolumetricResolution Resolution = VolumetricResolution.Half;
+
+		[Tooltip("Draw order against the other transparent objects (their material queues)")]
+		public int RenderQueue = 3000;
+
+		#endregion
+
+		#region PrivateFields
+
+		private VolumetricData data;
+
+		#endregion
+
+		#region PublicProperties
+
+		/// <summary>The cloud has been made and lit: it draws (and <see cref="DensityAt" /> answers).</summary>
+		public bool Ready => data != null && data.Ready;
+
+		/// <summary>Voxels of the cloud as the shape and voxel size give them (what the next build makes).</summary>
+		public Vector3i Grid => GridFor(Size, VoxelSize, out _, out _);
+
+		/// <summary>The GPU side of this object (made on its first frame, released when it is destroyed).</summary>
+		internal VolumetricData Data => data ??= new VolumetricData(this);
+
+		/// <summary>The preset: high quality (full resolution, temporal filter, fine steps near the camera).</summary>
+		internal abstract bool HighQuality { get; }
+
+		#endregion
+
+		#region PublicMethods
+
+		/// <summary>
+		///     The voxels a shape of <paramref name="size" /> gets at <paramref name="voxelSize" /> local units each: the voxel
+		///     size stays and a bigger shape gets more voxels, up to <see cref="MaxVoxels" /> and <see cref="MaxVoxelsAlong" />,
+		///     past which they grow (<paramref name="voxel" /> is the size used, <paramref name="capped" /> says it grew).
+		/// </summary>
+		public static Vector3i GridFor(Vector3 size, float voxelSize, out float voxel, out bool capped)
+		{
+			size = new Vector3(MathF.Max(size.X, 1e-3f), MathF.Max(size.Y, 1e-3f), MathF.Max(size.Z, 1e-3f));
+			voxel = MathF.Max(voxelSize, 1e-4f);
+			capped = false;
+			double total = (double)(size.X / voxel) * (size.Y / voxel) * (size.Z / voxel);
+			if (total > MaxVoxels)
+			{
+				voxel *= (float)Math.Pow(total / MaxVoxels, 1.0 / 3.0);
+				capped = true;
+			}
+
+			float longest = MathF.Max(size.X, MathF.Max(size.Y, size.Z));
+			if (longest / voxel > MaxVoxelsAlong)
+			{
+				voxel = longest / MaxVoxelsAlong;
+				capped = true;
+			}
+
+			return new Vector3i(
+				Math.Max(4, (int)MathF.Ceiling(size.X / voxel - 1e-3f)),
+				Math.Max(4, (int)MathF.Ceiling(size.Y / voxel - 1e-3f)),
+				Math.Max(4, (int)MathF.Ceiling(size.Z / voxel - 1e-3f)));
+		}
+
+		/// <summary>
+		///     The cloud's density (0..1, without the detail) at a world position: 0 outside the shape or before the cloud is
+		///     made. The first call after a build reads the density back from the GPU (once).
+		/// </summary>
+		public float DensityAt(Vector3 worldPosition)
+		{
+			return data != null ? data.DensityAt(transform.InverseTransformPoint(worldPosition)) : 0f;
+		}
+
+		/// <summary>The cloud's density (0..1) at a point in local space (see <see cref="DensityAt" />).</summary>
+		public float DensityAtLocal(Vector3 localPosition)
+		{
+			return data != null ? data.DensityAt(localPosition) : 0f;
+		}
+
+		/// <summary>
+		///     The cloud's density (0..1, without the detail) exactly at points in local space, from the noise it is made of,
+		///     not read from its voxels as <see cref="DensityAtLocal" /> does (no interpolation, no 8-bit steps): for picking
+		///     places in the cloud by their density. Worked out on the GPU, waiting for the result: an occasional query, on the
+		///     main thread. False (nothing written) before the cloud is made.
+		/// </summary>
+		public bool EvaluateDensity(ReadOnlySpan<Vector3> localPoints, Span<float> densities)
+		{
+			return data != null && data.EvaluateDensity(localPoints, densities);
+		}
+
+		/// <summary>
+		///     How much light gets through the cloud on the way between two world points (1: no cloud between them), from the
+		///     cloud's density without the detail, at <paramref name="samples" /> points along the way (CPU; the first call
+		///     after a build reads the density back once). Line of sight through fog, a bolt seen through its cloud.
+		/// </summary>
+		public float Transmittance(Vector3 worldFrom, Vector3 worldTo, int samples = 16)
+		{
+			if (data == null || !data.Ready || samples <= 0)
+			{
+				return 1f;
+			}
+
+			Matrix4 worldToLocal = transform.WorldToLocal;
+			Vector3 from = Vector3.TransformPosition(worldFrom, worldToLocal);
+			Vector3 to = Vector3.TransformPosition(worldTo, worldToLocal);
+			float step = Vector3.Distance(from, to) / samples;
+			float density = 0f;
+			for (int i = 0; i < samples; i++)
+			{
+				density += data.DensityAt(Vector3.Lerp(from, to, (i + 0.5f) / samples));
+			}
+
+			return MathF.Exp(-density * step * data.Sigma);
+		}
+
+		/// <summary>Makes the cloud again at once (it is made again by itself whenever its settings change).</summary>
+		public void Rebuild()
+		{
+			data?.Invalidate();
+		}
+
+		/// <summary>A short line about the cloud: voxels, memory, state (the inspector shows it).</summary>
+		public string Describe()
+		{
+			Vector3i grid = GridFor(Size, VoxelSize, out float voxel, out bool capped);
+			long voxels = (long)grid.X * grid.Y * grid.Z;
+			// Density r8 + lit rgba8, both with mips (a seventh more), the occupancy, the lights at half resolution.
+			double megabytes = voxels * (5.0 * 8.0 / 7.0) / (1024.0 * 1024.0) + (Lights.Count > 0 ? voxels / 8.0 * 8.0 / (1024.0 * 1024.0) : 0.0);
+			string state = data == null ? "not made yet" : data.Ready ? data.Pending ? "ready, being made again" : "ready" : "being made";
+			string size = $"{grid.X} x {grid.Y} x {grid.Z} voxels of {voxel:0.###} units ({voxels / 1e6:0.##} M, about {megabytes:0} MB): {state}";
+			return capped ? $"Too many voxels at {VoxelSize:0.###} units: {size}. Raise the voxel size or shrink the shape." : size;
+		}
+
+		#endregion
+
+		#region LifecycleMethods
+
+		public override void OnEnable()
+		{
+			VolumetricRuntime.Register(this);
+		}
+
+		public override void OnDisable()
+		{
+			VolumetricRuntime.Unregister(this);
+		}
+
+		public override void OnDestroy()
+		{
+			VolumetricRuntime.Unregister(this);
+			data?.Dispose();
+			data = null;
+		}
+
+		#endregion
+
+		#region InternalMethods
+
+		/// <summary>
+		///     The light that lights the cloud: <see cref="Sun" /> (enabled or not: a disabled one is a light for the cloud
+		///     alone), or the scene's main light.
+		/// </summary>
+		internal DirectionalLight EffectiveSun => Sun != null && !Sun.IsDestroyed ? Sun : DirectionalLight.This;
+
+		/// <summary>A hash of everything the cloud's density depends on (a change makes it again).</summary>
+		internal int ShapeHash()
+		{
+			var hash = new HashCode();
+			hash.Add(Shape);
+			hash.Add(Size);
+			hash.Add(SideSoftness);
+			hash.Add(CapSoftness);
+			hash.Add(TopRoughness);
+			hash.Add(BottomRoughness);
+			hash.Add(SideRoughness);
+			hash.Add(Noise);
+			hash.Add(NoiseSize);
+			hash.Add(Octaves);
+			hash.Add(Roughness);
+			hash.Add(Warp);
+			hash.Add(Seed);
+			hash.Add(Coverage);
+			hash.Add(Softness);
+			hash.Add(ClumpSize);
+			hash.Add(ClumpCoverage);
+			hash.Add(ClumpSoftness);
+			hash.Add(VoxelSize);
+			return hash.ToHashCode();
+		}
+
+		/// <summary>A hash of what the light volume depends on besides the density and the sun's direction.</summary>
+		internal int LightHash()
+		{
+			return HashCode.Combine(Density, ShadowReach, NoiseSize);
+		}
+
+		/// <summary>A hash of where the lights inside are (their colour and intensity are applied when the cloud is drawn).</summary>
+		internal int LightsHash()
+		{
+			var hash = new HashCode();
+			hash.Add(LightGlow);
+			hash.Add(Density);
+			int count = Math.Min(Lights.Count, MaxLights);
+			hash.Add(count);
+			for (int i = 0; i < count; i++)
+			{
+				VolumeLight light = Lights[i];
+				hash.Add(light?.Position ?? Vector3.Zero);
+				hash.Add(light?.Radius ?? 0f);
+			}
+
+			return hash.ToHashCode();
+		}
+
+		#endregion
+	}
+}

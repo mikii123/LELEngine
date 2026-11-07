@@ -545,7 +545,8 @@ namespace LELEngine.Editor
 				return;
 			}
 
-			bool continuous = PlayState == PlayState.Playing || SceneView.AlwaysRefresh || EditModeScriptsRunning() || UIElements.UIRuntime.AnyPanelAnimating || LELEngine.VFX.VfxRuntime.AnyActive;
+			bool continuous = PlayState == PlayState.Playing || SceneView.AlwaysRefresh || EditModeScriptsRunning() || UIElements.UIRuntime.AnyPanelAnimating || LELEngine.VFX.VfxRuntime.AnyActive
+				|| LELEngine.Volumetrics.VolumetricRuntime.NeedsRefresh;
 			SceneView.Render(continuous);
 			GameView.Render(continuous);
 			DebugDraw.Clear();

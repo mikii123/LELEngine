@@ -112,6 +112,7 @@ namespace LELEngine.Rendering
 		public void AddDefaultPasses()
 		{
 			AddPass(new VfxSimulationPass());
+			AddPass(new VolumetricPass());
 			AddPass(new ShadowPass());
 			AddPass(new GlobalDistanceFieldPass());
 			AddPass(new SurfaceCachePass());

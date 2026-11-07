@@ -28,6 +28,7 @@ namespace TestGame
 		///            [materials=1 Engine/LitTextured props before the player: workflows, mask / specular / emission maps, tiling]
 		///            [sdfatlas=1 distance field atlas check: many box shapes in steps, logged as [SdfAtlasProbe]]
 		///            Scenes: [outdoor=1 open-sky yard] [sky=0|1 procedural skybox] [skybox=asset path] [physics=1] [nav=1] [ui=1] [scene=path]
+		///            [volumetrics=1 volumetric objects: storm with flashes, HQ fog bank, glowing ball, nebula wisp] [volcube=1 a cube in the fog] [volhq=1 the storm as the high quality preset]
 		///            View: [view=ghost from under the ceiling down at the orbs] [camera=x,y,z] [look=x,y,z] [night=1 emitters only]
 		///            Ghosting measurements (GhostTest): [emitterstep=frame] [emitteroff=frame]
 		///            [mover=frame] [moverz=path depth] [moveremission=intensity] [regions=x,y,z;x,y,z;...] [regionsize=px] [regionstart=frame] [regionsource=scene|gi]
@@ -235,6 +236,14 @@ namespace TestGame
 					VfxTestScene.Load(scene, options);
 				}
 
+				Game.Mono.Renderer.Settings.GpuDriven = options.GpuDriven;
+			}
+			else if (GetBool(args, "volumetrics", false))
+			{
+				// volumetrics=1: the volumetric objects (a storm with flashes, an HQ fog bank, a glowing ball, a nebula wisp).
+				scene = Game.Mono.LoadEmptyScene();
+				scene.Name = "VolumetricTest";
+				VolumetricTestScene.Load(scene, options, GetBool(args, "volcube", false), GetBool(args, "volhq", false));
 				Game.Mono.Renderer.Settings.GpuDriven = options.GpuDriven;
 			}
 			else if (GetBool(args, "ui", false))

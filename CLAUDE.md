@@ -1376,6 +1376,67 @@ Added for New Frontier's port of Unity's SpaceStonesPack (Standard materials wit
   (`FragColor = rgb * a`); such textures come from shaders that compute the colour from the channels (KriptoFX's
   `Tint * G + Core * R`): bake that into the texture before using it in a graph.
 
+## Volumetric objects (clouds, fog, storms; 2026-11-07)
+
+- Two components, both `VolumetricObjectBase` (`LELEngine/Volumetrics`, `[ExecuteAlways]`, every setting): `VolumetricObject`
+  for volumes seen from outside (marched at `Resolution` Half, even steps, `MaxSteps` 64) and `VolumetricObjectHQ`, which
+  also looks right from inside (Full resolution, `MaxSteps` 160, steps growing with the distance: `NearStepScale` 0.02,
+  `MinStep` 0.25 voxel; a jitter per frame and a temporal filter (`TemporalFilter`, `HistoryWeight` 0.9: reprojected
+  through the previous view-projection and the object's previous transform, the history clamped to the 3 x 3 range);
+  the scene's sun shadows with `ReceiveShadows`).
+- Settings: `Shape` Box / Cylinder (axis local y) / Sphere (ellipsoid) with `Size` in local units, the boundary's fade and
+  wandering (`SideSoftness`, `CapSoftness`, `Top/Bottom/SideRoughness`); `Noise` Perlin / Billow / Ridged / Worley /
+  PerlinWorley, `NoiseSize` (local units of the big shapes: a bigger shape holds more of the same cloud), `Octaves`
+  (capped down to about three voxels), `Roughness`, `Warp`, `Seed`, `Coverage`, `Softness`, clumps (`ClumpSize` x noise
+  size, `ClumpCoverage`, `ClumpSoftness`); `Density` (optical depth through one noise size of full cloud), `ShadowReach`
+  (x noise size); detail (`DetailStrength`, `DetailSize`, `EdgeBand`, `DetailShade`, `DetailWind`: a tiling 96^3 texture
+  eats the edges); lighting (`Sun`, `SunStrength`, `SkyStrength`, `AmbientStrength`, `OwnAmbient` + `AmbientColor`,
+  `Albedo`, `PhaseG`, `MultipleScattering`: second and third orders at half and quarter optical depth, emission,
+  `Exposure`, `Opacity`); up to 8 `Lights` inside (`VolumeLight`: position, core radius, colour, intensity) with
+  `LightGlow`; quality (`VoxelSize` kept when the shape grows, up to 256^3 voxels and 512 per axis, then the voxel grows;
+  `StepSize` in voxels; `RenderQueue`).
+- A light of its own: `Sun` may be a disabled `DirectionalLight`, which lights only the cloud (the scene's main light is
+  its first enabled one): a backdrop's own sun. `OwnAmbient` replaces the scene's flat ambient light by `AmbientColor`: a
+  script lighting the scene through its ambient light (flashes on ships) must not light a cloud taking the scene's.
+- Made on the GPU from the settings, no bake (`VolumetricData`, compute shaders in `ShaderLibrary/Engine/Volumetrics`):
+  density R8 with mips (`VolumetricGenerate.shader`, noise in `VolumetricNoise.glsl`), occupancy (densest voxel per 4^3
+  block plus a voxel's border: the march jumps empty blocks), lit RGBA8 with mips (density, sqrt(sun optical depth / 16),
+  ambient openness: one fetch a step; `VolumetricLight.shader`), the lights' transport at half resolution (2 x RGBA8,
+  core x e^-tau + glow x e^-0.15 tau; their intensity and colour stay free every frame), the shared detail. Work goes in
+  z slices within `VolumetricRuntime.WorkPerFrame` (8 M voxels a frame, at most 1 M a dispatch) into new textures that
+  swap in when complete: a changed shape or noise rebuilds after the settings held 0.2 s (edit mode), the sun turning
+  against the object relights (at most every 0.1 s), a moved light reworks its transport. Seed offset: `new
+  Random(Seed)` x 1000, the same numbers on any .NET.
+- Drawing: `VolumetricPass` (Frame scope) advances the builds; `TransparentPass` sorts each volume with the other
+  transparents (centre distance, `RenderQueue`; the camera's culling mask applies); `VolumetricRuntime.Draw`: the opaque
+  depth at the march's resolution (`VolumetricDepth.shader`, checkerboard of nearest and farthest), the march
+  (`VolumetricMarch.shader`, variant `VOL_HQ`), the temporal filter (HQ), the composite (`VolumetricComposite.shader`:
+  nothing where the shape's entry is behind the scene, 2 x 2 depth-aware weights at reduced resolutions,
+  premultiplied). The march samples on units 0..5 and keeps the lighting's units free (shadow map 15, transmittance 10,
+  GI sky 16): every sampler needs a unit of its own.
+- API: `Ready`, `DensityAt(world)` / `DensityAtLocal(local)` (CPU, trilinear from the R8 voxels, read back once per
+  build), `EvaluateDensity(localPoints, densities)` (the noise exactly at those points through the generate kernel's
+  `VOL_POINTS` variant, a GPU round trip: picking places by density without the voxels' 8-bit ties), `Transmittance(from,
+  to, samples)` (CPU, through the voxels), `Rebuild`, `Describe` (grid, memory, state), `GridFor`.
+- Editor: `VolumetricObjectInspector` below the fields (Describe, what the preset does, Rebuild) and the selected object's
+  shape as a wire outline in the scene view while the component is expanded; `EditorApplication` keeps refreshing
+  while builds run (`VolumetricRuntime.NeedsRefresh`).
+- Gotchas: `half`, `near`, `far`, `exit` are reserved in GLSL; the occupancy jump keeps the pixel's step phase
+  (`range.x + (ceil((exit - range.x) / step - jitter) + jitter) x step`): restarting at the block's face drew contour
+  lines; a cloud under a black scene ambient and no sky shows only its sunlit side; the ACES display transform crushes
+  dark volumes (about 0.21 x in the toe) and saturates them, so content from gamma-space shaders needs its albedo and
+  lights matched against reference frames, not converted.
+- Debug: `LEL_VOL_DEBUG=1` logs every completed build (grid, filled share) and every 120th frame the draws' rectangles
+  and their march's centre texel (a readback: it stalls).
+- TestGame `volumetrics=1` (`VolumetricTestScene`: a storm cylinder with two flickering lights, an HQ fog bank box, a
+  glowing sphere with a light inside, a ridged wisp at a quarter resolution); `volcube=1` a cube in the fog, `volhq=1` the
+  storm as the HQ preset.
+- Measured on this machine's AMD Radeon 780M (OpenGL, 1280 x 720): the four test volumes 0.33-0.43 ms, inside the fog bank
+  0.35 ms, HQ at the dense storm's centre 2.5 ms (5.1 ms with `MinStep` 0.1, the same image); a backdrop cylinder of
+  3740 x 892 x 3740 at 10-unit voxels (12.6 M voxels, about 69 MB) filling a 1253 x 709 view 0.54 ms, 0.61 ms with its
+  8 lights lit. TestGame lumen, vct, gi=0, refraction, materials against the commit before: identical (max 1 / 255;
+  trails differ from run to run).
+
 ## Animation system (clips, Animator, state machines; 2026-10-28)
 
 - Runtime in `LELEngine/Animation`: `FloatCurve` (a curve as flat arrays: times, values, tangents, modes; binary

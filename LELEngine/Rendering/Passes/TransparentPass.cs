@@ -62,6 +62,9 @@ namespace LELEngine.Rendering.Passes
 			/// <summary>A custom renderer (<see cref="ICustomRenderer" />): its <see cref="Mesh" /> with its <see cref="Block" />.</summary>
 			public Behaviour Custom;
 
+			/// <summary>A volumetric object (<see cref="Volumetrics.VolumetricRuntime.Draw" />).</summary>
+			public Volumetrics.VolumetricObjectBase Volume;
+
 			public Mesh Mesh;
 			public MaterialPropertyBlock Block;
 
@@ -99,6 +102,8 @@ namespace LELEngine.Rendering.Passes
 
 		private readonly List<Entry> entries = new List<Entry>();
 		private readonly List<VFX.VfxDrawEntry> vfxEntries = new List<VFX.VfxDrawEntry>();
+		private readonly List<Volumetrics.VolumetricObjectBase> volumes = new List<Volumetrics.VolumetricObjectBase>();
+		private Renderer owner;
 		private readonly List<GrabCopy> grabCopies = new List<GrabCopy>();
 		private readonly List<PixelRect> copyRects = new List<PixelRect>();
 		private readonly List<PixelRect> drawnSinceCopy = new List<PixelRect>();
@@ -111,6 +116,11 @@ namespace LELEngine.Rendering.Passes
 
 		#region PublicMethods
 
+		public override void Initialize(Renderer renderer)
+		{
+			owner = renderer;
+		}
+
 		public override void Execute(RenderContext context)
 		{
 			IReadOnlyList<MeshRenderer> renderers = context.TransparentRenderers;
@@ -121,13 +131,14 @@ namespace LELEngine.Rendering.Passes
 			grabs |= CollectCustomRenderers(context);
 			vfxEntries.Clear();
 			VFX.VfxRuntime.CollectTransparent(context, vfxEntries);
-			if (entries.Count == 0 && vfxEntries.Count == 0)
+			Volumetrics.VolumetricRuntime.Collect(context, volumes);
+			if (entries.Count == 0 && vfxEntries.Count == 0 && volumes.Count == 0)
 			{
 				return;
 			}
 
 			// Materials reading the opaque scene's depth (soft particles) share the depth copy the particle effects take.
-			bool readsDepth = false;
+			bool readsDepth = volumes.Count > 0;
 			foreach (Entry entry in entries)
 			{
 				readsDepth |= entry.Material.RenderState.SceneDepth;
@@ -137,6 +148,15 @@ namespace LELEngine.Rendering.Passes
 			foreach (VFX.VfxDrawEntry vfx in vfxEntries)
 			{
 				entries.Add(new Entry { Vfx = vfx, Queue = vfx.Queue, DistanceSquared = vfx.DistanceSquared, Order = (ulong)(vfx.System * 64 + vfx.Output), GrabCopy = -1 });
+			}
+
+			// Volumetric objects too, at the centre of their shape (they end at the opaque scene's depth themselves).
+			foreach (Volumetrics.VolumetricObjectBase volume in volumes)
+			{
+				Matrix4 world = volume.transform.LocalToWorld;
+				float distanceSquared = (Vector3.TransformPosition(Vector3.Zero, world) - context.CameraPosition).LengthSquared;
+				Vector3 half = volume.Data.Size * 0.5f;
+				entries.Add(new Entry { Volume = volume, Queue = volume.RenderQueue, DistanceSquared = distanceSquared, Order = volume.Id * 64, World = world, BoundsMin = -half, BoundsMax = half, GrabCopy = -1 });
 			}
 
 			SortEntries();
@@ -172,6 +192,20 @@ namespace LELEngine.Rendering.Passes
 				{
 					depth = VFX.VfxRuntime.CaptureDepth(context);
 					context.SceneTarget.Bind();
+				}
+
+				if (entry.Volume != null)
+				{
+					// Its march, temporal filter and composite set their own state and leave the scene target bound.
+					context.Renderer.Profiler.Split("Transparent.Volumetrics");
+					Volumetrics.VolumetricRuntime.Draw(context, entry.Volume, depth);
+					context.Renderer.Profiler.Split("Transparent.Draw");
+					active = null;
+					resend = true;
+					afterMesh = true;
+					afterParticles = false;
+					DrawnCount++;
+					continue;
 				}
 
 				if (entry.Vfx != null)
@@ -284,6 +318,7 @@ namespace LELEngine.Rendering.Passes
 
 			entries.Clear();
 			vfxEntries.Clear();
+			volumes.Clear();
 			GLState.SetBlend(false);
 			GLState.SetDepth(true, true, DepthFunction.Less);
 			GLState.SetCull(true, TriangleFace.Back);
@@ -294,14 +329,23 @@ namespace LELEngine.Rendering.Passes
 		{
 			entries.Clear();
 			vfxEntries.Clear();
+			volumes.Clear();
 			// The new scene may grab nothing: its copy texture is made again on its first grab.
 			Grab.Release();
+			if (owner != null)
+			{
+				Volumetrics.VolumetricRuntime.ReleaseRenderer(owner);
+			}
 		}
 
 		public override void Dispose()
 		{
 			Grab.Delete();
 			trailGeometry.Delete();
+			if (owner != null)
+			{
+				Volumetrics.VolumetricRuntime.ReleaseRenderer(owner);
+			}
 		}
 
 		#endregion
@@ -314,7 +358,7 @@ namespace LELEngine.Rendering.Passes
 		// against the prepass's surfaces (a sun drawn with its vertex function and the corona plates crossing it).
 		private static bool DrawsLikeOpaque(Entry entry)
 		{
-			if (entry.Vfx != null || entry.Queue > MaterialQueue.GeometryLast + 1)
+			if (entry.Vfx != null || entry.Volume != null || entry.Queue > MaterialQueue.GeometryLast + 1)
 			{
 				return false;
 			}
@@ -544,7 +588,7 @@ namespace LELEngine.Rendering.Passes
 				return SceneGrab.ScreenRect(context.ViewProjection, entry.BoundsMin, entry.BoundsMax, screen, out rect, out nearestW) ? rect : screen;
 			}
 
-			if (entry.Custom != null)
+			if (entry.Custom != null || entry.Volume != null)
 			{
 				return SceneGrab.ScreenRect(entry.World * context.ViewProjection, entry.BoundsMin, entry.BoundsMax, screen, out rect, out nearestW) ? rect : screen;
 			}
