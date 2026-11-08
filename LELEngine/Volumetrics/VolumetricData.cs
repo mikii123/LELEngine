@@ -120,7 +120,18 @@ namespace LELEngine.Volumetrics
 		private readonly Vector4[] slotPositions = new Vector4[VolumetricObjectBase.MaxLights];
 		private readonly Vector4[] slotParams = new Vector4[VolumetricObjectBase.MaxLights];
 		private readonly Vector4[] slotSpots = new Vector4[VolumetricObjectBase.MaxLights];
+		private readonly VolumeLightSlot[] movedSlots = new VolumeLightSlot[VolumetricObjectBase.MaxLights];
 		private int giSlice;
+
+		// The drawn transport's grid and what it was worked out with besides the slots (TransportSettingsHash).
+		private Vector3i lightsResolution;
+		private int transportSettingsHash;
+
+		// A spare pair of transport textures (the ones the last swap replaced): the next whole rework of the lights writes into
+		// them instead of making new ones (a light crossing into a big cloud's reach made and dropped ~25 MB of textures).
+		private int spareLightsA;
+		private int spareLightsB;
+		private Vector3i spareLightsResolution;
 
 		#endregion
 
@@ -200,7 +211,7 @@ namespace LELEngine.Volumetrics
 					StartRelight(newLightHash, newLightsHash, newSun);
 					lastRelight = now;
 				}
-				else if (newLightsHash != lightsHash)
+				else if (newLightsHash != lightsHash && !TryUpdateLightsInPlace(newLightsHash))
 				{
 					StartLights(newLightsHash);
 				}
@@ -388,6 +399,8 @@ namespace LELEngine.Volumetrics
 			DeleteTexture(ref Lit);
 			DeleteTexture(ref LightsA);
 			DeleteTexture(ref LightsB);
+			DeleteTexture(ref spareLightsA);
+			DeleteTexture(ref spareLightsB);
 			DeleteTexture(ref GIA);
 			DeleteTexture(ref GIB);
 			cpuDensity = null;
@@ -534,11 +547,23 @@ namespace LELEngine.Volumetrics
 							break;
 						}
 
-						// Linear light in half floats: a scene light's falloff spans more than 8 bits hold.
+						// Linear light in half floats: a scene light's falloff spans more than 8 bits hold. The spare pair when it fits.
 						if (build.LightsA == 0)
 						{
-							build.LightsA = CreateTexture(SizedInternalFormat.Rgba16f, build.LightsResolution, true, false);
-							build.LightsB = CreateTexture(SizedInternalFormat.Rgba16f, build.LightsResolution, true, false);
+							if (spareLightsA != 0 && spareLightsResolution == build.LightsResolution)
+							{
+								build.LightsA = spareLightsA;
+								build.LightsB = spareLightsB;
+								spareLightsA = 0;
+								spareLightsB = 0;
+							}
+							else
+							{
+								DeleteTexture(ref spareLightsA);
+								DeleteTexture(ref spareLightsB);
+								build.LightsA = CreateTexture(SizedInternalFormat.Rgba16f, build.LightsResolution, true, false);
+								build.LightsB = CreateTexture(SizedInternalFormat.Rgba16f, build.LightsResolution, true, false);
+							}
 						}
 
 						used += DispatchSlices(VolumetricRuntime.LightTransport, build.LightsResolution, budget - used, SetLightsUniforms, build.LightsA, SizedInternalFormat.Rgba16f, build.LightsB, 1);
@@ -656,17 +681,25 @@ namespace LELEngine.Volumetrics
 
 		private void SetLightsUniforms(ShaderProgram program)
 		{
-			program.SetTexture("Density", TextureTarget.Texture3D, build.Density, 0);
-			program.SetInt3("volResolution", build.LightsResolution.X, build.LightsResolution.Y, build.LightsResolution.Z);
-			program.SetVector3("volSize", build.Size);
+			SetTransportUniforms(program, build.Density, build.LightsResolution, build.Size, build.Voxel, build.Lights, build.LightCount, Vector3i.Zero, build.LightsResolution);
+		}
+
+		// The light transport kernel's inputs: the density it reads, its grid, the lights' slots and the box it works out.
+		private void SetTransportUniforms(ShaderProgram program, int density, Vector3i resolution, Vector3 size, float voxel, VolumeLightSlot[] slots, int count, Vector3i regionMin, Vector3i regionMax)
+		{
+			program.SetTexture("Density", TextureTarget.Texture3D, density, 0);
+			program.SetInt3("volResolution", resolution.X, resolution.Y, resolution.Z);
+			program.SetInt3("volRegionMin", regionMin.X, regionMin.Y, regionMin.Z);
+			program.SetInt3("volRegionMax", regionMax.X, regionMax.Y, regionMax.Z);
+			program.SetVector3("volSize", size);
 			program.SetFloat("volSigma", Sigma);
-			program.SetFloat("volVoxel", build.Voxel);
+			program.SetFloat("volVoxel", voxel);
 			for (int i = 0; i < VolumetricObjectBase.MaxLights; i++)
 			{
-				bool used = i < build.LightCount;
-				slotPositions[i] = used ? build.Lights[i].PositionSize : Vector4.Zero;
-				slotParams[i] = used ? build.Lights[i].Params : new Vector4(0f, 0f, -2f, 0f);
-				slotSpots[i] = used ? build.Lights[i].Spot : new Vector4(0f, 0f, 0f, 1f);
+				bool used = i < count;
+				slotPositions[i] = used ? slots[i].PositionSize : Vector4.Zero;
+				slotParams[i] = used ? slots[i].Params : new Vector4(0f, 0f, -2f, 0f);
+				slotSpots[i] = used ? slots[i].Spot : new Vector4(0f, 0f, 0f, 1f);
 			}
 
 			program.SetVector4Array("volLights", slotPositions);
@@ -674,6 +707,113 @@ namespace LELEngine.Volumetrics
 			program.SetVector4Array("volLightSpots", slotSpots);
 			program.SetFloat("volWorldScale", owner.WorldScale);
 			program.SetFloat("volLightGlow", owner.LightGlow);
+		}
+
+		// What the whole transport depends on besides the lights' slots: a change of it reworks every voxel.
+		private int TransportSettingsHash()
+		{
+			return HashCode.Combine(owner.LightGlow, owner.Density, owner.NoiseSize, owner.WorldScale);
+		}
+
+		/// <summary>
+		///     Lights that moved, or changed their reach or cone, while the same lights stay in the same slots: a light's part of
+		///     the transport changes only where it reached before and where it reaches now, so only that box is worked out
+		///     again, in the drawn textures and at once (the box is small: a light dragged through a big cloud reworked all of
+		///     it every frame, 2026-11-08, ~1.6 M voxels of eight lights and a new pair of 25 MB textures a frame for New
+		///     Frontier's storm). False when the set of lights or the cloud's settings changed, or the box is large: the whole
+		///     transport is made again then.
+		/// </summary>
+		private bool TryUpdateLightsInPlace(int newLightsHash)
+		{
+			if (LightsA == 0 || build != null || transportSettingsHash != TransportSettingsHash())
+			{
+				return false;
+			}
+
+			owner.GatherLightSlots(captureSlots);
+			int count = Math.Min(captureSlots.Count, VolumetricObjectBase.MaxLights);
+			if (count != LightCount || count == 0)
+			{
+				return false;
+			}
+
+			Vector3i resolution = lightsResolution;
+			var lo = new Vector3i(int.MaxValue);
+			var hi = new Vector3i(int.MinValue);
+			for (int i = 0; i < count; i++)
+			{
+				VolumeLightSlot was = LightSlots[i];
+				VolumeLightSlot now = captureSlots[i];
+				if (was.Own != now.Own || was.Scene != now.Scene || was.Params.X != now.Params.X)
+				{
+					return false;
+				}
+
+				if (was.PositionSize == now.PositionSize && was.Params == now.Params && was.Spot == now.Spot)
+				{
+					continue;
+				}
+
+				IncludeReach(was, resolution, ref lo, ref hi);
+				IncludeReach(now, resolution, ref lo, ref hi);
+			}
+
+			if (lo.X < hi.X && lo.Y < hi.Y && lo.Z < hi.Z)
+			{
+				Vector3i extent = hi - lo;
+				long voxels = (long)extent.X * extent.Y * extent.Z;
+				if (voxels > Math.Min(InPlaceMaxVoxels, (long)resolution.X * resolution.Y * resolution.Z / 3))
+				{
+					return false;
+				}
+
+				ShaderProgram program = VolumetricRuntime.LightTransport.Program;
+				program.Use();
+				captureSlots.CopyTo(0, movedSlots, 0, count);
+				SetTransportUniforms(program, Density, resolution, Size, Voxel, movedSlots, count, lo, hi);
+				program.SetInt("volSliceOffset", 0);
+				GL.BindImageTexture(0, LightsA, 0, true, 0, TextureAccess.WriteOnly, SizedInternalFormat.Rgba16f);
+				GL.BindImageTexture(1, LightsB, 0, true, 0, TextureAccess.WriteOnly, SizedInternalFormat.Rgba16f);
+				GL.DispatchCompute((extent.X + 7) / 8, (extent.Y + 7) / 8, extent.Z);
+				GL.BindImageTexture(0, 0, 0, true, 0, TextureAccess.WriteOnly, SizedInternalFormat.Rgba16f);
+				GL.BindImageTexture(1, 0, 0, true, 0, TextureAccess.WriteOnly, SizedInternalFormat.Rgba16f);
+				GL.MemoryBarrier(MemoryBarrierFlags.AllBarrierBits);
+				GenerateMipmaps(LightsA);
+				GenerateMipmaps(LightsB);
+				InPlaceUpdates++;
+			}
+
+			for (int i = 0; i < count; i++)
+			{
+				LightSlots[i] = captureSlots[i];
+			}
+
+			lightsHash = newLightsHash;
+			return true;
+		}
+
+		/// <summary>Light transport boxes worked out in place since the start (diagnostics: a moving light should use these).</summary>
+		public static long InPlaceUpdates { get; private set; }
+
+		// The largest box (voxels of the transport grid) an in-place update works out at once.
+		private const long InPlaceMaxVoxels = 2_000_000;
+
+		// Widens the box (transport voxels, max exclusive) by where a slot's light reaches: an own light's glow ends at 8 core
+		// radii, a scene light at its range; a voxel more on every side for the sampling between voxels.
+		private void IncludeReach(VolumeLightSlot slot, Vector3i resolution, ref Vector3i lo, ref Vector3i hi)
+		{
+			Vector3 centre = slot.PositionSize.Xyz;
+			float reach = slot.Params.X < 0.5f ? slot.PositionSize.W * 8f : slot.PositionSize.W / owner.WorldScale;
+			Vector3 size = Size;
+			for (int axis = 0; axis < 3; axis++)
+			{
+				float min = ((centre[axis] - reach) / size[axis] + 0.5f) * resolution[axis] - 0.5f;
+				float max = ((centre[axis] + reach) / size[axis] + 0.5f) * resolution[axis] - 0.5f;
+				int a = Math.Clamp((int)MathF.Floor(min) - 1, 0, resolution[axis]);
+				int b = Math.Clamp((int)MathF.Ceiling(max) + 2, 0, resolution[axis]);
+				lo[axis] = Math.Min(lo[axis], a);
+				hi[axis] = Math.Max(hi[axis], b);
+			}
 		}
 
 		/// <summary>Extinction per local unit at density 1 (the object's Density is an optical depth through one noise size).</summary>
@@ -732,12 +872,13 @@ namespace LELEngine.Volumetrics
 			{
 				if (LightsA != b.LightsA)
 				{
-					DeleteTexture(ref LightsA);
-					DeleteTexture(ref LightsB);
+					KeepSpareLights(ref LightsA, ref LightsB, lightsResolution);
 				}
 
 				LightsA = b.LightsA;
 				LightsB = b.LightsB;
+				lightsResolution = b.LightsResolution;
+				transportSettingsHash = TransportSettingsHash();
 				lightsHash = b.LightsHash;
 				Array.Copy(b.Lights, LightSlots, LightSlots.Length);
 				LightCount = b.LightCount;
@@ -799,9 +940,30 @@ namespace LELEngine.Volumetrics
 
 			if (b.LightsA != LightsA)
 			{
-				DeleteTexture(ref b.LightsA);
-				DeleteTexture(ref b.LightsB);
+				KeepSpareLights(ref b.LightsA, ref b.LightsB, b.LightsResolution);
 			}
+		}
+
+		// A pair of transport textures no longer drawn: kept as the spare when there is none, else deleted.
+		private void KeepSpareLights(ref int a, ref int b, Vector3i resolution)
+		{
+			if (a == 0)
+			{
+				return;
+			}
+
+			if (spareLightsA == 0)
+			{
+				spareLightsA = a;
+				spareLightsB = b;
+				spareLightsResolution = resolution;
+				a = 0;
+				b = 0;
+				return;
+			}
+
+			DeleteTexture(ref a);
+			DeleteTexture(ref b);
 		}
 
 		private static int CreateTexture(SizedInternalFormat format, Vector3i size, bool mipmaps, bool zeroBorder)

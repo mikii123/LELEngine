@@ -129,6 +129,22 @@ namespace LELEngine.Editor
 			ApplyCamera();
 		}
 
+		/// <summary>
+		///     Moves the selected object by a world offset the way a drag of its transform gizmo does (the world matrix
+		///     applied, the change notified; the caller opens and commits the edit). Tests of dragging.
+		/// </summary>
+		internal void MoveSelectedAsGizmo(Vector3 offset)
+		{
+			GameObject selected = SelectedInScene();
+			if (selected == null)
+			{
+				return;
+			}
+
+			ApplyWorldMatrix(selected.transform, ToNumerics(selected.transform.LocalToWorld * Matrix4.CreateTranslation(offset)));
+			editor.NotifyChanged(selected);
+		}
+
 		/// <summary>Moves the camera along its own axes (x screen right, y up, z forward; tests of camera motion).</summary>
 		public void MoveView(Vector3 local)
 		{

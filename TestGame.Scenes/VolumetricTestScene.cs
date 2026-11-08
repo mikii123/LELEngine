@@ -40,7 +40,8 @@ namespace TestGame.Scenes
 			storm.Softness = 0.15f;
 			storm.Density = 30f;
 			storm.ShadowReach = 1.5f;
-			storm.VoxelSize = 0.45f;
+			// volbig=1: as many voxels as New Frontier's storm (11 M, transport 1.4 M), for costs that scale with the grid.
+			storm.VoxelSize = options.VolumeBig ? 0.19f : 0.45f;
 			storm.Albedo = new Color4(0.55f, 0.6f, 0.75f, 1f);
 			storm.EmissionColor = new Color4(0.12f, 0.08f, 0.3f, 1f);
 			storm.EmissionStrength = 0.05f;
@@ -102,6 +103,20 @@ namespace TestGame.Scenes
 			wisp.EmissionStrength = 0.3f;
 			wisp.Resolution = VolumetricResolution.Quarter;
 
+			// vollight=1: a lamp (a scene Light) flying back and forth through the storm, its range entering and leaving it.
+			if (options.VolumeMovingLight > 0)
+			{
+				VolumetricLightMover.Mode = options.VolumeMovingLight;
+				GameObject lamp = scene.CreateGameObject("Moving Lamp");
+				lamp.transform.position = new Vector3(-80f, 14f, 42f);
+				Light light = lamp.AddComponent<Light>();
+				light.Color = new Color4(1f, 0.55f, 0.25f, 1f);
+				light.Intensity = 120f;
+				light.Range = 14f;
+				light.SourceRadius = 0.5f;
+				lamp.AddComponent<VolumetricLightMover>();
+			}
+
 			if (cubeInFog)
 			{
 				GameObject cube = SceneModels.Instantiate(scene, SceneModels.Cube, "Cube In Fog");
@@ -131,6 +146,28 @@ namespace TestGame.Scenes
 		private static bool temporal = true;
 
 		#endregion
+	}
+
+	/// <summary>
+	///     Moves its object back and forth along x through the storm (x -80 .. 80 over 8 s), every frame (vollight=1); with
+	///     vollight=2 the same until 6 s, then still at x = 10; with vollight=3 at x = 10 from the start (the transport worked
+	///     out in place along a path against one made at once).
+	/// </summary>
+	public sealed class VolumetricLightMover : Behaviour
+	{
+		public static int Mode = 1;
+
+		public override void Update()
+		{
+			float time = (float)Time.timeD;
+			float x = -80f * MathF.Cos(time * MathF.PI * 2f / 8f);
+			if (Mode == 3 || Mode == 2 && time >= 6f)
+			{
+				x = 10f;
+			}
+
+			transform.position = new Vector3(x, 14f, 42f);
+		}
 	}
 
 	/// <summary>Flickers the lights inside a volumetric object like lightning: short bright strokes at random moments.</summary>

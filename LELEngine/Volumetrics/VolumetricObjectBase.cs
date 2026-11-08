@@ -221,7 +221,7 @@ namespace LELEngine.Volumetrics
 		[Tooltip("Blend the frames: the march's sampling pattern changes every frame and the frames before (moved with the camera and the object) fill in, so the cloud is smooth even marched at a reduced resolution with few steps. Off: a fixed pattern, grainy at reduced resolutions")]
 		public bool TemporalFilter = true;
 
-		[Tooltip("How much of the frames before a frame keeps (higher: smoother, slower to follow fast changes such as flashes)")]
+		[Tooltip("How much of the frames before a settled frame keeps (higher: smoother, slower to follow fast changes such as flashes). Cloud that just came into view (from behind an object, past the screen's edge) starts afresh and blends its first frames evenly")]
 		[Range(0f, 0.98f)]
 		public float HistoryWeight = 0.9f;
 

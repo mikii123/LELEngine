@@ -1402,7 +1402,17 @@ Added for New Frontier's port of Unity's SpaceStonesPack (Standard materials wit
   (`FragDistance`) through the previous view-projection and the object's previous transform, the history clamped to the
   3 x 3 range; the editor keeps refreshing until a history held 32 frames, `SettleFrames`; a history is continued by
   its renderer's own frame count, `Renderer.FrameIndex`: the volumetric pass's shared count went up once per renderer,
-  so an editor drawing its scene and game views in one frame restarted every history each frame). Without it a reduced
+  so an editor drawing its scene and game views in one frame restarted every history each frame). The history is checked
+  as the GI's screen probe history is (`ProbeIntegrate.shader`, 2026-11-08): a second target (RG16F: log2(1 + the light's
+  distance), 0 = no light; the frames it holds); of the four history texels around the reprojected point only those
+  whose light lay within 20 % (`HistoryDistanceTolerance`) of this pixel's distance from last frame's camera count,
+  weighted bilinearly, a partial match for fewer frames; a new value weighs 1 / n up to 1 / (1 - `HistoryWeight`); the
+  history target is cleared whole each frame. Before, the history was read blindly with one bilinear fetch: where an
+  asteroid in front of New Frontier's storm had hidden the cloud (the march stops there: no light, alpha 0), moving
+  sideways uncovered cloud whose history was that emptiness, the loose 3 x 3 clamp (the asteroid's empty texels are in
+  the box) let it through, and see-through blue outlines trailed every asteroid. A/B against the commit before on the
+  same flight (a worktree of it built apart): outlines gone, the cloud as smooth (neighbour difference 0.55 both, 1.0
+  without the filter). Without it a reduced
   resolution shows the dither raw: the user found it unacceptable at Quarter (2026-11-07), so it is on for both presets.
 - The user's direction (2026-11-07): general, physically consistent features that can each be tuned and switched off
   come before matching New Frontier's Unity look ("too much likeness to NF, too little functionality").
@@ -1434,6 +1444,20 @@ Added for New Frontier's port of Unity's SpaceStonesPack (Standard materials wit
   term 5/12 sum L e). The march scatters it towards the eye with the phase, a + g (b . ray) (b's colour from a), x
   `GIStrength`, in place of the sky term (`SkyStrength` applies while the GI is off or unavailable:
   `VolumetricRuntime.SceneGIAvailable`). The grid update is ~0.1 ms (`Volumetrics` pass).
+- Moving lights (2026-11-08): when the same lights stay in the same slots and only move (or change reach, cone), the
+  transport is worked out again only in the box of where the changed ones reached before and reach now, in the drawn
+  textures and at once (`VolumetricData.TryUpdateLightsInPlace`, the kernel's `volRegionMin` / `volRegionMax`; at most 2 M
+  voxels and a third of the grid, else the whole transport); a light's part is zero outside its reach, so the result is
+  the whole build's (TestGame `vollight=2` moving then still against `vollight=3` still: max 1 / 255). A whole rework
+  (a light entering or leaving the reach, the set changing) writes into a kept spare pair of textures instead of making
+  new ones. Before, every frame of a light moving in a cloud's reach made the whole transport again in a new pair of
+  textures (~25 MB for New Frontier's storm, made and dropped per frame). Measured (TestGame `volbig=1 vollight=1 gi=0`,
+  a storm of New Frontier's voxel count): the volumetric pass 0.70 -> 0.21 ms, GPU 1.70 -> 1.16 ms a frame. The user
+  reported the editor slowing down and stuttering badly while dragging a light into the storm's reach; in New Frontier's
+  editor neither engine stuttered in four reproductions (a lamp moved by a script and dragged through the gizmo's path,
+  `dragselected=`, ranges 60 and 600: 16.7 ms frames throughout), so that report is not reproduced yet. In play mode the
+  frame time doubles during the storm's flash bursts whatever the lamp does (Lumen's surface cache: the eight flash
+  lights, range 2500, change every frame).
 - Scene lights (`SceneLights`): `Light` components whose range reaches the shape take the transport's slots left after
   the cloud's own `Lights`, nearest first, whatever their intensity (a flash going dark keeps its slot: no rework when it
   flickers); `Light.VolumetricStrength` scales what the cloud takes (see "Local lights").
@@ -1474,7 +1498,9 @@ Added for New Frontier's port of Unity's SpaceStonesPack (Standard materials wit
   and their march's centre texel (a readback: it stalls).
 - TestGame `volumetrics=1` (`VolumetricTestScene`: a storm cylinder with two flickering lights, an HQ fog bank box, a
   glowing sphere with a light inside, a ridged wisp at a quarter resolution); `volcube=1` a cube in the fog, `volhq=1` the
-  storm as the HQ preset, `volgi=0` the volumes without GI, `voltemporal=0` without their temporal filter; `vsync=1`
+  storm as the HQ preset, `volgi=0` the volumes without GI, `voltemporal=0` without their temporal filter, `vollight=1` a
+  lamp (scene Light) flying through the storm (2: stopping at 6 s, 3: still), `volbig=1` the storm with New Frontier's
+  voxel count; editor hook `dragselected=N;dx,dy,dz;frames` drags the selection through the gizmo's path; `vsync=1`
   paces TestGame by the display as the editor is (motion tests at a game's frame rate, with `autocam=1` and `dump=N`).
 - Measured on this machine's AMD Radeon 780M (OpenGL, 1280 x 720): the four test volumes 0.33-0.43 ms, inside the fog bank
   0.35 ms, HQ at the dense storm's centre 2.5 ms (5.1 ms with `MinStep` 0.1, the same image); a backdrop cylinder of

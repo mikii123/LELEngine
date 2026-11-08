@@ -19,6 +19,8 @@ layout(binding = 1, rgba16f) uniform writeonly image3D LightsB;
 uniform sampler3D Density;       // r8 with mips; zero outside
 uniform ivec3 volResolution;     // of this grid
 uniform int volSliceOffset;
+uniform ivec3 volRegionMin;      // the box worked out: all of the grid, or where lights that moved reach (before and now)
+uniform ivec3 volRegionMax;      // exclusive
 uniform vec3 volSize;
 uniform float volSigma;
 uniform float volVoxel;          // local units per voxel of the density
@@ -97,8 +99,8 @@ float LightAt(vec3 p, int i)
 
 void main()
 {
-	ivec3 v = ivec3(gl_GlobalInvocationID.xy, int(gl_GlobalInvocationID.z) + volSliceOffset);
-	if (any(greaterThanEqual(v, volResolution)))
+	ivec3 v = volRegionMin + ivec3(gl_GlobalInvocationID.xy, int(gl_GlobalInvocationID.z) + volSliceOffset);
+	if (any(greaterThanEqual(v, min(volRegionMax, volResolution))))
 	{
 		return;
 	}

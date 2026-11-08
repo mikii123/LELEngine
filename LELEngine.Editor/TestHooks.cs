@@ -398,6 +398,43 @@ namespace LELEngine.Editor
 			}
 			if (Is("nudgecamera")) editor.SceneView.RotateView(20f);
 
+			// dragselected=N;dx,dy,dz;frames|...: the selected object dragged by (dx, dy, dz) world units in even steps over that
+			// many frames from N, through the transform gizmo's code path (one edit opened at N, committed after); every frame
+			// logs the frame time (dragging lights into volumes, 2026-11-08).
+			if (values.TryGetValue("dragselected", out string dragSelected))
+			{
+				var invariant = System.Globalization.CultureInfo.InvariantCulture;
+				foreach (string entry in dragSelected.Split('|'))
+				{
+					string[] parts = entry.Split(';');
+					string[] delta = parts.Length == 3 ? parts[1].Split(',') : Array.Empty<string>();
+					if (parts.Length != 3 || delta.Length != 3 || !int.TryParse(parts[0], out int start) || !int.TryParse(parts[2], out int steps) || steps <= 0
+						|| frame < start || frame > start + steps
+						|| !float.TryParse(delta[0], System.Globalization.NumberStyles.Float, invariant, out float dx)
+						|| !float.TryParse(delta[1], System.Globalization.NumberStyles.Float, invariant, out float dy)
+						|| !float.TryParse(delta[2], System.Globalization.NumberStyles.Float, invariant, out float dz)
+						|| editor.Selected == null)
+					{
+						continue;
+					}
+
+					if (frame == start)
+					{
+						editor.Edits.Begin(editor.Selected.transform);
+					}
+
+					if (frame < start + steps)
+					{
+						editor.SceneView.MoveSelectedAsGizmo(new OpenTK.Mathematics.Vector3(dx, dy, dz) / steps);
+						Debug.Log($"[Test] Drag frame {frame}: dt {ImGui.GetIO().DeltaTime * 1000f:0.0} ms, {editor.Selected.Name} at {editor.Selected.transform.position}");
+					}
+					else
+					{
+						editor.Edits.RequestCommit();
+					}
+				}
+			}
+
 			// movecamera=N;dx,dy,dz;frames: from frame N on, the scene view camera moves by (dx, dy, dz) along its own axes
 			// (x screen right, y up, z forward) in even steps over that many frames (steady camera motion tests).
 			if (values.TryGetValue("movecamera", out string moveCamera))

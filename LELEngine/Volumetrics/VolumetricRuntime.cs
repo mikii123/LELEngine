@@ -85,6 +85,11 @@ namespace LELEngine.Volumetrics
 		private const int ResultDepthUnit = 1;
 		private const int SceneDepthUnit = 2;
 		private const int HistoryUnit = 2;
+		private const int HistoryMetaUnit = 3;
+
+		// A history texel matches when its light lay within this share of the distance expected (the light-weighted mean
+		// distance moves with the march's jitter by a few percent; an object in front, or other cloud, is far further off).
+		private const float HistoryDistanceTolerance = 0.2f;
 
 		// A view's targets, per resolution (index 0 full, 1 half, 2 quarter): objects of different resolutions in one view
 		// keep their own instead of resizing shared ones back and forth every frame.
@@ -102,6 +107,7 @@ namespace LELEngine.Volumetrics
 			public bool Valid;
 			public Matrix4 PreviousViewProjection;
 			public Matrix4 PreviousLocalToWorld;
+			public Vector3 PreviousCameraPosition;
 			public uint Frame;
 
 			// The renderer's frame it was last continued in (its own count: the editor's scene and game views render in one
@@ -386,17 +392,23 @@ namespace LELEngine.Volumetrics
 			{
 				Framebuffer next = history.Targets[1 - history.Current];
 				next.Bind();
-				GL.Scissor(lowRect.X0, lowRect.Y0, lowRect.X1 - lowRect.X0, lowRect.Y1 - lowRect.Y0);
+				// Cleared whole (both targets): what lies outside this frame's rectangle is no history next frame.
+				GL.Disable(EnableCap.ScissorTest);
 				GL.ClearColor(0f, 0f, 0f, 0f);
 				GL.Clear(ClearBufferMask.ColorBufferBit);
+				GL.Enable(EnableCap.ScissorTest);
+				GL.Scissor(lowRect.X0, lowRect.Y0, lowRect.X1 - lowRect.X0, lowRect.Y1 - lowRect.Y0);
 				temporal.Use();
 				SetViewUniforms(temporal, context, volume, data, worldToLocal, invViewProjection, lowWidth, lowHeight);
 				temporal.SetTexture("volCurrent", TextureTarget.Texture2D, target.ColorAttachments[0].Handle, ResultUnit);
 				temporal.SetTexture("volCurrentDistance", TextureTarget.Texture2D, target.ColorAttachments[1].Handle, ResultDepthUnit);
 				temporal.SetTexture("volHistory", TextureTarget.Texture2D, history.Targets[history.Current].ColorAttachments[0].Handle, HistoryUnit);
+				temporal.SetTexture("volHistoryMeta", TextureTarget.Texture2D, history.Targets[history.Current].ColorAttachments[1].Handle, HistoryMetaUnit);
 				temporal.SetMatrix4("volPreviousViewProjection", history.PreviousViewProjection);
 				temporal.SetMatrix4("volPreviousLocalToWorld", history.PreviousLocalToWorld);
-				temporal.SetFloat("volHistoryWeight", Math.Clamp(volume.HistoryWeight, 0f, 0.98f));
+				temporal.SetVector3("volPreviousCameraPosition", history.PreviousCameraPosition);
+				temporal.SetFloat("volMaxFrames", 1f / (1f - Math.Clamp(volume.HistoryWeight, 0f, 0.98f)));
+				temporal.SetFloat("volDistanceTolerance", MathF.Log2(1f + HistoryDistanceTolerance));
 				temporal.SetInt("volHistoryValid", history.Valid ? 1 : 0);
 				context.Fullscreen.Draw();
 				history.Settled = history.Valid && history.PreviousViewProjection == context.ViewProjection && history.PreviousLocalToWorld == localToWorld ? history.Settled + 1 : 0;
@@ -404,6 +416,7 @@ namespace LELEngine.Volumetrics
 				history.Valid = true;
 				history.PreviousViewProjection = context.ViewProjection;
 				history.PreviousLocalToWorld = localToWorld;
+				history.PreviousCameraPosition = context.CameraPosition;
 				history.Frame++;
 				history.Stamp = context.Renderer.FrameIndex;
 				result = next.ColorAttachments[0];
@@ -559,7 +572,8 @@ namespace LELEngine.Volumetrics
 					history.Valid = false;
 				}
 
-				Ensure(ref history.Targets[i], width, height, RenderTextureFormat.RGBA16F, true, null);
+				// The result, and where its light was and how many frames it holds (VolumetricTemporal.shader).
+				Ensure(ref history.Targets[i], width, height, RenderTextureFormat.RGBA16F, true, RenderTextureFormat.RG16F);
 			}
 
 			return history;
