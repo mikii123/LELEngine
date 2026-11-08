@@ -339,6 +339,78 @@ namespace LELEngine.Volumetrics
 			return MathF.Exp(-density * step * data.Sigma);
 		}
 
+		/// <summary>
+		///     Where a ray first meets the cloud as something to look at: the distance along the ray (world units, from
+		///     <paramref name="worldOrigin" />) at which the light through the cloud falls below <paramref name="transmittance" />,
+		///     from the cloud's density without the detail (CPU; the first call after a build reads the voxels back once). The
+		///     editor's scene view pans and zooms at it as at a mesh's surface. False when the ray passes through less cloud
+		///     than that within <paramref name="maxDistance" />, or before the cloud is made.
+		/// </summary>
+		public bool Raycast(Vector3 worldOrigin, Vector3 worldDirection, float maxDistance, out float distance, float transmittance = 0.5f)
+		{
+			distance = 0f;
+			if (data == null || !data.Ready || worldDirection.LengthSquared < 1e-12f || maxDistance <= 0f)
+			{
+				return false;
+			}
+
+			// The same ray parameter in both spaces: the local direction keeps the scale of a world unit.
+			Vector3 dir = worldDirection.Normalized();
+			Matrix4 worldToLocal = transform.WorldToLocal;
+			Vector3 origin = Vector3.TransformPosition(worldOrigin, worldToLocal);
+			Vector3 direction = Vector3.TransformVector(dir, worldToLocal);
+			float localPerWorld = direction.Length;
+			if (localPerWorld < 1e-12f)
+			{
+				return false;
+			}
+
+			// The shape's box: where the ray is inside it.
+			Vector3 half = new Vector3(MathF.Max(Size.X, 1e-3f), MathF.Max(Size.Y, 1e-3f), MathF.Max(Size.Z, 1e-3f)) * 0.5f;
+			float enter = 0f;
+			float exit = maxDistance;
+			for (int axis = 0; axis < 3; axis++)
+			{
+				if (MathF.Abs(direction[axis]) < 1e-12f)
+				{
+					if (origin[axis] < -half[axis] || origin[axis] > half[axis])
+					{
+						return false;
+					}
+
+					continue;
+				}
+
+				float a = (-half[axis] - origin[axis]) / direction[axis];
+				float b = (half[axis] - origin[axis]) / direction[axis];
+				enter = MathF.Max(enter, MathF.Min(a, b));
+				exit = MathF.Min(exit, MathF.Max(a, b));
+			}
+
+			if (enter >= exit)
+			{
+				return false;
+			}
+
+			// Half a voxel a step (in world units along the ray), the optical depth summed until the light is down to the
+			// threshold.
+			float sigma = data.Sigma;
+			float threshold = -MathF.Log(Math.Clamp(transmittance, 1e-4f, 0.9999f));
+			float step = MathF.Max(data.Voxel * 0.5f / localPerWorld, (exit - enter) / 4096f);
+			float tau = 0f;
+			for (float t = enter + step * 0.5f; t < exit; t += step)
+			{
+				tau += data.DensityAt(origin + direction * t) * sigma * step * localPerWorld;
+				if (tau >= threshold)
+				{
+					distance = t;
+					return true;
+				}
+			}
+
+			return false;
+		}
+
 		/// <summary>Makes the cloud again at once (it is made again by itself whenever its settings change).</summary>
 		public void Rebuild()
 		{

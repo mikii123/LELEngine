@@ -956,22 +956,62 @@ Added for New Frontier's port of Unity's SpaceStonesPack (Standard materials wit
 
 ## Scene view navigation (2026-10-22)
 
-- `SceneViewPanel`: the wheel moves 20% (`WheelShare`) of the distance to the point under the mouse (picked object,
-  else the ground plane), so it works at any distance; middle-drag pans by the focus distance (world per pixel =
-  2 * focusDistance * tan(fov / 2) / view height). `FocusDistance` follows wheel, pick, frame (F) and is saved with
-  the view. Test hooks: `wheel=N;sceneview;notches|...`, `mdrag=N;sceneview;dx,dy|...`, `logsceneview=N|M`
-  (position, forward, focus distance); anchor `sceneview`.
+- `SceneViewPanel`: the wheel moves 20% (`WheelShare`) of the distance to the point under the mouse at the navigation
+  depth (below), so it works at any distance; middle-drag pans at the navigation depth taken at the press (world per
+  pixel = 2 * focusDistance * tan(fov / 2) / view height). `FocusDistance` is the last of those depths (frame, F, sets
+  it too) and is saved with the view. Test hooks: `wheel=N;sceneview;notches|...`, `mdrag=N;sceneview;dx,dy|...`,
+  `logsceneview=N|M` (position, forward, focus distance); anchor `sceneview`.
+- Navigation depth (2026-11-08; the user: after a few zooms here and there a pan barely moved or raced):
+  `NavigationDepth(mouse)` is taken from what is there at that moment, never kept from an earlier zoom: (1) under the
+  cursor, the nearer of the mesh pick and a cloud (`VolumetricObjectBase.Raycast`: a CPU march through the volume's
+  density to where the light through it falls to half; clouds write no depth and are not picked); (2) the surface
+  drawn nearest to the cursor within 0.1 of the view's height (`SceneDepthProbe`: after the view renders, a compute
+  pass reduces its depth to 64 x 36 cells, each the nearest of 4 x 4 texels, read back through a buffer and a fence a
+  frame or two later, no stall; a cell is placed with the camera that drew it, so its depth stays right after the
+  camera moved); (3) the median over a 16 x 9 grid of rays, each the nearer of the drawn surface and a cloud; (4) the
+  view shows nothing: the distance from the camera to the nearest renderer's or volume's box (boxes holding the camera
+  left out); (5) the last depth. Before, it was the last zoom's pick or the ground plane y = 0, kept as the focus
+  distance: New Frontier plays in XY with the camera looking along Z, so it sees that plane edge on and a ray met it
+  near or thousands of units away depending on the cursor's height, and the next pan over empty space used that.
+- Why not the GI's global distance field (the user's idea: the occupancy around the camera): it exists only while the
+  GI traces distance fields and only inside the GI's volume, it holds distances only within `SdfBandVoxels` (8 in New
+  Frontier) of a surface, clouds are not in it, and a pan needs the depth along the ray through the cursor, not the
+  nearest surface in any direction (it may be behind the camera). The nearest box is that idea without the limits,
+  used only when the view shows nothing.
+- Test: `logcamera=` lines end with `focus F drawn M source S at (x, y)` (S = mesh, cloud, near, view, around or last;
+  the point of the view it was taken for). Scratchpad `storm/realnav.ps1` (real input, `-Absolute`): wheel notches at
+  three places with strokes at each, per stroke the depth, its source and the camera's units per pixel; New Frontier's
+  Flight with copies of the user's state files. 2026-11-08: over the storm `cloud` 635-890 (a volume: after the camera
+  moved, the ray through the same pixel meets another part of it), over empty space `view` 960-1012, after zooming out
+  1416-1839, `around` 1993-2359 once a 321 px pan (relative input, the pointer's acceleration) had moved everything out
+  of the view; absolute input (200 px strokes) 889, 967-988, 1425-1497 at the three places; no frame over 50 ms. `storm/pantest.ps1` (scripted 200 px pan over the storm, image shift by profile correlation): depth from
+  the cloud (1287), the bright asteroid behind it moved 188.9 px (parallax; the old focus depth gave about 283 px).
 - Camera drags (2026-11-08; the user found panning and turning inconsistent): look (right button) and pan (middle
   button) start on a press over the view and last while the button is held, over the view or not; both read the motion
-  from the first pixel (`CameraDragDelta`); a focused editor window captures the cursor meanwhile (`CursorState.Grabbed`,
-  the motion from `ImGuiController.RawMouseDelta`, which ImGui does not get while grabbed; the first captured frame is
-  skipped) and puts it back where the drag started; automated runs (not focused) keep the cursor and drive the drags
-  with scripted ImGui input. Before, a pan stopped when the cursor left the view and started past ImGui's 6 px drag
-  threshold, turning did neither, and both stopped at the screen's edge. A pan's depth (the scene follows the mouse
-  there, `SetPanDepth`): the object under the cursor, else the ground plane while it is no further than 4 x the focus
-  distance (at least 10), else the focus distance: looking along the ground the plane was thousands of units away and
-  the pan raced. Verified: a 900 px middle drag running past the view's edge moved the camera the full 900 px at the
-  focus depth (even steps).
+  from the first pixel (`CameraDragDelta`). Before, a pan stopped when the cursor left the view and started past ImGui's
+  6 px drag threshold, turning did neither, and both stopped at the screen's edge.
+- The drags move by the cursor's motion as the UI sees it (`io.MouseDelta`), never with the cursor captured: the
+  frame of the press applies none (ImGui takes the positions after a press in the next frame, so it is all from before
+  the press), the frame of the release still applies its motion, and `ReleaseCameraDragIfAbandoned` ends a drag only
+  when the controls missed a frame (it ended every drag on its release before the motion was read). GLFW keeps the
+  mouse captured by the window while a button is held, so a drag goes on outside the window up to the screen's edge.
+  History (2026-11-08, both shipped and both reported broken by the user): (1) the cursor hidden and grabbed with
+  OpenTK's per-event deltas (c654fb5): GLFW warps the cursor when it captures (to the window's centre) and when it lets
+  go, and the warps came in as motion, up to 1117 px a frame (pitch -75 after horizontal strokes only: "jumps and
+  resets rotation and position"); (2) GLFW raw mouse motion with positions measured against the capture's (uncommitted):
+  clean with a local mouse, but the user works through Chrome Remote Desktop, which injects absolute positions (as do
+  pen tablets and virtual machines), and a captured cursor turns them into the distance from the window's centre, so a
+  pan went towards one side only. Do not capture the cursor for editor drags.
+- Real-mouse test (scripted hooks feed ImGui and never exercise the OS input path): scratchpad `storm/realdrag.ps1`
+  starts the editor focused (`screenshot=` with an unreached frame keeps it an automated run without `focus=0`), with
+  `logcamera=<file>` (every frame: drag, the drag's motion, camera, yaw, pitch, the view's screen rectangle), and sends
+  OS input with user32 `SendInput`, relative moves or `-Absolute` (MOUSEEVENTF_ABSOLUTE, as Chrome Remote Desktop: the
+  pointer keeps its own position), middle / right button, in strokes left and right (`-StepPixelsY` for diagonals);
+  `realdrag-check.ps1` reports the largest motion in a frame, the pitch's range, per stroke the summed motion and the
+  camera at the start and the end. Now: absolute and human-paced relative strokes, straight and diagonal, all equal
+  and the camera back exactly at its start (yaw, pitch, position). Strokes larger than the view leave the cursor
+  outside it (at the screen's edge), and a press there starts no drag, as before. Verified: a 900 px middle drag running
+  past the view's edge moved the camera the full 900 px at the pan's depth (even steps).
 - Flying (right button + WASD/QE) moves by the frame time averaged over about ten frames (`smoothDeltaTime`, Unity's
   smoothDeltaTime), not the raw one (2026-11-07). The user saw New Frontier's storm and the position gizmo "jump in
   random directions" when flying sideways, more the farther away, never when turning: with a volume filling the view

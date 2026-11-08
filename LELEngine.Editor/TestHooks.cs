@@ -40,6 +40,7 @@ namespace LELEngine.Editor
 		private bool selected;
 		private bool componentAdded;
 		private readonly System.Diagnostics.Stopwatch frameClock = System.Diagnostics.Stopwatch.StartNew();
+		private System.IO.StreamWriter cameraWriter;
 		private double lastFrameMs;
 		private readonly List<(int start, string from, string to)> drags = new List<(int, string, string)>();
 		private readonly List<(int at, string anchor, bool twice, int button)> clicks = new List<(int, string, bool, int)>();
@@ -602,6 +603,17 @@ namespace LELEngine.Editor
 			if (IsListed("logfronttabs"))
 			{
 				Debug.Log($"[Test] Frame {frame} front tabs: {editor.FrontTabs}");
+			}
+
+			// logcamera=file: every frame the scene view's camera, its drag and the drag's motion, with the view's rectangle on
+			// the screen (motion tests with the real mouse: OS input sent to the focused editor). Written straight to the file
+			// (the console would capture a call stack per line).
+			if (values.TryGetValue("logcamera", out string cameraLog))
+			{
+				cameraWriter ??= new System.IO.StreamWriter(cameraLog, false) { AutoFlush = true };
+				(System.Numerics.Vector2 min, System.Numerics.Vector2 size) = editor.SceneView.ViewRect;
+				OpenTK.Mathematics.Vector2i client = editor.Window.ClientLocation;
+				cameraWriter.WriteLine($"{frame} {frameClock.Elapsed.TotalMilliseconds:0.0} screen {client.X + min.X:0} {client.Y + min.Y:0} size {size.X:0} {size.Y:0} focused {editor.Window.IsFocused} {editor.SceneView.DescribeDrag()}");
 			}
 
 			// logdocks=N|M: every docked window's state (submitted, dock, front, the dock's selected tab).

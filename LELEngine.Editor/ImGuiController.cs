@@ -146,15 +146,6 @@ namespace LELEngine.Editor
 			ImGuizmo.SetImGuiContext(Context);
 		}
 
-		/// <summary>
-		///     The mouse's motion over the last frame from the window's own events, also while the cursor is grabbed (its
-		///     position then means nothing to the UI, which gets none): drags that capture the cursor read it (the scene view's
-		///     look and pan).
-		/// </summary>
-		public NVector2 RawMouseDelta { get; private set; }
-
-		private NVector2 rawMouseMotion;
-
 		public void NewFrame(float deltaTime, int width, int height)
 		{
 			Activate();
@@ -168,8 +159,6 @@ namespace LELEngine.Editor
 			io.DisplaySize = new NVector2(Math.Max(1, width), Math.Max(1, height));
 			io.DisplayFramebufferScale = new NVector2(1f, 1f);
 			io.DeltaTime = deltaTime > 0f ? deltaTime : 1f / 60f;
-			RawMouseDelta = rawMouseMotion;
-			rawMouseMotion = NVector2.Zero;
 			UpdateCursor();
 
 			ImGui.NewFrame();
@@ -335,7 +324,6 @@ namespace LELEngine.Editor
 
 		private void OnMouseMove(MouseMoveEventArgs e)
 		{
-			rawMouseMotion += new NVector2(e.DeltaX, e.DeltaY);
 			ImGui.SetCurrentContext(Context);
 			// A grabbed cursor (game view mouse look) has no meaningful position for the UI.
 			if (window.CursorState != CursorState.Grabbed)

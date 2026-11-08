@@ -15,9 +15,9 @@ namespace LELEngine.Editor
 	///     The editable view of the scene, rendered by the game's own renderer (same lighting and GI as the game)
 	///     from an editor camera that is not part of the scene.
 	///     Right mouse: look + WASD/QE fly (Shift faster, wheel while flying changes the speed); middle mouse: pan (the
-	///     scene follows the mouse at the depth of what is under it); both drags capture the cursor until released (it comes
-	///     back where it was) and go on outside the view; wheel: dolly a fifth of the way to what the mouse
-	///     points at (an object or the ground plane), as fast far away as close up; F: frame the selection;
+	///     scene follows the mouse at the depth of what is under or near it); both drags last until released, over the view
+	///     or not; wheel: dolly a fifth of the way to what the mouse points at (a mesh, else the depth of what is drawn near
+	///     the cursor or in the view: <see cref="NavigationDepth" />), as fast far away as close up; F: frame the selection;
 	///     W / E / R: move / rotate / scale gizmo; left click: select; handles of the selection's 2D colliders
 	///     (<see cref="Physics2DGizmos" />).
 	/// </summary>
@@ -35,6 +35,23 @@ namespace LELEngine.Editor
 
 		/// <summary>Depth the view looks at (pans move the scene at it).</summary>
 		public float FocusDistance => focusDistance;
+
+		/// <summary>The view's image in the main window's client coordinates (tests).</summary>
+		public (NVector2 Min, NVector2 Size) ViewRect => (viewMin, viewSize);
+
+		/// <summary>The camera drag's state and the last frame's motion (tests: logcamera=file).</summary>
+		public string DescribeDrag()
+		{
+			string typical = TryViewDepth(out float median) ? median.ToString("0.##") : "-";
+			return $"drag {cameraDrag} delta ({lastDragDelta.X:0.#}, {lastDragDelta.Y:0.#}) camera ({position.X:0.###}, {position.Y:0.###}, {position.Z:0.###}) yaw {yaw:0.##} pitch {pitch:0.##} focus {focusDistance:0.##} drawn {typical} source {navigationSource} at ({navigationAt.X:0.###}, {navigationAt.Y:0.###})";
+		}
+
+		// The last frame's drag motion (tests).
+		private NVector2 lastDragDelta;
+
+		// Where the last navigation depth came from and the point of the view it was asked for (tests).
+		private string navigationSource = "-";
+		private Vector2 navigationAt;
 
 		/// <summary>Views render every frame, not only on changes (animated shaders, time-based effects).</summary>
 		public bool AlwaysRefresh { get; private set; }
@@ -82,10 +99,12 @@ namespace LELEngine.Editor
 		private NVector2 pressPosition;
 
 		// Camera drags: look (right button, with WASD flight) and pan (middle button). One starts on a press over the view
-		// and lasts while its button is held, over the view or not; the cursor is captured meanwhile (hidden, no screen edge
-		// stops the motion) and put back where the drag started. Before 2026-11-08 a pan stopped when the cursor left the
-		// view and started only past ImGui's 6 px drag threshold, while looking did neither, and both stopped at the screen's
-		// edge: the user found panning and turning inconsistent.
+		// and lasts while its button is held, over the view or not, moving by the cursor's motion as the UI sees it. Before
+		// 2026-11-08 a pan stopped when the cursor left the view and started only past ImGui's 6 px drag threshold, while
+		// looking did neither: the user found panning and turning inconsistent. The cursor is never captured (hidden with
+		// relative motion): GLFW's warps came in as jumps, and remote desktops and tablets send absolute positions, which a
+		// captured cursor turns into motion towards one side only (see ImGuiController.CapturedMouseDelta's history in
+		// the engine's CLAUDE.md, "Camera drags").
 		private enum CameraDrag
 		{
 			None,
@@ -94,18 +113,15 @@ namespace LELEngine.Editor
 		}
 
 		private CameraDrag cameraDrag;
-		private NVector2 dragStartMouse;
-		private bool cursorCaptured;
-		private int capturedFrames;
 
 		private bool flying => cameraDrag == CameraDrag.Look;
 
 		private const float LookDegreesPerPixel = 0.2f;
 
-		// A pan over empty space moves the ground plane under the cursor only while the ground is no further than this many
-		// times the view's focus distance (looking along the ground it is thousands of units away: the pan raced).
-		private const float GroundPanReach = 4f;
 		private bool pressCanPick;
+
+		// The view's render as depths on the CPU: the depth pans and zooms work at where the cursor is over no mesh.
+		private readonly SceneDepthProbe depthProbe = new SceneDepthProbe();
 
 		#endregion
 
@@ -284,6 +300,7 @@ namespace LELEngine.Editor
 			}
 
 			ViewRenderer.EnsureSize((int)viewSize.X, (int)viewSize.Y);
+			depthProbe.Update();
 			ApplyCamera();
 			// Effects orient and sort for the scene camera when the scene has no camera of its own.
 			LELEngine.VFX.VfxRuntime.FallbackCamera = camera;
@@ -294,6 +311,7 @@ namespace LELEngine.Editor
 				ViewRenderer.Renderer.Settings.RenderUI = false;
 				DrawGizmos();
 				ViewRenderer.Render(camera, editor.Scene);
+				depthProbe.Capture(ViewRenderer.Renderer, camera);
 			}
 		}
 
@@ -432,6 +450,7 @@ namespace LELEngine.Editor
 
 		public void Dispose()
 		{
+			depthProbe.Dispose();
 			ViewRenderer?.Dispose();
 			ViewRenderer = null;
 		}
@@ -568,30 +587,38 @@ namespace LELEngine.Editor
 
 		private void UpdateCameraControls(bool hovered)
 		{
+			controlsFrame = ImGui.GetFrameCount();
 			ImGuiIOPtr io = ImGui.GetIO();
 			smoothDeltaTime += (Math.Min(io.DeltaTime, 0.1f) - smoothDeltaTime) * DeltaTimeSmoothing;
 			float dt = smoothDeltaTime;
 
+			bool began = false;
 			if (cameraDrag == CameraDrag.None && hovered)
 			{
 				if (ImGui.IsMouseClicked(ImGuiMouseButton.Right))
 				{
 					BeginCameraDrag(CameraDrag.Look);
 					ImGui.SetWindowFocus();
+					began = true;
 				}
 				else if (ImGui.IsMouseClicked(ImGuiMouseButton.Middle))
 				{
 					BeginCameraDrag(CameraDrag.Pan);
 					SetPanDepth();
+					began = true;
 				}
 			}
 
-			if (cameraDrag != CameraDrag.None && !ImGui.IsMouseDown(cameraDrag == CameraDrag.Look ? ImGuiMouseButton.Right : ImGuiMouseButton.Middle))
-			{
-				EndCameraDrag();
-			}
-
+			// This frame's motion first: the frame whose release ends the drag still moves the camera by it (it was dropped,
+			// and quick strokes lost their last steps). Not the press's frame: ImGui takes the positions that came after a
+			// button's press in the next frame, so this frame's motion is all from before the press.
 			NVector2 mouseDelta = CameraDragDelta(io);
+			if (began)
+			{
+				mouseDelta = NVector2.Zero;
+				lastDragDelta = NVector2.Zero;
+			}
+			bool released = cameraDrag != CameraDrag.None && !ImGui.IsMouseDown(cameraDrag == CameraDrag.Look ? ImGuiMouseButton.Right : ImGuiMouseButton.Middle);
 			if (cameraDrag == CameraDrag.Pan)
 			{
 				// The scene follows the mouse at the depth chosen when the drag started.
@@ -600,6 +627,19 @@ namespace LELEngine.Editor
 				Vector3 up = Vector3.Cross(right, forward).Normalized();
 				float worldPerPixel = 2f * focusDistance * MathF.Tan(camera.FoV * 0.5f * MathF.PI / 180f) / Math.Max(1f, viewSize.Y);
 				position += (-right * mouseDelta.X + up * mouseDelta.Y) * worldPerPixel;
+				if (released)
+				{
+					EndCameraDrag();
+				}
+
+				return;
+			}
+
+			if (flying && released)
+			{
+				yaw -= mouseDelta.X * LookDegreesPerPixel;
+				pitch = Math.Clamp(pitch + mouseDelta.Y * LookDegreesPerPixel, -89f, 89f);
+				EndCameraDrag();
 				return;
 			}
 
@@ -641,12 +681,16 @@ namespace LELEngine.Editor
 				return;
 			}
 
-			// Wheel: towards what the mouse points at (an object, else the ground plane) by a share of the distance, so a
-			// notch moves as much of the view far away as close up, and never through the point.
+			// Wheel: towards what the mouse points at by a share of the distance, so a notch moves as much of the view far away
+			// as close up, and never through the point.
 			if (io.MouseWheel != 0f)
 			{
-				Pick(ImGui.GetMousePos(), out _, out Vector3? point);
-				Vector3 target = point ?? position + Forward() * focusDistance;
+				// Towards the point of the cursor's ray at the depth there is something to look at (NavigationDepth): the mesh
+				// hit itself, or the depth of what is drawn near the cursor, or of the view's scene.
+				NVector2 mouse = ImGui.GetMousePos();
+				float depth = NavigationDepth(mouse);
+				Vector3 ray = MouseRay(mouse);
+				Vector3 target = position + ray * (depth / Math.Max(0.05f, Vector3.Dot(ray, Forward())));
 				Vector3 toTarget = target - position;
 				if (toTarget.LengthSquared > 1e-8f)
 				{
@@ -664,44 +708,32 @@ namespace LELEngine.Editor
 		private void BeginCameraDrag(CameraDrag drag)
 		{
 			cameraDrag = drag;
-			dragStartMouse = ImGui.GetMousePos();
-			capturedFrames = 0;
-			// Only a focused editor window captures the cursor (automated runs drive the view with scripted input).
-			if (editor.HasUI && editor.Window != null && editor.Window.IsFocused && !Automation.WindowCapture.Active)
-			{
-				editor.Window.CursorState = OpenTK.Windowing.Common.CursorState.Grabbed;
-				cursorCaptured = true;
-			}
 		}
 
 		private void EndCameraDrag()
 		{
 			cameraDrag = CameraDrag.None;
-			if (!cursorCaptured)
-			{
-				return;
-			}
-
-			cursorCaptured = false;
-			editor.Window.CursorState = OpenTK.Windowing.Common.CursorState.Normal;
-			// Back where the drag started (the UI saw no motion meanwhile).
-			editor.Window.MousePosition = new Vector2(dragStartMouse.X, dragStartMouse.Y);
-			ImGui.GetIO().AddMousePosEvent(dragStartMouse.X, dragStartMouse.Y);
 		}
 
-		/// <summary>The view stopped drawing during a camera drag (tab switched, window closed): the cursor is released.</summary>
+		/// <summary>
+		///     The view stopped drawing during a camera drag (tab switched, window closed): its controls missed last frame, and
+		///     the cursor is released. A drag the controls ran last frame ends there, after the frame's motion (ending it here
+		///     on the release dropped the last frame's motion).
+		/// </summary>
 		private void ReleaseCameraDragIfAbandoned()
 		{
-			if (cameraDrag != CameraDrag.None && !ImGui.IsMouseDown(ImGuiMouseButton.Right) && !ImGui.IsMouseDown(ImGuiMouseButton.Middle))
+			if (cameraDrag != CameraDrag.None && controlsFrame < ImGui.GetFrameCount() - 1)
 			{
 				EndCameraDrag();
 			}
 		}
 
+		// The UI frame the camera controls last ran in.
+		private int controlsFrame;
+
 		/// <summary>
-		///     The mouse's motion this frame for a camera drag: what reached the UI (scripted input in tests, the real mouse
-		///     before the capture takes hold) plus the window's own motion while the cursor is captured (the UI then gets none).
-		///     The first captured frame's motion is the capture itself (the cursor centred) and is skipped.
+		///     The mouse's motion this frame for a camera drag: the cursor's, as the UI sees it (real input of any device, local
+		///     or remote, and scripted input in tests alike). ImGui sets it unknown (huge) when the window lost the focus.
 		/// </summary>
 		private NVector2 CameraDragDelta(ImGuiIOPtr io)
 		{
@@ -711,31 +743,200 @@ namespace LELEngine.Editor
 				delta = NVector2.Zero;
 			}
 
-			if (cursorCaptured && capturedFrames++ > 0)
-			{
-				delta += editor.Window.Controller.RawMouseDelta;
-			}
-
+			lastDragDelta = cameraDrag != CameraDrag.None ? delta : NVector2.Zero;
 			return delta;
 		}
 
-		/// <summary>
-		///     The depth a pan moves the scene at (it follows the mouse there): that of the object under the cursor, else of
-		///     the ground plane under it while that is not far beyond the view's focus, else the focus distance as it is.
-		/// </summary>
+		/// <summary>The depth a pan moves the scene at (the scene follows the mouse there): <see cref="NavigationDepth" />.</summary>
 		private void SetPanDepth()
 		{
-			GameObject hit = Pick(ImGui.GetMousePos(), out _, out Vector3? point);
-			if (!point.HasValue)
+			focusDistance = NavigationDepth(ImGui.GetMousePos());
+		}
+
+		/// <summary>
+		///     The depth (along the view) a pan or a zoom works at for a point of the view, from what is there now:
+		///     <list type="number">
+		///         <item>under the cursor: the nearer of the mesh it is over (the exact pick) and a cloud (where the light through it
+		///         falls to half, <see cref="Volumetrics.VolumetricObjectBase.Raycast" />);</item>
+		///         <item>the surface drawn nearest to the cursor within <see cref="NearSurfaceReach" /> of the view's height
+		///         (<see cref="SceneDepthProbe" />: the view's own render, reduced on the GPU and read back without a stall);</item>
+		///         <item>the median depth of what the view shows: per ray of a 16 x 9 grid the nearer of the render's surface and a
+		///         cloud;</item>
+		///         <item>the last depth used.</item>
+		///     </list>
+		///     Before 2026-11-08 it was the depth of whatever the last zoom hit, or of the ground plane (y = 0) where nothing was
+		///     hit, kept until the next zoom: after zooms here and there a pan over empty space barely moved or raced (the user's
+		///     report). The GI's global distance field was not used: see <see cref="SceneDepthProbe" />.
+		/// </summary>
+		private float NavigationDepth(NVector2 mouse)
+		{
+			Vector3 forward = Forward();
+			var view = new Vector2((mouse.X - viewMin.X) / Math.Max(1f, viewSize.X), (mouse.Y - viewMin.Y) / Math.Max(1f, viewSize.Y));
+			navigationAt = view;
+			float under = float.MaxValue;
+			if (Pick(mouse, out _, out Vector3? point) != null && point.HasValue)
 			{
-				return;
+				under = Vector3.Dot(point.Value - position, forward);
+				navigationSource = "mesh";
 			}
 
-			float depth = Vector3.Dot(point.Value - position, Forward());
-			if (hit != null || depth <= Math.Max(focusDistance, 10f) * GroundPanReach)
+			Vector3 ray = MouseRay(mouse);
+			float depthPerDistance = Math.Max(0.05f, Vector3.Dot(ray, forward));
+			if (TryCloudHit(ray, under < float.MaxValue ? under / depthPerDistance : camera.FarClip, out float cloud) && cloud * depthPerDistance < under)
 			{
-				focusDistance = Math.Max(MinFocusDistance, depth);
+				under = cloud * depthPerDistance;
+				navigationSource = "cloud";
 			}
+
+			if (under < float.MaxValue && under > MinFocusDistance)
+			{
+				return under;
+			}
+
+			if (depthProbe.TryDepthNear(view, NearSurfaceReach, position, forward, out float near))
+			{
+				navigationSource = "near";
+				return Math.Max(MinFocusDistance, near);
+			}
+
+			if (TryViewDepth(out float typical))
+			{
+				navigationSource = "view";
+				return Math.Max(MinFocusDistance, typical);
+			}
+
+			if (TryNearestObjectDistance(out float around))
+			{
+				navigationSource = "around";
+				return Math.Max(MinFocusDistance, around);
+			}
+
+			navigationSource = "last";
+			return focusDistance;
+		}
+
+		/// <summary>
+		///     The view shows nothing: the distance from the camera to the nearest object of the scene (a renderer's or a cloud's
+		///     box), the scale of what is around it (the user's idea: the occupancy around the camera). Boxes holding the camera
+		///     do not count: whatever of them lies where the camera looks would have been drawn.
+		/// </summary>
+		private bool TryNearestObjectDistance(out float distance)
+		{
+			distance = float.MaxValue;
+			Scene scene = editor.Scene;
+			if (scene == null)
+			{
+				return false;
+			}
+
+			foreach (MeshRenderer renderer in scene.Renderers)
+			{
+				Mesh mesh = renderer.Mesh;
+				if (mesh != null && renderer.isActiveAndEnabled && renderer.gameObject.hideFlags == HideFlags.None)
+				{
+					NearestBox(mesh.BoundsMin, mesh.BoundsMax, renderer.transform.LocalToWorld, ref distance);
+				}
+			}
+
+			foreach (Volumetrics.VolumetricObjectBase volume in Volumetrics.VolumetricRuntime.Objects)
+			{
+				if (volume.isActiveAndEnabled && volume.gameObject?.scene == scene)
+				{
+					NearestBox(volume.Size * -0.5f, volume.Size * 0.5f, volume.transform.LocalToWorld, ref distance);
+				}
+			}
+
+			return distance < float.MaxValue;
+		}
+
+		// The distance from the camera to a local box placed in the world (its world-aligned bounds), kept when nearer; a box
+		// holding the camera is left out.
+		private void NearestBox(Vector3 localMin, Vector3 localMax, Matrix4 localToWorld, ref float distance)
+		{
+			var min = new Vector3(float.MaxValue);
+			var max = new Vector3(float.MinValue);
+			for (int i = 0; i < 8; i++)
+			{
+				var corner = new Vector3((i & 1) != 0 ? localMax.X : localMin.X, (i & 2) != 0 ? localMax.Y : localMin.Y, (i & 4) != 0 ? localMax.Z : localMin.Z);
+				Vector3 world = Vector3.TransformPosition(corner, localToWorld);
+				min = Vector3.ComponentMin(min, world);
+				max = Vector3.ComponentMax(max, world);
+			}
+
+			Vector3 outside = Vector3.ComponentMax(Vector3.ComponentMax(min - position, position - max), Vector3.Zero);
+			float d = outside.Length;
+			if (d > 0f && float.IsFinite(d))
+			{
+				distance = Math.Min(distance, d);
+			}
+		}
+
+		/// <summary>The nearest cloud of the scene a ray from the camera meets (its distance along the ray), within a distance.</summary>
+		private bool TryCloudHit(Vector3 ray, float maxDistance, out float distance)
+		{
+			distance = float.MaxValue;
+			foreach (Volumetrics.VolumetricObjectBase volume in Volumetrics.VolumetricRuntime.Objects)
+			{
+				if (volume.isActiveAndEnabled && volume.gameObject?.scene == editor.Scene && volume.Raycast(position, ray, Math.Min(maxDistance, distance), out float t))
+				{
+					distance = Math.Min(distance, t);
+				}
+			}
+
+			return distance < float.MaxValue;
+		}
+
+		/// <summary>The median depth of what the view shows: per ray of a 16 x 9 grid, the nearer of the render's surface and a cloud.</summary>
+		private bool TryViewDepth(out float depth)
+		{
+			const int Columns = 16;
+			const int Rows = 9;
+			viewDepths.Clear();
+			Vector3 forward = Forward();
+			for (int row = 0; row < Rows; row++)
+			{
+				for (int column = 0; column < Columns; column++)
+				{
+					var view = new Vector2((column + 0.5f) / Columns, (row + 0.5f) / Rows);
+					float nearest = depthProbe.TryDepthAt(view, position, forward, out float drawn) ? drawn : float.MaxValue;
+					Vector3 ray = MouseRay(viewMin + new NVector2(view.X * viewSize.X, view.Y * viewSize.Y));
+					float depthPerDistance = Math.Max(0.05f, Vector3.Dot(ray, forward));
+					if (TryCloudHit(ray, nearest < float.MaxValue ? nearest / depthPerDistance : camera.FarClip, out float cloud))
+					{
+						nearest = Math.Min(nearest, cloud * depthPerDistance);
+					}
+
+					if (nearest < float.MaxValue)
+					{
+						viewDepths.Add(nearest);
+					}
+				}
+			}
+
+			depth = 0f;
+			if (viewDepths.Count == 0)
+			{
+				return false;
+			}
+
+			viewDepths.Sort();
+			depth = viewDepths[viewDepths.Count / 2];
+			return true;
+		}
+
+		private readonly System.Collections.Generic.List<float> viewDepths = new System.Collections.Generic.List<float>();
+
+		/// <summary>How far from the cursor (a share of the view's height) a drawn surface still sets the depth to navigate at.</summary>
+		private const float NearSurfaceReach = 0.1f;
+
+		/// <summary>The direction of the ray through a point of the view (unit length).</summary>
+		private Vector3 MouseRay(NVector2 mouse)
+		{
+			float ndcX = (mouse.X - viewMin.X) / viewSize.X * 2f - 1f;
+			float ndcY = 1f - (mouse.Y - viewMin.Y) / viewSize.Y * 2f;
+			Matrix4 inverse = camera.ViewProjectionMatrix.Inverted();
+			Vector3 direction = Unproject(new Vector4(ndcX, ndcY, 1f, 1f), inverse) - Unproject(new Vector4(ndcX, ndcY, -1f, 1f), inverse);
+			return direction.LengthSquared > 1e-12f ? direction.Normalized() : Forward();
 		}
 
 		private void HandleToolKeys()
