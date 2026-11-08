@@ -89,7 +89,7 @@ namespace LELEngine.Editor
 		protected override void OnLoad()
 		{
 			base.OnLoad();
-			string layout = Path.Combine(RecentProjects.EditorDataFolder, "layout.ini");
+			string layout = ImGuiController.LayoutFileOverride ?? Path.Combine(RecentProjects.EditorDataFolder, "layout.ini");
 			bool layoutExisted = File.Exists(layout);
 			imgui = new ImGuiController(this, layout);
 			EditorStyle.Apply();

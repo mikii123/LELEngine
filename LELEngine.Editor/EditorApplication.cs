@@ -177,6 +177,13 @@ namespace LELEngine.Editor
 
 		private bool WindowStatesWritable => !automated || namedWindowStatesFile != null;
 
+		/// <summary>
+		///     The scene view's camera and the scripted windows' states are written: the user's own runs, or an automated run
+		///     given a state file of its own (editorstatefile=). Before 2026-11-08 automated runs wrote them when closing, and
+		///     test runs that placed the camera moved the user's.
+		/// </summary>
+		private bool EditorStateWritable => !automated || SceneViewPanel.StateFileOverride != null;
+
 		private readonly string namedWindowStatesFile;
 		private string savedWindowStates;
 		private double nextStateCheck;
@@ -206,6 +213,7 @@ namespace LELEngine.Editor
 			// Batch mode is automated too: the user's window states and recent projects stay as they are.
 			automated = !hasUI || IsAutomatedRun(args);
 			namedWindowStatesFile = GetValue(args, "windowsfile");
+			SceneViewPanel.StateFileOverride = GetValue(args, "editorstatefile");
 			Edits = new EditTracker(this);
 			Extensions = new EditorExtensions(this);
 			Tests = new EditorTests(this);
@@ -468,6 +476,16 @@ namespace LELEngine.Editor
 			Edits.Flush();
 			RunDeferred();
 
+			// ImGui focuses every window when it appears, so at the start each one took the focus in drawing order, and the last
+			// one docked with others (Console) brought its tab to the front over the one the layout saved (the user's report,
+			// 2026-11-08: Project behind Console after every start). The windows the start opens keep no focus; requests below
+			// (automation, the windows' own) still apply.
+			if (startupFocusFrames > 0)
+			{
+				startupFocusFrames--;
+				ImGui.SetWindowFocus((string)null);
+			}
+
 			if (testHooks.PendingFocus != null)
 			{
 				ImGui.SetWindowFocus(testHooks.PendingFocus);
@@ -481,6 +499,90 @@ namespace LELEngine.Editor
 			}
 
 			DrawModals();
+			TrackFrontTabs();
+		}
+
+		/// <summary>The windows in front in their docks (or floating and open) at the last frame, '|'-separated (tests).</summary>
+		public string FrontTabs => frontTabs;
+
+		/// <summary>Every docked window of the main context: submitted this frame, its dock, front or not, the dock's selected tab (tests).</summary>
+		public string DescribeDocks()
+		{
+			var text = new System.Text.StringBuilder();
+			foreach (IEditorPanel panel in GetPanels())
+			{
+				if (panel.IsWholeContext || string.IsNullOrEmpty(panel.ImGuiName) || panel.Owner != Window?.Controller)
+				{
+					continue;
+				}
+
+				ImGuiWindowPtr window = ImGuiP.FindWindowByName(panel.ImGuiName);
+				if (window.IsNull)
+				{
+					text.Append(panel.ImGuiName).Append(": none; ");
+					continue;
+				}
+
+				ImGuiDockNodePtr node = window.DockNode;
+				text.Append(panel.ImGuiName).Append(window.Active ? " active" : " inactive")
+					.Append($" dock {(node.IsNull ? 0u : node.ID):X} tab {window.TabId:X}")
+					.Append(window.DockTabIsVisible ? " front" : "")
+					.Append(node.IsNull ? "" : $" node-selected {node.SelectedTabId:X}")
+					.Append(node.IsNull || node.TabBar.IsNull ? "" : $" bar-selected {node.TabBar.SelectedTabId:X} next {node.TabBar.NextSelectedTabId:X}")
+					.Append("; ");
+			}
+
+			return text.ToString();
+		}
+
+		// The docked windows whose tab is in front, last frame; when they changed and when the change is written.
+		private string frontTabs;
+		private double frontTabsChangedAt = -1.0;
+
+		// UI frames left in which the focus windows took by appearing is dropped (set when a project opens).
+		private int startupFocusFrames;
+
+		/// <summary>
+		///     The layout records each dock's front tab (Console or Inspector where both share a place), but ImGui writes the
+		///     layout on its own only when a window moves or resizes, so a tab brought to the front was lost at the next start
+		///     (the user's report, 2026-11-08). When the set of front windows changes, the layout is written half a second
+		///     later, once no button is held.
+		/// </summary>
+		private void TrackFrontTabs()
+		{
+			var front = new System.Text.StringBuilder();
+			foreach (IEditorPanel panel in GetPanels())
+			{
+				// Windows of this ImGui context only (OS windows of their own and the main window as a whole have no name here).
+				if (panel.IsWholeContext || string.IsNullOrEmpty(panel.ImGuiName) || panel.Owner != Window?.Controller)
+				{
+					continue;
+				}
+
+				ImGuiWindowPtr window = ImGuiP.FindWindowByName(panel.ImGuiName);
+				if (!window.IsNull && window.Active && (window.DockIsActive ? window.DockTabIsVisible : !window.Collapsed))
+				{
+					front.Append(panel.ImGuiName).Append('|');
+				}
+			}
+
+			string now = front.ToString();
+			double time = ImGui.GetTime();
+			if (frontTabs == null)
+			{
+				frontTabs = now;
+			}
+			else if (now != frontTabs)
+			{
+				frontTabs = now;
+				frontTabsChangedAt = time;
+			}
+
+			if (frontTabsChangedAt >= 0.0 && time - frontTabsChangedAt > 0.5 && !ImGui.IsAnyMouseDown())
+			{
+				frontTabsChangedAt = -1.0;
+				Window?.Controller?.SaveLayout();
+			}
 		}
 
 		/// <summary>
@@ -677,6 +779,10 @@ namespace LELEngine.Editor
 			AssetDatabase.Initialize(project.AssetsPath, true);
 			ModelAssets.CacheFolder = project.ModelCachePath;
 			AssetThumbnails.CacheFolder = project.ThumbnailCachePath;
+			// Made clouds (Library/VolumeCache): read instead of made again, written after the editor made one. Before the scene
+			// is read: its volumetric objects start reading their files as they are read.
+			LELEngine.Volumetrics.VolumeCache.Writable = true;
+			LELEngine.Volumetrics.VolumeCache.Folder = project.VolumeCachePath;
 			ImportChangedModels(true);
 			// Remapped controls of play mode are the project's, not the user's (a built game keeps them in AppData).
 			LELEngine.InputSystem.InputManager.UserDataPath = Path.Combine(project.LibraryPath, "InputUserData.json");
@@ -714,8 +820,11 @@ namespace LELEngine.Editor
 			Scripts = new ScriptDomain(this, project);
 			Scripts.Initialize();
 
-			// The windows as they were (not in automated runs: they get the default ones).
-			restoreWindowsPending = !automated;
+			// The windows as they were (not in automated runs: they get the default ones, unless given a windows file of their
+			// own, windowsfile=, which then starts like the user's editor).
+			restoreWindowsPending = WindowStatesWritable;
+			// The docks keep the front tabs the layout saved (see DrawUI).
+			startupFocusFrames = 4;
 
 			string scenePath = lastScene ?? project.StartScene;
 			if (scenePath != null && File.Exists(AssetDatabase.ToAbsolute(scenePath)))
@@ -780,6 +889,8 @@ namespace LELEngine.Editor
 			InternalStorage.Clear();
 			ModelAssets.CacheFolder = null;
 			AssetThumbnails.CacheFolder = null;
+			LELEngine.Volumetrics.VolumeCache.Folder = null;
+			LELEngine.Volumetrics.VolumeCache.Clear();
 			// Audio: the studio closes with the project, every bank and clip goes.
 			audioStudio?.Dispose();
 			audioStudio = null;
@@ -2866,10 +2977,20 @@ namespace LELEngine.Editor
 			if (Project != null)
 			{
 				Edits.SaveWaiting();
-				SceneView.SaveState(Project);
-				Extensions.SaveOpenWindows(Project);
+				if (EditorStateWritable)
+				{
+					SceneView.SaveState(Project);
+				}
+
+				if (!automated)
+				{
+					Extensions.SaveOpenWindows(Project);
+				}
+
 				SaveWindowStates();
 				hierarchy.SaveState();
+				// The docking layout with the front tab of every dock (ImGui saves it on its own only when a window moves).
+				Window?.Controller?.SaveLayout();
 			}
 		}
 
@@ -2891,8 +3012,12 @@ namespace LELEngine.Editor
 				return;
 			}
 
-			SceneView.SaveStateIfChanged(Project);
-			if (!IsPlaying)
+			if (EditorStateWritable)
+			{
+				SceneView.SaveStateIfChanged(Project);
+			}
+
+			if (!IsPlaying && !automated)
 			{
 				Extensions.SaveOpenWindowsIfChanged(Project);
 			}

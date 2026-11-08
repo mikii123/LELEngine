@@ -387,13 +387,16 @@ namespace LELEngine.Editor
 			// focusscene=N: Scene tab to the front at frame N; nudgecamera=N: turn the scene camera by 20 degrees.
 			if (Is("focusscene")) editor.SceneView.Focus();
 
-			// focuswindow=N;Name: that window to the front at frame N (consumed by the next UI frame).
+			// focuswindow=N;Name|M;Other: that window to the front at frame N (consumed by the next UI frame).
 			if (values.TryGetValue("focuswindow", out string focus))
 			{
-				string[] parts = focus.Split(';');
-				if (parts.Length == 2 && int.TryParse(parts[0], out int at) && at == frame)
+				foreach (string entry in focus.Split('|'))
 				{
-					PendingFocus = parts[1];
+					string[] parts = entry.Split(';');
+					if (parts.Length == 2 && int.TryParse(parts[0], out int at) && at == frame)
+					{
+						PendingFocus = parts[1];
+					}
 				}
 			}
 			if (Is("nudgecamera")) editor.SceneView.RotateView(20f);
@@ -595,6 +598,18 @@ namespace LELEngine.Editor
 			}
 
 			// logsceneview=N|M: the scene view camera's position, view direction and focus distance.
+			// logfronttabs=N|M: the windows in front in their docks (the layout restores each dock's front tab).
+			if (IsListed("logfronttabs"))
+			{
+				Debug.Log($"[Test] Frame {frame} front tabs: {editor.FrontTabs}");
+			}
+
+			// logdocks=N|M: every docked window's state (submitted, dock, front, the dock's selected tab).
+			if (IsListed("logdocks"))
+			{
+				Debug.Log($"[Test] Frame {frame} docks: {editor.DescribeDocks()}");
+			}
+
 			if (IsListed("logsceneview"))
 			{
 				Debug.Log($"[Test] Scene view at {editor.SceneView.CameraPosition}, forward {editor.SceneView.CameraForward}, focus {editor.SceneView.FocusDistance:0.###}");

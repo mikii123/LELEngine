@@ -880,6 +880,11 @@ Added for New Frontier's port of Unity's SpaceStonesPack (Standard materials wit
   ...) plus every ImGuiCol overridable by name, text size via `style.FontSizeBase`. `ImGuiController.ApplyStyle`
   re-applies it per window when `EditorPreferences.ThemeVersion` changes (Audio Studio adds its own style on top).
   Monospace font per context: `EditorFonts.PushMono(size)` (Consolas / Cascadia Mono / ImGui default).
+- A new selection, wherever it comes from (a scene view pick, a field, the CLI), unfolds its parents in the hierarchy
+  and scrolls its row to the middle when it is out of view (2026-11-08, the user's ask; `HierarchyPanel.revealSelection`,
+  the same unfolding as an object field's ping, no flash); the highlight is the row's selection. Verified: selecting
+  Flight's Game UI/Preview Stage/Preview Camera Root/Preview Orbit/Preview Camera with the list scrolled to its end
+  unfolded the four parents and brought the row into view.
 - Hierarchy folding (2026-10-24): rows start folded; `HierarchyExpansion` keeps the unfolded rows (`Expanded`) per project folder + scene / prefab path
   (object ids) in `%APPDATA%\LELEngine\Editor\hierarchy.json`, never in the project; saved 0.5 s after a change and
   in `SaveEditorState`. Automated runs read it and save nothing unless `hierarchyfile=path`. The editor has no
@@ -890,10 +895,32 @@ Added for New Frontier's port of Unity's SpaceStonesPack (Standard materials wit
   (`WindowStates.LastScenes` / `ReloadScriptsOnPlay`, saved with the window states), not in Project.json (2026-10-27).
 - Automated runs read the user's `layout.ini` (and the other windows' ini files) but never save them
   (`ImGuiController.ReadOnlyLayouts`), and their projects stay out of `recent.json`: a test that docked the console
-  elsewhere once moved the user's real console.
+  elsewhere once moved the user's real console. Since 2026-11-08 they never write the user's `Library/EditorState.json`
+  (scene camera) or `windows.json` either (`EditorStateWritable`, `WindowStatesWritable`): runs that placed the camera
+  for a test moved the user's. Files of their own: `layoutfile=`, `editorstatefile=`, `windowsfile=` (with it the run
+  also restores the windows from that file at start, as the user's editor does); tests copy the user's files there.
+- Each dock's front tab survives a restart (2026-11-08, the user's report: Console and Inspector share places, the wrong
+  one came to the front): the layout records each dock node's `Selected` tab, but ImGui writes the ini only when a window
+  moves or resizes, so `EditorApplication.TrackFrontTabs` writes it (`ImGuiController.SaveLayout`) half a second after
+  the set of front windows changed, and `SaveEditorState` at close (no longer only ImGui's own save in `DestroyContext`).
+  At start every window focused itself as it appeared (ImGui focuses appearing windows), in drawing order, and the last
+  docked one, Console, brought its tab over the saved one: the first UI frames of a project drop that focus
+  (`startupFocusFrames`). Tab ids in the ini are ImGui's hash of "#TAB" seeded with the window's id, CRC32C since
+  ImGui 1.92 (Project 0x9C21DE82, Console 0xEA83D666, Inspector 0x36DC96AB, Lighting 0x29B5A1D1, Scene 0xE601B12F,
+  Game 0xD1EB2482, Hierarchy 0xBABDAE5E). The user's `layout.ini` had not been written since 2026-10-22 although their
+  editor (Editor.cmd, Release) wrote it when reproduced: not explained, and no longer depends on ImGui's exit save.
+- The editor crashed when exiting after a transform gizmo drag (access violation in cimguizmo.dll at 0x33914 / 0x33923;
+  WER logged 50 of them on 2026-11-02 and the user's on 2026-11-08): cimguizmo.dll links its own copy of ImGui, whose
+  context pointer (`ImGuizmo.SetImGuiContext`) still pointed at the destroyed context, and ImGuizmo's static buffers
+  were freed through that copy's `MemFree` at process exit, which reads the context. `ImGuiController.Dispose` points
+  ImGuizmo at the current context (null) after `DestroyContext`. Reproduced and verified with `ldrag=60;sceneview@0.5,0.5;150,0`
+  on a scratch project's cube (exit code 0, no WER event); look in the Application event log (Id 1000) for crashes the
+  user did not mention.
 - Test hooks: `log=N;Type;text` (nested calls, Exception with an inner cause), `consoleselect=N;text`,
   `preferences=N;Section`, `dockwindow=N;Window;Target` (dock next to another window, e.g. Console;Inspector for a
-  tall narrow console), anchors `console:row`, `consoleframe:i`, `consolefilter:Name`, `preferences:Section`.
+  tall narrow console), anchors `console:row`, `consoleframe:i`, `consolefilter:Name`, `preferences:Section`;
+  `focuswindow=N;Name|M;Name`, `logfronttabs=N|M` (`[Test] Frame N front tabs: Hierarchy|Scene|...`), `logdocks=N|M`
+  (each docked window: submitted, dock, tab id, front, the node's and tab bar's selected tab).
 
 ## GI method: fixed while running, only the active one allocates (2026-10-22)
 
@@ -934,6 +961,17 @@ Added for New Frontier's port of Unity's SpaceStonesPack (Standard materials wit
   2 * focusDistance * tan(fov / 2) / view height). `FocusDistance` follows wheel, pick, frame (F) and is saved with
   the view. Test hooks: `wheel=N;sceneview;notches|...`, `mdrag=N;sceneview;dx,dy|...`, `logsceneview=N|M`
   (position, forward, focus distance); anchor `sceneview`.
+- Camera drags (2026-11-08; the user found panning and turning inconsistent): look (right button) and pan (middle
+  button) start on a press over the view and last while the button is held, over the view or not; both read the motion
+  from the first pixel (`CameraDragDelta`); a focused editor window captures the cursor meanwhile (`CursorState.Grabbed`,
+  the motion from `ImGuiController.RawMouseDelta`, which ImGui does not get while grabbed; the first captured frame is
+  skipped) and puts it back where the drag started; automated runs (not focused) keep the cursor and drive the drags
+  with scripted ImGui input. Before, a pan stopped when the cursor left the view and started past ImGui's 6 px drag
+  threshold, turning did neither, and both stopped at the screen's edge. A pan's depth (the scene follows the mouse
+  there, `SetPanDepth`): the object under the cursor, else the ground plane while it is no further than 4 x the focus
+  distance (at least 10), else the focus distance: looking along the ground the plane was thousands of units away and
+  the pan raced. Verified: a 900 px middle drag running past the view's edge moved the camera the full 900 px at the
+  focus depth (even steps).
 - Flying (right button + WASD/QE) moves by the frame time averaged over about ten frames (`smoothDeltaTime`, Unity's
   smoothDeltaTime), not the raw one (2026-11-07). The user saw New Frontier's storm and the position gizmo "jump in
   random directions" when flying sideways, more the farther away, never when turning: with a volume filling the view
@@ -1064,6 +1102,14 @@ Added for New Frontier's port of Unity's SpaceStonesPack (Standard materials wit
   required), `CollectionDrawers` (lists: grip reorder, index, remove, count, add, drop to append; dictionaries: table,
   new-key row). Rows decorate any field kind through `InspectorContext.PendingRow` (taken by `BeginLine` / `Header`).
   The hierarchy selects on mouse release (a drag keeps the selection); the inspector has a lock (top right).
+- `[ShowIf(member)]` / `[ShowIf(member, value)]` and `[HideIf(...)]` (`Mono/Attributes.cs`, Odin's; 2026-11-08): the
+  inspector shows a field only while a field, property or parameterless method of the same object is true or equals
+  the value (several: all must hold); `FieldDrawer.IsShown`, checked before the field's headers; a missing member
+  shows the field and warns once. `Light`'s `SpotAngle` and `InnerSpot` are `[ShowIf(nameof(Type), LightType.Spot)]`
+  (the user's ask: a light shows only its type's settings).
+- The Transform header's right-click menu (2026-11-08): Reset Position / Reset Rotation / Reset Scale and Reset All
+  (local values, one undo step each, `InspectorPanel.ResetTransform`); other components keep Remove Component / Reset.
+  Verified with the CLI: `context "header:Transform"`, `click "menu:Reset Position"`, values read back, undo.
 - References unfold in place only with `[InlineEditor]` (Odin's; on a list or dictionary it applies to the elements
   through `InspectorContext.InlineElements`), 2026-10-24; without it they are a plain object field. `InlineEditors`
   (`Inspector/InlineEditors.cs`): a ScriptableObject's fields, a scene component's fields (scene undo, override marks),
@@ -1089,7 +1135,8 @@ Added for New Frontier's port of Unity's SpaceStonesPack (Standard materials wit
   first click that way until 2026-10-24).
 - Test hooks (TestHooks / TestAnchors): `drag=N;from;to|...` (press N, hover N+10, drop N+12), `click=`,
   `doubleclick=`, `rclick=`, `ctrlclick=` (N;anchor|...), anchors `hierarchy:Name`, `project:Folder/File.ext`,
-  `project:(empty)`, `component:Type`, `field:Type.field[@fraction]`, `row:Label/i[/row]`, `button:AddEntry`,
+  `project:(empty)`, `component:Type`, `field:Type.field[@fraction]` (`anchor@fx,fy`: that point of any anchor's rectangle,
+  `sceneview@0.5,0.5` the view's centre; plain anchors press 40 px in on their first line), `row:Label/i[/row]`, `button:AddEntry`,
   `button:InspectorLock` (the real lock button; `lockinspector=N` locks without clicking), `materialfield:Name` (a
   material's [KeywordEnum] combo, closed, or [Toggle] checkbox), `materialoption:Name/i` (option i of the open combo);
   `logfield=N;Object;Component.field|...`, `pingasset=N;path|...`, `lockinspector=N`, `undo=N|M`, `redo=`,
@@ -1461,7 +1508,8 @@ Added for New Frontier's port of Unity's SpaceStonesPack (Standard materials wit
 - Scene lights (`SceneLights`): `Light` components whose range reaches the shape take the transport's slots left after
   the cloud's own `Lights`, nearest first, whatever their intensity (a flash going dark keeps its slot: no rework when it
   flickers); `Light.VolumetricStrength` scales what the cloud takes (see "Local lights").
-- Made on the GPU from the settings, no bake (`VolumetricData`, compute shaders in `ShaderLibrary/Engine/Volumetrics`):
+- Made on the GPU from the settings (`VolumetricData`, compute shaders in `ShaderLibrary/Engine/Volumetrics`), unless
+  kept (see "Made clouds kept" below):
   density R8 with mips (`VolumetricGenerate.shader`, noise in `VolumetricNoise.glsl`), occupancy (densest voxel per 4^3
   block plus a voxel's border: the march jumps empty blocks), lit RGBA8 with mips (density, sqrt(sun optical depth / 16),
   ambient openness: one fetch a step; `VolumetricLight.shader`), the lights' transport at half resolution (2 x RGBA16F,
@@ -1472,7 +1520,41 @@ Added for New Frontier's port of Unity's SpaceStonesPack (Standard materials wit
   z slices within `VolumetricRuntime.WorkPerFrame` (8 M voxels a frame, at most 1 M a dispatch) into new textures that
   swap in when complete: a changed shape or noise rebuilds after the settings held 0.2 s (edit mode), the sun turning
   against the object relights (at most every 0.1 s), a moved light reworks its transport. Seed offset: `new
-  Random(Seed)` x 1000, the same numbers on any .NET.
+  Random(Seed)` x 1000, the same numbers on any .NET. A transport voxel counts 1 + 0.7 x lights voxels of the budget
+  (`TransportCostPerLight`; New Frontier's eight flash lights took 68 ms of the 780M in one frame, now spread over two).
+- Made clouds kept (2026-11-08, the user asked whether the volumes could load faster, in parallel, and be stored for
+  builds as textures are): measured on New Frontier's storm (12.6 M voxels, 780M), opening Flight made it with 70-94 ms of
+  the GPU's generate kernel and 37-87 ms of its light kernel over 3 frames, entering play mode made it again (the editor
+  unloads the scene and loads a copy), leaving play mode once more; a player made it at its first frames (586 ms of
+  generate on a first run: the noise kernel compiles then). `VolumeCache` (engine) keeps them:
+  - Keys that stay the same across runs and machines (`VolumetricObjectBase.DensityKey`: SHA-256 of
+    `VolumeFile.GeneratorVersion`, every setting the density depends on and the grid; `LitKey`: the density key plus
+    Density, ShadowReach, NoiseSize, TauMax; the sun is stored beside the lit voxels and compared within `SunTolerance`).
+    .NET's HashCode (ShapeHash and co.) is seeded per process: never a file key. Bump `GeneratorVersion` when the
+    generate or light kernels change what they make.
+  - GPU: `VolumetricData.Dispose` parks a complete cloud's density, occupancy, lit voxels and CPU copy
+    (`VolumeCache.Park`, kept `ParkSeconds` 120, at most `MaxParkedBytes` 768 MB); the next object's first build takes
+    them (`TryAdopt`: drawn at once when the lit key and sun fit, else relit), then works out its lights' transport.
+    Play / stop in the editor: `[Volumetrics] Space Storm: kept ... (nothing made)`.
+  - Files (`VolumeFile`, ".lelvol"): density R8 and lit RGBA8 at level 0 with the lit key and sun, in chunks of 8 z slices
+    compressed apart (Deflate, written and unpacked in parallel; the storm's 63 MB in 25 MB); mips and occupancy are made
+    after the upload. `VolumeCache.Folder`: the editor's `Library/VolumeCache` (`Writable`: a cloud the GPU made, still
+    drawn `WriteDelay` 1 s later, is read back through pixel buffers and a fence, no stall, and written on a worker thread;
+    files unused 30 days or past 2 GB go when a project opens), a player's `Data/Volumes`. An object read from a document
+    starts its file's read at once (`ISerializationCallbackReceiver.OnAfterDeserialize` -> `Prefetch`, the loading
+    thread included), so it runs beside the rest of the scene's load; its first build takes it (`WaitForFile`) and
+    uploads it at most `UploadBytesPerFrame` (32 MB) a frame (phase `Upload`); the CPU copy for `DensityAt` comes from it.
+    `Rebuild()` always makes the cloud. Frames of the storm made and read: identical bytes (scene view dumps).
+  - Builds: `VolumeBaker` (step 4b' of `GameBuilder`) lists the volumetric objects of the build's scenes (prefab instances
+    too) and Resources prefabs as detached copies (`DocumentValues.FromNode`, prefetch suppressed), copies their files from
+    `Library/VolumeCache` into `Data/Volumes`, and makes the missing ones' density when it has the GL context (batch:
+    `MakeDensity`; the player lights them: the lit voxels need the scene's sun). Log: `Volumes: 1 clouds (1 from the
+    editor's cache, 0 made now), 23.8 MB.` `GameLoader` sets the folder before the scene is read.
+  - Measured: editor open from the file 31 ms of the GPU for the upload (mips and occupancy included) instead of 108-180 ms;
+    play and stop nothing; the player (warm shader cache) storm ready 471 ms after its build began (upload 36 ms) against
+    1081 ms made (generate 586 + light 77 ms), and no density readback. Each object's first cloud logs
+    `[Volumetrics] <name>: made|read from its file|kept ... in N frames, T ms`; `LEL_VOL_PROFILE=1` adds every phase's GPU
+    time (the GPU drained around each step: measuring only) and the readback's.
 - Drawing: `VolumetricPass` (Frame scope) advances the builds; `TransparentPass` sorts each volume with the other
   transparents (centre distance, `RenderQueue`; the camera's culling mask applies); `VolumetricRuntime.Draw`: the opaque
   depth at the march's resolution (`VolumetricDepth.shader`, checkerboard of nearest and farthest), the march
@@ -1515,7 +1597,7 @@ Added for New Frontier's port of Unity's SpaceStonesPack (Standard materials wit
 ## Local lights (Light component; 2026-11-07)
 
 - `Light` (`Mono/Behaviours/Light.cs`, global namespace, `[ExecuteAlways]`): `Type` Point / Spot (`SpotAngle`,
-  `InnerSpot`), `Color`, `Intensity` (radiance units as a directional light's Strength: a white surface facing the light one
+  `InnerSpot`, shown in the inspector for spots only: `[ShowIf]`), `Color`, `Intensity` (radiance units as a directional light's Strength: a white surface facing the light one
   unit away reflects Intensity), `Range`, `SourceRadius`; GI: `AffectsGI`, `IndirectStrength`, `GIShadows`; volumes:
   `AffectsVolumes`, `VolumetricStrength` (HDRP's Volumetric Multiplier: a flash can light the ships around brightly and
   its cloud less), `VolumetricShadows` (clouds between the light and what it lights dim it). Falloff (`Falloff(d)`, the

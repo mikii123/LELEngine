@@ -281,6 +281,10 @@ namespace LELEngine.Editor
 
 			log(fields.ToString());
 
+			// 4b'. The volumetric objects' clouds (Data/Volumes/<key>.lelvol): from the editor's cache, made here when missing
+			//      and this thread has the GL context; the player reads them on worker threads instead of making them.
+			log(VolumeBaker.Collect(project, buildScenes, Path.Combine(data, LELEngine.Volumetrics.VolumeCache.BuildFolder), log).ToString());
+
 			// 4c. Audio: the audio project compiled into bank files (Data/Audio/Banks/<Bank>.bank): the events with their
 			//     sounds stored as their import settings say. The player loads the master bank at start; the .lelaudio
 			//     asset and the source audio files do not ship.

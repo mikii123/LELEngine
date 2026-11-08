@@ -29,6 +29,7 @@ namespace LELEngine.Editor
 
 		private readonly NativeWindow window;
 		private readonly IntPtr iniPath;
+		private readonly string iniFileName;
 
 		/// <summary>The preferences' theme version this context shows (<see cref="ApplyStyle" />).</summary>
 		private int themeVersion = -1;
@@ -64,6 +65,7 @@ namespace LELEngine.Editor
 			}
 			else
 			{
+				iniFileName = iniFile;
 				iniPath = Marshal.StringToHGlobalAnsi(iniFile);
 				io.IniFilename = (byte*)iniPath;
 				// The layout follows its changes like the rest of the editor's state (ImGui's default waits 5 s).
@@ -114,6 +116,26 @@ namespace LELEngine.Editor
 		/// </summary>
 		public Action ApplyStyle = EditorStyle.Apply;
 
+		/// <summary>
+		///     Writes the docking layout now, with every dock's front tab (ImGui writes it on its own only when a window moves
+		///     or resizes; a tab brought to the front was lost at the next start). Not for read-only layouts.
+		/// </summary>
+		public void SaveLayout()
+		{
+			if (iniFileName == null)
+			{
+				return;
+			}
+
+			ImGuiContextPtr previous = ImGui.GetCurrentContext();
+			ImGui.SetCurrentContext(Context);
+			ImGui.SaveIniSettingsToDisk(iniFileName);
+			ImGui.SetCurrentContext(previous);
+		}
+
+		/// <summary>layoutfile=path: the editor's docking layout is read from and written to that file (automated runs too).</summary>
+		public static string LayoutFileOverride;
+
 		/// <summary>Automated runs: layout files (layout.ini, ...) are read, never saved.</summary>
 		public static bool ReadOnlyLayouts;
 
@@ -123,6 +145,15 @@ namespace LELEngine.Editor
 			ImGui.SetCurrentContext(Context);
 			ImGuizmo.SetImGuiContext(Context);
 		}
+
+		/// <summary>
+		///     The mouse's motion over the last frame from the window's own events, also while the cursor is grabbed (its
+		///     position then means nothing to the UI, which gets none): drags that capture the cursor read it (the scene view's
+		///     look and pan).
+		/// </summary>
+		public NVector2 RawMouseDelta { get; private set; }
+
+		private NVector2 rawMouseMotion;
 
 		public void NewFrame(float deltaTime, int width, int height)
 		{
@@ -137,6 +168,8 @@ namespace LELEngine.Editor
 			io.DisplaySize = new NVector2(Math.Max(1, width), Math.Max(1, height));
 			io.DisplayFramebufferScale = new NVector2(1f, 1f);
 			io.DeltaTime = deltaTime > 0f ? deltaTime : 1f / 60f;
+			RawMouseDelta = rawMouseMotion;
+			rawMouseMotion = NVector2.Zero;
 			UpdateCursor();
 
 			ImGui.NewFrame();
@@ -201,6 +234,10 @@ namespace LELEngine.Editor
 			renderer.Dispose();
 			EditorFonts.Forget((nint)Context.Handle);
 			ImGui.DestroyContext(Context);
+			// ImGuizmo is linked with its own copy of ImGui, whose context pointer was this one. Left dangling, the process
+			// crashed when it exited after a gizmo drag: ImGuizmo's static state frees its buffers through that copy's
+			// MemFree, which reads the (freed) context's allocation statistics (access violation in cimguizmo.dll).
+			ImGuizmo.SetImGuiContext(ImGui.GetCurrentContext());
 			Marshal.FreeHGlobal(iniPath);
 		}
 
@@ -298,6 +335,7 @@ namespace LELEngine.Editor
 
 		private void OnMouseMove(MouseMoveEventArgs e)
 		{
+			rawMouseMotion += new NVector2(e.DeltaX, e.DeltaY);
 			ImGui.SetCurrentContext(Context);
 			// A grabbed cursor (game view mouse look) has no meaningful position for the UI.
 			if (window.CursorState != CursorState.Grabbed)

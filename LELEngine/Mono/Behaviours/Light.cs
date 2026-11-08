@@ -41,12 +41,14 @@ public sealed class Light : Behaviour
 	[Tooltip("Where the light ends: it fades to nothing at this distance and costs nothing beyond it")]
 	public float Range = 10f;
 
-	[Tooltip("Spot: the cone's full angle in degrees")]
+	[Tooltip("The cone's full angle in degrees")]
 	[Range(1f, 179f)]
+	[ShowIf(nameof(Type), LightType.Spot)]
 	public float SpotAngle = 60f;
 
-	[Tooltip("Spot: the share of the cone at full brightness (0: dimming from the centre, 1: a hard edge)")]
+	[Tooltip("The share of the cone at full brightness (0: dimming from the centre, 1: a hard edge)")]
 	[Range(0f, 1f)]
+	[ShowIf(nameof(Type), LightType.Spot)]
 	public float InnerSpot = 0.7f;
 
 	[Tooltip("The size of the light's source in units: closer than this the light stops growing")]

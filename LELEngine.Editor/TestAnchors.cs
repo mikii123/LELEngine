@@ -393,10 +393,18 @@ namespace LELEngine.Editor
 		{
 			point = default;
 			float fraction = -1f;
+			float fractionY = -1f;
 			int at = name.IndexOf('@');
 			if (at > 0)
 			{
-				float.TryParse(name.Substring(at + 1), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out fraction);
+				// name@fx: that share of the width on the first line; name@fx,fy: that point of the rectangle (sceneview@0.5,0.5 is its centre).
+				string[] shares = name.Substring(at + 1).Split(',');
+				float.TryParse(shares[0], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out fraction);
+				if (shares.Length > 1)
+				{
+					float.TryParse(shares[1], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out fractionY);
+				}
+
 				name = name.Substring(0, at);
 			}
 
@@ -405,7 +413,7 @@ namespace LELEngine.Editor
 				return false;
 			}
 
-			float lineY = rect.Min.Y + Math.Min(rect.Max.Y - rect.Min.Y, ImGui.GetFrameHeight()) * 0.5f;
+			float lineY = fractionY >= 0f ? rect.Min.Y + (rect.Max.Y - rect.Min.Y) * fractionY : rect.Min.Y + Math.Min(rect.Max.Y - rect.Min.Y, ImGui.GetFrameHeight()) * 0.5f;
 			if (fraction >= 0f)
 			{
 				point = new NVector2(rect.Min.X + (rect.Max.X - rect.Min.X) * fraction, lineY);

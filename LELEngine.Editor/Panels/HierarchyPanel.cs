@@ -46,6 +46,10 @@ namespace LELEngine.Editor
 		private bool revealPinged;
 		private const double PingSeconds = 1.6;
 
+		// The selection the panel saw last, and a new one still to be revealed (parents unfolded, row scrolled into view).
+		private GameObject lastSelected;
+		private GameObject revealSelection;
+
 		// Vertical padding above and below a row's text (rows have no spacing between them).
 		private const float RowPadding = 2f;
 
@@ -89,6 +93,8 @@ namespace LELEngine.Editor
 			pinged = null;
 			pressed = null;
 			renaming = null;
+			lastSelected = null;
+			revealSelection = null;
 		}
 
 		/// <summary>Shows the object: its parents unfold, its row scrolls into view and flashes for a moment.</summary>
@@ -186,12 +192,24 @@ namespace LELEngine.Editor
 				iconPadding = new string(' ', (int)Math.Ceiling((ImGui.GetTextLineHeight() + 5f) / Math.Max(1f, space)));
 			}
 
+			// A new selection (picked in the scene view, framed, chosen in a field): its parents unfold and its row scrolls
+			// into view when it is out of it (the user's ask, 2026-11-08; a click on a row is in view already).
+			GameObject selected = editor.Selected;
+			if (selected != lastSelected)
+			{
+				lastSelected = selected;
+				revealSelection = selected != null && !selected.dead && selected.scene == scene ? selected : null;
+			}
+
 			GameObject deferredReparent = null;
 			Transform deferredParent = null;
 			foreach (GameObject root in scene.GetRootGameObjects())
 			{
 				DrawNode(root, ref deferredReparent, ref deferredParent);
 			}
+
+			// Not drawn at all (hidden from the hierarchy): nothing to reveal.
+			revealSelection = null;
 
 			// Empty area: drop to un-parent, right click to create, click to deselect.
 			NVector2 rest = ImGui.GetContentRegionAvail();
@@ -336,7 +354,8 @@ namespace LELEngine.Editor
 				flags |= ImGuiTreeNodeFlags.Selected;
 			}
 
-			if (revealPinged && pinged != null && pinged != go && !pinged.dead && pinged.transform.IsChildOf(go.transform))
+			if (revealPinged && pinged != null && pinged != go && !pinged.dead && pinged.transform.IsChildOf(go.transform)
+				|| revealSelection != null && revealSelection != go && revealSelection.transform.IsChildOf(go.transform))
 			{
 				ImGui.SetNextItemOpen(true);
 			}
@@ -438,6 +457,17 @@ namespace LELEngine.Editor
 			if (go == pinged)
 			{
 				FlashPinged();
+			}
+
+			// The new selection's row (the last item): scrolled to the middle when it is not in view.
+			if (go == revealSelection)
+			{
+				if (!ImGui.IsItemVisible())
+				{
+					ImGui.SetScrollHereY(0.5f);
+				}
+
+				revealSelection = null;
 			}
 
 			if (ImGui.BeginDragDropSource())

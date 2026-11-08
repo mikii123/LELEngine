@@ -139,7 +139,7 @@ namespace LELEngine.Editor
 			bool changed = false;
 			foreach (SerializedField field in SerializationUtility.GetFields(target.GetType()))
 			{
-				if (field.HideInInspector || (filter != null && !filter(field)))
+				if (field.HideInInspector || (filter != null && !filter(field)) || !IsShown(field.Field, target))
 				{
 					continue;
 				}
@@ -179,8 +179,71 @@ namespace LELEngine.Editor
 			return changed;
 		}
 
+		/// <summary>
+		///     Whether the field's [ShowIf] / [HideIf] conditions let the inspector show it on this object (no conditions: yes).
+		///     A member the condition names that does not exist counts as true, and is logged once.
+		/// </summary>
+		public static bool IsShown(FieldInfo field, object target)
+		{
+			if (field == null || target == null)
+			{
+				return true;
+			}
+
+			foreach (ShowIfAttribute show in field.GetCustomAttributes<ShowIfAttribute>(false))
+			{
+				if (!Condition(target, show.Member, show.HasValue, show.Value))
+				{
+					return false;
+				}
+			}
+
+			foreach (HideIfAttribute hide in field.GetCustomAttributes<HideIfAttribute>(false))
+			{
+				if (Condition(target, hide.Member, hide.HasValue, hide.Value))
+				{
+					return false;
+				}
+			}
+
+			return true;
+		}
+
 		/// <summary>Test runs: every foldout of the inspector opens (screenshots of nested fields, lists and dictionaries).</summary>
 		public static bool ForceOpen;
+
+		// A [ShowIf] / [HideIf] condition: the member's value equal to the given one, or true when read as a bool.
+		private static bool Condition(object target, string member, bool hasValue, object expected)
+		{
+			const BindingFlags Flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.FlattenHierarchy;
+			Type type = target.GetType();
+			object value;
+			if (type.GetField(member, Flags) is FieldInfo info)
+			{
+				value = info.GetValue(target);
+			}
+			else if (type.GetProperty(member, Flags) is PropertyInfo property && property.GetIndexParameters().Length == 0)
+			{
+				value = property.GetValue(target);
+			}
+			else if (type.GetMethod(member, Flags, null, Type.EmptyTypes, null) is MethodInfo method)
+			{
+				value = method.Invoke(target, null);
+			}
+			else
+			{
+				if (missingConditions.Add(type.FullName + "." + member))
+				{
+					Debug.LogWarning("[Inspector] " + type.Name + " has no field, property or method '" + member + "' for a ShowIf / HideIf: shown");
+				}
+
+				return true;
+			}
+
+			return hasValue ? Equals(value, expected) : value is bool flag && flag;
+		}
+
+		private static readonly HashSet<string> missingConditions = new HashSet<string>();
 
 		/// <summary>ImGui id of the last foldout <see cref="Header" /> drew (its open state lives in the window's storage under it).</summary>
 		public static uint LastHeaderId { get; private set; }

@@ -195,6 +195,7 @@ namespace LELEngine.Volumetrics
 			frameStamp++;
 			DrawnCount = drawnThisFrame;
 			drawnThisFrame = 0;
+			VolumeCache.Update();
 			long budget = WorkPerFrame;
 			foreach (VolumetricObjectBase volume in objects)
 			{

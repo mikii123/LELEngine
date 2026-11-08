@@ -444,6 +444,31 @@ namespace LELEngine.Editor
 					editor.NotifyChanged(go);
 				}
 
+				// The transform's parts (local values, as Unity's Reset): one undo step each.
+				if (component is Transform transformComponent)
+				{
+					if (EditorMenu.Item("Reset Position"))
+					{
+						ResetTransform(go, transformComponent, true, false, false);
+					}
+
+					if (EditorMenu.Item("Reset Rotation"))
+					{
+						ResetTransform(go, transformComponent, false, true, false);
+					}
+
+					if (EditorMenu.Item("Reset Scale"))
+					{
+						ResetTransform(go, transformComponent, false, false, true);
+					}
+
+					ImGui.Separator();
+					if (EditorMenu.Item("Reset All"))
+					{
+						ResetTransform(go, transformComponent, true, true, true);
+					}
+				}
+
 				// The project's script of the component (engine components have none).
 				string script = component is MissingComponent ? null : ScriptFiles.Find(type);
 				if (script != null)
@@ -579,6 +604,30 @@ namespace LELEngine.Editor
 				InspectorColorKind.Effects => EditorColor.ComponentEffects,
 				_ => EditorColor.ComponentUI
 			});
+		}
+
+		/// <summary>Sets the transform's local position to zero, rotation to none and / or scale to one, as one undo step.</summary>
+		private void ResetTransform(GameObject go, Transform transform, bool position, bool rotation, bool scale)
+		{
+			editor.Edits.Begin(transform);
+			if (position)
+			{
+				transform.localPosition = Vector3.Zero;
+			}
+
+			if (rotation)
+			{
+				transform.localRotation = Quaternion.Identity;
+				eulerHints.Remove(transform);
+			}
+
+			if (scale)
+			{
+				transform.localScale = Vector3.One;
+			}
+
+			editor.Edits.RequestCommit();
+			editor.NotifyChanged(go);
 		}
 
 		private bool DrawTransform(Transform transform)

@@ -15,7 +15,8 @@ namespace LELEngine.Editor
 	///     The editable view of the scene, rendered by the game's own renderer (same lighting and GI as the game)
 	///     from an editor camera that is not part of the scene.
 	///     Right mouse: look + WASD/QE fly (Shift faster, wheel while flying changes the speed); middle mouse: pan (the
-	///     scene follows the mouse at the depth of what is under it); wheel: dolly a fifth of the way to what the mouse
+	///     scene follows the mouse at the depth of what is under it); both drags capture the cursor until released (it comes
+	///     back where it was) and go on outside the view; wheel: dolly a fifth of the way to what the mouse
 	///     points at (an object or the ground plane), as fast far away as close up; F: frame the selection;
 	///     W / E / R: move / rotate / scale gizmo; left click: select; handles of the selection's 2D colliders
 	///     (<see cref="Physics2DGizmos" />).
@@ -78,8 +79,32 @@ namespace LELEngine.Editor
 		private ImGuizmoOperation operation = ImGuizmoOperation.Translate;
 		private ImGuizmoMode mode = ImGuizmoMode.Local;
 		private bool gizmoWasUsing;
-		private bool flying;
 		private NVector2 pressPosition;
+
+		// Camera drags: look (right button, with WASD flight) and pan (middle button). One starts on a press over the view
+		// and lasts while its button is held, over the view or not; the cursor is captured meanwhile (hidden, no screen edge
+		// stops the motion) and put back where the drag started. Before 2026-11-08 a pan stopped when the cursor left the
+		// view and started only past ImGui's 6 px drag threshold, while looking did neither, and both stopped at the screen's
+		// edge: the user found panning and turning inconsistent.
+		private enum CameraDrag
+		{
+			None,
+			Look,
+			Pan
+		}
+
+		private CameraDrag cameraDrag;
+		private NVector2 dragStartMouse;
+		private bool cursorCaptured;
+		private int capturedFrames;
+
+		private bool flying => cameraDrag == CameraDrag.Look;
+
+		private const float LookDegreesPerPixel = 0.2f;
+
+		// A pan over empty space moves the ground plane under the cursor only while the ground is no further than this many
+		// times the view's focus distance (looking along the ground it is thousands of units away: the pan raced).
+		private const float GroundPanReach = 4f;
 		private bool pressCanPick;
 
 		#endregion
@@ -172,6 +197,7 @@ namespace LELEngine.Editor
 				return;
 			}
 
+			ReleaseCameraDragIfAbandoned();
 			if (!Open)
 			{
 				// Closed: nothing to render either (see Render).
@@ -546,22 +572,42 @@ namespace LELEngine.Editor
 			smoothDeltaTime += (Math.Min(io.DeltaTime, 0.1f) - smoothDeltaTime) * DeltaTimeSmoothing;
 			float dt = smoothDeltaTime;
 
-			if (hovered && ImGui.IsMouseClicked(ImGuiMouseButton.Right))
+			if (cameraDrag == CameraDrag.None && hovered)
 			{
-				flying = true;
-				ImGui.SetWindowFocus();
+				if (ImGui.IsMouseClicked(ImGuiMouseButton.Right))
+				{
+					BeginCameraDrag(CameraDrag.Look);
+					ImGui.SetWindowFocus();
+				}
+				else if (ImGui.IsMouseClicked(ImGuiMouseButton.Middle))
+				{
+					BeginCameraDrag(CameraDrag.Pan);
+					SetPanDepth();
+				}
 			}
 
-			if (!ImGui.IsMouseDown(ImGuiMouseButton.Right))
+			if (cameraDrag != CameraDrag.None && !ImGui.IsMouseDown(cameraDrag == CameraDrag.Look ? ImGuiMouseButton.Right : ImGuiMouseButton.Middle))
 			{
-				flying = false;
+				EndCameraDrag();
+			}
+
+			NVector2 mouseDelta = CameraDragDelta(io);
+			if (cameraDrag == CameraDrag.Pan)
+			{
+				// The scene follows the mouse at the depth chosen when the drag started.
+				Vector3 forward = Forward();
+				Vector3 right = Vector3.Cross(forward, Vector3.UnitY).Normalized();
+				Vector3 up = Vector3.Cross(right, forward).Normalized();
+				float worldPerPixel = 2f * focusDistance * MathF.Tan(camera.FoV * 0.5f * MathF.PI / 180f) / Math.Max(1f, viewSize.Y);
+				position += (-right * mouseDelta.X + up * mouseDelta.Y) * worldPerPixel;
+				return;
 			}
 
 			if (flying)
 			{
 				// Same conventions as the FPS controller: screen-right is -X.
-				yaw -= io.MouseDelta.X * 0.2f;
-				pitch = Math.Clamp(pitch + io.MouseDelta.Y * 0.2f, -89f, 89f);
+				yaw -= mouseDelta.X * LookDegreesPerPixel;
+				pitch = Math.Clamp(pitch + mouseDelta.Y * LookDegreesPerPixel, -89f, 89f);
 
 				Vector3 forward = Forward();
 				Vector3 right = Vector3.Cross(forward, Vector3.UnitY).Normalized();
@@ -609,28 +655,86 @@ namespace LELEngine.Editor
 				}
 			}
 
-			// Middle drag: the scene follows the mouse at the depth of what was under it when the drag started.
-			if (ImGui.IsMouseClicked(ImGuiMouseButton.Middle))
-			{
-				Pick(ImGui.GetMousePos(), out _, out Vector3? point);
-				if (point.HasValue)
-				{
-					focusDistance = Math.Max(MinFocusDistance, Vector3.Dot(point.Value - position, Forward()));
-				}
-			}
-
-			if (ImGui.IsMouseDragging(ImGuiMouseButton.Middle))
-			{
-				Vector3 forward = Forward();
-				Vector3 right = Vector3.Cross(forward, Vector3.UnitY).Normalized();
-				Vector3 up = Vector3.Cross(right, forward).Normalized();
-				float worldPerPixel = 2f * focusDistance * MathF.Tan(camera.FoV * 0.5f * MathF.PI / 180f) / Math.Max(1f, viewSize.Y);
-				position += (-right * io.MouseDelta.X + up * io.MouseDelta.Y) * worldPerPixel;
-			}
-
 			if (!io.WantTextInput)
 			{
 				HandleToolKeys();
+			}
+		}
+
+		private void BeginCameraDrag(CameraDrag drag)
+		{
+			cameraDrag = drag;
+			dragStartMouse = ImGui.GetMousePos();
+			capturedFrames = 0;
+			// Only a focused editor window captures the cursor (automated runs drive the view with scripted input).
+			if (editor.HasUI && editor.Window != null && editor.Window.IsFocused && !Automation.WindowCapture.Active)
+			{
+				editor.Window.CursorState = OpenTK.Windowing.Common.CursorState.Grabbed;
+				cursorCaptured = true;
+			}
+		}
+
+		private void EndCameraDrag()
+		{
+			cameraDrag = CameraDrag.None;
+			if (!cursorCaptured)
+			{
+				return;
+			}
+
+			cursorCaptured = false;
+			editor.Window.CursorState = OpenTK.Windowing.Common.CursorState.Normal;
+			// Back where the drag started (the UI saw no motion meanwhile).
+			editor.Window.MousePosition = new Vector2(dragStartMouse.X, dragStartMouse.Y);
+			ImGui.GetIO().AddMousePosEvent(dragStartMouse.X, dragStartMouse.Y);
+		}
+
+		/// <summary>The view stopped drawing during a camera drag (tab switched, window closed): the cursor is released.</summary>
+		private void ReleaseCameraDragIfAbandoned()
+		{
+			if (cameraDrag != CameraDrag.None && !ImGui.IsMouseDown(ImGuiMouseButton.Right) && !ImGui.IsMouseDown(ImGuiMouseButton.Middle))
+			{
+				EndCameraDrag();
+			}
+		}
+
+		/// <summary>
+		///     The mouse's motion this frame for a camera drag: what reached the UI (scripted input in tests, the real mouse
+		///     before the capture takes hold) plus the window's own motion while the cursor is captured (the UI then gets none).
+		///     The first captured frame's motion is the capture itself (the cursor centred) and is skipped.
+		/// </summary>
+		private NVector2 CameraDragDelta(ImGuiIOPtr io)
+		{
+			NVector2 delta = io.MouseDelta;
+			if (!float.IsFinite(delta.X) || !float.IsFinite(delta.Y) || Math.Abs(delta.X) > 1e5f || Math.Abs(delta.Y) > 1e5f)
+			{
+				delta = NVector2.Zero;
+			}
+
+			if (cursorCaptured && capturedFrames++ > 0)
+			{
+				delta += editor.Window.Controller.RawMouseDelta;
+			}
+
+			return delta;
+		}
+
+		/// <summary>
+		///     The depth a pan moves the scene at (it follows the mouse there): that of the object under the cursor, else of
+		///     the ground plane under it while that is not far beyond the view's focus, else the focus distance as it is.
+		/// </summary>
+		private void SetPanDepth()
+		{
+			GameObject hit = Pick(ImGui.GetMousePos(), out _, out Vector3? point);
+			if (!point.HasValue)
+			{
+				return;
+			}
+
+			float depth = Vector3.Dot(point.Value - position, Forward());
+			if (hit != null || depth <= Math.Max(focusDistance, 10f) * GroundPanReach)
+			{
+				focusDistance = Math.Max(MinFocusDistance, depth);
 			}
 		}
 
@@ -986,9 +1090,15 @@ namespace LELEngine.Editor
 			return "{\n  \"cameraPosition\": [" + F(position.X) + ", " + F(position.Y) + ", " + F(position.Z) + "],\n  \"cameraYaw\": " + F(yaw) + ",\n  \"cameraPitch\": " + F(pitch) + ",\n  \"flySpeed\": " + F(flySpeed) + ",\n  \"focusDistance\": " + F(focusDistance) + ",\n  \"alwaysRefresh\": " + (AlwaysRefresh ? "true" : "false") + ",\n  \"showNavigation\": " + (ShowNavigation ? "true" : "false") + ",\n  \"gizmoOperation\": \"" + operation + "\",\n  \"gizmoMode\": \"" + mode + "\"\n}\n";
 		}
 
+		/// <summary>
+		///     editorstatefile=path: the view's state (camera, tool) is read from and written to that file instead of the
+		///     project's Library/EditorState.json (automated runs that place the camera leave the user's alone).
+		/// </summary>
+		public static string StateFileOverride;
+
 		private static string StateFile(ProjectInfo project)
 		{
-			return Path.Combine(project.LibraryPath, "EditorState.json");
+			return StateFileOverride ?? Path.Combine(project.LibraryPath, "EditorState.json");
 		}
 
 		private static string F(float value)

@@ -59,7 +59,9 @@ namespace LELEngine.Editor
 
 			// The user's preferences first: the theme applies to the first window.
 			EditorPreferences.Initialize(args);
-			ImGuiController.ReadOnlyLayouts = EditorApplication.IsAutomatedRun(args);
+			// layoutfile=path: a layout of the run's own (automated runs then read and write it, never the user's).
+			ImGuiController.LayoutFileOverride = Array.Find(args, a => a.StartsWith("layoutfile=", StringComparison.OrdinalIgnoreCase))?.Substring("layoutfile=".Length).Trim('"');
+			ImGuiController.ReadOnlyLayouts = EditorApplication.IsAutomatedRun(args) && ImGuiController.LayoutFileOverride == null;
 			HierarchyExpansion.Initialize(args);
 
 			// focus=0: automated runs open their windows without taking the keyboard focus.

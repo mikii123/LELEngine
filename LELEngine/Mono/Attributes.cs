@@ -66,6 +66,56 @@ namespace LELEngine
 		}
 	}
 
+	/// <summary>
+	///     The inspector shows the field only while a member of the same object says so (Odin's ShowIf): a bool field,
+	///     property or parameterless method, or any of them equal to <see cref="Value" />. Several on one field must all hold.
+	/// </summary>
+	/// <example><c>[ShowIf(nameof(Type), LightType.Spot)] public float SpotAngle;</c> <c>[ShowIf(nameof(UseGravity))] public float Gravity;</c></example>
+	[AttributeUsage(AttributeTargets.Field, AllowMultiple = true)]
+	public sealed class ShowIfAttribute : Attribute
+	{
+		/// <summary>The member read (field, property or method without parameters).</summary>
+		public readonly string Member;
+
+		/// <summary>The value it must equal; without one the member is read as a bool.</summary>
+		public readonly object Value;
+
+		public readonly bool HasValue;
+
+		public ShowIfAttribute(string member)
+		{
+			Member = member;
+		}
+
+		public ShowIfAttribute(string member, object value)
+		{
+			Member = member;
+			Value = value;
+			HasValue = true;
+		}
+	}
+
+	/// <summary>The inspector hides the field while a member of the same object says so (Odin's HideIf; see <see cref="ShowIfAttribute" />).</summary>
+	[AttributeUsage(AttributeTargets.Field, AllowMultiple = true)]
+	public sealed class HideIfAttribute : Attribute
+	{
+		public readonly string Member;
+		public readonly object Value;
+		public readonly bool HasValue;
+
+		public HideIfAttribute(string member)
+		{
+			Member = member;
+		}
+
+		public HideIfAttribute(string member, object value)
+		{
+			Member = member;
+			Value = value;
+			HasValue = true;
+		}
+	}
+
 	/// <summary>Inspector header shown above a field.</summary>
 	[AttributeUsage(AttributeTargets.Field, AllowMultiple = true)]
 	public sealed class HeaderAttribute : Attribute

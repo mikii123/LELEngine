@@ -7,8 +7,10 @@ namespace LELEngine.Volumetrics
 	/// <summary>
 	///     A volumetric object: a cloud (fog, smoke, a storm, a nebula) filling a shape (box, cylinder, sphere) in the
 	///     object's local space, cut out of procedural noise. The engine makes the cloud on the GPU when the object
-	///     appears and again when its shape or noise change (no bake, nothing stored), and works out how the sun, the sky
-	///     and the lights inside light it whenever the sun turns against the object. Two presets draw it, each a component:
+	///     appears and again when its shape or noise change, and works out how the sun, the sky and the lights inside light
+	///     it whenever the sun turns against the object. A cloud made once is kept for the next object of the same settings
+	///     (<see cref="VolumeCache" />: on the GPU across a scene's reload, in files the editor writes and builds ship, read on
+	///     worker threads while the scene loads). Two presets draw it, each a component:
 	///     <see cref="VolumetricObject" /> for clouds seen from outside (cheap: marched at half resolution with even steps)
 	///     and <see cref="VolumetricObjectHQ" /> for clouds the camera also goes into (full resolution, fine steps near the
 	///     camera, a temporal filter, the scene's shadows). It draws in the transparent pass, sorted with the other
@@ -18,7 +20,7 @@ namespace LELEngine.Volumetrics
 	/// </summary>
 	[ExecuteAlways]
 	[InspectorColor(InspectorColorKind.Rendering)]
-	public abstract class VolumetricObjectBase : Behaviour
+	public abstract class VolumetricObjectBase : Behaviour, Serialization.ISerializationCallbackReceiver
 	{
 		#region PublicFields
 
@@ -364,6 +366,22 @@ namespace LELEngine.Volumetrics
 			VolumetricRuntime.Register(this);
 		}
 
+		void Serialization.ISerializationCallbackReceiver.OnBeforeSerialize()
+		{
+		}
+
+		/// <summary>
+		///     Read from a scene or prefab (the loading thread too): the file of its cloud starts loading on a worker thread now,
+		///     in parallel with the rest of the load, and is uploaded when the object first draws.
+		/// </summary>
+		void Serialization.ISerializationCallbackReceiver.OnAfterDeserialize()
+		{
+			if (VolumeCache.Folder != null)
+			{
+				VolumeCache.Prefetch(DensityKey());
+			}
+		}
+
 		public override void OnDisable()
 		{
 			VolumetricRuntime.Unregister(this);
@@ -385,6 +403,71 @@ namespace LELEngine.Volumetrics
 		///     alone), or the scene's main light.
 		/// </summary>
 		internal DirectionalLight EffectiveSun => Sun != null && !Sun.IsDestroyed ? Sun : DirectionalLight.This;
+
+		/// <summary>
+		///     The cloud's density as a key that is the same in every run and on every machine (made clouds are found by it,
+		///     <see cref="VolumeCache" />): the version of what makes it, every setting it depends on and its grid. Unlike
+		///     <see cref="ShapeHash" />: .NET's HashCode is seeded per process.
+		/// </summary>
+		internal string DensityKey()
+		{
+			Vector3i grid = GridFor(Size, VoxelSize, out _, out _);
+			using var stream = new System.IO.MemoryStream(160);
+			using (var writer = new System.IO.BinaryWriter(stream, System.Text.Encoding.UTF8, true))
+			{
+				writer.Write("LELVOL density");
+				writer.Write(VolumeFile.GeneratorVersion);
+				writer.Write((int)Shape);
+				writer.Write(Size.X);
+				writer.Write(Size.Y);
+				writer.Write(Size.Z);
+				writer.Write(SideSoftness);
+				writer.Write(CapSoftness);
+				writer.Write(TopRoughness);
+				writer.Write(BottomRoughness);
+				writer.Write(SideRoughness);
+				writer.Write((int)Noise);
+				writer.Write(NoiseSize);
+				writer.Write(Octaves);
+				writer.Write(Roughness);
+				writer.Write(Warp);
+				writer.Write(Seed);
+				writer.Write(Coverage);
+				writer.Write(Softness);
+				writer.Write(ClumpSize);
+				writer.Write(ClumpCoverage);
+				writer.Write(ClumpSoftness);
+				writer.Write(VoxelSize);
+				writer.Write(grid.X);
+				writer.Write(grid.Y);
+				writer.Write(grid.Z);
+			}
+
+			return KeyOf(stream);
+		}
+
+		/// <summary>The settings the lit voxels of a density are made with besides the sun (stable as <see cref="DensityKey" />).</summary>
+		internal string LitKey(string densityKey)
+		{
+			using var stream = new System.IO.MemoryStream(96);
+			using (var writer = new System.IO.BinaryWriter(stream, System.Text.Encoding.UTF8, true))
+			{
+				writer.Write("LELVOL lit");
+				writer.Write(densityKey);
+				writer.Write(Density);
+				writer.Write(ShadowReach);
+				writer.Write(NoiseSize);
+				writer.Write(VolumetricData.TauMax);
+			}
+
+			return KeyOf(stream);
+		}
+
+		private static string KeyOf(System.IO.MemoryStream stream)
+		{
+			byte[] hash = System.Security.Cryptography.SHA256.HashData(stream.GetBuffer().AsSpan(0, (int)stream.Length));
+			return Convert.ToHexString(hash, 0, 16);
+		}
 
 		/// <summary>A hash of everything the cloud's density depends on (a change makes it again).</summary>
 		internal int ShapeHash()

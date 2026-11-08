@@ -140,7 +140,14 @@ namespace LELEngine.Player
 			try
 			{
 				// No GL context needed: runs while the main thread opens the window.
-				Step("assets", () => AssetDatabase.Initialize(dataFolder));
+				Step("assets", () =>
+				{
+					AssetDatabase.Initialize(dataFolder);
+					// The clouds the build made (Data/Volumes): the scene's volumetric objects start reading theirs as the scene
+					// is read, on worker threads, and upload them instead of making them on the GPU.
+					string volumes = Path.Combine(dataFolder, LELEngine.Volumetrics.VolumeCache.BuildFolder);
+					LELEngine.Volumetrics.VolumeCache.Folder = Directory.Exists(volumes) ? volumes : null;
+				});
 				if (projectSettings != null)
 				{
 					Step("settings", () => ProjectSettings.Load(projectSettings));
