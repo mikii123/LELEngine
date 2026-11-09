@@ -107,6 +107,12 @@ namespace LELEngine.Editor
 
 		#region PublicMethods
 
+		/// <summary>Before the scripts reload: the fields' context lets go of the scene it last drew with.</summary>
+		public void OnDomainUnloading()
+		{
+			context.Release();
+		}
+
 		/// <summary>Opens the window on a configuration (null: the project's).</summary>
 		public void Show(string configurationPath)
 		{

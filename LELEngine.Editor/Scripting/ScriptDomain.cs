@@ -133,6 +133,16 @@ namespace LELEngine.Editor
 			string dll = AssemblyFile(project);
 			bool editorScripts = HasEditorScripts(project);
 			HasTests = HasTestScripts(project);
+
+			// Scripts changed since their last build (components added while the editor was closed): built before anything
+			// loads, as Unity does. The scene opens after this; with the old assembly loaded it read the new components as
+			// missing, and the reload when the build finished came on top (2026-11-09, the user's report). A failed build
+			// leaves the old assembly to load below, with its errors in the console.
+			if (HasScripts(project) && (!File.Exists(dll) || !IsAssemblyCurrent(project, editorScripts)) && BuildBeforeLoading())
+			{
+				return;
+			}
+
 			if (File.Exists(dll))
 			{
 				// Scripts built before the weaver existed (or by an IDE): rewritten before they load.
@@ -161,15 +171,33 @@ namespace LELEngine.Editor
 				}
 
 				LoadDomain();
-				if (!IsAssemblyCurrent(project, editorScripts) || HasTests && testAssemblyBytes == null)
+				// Stale game scripts here mean their build just failed: the next edit builds again.
+				if (!HasErrors && (!IsAssemblyCurrent(project, editorScripts) || HasTests && testAssemblyBytes == null))
 				{
 					RequestBuild(false);
 				}
 			}
-			else if (HasScripts(project))
+		}
+
+		/// <summary>Builds the scripts now, on this thread, and loads them when the build succeeds (no scene is loaded yet).</summary>
+		private bool BuildBeforeLoading()
+		{
+			Debug.Log("[Scripts] The scripts changed since their last build: compiling them before the scene opens");
+			StartBuild();
+			BuildResult result;
+			try
 			{
-				RequestBuild(false);
+				result = buildTask.GetAwaiter().GetResult();
 			}
+			catch (Exception e)
+			{
+				result = Failed(e);
+			}
+
+			buildTask = null;
+			// Diagnostics, the sources' record and the load (Apply -> ReloadSceneAround with no scene: the domain alone).
+			OnBuildFinished(result);
+			return result.Success && GameAssembly != null;
 		}
 
 		/// <summary>The editor build of the scripts (Library/ScriptAssemblies/Game.dll).</summary>

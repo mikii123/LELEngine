@@ -113,6 +113,7 @@ namespace LELEngine.Editor.Animation
 			keyTimeCache.Clear();
 			propertyBindings.Clear();
 			ClearSelection();
+			context.Release();
 		}
 
 		/// <summary>Scripts reload: the document may hold nothing of them, but the scene's objects go away.</summary>
@@ -132,6 +133,9 @@ namespace LELEngine.Editor.Animation
 			popupClipChannel = null;
 			popupMarker = null;
 			TimelineAsset.ClearCache();
+			// The fields' context keeps the scene it last drew with: a closed window kept the unloaded scene (and with it the
+			// old scripts) alive.
+			context.Release();
 		}
 
 		public void OnDomainLoaded()

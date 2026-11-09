@@ -273,6 +273,7 @@ namespace LELEngine.Editor.Animation
 			Open = false;
 			selectedKeys.Clear();
 			selectedRows.Clear();
+			context.Release();
 		}
 
 		public void OnDomainUnloading()
@@ -283,6 +284,7 @@ namespace LELEngine.Editor.Animation
 			reloadPath = document?.AssetPath;
 			document = null;
 			target = null;
+			context.Release();
 		}
 
 		public void OnDomainLoaded()

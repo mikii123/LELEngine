@@ -1862,6 +1862,7 @@ namespace LELEngine.Editor
 			animatorWindow.OnDomainUnloading();
 			animationWindow.OnDomainUnloading();
 			timelineWindow.OnDomainUnloading();
+			inputManagerWindow.OnDomainUnloading();
 			inspector.ClearTypeCaches();
 			HierarchyPanel.ResetDrag();
 			hierarchy.ForgetObjects();

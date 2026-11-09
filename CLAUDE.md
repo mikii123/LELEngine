@@ -118,6 +118,15 @@
   the newest script time counted, so a deleted, renamed or moved script left the old types loaded ("Scripts are up to
   date"). A build without the record (older engines, an IDE build) is built again once. Running editors also rebuild
   on the file watcher's events; `dotnet build` itself drops deleted files (the SDK hashes its Compile items).
+- Editor start with scripts newer than their build (2026-11-09, the user's report: components added since the last run
+  logged as missing): `ScriptDomain.Initialize` builds them on the main thread before anything loads
+  (`BuildBeforeLoading`, log "compiling them before the scene opens"), so the scene opens with the new types. Before,
+  the old Game.dll loaded, the scene read the new components as missing, and the build's reload followed. A failed
+  build loads the old assembly as before (errors in the console, no second build until an edit).
+- Windows with an `InspectorContext` of their own (Timeline, Animation, Input Manager) release it in
+  `OnDomainUnloading`: the context keeps the scene it last drew with, and a Timeline opened and closed once held the
+  unloaded scene, and with it the old scripts, through every reload ("still referenced ... timelineWindow.context.Scene").
+  Reproduced and verified with scratchpad `storm/timelineleak.ps1` (CLI `open Timeline`, `close Timeline`, then a reload).
 - Leak report: a context that survives its unload check (`ScriptDomain.VerifyUnload`, 40 GC passes in the
   background) is traced on the main thread (`ScriptDomain.Update` -> `LeakTracer`, `LELEngine.Editor/Scripting`):
   breadth-first from the static fields of the engine and the assemblies referencing it (closed generic base classes
