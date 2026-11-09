@@ -197,6 +197,37 @@ namespace LELEngine.Editor
 		/// <summary>Play was asked for while the scripts compiled: it starts when they have, unless they have errors.</summary>
 		private bool playAfterCompile;
 
+		/// <summary>The project that opens, step by step between frames (see <see cref="OpenProject" />); null when none does.</summary>
+		private IEnumerator<string> projectLoad;
+
+		/// <summary>
+		///     The open project finished loading. Until then nothing of the editor's own state is written (scene camera, open
+		///     windows, layout): it is not read yet, and a load that fails or is closed must not replace the user's.
+		/// </summary>
+		private bool projectReady;
+
+		// What the load does now (shown in its windows and the menu bar), since when, and the time of every step.
+		private string loadingStatus;
+		private long loadingStatusSince;
+		private long projectLoadStart;
+		private readonly List<(string Step, double Ms)> projectLoadTimes = new List<(string, double)>();
+
+		// The scripted windows of the last session while the project loads (their types are not loaded yet): empty windows
+		// under their own ImGui names and titles, so they stand where the layout docks them until the real ones take over.
+		private readonly List<(string Name, string Title)> loadingWindows = new List<(string, string)>();
+		private int loadingFramesDrawn;
+		private int loadingUpdatesWithoutFrame;
+
+		/// <summary>
+		///     Frames drawn before the load's first step: ImGui docks windows from the layout in the next frame's NewFrame, so
+		///     the first frame shows the menu bar and the empty dock space only, the second the windows (measured: frame 1 without
+		///     them, frame 2 with them; one more to spare).
+		/// </summary>
+		private const int LoadingFramesFirst = 3;
+
+		/// <summary>The next update runs the load's next step: the frame just drawn is what shows while it runs (tests).</summary>
+		public bool LoadingStepNext => projectLoad != null && loadingFramesDrawn >= LoadingFramesFirst;
+
 		#endregion
 
 		#region Constructors
@@ -310,6 +341,17 @@ namespace LELEngine.Editor
 		public void Update(float deltaTime)
 		{
 			EditorPreferences.Update();
+			if (projectLoad != null)
+			{
+				// One step of the project's load per frame; the frame it ends in goes on as any other, so the windows it restores
+				// draw at once in the places of their stand-ins.
+				UpdateProjectLoad();
+				if (projectLoad != null || Project == null)
+				{
+					return;
+				}
+			}
+
 			if (Project == null)
 			{
 				ChooseProject();
@@ -416,7 +458,9 @@ namespace LELEngine.Editor
 				return;
 			}
 
-			if (!capture)
+			// The project loads over frames (see OpenProject): the windows draw as they are, without what is not loaded yet.
+			bool loading = projectLoad != null;
+			if (!capture && !loading)
 			{
 				HandleShortcuts();
 			}
@@ -442,10 +486,16 @@ namespace LELEngine.Editor
 				resetLayoutRequested = false;
 			}
 
-			if (!capture && testHooks.PendingDock is (string window, string target))
+			if (!capture && !loading && testHooks.PendingDock is (string window, string target))
 			{
 				testHooks.PendingDock = null;
 				DockInto(window, target);
+			}
+
+			// While the project loads every window but the console takes no input (all it would act on is still loading).
+			if (loading)
+			{
+				BeginLoadingInputLock();
 			}
 
 			hierarchy.Draw();
@@ -454,7 +504,17 @@ namespace LELEngine.Editor
 			inspector.Draw();
 			lightingPanel.Draw();
 			projectPanel.Draw();
+			if (loading)
+			{
+				EndLoadingInputLock();
+			}
+
 			consolePanel.Draw();
+			if (loading)
+			{
+				BeginLoadingInputLock();
+			}
+
 			projectSettingsWindow.Draw();
 			preferencesWindow.Draw();
 			vfxGraphWindow.Draw();
@@ -463,6 +523,14 @@ namespace LELEngine.Editor
 			timelineWindow.Draw();
 			inputManagerWindow.Draw();
 			testRunnerWindow.Draw();
+			if (loading)
+			{
+				DrawLoadingScriptWindows();
+				EndLoadingInputLock();
+				EndLoadingFrame(capture);
+				return;
+			}
+
 			if (capture)
 			{
 				Extensions.DrawWindowsForCapture();
@@ -607,7 +675,19 @@ namespace LELEngine.Editor
 		///     The editor has work in flight: a script build (or one waiting), changed assets or settings not refreshed yet, a
 		///     scene or resource loading in the background. Automation waits for this to end (<see cref="EditorAutomation.WaitForIdle" />).
 		/// </summary>
-		public bool IsBusy => Project != null && (Scripts != null && !Scripts.IsIdle || assetsChanged || settingsChanged || restoreWindowsPending || SceneManager.PendingLoads.Count > 0 || Tests.IsRunning);
+		public bool IsBusy => Project != null && (projectLoad != null || Scripts != null && !Scripts.IsIdle || assetsChanged || settingsChanged || restoreWindowsPending || SceneManager.PendingLoads.Count > 0 || Tests.IsRunning);
+
+		/// <summary>A project is opening: its windows stand empty until the load's steps are done (see <see cref="OpenProject" />).</summary>
+		public bool IsLoadingProject => projectLoad != null;
+
+		/// <summary>What the project's load does now ("Compiling scripts"); null when no project loads.</summary>
+		public string LoadingStatus => loadingStatus;
+
+		/// <summary>
+		///     The open project's assets are read (<see cref="AssetDatabase" /> holds this project's, not the one before): windows
+		///     listing or resolving assets draw their content from here on while the project loads.
+		/// </summary>
+		public bool AssetsReady { get; private set; }
 
 		/// <summary>The window comes to the front on the next frame (its ImGui name).</summary>
 		public void RequestWindowFocus(string imguiName)
@@ -642,7 +722,7 @@ namespace LELEngine.Editor
 		/// </summary>
 		public void RenderViews()
 		{
-			if (Project == null)
+			if (Project == null || projectLoad != null)
 			{
 				return;
 			}
@@ -762,11 +842,32 @@ namespace LELEngine.Editor
 			Window.Focus();
 		}
 
+		/// <summary>
+		///     Opens a project. With a UI the editor's windows show at once and the project loads in steps between frames
+		///     (<see cref="OpenProjectSteps" />): until it is there they stand empty where the layout docks them, with the step
+		///     in their middle (<see cref="DrawLoadingUI" />), the console shows the load's messages, and automation waits. The
+		///     user's ask (2026-11-09): the editor's windows first, the heavy loading (assets, scripts, the scene) after; before,
+		///     the window stayed blank until the scene was open. Batch mode loads it at once. The project's files are read and
+		///     its first step runs here, so their errors are the caller's; a later step's error closes the project and logs it.
+		/// </summary>
 		public void OpenProject(string root)
 		{
 			ProjectInfo project = ProjectInfo.Load(root);
 			CloseProject();
 
+			projectLoad = OpenProjectSteps(project);
+			projectLoadStart = System.Diagnostics.Stopwatch.GetTimestamp();
+			projectLoadTimes.Clear();
+			loadingFramesDrawn = 0;
+			loadingUpdatesWithoutFrame = 0;
+			loadingStatus = null;
+			SetLoadingStatus("Opening the project");
+			AdvanceProjectLoad(!HasUI);
+		}
+
+		/// <summary>The steps of <see cref="OpenProject" />: each yields what the next one does (shown while it runs).</summary>
+		private IEnumerator<string> OpenProjectSteps(ProjectInfo project)
+		{
 			Project = project;
 			// The user's own settings of the project (windows.json, not in the project): Edit > Reload Scripts On Play, the
 			// scene open last.
@@ -776,16 +877,28 @@ namespace LELEngine.Editor
 			// Physics and lighting quality of the project; projects from before the file get it with the defaults.
 			project.LoadProjectSettings();
 			projectSettingsStamp = FileStamp.Of(project.ProjectSettingsFile);
+			// The scripted windows open last time (they come back once their scripts load) and the windows that stand in for
+			// all of them meanwhile; the windows the start opens keep no focus (see DrawUI).
+			Extensions.LoadOpenWindows(project);
+			PrepareLoadingWindows(states);
+			startupFocusFrames = 4;
+			yield return "Reading the assets";
+
 			AssetDatabase.Initialize(project.AssetsPath, true);
+			AssetsReady = true;
 			ModelAssets.CacheFolder = project.ModelCachePath;
 			AssetThumbnails.CacheFolder = project.ThumbnailCachePath;
 			// Made clouds (Library/VolumeCache): read instead of made again, written after the editor made one. Before the scene
 			// is read: its volumetric objects start reading their files as they are read.
 			LELEngine.Volumetrics.VolumeCache.Writable = true;
 			LELEngine.Volumetrics.VolumeCache.Folder = project.VolumeCachePath;
+			yield return "Importing models";
+
 			ImportChangedModels(true);
 			// Remapped controls of play mode are the project's, not the user's (a built game keeps them in AppData).
 			LELEngine.InputSystem.InputManager.UserDataPath = Path.Combine(project.LibraryPath, "InputUserData.json");
+			yield return "Loading the audio project";
+
 			OpenAudioProjectForEditor();
 			if (!automated)
 			{
@@ -794,6 +907,7 @@ namespace LELEngine.Editor
 			}
 
 			Debug.Log($"[Editor] Opened project {project.Name} ({project.RootPath})");
+			yield return "Preparing the views";
 
 			GameView.EnsureRenderer();
 			SceneView.EnsureRenderer();
@@ -815,10 +929,26 @@ namespace LELEngine.Editor
 			settingsWatcher.Renamed += (s, e) => OnSettingsChanged();
 			settingsWatcher.Changed += (s, e) => OnSettingsChanged();
 			settingsWatcher.EnableRaisingEvents = true;
+			yield return "Loading the scripts";
 
-			Extensions.LoadOpenWindows(project);
 			Scripts = new ScriptDomain(this, project);
-			Scripts.Initialize();
+			if (Scripts.BeginStartup())
+			{
+				// The scripts compile in a process of their own; the window keeps drawing meanwhile (batch mode waits), and the
+				// scene opens with their types.
+				while (Scripts.StartupBuildRunning)
+				{
+					if (!HasUI)
+					{
+						Scripts.WaitForStartupBuild();
+						continue;
+					}
+
+					yield return "Compiling scripts";
+				}
+
+				Scripts.FinishStartup();
+			}
 
 			// The windows as they were (not in automated runs: they get the default ones, unless given a windows file of their
 			// own, windowsfile=, which then starts like the user's editor).
@@ -827,7 +957,10 @@ namespace LELEngine.Editor
 			startupFocusFrames = 4;
 
 			string scenePath = lastScene ?? project.StartScene;
-			if (scenePath != null && File.Exists(AssetDatabase.ToAbsolute(scenePath)))
+			bool sceneExists = scenePath != null && File.Exists(AssetDatabase.ToAbsolute(scenePath));
+			yield return sceneExists ? "Opening " + scenePath : "Creating a scene";
+
+			if (sceneExists)
 			{
 				OpenSceneNow(scenePath);
 			}
@@ -841,6 +974,184 @@ namespace LELEngine.Editor
 			}
 		}
 
+		// Every frame while a project loads: its next step, once the windows have been drawn (the first step, the assets, would
+		// otherwise run before the first frame; a minimized window draws none, so not for long). An error ends the load: the
+		// project closes, and the next frame shows the project chooser with it (an automated run ends), as when the project's
+		// files cannot be read.
+		private void UpdateProjectLoad()
+		{
+			if (loadingFramesDrawn < LoadingFramesFirst && ++loadingUpdatesWithoutFrame < 10)
+			{
+				return;
+			}
+
+			try
+			{
+				AdvanceProjectLoad(false);
+			}
+			catch (Exception e)
+			{
+				Debug.LogException(e);
+				OpenError = "Cannot open the project: " + e.Message;
+				if (Project != null)
+				{
+					CloseProject();
+				}
+			}
+		}
+
+		// Runs the load's next step (all of them with allSteps); the last one finishes the load. An exception ends the load
+		// and goes to the caller.
+		private void AdvanceProjectLoad(bool allSteps)
+		{
+			try
+			{
+				do
+				{
+					if (!projectLoad.MoveNext())
+					{
+						EndProjectLoad(true);
+						return;
+					}
+
+					SetLoadingStatus(projectLoad.Current);
+				}
+				while (allSteps);
+			}
+			catch
+			{
+				EndProjectLoad(false);
+				throw;
+			}
+		}
+
+		// The step the load is at; the time of the one before it is recorded (the frames drawn meanwhile included).
+		private void SetLoadingStatus(string status)
+		{
+			if (status == loadingStatus)
+			{
+				return;
+			}
+
+			long now = System.Diagnostics.Stopwatch.GetTimestamp();
+			if (loadingStatus != null)
+			{
+				projectLoadTimes.Add((loadingStatus, System.Diagnostics.Stopwatch.GetElapsedTime(loadingStatusSince, now).TotalMilliseconds));
+			}
+
+			loadingStatus = status;
+			loadingStatusSince = now;
+		}
+
+		private void EndProjectLoad(bool completed)
+		{
+			IEnumerator<string> load = projectLoad;
+			projectLoad = null;
+			if (completed)
+			{
+				SetLoadingStatus(null);
+				projectReady = true;
+				var steps = new System.Text.StringBuilder();
+				foreach ((string step, double ms) in projectLoadTimes)
+				{
+					steps.Append(steps.Length > 0 ? ", " : "").Append(step).Append(' ').Append(ms.ToString("F0")).Append(" ms");
+				}
+
+				Debug.Log($"[Editor] Project {Project?.Name} loaded in {System.Diagnostics.Stopwatch.GetElapsedTime(projectLoadStart).TotalMilliseconds:F0} ms{(HasUI ? ", its windows up meanwhile" : "")} ({steps})");
+			}
+
+			loadingStatus = null;
+			loadingWindows.Clear();
+			load?.Dispose();
+		}
+
+		/// <summary>
+		///     The windows that show while the project loads: the built-in ones open as the user left them (windows.json; the
+		///     same flags <see cref="RestoreWindowStates" /> sets, which also gives the document windows their documents once the
+		///     project is there; without it or in automated runs they stay as they start), and stand-ins for the scripted windows
+		///     of the last session, whose types load with the scripts.
+		/// </summary>
+		private void PrepareLoadingWindows(WindowStates states)
+		{
+			loadingWindows.Clear();
+			loadingWindows.AddRange(Extensions.SavedWindowNames());
+			if (!WindowStatesWritable || states == null)
+			{
+				return;
+			}
+
+			bool Saved(string name, bool fallback) => states.Open.TryGetValue(name, out bool open) ? open : fallback;
+			SceneView.Open = Saved("Scene", true);
+			GameView.Open = Saved("Game", true);
+			hierarchy.Open = Saved("Hierarchy", true);
+			inspector.Open = Saved("Inspector", true);
+			projectPanel.Open = Saved("Project", true);
+			consolePanel.Open = Saved("Console", true);
+			lightingPanel.Open = Saved("Lighting", true);
+			inputManagerWindow.Open = Saved("Input Manager", false);
+			testRunnerWindow.Open = Saved("Test Runner", false);
+			vfxGraphWindow.Open = Saved("VFX Graph", false);
+			animatorWindow.Open = Saved("Animator", false);
+			animationWindow.Open = Saved("Animation", false);
+			timelineWindow.Open = Saved("Timeline", false);
+			if (Saved("Project Settings", false))
+			{
+				projectSettingsWindow.Restore(Enum.TryParse(states.ProjectSettingsTab, out ProjectSettingsWindow.Tab tab) ? tab : ProjectSettingsWindow.Tab.Lighting);
+			}
+		}
+
+		/// <summary>
+		///     While the project loads every window but the console draws without taking input: what it would act on is still
+		///     loading. ImGui's disabled state (windows begun inside it are disabled too) at full strength, so the windows look as
+		///     they will; the menus are dimmed (see <see cref="DrawMainMenu" />).
+		/// </summary>
+		private static void BeginLoadingInputLock()
+		{
+			ImGui.PushStyleVar(ImGuiStyleVar.DisabledAlpha, 1f);
+			ImGui.BeginDisabled();
+		}
+
+		private static void EndLoadingInputLock()
+		{
+			ImGui.EndDisabled();
+			ImGui.PopStyleVar();
+		}
+
+		/// <summary>The status while the project loads: "Project: step... (N s)".</summary>
+		private string LoadingText()
+		{
+			double seconds = System.Diagnostics.Stopwatch.GetElapsedTime(loadingStatusSince).TotalSeconds;
+			return $"{Project?.Name}: {loadingStatus ?? "Loading"}" + new string('.', 1 + (int)(ImGui.GetTime() * 3.0) % 3).PadRight(3) + (seconds >= 2.0 ? $" ({seconds:F0} s)" : "");
+		}
+
+		/// <summary>The scripted windows while their scripts load: empty, under their own ImGui names and titles.</summary>
+		private void DrawLoadingScriptWindows()
+		{
+			foreach ((string name, string title) in loadingWindows)
+			{
+				ImGui.SetNextWindowSize(new NVector2(420f, 320f), ImGuiCond.FirstUseEver);
+				ImGui.Begin(title + name);
+				ImGui.End();
+			}
+		}
+
+		// The end of a UI frame while the project loads: the frames the load waits for before its first step, and the focus
+		// the windows took by appearing dropped (see startupFocusFrames).
+		private void EndLoadingFrame(bool capture)
+		{
+			if (capture)
+			{
+				return;
+			}
+
+			loadingFramesDrawn++;
+			if (startupFocusFrames > 0)
+			{
+				startupFocusFrames--;
+				ImGui.SetWindowFocus((string)null);
+			}
+		}
+
 		public void CloseProject()
 		{
 			if (Project == null)
@@ -849,6 +1160,10 @@ namespace LELEngine.Editor
 			}
 
 			SaveEditorState();
+			// A load in progress ends here (the window closed, or another project opens); nothing of it is saved.
+			EndProjectLoad(false);
+			projectReady = false;
+			AssetsReady = false;
 			if (IsPlaying)
 			{
 				ExitPlayMode();
@@ -2269,8 +2584,20 @@ namespace LELEngine.Editor
 				return;
 			}
 
+			// While the project loads the menus and the play controls are disabled; the status says what loads.
+			bool loading = projectLoad != null;
+			if (loading)
+			{
+				ImGui.BeginDisabled();
+			}
+
 			DrawMenus();
 			DrawPlayControls();
+			if (loading)
+			{
+				ImGui.EndDisabled();
+			}
+
 			DrawStatus();
 			ImGui.EndMainMenuBar();
 		}
@@ -2632,7 +2959,7 @@ namespace LELEngine.Editor
 
 		private void DrawStatus()
 		{
-			string status = Scripts?.StatusText;
+			string status = projectLoad != null ? LoadingText() : Scripts?.StatusText;
 			if (string.IsNullOrEmpty(status))
 			{
 				return;
@@ -2640,7 +2967,7 @@ namespace LELEngine.Editor
 
 			float width = ImGui.CalcTextSize(status).X + 16;
 			ImGui.SetCursorPosX(ImGui.GetWindowWidth() - width);
-			if (Scripts.HasErrors)
+			if (projectLoad == null && Scripts.HasErrors)
 			{
 				ImGui.TextColored(new System.Numerics.Vector4(1f, 0.4f, 0.35f, 1f), status);
 			}
@@ -2741,6 +3068,8 @@ namespace LELEngine.Editor
 		{
 			string title = Project == null
 				? "LELEngine Editor"
+				: projectLoad != null
+					? $"LELEngine Editor - {Project.Name} - loading"
 				: Stage != null
 					? $"LELEngine Editor - {Project.Name} - Prefab: {Stage.Name}{(SceneDirty ? " *" : "")}"
 					: $"LELEngine Editor - {Project.Name} - {Scene?.Name ?? "no scene"}{(SceneDirty ? " *" : "")}{(IsPlaying ? " [Playing]" : "")}";
@@ -2975,7 +3304,8 @@ namespace LELEngine.Editor
 
 		private void SaveEditorState()
 		{
-			if (Project != null)
+			// Not before the project finished loading: its state is not read yet (see projectReady).
+			if (Project != null && projectReady)
 			{
 				Edits.SaveWaiting();
 				if (EditorStateWritable)

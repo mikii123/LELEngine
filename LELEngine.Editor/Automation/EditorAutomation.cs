@@ -668,7 +668,8 @@ namespace LELEngine.Editor
 		/// </summary>
 		internal static void Pump()
 		{
-			if (editor == null)
+			// A project that loads over frames (EditorApplication.OpenProject): commands wait until it is there.
+			if (editor == null || editor.IsLoadingProject)
 			{
 				return;
 			}

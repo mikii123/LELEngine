@@ -116,10 +116,33 @@ namespace LELEngine.Editor
 		#region PublicMethods
 
 		/// <summary>
-		///     Writes the IDE project, loads the last built scripts (instant start) and builds in the background when
-		///     sources are newer.
+		///     Starts the scripts of a project that opens and waits for them (batch mode): <see cref="BeginStartup" />, the
+		///     build it started, if any, waited for on this thread, then <see cref="FinishStartup" />.
 		/// </summary>
 		public void Initialize()
+		{
+			if (BeginStartup())
+			{
+				WaitForStartupBuild();
+				FinishStartup();
+			}
+		}
+
+		/// <summary>Blocks until the build <see cref="BeginStartup" /> started has finished (batch mode).</summary>
+		public void WaitForStartupBuild()
+		{
+			((IAsyncResult)buildTask)?.AsyncWaitHandle.WaitOne();
+		}
+
+		/// <summary>
+		///     Starts the scripts of a project that opens: the IDE project, the file watcher, and the last built assemblies
+		///     loaded when they are current (instant start). Scripts changed since their build (components added while the
+		///     editor was closed) are built first, as Unity does: true when that build started, and the caller opens the
+		///     scene only once <see cref="StartupBuildRunning" /> ended and <see cref="FinishStartup" /> loaded its result. With
+		///     the old assembly loaded the scene read the new components as missing, and the reload when the build finished came
+		///     on top (2026-11-09, the user's report). The editor's window keeps drawing while it builds.
+		/// </summary>
+		public bool BeginStartup()
 		{
 			ProjectGenerator.Generate(project);
 
@@ -130,19 +153,41 @@ namespace LELEngine.Editor
 			watcher.Renamed += (s, e) => OnSourcesChanged();
 			watcher.EnableRaisingEvents = true;
 
-			string dll = AssemblyFile(project);
-			bool editorScripts = HasEditorScripts(project);
 			HasTests = HasTestScripts(project);
-
-			// Scripts changed since their last build (components added while the editor was closed): built before anything
-			// loads, as Unity does. The scene opens after this; with the old assembly loaded it read the new components as
-			// missing, and the reload when the build finished came on top (2026-11-09, the user's report). A failed build
-			// leaves the old assembly to load below, with its errors in the console.
-			if (HasScripts(project) && (!File.Exists(dll) || !IsAssemblyCurrent(project, editorScripts)) && BuildBeforeLoading())
+			if (HasScripts(project) && (!File.Exists(AssemblyFile(project)) || !IsAssemblyCurrent(project, HasEditorScripts(project))))
 			{
-				return;
+				Debug.Log("[Scripts] The scripts changed since their last build: compiling them before the scene opens");
+				StartBuild();
+				return true;
 			}
 
+			LoadBuiltAssemblies();
+			return false;
+		}
+
+		/// <summary>The build <see cref="BeginStartup" /> started has not finished yet.</summary>
+		public bool StartupBuildRunning => buildTask != null && !buildTask.IsCompleted;
+
+		/// <summary>
+		///     After the startup build: its diagnostics, the record of its sources and its assemblies loaded (no scene is loaded
+		///     yet: the domain alone). A failed build loads the previous assemblies, its errors stay in the console.
+		/// </summary>
+		public void FinishStartup()
+		{
+			BuildResult result = buildTask.IsFaulted ? Failed(buildTask.Exception) : buildTask.Result;
+			buildTask = null;
+			OnBuildFinished(result);
+			if (!result.Success || GameAssembly == null)
+			{
+				LoadBuiltAssemblies();
+			}
+		}
+
+		/// <summary>The assemblies of the last build, as they are (woven first when an IDE or an older engine built them).</summary>
+		private void LoadBuiltAssemblies()
+		{
+			string dll = AssemblyFile(project);
+			bool editorScripts = HasEditorScripts(project);
 			if (File.Exists(dll))
 			{
 				// Scripts built before the weaver existed (or by an IDE): rewritten before they load.
@@ -177,27 +222,6 @@ namespace LELEngine.Editor
 					RequestBuild(false);
 				}
 			}
-		}
-
-		/// <summary>Builds the scripts now, on this thread, and loads them when the build succeeds (no scene is loaded yet).</summary>
-		private bool BuildBeforeLoading()
-		{
-			Debug.Log("[Scripts] The scripts changed since their last build: compiling them before the scene opens");
-			StartBuild();
-			BuildResult result;
-			try
-			{
-				result = buildTask.GetAwaiter().GetResult();
-			}
-			catch (Exception e)
-			{
-				result = Failed(e);
-			}
-
-			buildTask = null;
-			// Diagnostics, the sources' record and the load (Apply -> ReloadSceneAround with no scene: the domain alone).
-			OnBuildFinished(result);
-			return result.Success && GameAssembly != null;
 		}
 
 		/// <summary>The editor build of the scripts (Library/ScriptAssemblies/Game.dll).</summary>

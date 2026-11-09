@@ -130,6 +130,13 @@ namespace LELEngine.Editor
 
 		private void DrawContent()
 		{
+			// Empty while the project loads until its assets are read (settings name assets: the splash logo, the input
+			// configuration, the audio project).
+			if (!editor.AssetsReady)
+			{
+				return;
+			}
+
 			ProjectSettings settings = ProjectSettings.Current;
 			context.Scene = editor.Scene;
 			context.UndoTarget = settings;

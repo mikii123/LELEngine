@@ -23,6 +23,17 @@ namespace LELEngine.Editor
 		private readonly int exitFrame;
 		private readonly FrameDumper screenshotDumper = new FrameDumper();
 
+		// loadingshots=folder: per step of the project's load the frame shown while it runs, folder/load01, load02, ... (tests).
+		private readonly string loadingShotsFolder;
+		private string lastLoadingShot;
+		private int loadingShots;
+		private bool firstFrameLogged;
+
+		// Milliseconds after the process started: the window's GL context made (OnLoad), the editor made (its project's
+		// first step included).
+		private double contextMs;
+		private double editorMs;
+
 		/// <summary>The window's place is remembered between runs (not for automated runs: they must not move it or depend on it).</summary>
 		private readonly bool rememberPlacement;
 
@@ -53,6 +64,7 @@ namespace LELEngine.Editor
 				if (name == "screenshot") screenshotFolder = value;
 				else if (name == "screenshotframe") screenshotFrames = Array.ConvertAll(value.Split(',', StringSplitOptions.RemoveEmptyEntries), item => int.TryParse(item, out int at) ? at : -1);
 				else if (name == "exitframe") int.TryParse(value, out exitFrame);
+				else if (name == "loadingshots") loadingShotsFolder = value;
 			}
 		}
 
@@ -89,12 +101,19 @@ namespace LELEngine.Editor
 		protected override void OnLoad()
 		{
 			base.OnLoad();
+			contextMs = SinceProcessStart();
 			string layout = ImGuiController.LayoutFileOverride ?? Path.Combine(RecentProjects.EditorDataFolder, "layout.ini");
 			bool layoutExisted = File.Exists(layout);
 			imgui = new ImGuiController(this, layout);
 			EditorStyle.Apply();
 			editor = new EditorApplication(this, layoutExisted ? layout : null, args);
 			EditorAutomation.Start(editor, args);
+			editorMs = SinceProcessStart();
+		}
+
+		private static double SinceProcessStart()
+		{
+			return (DateTime.Now - System.Diagnostics.Process.GetCurrentProcess().StartTime).TotalMilliseconds;
 		}
 
 		private void StartWithoutUI()
@@ -204,20 +223,51 @@ namespace LELEngine.Editor
 			editor.RenderExtraWindows((float)e.Time);
 
 			// Testing aid: screenshot=folder screenshotframe=N writes frame N of the window (screenshotframe=a,b,c: each
-			// into folder/fNNNN); exitframe=N closes.
-			frame++;
-			if (screenshotFolder != null && Array.IndexOf(screenshotFrames, frame) >= 0)
+			// into folder/fNNNN); exitframe=N closes. Frames count once the project is loaded (it loads over frames, see
+			// EditorApplication.OpenProject), so frame N is the scene's Nth frame as before.
+			if (editor.IsLoadingProject)
 			{
-				screenshotDumper.Start(screenshotFrames.Length > 1 ? Path.Combine(screenshotFolder, "f" + frame.ToString("0000")) : screenshotFolder, 1);
-				screenshotDumper.Capture(ClientSize.X, ClientSize.Y);
+				CaptureLoadingStep();
+			}
+			else
+			{
+				frame++;
+				if (screenshotFolder != null && Array.IndexOf(screenshotFrames, frame) >= 0)
+				{
+					screenshotDumper.Start(screenshotFrames.Length > 1 ? Path.Combine(screenshotFolder, "f" + frame.ToString("0000")) : screenshotFolder, 1);
+					screenshotDumper.Capture(ClientSize.X, ClientSize.Y);
+				}
 			}
 
 			base.OnRenderFrame(e);
+			if (!firstFrameLogged)
+			{
+				firstFrameLogged = true;
+				Console.WriteLine($"[Editor] First frame drawn {SinceProcessStart():F0} ms after the process started (window and GL context at {contextMs:F0} ms, editor made at {editorMs:F0} ms)");
+			}
+
 			if (exitFrame > 0 && frame >= exitFrame)
 			{
 				editor.DiscardChangesOnClose();
 				Close();
 			}
+		}
+
+		// loadingshots=folder: per step of the project's load the frame that shows while it runs (the last one before it).
+		private void CaptureLoadingStep()
+		{
+			string step = editor.LoadingStatus;
+			if (loadingShotsFolder == null || step == null || step == lastLoadingShot || !editor.LoadingStepNext)
+			{
+				return;
+			}
+
+			lastLoadingShot = step;
+			loadingShots++;
+			string folder = Path.Combine(loadingShotsFolder, "load" + loadingShots.ToString("00"));
+			Console.WriteLine($"[Test] Loading frame {loadingShots:00}: {step}");
+			screenshotDumper.Start(folder, 1);
+			screenshotDumper.Capture(ClientSize.X, ClientSize.Y);
 		}
 
 		protected override void OnClosing(CancelEventArgs e)

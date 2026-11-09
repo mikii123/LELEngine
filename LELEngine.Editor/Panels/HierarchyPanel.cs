@@ -161,7 +161,12 @@ namespace LELEngine.Editor
 			Scene scene = editor.Scene;
 			if (scene == null)
 			{
-				ImGui.TextDisabled("No scene");
+				// Empty while the project loads (its scene opens last).
+				if (!editor.IsLoadingProject)
+				{
+					ImGui.TextDisabled("No scene");
+				}
+
 				return;
 			}
 

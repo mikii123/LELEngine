@@ -173,6 +173,13 @@ namespace LELEngine.Editor
 
 		private void DrawContent()
 		{
+			// While the project loads nothing is selected (and a lock's asset is not read yet).
+			if (editor.IsLoadingProject)
+			{
+				ImGui.TextDisabled("Nothing selected");
+				return;
+			}
+
 			GameObject go = editor.Selected;
 			string asset = editor.SelectedAsset;
 			if (locked)

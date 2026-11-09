@@ -119,10 +119,12 @@
   date"). A build without the record (older engines, an IDE build) is built again once. Running editors also rebuild
   on the file watcher's events; `dotnet build` itself drops deleted files (the SDK hashes its Compile items).
 - Editor start with scripts newer than their build (2026-11-09, the user's report: components added since the last run
-  logged as missing): `ScriptDomain.Initialize` builds them on the main thread before anything loads
-  (`BuildBeforeLoading`, log "compiling them before the scene opens"), so the scene opens with the new types. Before,
-  the old Game.dll loaded, the scene read the new components as missing, and the build's reload followed. A failed
-  build loads the old assembly as before (errors in the console, no second build until an edit).
+  logged as missing): they are built before the scene opens (`ScriptDomain.BeginStartup` starts the build,
+  `StartupBuildRunning`, `FinishStartup` loads the result; log "compiling them before the scene opens"), so the scene
+  opens with the new types. Before, the old Game.dll loaded, the scene read the new components as missing, and the
+  build's reload followed. The editor's window keeps drawing meanwhile (see "Editor start"); batch mode waits
+  (`Initialize`, `WaitForStartupBuild`). A failed build loads the old assembly as before (errors in the console, no
+  second build until an edit).
 - Windows with an `InspectorContext` of their own (Timeline, Animation, Input Manager) release it in
   `OnDomainUnloading`: the context keeps the scene it last drew with, and a Timeline opened and closed once held the
   unloaded scene, and with it the old scripts, through every reload ("still referenced ... timelineWindow.context.Scene").
@@ -267,6 +269,50 @@
   `click hierarchy:Sphere` + `status`, `click "checkbox:Cast Shadows"` + `get`, `undo`, screenshots of covered
   windows; batch `-executeMethod AutoTest.Run` and `-listen` + `quit`. Start / stop test editors from the PowerShell
   tool (a Bash-run `Start-Process` hangs on inherited handles).
+
+## Editor start: the windows first, the project over frames (2026-11-09)
+
+- The user's ask: the editor's own windows show first, as they will be but without what is not loaded yet (an empty
+  hierarchy, a scene view that renders nothing), and the heavy loading comes after. Before, `OpenProject` ran whole inside
+  `MainWindow.OnLoad` (the editor's constructor), so the window stayed blank until the scene was open. A first version
+  drew stand-ins (empty windows with the step in their middle) and the user corrected it: the real windows, empty.
+- `EditorApplication.OpenProject` reads the project's files and runs the first step at once (errors there are the
+  caller's, as before), then `OpenProjectSteps` (an iterator; each `yield return` names the next step) advances one step
+  per `Update` once `LoadingFramesFirst` (3) loading frames were drawn: reading the assets, importing models, the audio
+  project, the views (renderers, the scene camera, file watchers), the scripts (a stale build: one frame per poll of
+  `Scripts.StartupBuildRunning` while it compiles in its own process), the scene. ImGui docks windows from the layout in
+  the next frame's NewFrame: frame 1 shows the menu bar and the empty dock space only, frame 2 the windows (measured). The
+  frame the load ends in goes on as any other (`RestoreWindowStates` opens the real windows before it draws). An error
+  in a later step closes the project and shows the chooser (automated runs end). Batch mode runs every step at once.
+- While it loads (`IsLoadingProject`, `LoadingStatus`) `DrawUI` draws the editor as always: the menu bar (menus and play
+  controls disabled, "Project: step... (N s)" as its status), the dock space, and every panel through its own `Draw`. The
+  first step sets the built-in windows' open flags from windows.json (`PrepareLoadingWindows`: the flags
+  `RestoreWindowStates` sets, which after the load also gives the document windows their documents). Each panel shows what
+  is there: the hierarchy and the lighting panel nothing (no "No scene" while loading), the scene view its toolbar over
+  an empty view (no image, camera input or picking: its last image may be another project's; an `ImGui.Dummy` takes the
+  view's place, as ImGui asserts on a window grown by `SetCursorPos` alone), the game view nothing, the inspector "Nothing
+  selected", the Project panel, Project Settings and the Input Manager their content once `AssetsReady` (the asset
+  database still holds the previous project before), the document windows their empty state. Every window but the
+  console takes no input (`BeginLoadingInputLock`: ImGui's disabled state, which windows begun inside it inherit, with
+  `DisabledAlpha` 1 so they look as they will); the console is live (the load's messages). The scripted windows of
+  `Library/EditorWindows.txt` cannot draw before their types load: empty windows under their ImGui names
+  (`EditorExtensions.SavedWindowNames`, "Probe Window###ProbeWindow") stand where the layout docks them until the real
+  ones take over the same ImGui windows. `startupFocusFrames` covers the first frames. Nothing renders the views, automation
+  waits (`EditorAutomation.Pump` returns, `IsBusy` true), `SaveEditorState` writes nothing until `projectReady` (a closed
+  or failed load must not replace the user's camera, windows or layout: verified, closing during the compile left them
+  byte-identical).
+- Logs: `[Editor] First frame drawn N ms after the process started (window and GL context at N ms, editor made at N ms)`,
+  `[Editor] Project P loaded in N ms, its windows up meanwhile (step N ms, ...)`. New Frontier (Debug, 780M): first
+  frame with the windows ~1.3 s (the window and GL context alone ~1.0 s), then assets ~0.3 s, scripts 0.07 s (current) or
+  ~5-6 s (compiling, the windows drawing), the scene ~1.3-2 s (still one blocking step: the window shows "Opening
+  Scenes/Flight.scene" meanwhile).
+- Frames of automated runs count from the end of the load: `screenshotframe=`, `exitframe=` (`MainWindow.frame`) and the
+  test hooks (`TestHooks.Update` runs after it), so frame N means the scene's Nth frame as before. `loadingshots=folder`
+  writes per step the frame shown while it runs (`folder/loadNN/frame_000.bmp`, `[Test] Loading frame NN: step`).
+  Scratchpad `storm/startload.ps1` (`-Stale` adds a probe script so the build runs), `storm/closeload.ps1` (closes during
+  the compile, compares the state files), `storm/winprobe.ps1` (scratch project with a scripted window saved open and
+  every built-in window open through `windowsfile=`: all of them draw while loading without an assert, the scripted
+  window's stand-in, then the real windows in their places).
 
 ## Player startup and splash screen
 

@@ -470,8 +470,13 @@ namespace LELEngine.Editor
 			{
 				TestAnchors.Record("sceneview", viewMin, viewMin + viewSize);
 			}
-			if (ViewRenderer == null)
+
+			// While the project loads the view shows nothing (no scene yet; its last image may be another project's) and takes no
+			// camera input. Its place is still an item: the toolbar moved the cursor, and ImGui asserts on a window grown by the
+			// cursor alone.
+			if (ViewRenderer == null || editor.IsLoadingProject)
 			{
+				ImGui.Dummy(viewSize);
 				return;
 			}
 

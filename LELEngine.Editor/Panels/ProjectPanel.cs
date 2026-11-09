@@ -188,7 +188,8 @@ namespace LELEngine.Editor
 		private void DrawContent()
 		{
 			ProjectInfo project = editor.Project;
-			if (project == null)
+			// Empty while the project loads until its assets are read (the asset database may still hold the project before).
+			if (project == null || !editor.AssetsReady)
 			{
 				return;
 			}

@@ -226,6 +226,26 @@ namespace LELEngine.Editor
 			}
 		}
 
+		/// <summary>
+		///     The windows waiting for their scripts (read by <see cref="LoadOpenWindows" />) as ImGui names and titles: the
+		///     editor shows them empty in their places while the project loads.
+		/// </summary>
+		public IEnumerable<(string Name, string Title)> SavedWindowNames()
+		{
+			foreach (WindowState state in savedWindows)
+			{
+				string title = state.Title;
+				if (string.IsNullOrEmpty(title))
+				{
+					// The tab text of a window without a title of its own (EditorWindow.title): its class name, spaced.
+					title = state.TypeName.Split(',')[0];
+					title = LELEngine.Serialization.SerializationUtility.NicifyName(title.Substring(title.LastIndexOf('.') + 1));
+				}
+
+				yield return ("###" + state.Key, title);
+			}
+		}
+
 		/// <summary>Writes the open windows (and the ones still waiting for their scripts) to the project's Library.</summary>
 		public void SaveOpenWindows(ProjectInfo project)
 		{
