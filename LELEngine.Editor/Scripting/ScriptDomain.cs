@@ -18,8 +18,10 @@ namespace LELEngine.Editor
 	///     types is dropped, the collectible load context of the old assembly is unloaded, the new assembly is loaded
 	///     into a fresh context and the scene is loaded back from its saved state. Compile errors keep the old
 	///     scripts running. That the old context really went away is checked in the background; when something still
-	///     references it, <see cref="LeakTracer" /> finds the paths from static fields to it on the main thread and a
-	///     warning lists them.
+	///     references it, <see cref="LeakRoots" /> takes a snapshot of the process at that moment and reads the GC's own
+	///     roots from it (thread stacks, handles, the finalizer queue, every static), <see cref="LeakTracer" /> finds the
+	///     paths from static fields to it on the main thread, and warnings list both; a context that goes later is logged
+	///     with the time it took.
 	///     Scripts in Editor folders build into Game.Editor.dll (custom inspectors, editor windows, menu items), loaded
 	///     into the same context after Game.dll and handed to <see cref="EditorExtensions" />.
 	///     Scripts in Tests folders build into Game.Tests.dll after the game's assemblies (dotnet build of the tests'
@@ -96,6 +98,9 @@ namespace LELEngine.Editor
 		// Contexts that outlived their unload check (weak), with the scene components still alive: traced in Update.
 		private readonly System.Collections.Concurrent.ConcurrentQueue<(WeakReference context, System.Collections.Generic.List<string> components)> survivors =
 			new System.Collections.Concurrent.ConcurrentQueue<(WeakReference, System.Collections.Generic.List<string>)>();
+
+		// Searches of the GC's roots (LeakRoots) finished on their worker thread: logged in Update.
+		private readonly System.Collections.Concurrent.ConcurrentQueue<LeakRoots.Report> rootReports = new System.Collections.Concurrent.ConcurrentQueue<LeakRoots.Report>();
 
 		private volatile bool disposed;
 
@@ -409,6 +414,11 @@ namespace LELEngine.Editor
 			while (survivors.TryDequeue(out (WeakReference context, System.Collections.Generic.List<string> components) survivor))
 			{
 				ReportLeak(survivor.context, survivor.components);
+			}
+
+			while (rootReports.TryDequeue(out LeakRoots.Report roots))
+			{
+				ReportLeakRoots(roots);
 			}
 		}
 
@@ -756,6 +766,7 @@ namespace LELEngine.Editor
 
 			Task.Run(async () =>
 			{
+				var sinceUnload = Stopwatch.StartNew();
 				for (int attempt = 0; attempt < 40; attempt++)
 				{
 					GC.Collect();
@@ -786,7 +797,34 @@ namespace LELEngine.Editor
 					return;
 				}
 
-				survivors.Enqueue((unloaded, alive));
+				// The GC's own roots, from a snapshot taken now: a hold about to end (a background job) is still in it, and
+				// the main thread's trace starts only once it is taken (in the copy, the trace's walk would hold the old
+				// objects on the main thread's stack).
+				System.Collections.Generic.List<IntPtr> oldTypes = OldTypeHandles(unloaded);
+				if (oldTypes.Count > 0)
+				{
+					rootReports.Enqueue(LeakRoots.Find(oldTypes, () => survivors.Enqueue((unloaded, alive))));
+				}
+				else
+				{
+					survivors.Enqueue((unloaded, alive));
+				}
+
+				// It may still go: then something held it for a while, not for good (how long tells what to look for). As
+				// often as the check above for ten seconds (an unload takes a few collections in a row: coarser checks
+				// would add their wait to the time), then every two seconds for forty more.
+				for (int wait = 0; wait < 60 && unloaded.IsAlive && !disposed; wait++)
+				{
+					await Task.Delay(wait < 40 ? 250 : 2000);
+					GC.Collect();
+					GC.WaitForPendingFinalizers();
+					GC.Collect();
+				}
+
+				if (!unloaded.IsAlive)
+				{
+					Console.WriteLine($"[Scripts] Previous script assembly unloaded after all, {sinceUnload.Elapsed.TotalSeconds:0.0} s after the reload: something held it for a while, not for good");
+				}
 			});
 		}
 
@@ -805,7 +843,8 @@ namespace LELEngine.Editor
 
 			LeakTracer.Report report = LeakTracer.Trace(old, new[] { new System.Collections.Generic.KeyValuePair<string, object>("editor", editor) });
 			old = null;
-			var text = new System.Text.StringBuilder("[Warning] [Scripts] The previous script assembly is still referenced after the reload (it stays in memory with its static state).");
+			// The console adds "[Warning]" to the log's line itself.
+			var text = new System.Text.StringBuilder("[Scripts] The previous script assembly is still referenced after the reload (it stays in memory with its static state).");
 			string searched = report.Visited.ToString("N0", System.Globalization.CultureInfo.InvariantCulture) + $" objects searched in {report.Milliseconds:0} ms{(report.Stopped ? ", stopped early" : "")}";
 			if (report.Paths.Count > 0)
 			{
@@ -825,7 +864,7 @@ namespace LELEngine.Editor
 			else
 			{
 				text.Append($" Nothing reachable from the static fields of the engine and the editor, the editor itself or the runtime's events, timers and queued work holds it ({searched}): " +
-					"look for a thread a script started that still runs, a library's static field or event, or a GC handle / native callback (a delegate passed to native code).");
+					"a thread's stack, a GC handle (a native callback, COM), the finalizer queue or a library's static field does; the GC's own roots follow.");
 			}
 
 			if (aliveComponents.Count > 0)
@@ -834,6 +873,79 @@ namespace LELEngine.Editor
 			}
 
 			// One console entry for every line (written line by line, the paths would be plain log entries without the warning's color).
+			editor.Log.Add(text.ToString(), LogType.Warning);
+		}
+
+		/// <summary>
+		///     A type of each assembly of the context, as its method table: what <see cref="LeakRoots" /> knows the old
+		///     scripts by in a snapshot (a handle keeps nothing alive). A method of its own: its locals go with it.
+		/// </summary>
+		private static System.Collections.Generic.List<IntPtr> OldTypeHandles(WeakReference unloaded)
+		{
+			var handles = new System.Collections.Generic.List<IntPtr>();
+			if (!(unloaded.Target is AssemblyLoadContext old))
+			{
+				return handles;
+			}
+
+			foreach (Assembly assembly in old.Assemblies)
+			{
+				Type[] types;
+				try
+				{
+					types = assembly.GetTypes();
+				}
+				catch (ReflectionTypeLoadException e)
+				{
+					types = e.Types;
+				}
+				catch (Exception)
+				{
+					continue;
+				}
+
+				foreach (Type type in types)
+				{
+					if (type != null && !type.ContainsGenericParameters)
+					{
+						handles.Add(type.TypeHandle.Value);
+						break;
+					}
+				}
+			}
+
+			return handles;
+		}
+
+		/// <summary>Main thread: what the GC's roots say holds the old scripts, a second warning after the trace's.</summary>
+		private void ReportLeakRoots(LeakRoots.Report report)
+		{
+			string timing = $"snapshot {report.SnapshotMilliseconds:0} ms ({report.SnapshotFrames} frames drawn meanwhile), search {report.Milliseconds:0} ms in all{(report.Stopped ? ", stopped early" : "")}";
+			if (report.Error != null)
+			{
+				editor.Log.Add($"[Scripts] The GC roots of the old scripts could not be read from a snapshot of the process: {report.Error} ({timing})", LogType.Warning);
+				return;
+			}
+
+			if (report.Roots == 0)
+			{
+				Console.WriteLine(report.OldObjects > 0
+					? $"[Scripts] No GC root holds the old scripts any more: {report.OldObjects} objects of them in the snapshot wait for the next GC ({timing})"
+					: $"[Scripts] The old scripts are not in the snapshot any more: they unloaded late ({timing})");
+				return;
+			}
+
+			var text = new System.Text.StringBuilder($"[Scripts] GC roots that hold the old scripts ({report.Roots} in {report.Places} place{(report.Places == 1 ? "" : "s")}; {timing}), the shortest path of each:");
+			foreach (string path in report.Paths)
+			{
+				text.Append("\n  ").Append(path);
+			}
+
+			if (report.Places > report.Paths.Count)
+			{
+				text.Append($"\n  ... and {report.Places - report.Paths.Count} more places");
+			}
+
 			editor.Log.Add(text.ToString(), LogType.Warning);
 		}
 

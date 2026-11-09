@@ -113,11 +113,14 @@ public sealed class Light : Behaviour
 	public override void OnDisable()
 	{
 		active.Remove(this);
+		// The light list and the GI's tracking keep no light that is off (it held its scene until frames rendered).
+		LELEngine.Rendering.LightBuffer.Forget(this);
 	}
 
 	public override void OnDestroy()
 	{
 		active.Remove(this);
+		LELEngine.Rendering.LightBuffer.Forget(this);
 	}
 
 	#endregion

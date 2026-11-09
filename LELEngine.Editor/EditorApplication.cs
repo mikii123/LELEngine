@@ -2187,6 +2187,10 @@ namespace LELEngine.Editor
 			ObjectPicker.Close();
 			Edits.Cancel();
 			InlineEditors.Clear();
+			// The renderers of window captures (a view captured at another size) keep what their GI caches saw of the scene
+			// (LumenScene.lastMaterials): the old scripts stayed referenced through them after a reload (2026-11-09). They are
+			// made again by the next capture.
+			Automation.WindowCapture.ReleaseViews();
 		}
 
 		public void Dispose()

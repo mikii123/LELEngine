@@ -245,6 +245,13 @@ namespace LELEngine.Volumetrics
 		/// <summary>The cloud has been made and lit: it draws (and <see cref="DensityAt" /> answers).</summary>
 		public bool Ready => data != null && data.Ready;
 
+		/// <summary>
+		///     Changes whenever another cloud is drawn (its settings changed, it was made again, read from its file or kept from
+		///     an object of the same settings): scripts that placed things by the cloud's density (flash points in it) compare
+		///     it to know when to place them again. 0 before the first cloud.
+		/// </summary>
+		public int CloudVersion => data != null && data.Ready ? data.DensityVersion : 0;
+
 		/// <summary>Voxels of the cloud as the shape and voxel size give them (what the next build makes).</summary>
 		public Vector3i Grid => GridFor(Size, VoxelSize, out _, out _);
 

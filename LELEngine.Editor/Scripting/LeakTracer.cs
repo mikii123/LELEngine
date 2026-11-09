@@ -20,8 +20,8 @@ namespace LELEngine.Editor
 	///     locals). The walk stops at every object, type, member or delegate of the old assembly; a reverse walk from
 	///     those then gives every root that reaches one its own shortest path. Thread stacks, GC handles, native
 	///     callbacks and the libraries' own static fields are not visible to it (reading a library's static field could
-	///     run a static constructor that is not ready to run). Main thread: reading an engine class's static field may
-	///     run its static constructor.
+	///     run a static constructor that is not ready to run): <see cref="LeakRoots" /> reads those from a snapshot of the
+	///     process. Main thread: reading an engine class's static field may run its static constructor.
 	/// </summary>
 	internal static class LeakTracer
 	{

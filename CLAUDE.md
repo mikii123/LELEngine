@@ -129,6 +129,10 @@
   `OnDomainUnloading`: the context keeps the scene it last drew with, and a Timeline opened and closed once held the
   unloaded scene, and with it the old scripts, through every reload ("still referenced ... timelineWindow.context.Scene").
   Reproduced and verified with scratchpad `storm/timelineleak.ps1` (CLI `open Timeline`, `close Timeline`, then a reload).
+- Screenshots' own renderers (`WindowCapture`: a Scene / Game view captured at a size renders with a renderer of its own)
+  are released at a reload (`EditorApplication.ClearTypeCaches` -> `WindowCapture.ReleaseViews`, 2026-11-09): their
+  `LumenScene.lastMaterials` kept the unloaded scene's materials, and with them the old scripts. Verified: a sized
+  `screenshot Scene` then play -> "Previous script assembly unloaded".
 - Leak report: a context that survives its unload check (`ScriptDomain.VerifyUnload`, 40 GC passes in the
   background) is traced on the main thread (`ScriptDomain.Update` -> `LeakTracer`, `LELEngine.Editor/Scripting`):
   breadth-first from the static fields of the engine and the assemblies referencing it (closed generic base classes
@@ -139,6 +143,28 @@
   `UIRuntime.frameDocuments[0] (UIDocument on 'Async').gameObject (GameObject 'Async').components[1] -> AsyncProbe`.
   Not visible to it: thread stacks (a script's running thread), GC handles, native callbacks, libraries' statics (not
   read: their static constructors could fail when run early); the warning then says so. ~60 ms on the probe project.
+- The GC's own roots (2026-11-09, the user's ask after the tracer kept finding nothing: "make the leak's debug info tell
+  you more"): `LeakRoots` (`LELEngine.Editor/Scripting`, package `Microsoft.Diagnostics.Runtime` = ClrMD 4.2, the editor
+  only, approved by the user) takes a snapshot of the editor's own process the moment the unload check gives up
+  (`DataTarget.CreateSnapshotAndAttach`, PssCaptureSnapshot: ~0.3 s with no frame drawn, the copy then read on the worker
+  thread; the main thread's trace waits for the snapshot, as its walk would hold the old objects on the main stack in the
+  copy) and searches it with ClrMD's `GCRoot` from every root to the objects of the old scripts' types (by their loader
+  allocator handle, so List<OldType> and OldType[] count) and to the old loader allocator object (held by their `Type`s,
+  methods, delegates). Second warning, one line per place: `stack of thread N (started in X), in Y.Method`, strong / pinned
+  / ref-counted (COM) / dependent handles, the finalizer queue, or a static field named from the slot of the runtime's
+  statics array (`StaticNames`: `ClrStaticField.GetAddress` of every loaded type), e.g. `static LightBuffer.giLights ->
+  Dictionary<Light, LightBuffer+GIState>._entries -> ...Entry[][5] -> Light on 'Flash 6'.gameObject -> ... -> SpaceStorm
+  on 'Space Storm'`. Left out: weak handles (ClrMD lists kinds it does not know, the runtime's weak interior pointers
+  (kind 10), as roots) and roots the old loader allocator holds itself (the old scripts' own statics). Then the check goes
+  on (GC passes every 250 ms for 10 s, every 2 s for 40 more) and logs `unloaded after all, N s after the reload` when
+  the hold was only for a while. ~1.6 s for the search on New Frontier.
+- Found with it (2026-11-09): `LightBuffer` kept the last frames' lights in its static GI tracking (`giLights` /
+  `giSeen`, swapped each frame) and `shining`, so a light lit in the edit scene held that scene and the old scripts after
+  a reload until two frames rendered in play mode, which took over the 4 s check (New Frontier's storm preview: the
+  flash lights). `Light.OnDisable` / `OnDestroy` now call `LightBuffer.Forget` (out of the lists at once, the reach kept in
+  `giGone` for the next frame's GI change), and `candidates` is cleared after use. Verified with scratchpad
+  `storm/selectleak.ps1` (`-AllFlashes`, `-SetTime 0.754693`, `-Click -Button 'Next Strike'`: all three leaked, now
+  "unloaded (4-5 GC passes)"); the report itself checked by switching the fix off for one run.
 - Open windows are saved (type, ImGui id, serialized fields) before a reload, before play mode and as they change
   (`Library/EditorWindows.txt`), and restored on the next frame. Their capture runs before the scene unloads, since
   references to scene objects are only written for objects of the current scene.
@@ -1662,7 +1688,10 @@ Added for New Frontier's port of Unity's SpaceStonesPack (Standard materials wit
 - API: `Ready`, `DensityAt(world)` / `DensityAtLocal(local)` (CPU, trilinear from the R8 voxels, read back once per
   build), `EvaluateDensity(localPoints, densities)` (the noise exactly at those points through the generate kernel's
   `VOL_POINTS` variant, a GPU round trip: picking places by density without the voxels' 8-bit ties), `Transmittance(from,
-  to, samples)` (CPU, through the voxels), `Rebuild`, `Describe` (grid, memory, state), `GridFor`.
+  to, samples)` (CPU, through the voxels), `Rebuild`, `Describe` (grid, memory, state), `GridFor`, `CloudVersion`
+  (2026-11-09: a number that changes whenever another density is drawn, `VolumetricData.DensityVersion`, made or taken
+  from a kept cloud; 0 while not ready: scripts placing things by density redo them on a change without hashing the
+  `DensityKey`, a SHA-256).
 - Editor: `VolumetricObjectInspector` below the fields (Describe, what the preset does, Rebuild) and the selected object's
   shape as a wire outline in the scene view while the component is expanded; `EditorApplication` keeps refreshing
   while builds run (`VolumetricRuntime.NeedsRefresh`).
@@ -1704,6 +1733,9 @@ Added for New Frontier's port of Unity's SpaceStonesPack (Standard materials wit
   a std140 uniform block at binding 7, 6 vec4 per light (position + range, radiance + GI strength, spot direction + cos
   outer, spot scale / flags / source radius, the clouds' transmittance towards +x -x +y and -y +z -z);
   `Lighting.SetUniforms` calls `EnsureBound` (programs drawn before the first frame never read an unbound block).
+  A light disabled or destroyed leaves the list and the GI tracking at once (`LightBuffer.Forget` from `Light.OnDisable` /
+  `OnDestroy`; its reach waits in `giGone` for the next frame's change): static lists must never hold a light that is
+  off (see "The GC's own roots": it held an unloaded scene and the old scripts).
   `Engine/Lights.glsl`: `LelLight`, `LelLightCount`, `LelLightHas`, `LelLightFalloff`, `LelLightCloudTransmittance` (the
   six axes blended by dir^2), `LelLightShape`, `LelLightAt`.
 - Lit materials: `Lit`, `LitTextured` (Scene workflow: Blinn-Phong as the sun; Metallic / Specular:

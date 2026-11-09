@@ -207,6 +207,11 @@ namespace LELEngine.Volumetrics
 		/// <summary>A new cloud or light is being made (the old one keeps drawing).</summary>
 		public bool Pending => build != null;
 
+		/// <summary>Changes whenever another cloud (density) is drawn; unique across objects (a number never comes back).</summary>
+		public int DensityVersion { get; private set; }
+
+		private static int lastDensityVersion;
+
 		#endregion
 
 		#region PublicMethods
@@ -626,6 +631,7 @@ namespace LELEngine.Volumetrics
 			shapeHash = newShapeHash;
 			cpuDensity = cloud.CpuDensity;
 			drawnDensityKey = densityKey;
+			DensityVersion = System.Threading.Interlocked.Increment(ref lastDensityVersion);
 			string litKey = owner.LitKey(densityKey);
 			if (cloud.Lit != 0 && cloud.LitKey == litKey && Vector3.Dot(cloud.Sun, newSun) >= SunTolerance)
 			{
@@ -1205,6 +1211,7 @@ namespace LELEngine.Volumetrics
 				drawnDensityKey = b.DensityKey;
 				// Read from a file: the CPU's copy is the file's (no readback for DensityAt).
 				cpuDensity = b.File?.Density;
+				DensityVersion = System.Threading.Interlocked.Increment(ref lastDensityVersion);
 			}
 
 			if (b.Relight && Lit != b.Lit)

@@ -36,6 +36,11 @@ namespace LELEngine.Rendering
 		private static readonly List<(Light light, float score)> candidates = new List<(Light, float)>();
 		private static Dictionary<Light, GIState> giLights = new Dictionary<Light, GIState>();
 		private static Dictionary<Light, GIState> giSeen = new Dictionary<Light, GIState>();
+
+		// Lights disabled or destroyed since the last frame (Forget): their reach, which the GI still has to take their
+		// light out of, without the light itself.
+		private static readonly List<GIState> giGone = new List<GIState>();
+
 		private static readonly List<(Vector3 min, Vector3 max)> giChanges = new List<(Vector3, Vector3)>();
 		private static int buffer;
 
@@ -93,6 +98,8 @@ namespace LELEngine.Rendering
 				shining.Add(candidates[i].light);
 			}
 
+			// A scratch list: it keeps no light until the next frame.
+			candidates.Clear();
 			Volumetrics.VolumetricRuntime.UpdateLightTransmittance(shining);
 
 			Array.Clear(data, 0, data.Length);
@@ -125,6 +132,23 @@ namespace LELEngine.Rendering
 			{
 				GL.BindBufferBase(BufferRangeTarget.UniformBuffer, Binding, buffer);
 			}
+		}
+
+		/// <summary>
+		///     A light disabled or destroyed (<see cref="Light.OnDisable" />, <see cref="Light.OnDestroy" />): out of the list
+		///     and the GI's tracking at once, its reach kept for the next frame's change. The static lists held such a light,
+		///     and through it its unloaded scene and the scripts of a reload, until two more frames rendered: none does while
+		///     the editor is not drawing (the scripts' unload check reported them).
+		/// </summary>
+		internal static void Forget(Light light)
+		{
+			shining.Remove(light);
+			if (giLights.Remove(light, out GIState state))
+			{
+				giGone.Add(state);
+			}
+
+			giSeen.Remove(light);
 		}
 
 		/// <summary>
@@ -210,6 +234,19 @@ namespace LELEngine.Rendering
 				giChanges.Add(pair.Value.Reach);
 			}
 
+			// Lights gone since the last frame (Forget took them out of giLights): their reach changes too.
+			foreach (GIState gone in giGone)
+			{
+				if (!changed)
+				{
+					giChanges.Clear();
+					changed = true;
+				}
+
+				giChanges.Add(gone.Reach);
+			}
+
+			giGone.Clear();
 			(giLights, giSeen) = (giSeen, giLights);
 			if (changed)
 			{
