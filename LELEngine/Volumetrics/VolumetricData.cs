@@ -876,7 +876,7 @@ namespace LELEngine.Volumetrics
 							}
 						}
 
-						// A transport voxel costs about 0.7 of a made voxel per light (measured on New Frontier's storm: eight lights
+						// A transport voxel costs about 0.7 of a made voxel per light (measured on a 12.6 M-voxel storm: eight lights
 						// over its 1.6 M transport voxels took 68 ms of the GPU, its 12.6 M voxels made 72-94 ms): counted so, eight
 						// lights spread over frames instead of filling one.
 						used += DispatchSlices(VolumetricRuntime.LightTransport, build.LightsResolution, budget - used, SetLightsUniforms, build.LightsA, SizedInternalFormat.Rgba16f, build.LightsB, 1, 1.0 + TransportCostPerLight * build.LightCount);

@@ -280,7 +280,7 @@ namespace LELEngine
 		}
 
 		// Immutable storage with every mip level allocated up front, then level 0: GenerateMipmap fills levels that exist.
-		// Measured on an RTX 5070 Ti with New Frontier's Planets scene (112 textures, 1.6 GB): 274 ms against 779-868 ms for
+		// Measured on an RTX 5070 Ti with a planets scene of 112 textures (1.6 GB): 274 ms against 779-868 ms for
 		// glTexImage2D, whose GenerateMipmap had to allocate the chain (518-530 ms of it). The handle is never respecified:
 		// new pixels release it and the next use makes a new one.
 		protected override void UploadData()

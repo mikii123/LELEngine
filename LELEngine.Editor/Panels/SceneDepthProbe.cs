@@ -15,7 +15,7 @@ namespace LELEngine.Editor
 	///     near the cursor, else the typical depth of what is drawn (2026-11-08, the user: after zooms here and there a pan
 	///     barely moved or raced, as it kept the depth of whatever the last zoom hit, or of the ground plane far away).
 	///     The GI's global distance field was not used for it: it only exists while the GI uses one, only inside the GI's
-	///     volume, and holds distances within a band of a few voxels from surfaces (8 in New Frontier).
+	///     volume, and holds distances within a band of a few voxels from surfaces (SdfBandVoxels, e.g. 8).
 	/// </summary>
 	internal sealed class SceneDepthProbe : IDisposable
 	{

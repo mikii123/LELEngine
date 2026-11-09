@@ -209,7 +209,7 @@ namespace TestGame.Scenes
 			/// <summary>vollight=1: a lamp flying through the volumetric test scene's storm (light transport updates); 2: it stops at 6 s; 3: still.</summary>
 			public int VolumeMovingLight;
 
-			/// <summary>volbig=1: the volumetric test scene's storm with as many voxels as New Frontier's.</summary>
+			/// <summary>volbig=1: the volumetric test scene's storm with about 11 M voxels (a large game's storm).</summary>
 			public bool VolumeBig;
 
 			/// <summary>Start position of the player's eye (null = the usual spot by the open side of the room).</summary>

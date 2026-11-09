@@ -40,7 +40,7 @@ namespace TestGame.Scenes
 			storm.Softness = 0.15f;
 			storm.Density = 30f;
 			storm.ShadowReach = 1.5f;
-			// volbig=1: as many voxels as New Frontier's storm (11 M, transport 1.4 M), for costs that scale with the grid.
+			// volbig=1: as many voxels as a large game's storm (11 M, transport 1.4 M), for costs that scale with the grid.
 			storm.VoxelSize = options.VolumeBig ? 0.19f : 0.45f;
 			storm.Albedo = new Color4(0.55f, 0.6f, 0.75f, 1f);
 			storm.EmissionColor = new Color4(0.12f, 0.08f, 0.3f, 1f);

@@ -12,7 +12,7 @@ namespace LELEngine.Volumetrics
 	///     upload, in milliseconds). Each is stored in chunks of <see cref="SlicesPerChunk" /> z slices compressed apart
 	///     (Deflate), so worker threads write and read the chunks in parallel. The editor writes one after it made a cloud
 	///     (Library/VolumeCache), builds ship them (Data/Volumes), and a cloud of the same settings is read instead of made
-	///     (<see cref="VolumeCache" />): New Frontier's storm (12.6 M voxels) took ~110-180 ms of the GPU to make and light.
+	///     (<see cref="VolumeCache" />): a storm of 12.6 M voxels took ~110-180 ms of the GPU to make and light.
 	/// </summary>
 	internal sealed class VolumeFile
 	{

@@ -14,7 +14,7 @@ namespace LELEngine.Volumetrics
 	///         <item>
 	///             On the GPU: the textures of an object that went away (its scene unloaded) wait <see cref="ParkSeconds" />
 	///             for the next object of the same settings (<see cref="Park" />, <see cref="TryAdopt" />). The editor unloads the
-	///             scene to play a copy of it and loads it again after: New Frontier's storm was made twice per play, ~180 ms
+	///             scene to play a copy of it and loads it again after: a 12.6 M-voxel storm was made twice per play, ~180 ms
 	///             of the GPU each time and the storm missing for a second.
 	///         </item>
 	///         <item>

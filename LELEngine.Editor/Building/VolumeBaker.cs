@@ -10,7 +10,7 @@ namespace LELEngine.Editor
 	/// <summary>
 	///     The clouds of a game build's volumetric objects, shipped as files (Data/Volumes/&lt;key&gt;.lelvol, see
 	///     <see cref="VolumeFile" />): the player reads and unpacks them on worker threads while a scene loads and uploads them,
-	///     instead of making them on the GPU (New Frontier's storm took ~110-180 ms of the GPU and was missing for its first
+	///     instead of making them on the GPU (a 12.6 M-voxel storm took ~110-180 ms of the GPU and was missing for its first
 	///     frames). Each comes from the editor's cache (Library/VolumeCache: what it made, lit as it drew it), else is made now
 	///     when this thread has the GL context (the density only: the lit voxels need the scene's sun, the player lights the
 	///     cloud), else is left to the player. Objects of the build's scenes (their prefab instances too) and of the prefabs
