@@ -285,7 +285,8 @@
   one: `input <element> <value>` = `UIAutomation.Action.SetValue`, parsed by `ValueText` ("1, 2, 3", "#FF8000",
   true), written after the widget, which then returns true and reads as edited and deactivated after an edit
   (`UIAutomation.ValueApplied` sets ImGui's LastItemData / DeactivatedItemData), so `InspectorContext.Track` makes
-  one undo step per input. Combos: click, then the option's element. Verified 2026-10-26 on a scratch `Mover`
+  one undo step per input. A slider is two elements: `input:Path` (the slider) and `input:Path/value` (its number
+  field, see "Sliders" below): `click` the field, `type`, `key Enter` types as a person would. Combos: click, then the option's element. Verified 2026-10-26 on a scratch `Mover`
   component (float, int, string, bool, Vector3, Color4, enum, nested class, List, Dictionary, Transform): 10 inputs,
   values in the inspector, 10 undos back to the start.
 - Editor scripts: `EditorGUILayout.Button / Toggle / TextField / Foldout` (and `Field` / `PropertyField`) are
@@ -1228,6 +1229,23 @@ Added for New Frontier's port of Unity's SpaceStonesPack (Standard materials wit
   the value (several: all must hold); `FieldDrawer.IsShown`, checked before the field's headers; a missing member
   shows the field and warns once. `Light`'s `SpotAngle` and `InnerSpot` are `[ShowIf(nameof(Type), LightType.Spot)]`
   (the user's ask: a light shows only its type's settings).
+- Sliders (2026-11-09, the user's ask: a slider could only be dragged, the value not typed): `EditorGui.SliderFloat` /
+  `SliderInt`, which every slider of the editor goes through (`[Range]` fields, material ranges, VFX slots, Animator and
+  Timeline weights, Audio Studio, UI Builder, Project Settings, Preferences, `EditorGUILayout.Slider` / `IntSlider`), draw
+  Unity's slider: the slider and a number field beside it (`GetFontSize() x 4.5` wide, 40 % of a narrow item), both in
+  the caller's item width, in one ImGui group (so `IsItemActive`, `IsItemDeactivatedAfterEdit`, `Track`'s undo steps and
+  `IsItemHovered` see either; the group is the last item). A typed value applies as it is typed and is clamped to the
+  slider's range, either way round (Unity's; ImGui's Ctrl+click typing goes past it). A format that is the number alone
+  ("%.3f", "%d") shows in the field only: the slider's text is drawn transparent, so its rounding to the format stays; a
+  format with words or units ("%.0f px", "weight %.2f", "-inf dB", "default") stays on the slider too, the field showing
+  its number ("%.1f"; none: "%.3f"). A visible label ("Alpha") goes after the field. `IsItemDoubleClicked` leaves out a
+  double click over the field (it selects text there; the Audio Studio's dB sliders reset on a double click). Not changed:
+  the Audio Studio mixer's vertical faders (raw `ImGui.VSliderFloat`, Ctrl+click types) and its knobs. Verified on New
+  Frontier: scratchpad `slider/slidertest.ps1` (CLI: the field typed 0.5 and 7 -> 1, one undo step each, `input` on
+  slider and field, "abc" refused, Preferences' font sliders keep "17 px") and `slider/realslider.ps1` (SendInput, the
+  focused editor: an absolute pointer as Chrome Remote Desktop's and a local cursor click into Side Softness's field,
+  Ctrl+A, typed, Enter: 0.4, 0.05; the slider still drags; three undos back to the start). Elements are placed in their
+  window: add the window's place from `windows` for screen positions.
 - The Transform header's right-click menu (2026-11-08): Reset Position / Reset Rotation / Reset Scale and Reset All
   (local values, one undo step each, `InspectorPanel.ResetTransform`); other components keep Remove Component / Reset.
   Verified with the CLI: `context "header:Transform"`, `click "menu:Reset Position"`, values read back, undo.

@@ -419,18 +419,67 @@ namespace LELEngine.Editor
 			return FinishNumbers("input", label, id, request, MemoryMarshal.CreateSpan(ref v, 4), changed);
 		}
 
+		// ---------------------------------------------------------------- sliders
+		// Unity's slider: the slider and a number field beside it, where the value can be typed (the user's ask, 2026-11-09:
+		// a slider could only be dragged; ImGui's Ctrl+click typing is nothing anyone finds). A typed value is clamped to the
+		// slider's range, as Unity's. Elements: "input:Label" (the slider; automation sets the value) and "input:Label/value"
+		// (the field: click it and type, or set it). A format that is the number alone ("%.3f") shows in the field only (the
+		// slider's text hidden, its rounding to the format kept); one with words or units ("%.0f px", "weight %.2f",
+		// "-inf dB") stays on the slider too. A visible label goes after the field. Slider, field and label are one ImGui
+		// group: IsItemActive, IsItemDeactivatedAfterEdit and so the inspector's undo steps see an edit in either.
+
 		public static bool SliderFloat(string label, ref float v, float vMin, float vMax, string format = "%.3f", ImGuiSliderFlags flags = ImGuiSliderFlags.None)
 		{
-			string request = ValueRequest(label, out uint id);
-			bool changed = ImGui.SliderFloat(label, ref v, vMin, vMax, format, flags);
-			return FinishNumbers("input", label, id, request, MemoryMarshal.CreateSpan(ref v, 1), changed);
+			SliderLayout layout = BeginSlider(label, format);
+			string request = ValueRequest(layout.SliderLabel, out uint id);
+			bool changed = ImGui.SliderFloat(layout.SliderLabel, ref v, vMin, vMax, format, flags);
+			uint field = BeginSliderField(layout, id, out string fieldRequest, out bool activated);
+			float typed = v;
+			if (ImGui.InputFloat("##value", ref typed, 0f, 0f, layout.Number ?? "%.3f"))
+			{
+				changed |= SetTyped(ref v, typed, vMin, vMax);
+			}
+
+			EndSlider(layout, activated, out NVector2 fieldMin, out NVector2 fieldMax);
+			changed = FinishNumbers("input", label, id, request, MemoryMarshal.CreateSpan(ref v, 1), changed);
+			if (fieldRequest != null)
+			{
+				Span<float> parsed = stackalloc float[1];
+				bool valid = ValueText.TryParse(fieldRequest, parsed);
+				bool differs = valid && SetTyped(ref v, parsed[0], vMin, vMax);
+				UIAutomation.ValueApplied(differs, valid ? null : "not a number");
+				changed |= differs;
+			}
+
+			RecordSliderField(field, TestAnchors.Enabled ? ValueText.Format(MemoryMarshal.CreateSpan(ref v, 1)) : null, fieldMin, fieldMax);
+			return changed;
 		}
 
 		public static bool SliderInt(string label, ref int v, int vMin, int vMax, string format = "%d", ImGuiSliderFlags flags = ImGuiSliderFlags.None)
 		{
-			string request = ValueRequest(label, out uint id);
-			bool changed = ImGui.SliderInt(label, ref v, vMin, vMax, format, flags);
-			return FinishNumbers("input", label, id, request, MemoryMarshal.CreateSpan(ref v, 1), changed);
+			SliderLayout layout = BeginSlider(label, format);
+			string request = ValueRequest(layout.SliderLabel, out uint id);
+			bool changed = ImGui.SliderInt(layout.SliderLabel, ref v, vMin, vMax, format, flags);
+			uint field = BeginSliderField(layout, id, out string fieldRequest, out bool activated);
+			int typed = v;
+			if (ImGui.InputInt("##value", ref typed, 0, 0))
+			{
+				changed |= SetTyped(ref v, typed, vMin, vMax);
+			}
+
+			EndSlider(layout, activated, out NVector2 fieldMin, out NVector2 fieldMax);
+			changed = FinishNumbers("input", label, id, request, MemoryMarshal.CreateSpan(ref v, 1), changed);
+			if (fieldRequest != null)
+			{
+				Span<int> parsed = stackalloc int[1];
+				bool valid = ValueText.TryParse(fieldRequest, parsed);
+				bool differs = valid && SetTyped(ref v, parsed[0], vMin, vMax);
+				UIAutomation.ValueApplied(differs, valid ? null : "not a whole number");
+				changed |= differs;
+			}
+
+			RecordSliderField(field, TestAnchors.Enabled ? ValueText.Format(MemoryMarshal.CreateSpan(ref v, 1)) : null, fieldMin, fieldMax);
+			return changed;
 		}
 
 		public static bool InputInt(string label, ref int v, int step = 1, int stepFast = 100, ImGuiInputTextFlags flags = ImGuiInputTextFlags.None)
@@ -481,7 +530,11 @@ namespace LELEngine.Editor
 		/// <summary>The last item was double-clicked (hovered and a double click), or automation double-clicks it.</summary>
 		public static bool IsItemDoubleClicked()
 		{
-			return (ImGui.IsItemHovered() && ImGui.IsMouseDoubleClicked(ImGuiMouseButton.Left)) || UIAutomation.ItemDoubleClicked(ImGui.GetItemID());
+			// Over a slider's number field a double click selects text: a reset on the slider's double click leaves it out.
+			bool overSliderField = sliderFieldFrame == ImGui.GetFrameCount() && ImGui.IsMouseHoveringRect(sliderFieldMin, sliderFieldMax)
+				&& ImGui.GetItemRectMin().X <= sliderFieldMin.X && ImGui.GetItemRectMax().X >= sliderFieldMax.X
+				&& ImGui.GetItemRectMin().Y <= sliderFieldMin.Y && ImGui.GetItemRectMax().Y >= sliderFieldMax.Y;
+			return (!overSliderField && ImGui.IsItemHovered() && ImGui.IsMouseDoubleClicked(ImGuiMouseButton.Left)) || UIAutomation.ItemDoubleClicked(ImGui.GetItemID());
 		}
 
 		/// <summary>ImGui.IsMouseDoubleClicked inside a click of the last item (also true when automation double-clicks it).</summary>
@@ -584,6 +637,177 @@ namespace LELEngine.Editor
 
 			TestAnchors.RecordElement(kind, label, id, TestAnchors.Enabled ? ValueText.Format(values) : null);
 			return changed;
+		}
+
+		// The number field of the slider drawn last in this frame (IsItemDoubleClicked leaves a double click on it to the text).
+		private static NVector2 sliderFieldMin;
+		private static NVector2 sliderFieldMax;
+		private static int sliderFieldFrame = -1;
+
+		/// <summary>How a slider and its number field share the item's width.</summary>
+		private struct SliderLayout
+		{
+			/// <summary>The slider's ImGui label: the caller's, or with its visible text hidden (drawn after the field).</summary>
+			public string SliderLabel;
+
+			/// <summary>The label's visible text, drawn after the field (null: none).</summary>
+			public string Visible;
+
+			public float FieldWidth;
+
+			/// <summary>The format's number ("%.2f" of "weight %.2f"), the field's format; null: none ("-inf dB").</summary>
+			public string Number;
+
+			/// <summary>The format is the number alone: shown in the field only.</summary>
+			public bool HideText;
+		}
+
+		/// <summary>Opens the slider's group and sizes its slider; the slider is the next item.</summary>
+		private static SliderLayout BeginSlider(string label, string format)
+		{
+			var layout = new SliderLayout();
+			int cut = label.IndexOf("##", StringComparison.Ordinal);
+			string visible = cut < 0 ? label : label.Substring(0, cut);
+			layout.Visible = visible.Length > 0 ? visible : null;
+			layout.SliderLabel = layout.Visible != null ? "##" + label : label;
+			layout.Number = NumberIn(format, out layout.HideText);
+
+			// The item's width (the caller's, or the inspector's value column) holds both; the field is narrow, as Unity's.
+			float total = ImGui.CalcItemWidth();
+			float spacing = ImGui.GetStyle().ItemInnerSpacing.X;
+			float field = ImGui.GetFontSize() * 4.5f;
+			if (total < field * 2.5f)
+			{
+				field = MathF.Max(1f, total * 0.4f);
+			}
+
+			layout.FieldWidth = field;
+			ImGui.BeginGroup();
+			ImGui.SetNextItemWidth(MathF.Max(1f, total - field - spacing));
+			if (layout.HideText)
+			{
+				ImGui.PushStyleColor(ImGuiCol.Text, 0u);
+			}
+
+			return layout;
+		}
+
+		/// <summary>After the slider: the field beside it is the next item ("##value" under the slider's id). Returns the field's id.</summary>
+		private static uint BeginSliderField(SliderLayout layout, uint slider, out string request, out bool activated)
+		{
+			if (layout.HideText)
+			{
+				ImGui.PopStyleColor();
+			}
+
+			ImGui.SameLine(0f, ImGui.GetStyle().ItemInnerSpacing.X);
+			ImGui.SetNextItemWidth(layout.FieldWidth);
+			ImGui.PushID((int)slider);
+			uint field = ImGui.GetID("##value");
+			request = UIAutomation.ValueRequested(field);
+			activated = UIAutomation.BeginActivation("##value");
+			return field;
+		}
+
+		/// <summary>After the field: its rectangle, the visible label, the group's end (the group is then the last item).</summary>
+		private static void EndSlider(SliderLayout layout, bool activated, out NVector2 fieldMin, out NVector2 fieldMax)
+		{
+			UIAutomation.EndActivation(activated);
+			fieldMin = ImGui.GetItemRectMin();
+			fieldMax = ImGui.GetItemRectMax();
+			sliderFieldMin = fieldMin;
+			sliderFieldMax = fieldMax;
+			sliderFieldFrame = ImGui.GetFrameCount();
+			ImGui.PopID();
+			if (layout.Visible != null)
+			{
+				ImGui.SameLine(0f, ImGui.GetStyle().ItemInnerSpacing.X);
+				ImGui.TextUnformatted(layout.Visible);
+			}
+
+			ImGui.EndGroup();
+		}
+
+		/// <summary>The field as its own element, "input:Label/value", after the slider's (whose name it takes).</summary>
+		private static void RecordSliderField(uint field, string value, NVector2 min, NVector2 max)
+		{
+			if (TestAnchors.Enabled)
+			{
+				string owner = TestAnchors.LastElementText;
+				TestAnchors.RecordElement("input", string.IsNullOrEmpty(owner) ? "value" : owner + "/value", field, value, min, max);
+			}
+		}
+
+		/// <summary>A typed value, clamped to the slider's range (either way round); false when it changes nothing.</summary>
+		private static bool SetTyped(ref float v, float typed, float vMin, float vMax)
+		{
+			if (float.IsNaN(typed))
+			{
+				return false;
+			}
+
+			typed = Math.Clamp(typed, MathF.Min(vMin, vMax), MathF.Max(vMin, vMax));
+			if (typed == v)
+			{
+				return false;
+			}
+
+			v = typed;
+			return true;
+		}
+
+		private static bool SetTyped(ref int v, int typed, int vMin, int vMax)
+		{
+			typed = Math.Clamp(typed, Math.Min(vMin, vMax), Math.Max(vMin, vMax));
+			if (typed == v)
+			{
+				return false;
+			}
+
+			v = typed;
+			return true;
+		}
+
+		/// <summary>The printf number in a slider's format ("%.2f" of "weight %.2f"; "%%" is a percent sign); <paramref name="alone" />: nothing else in it.</summary>
+		private static string NumberIn(string format, out bool alone)
+		{
+			alone = false;
+			if (string.IsNullOrEmpty(format))
+			{
+				return null;
+			}
+
+			for (int i = 0; i < format.Length - 1; i++)
+			{
+				if (format[i] != '%')
+				{
+					continue;
+				}
+
+				if (format[i + 1] == '%')
+				{
+					i++;
+					continue;
+				}
+
+				// Flags, width and precision, then the conversion.
+				int end = i + 1;
+				while (end < format.Length && "-+ #0123456789.'".IndexOf(format[end]) >= 0)
+				{
+					end++;
+				}
+
+				if (end >= format.Length || "dfFgGeEiu".IndexOf(format[end]) < 0)
+				{
+					return null;
+				}
+
+				string number = format.Substring(i, end - i + 1);
+				alone = format.Trim() == number;
+				return number;
+			}
+
+			return null;
 		}
 
 		/// <summary>A tree node or header that folds on a click of its label (not only on its arrow or a double click): activating it folds it too.</summary>

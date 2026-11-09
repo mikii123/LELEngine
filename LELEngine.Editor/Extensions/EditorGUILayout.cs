@@ -80,6 +80,7 @@ namespace LELEngine.Editor
 			return gradient;
 		}
 
+		/// <summary>Unity's slider: drag it, or type the value into the number field beside it (clamped to min..max).</summary>
 		public static float Slider(string label, float value, float min, float max)
 		{
 			PrefixLabel(label);
@@ -91,6 +92,7 @@ namespace LELEngine.Editor
 			return value;
 		}
 
+		/// <summary>A whole-number slider with its number field (typed values clamped to min..max).</summary>
 		public static int IntSlider(string label, int value, int min, int max)
 		{
 			PrefixLabel(label);
