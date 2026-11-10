@@ -32,7 +32,18 @@ namespace LELEngine.Editor
 		public MainWindow Window { get; }
 		public ProjectInfo Project { get; private set; }
 		public Scene Scene => SceneManager.ActiveScene;
-		public GameObject Selected { get; private set; }
+		/// <summary>
+		///     The selected GameObject; null once it is destroyed (Unity's Selection does the same). The editor is not
+		///     null-check woven: before, a selected object a game script destroyed in play mode stayed selected, and the
+		///     scene view's gizmos asked it for components (an exception that took a screenshot's capture down).
+		/// </summary>
+		public GameObject Selected
+		{
+			get => selected != null && selected.dead ? null : selected;
+			private set => selected = value;
+		}
+
+		private GameObject selected;
 
 		/// <summary>Asset path of the project file shown in the inspector (when no GameObject is selected).</summary>
 		public string SelectedAsset { get; private set; }

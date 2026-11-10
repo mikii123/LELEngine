@@ -967,6 +967,12 @@ Added for New Frontier's port of Unity's SpaceStonesPack (Standard materials wit
   the same unfolding as an object field's ping, no flash); the highlight is the row's selection. Verified: selecting
   Flight's Game UI/Preview Stage/Preview Camera Root/Preview Orbit/Preview Camera with the list scrolled to its end
   unfolded the four parents and brought the row into view.
+- A selected object a game script destroys is no longer selected (`EditorApplication.Selected` is null once it is dead,
+  2026-11-10; Unity's Selection does the same). The editor is not null-check woven, so before it stayed selected in
+  play mode and the scene view's gizmos asked it for components: `ObjectDestroyedException` inside a CLI screenshot's
+  capture (`SceneViewPanel.RenderCapture` -> `DrawGizmos` -> `VisualEffectInspector.DrawGizmos`), then ImGui's "Missing
+  End()" assert ended the process. Found by a game test that killed the ship whose child was selected; verified with
+  the same run (kill, then `screenshot Scene`: no exception).
 - Hierarchy folding (2026-10-24): rows start folded; `HierarchyExpansion` keeps the unfolded rows (`Expanded`) per project folder + scene / prefab path
   (object ids) in `%APPDATA%\LELEngine\Editor\hierarchy.json`, never in the project; saved 0.5 s after a change and
   in `SaveEditorState`. Automated runs read it and save nothing unless `hierarchyfile=path`. The editor has no
