@@ -1571,6 +1571,24 @@ Added for New Frontier's port of Unity's SpaceStonesPack (Standard materials wit
   180 / 270, turns the texture's u axis along the quad's up or the strip: wide spark textures on stretched quads) and,
   in Simple UV mode, `UV Scale` / `UV Offset` inputs (per particle, e.g. a custom attribute; Time x speed into UV
   Offset scrolls a beam); `VfxCodegen.EmitUv`.
+- Output lighting `LitPerVertex` (2026-11-10, for SmokeOn's particle smoke): `VfxShade` (sun with its shadow map, ambient,
+  the GI volume) runs in the vertex stage for a white surface (`v.lighting`, a new member of `VfxVaryings`, 1 for the
+  other modes) and the fragment multiplies its colour by it; two-sided picks the side the camera sees (no
+  `gl_FrontFacing` there); nothing in the shadow pass. Why: `Lit` evaluates the shadow map and the radiance cache
+  probes for every fragment of every layer, so large overlapping particles cost with their area: SmokeOn's hover
+  cloud (~690 lit quads) took 25 ms of `Transparent.Draw` on the 780M, 2.2 ms unlit, 0.4-0.6 ms per vertex. Verified
+  on quads (Octagon, normal bending, soft particles) only; mesh and strip outputs and `CastShadows` with it are not.
+- Output setting `LowResolution` (2026-11-10, blended outputs without ZWrite; `VfxOutputDescription.LowResolution`,
+  `VfxDrawEntry.LowResolution`): `TransparentPass` draws every such entry, in their sorted order, into the layer of
+  `Rendering/LowResolutionTransparency` at the place the last of them sorts: half the scene target's size, RGBA16F
+  cleared to (0, 0, 0, 1) (alpha = what the scene shows through), Depth32F filled from the transparent pass's depth copy
+  with the farthest of each 2 x 2 (`Engine/LowResolutionDepth.shader`); the draws use blend states 4-6
+  (`VfxRuntime.SetDrawState`: the colour as usual, alpha x (1 - a)); `Engine/LowResolutionComposite.shader` lays it
+  over the scene (Blend One SrcAlpha) from the four nearest texels weighted by the eye-depth match, so outlines in front
+  stay sharp. Soft particles read the depth copy at `gl_FragCoord * 2` (codegen), points get half the viewport height.
+  Profiler section `Transparent.LowResolution`. Order against other transparent objects is the layer's, not each
+  particle's (HDRP's low-resolution transparency has the same limit). Why: SmokeOn's dense particle smoke (5-7k lit
+  quads up to 10 m) cost 2-3 ms of fill at full resolution on the 780M, 0.5-0.6 ms in the layer.
 - A block's locals carry its salt (`triggerAmount_<salt>`, `randomForce_<salt>`): two blocks of one kind in a context
   compiled to a GLSL redefinition before; a CustomCode block opens its scope before its input declarations for the
   same reason (two CustomCode blocks declaring `Length` in one Update).

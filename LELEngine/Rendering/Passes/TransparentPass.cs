@@ -112,6 +112,9 @@ namespace LELEngine.Rendering.Passes
 		private readonly LineGeometryBuilder trailBuilder = new LineGeometryBuilder();
 		private readonly DynamicGeometry trailGeometry = new DynamicGeometry();
 
+		// The layer of the particle outputs drawn at half resolution.
+		private readonly LowResolutionTransparency lowResolution = new LowResolutionTransparency();
+
 		#endregion
 
 		#region PublicMethods
@@ -175,9 +178,20 @@ namespace LELEngine.Rendering.Passes
 
 			context.SceneTarget.Bind();
 
+			// Particle outputs drawn at half resolution are drawn together into their layer, which is laid over the scene
+			// where the last of them sorts (LowResolutionTransparency); the layer needs the scene's depth.
+			int lastLowResolution = -1;
+			for (int i = 0; i < entries.Count; i++)
+			{
+				if (entries[i].Vfx != null && entries[i].Vfx.LowResolution)
+				{
+					lastLowResolution = i;
+				}
+			}
+
 			// The scene depth with the opaques for soft particles (and the next simulation's depth collisions), taken
 			// once the opaque surfaces this pass draws itself are in it (DrawsLikeOpaque): right before the first other entry.
-			bool needsDepth = (vfxEntries.Count > 0 && VFX.VfxRuntime.NeedsDepth) || readsDepth;
+			bool needsDepth = (vfxEntries.Count > 0 && VFX.VfxRuntime.NeedsDepth) || readsDepth || lastLowResolution >= 0;
 			VFX.VfxDepthCapture depth = null;
 
 			ShaderProgram active = null;
@@ -186,12 +200,27 @@ namespace LELEngine.Rendering.Passes
 			bool resend = true;
 			bool afterParticles = false;
 			bool afterMesh = false;
-			foreach (Entry entry in entries)
+			for (int index = 0; index < entries.Count; index++)
 			{
+				Entry entry = entries[index];
 				if (needsDepth && depth == null && !DrawsLikeOpaque(entry))
 				{
 					depth = VFX.VfxRuntime.CaptureDepth(context);
 					context.SceneTarget.Bind();
+				}
+
+				if (entry.Vfx != null && entry.Vfx.LowResolution)
+				{
+					if (index == lastLowResolution)
+					{
+						DrawLowResolution(context, depth);
+						active = null;
+						resend = true;
+						afterMesh = true;
+						afterParticles = false;
+					}
+
+					continue;
 				}
 
 				if (entry.Volume != null)
@@ -332,6 +361,7 @@ namespace LELEngine.Rendering.Passes
 			volumes.Clear();
 			// The new scene may grab nothing: its copy texture is made again on its first grab.
 			Grab.Release();
+			lowResolution.Delete();
 			if (owner != null)
 			{
 				Volumetrics.VolumetricRuntime.ReleaseRenderer(owner);
@@ -341,6 +371,7 @@ namespace LELEngine.Rendering.Passes
 		public override void Dispose()
 		{
 			Grab.Delete();
+			lowResolution.Delete();
 			trailGeometry.Delete();
 			if (owner != null)
 			{
@@ -351,6 +382,32 @@ namespace LELEngine.Rendering.Passes
 		#endregion
 
 		#region PrivateMethods
+
+		// Every particle output drawn at half resolution, in their sorted order, into their layer, then the layer over the
+		// scene; the scene target is bound again afterwards.
+		private void DrawLowResolution(RenderContext context, VFX.VfxDepthCapture depth)
+		{
+			if (depth == null || !depth.Valid || depth.Depth == null)
+			{
+				return;
+			}
+
+			context.Renderer.Profiler.Split("Transparent.LowResolution");
+			lowResolution.Begin(context, depth.Depth);
+			VFX.VfxRuntime.InvalidateDrawState();
+			foreach (Entry entry in entries)
+			{
+				if (entry.Vfx != null && entry.Vfx.LowResolution)
+				{
+					entry.Vfx.Instance.Draw(context, entry.Vfx.System, entry.Vfx.Output, false, depth);
+					DrawnCount++;
+				}
+			}
+
+			lowResolution.End(context, depth.Depth);
+			VFX.VfxRuntime.InvalidateDrawState();
+			context.Renderer.Profiler.Split("Transparent.Draw");
+		}
 
 		// An opaque surface this pass draws: no blending and depth written, in the queues up to GeometryLast + 1, where the
 		// engine puts what the depth prepass cannot draw (alpha clip, vertex functions that move the surface, grab variants of

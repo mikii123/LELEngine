@@ -17,7 +17,15 @@ namespace LELEngine.VFX
 	public enum VfxLightingMode
 	{
 		Unlit,
-		Lit
+
+		/// <summary>The light worked out for every pixel.</summary>
+		Lit,
+
+		/// <summary>
+		///     The same light worked out at the particle's vertices and blended across it: the cost no longer grows with
+		///     the area the particles cover (smoke, dust, clouds of large soft particles over each other).
+		/// </summary>
+		LitPerVertex
 	}
 
 	public enum VfxOrientMode
@@ -192,6 +200,12 @@ namespace LELEngine.VFX
 
 		/// <summary>Quad and strip outputs: quarter turns the texture is rotated (1: its u axis runs along the quad's up / velocity axis, or along the strip).</summary>
 		public int UvRotation;
+
+		/// <summary>
+		///     Transparent outputs: drawn at half the view's resolution and laid over the scene by its depth
+		///     (<see cref="Rendering.LowResolutionTransparency" />): a quarter of the pixels for large soft particles.
+		/// </summary>
+		public bool LowResolution;
 
 		public bool IsTransparent => Blend != VfxBlendMode.Opaque && Blend != VfxBlendMode.AlphaClip;
 		public bool Sorted => IsTransparent && (Sort == VfxSortMode.ByDistance || (Sort == VfxSortMode.Auto && Blend != VfxBlendMode.Additive));
@@ -1010,6 +1024,9 @@ namespace LELEngine.VFX
 				UvRotation = (node.GetInt("UvRotation", 0) / 90) & 3
 			};
 			output.Queue = node.GetInt("Queue", output.IsTransparent ? Shaders.MaterialQueue.Transparent : Shaders.MaterialQueue.Geometry);
+
+			// Only blended outputs can be drawn apart and laid over the scene; those writing depth cannot.
+			output.LowResolution = node.GetBool("LowResolution", false) && output.IsTransparent && !node.GetBool("ZWrite", false);
 			if (output.Blend == VfxBlendMode.Opaque || output.Blend == VfxBlendMode.AlphaClip)
 			{
 				output.ZWrite = true;

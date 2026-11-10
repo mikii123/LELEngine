@@ -1008,6 +1008,21 @@ namespace LELEngine.VFX
 						GL.Enable(EnableCap.Blend);
 						GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
 						break;
+
+					// The same into a low-resolution layer (Rendering.LowResolutionTransparency): its alpha starts at 1 and
+					// keeps what the scene will show through (each layer takes its alpha's share away; additive takes none).
+					case 4:
+						GL.Enable(EnableCap.Blend);
+						GL.BlendFuncSeparate(BlendingFactorSrc.One, BlendingFactorDest.One, BlendingFactorSrc.Zero, BlendingFactorDest.One);
+						break;
+					case 5:
+						GL.Enable(EnableCap.Blend);
+						GL.BlendFuncSeparate(BlendingFactorSrc.One, BlendingFactorDest.OneMinusSrcAlpha, BlendingFactorSrc.Zero, BlendingFactorDest.OneMinusSrcAlpha);
+						break;
+					case 6:
+						GL.Enable(EnableCap.Blend);
+						GL.BlendFuncSeparate(BlendingFactorSrc.SrcAlpha, BlendingFactorDest.OneMinusSrcAlpha, BlendingFactorSrc.Zero, BlendingFactorDest.OneMinusSrcAlpha);
+						break;
 					default:
 						GL.Disable(EnableCap.Blend);
 						break;
@@ -1701,6 +1716,9 @@ namespace LELEngine.VFX
 		public int Output;
 		public int Queue;
 		public float DistanceSquared;
+
+		/// <summary>Drawn at half resolution (<see cref="VfxOutputDescription.LowResolution" />).</summary>
+		public bool LowResolution;
 
 		/// <summary>The system drawn, and the length of its sort for this view (a power of two at least its alive count).</summary>
 		internal VfxSystemState State;

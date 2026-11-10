@@ -19,7 +19,7 @@ namespace LELEngine.VFX
 		public const string OutputStrip = "Context.OutputStrip";
 
 		public static readonly string[] BlendOptions = { "Alpha", "Additive", "Premultiplied", "Opaque", "AlphaClip" };
-		public static readonly string[] LightingOptions = { "Unlit", "Lit" };
+		public static readonly string[] LightingOptions = { "Unlit", "Lit", "LitPerVertex" };
 		public static readonly string[] OrientOptions = { "FaceCameraPlane", "FaceCamera", "FixedAxis", "AlongVelocity", "AxisAlignedBillboard" };
 		public static readonly string[] UvOptions = { "Simple", "Flipbook", "FlipbookBlend" };
 		public static readonly string[] PrimitiveOptions = { "Quad", "Triangle", "Octagon" };
@@ -272,7 +272,7 @@ namespace LELEngine.VFX
 			definition.Settings.Add(VfxSettingDefinition.Enum("Blend", defaultBlend, BlendOptions).WithTooltip("Alpha / Additive / Premultiplied blend in the transparent pass; Opaque and AlphaClip write depth before the sky."));
 			if (lit)
 			{
-				definition.Settings.Add(VfxSettingDefinition.Enum("Lighting", defaultLighting, LightingOptions).WithTooltip("Lit: the sun with shadows, ambient and the GI volume shade the particle."));
+				definition.Settings.Add(VfxSettingDefinition.Enum("Lighting", defaultLighting, LightingOptions).WithTooltip("Lit: the sun with shadows, ambient and the GI volume shade the particle, for every pixel. LitPerVertex: the same light at the particle's vertices, blended across it: far cheaper where many large particles cover each other (smoke, dust), the shading softer."));
 				definition.Settings.Add(VfxSettingDefinition.Float("Roughness", 0.8f, "Roughness of lit particles (their indirect reflections)."));
 				definition.Settings.Add(VfxSettingDefinition.Bool("ReceiveShadows", true));
 				definition.Settings.Add(VfxSettingDefinition.Bool("ReceiveGI", true));
@@ -294,6 +294,7 @@ namespace LELEngine.VFX
 			}
 
 			definition.Settings.Add(VfxSettingDefinition.Enum("Sort", "Auto", SortOptions).WithTooltip("Draw back to front (sorted on the GPU per view). Auto sorts alpha-blended outputs only."));
+			definition.Settings.Add(VfxSettingDefinition.Bool("LowResolution", false, "Blended outputs: draw at half the view's resolution (a quarter of the pixels) and lay the result over the scene by its depth, so the edges of what is in front stay sharp. For large soft particles (smoke, dust, clouds): their cost is the pixels they cover. They are laid over the scene together, after the transparent objects sorted before the last of them."));
 			definition.Settings.Add(VfxSettingDefinition.Bool("CastShadows", false, "Draw into the shadow map (alpha tested)."));
 			definition.Settings.Add(VfxSettingDefinition.Bool("ZWrite", false, "Write depth (opaque outputs always do)."));
 			definition.Settings.Add(VfxSettingDefinition.Bool("CullBack", cullBack, "Cull back faces."));

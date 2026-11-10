@@ -393,6 +393,13 @@ namespace LELEngine.VFX
 
 			Includes(vertex, system, writer);
 			Accessors(vertex, system);
+			bool vertexLit = output.Lighting == VfxLightingMode.LitPerVertex;
+			if (vertexLit)
+			{
+				vertex.Append("#include \"Engine/Shadows.glsl\"\n#include \"Engine/VolumeLighting.glsl\"\n#include \"Engine/VFX/VfxLighting.glsl\"\n");
+				vertex.Append("uniform vec4 vfxFragmentParams; // alpha threshold, roughness, 0, 0\n");
+			}
+
 			vertex.Append("uniform mat4 projectionMatrix;\nuniform mat4 viewMatrix;\nuniform uint vfxDrawListMask;\nuniform float vfxViewportHeight;\n");
 			if (output.Kind == VfxOutputKind.Mesh)
 			{
@@ -400,7 +407,7 @@ namespace LELEngine.VFX
 			}
 
 			vertex.Append(writer.Declarations);
-			vertex.Append("out VfxVaryings\n{\n\tvec3 worldPos;\n\tvec3 normal;\n\tvec2 uv;\n\tvec4 color;\n\tflat float texIndex;\n\tflat vec2 flipbook;\n\tflat float softDistance;\n\tvec4 clip;\n} v;\n");
+			vertex.Append("out VfxVaryings\n{\n\tvec3 worldPos;\n\tvec3 normal;\n\tvec2 uv;\n\tvec4 color;\n\tvec3 lighting;\n\tflat float texIndex;\n\tflat vec2 flipbook;\n\tflat float softDistance;\n\tvec4 clip;\n} v;\n");
 			vertex.Append("\nvoid main()\n{\n");
 			// Indexed outputs: gl_VertexID is the index value, particle * vertices per particle + corner.
 			vertex.Append("\tuint vertexId = uint(gl_VertexID);\n");
@@ -424,6 +431,25 @@ namespace LELEngine.VFX
 			vertex.Append(writer.PreBody);
 			vertex.Append(writer.Body);
 			vertex.Append("\tv.worldPos = worldPos;\n\tv.normal = outNormal;\n\tv.uv = outUv;\n\tv.color = vec4(outColor, outAlpha);\n\tv.texIndex = outTexIndex;\n");
+			if (vertexLit)
+			{
+				// The light for a white surface at this vertex; the fragment multiplies its colour by it (the shading
+				// is linear in the albedo). Back faces are lit as if they faced the camera when asked: there is no
+				// gl_FrontFacing here, so the side is the one the camera sees.
+				vertex.Append("#ifdef VFX_SHADOW_PASS\n\tv.lighting = vec3(1.0);\n#else\n");
+				vertex.Append("\tvec3 lightNormal = VfxSafeNormalize(outNormal);\n");
+				if (output.TwoSidedLighting)
+				{
+					vertex.Append("\tif (dot(lightNormal, vfxCameraPosition - worldPos) < 0.0) lightNormal = -lightNormal;\n");
+				}
+
+				vertex.Append("\tv.lighting = VfxShade(vec3(1.0), lightNormal, worldPos, vfxFragmentParams.y);\n#endif\n");
+			}
+			else
+			{
+				vertex.Append("\tv.lighting = vec3(1.0);\n");
+			}
+
 			vertex.Append("\tv.flipbook = " + (output.Locals.ContainsKey("Flipbook Size") ? output.Locals["Flipbook Size"] : "vec2(1.0)") + ";\n");
 			vertex.Append("\tv.softDistance = " + (output.Locals.ContainsKey("Soft Particle Distance") ? output.Locals["Soft Particle Distance"] : "1.0") + ";\n");
 			vertex.Append("\tvec4 clip = projectionMatrix * viewMatrix * vec4(worldPos, 1.0);\n\tv.clip = clip;\n\tgl_Position = clip;\n");
@@ -839,7 +865,7 @@ namespace LELEngine.VFX
 			}
 
 			code.Append("uniform vec4 vfxFragmentParams; // alpha threshold, roughness, 0, 0\n");
-			code.Append("in VfxVaryings\n{\n\tvec3 worldPos;\n\tvec3 normal;\n\tvec2 uv;\n\tvec4 color;\n\tflat float texIndex;\n\tflat vec2 flipbook;\n\tflat float softDistance;\n\tvec4 clip;\n} v;\n");
+			code.Append("in VfxVaryings\n{\n\tvec3 worldPos;\n\tvec3 normal;\n\tvec2 uv;\n\tvec4 color;\n\tvec3 lighting;\n\tflat float texIndex;\n\tflat vec2 flipbook;\n\tflat float softDistance;\n\tvec4 clip;\n} v;\n");
 			code.Append("out vec4 FragColor;\n");
 			code.Append("\nvoid main()\n{\n");
 			string mainTexture = output.Textures.ContainsKey("Main Texture") ? output.Textures["Main Texture"] : null;
@@ -882,7 +908,8 @@ namespace LELEngine.VFX
 			code.Append("\tvec4 color = v.color * texel;\n");
 			if (output.SoftParticles)
 			{
-				code.Append("\tcolor.a *= VfxSoftParticleFade(gl_FragCoord.xy, v.clip.w, v.softDistance);\n");
+				// A low-resolution output's pixels are 2 x 2 of the depth copy's.
+				code.Append("\tcolor.a *= VfxSoftParticleFade(gl_FragCoord.xy" + (output.LowResolution ? " * 2.0" : "") + ", v.clip.w, v.softDistance);\n");
 			}
 
 			if (output.Blend == VfxBlendMode.AlphaClip)
@@ -905,6 +932,10 @@ namespace LELEngine.VFX
 
 				code.Append("\tvec3 lit = VfxShade(color.rgb, N, v.worldPos, vfxFragmentParams.y);\n");
 				code.Append("\tcolor.rgb = lit;\n");
+			}
+			else if (output.Lighting == VfxLightingMode.LitPerVertex)
+			{
+				code.Append("\tcolor.rgb *= v.lighting;\n");
 			}
 
 			switch (output.Blend)

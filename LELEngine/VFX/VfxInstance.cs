@@ -557,6 +557,7 @@ namespace LELEngine.VFX
 					entry.Output = o;
 					entry.Queue = output.Queue;
 					entry.DistanceSquared = distance;
+					entry.LowResolution = output.LowResolution;
 					entry.State = state;
 					entry.SortCount = 0;
 					entries.Add(entry);
@@ -1547,10 +1548,10 @@ namespace LELEngine.VFX
 				programState.ViewStamp = VfxRuntime.ViewStamp;
 				program.SetMatrix4("projectionMatrix", projection);
 				program.SetMatrix4("viewMatrix", view);
-				program.SetFloat("vfxViewportHeight", renderContext.Height);
+				program.SetFloat("vfxViewportHeight", output.LowResolution ? (renderContext.Height + 1) / 2 : renderContext.Height);
 				program.SetVector4("vfxFragmentParams", new Vector4(output.AlphaThreshold, output.Roughness, 0f, 0f));
 				programState.DepthSet = false;
-				if (output.Lighting == VfxLightingMode.Lit && !shadowPass)
+				if (output.Lighting != VfxLightingMode.Unlit && !shadowPass)
 				{
 					Lighting.SetUniforms(program, output.ReceiveShadows, false);
 					Lighting.SetVolumeGIUniforms(program, output.ReceiveGI);
@@ -1586,6 +1587,12 @@ namespace LELEngine.VFX
 			else
 			{
 				int blend = output.Blend == VfxBlendMode.Additive ? 1 : output.Blend == VfxBlendMode.Premultiplied ? 2 : output.Blend == VfxBlendMode.Opaque || output.Blend == VfxBlendMode.AlphaClip ? 0 : 3;
+				if (output.LowResolution && blend != 0)
+				{
+					// Into the low-resolution layer, whose alpha is what the scene will show through it.
+					blend += 3;
+				}
+
 				VfxRuntime.SetDrawState(blend, output.ZWrite, output.CullBack);
 			}
 
