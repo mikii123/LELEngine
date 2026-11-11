@@ -2070,6 +2070,26 @@ texture read back), see the port's `PORTING.md` "UI".
 - Scene documents: objects must follow their parent in the file (`[Scene] 'X': parent N not found ... kept at the
   root` otherwise); hand-written objects go after the parent's entry.
 
+## UI text: distance field range, shadows and outlines (2026-11-11)
+
+- The user's report: small text with `text-shadow` (SmokeOn's fps label, 15 px at panel scale 0.52) showed the glyph
+  quads as boxes of the shadow's colour, "the same problem TextMeshPro had for years". Cause: the shadow and the outline
+  are drawn from the glyph's distance field, which knew distances only up to `FontAsset.SdfSpread` (8 atlas pixels) and
+  holds one value from there to the edge of the glyph's quad; on small text 8 atlas pixels are ~1.3 screen pixels, less
+  than the blur, so the shadow stood at ~18 % at the quad's edge and stopped there.
+- Now `SdfSpread` is 24 (the glyph padding follows: spread + 1), the atlas pages are R16 (`AtlasPage.pixels` ushort,
+  `GlyphSdf.Render` returns ushort: the wide range keeps large text's edges exact), and `UIShaders` keeps everything
+  drawn outside the glyph inside what the field knows (`known` = half its range in screen pixels - 1): the shadow is
+  `smoothstep(-reach, reach, d)` with reach = 0.5 + blur px clamped to `known` (a blur wider than that at that size
+  gets softer, never a box), the outline width is clamped the same way. Synthesized bold is in atlas pixels
+  (`TextGenerator.SynthBoldAtlasPixels` 1.28: the old 0.08 of the 8-pixel range), so its weight did not change.
+- Glyph rasterization: each row only tests the segments within the range of the row, rows of larger glyphs run in
+  parallel (`GlyphSdf.RenderRow`): printable ASCII of a fresh font 19-37 ms (Segoe UI, Georgia, Impact, Consolas;
+  with the wider range and the old loop it was 60-90 ms). One 1024 page still holds all of it.
+- Verified: SmokeOn's HUD before / after (crops of the fps label), a board of 8-48 px labels with 3 px shadows, a hard
+  2 px shadow, an 8 px blur on 12 px text, 2 px outlines at 10 and 24 px, synthesized bold (Impact) at 14 and 40 px;
+  TestGame `ui=1` (title shadow, rich text, controls) looks as before.
+
 ## MaterialPropertyBlock, [PerRendererData], ICustomRenderer (2026-10-31)
 
 - Game effects belong in the game's repo, not here (the user's correction, 2026-10-31): a plume component written for

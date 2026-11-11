@@ -101,6 +101,9 @@ namespace LELEngine.UIElements
 	{
 		#region PrivateFields
 
+		// Synthesized bold: how far the glyph's edge moves out, in atlas pixels (at FontAsset.SdfFontSize).
+		private const float SynthBoldAtlasPixels = 1.28f;
+
 		private struct CharRun
 		{
 			public int codepoint;
@@ -945,7 +948,7 @@ namespace LELEngine.UIElements
 							color = color,
 							baseline = roundedBaseline,
 							shear = c.synthItalic ? 0.2f : 0f,
-							boldness = c.synthBold ? 0.08f : 0f,
+							boldness = c.synthBold ? SynthBoldAtlasPixels / (2f * FontAsset.SdfSpread) : 0f,
 							charIndex = c.sourceIndex
 						});
 					}

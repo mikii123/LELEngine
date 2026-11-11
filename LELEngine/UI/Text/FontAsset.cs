@@ -40,8 +40,13 @@ namespace LELEngine.UIElements
 		/// <summary>Pixel size glyphs are rasterized at into the atlas.</summary>
 		public const float SdfFontSize = 48f;
 
-		/// <summary>Distance range stored around glyph edges, in atlas pixels (also the bitmap padding).</summary>
-		public const float SdfSpread = 8f;
+		/// <summary>
+		///     Distance range stored around glyph edges, in atlas pixels (also the bitmap padding). Wide enough for text
+		///     shadows and outlines: a shadow's blur and offset must fit inside it, in atlas pixels, at the size the text
+		///     is drawn (a 3 px blur on 8 px text is ~20 of them); the shader keeps a wider blur within it. Stored in 16
+		///     bits, so the wide range keeps the edges of large text exact.
+		/// </summary>
+		public const float SdfSpread = 24f;
 
 		public const int AtlasSize = 1024;
 
@@ -363,7 +368,7 @@ namespace LELEngine.UIElements
 		/// <summary>A glyph's distance field before it has a place in the atlas (no pixels: nothing to draw).</summary>
 		private struct GlyphBitmap
 		{
-			public byte[] pixels;
+			public ushort[] pixels;
 			public int left, top, width, height;
 		}
 
@@ -592,11 +597,11 @@ namespace LELEngine.UIElements
 
 		#region NestedTypes
 
-		/// <summary>One atlas texture (R8) with a shelf packer and a dirty region for incremental uploads.</summary>
+		/// <summary>One atlas texture (R16) with a shelf packer and a dirty region for incremental uploads.</summary>
 		public sealed class AtlasPage
 		{
 			public readonly int size;
-			public readonly byte[] pixels;
+			public readonly ushort[] pixels;
 
 			private int handle;
 			private int shelfY;
@@ -608,7 +613,7 @@ namespace LELEngine.UIElements
 			public AtlasPage(int size)
 			{
 				this.size = size;
-				pixels = new byte[size * size];
+				pixels = new ushort[size * size];
 			}
 
 			public bool TryAllocate(int width, int height, out int x, out int y)
@@ -634,11 +639,11 @@ namespace LELEngine.UIElements
 				return true;
 			}
 
-			public void Write(byte[] glyph, int x, int y, int width, int height)
+			public void Write(ushort[] glyph, int x, int y, int width, int height)
 			{
 				for (int row = 0; row < height; row++)
 				{
-					System.Buffer.BlockCopy(glyph, row * width, pixels, (y + row) * size + x, width);
+					Array.Copy(glyph, row * width, pixels, (y + row) * size + x, width);
 				}
 
 				dirtyMinX = Math.Min(dirtyMinX, x);
@@ -667,8 +672,8 @@ namespace LELEngine.UIElements
 				if (!uploaded)
 				{
 					GL.BindTexture(TextureTarget.Texture2D, handle);
-					GL.PixelStore(PixelStoreParameter.UnpackAlignment, 1);
-					GL.TexImage2D(TextureTarget.Texture2D, 0, PixelInternalFormat.R8, size, size, 0, PixelFormat.Red, PixelType.UnsignedByte, pixels);
+					GL.PixelStore(PixelStoreParameter.UnpackAlignment, 2);
+					GL.TexImage2D(TextureTarget.Texture2D, 0, PixelInternalFormat.R16, size, size, 0, PixelFormat.Red, PixelType.UnsignedShort, pixels);
 					GL.PixelStore(PixelStoreParameter.UnpackAlignment, 4);
 					uploaded = true;
 					ClearDirty();
@@ -676,11 +681,11 @@ namespace LELEngine.UIElements
 				else if (dirtyMaxX > dirtyMinX)
 				{
 					GL.BindTexture(TextureTarget.Texture2D, handle);
-					GL.PixelStore(PixelStoreParameter.UnpackAlignment, 1);
+					GL.PixelStore(PixelStoreParameter.UnpackAlignment, 2);
 					GL.PixelStore(PixelStoreParameter.UnpackRowLength, size);
 					GL.PixelStore(PixelStoreParameter.UnpackSkipPixels, dirtyMinX);
 					GL.PixelStore(PixelStoreParameter.UnpackSkipRows, dirtyMinY);
-					GL.TexSubImage2D(TextureTarget.Texture2D, 0, dirtyMinX, dirtyMinY, dirtyMaxX - dirtyMinX, dirtyMaxY - dirtyMinY, PixelFormat.Red, PixelType.UnsignedByte, pixels);
+					GL.TexSubImage2D(TextureTarget.Texture2D, 0, dirtyMinX, dirtyMinY, dirtyMaxX - dirtyMinX, dirtyMaxY - dirtyMinY, PixelFormat.Red, PixelType.UnsignedShort, pixels);
 					GL.PixelStore(PixelStoreParameter.UnpackRowLength, 0);
 					GL.PixelStore(PixelStoreParameter.UnpackSkipPixels, 0);
 					GL.PixelStore(PixelStoreParameter.UnpackSkipRows, 0);

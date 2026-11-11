@@ -5,8 +5,9 @@ namespace LELEngine.UIElements
 {
 	/// <summary>
 	///     Rasterizes a glyph outline into a signed distance field: every pixel stores its distance to the nearest
-	///     contour edge (positive inside), encoded in 8 bits around 0.5 with a fixed spread in pixels. The fragment
-	///     shader turns the distance into anti-aliased coverage at any scale, so one atlas serves all font sizes.
+	///     contour edge (positive inside), encoded in 16 bits around 0.5 with a fixed spread in pixels. The fragment
+	///     shader turns the distance into anti-aliased coverage at any scale, so one atlas serves all font sizes, and
+	///     into the soft edge of the text's shadow.
 	/// </summary>
 	internal static class GlyphSdf
 	{
@@ -29,67 +30,30 @@ namespace LELEngine.UIElements
 		///     <paramref name="originX" />/<paramref name="originY" /> is the glyph-space position of the bitmap's
 		///     top-left pixel (y up in glyph space; bitmap rows go down).
 		/// </summary>
-		public static byte[] Render(List<GlyphContour> contours, float scale, float originX, float originY, int width, int height, float spread)
+		public static ushort[] Render(List<GlyphContour> contours, float scale, float originX, float originY, int width, int height, float spread)
 		{
 			List<Segment> segments = segmentBuffer ??= new List<Segment>(256);
 			segments.Clear();
 			Flatten(contours, scale, segments);
 
-			var pixels = new byte[width * height];
+			var pixels = new ushort[width * height];
 			if (segments.Count == 0)
 			{
 				return pixels;
 			}
 
-			float invRange = 1f / (2f * spread);
-			for (int py = 0; py < height; py++)
+			Segment[] all = segments.ToArray();
+			if ((long)width * height * all.Length < 200000)
 			{
-				// Pixel center in scaled glyph space (y up).
-				float sy = originY - (py + 0.5f);
-				int row = py * width;
-				for (int px = 0; px < width; px++)
+				for (int py = 0; py < height; py++)
 				{
-					float sx = originX + px + 0.5f;
-					float best = spread * spread;
-					int winding = 0;
-					for (int i = 0; i < segments.Count; i++)
-					{
-						Segment s = segments[i];
-						// Winding: count crossings of the horizontal ray to +x.
-						if ((s.ay <= sy) != (s.by <= sy))
-						{
-							float t = (sy - s.ay) / (s.by - s.ay);
-							float ix = s.ax + t * (s.bx - s.ax);
-							if (ix > sx)
-							{
-								winding += s.by > s.ay ? 1 : -1;
-							}
-						}
-
-						// Quick reject on the segment's bounding box.
-						float dxBox = sx < s.minX ? s.minX - sx : sx > s.maxX ? sx - s.maxX : 0f;
-						float dyBox = sy < s.minY ? s.minY - sy : sy > s.maxY ? sy - s.maxY : 0f;
-						if (dxBox * dxBox + dyBox * dyBox >= best)
-						{
-							continue;
-						}
-
-						float d = DistanceSquared(sx, sy, s);
-						if (d < best)
-						{
-							best = d;
-						}
-					}
-
-					float distance = (float)Math.Sqrt(best);
-					if (winding == 0)
-					{
-						distance = -distance;
-					}
-
-					float value = 0.5f + distance * invRange;
-					pixels[row + px] = (byte)Math.Clamp((int)(value * 255f + 0.5f), 0, 255);
+					RenderRow(all, pixels, py, originX, originY, width, spread);
 				}
+			}
+			else
+			{
+				// Rows are independent: large glyphs (and the wide range around them) on every core.
+				System.Threading.Tasks.Parallel.For(0, height, py => RenderRow(all, pixels, py, originX, originY, width, spread));
 			}
 
 			return pixels;
@@ -98,6 +62,69 @@ namespace LELEngine.UIElements
 		#endregion
 
 		#region PrivateMethods
+
+		// One row of the field. Only the segments within the range of the row matter: they hold the nearest edge of
+		// every pixel nearer than the range, and every crossing of the row (the winding).
+		private static void RenderRow(Segment[] all, ushort[] pixels, int py, float originX, float originY, int width, float spread)
+		{
+			// Pixel center in scaled glyph space (y up).
+			float sy = originY - (py + 0.5f);
+			Span<int> near = all.Length <= 1024 ? stackalloc int[all.Length] : new int[all.Length];
+			int count = 0;
+			for (int i = 0; i < all.Length; i++)
+			{
+				if (sy >= all[i].minY - spread && sy <= all[i].maxY + spread)
+				{
+					near[count++] = i;
+				}
+			}
+
+			float invRange = 1f / (2f * spread);
+			int row = py * width;
+			for (int px = 0; px < width; px++)
+			{
+				float sx = originX + px + 0.5f;
+				float best = spread * spread;
+				int winding = 0;
+				for (int k = 0; k < count; k++)
+				{
+					ref Segment s = ref all[near[k]];
+					// Winding: count crossings of the horizontal ray to +x.
+					if ((s.ay <= sy) != (s.by <= sy))
+					{
+						float t = (sy - s.ay) / (s.by - s.ay);
+						float ix = s.ax + t * (s.bx - s.ax);
+						if (ix > sx)
+						{
+							winding += s.by > s.ay ? 1 : -1;
+						}
+					}
+
+					// Quick reject on the segment's bounding box.
+					float dxBox = sx < s.minX ? s.minX - sx : sx > s.maxX ? sx - s.maxX : 0f;
+					float dyBox = sy < s.minY ? s.minY - sy : sy > s.maxY ? sy - s.maxY : 0f;
+					if (dxBox * dxBox + dyBox * dyBox >= best)
+					{
+						continue;
+					}
+
+					float d = DistanceSquared(sx, sy, s);
+					if (d < best)
+					{
+						best = d;
+					}
+				}
+
+				float distance = (float)Math.Sqrt(best);
+				if (winding == 0)
+				{
+					distance = -distance;
+				}
+
+				float value = 0.5f + distance * invRange;
+				pixels[row + px] = (ushort)Math.Clamp((int)(value * 65535f + 0.5f), 0, 65535);
+			}
+		}
 
 		/// <summary>Turns the quadratic contours into line segments in scaled glyph space.</summary>
 		private static void Flatten(List<GlyphContour> contours, float scale, List<Segment> segments)

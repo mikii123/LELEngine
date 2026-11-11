@@ -222,6 +222,11 @@ void main()
 		vec2 unitRange = vec2(uSdfUnitRange);
 		vec2 screenTexSize = vec2(1.0) / fwidth(fUV);
 		float pxRange = max(0.5 * dot(unitRange, screenTexSize), 1.0);
+
+		// The distance field knows distances up to half its range (in screen pixels here) from the glyph's edge; past
+		// that it holds one value up to the edge of the glyph's quad. Whatever is drawn outside the glyph must have
+		// faded out before that, or the quad shows (a box of the outline's or the shadow's colour around small text).
+		float known = 0.5 * pxRange - 1.0;
 		vec4 color = fColor;
 		float alpha;
 		if (kind == KIND_TEXT)
@@ -231,7 +236,8 @@ void main()
 			float outlineWidth = e.textParams.x;
 			if (outlineWidth > 0.0)
 			{
-				float outlineAlpha = clamp((sdf * pxRange + outlineWidth * uScale) + 0.5, 0.0, 1.0);
+				float outlinePx = clamp(outlineWidth * uScale, 0.0, max(known, 0.0));
+				float outlineAlpha = clamp((sdf * pxRange + outlinePx) + 0.5, 0.0, 1.0);
 				vec4 outline = e.textOutlineColor;
 				color = vec4(mix(outline.rgb, color.rgb, alpha), max(alpha * color.a, outlineAlpha * outline.a));
 				alpha = 1.0;
@@ -239,10 +245,12 @@ void main()
 		}
 		else
 		{
-			// Shadow: softened edge by the blur radius (fExtra, px).
-			float blur = max(fExtra * uScale, 0.0);
+			// Shadow: the glyph blurred by the blur radius (fExtra, px; CSS: a Gaussian of half that deviation),
+			// as the soft step it makes across an edge: half its strength on the edge, the whole of it the radius
+			// inside, nothing the radius outside. Kept within the distances the field knows.
+			float reach = clamp(0.5 + max(fExtra * uScale, 0.0), 0.5, max(known, 0.5));
 			float d = (sd - 0.5) * pxRange;
-			alpha = clamp((d + 0.5 + blur) / (1.0 + 2.0 * blur), 0.0, 1.0);
+			alpha = smoothstep(-reach, reach, d);
 		}
 
 		result = vec4(color.rgb * color.a * alpha, color.a * alpha);
