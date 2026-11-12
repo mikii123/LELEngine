@@ -76,6 +76,9 @@ public sealed class CameraShake : Behaviour
 	[Tooltip("The camera also feels the shakes of the world: Camera Shake Sources and what scripts start with ImpactAt, PlayAt, ImpactEverywhere, PlayEverywhere")]
 	public bool Listen = true;
 
+	[Tooltip("Where the world's shakes are felt from (how far they are, when they arrive, which way they push): a camera high above the player, or far behind it, feels them where the player is. Empty: where the camera is")]
+	public Transform Listener;
+
 	[Header("Axes")]
 	[Range(0f, 2f)]
 	[Tooltip("Share of the shakes' turning of the view")]
@@ -343,9 +346,11 @@ public sealed class CameraShake : Behaviour
 
 		if (Listen)
 		{
+			// The world's shakes are as far as they are from the listener; they still turn and push this camera.
+			Vector3 heard = Listener != null && !Listener.dead ? Listener.position : position;
 			for (int i = 0; i < world.Count; i++)
 			{
-				world[i].AddTo(position, rotation, ref sum, ref quiet);
+				world[i].AddTo(heard, rotation, ref sum, ref quiet);
 			}
 		}
 

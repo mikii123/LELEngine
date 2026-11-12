@@ -1873,7 +1873,10 @@ Added for New Frontier's port of Unity's SpaceStonesPack (Standard materials wit
   `Listen`: static `ImpactAt` / `PlayAt` (position, radius; `InnerRadius`, `Falloff`, `PropagationSpeed`: a far camera
   feels it later, `PushesAway`: the kick pushes cameras away from it) and `ImpactEverywhere` / `PlayEverywhere`;
   `CameraShakeSource` is the component for those (Constant / Impact, `PlayOnEnable`, reach, animatable `Strength`;
-  a profile given later starts it, another fades over). The world's list is static and moves on once a frame with the
+  a profile given later starts it, another fades over). `Listener` (a Transform, 2026-11-12): the world's shakes are
+  measured from it (distance, delay, push direction) instead of the camera's rest position; they still turn the camera
+  in its own axes. For a camera far from what it shows (a top-down camera 100 units above the player: an explosion next
+  to the player must count as next to it); a destroyed listener falls back to the camera. The world's list is static and moves on once a frame with the
   first camera's LateUpdate (`Time.frameCount`); with no camera enabled, impacts are dropped and only un-stopped constant
   shakes are kept (a stale impact would play to the next camera). An ended instance forgets its camera (`End`: whoever
   still holds it, the inspector's trial included, holds nothing of a scene).

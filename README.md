@@ -68,7 +68,8 @@ Built on .NET 10, OpenTK 4.9 (GLFW) and OpenGL 4.6 (4.3 minimum), developed and 
 - Camera shake: a `CameraShake` component shakes the object it is on (its transform; a camera, or what a camera hangs
   under), `shake.Impact(...)` once and `shake.Play(profile)` until `Stop`, with the strength set as the game goes;
   shakes of the world (`CameraShake.ImpactAt`, the `CameraShakeSource` component) reach every listening camera by its
-  distance, later far away, and push it away. What a shake looks like is a `CameraShakeProfile` asset of procedural
+  distance, later far away, and push it away (measured from the camera, or from its `Listener`: the player under a
+  camera high above or far behind). What a shake looks like is a `CameraShakeProfile` asset of procedural
   layers after handheld film cameras (sway, tremor, breathing, footsteps, reframing; the camera's weight and pivot),
   vibration and a kick, each profile with its own strength; eighteen presets (handheld steady / normal / telephoto /
   wide, shoulder rig, documentary, walking, running, shaky, phone, aerial, vehicle, engine, rumble, impact, explosion,
