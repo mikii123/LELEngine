@@ -382,6 +382,52 @@ namespace LELEngine.Editor
 			return delivered;
 		}
 
+		/// <summary>
+		///     Drop target on the last item for project files taken by their paths, nothing loaded (a list of files in a
+		///     settings window): outlines it while a drag hovers (green: a file <paramref name="fits" />, red: none does)
+		///     and returns true on the drop with the path of every file that fits.
+		/// </summary>
+		public static bool AcceptFiles(Func<string, bool> fits, out List<string> assetPaths)
+		{
+			assetPaths = null;
+			NVector2 min = ImGui.GetItemRectMin();
+			NVector2 max = ImGui.GetItemRectMax();
+			if (!ImGui.BeginDragDropTarget())
+			{
+				return false;
+			}
+
+			bool delivered = false;
+			ImGuiPayloadPtr payload = AcceptOurs();
+			if (!payload.IsNull)
+			{
+				var found = new List<string>();
+				foreach (DragItem item in items)
+				{
+					// A file itself: not an object of the scene, not a sub-asset of a file (a model's mesh).
+					if (item.GameObject == null && item.Component == null && item.AssetPath != null && item.SubAsset == null && fits(item.AssetPath) && !found.Contains(item.AssetPath))
+					{
+						found.Add(item.AssetPath);
+					}
+				}
+
+				EditorIcons.DropHighlight(min, max, found.Count > 0);
+				if (found.Count == 0)
+				{
+					ImGui.SetMouseCursor(ImGuiMouseCursor.NotAllowed);
+				}
+
+				if (found.Count > 0 && payload.IsDelivery())
+				{
+					assetPaths = found;
+					delivered = true;
+				}
+			}
+
+			ImGui.EndDragDropTarget();
+			return delivered;
+		}
+
 		/// <summary>True when the dragged objects hold something a slot of the type takes (no loading).</summary>
 		public static bool AnyFits(Type declaredType)
 		{

@@ -69,7 +69,8 @@ namespace LELEngine.Shaders
 	}
 
 	/// <summary>
-	///     The shader variants a game build's materials use (<see cref="ShaderVariant" />): the build checks each one with
+	///     The shader variants a game build's materials use, and the shaders the project always includes without keywords
+	///     (<see cref="GraphicsSettings.AlwaysIncludedShaders" />) (<see cref="ShaderVariant" />): the build checks each one with
 	///     the reference compiler (glslang, the editor's ShaderValidator; a variant that does not compile fails the build)
 	///     and writes the list to Data/ShaderVariants.txt (a line per variant: "shader path|KEYWORD KEYWORD"); the player
 	///     compiles them while it loads, before the first frame (<see cref="Compile" />; the program binary cache makes
@@ -89,7 +90,7 @@ namespace LELEngine.Shaders
 		public static void Write(string file, IEnumerable<ShaderVariant> variants)
 		{
 			var text = new StringBuilder();
-			text.Append("# Shader variants the game's materials use (shader path|keywords); the player compiles them while it loads.\n");
+			text.Append("# Shader variants the game's materials use, and its always included shaders (shader path|keywords); the player compiles them while it loads.\n");
 			foreach (ShaderVariant variant in variants)
 			{
 				text.Append(variant.Shader).Append('|').Append(string.Join(" ", variant.Keywords)).Append('\n');

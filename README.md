@@ -65,6 +65,14 @@ Built on .NET 10, OpenTK 4.9 (GLFW) and OpenGL 4.6 (4.3 minimum), developed and 
   game hears, sustain points, and parameters the game sets (`timeline.SetParameter`). The Timeline window previews on
   the objects in edit mode, follows the game in play mode and records keys, while paused or as it plays, from anything
   exposed on the objects: your scripts' fields and `[Animatable]` members too.
+- Camera shake: a `CameraShake` component shakes the object it is on (its transform; a camera, or what a camera hangs
+  under), `shake.Impact(...)` once and `shake.Play(profile)` until `Stop`, with the strength set as the game goes;
+  shakes of the world (`CameraShake.ImpactAt`, the `CameraShakeSource` component) reach every listening camera by its
+  distance, later far away, and push it away. What a shake looks like is a `CameraShakeProfile` asset of procedural
+  layers after handheld film cameras (sway, tremor, breathing, footsteps, reframing; the camera's weight and pivot),
+  vibration and a kick, each profile with its own strength; eighteen presets (handheld steady / normal / telephoto /
+  wide, shoulder rig, documentary, walking, running, shaky, phone, aerial, vehicle, engine, rumble, impact, explosion,
+  recoil, landing). The profile's inspector plays it in a viewfinder in edit mode.
 - Textures: 2D, 3D (slice grids), cubemaps (crosses, strips, panoramas, HDR) and sprites (single or sliced sheets),
   configured per file like Unity's texture importer. Materials are documents of typed properties declared by the
   shader's `//Properties` block.
@@ -314,8 +322,12 @@ GPU event, ribbons and soft smoke puffs, all simulated and drawn on the GPU.*
 *The VFX Graph window: the default effect with its Spawn, Initialize, Update and Output contexts and two
 blackboard properties wired into the blocks.*
 - Project Settings (Edit > Project Settings...) has tabs for lighting quality (shadow map, GI method and its
-  tunables), 2D physics and the build. They are saved to `ProjectSettings/ProjectSettings.asset` and go into
+  tunables), graphics, 2D physics and the build. They are saved to `ProjectSettings/ProjectSettings.asset` and go into
   builds. The Lighting panel keeps what belongs to a scene: its environment, shadow reach and GI volume.
+- A build ships the shaders its materials use. Shaders that only scripts load by path
+  (`new ShaderProgram("Shaders/Fog.shader")`) go on Project Settings > Graphics > Always Included Shaders: drag the
+  shader files onto the list from the Project panel. They ship with their `#include` files, the build checks that
+  they compile, and the game compiles them while it loads.
 - The Build tab (File > Build Settings...) produces a standalone game folder, framework-dependent or self-contained,
   with a splash screen shown while the game loads in the background. Batch mode (`-batchmode`) covers build machines
   and scripts; the editor also builds Windows games on Linux (a headless container with Mesa), and texture and

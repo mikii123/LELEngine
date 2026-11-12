@@ -360,7 +360,7 @@ namespace LELEngine.Editor
 				log("Error: shader variant " + error);
 			}
 
-			log($"Shader variants: {variants.Count} used by the materials, {result.Stages} stage sources checked with glslang in {result.Milliseconds} ms"
+			log($"Shader variants: {variants.Count} (the materials' and the always included shaders), {result.Stages} stage sources checked with glslang in {result.Milliseconds} ms"
 				+ (result.Warnings > 0 ? $", {result.Warnings} warnings" : "") + (result.Errors.Count > 0 ? $", {result.Errors.Count} failed" : ""));
 			return result.Errors.Count == 0;
 		}

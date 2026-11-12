@@ -6,7 +6,8 @@ namespace LELEngine
 {
 	/// <summary>
 	///     Project-wide settings: the names of the user layers, 2D physics, the lighting quality (the shadow map and the
-	///     global illumination method with its tunables) and the splash screen of builds. One document: ProjectSettings/ProjectSettings.asset in a
+	///     global illumination method with its tunables), the shaders every build ships and the splash screen of
+	///     builds. One document: ProjectSettings/ProjectSettings.asset in a
 	///     project (written by the editor's Project Settings window), next to boot.json in a game build. Per-scene
 	///     lighting (environment, shadow reach, the GI volume) stays in <see cref="SceneSettings" />. <see cref="Use" />
 	///     makes a settings object the live one (<see cref="Current" />, <see cref="Lighting.Shadows" />,
@@ -40,6 +41,9 @@ namespace LELEngine
 
 		/// <summary>The input system: the configuration the game's players read their actions through.</summary>
 		public InputSystem.InputProjectSettings Input = new InputSystem.InputProjectSettings();
+
+		/// <summary>Graphics: the shaders every build ships although nothing of it references them (the ones scripts load by path).</summary>
+		public GraphicsSettings Graphics = new GraphicsSettings();
 
 		#endregion
 

@@ -1381,6 +1381,25 @@ Added for New Frontier's port of Unity's SpaceStonesPack (Standard materials wit
   dependencies) and the files left out. Stored
   type names are checked against the engine and the player's scripts (Mono.Cecil): types of Editor scripts or missing
   classes are reported. `Data/` is deleted before it is written.
+- Always included shaders (2026-11-12; found with a game whose built player died before its first frame:
+  `DirectoryNotFoundException ... Shaders\Shaders\Atmosphere.shader`). A shader a script loads by its path
+  (`new ShaderProgram("Shaders/X.shader")`) is used by nothing the build follows, so it was not shipped, and
+  `ShaderProgram.ResolveShaderPath` fell back to the engine's library folder (hence the doubled `Shaders\Shaders`). The
+  user's ask: a field in Project Settings to drag such shaders into; their correction: not on the Build tab ("it runs
+  the build, it is not for settings"). So: `ProjectSettings.Graphics` (`GraphicsSettings.AlwaysIncludedShaders`, a list
+  of `IncludedAsset`: GUID + last path as plain strings, so reading the settings loads and compiles nothing: the player
+  reads them before it has a renderer), edited on the Graphics tab (`ProjectSettingsWindow.DrawGraphics`,
+  `Tab.Graphics` appended to the enum: the tab is saved by name): a bordered list that takes shader files dropped on it
+  (`DragAndDrop.AcceptFiles`: project files by path, nothing loaded; anchor `includedshaders`), a row each (click
+  pings the file, X removes), an "Add Shader..." combo of the project's other shaders; undoable, saved with the
+  settings. `BuildDependencies.Collect` adds them with the reason "Project Settings > Graphics > Always Included
+  Shaders" (their #include files follow as for any shader; a missing one is a build warning) and
+  `CollectShaderVariants` lists each without keywords: glslang checks them and the player compiles them while it
+  loads. Verified on that game: a real drag through the test hooks (`projectsettings=1500;Graphics
+  pingasset=2500;Shaders/Atmosphere.shader drag=3000;project:Shaders/Atmosphere.shader;includedshaders`), the combo,
+  X, undo / redo through the CLI, the settings file, a `-build` (six shaders in `Data/Shaders`, twelve variants
+  checked, the missing entry's warning), and the built player (`screenshot=folder screenshotframe=500 exitframe=560
+  focus=0`: exit code 0, the frame with the game's own fog and smoke shaders drawn).
 - `GameBuilder` (`LELEngine.Editor/Building`) ships assets the player uses as they are:
   - documents (scenes, materials, meta files) as binary LELB, models as their imported binary;
   - images as KTX 1.1 (`KtxFile`) baked by `TextureBaker`: every mip level (box filter, in linear light for sRGB),
@@ -1827,6 +1846,79 @@ Added for New Frontier's port of Unity's SpaceStonesPack (Standard materials wit
 - TestGame `lights=1` (`GITestScene.BuildLocalLights`: a point light, a spot, a lamp in a patch of fog; `night=1` puts the
   sun down). Measured (780M, 1280 x 720, night): whole frame on the GPU gi=0 1.79 ms, VCT ~9.3 ms, Lumen ~6.8 ms. Without
   lights TestGame lumen, vct, gi=0, refraction, materials match the commit before (max 2 / 255).
+
+## Camera shake (CameraShake, profiles, sources; 2026-11-12)
+
+- The user's ask: camera shake as a built-in feature for every project (it was a game's own code): script calls for an
+  impact and for a constant shake (start, stop), "other things that make it cinematic", and procedural, realistic
+  profiles after handheld film cameras, with parameters and an overall 0..1 multiplier per profile. Their correction
+  while it was built: a separate component that works on the transform, no state applied only while rendering ("so
+  there are no inconsistencies later"). So: no renderer or scene hooks; `LELEngine/CameraShake/` is components and data only.
+- `CameraShake` (component, global namespace as `Camera`): in LateUpdate it adds up the shakes playing on it and writes
+  them to its own object's local position and rotation, and to its camera's `FoV`. The rest pose is whatever the transform
+  holds that the component did not write (`TakeRest`: position and rotation compared apart, bit for bit, with what was
+  written last): the pose at the start, and any pose something else sets later. So the object may hang under what steers
+  the camera (the reliable way: order of scripts does not matter) or be set anew every frame before this LateUpdate
+  (same-object setters that run after it overwrite the shake; ones that move it step by step from the shaken pose pile
+  the shake up: not supported). With nothing shaking the transform is not touched; after a shake the rest pose is put
+  back exactly (no drift). Offsets are in the object's own axes, in world metres whatever the parents' scale. Not
+  `[ExecuteAlways]`: nothing moves in edit mode. `OnDisable` takes the shake off and ends its instances.
+- Picture axes (`CameraShakePose`): position x right / y up / z forward, rotation x tilt up / y pan right / z roll
+  clockwise. The engine's cameras look along +Z with +Y up, which puts the picture's right at -X (`Matrix4.LookAt` is
+  right-handed): `LocalPosition` = (-x, y, z), `LocalRotation` = Qy(-pan) Qx(-tilt) Qz(roll).
+- What plays: `Profiles` (list of `CameraShakeSlot`: profile + strength 0..1, playing all the time; another profile in
+  an entry fades over; `StopAll` leaves them), `Play(profile, strength, fadeIn)` -> `CameraShakeInstance` until
+  `Stop(fadeOut)` (constant: `Strength` / `Speed` set while it plays, followed over `Smoothing` 0.05 s so setting it
+  never jolts), `Impact(strength, profile, direction, duration)` (one shot, ends by itself), and the world's shakes when
+  `Listen`: static `ImpactAt` / `PlayAt` (position, radius; `InnerRadius`, `Falloff`, `PropagationSpeed`: a far camera
+  feels it later, `PushesAway`: the kick pushes cameras away from it) and `ImpactEverywhere` / `PlayEverywhere`;
+  `CameraShakeSource` is the component for those (Constant / Impact, `PlayOnEnable`, reach, animatable `Strength`;
+  a profile given later starts it, another fades over). The world's list is static and moves on once a frame with the
+  first camera's LateUpdate (`Time.frameCount`); with no camera enabled, impacts are dropped and only un-stopped constant
+  shakes are kept (a stale impact would play to the next camera). An ended instance forgets its camera (`End`: whoever
+  still holds it, the inspector's trial included, holds nothing of a scene).
+- Camera's own controls: `Strength`, `RotationAmount` / `PositionAmount` / `FieldOfViewAmount`, soft limits `MaxAngle` /
+  `MaxOffset` / `MaxFieldOfView` (untouched to 0.6 of the limit, then tanh towards it: stacked impacts never throw the
+  camera about), `LensCompensation` (0: physical angles, a long lens shakes more in the picture; 1: same size in the
+  picture as at `LensReference`), `Seed`. Static `GlobalStrength` (the player's setting), `Main`, `Active`, `World`.
+  `Pose` (what was written), `Intensity` (0..1 from the shakes' levels, not their swings: for pad rumble, sound).
+- `CameraShakeProfile` (ScriptableObject asset, Create > Camera Shake Profile): layers that add up, each a pure function
+  of time and a seed (`CameraShakeNoise`: no state, so previews, tests and late arrivals agree, and the frame rate is not
+  in it). Operator layers: `Sway` (5 octaves, spectrum 1 / f^(3 - 2 Roughness), amplitude coming and going), `Tremor`
+  (narrow band, in spells), `Breathing` (uneven, in quicker than out), `Steps` (bob once a step with overtones, sway and
+  roll once a stride), `Reframing` (holds, then one eased move: `Holds`, moves start at 0..0.7 of a cell and last at most
+  0.3 of it, so they never run into each other); `Vibration` (3 octaves, not smoothed by the weight); the kick
+  (`KickPosition` / `KickRotation` / `KickFieldOfView`: a damped spring's answer to a knock, normalized to its farthest;
+  an impact with a direction pushes along it as far as the profile kicks). `Weight` is a 12 dB / octave low pass applied
+  per octave (cutoff 14 Hz at 0 down to 1.3 Hz at 1), `Pivot` moves the lens with the turning (parallax), `Rotation` /
+  `Position` scale per axis, `Strength` 0..1 all of it. Playing: `Attack`, `Release`, `Duration`, `Decay`,
+  `IgnoreTimeScale`. Amounts are in units of "a careful operator": 1 of Sway is 0.42 / 0.5 / 0.22 degrees RMS of tilt /
+  pan / roll and 12 / 8 / 9 mm; the Handheld preset comes to about 0.7 degrees RMS at 3.7 degrees a second (hand shake
+  from the 1 / focal length rule is 1 to 2 degrees a second per axis).
+- Noise calibration (scratch program, measured): one 1D gradient noise stands at zero on every lattice point, so
+  `Signal` sums two on lattices that do not line up (offset per seed, 0.8731 apart in frequency): RMS 0.199 (x 5.025 =
+  1), 0.573 zero-crossing cycles per cell (x 1.745 cells per cycle: the nominal frequency is the mean swing rate), peaks
+  to 4.8 RMS.
+- Presets (`CameraShakePreset`, `Load` / `Create` / shared `Get`): HandheldSteady, Handheld, HandheldTelephoto,
+  HandheldWide, ShoulderRig, Documentary, Walking, Running, Shaky, Phone; Aerial, Vehicle, Engine, Rumble; Impact,
+  Explosion, Recoil, Landing. A new asset is Handheld (`Reset`, same as the field initializers).
+- Editor (`Inspector/CameraShakeInspector.cs`): a profile draws, above its values, a viewfinder that plays it over a
+  drawn scene (far lines 5 degrees apart: turning; posts 2 and 3.5 m away: moving against them; Pause, Impact, Lens =
+  the viewfinder's field of view), its measured size, and Preset + Load (undoable, saved); in play mode Impact In Game /
+  Play In Game on `CameraShake.Main`. Also inline, where a profile unfolds (`[InlineEditor]`: the camera's list, a
+  source). `CameraShake` in play mode: intensity, pose, what plays, Impact / Stop All. `CameraShakeSource`: Play /
+  Impact / Stop, reach spheres in the scene view. ImGui's `Text` / `BulletText` take format strings: a percent sign in
+  an interpolated string must be doubled (the level column vanished until it was).
+- Verified in a game project (2026-11-12): 41 unit tests on stages stepped without rendering (rest pose exact after
+  impacts and stops, an outside setter, a moving rig, directions of every axis, strengths multiplying, limits, frame
+  rate independence 30 vs 120 fps, time scale 0 with and without `IgnoreTimeScale`, the list, world impacts by
+  distance / delay / push, sources, field of view kick, lens compensation, preset sizes and order, step cadence, no
+  jumps at 0.25 ms in any preset); the editor through the CLI (inspector screenshots, preview frames differing, Load +
+  undo writing the asset file, the list with an inline profile, play mode: per-frame recording of Handheld = 0.8 degrees
+  RMS with at most 0.14 degrees between frames at 60 fps, a world explosion pushing away and giving the field of view
+  back, the rest pose after Stop); "Previous script assembly unloaded" after a play session with shakes; a `-build`
+  ships the profile assets and the built player runs with them (it reads the two profiles with the scene; its shake
+  was not measured there). Not verified: a real long session's feel (only measured, not watched).
 
 ## Animation system (clips, Animator, state machines; 2026-10-28)
 

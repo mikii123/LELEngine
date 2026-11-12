@@ -15,8 +15,11 @@ namespace LELEngine.Editor
 	/// <summary>
 	///     Project Settings (Edit > Project Settings...), one tab each: the project-wide lighting quality (shadow map,
 	///     GI method and its tunables), the names of the user layers, 2D physics (simulation plane, gravity, solver, queries, layer collision matrix),
+	///     graphics (the shaders every build ships although nothing references them: a list that takes shader files
+	///     dropped on it),
 	///     the splash screen of builds (duration, background, logo, with a preview) and the build (scenes, start scene,
-	///     output folder, configuration; builds in the background). Lighting, physics and splash screen edits are
+	///     output folder, configuration; builds in the background: the tab that runs a build, not one of settings).
+	///     Lighting, graphics, physics and splash screen edits are
 	///     undoable and saved to ProjectSettings/ProjectSettings.asset when they end; the lighting of a scene
 	///     (environment, shadow reach, GI volume) stays in the Lighting panel.
 	/// </summary>
@@ -32,7 +35,8 @@ namespace LELEngine.Editor
 			SplashScreen,
 			Audio,
 			Input,
-			Build
+			Build,
+			Graphics
 		}
 
 		public bool Open;
@@ -51,6 +55,8 @@ namespace LELEngine.Editor
 		#region PrivateFields
 
 		private static readonly string[] PlaneNames = { "XY (side view)", "XZ (top-down)" };
+
+		private const string ShaderExtension = ".shader";
 
 		private readonly EditorApplication editor;
 		private readonly InspectorContext context;
@@ -151,6 +157,12 @@ namespace LELEngine.Editor
 			if (BeginTab(Tab.Lighting, "Lighting"))
 			{
 				changed |= DrawLighting(settings);
+				EndTab();
+			}
+
+			if (BeginTab(Tab.Graphics, "Graphics"))
+			{
+				changed |= DrawGraphics(settings.Graphics ??= new GraphicsSettings());
 				EndTab();
 			}
 
@@ -794,6 +806,141 @@ namespace LELEngine.Editor
 			}
 
 			ImGui.EndChild();
+		}
+
+		// ---------------------------------------------------------------- graphics
+
+		/// <summary>
+		///     The shaders every build ships although nothing of it references them (scripts load them by path): a list
+		///     that takes shader files dropped on it from the Project panel, a row each (a click shows the file, X takes
+		///     it off), and a combo of the project's other shaders. Undoable, saved with the project settings.
+		/// </summary>
+		private bool DrawGraphics(GraphicsSettings content)
+		{
+			bool changed = false;
+			ImGui.PushTextWrapPos(0f);
+			ImGui.TextDisabled("A build ships the shaders its materials use. A shader that only a script loads by its path (new ShaderProgram(\"Shaders/Fog.shader\")) is used by nothing the build can see, and the built game would not find it: put it on this list.");
+			ImGui.PopTextWrapPos();
+			ImGui.Spacing();
+			ImGui.SeparatorText("Always Included Shaders");
+
+			List<IncludedAsset> shaders = content.AlwaysIncludedShaders ??= new List<IncludedAsset>();
+			float height = Math.Clamp(shaders.Count + 1, 4, 14) * ImGui.GetTextLineHeightWithSpacing() + ImGui.GetStyle().WindowPadding.Y * 2f;
+			int remove = -1;
+			if (ImGui.BeginChild("##includedshaders", new NVector2(0, height), ImGuiChildFlags.Borders))
+			{
+				if (shaders.Count == 0)
+				{
+					ImGui.TextDisabled("Drag shader files here from the Project panel.");
+				}
+
+				float buttonWidth = ImGui.CalcTextSize("X").X + ImGui.GetStyle().FramePadding.X * 2f;
+				for (int i = 0; i < shaders.Count; i++)
+				{
+					IncludedAsset entry = shaders[i];
+					string path = entry?.Resolve();
+					ImGui.PushID(i);
+					var size = new NVector2(Math.Max(40f, ImGui.GetContentRegionAvail().X - buttonWidth - ImGui.GetStyle().ItemSpacing.X), 0f);
+					if (path != null)
+					{
+						if (EditorGui.Selectable(path, false, size))
+						{
+							editor.Ping(path);
+						}
+
+						if (ImGui.IsItemHovered())
+						{
+							ImGui.SetTooltip("Click: shows the file in the Project panel.");
+						}
+					}
+					else
+					{
+						// Deleted, or its meta file lost: the build warns and goes on without it.
+						ImGui.PushStyleColor(ImGuiCol.Text, EditorStyle.Warning);
+						EditorGui.Selectable((entry?.Path ?? "?") + " (missing)", false, size);
+						ImGui.PopStyleColor();
+					}
+
+					ImGui.SameLine();
+					if (EditorGui.SmallButton("X"))
+					{
+						remove = i;
+					}
+
+					if (ImGui.IsItemHovered())
+					{
+						ImGui.SetTooltip("Take it off the list.");
+					}
+
+					ImGui.PopID();
+				}
+			}
+
+			ImGui.EndChild();
+
+			// The whole list takes the shader files dropped on it.
+			if (DragAndDrop.AcceptFiles(IsShaderFile, out List<string> dropped))
+			{
+				context.BeginEdit();
+				foreach (string path in dropped)
+				{
+					changed |= content.AddShader(path);
+				}
+
+				context.EndEdit();
+			}
+
+			if (TestAnchors.Enabled)
+			{
+				TestAnchors.Record("includedshaders", ImGui.GetItemRectMin(), ImGui.GetItemRectMax());
+			}
+
+			ImGui.SetNextItemWidth(-1);
+			if (EditorGui.BeginCombo("##addshader", "Add Shader..."))
+			{
+				bool any = false;
+				foreach (string path in AssetDatabase.GetAllAssetPaths(ShaderExtension))
+				{
+					if (content.IncludesShader(path))
+					{
+						continue;
+					}
+
+					any = true;
+					if (EditorGui.Selectable(path))
+					{
+						context.BeginEdit();
+						changed |= content.AddShader(path);
+						context.EndEdit();
+					}
+				}
+
+				if (!any)
+				{
+					ImGui.TextDisabled("Every shader of the project is on the list.");
+				}
+
+				EditorGui.EndCombo();
+			}
+
+			if (remove >= 0)
+			{
+				context.BeginEdit();
+				shaders.RemoveAt(remove);
+				context.EndEdit();
+				changed = true;
+			}
+
+			ImGui.Spacing();
+			ImGui.PushTextWrapPos(0f);
+			ImGui.TextDisabled("Drag shader files onto the list from the Project panel, or pick them above. Their #include files go with them; the build checks that they compile, and the built game compiles them while it loads.");
+			ImGui.PopTextWrapPos();
+			return changed;
+		}
+
+		private static bool IsShaderFile(string assetPath)
+		{
+			return assetPath.EndsWith(ShaderExtension, StringComparison.OrdinalIgnoreCase) && !AssetDatabase.IsEngineResource(assetPath);
 		}
 
 		private static string OutputFolderOf(ProjectInfo project)

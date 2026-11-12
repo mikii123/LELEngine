@@ -11,7 +11,8 @@ namespace LELEngine.Editor
 {
 	/// <summary>
 	///     The assets a game build ships: its scenes, everything in Resources folders (scripts load those by name,
-	///     <see cref="Resources" />), and what those use, transitively. A document (scene, material, ScriptableObject,
+	///     <see cref="Resources" />), the shaders Project Settings > Graphics always includes (scripts load those by path),
+	///     and what those use, transitively. A document (scene, material, ScriptableObject,
 	///     VFX graph, physics material) uses the assets its values reference, wherever they sit (components, nested and
 	///     polymorphic objects, interface slots, lists, dictionaries); a model uses its imported materials; a project
 	///     shader its #include files; style sheets and UI documents the files their url() / resource() / src name.
@@ -43,6 +44,14 @@ namespace LELEngine.Editor
 
 		/// <summary>Missing references and unreadable files.</summary>
 		public readonly List<string> Warnings = new List<string>();
+
+		/// <summary>
+		///     The shaders Project Settings > Graphics always includes (asset paths; engine shaders too): shipped like the
+		///     rest, and compiled without keywords by the build's check and by the player while it loads.
+		/// </summary>
+		public readonly List<string> AlwaysIncludedShaders = new List<string>();
+
+		public const string AlwaysIncludedReason = "Project Settings > Graphics > Always Included Shaders";
 
 		public int SceneCount;
 		public int ResourceCount;
@@ -88,6 +97,28 @@ namespace LELEngine.Editor
 			if (!string.IsNullOrEmpty(input) && File.Exists(AssetDatabase.ToAbsolute(input)))
 			{
 				result.Add(input, "Project Settings > Input");
+			}
+
+			// The shaders Project Settings > Graphics names: nothing of the build references them (scripts load them by
+			// path), so nothing else would bring them in.
+			GraphicsSettings graphics = ProjectSettings.Current.Graphics;
+			if (graphics?.AlwaysIncludedShaders != null)
+			{
+				foreach (IncludedAsset shader in graphics.AlwaysIncludedShaders)
+				{
+					string path = shader?.Resolve();
+					if (path == null)
+					{
+						result.Warnings.Add($"{AlwaysIncludedReason}: '{shader?.Path}' does not exist");
+						continue;
+					}
+
+					result.Add(path, AlwaysIncludedReason);
+					if (!result.AlwaysIncludedShaders.Contains(path))
+					{
+						result.AlwaysIncludedShaders.Add(path);
+					}
+				}
 			}
 
 			while (result.pending.Count > 0)
@@ -197,8 +228,8 @@ namespace LELEngine.Editor
 
 		/// <summary>
 		///     The shader variants the build's materials draw with (each material's shader and the keywords of its values),
-		///     shipped materials and the built-in ones they use alike: the build compiles them and lists them for the player
-		///     (<see cref="Shaders.ShaderVariantList" />).
+		///     shipped materials and the built-in ones they use alike, and the always included shaders (without keywords):
+		///     the build compiles them and lists them for the player (<see cref="Shaders.ShaderVariantList" />).
 		/// </summary>
 		public List<Shaders.ShaderVariant> CollectShaderVariants()
 		{
@@ -220,6 +251,16 @@ namespace LELEngine.Editor
 				}
 
 				Shaders.ShaderVariant variant = Shaders.ShaderVariant.Of(material);
+				if (!variants.Contains(variant))
+				{
+					variants.Add(variant);
+				}
+			}
+
+			// The always included shaders as scripts load them by path: without keywords.
+			foreach (string shader in AlwaysIncludedShaders)
+			{
+				var variant = new Shaders.ShaderVariant(shader, null);
 				if (!variants.Contains(variant))
 				{
 					variants.Add(variant);
