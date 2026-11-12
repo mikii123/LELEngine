@@ -818,11 +818,26 @@ namespace LELEngine.Editor
 		private bool DrawGraphics(GraphicsSettings content)
 		{
 			bool changed = false;
+			ImGui.SeparatorText("Display");
+			bool vsync = content.VSync;
+			FieldDrawer.Label("VSync", null, context);
+			bool edited = EditorGui.Checkbox("##vsync", ref vsync);
+			Tooltip("Built games wait for the display's refresh to show a frame: no tearing, frames shown evenly.\n" +
+				"Off: they render as fast as they can, and a slower display shows them at uneven moments (stutter).\n" +
+				"The editor always waits. The player's command line overrides it: vsync=0 or vsync=1.");
+			context.Track(edited);
+			if (edited)
+			{
+				content.VSync = vsync;
+				changed = true;
+			}
+
+			ImGui.Spacing();
+			ImGui.SeparatorText("Always Included Shaders");
 			ImGui.PushTextWrapPos(0f);
 			ImGui.TextDisabled("A build ships the shaders its materials use. A shader that only a script loads by its path (new ShaderProgram(\"Shaders/Fog.shader\")) is used by nothing the build can see, and the built game would not find it: put it on this list.");
 			ImGui.PopTextWrapPos();
 			ImGui.Spacing();
-			ImGui.SeparatorText("Always Included Shaders");
 
 			List<IncludedAsset> shaders = content.AlwaysIncludedShaders ??= new List<IncludedAsset>();
 			float height = Math.Clamp(shaders.Count + 1, 4, 14) * ImGui.GetTextLineHeightWithSpacing() + ImGui.GetStyle().WindowPadding.Y * 2f;

@@ -23,6 +23,21 @@ namespace LELEngine
 		private Vector2i pendingFrameSize;
 		private bool resizedSinceSwap;
 
+		// When the last two frames were presented (Stopwatch ticks): the game's time steps come from these.
+		private long lastPresent;
+		private long previousPresent;
+		private bool presentedSinceUpdate;
+		private int refreshCheckFrames;
+
+		/// <summary>
+		///     Makes the game's time steps even (<see cref="FramePacing" />): from the times frames are presented, snapped to
+		///     the display's refresh periods under vsync. Off: each frame advances by the measured time since the last update.
+		/// </summary>
+		public static bool PaceFrames { get; set; } = true;
+
+		/// <summary>The window's frame pacing (its refresh period, what it still owes the real clock).</summary>
+		public FramePacing Pacing { get; } = new FramePacing();
+
 		#endregion
 
 		#region Constructors
@@ -97,7 +112,7 @@ namespace LELEngine
 		{
 			// Raises the UpdateFrame event (hosts and test hooks subscribe to it).
 			base.OnUpdateFrame(e);
-			double deltaTime = e.Time;
+			double deltaTime = NextDeltaTime(e.Time);
 			Time.unscaledDeltaTimeD = deltaTime;
 			Time.unscaledTimeD += deltaTime;
 			deltaTime *= Time.timeScaleD;
@@ -159,7 +174,73 @@ namespace LELEngine
 
 			long before = Stopwatch.GetTimestamp();
 			SwapBuffers();
-			Time.swapMs = (Stopwatch.GetTimestamp() - before) * 1000.0 / Stopwatch.Frequency;
+			long after = Stopwatch.GetTimestamp();
+			Time.swapMs = (after - before) * 1000.0 / Stopwatch.Frequency;
+			MarkPresented(after);
+		}
+
+		/// <summary>
+		///     How far this frame advances the game: the interval between the last two presents (under vsync the swap
+		///     returns at the display's refresh, so it measures what the screen shows, without the CPU's noise of when the
+		///     update starts), made even by <see cref="Pacing" />; <paramref name="sinceLastUpdate" /> when no frame was
+		///     presented since the last update (minimized, the splash screen) or pacing is off.
+		/// </summary>
+		private double NextDeltaTime(double sinceLastUpdate)
+		{
+			bool measured = presentedSinceUpdate && previousPresent != 0;
+			presentedSinceUpdate = false;
+			if (!PaceFrames)
+			{
+				return sinceLastUpdate;
+			}
+
+			if (refreshCheckFrames-- <= 0)
+			{
+				// The display can change (the window moved to another monitor, its mode changed): looked at now and then.
+				refreshCheckFrames = 120;
+				Pacing.RefreshPeriod = RefreshPeriod();
+			}
+
+			Pacing.VSync = VSync != VSyncMode.Off;
+			return Pacing.Next(measured ? (lastPresent - previousPresent) / (double)Stopwatch.Frequency : sinceLastUpdate);
+		}
+
+		private void MarkPresented(long timestamp)
+		{
+			previousPresent = lastPresent;
+			lastPresent = timestamp;
+			presentedSinceUpdate = true;
+		}
+
+		/// <summary>Seconds of one refresh of the monitor the window's middle is on (the primary monitor's when none is found); 0 when unknown.</summary>
+		private unsafe double RefreshPeriod()
+		{
+			try
+			{
+				GLFW.GetWindowPos(WindowPtr, out int x, out int y);
+				GLFW.GetWindowSize(WindowPtr, out int width, out int height);
+				int centerX = x + width / 2;
+				int centerY = y + height / 2;
+				OpenTK.Windowing.GraphicsLibraryFramework.Monitor* chosen = GLFW.GetPrimaryMonitor();
+				OpenTK.Windowing.GraphicsLibraryFramework.Monitor** monitors = GLFW.GetMonitorsRaw(out int count);
+				for (int i = 0; i < count; i++)
+				{
+					OpenTK.Windowing.GraphicsLibraryFramework.VideoMode* candidate = GLFW.GetVideoMode(monitors[i]);
+					GLFW.GetMonitorPos(monitors[i], out int left, out int top);
+					if (candidate != null && centerX >= left && centerX < left + candidate->Width && centerY >= top && centerY < top + candidate->Height)
+					{
+						chosen = monitors[i];
+						break;
+					}
+				}
+
+				OpenTK.Windowing.GraphicsLibraryFramework.VideoMode* mode = chosen != null ? GLFW.GetVideoMode(chosen) : null;
+				return mode != null && mode->RefreshRate > 0 ? 1.0 / mode->RefreshRate : 0.0;
+			}
+			catch (Exception)
+			{
+				return 0.0;
+			}
 		}
 
 		#endregion
@@ -179,6 +260,7 @@ namespace LELEngine
 				WaitForQueuedPresents();
 			}
 
+			// Not a frame of the game loop (the splash screen): the time to the game's first present is no frame interval.
 			SwapBuffers();
 		}
 

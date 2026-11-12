@@ -349,6 +349,38 @@
   every built-in window open through `windowsfile=`: all of them draw while loading without an assert, the scripted
   window's stand-in, then the real windows in their places).
 
+## Frame pacing and vsync (2026-11-12)
+
+- A game reported "stuttering". Measured (a probe recording every frame's wall interval, `Time.deltaTime`, GC, and how
+  far the camera moved; scratchpad `stutter/` of session 7fcb5476): each frame advanced the game by the time of the
+  frame before, measured when the update started, so with the CPU's noise in it. Under vsync at 60 Hz (the editor) the
+  display showed frames evenly while `deltaTime` went from 13.6 to 20.2 ms: a camera at 78 m/s moved 0.9 m in one
+  frame and 1.8 m in the next (camera step vs its median: p99 27 %, max 37 %). The player had vsync off: 160 fps on a
+  60 Hz display, so the frames the display picked were 12 to 19 ms of game time apart. No GC or allocation spikes.
+- `Window.NextDeltaTime` (engine): the interval between the last two presents (`MarkPresented` after the deferred
+  `SwapBuffers`; under vsync it returns at the refresh) made even by `FramePacing` (`Mono/FramePacing.cs`): the median
+  of the last 8 intervals, snapped to a whole number of refresh periods under vsync when that median is within 6 % of
+  one (the refresh rate from GLFW's video mode of the monitor under the window's middle, looked at every 120 frames);
+  the time this takes away is owed and paid back at 10 % a frame, at most a tenth of the step, and only past half a
+  step (the measurements' own noise stays unpaid: a present 23.4 ms then the next 13.4 ms at 60 Hz). The first 8
+  frames (start, after a stall) and stalls over 0.25 s pass as measured. `Window.PaceFrames = false` gives the old
+  measured `e.Time`. `Present()` (the splash screen) is no frame of the loop and records no present.
+- First version snapped each interval on its own (20 % tolerance): where the swap does not wait for the refresh (this
+  machine's remote desktop virtual display, frames of 36 ms) it snapped 36 to 33.3 and the paid-back debt made the
+  steps uneven again; then a mean of 8 (one loading frame raised 8 steps). Hence median + snap of the median.
+- The editor's play mode ticks the scenes with `Time.deltaTime` (it passed the raw `e.Time`, unscaled, while scripts
+  read the scaled `Time.deltaTime`).
+- `GraphicsSettings.VSync` (Project Settings > Graphics > Display, default on): the player sets `host.VSync` from it
+  before its loop (`[Player] VSync on` in Player.log); `vsync=0|1` on the player's command line overrides. The editor
+  always had vsync on.
+- Results (780M, 60 Hz virtual display): editor `deltaTime` p1..p99 16.62..16.80 ms, camera step max 3.4 %; built
+  game, vsync on: `deltaTime` 16.667 every frame after the start, camera step max 2.2 % (the plane's own speed
+  change); vsync off: 5.8..6.9 ms, max 17 %. Tests: `FramePacingTests` in the game project (noisy vsync, a missed
+  refresh caught up without a step over 1.1 periods, 36 ms frames not forced onto 33.3, no vsync, 60 -> 30 fps, a
+  stall). Seen once, not explained: bursts of 40..110 ms frames in the editor with GPU and swap normal (the CPU, other
+  processes on the machine?); a second run had none. A probe for that: a thread sleeping 1 ms and recording its
+  oversleep, which tells a machine-wide stall from the game's.
+
 ## Player startup and splash screen
 
 - `LELEngine.Player/Program.cs`: boot.json (source-generated STJ, `BootConfigJson`), the window opens hidden without

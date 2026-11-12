@@ -44,7 +44,8 @@ namespace LELEngine
 	}
 
 	/// <summary>
-	///     Project-wide graphics settings (Project Settings > Graphics): the shaders every build ships. A build ships its
+	///     Project-wide graphics settings (Project Settings > Graphics): whether built games wait for the display's
+	///     refresh, and the shaders every build ships. A build ships its
 	///     scenes, the Resources folders and everything those use: a shader nothing of that references is left out, and a
 	///     script that loads it by its path finds nothing in the built game.
 	/// </summary>
@@ -52,6 +53,13 @@ namespace LELEngine
 	public sealed class GraphicsSettings
 	{
 		#region PublicFields
+
+		/// <summary>
+		///     A built game waits for the display's refresh to show a frame (no tearing, frames shown evenly, the game's
+		///     time steps snapped to the refresh). Off: it renders as fast as it can, and a display slower than that shows
+		///     frames at uneven moments. The editor always waits. The player's command line overrides it (vsync=0 / 1).
+		/// </summary>
+		public bool VSync = true;
 
 		/// <summary>
 		///     Shaders every build ships, with their #include files, although no material of the build uses them: the

@@ -325,6 +325,9 @@ blackboard properties wired into the blocks.*
 - Project Settings (Edit > Project Settings...) has tabs for lighting quality (shadow map, GI method and its
   tunables), graphics, 2D physics and the build. They are saved to `ProjectSettings/ProjectSettings.asset` and go into
   builds. The Lighting panel keeps what belongs to a scene: its environment, shadow reach and GI volume.
+- Smooth motion: each frame advances the game by the time between the frames the screen shows, made even (under vsync
+  exactly one refresh, what it misses paid back over the next frames), not by the noisy time the last frame took.
+  Built games wait for the display's refresh unless Project Settings > Graphics > VSync is off.
 - A build ships the shaders its materials use. Shaders that only scripts load by path
   (`new ShaderProgram("Shaders/Fog.shader")`) go on Project Settings > Graphics > Always Included Shaders: drag the
   shader files onto the list from the Project panel. They ship with their `#include` files, the build checks that

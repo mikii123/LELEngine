@@ -429,7 +429,9 @@ namespace LELEngine.Editor
 				{
 					Input.BeginFrame();
 					SceneManager.Update();
-					SceneManager.UpdateScenes(deltaTime);
+					// The game's time step (paced and scaled, Window.NextDeltaTime), as the player runs it: the same step
+					// the scripts read from Time.deltaTime.
+					SceneManager.UpdateScenes(Time.deltaTime);
 					Input.EndFrame();
 				}
 				finally

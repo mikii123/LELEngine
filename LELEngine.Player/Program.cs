@@ -15,7 +15,8 @@ namespace LELEngine.Player
 	///     the splash screen once it has loaded and the splash screen's time is up; then the game loop runs. A window
 	///     application (no console): the log goes to Player.log, with the startup times.
 	///     Command line overrides (testing): data=folder game=assembly.dll scene=assetPath fullscreen=0|1
-	///     screenshot=folder screenshotframe=N exitframe=N focus=0 shadercache=0 (no program binary cache).
+	///     screenshot=folder screenshotframe=N exitframe=N focus=0 shadercache=0 (no program binary cache)
+	///     vsync=0|1 (else Project Settings > Graphics > VSync).
 	///     Linked shader programs are kept as the driver's binaries in the user's local app data
 	///     (LELEngine/&lt;title&gt;/ShaderCache, <see cref="Shaders.ProgramBinaryCache" />): later starts compile nothing.
 	/// </summary>
@@ -181,6 +182,12 @@ namespace LELEngine.Player
 			}
 
 			InstallTestHooks(args);
+
+			// The project's choice, read by the loader with the settings; vsync=0 / 1 on the command line wins.
+			string vsync = GetValue(args, "vsync");
+			bool waitForDisplay = vsync != null ? vsync != "0" : ProjectSettings.Current.Graphics?.VSync ?? true;
+			host.VSync = waitForDisplay ? OpenTK.Windowing.Common.VSyncMode.On : OpenTK.Windowing.Common.VSyncMode.Off;
+			Log("VSync " + (waitForDisplay ? "on" : "off") + (vsync != null ? " (command line)" : ""));
 			bool first = true;
 			host.RenderFrame += _ =>
 			{
