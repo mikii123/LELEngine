@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Reflection;
 using Hexa.NET.ImGui;
 using LELEngine.Serialization;
@@ -19,6 +20,9 @@ namespace LELEngine.Editor
 		private static InspectorContext context;
 		private static Behaviour inspected;
 		private static bool changed;
+
+		/// <summary>Per tab strip (its ImGui id): the tab it showed last, and in which frame of which ImGui context (<see cref="Tabs" />).</summary>
+		private static readonly Dictionary<uint, (int Tab, int Frame, ImGuiContextPtr Context)> shownTabs = new Dictionary<uint, (int, int, ImGuiContextPtr)>();
 
 		#endregion
 
@@ -121,6 +125,89 @@ namespace LELEngine.Editor
 			Context.Track(edited);
 			changed |= edited;
 			return value;
+		}
+
+		/// <summary>
+		///     Unity's Popup: a drop-down after the label column showing the selected option; returns the selected index
+		///     (an index outside the options shows an empty box and stays as it is until one is picked). Options may
+		///     repeat. Automation element "combo:Label", its options "item:Label/Option" while it is open.
+		/// </summary>
+		public static int Popup(string label, int selectedIndex, IReadOnlyList<string> options)
+		{
+			PrefixLabel(label);
+			ImGui.SetNextItemWidth(-1f);
+			int count = options?.Count ?? 0;
+			int result = selectedIndex;
+			if (EditorGui.BeginCombo("##" + label, selectedIndex >= 0 && selectedIndex < count ? options[selectedIndex] ?? "" : ""))
+			{
+				for (int i = 0; i < count; i++)
+				{
+					ImGui.PushID(i);
+					if (EditorGui.Selectable(options[i] ?? "", i == selectedIndex))
+					{
+						result = i;
+					}
+
+					if (i == selectedIndex)
+					{
+						ImGui.SetItemDefaultFocus();
+					}
+
+					ImGui.PopID();
+				}
+
+				EditorGui.EndCombo();
+			}
+
+			bool edited = result != selectedIndex;
+			Context.Track(edited);
+			changed |= edited;
+			return result;
+		}
+
+		/// <summary>
+		///     A strip of tabs (Unity's Toolbar), one per label; returns the index of the tab that shows. A window keeps the
+		///     index (in a serialized field, to open on the same tab again) and draws that tab's content after the call. An
+		///     index other than the tab on show switches the strip to it: set from code, or restored with the window.
+		///     <paramref name="id" /> tells the strips of one window apart. Automation elements "tab:Label".
+		/// </summary>
+		public static int Tabs(string id, int selected, IReadOnlyList<string> labels)
+		{
+			int count = labels?.Count ?? 0;
+			uint key = ImGui.GetID("##" + id);
+			if (count == 0 || !ImGui.BeginTabBar("##" + id))
+			{
+				return selected;
+			}
+
+			selected = Math.Clamp(selected, 0, count - 1);
+			// Which tab shows is ImGui's own state: it is told when the caller's index is not the one it showed last, and
+			// when that state is new (the strip was not drawn the frame before: first shown, hidden behind another window's
+			// tab, or drawn for a screenshot), where it would start on the first tab again.
+			int frame = ImGui.GetFrameCount();
+			ImGuiContextPtr contextNow = ImGui.GetCurrentContext();
+			bool continued = shownTabs.TryGetValue(key, out (int Tab, int Frame, ImGuiContextPtr Context) last) && last.Context.Equals(contextNow) && frame - last.Frame <= 1;
+			bool force = !continued || last.Tab != selected;
+			int open = selected;
+			for (int i = 0; i < count; i++)
+			{
+				ImGui.PushID(i);
+				if (EditorGui.BeginTabItem(labels[i] ?? "", force && i == selected ? ImGuiTabItemFlags.SetSelected : ImGuiTabItemFlags.None))
+				{
+					open = i;
+					ImGui.EndTabItem();
+				}
+
+				ImGui.PopID();
+			}
+
+			ImGui.EndTabBar();
+			// The switch asked for takes ImGui a frame: until then the asked tab counts as the one on show.
+			int result = force ? selected : open;
+			shownTabs[key] = (result, frame, contextNow);
+			bool edited = result != selected;
+			changed |= edited;
+			return result;
 		}
 
 		/// <summary>A one-line text field after the label column; returns the (possibly edited) text. Automation element "input:Label".</summary>

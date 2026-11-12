@@ -569,8 +569,10 @@ or arrows between nodes (both directions side by side, a label, a travelling dot
 - `[MenuItem("Menu/Sub/Item", priority)]` on a static method without parameters: `File`, `Edit`, `GameObject` and
   `Window` get the items appended, other names become menus of their own. A priority gap above 10 adds a separator.
 - `EditorGUILayout`: `Field<T>` (any type the inspector can draw: numbers, vectors, colors, enums, strings, lists,
-  scene references, assets), `PropertyField(target, "field")`, `Slider`, `IntSlider`, `LabelField`, `HelpBox`,
-  `PrefixLabel` (label column for a raw ImGui widget), `labelWidth`.
+  scene references, assets), `PropertyField(target, "field")`, `Slider`, `IntSlider`, `Popup` (a drop-down of
+  options, returns the picked index), `Tabs` (a tab strip, returns the index of the tab on show; the window keeps it),
+  `Button`, `Toggle`, `TextField`, `Foldout`, `LabelField`, `HelpBox`, `PrefixLabel` (label column for a raw ImGui
+  widget), `labelWidth`.
 - `Undo.RecordObject(component)` before changing a component by hand (one undo step per drag, the scene becomes
   dirty, `OnValidate` runs), `Undo.RecordSceneChange(name, () => ...)` for creating or deleting objects.
 - `Selection.activeGameObject`, `Selection.activeAssetPath`.

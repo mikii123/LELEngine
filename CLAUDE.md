@@ -289,8 +289,16 @@
   field, see "Sliders" below): `click` the field, `type`, `key Enter` types as a person would. Combos: click, then the option's element. Verified 2026-10-26 on a scratch `Mover`
   component (float, int, string, bool, Vector3, Color4, enum, nested class, List, Dictionary, Transform): 10 inputs,
   values in the inspector, 10 undos back to the start.
-- Editor scripts: `EditorGUILayout.Button / Toggle / TextField / Foldout` (and `Field` / `PropertyField`) are
-  elements; a raw `ImGui.Button` in a script window is not (by design: no hook into raw ImGui).
+- Editor scripts: `EditorGUILayout.Button / Toggle / TextField / Foldout / Popup / Tabs` (and `Field` /
+  `PropertyField`) are elements; a raw `ImGui.Button` in a script window is not (by design: no hook into raw ImGui).
+  `Popup(label, index, options)` (2026-11-12) is a drop-down after the label column: `combo:Label`, its options
+  `item:Label/Option` while open (options may repeat: each is drawn under its own index id). `Tabs(id, index, labels)`
+  is a tab strip (`tab:Label`) whose index the caller keeps (a serialized field, so a window opens on its last tab):
+  ImGui owns which tab shows, so the strip is told (`SetSelected`) when the caller's index is not the tab it showed
+  last, and when its ImGui state is new: not drawn the frame before in this context (first shown, behind another
+  dock tab, or drawn in a screenshot's layout context), where ImGui would start on the first tab and hand index 0
+  back. Verified in a script window with three tabs and ~20 drop-downs: CLI `click combo:X` + `click item:X/Y`,
+  `click tab:Y`, layout screenshots in batch on the asked tab, the index kept over a script reload.
 - Verify recipe (scratchpad `AutoProbe` of 2026-10-26: `ProbeWindow` + `AutoTest.Run`): GUI editor `project=P focus=0`,
   then the CLI: `windows`, `elements "Probe Window"`, `click "button:Press me"`, `input "input:Note" text`,
   `click hierarchy:Sphere` + `status`, `click "checkbox:Cast Shadows"` + `get`, `undo`, screenshots of covered
