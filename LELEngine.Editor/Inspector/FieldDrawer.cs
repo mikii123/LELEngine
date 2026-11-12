@@ -717,7 +717,8 @@ namespace LELEngine.Editor
 			bool changed;
 			try
 			{
-				changed = DrawFields(asset, context, depth);
+				changed = asset is CameraShakeProfile shake && CameraShakeInspector.DrawProfile(shake, context);
+				changed |= DrawFields(asset, context, depth);
 			}
 			finally
 			{

@@ -43,7 +43,10 @@ namespace LELEngine.Editor
 
 			ImGui.Separator();
 			context.UndoTarget = asset;
-			if (FieldDrawer.DrawFields(asset, context))
+			// A camera shake is tuned by eye: its preview stands above its values.
+			bool changed = asset is CameraShakeProfile shake && CameraShakeInspector.DrawProfile(shake, context);
+			changed |= FieldDrawer.DrawFields(asset, context);
+			if (changed)
 			{
 				asset.Validate();
 				context.Editor.NotifySceneChanged();

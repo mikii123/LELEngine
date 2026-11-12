@@ -20,6 +20,8 @@ namespace LELEngine.Editor
 			{ typeof(NavMeshAgent), (component, context) => NavMeshAgentInspector.Draw((NavMeshAgent)component, context) },
 			{ typeof(LELEngine.VFX.VisualEffect), (component, context) => VFX.VisualEffectInspector.Draw((LELEngine.VFX.VisualEffect)component, context) },
 			{ typeof(Camera), (component, context) => CameraInspector.Draw((Camera)component, context) },
+			{ typeof(CameraShake), (component, context) => CameraShakeInspector.DrawComponent((CameraShake)component, context) },
+			{ typeof(CameraShakeSource), (component, context) => CameraShakeInspector.DrawSource((CameraShakeSource)component, context) },
 			{ typeof(LODGroup), (component, context) => LODGroupInspector.Draw((LODGroup)component, context) },
 			{ typeof(LELEngine.Volumetrics.VolumetricObjectBase), (component, context) => VolumetricObjectInspector.Draw((LELEngine.Volumetrics.VolumetricObjectBase)component, context) },
 			{ typeof(Light), (component, context) => LightInspector.Draw((Light)component, context) },
