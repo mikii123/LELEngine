@@ -1184,6 +1184,23 @@ Added for New Frontier's port of Unity's SpaceStonesPack (Standard materials wit
   plus `RenderContext.CameraForward` x look-ahead, snapped to voxels (`GlobalIlluminationSettings.UpdateGridPlacement`,
   called by `VoxelGIPass` and `GlobalDistanceFieldPass`). For top-down / third-person cameras: one volume covers the
   camera's surroundings and the ground it looks at.
+- Scrolling (2026-11-12): a fast camera moves the volume nearly every frame (75 m/s over 1.5 m voxels). Before, every
+  move rebuilt the whole global SDF (3.9 ms on the 780M) and cleared the radiance cache (0.6 ms, and the probes never
+  converged while moving). Both are toroidal now, like Lumen's clipmaps:
+  - Global SDF: grid voxel v is stored in texel `(v + sdfScroll) mod res` (`GI.SdfScroll`, uniform `sdfScroll`,
+    `SdfStorageVoxel` in Engine/DistanceField.glsl; `SampleSdf` clamps to the edge texels' centres itself, the textures
+    wrap with GL_REPEAT). A move by whole voxels composes only the entering slabs (static from the static objects, the
+    working field from it plus the dynamic objects) and shifts last frame's dynamic regions (`ScrollStaticField`,
+    profiler `GlobalSDF.scroll`, ~0.2 ms); a size / object count / static version change or a jump past the grid still
+    rebuilds (scroll back to 0). Verified: after (52, 1, 106) voxels of scrolling the field and ids were bit-identical to
+    a rebuild at the same place (scratch probe dumping both in grid order).
+  - Radiance cache: with `FollowCamera` its grid snaps to whole probe spacings (within half a spacing of the volume)
+    and probes are stored at slot `(coord + rcScroll) mod n` (`RadianceCacheProbeIndex` / `ProbeCoord` in
+    Engine/RadianceCache.glsl, `RadianceCacheBinding.Scroll`). A move keeps every probe still inside with its history;
+    the entering slab's slots are emptied by Engine/RadianceCacheReset.shader and traced first (priority list, up to a
+    quarter of `RadianceCacheProbesPerFrame` a frame); the round robin keeps its place across the list rebuild.
+  - Fixed volumes keep scroll 0 and render as before (TestGame `animate=0 dumpframe=400`, Lumen and VCT: the A/B
+    difference equals the run-to-run one, max 2/255; note TestGame's orbs move with real time unless `animate=0`).
 
 ## AnimationCurve and the curve editor
 

@@ -422,6 +422,7 @@ namespace LELEngine
 			program.SetVector3("rcGridMin", cache.GridMin);
 			program.SetFloat("rcProbeSpacing", cache.ProbeSpacing);
 			program.SetInt("rcProbesPerAxis", cache.ProbesPerAxis);
+			program.SetInt3("rcScroll", cache.Scroll.X, cache.Scroll.Y, cache.Scroll.Z);
 			program.SetInt("rcProbesPerRow", cache.ProbesPerRow);
 			program.SetInt("rcProbeResolution", cache.ProbeResolution);
 			program.SetVector2("rcAtlasSize", cache.AtlasSize);
@@ -505,6 +506,7 @@ namespace LELEngine
 			program.SetVector3("sdfGridMin", GI.GridMin);
 			program.SetFloat("sdfGridSize", GI.GridSize);
 			program.SetInt("sdfResolution", GI.SdfResolution);
+			program.SetInt3("sdfScroll", GI.SdfScroll.X, GI.SdfScroll.Y, GI.SdfScroll.Z);
 			program.SetInt("sdfMaxSteps", GI.SdfMaxSteps);
 			program.SetFloat("sdfMaxDistance", GI.SdfBandVoxels * GI.SdfVoxelSize);
 			program.SetTexture("GlobalSdf", TextureTarget.Texture3D, GI.GlobalSdf, GlobalSdfTextureUnit);
@@ -588,6 +590,9 @@ namespace LELEngine
 			public Vector3 GridMin;
 			public float ProbeSpacing;
 			public int ProbesPerAxis;
+
+			/// <summary>The probe slot of grid coordinate 0 per axis: the probes are stored toroidally (Engine/RadianceCache.glsl).</summary>
+			public Vector3i Scroll;
 			public int ProbesPerRow;
 			public int ProbeResolution;
 			public Vector2 AtlasSize;
@@ -1243,6 +1248,9 @@ namespace LELEngine
 
 		/// <summary>GL handle of the matching object-id volume (R16UI, index + 1 of the nearest object), 0 when unavailable.</summary>
 		[NonSerialized] public int GlobalSdfObjectIds;
+
+		/// <summary>Where grid voxel 0 is stored in the distance field textures (they are toroidal, see Engine/DistanceField.glsl).</summary>
+		[NonSerialized] public Vector3i SdfScroll;
 
 		[NonSerialized] public bool ResolveActive;
 		[NonSerialized] public int ResolvedDiffuse;

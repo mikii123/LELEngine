@@ -12,9 +12,20 @@ uniform int sdfResolution;
 uniform int sdfMaxSteps;
 uniform float sdfMaxDistance; // distance band stored in the field
 
+// The field is stored toroidally: a volume that follows the camera moves in whole voxels, and only the slabs that
+// enter are composed (GlobalDistanceFieldPass). Grid voxel v (0..res-1 from sdfGridMin) lives in texel
+// (v + sdfScroll) mod res; the texture wraps (GL_REPEAT), so filtering across the storage seam is the grid's own.
+uniform ivec3 sdfScroll;
+
 float SdfVoxelSize()
 {
 	return sdfGridSize / float(sdfResolution);
+}
+
+// The stored texel of grid voxel v (inside the grid).
+ivec3 SdfStorageVoxel(ivec3 v)
+{
+	return (v + sdfScroll) % sdfResolution;
 }
 
 bool InsideSdfGrid(vec3 p)
@@ -23,11 +34,13 @@ bool InsideSdfGrid(vec3 p)
 	return all(greaterThanEqual(uvw, vec3(0.0))) && all(lessThanEqual(uvw, vec3(1.0)));
 }
 
-// Distance to the nearest surface, clamped to the band. Outside the grid the edge value is returned.
+// Distance to the nearest surface, clamped to the band. Outside the grid the edge value is returned (the clamp to the
+// edge texels' centres: the texture itself wraps).
 float SampleSdf(vec3 p)
 {
-	vec3 uvw = (p - sdfGridMin) / sdfGridSize;
-	return texture(GlobalSdf, uvw).r;
+	float halfTexel = 0.5 / float(sdfResolution);
+	vec3 uvw = clamp((p - sdfGridMin) / sdfGridSize, vec3(halfTexel), vec3(1.0 - halfTexel));
+	return texture(GlobalSdf, uvw + vec3(sdfScroll) / float(sdfResolution)).r;
 }
 
 // Central differences. (A four-tap tetrahedral stencil would save two fetches, but its mixed-derivative

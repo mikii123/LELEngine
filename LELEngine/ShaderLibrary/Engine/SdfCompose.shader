@@ -21,24 +21,26 @@ layout(binding = 2, r16ui) uniform readonly uimage3D BaseIds;
 layout(binding = 3, r16ui) uniform writeonly uimage3D OutIds;
 uniform int useBase;
 
-uniform ivec3 dstOffset;
+uniform ivec3 dstOffset;   // the region, in grid voxels
 uniform ivec3 dstSize;
 uniform vec3 gridMin;
 uniform float gridSize;
 uniform int sdfResolution;
 uniform float maxDistance;
+uniform ivec3 storageScroll; // grid voxel v is stored at (v + storageScroll) mod resolution (Engine/DistanceField.glsl)
 
 void main()
 {
 	ivec3 local = ivec3(gl_GlobalInvocationID);
 	if (any(greaterThanEqual(local, dstSize))) return;
 	ivec3 coord = dstOffset + local;
+	ivec3 texel = (coord + storageScroll) % sdfResolution;
 
 	float voxel = gridSize / float(sdfResolution);
 	vec3 p = gridMin + (vec3(coord) + 0.5) * voxel;
 
-	float d = useBase != 0 ? imageLoad(BaseSdf, coord).r : maxDistance;
-	uint id = useBase != 0 ? imageLoad(BaseIds, coord).r : 0u;
+	float d = useBase != 0 ? imageLoad(BaseSdf, texel).r : maxDistance;
+	uint id = useBase != 0 ? imageLoad(BaseIds, texel).r : 0u;
 	for (int i = 0; i < objectCount; i++)
 	{
 		SceneObject o = sceneObjects[objectStart + i];
@@ -51,8 +53,8 @@ void main()
 		}
 	}
 
-	imageStore(OutSdf, coord, vec4(min(d, maxDistance)));
-	imageStore(OutIds, coord, uvec4(d < maxDistance ? id : 0u, 0u, 0u, 0u));
+	imageStore(OutSdf, texel, vec4(min(d, maxDistance)));
+	imageStore(OutIds, texel, uvec4(d < maxDistance ? id : 0u, 0u, 0u, 0u));
 }
 
 /////Compute

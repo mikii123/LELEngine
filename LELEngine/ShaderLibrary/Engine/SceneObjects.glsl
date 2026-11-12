@@ -98,7 +98,7 @@ int SceneObjectAtPoint(vec3 p, float maxDistance, out vec3 localPos)
 	ivec3 voxel = ivec3(floor(uvw * float(sdfResolution)));
 	if (all(greaterThanEqual(voxel, ivec3(0))) && all(lessThan(voxel, ivec3(sdfResolution))))
 	{
-		uint id = texelFetch(GlobalSdfObjectIds, voxel, 0).r;
+		uint id = texelFetch(GlobalSdfObjectIds, SdfStorageVoxel(voxel), 0).r;
 		if (id > 0u && int(id) <= sceneObjectCount)
 		{
 			SceneObject o = sceneObjects[int(id) - 1];

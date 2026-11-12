@@ -18,6 +18,11 @@ namespace LELEngine.Rendering.Passes
 	///     Like Lumen, the update budget goes to the probes that matter: probes inside the static scene bounds
 	///     ("interior") are refreshed round robin from a per-frame budget, the rest get an eighth of it.
 	///
+	///     A GI volume that follows the camera moves in whole voxels; the cache's grid follows it in whole probe spacings
+	///     (it lies within half a spacing of the volume) and scrolls: the probes are stored toroidally (rcScroll, see
+	///     Engine/RadianceCache.glsl), so a move keeps every probe that is still inside the grid with its history, and
+	///     only the slab that entered starts empty (Engine/RadianceCacheReset.shader) and is traced first.
+	///
 	///     Every updated probe's map is also projected to second-order spherical harmonics (Engine/RadianceCacheSH.shader):
 	///     the GI of surfaces outside the depth buffer (transparent materials) interpolates those, the way Lumen lights
 	///     translucency from a volume of probes. The cache is published through <see cref="Lighting.RadianceCache" />,
@@ -56,6 +61,7 @@ namespace LELEngine.Rendering.Passes
 
 		private const int ProbeListBinding = 3;
 		private const int ProbeFramesBinding = 4;
+		private const int ResetListBinding = 5;
 		private const int TraceGroupSize = 16;
 
 		// Probes updated first each frame because the lighting around them changed (LumenScene.ChangeRegions): stored
@@ -67,6 +73,8 @@ namespace LELEngine.Rendering.Passes
 		private ComputeShader trace;
 		private ComputeShader resolve;
 		private ComputeShader sh;
+		private ComputeShader reset;
+		private int resetBuffer;
 
 		private int atlas;
 		private int accumulator; // fp32 copy of the atlas that the resolve accumulates into (see RadianceCacheResolve.shader)
@@ -88,6 +96,18 @@ namespace LELEngine.Rendering.Passes
 		private Vector3 gridMin;
 		private float probeSpacing;
 
+		// Scrolling: the grid follows the volume in whole probe spacings (gridCell = gridMin / spacing), and the probe slot
+		// of grid coordinate 0 is scroll (per axis, mod probesPerAxis).
+		private bool scrolling;
+		private Vector3i gridCell;
+		private Vector3i scroll;
+		private bool keepSchedule;
+
+		// Probes a scroll brought in, not traced since: taken into the priority list a few per frame.
+		private readonly List<int> freshProbes = new List<int>();
+		private readonly HashSet<int> freshSet = new HashSet<int>();
+		private readonly List<int> resetList = new List<int>();
+
 		private int probeListBuffer;
 		private int probeFramesBuffer;
 		private int interiorTotal;
@@ -98,6 +118,8 @@ namespace LELEngine.Rendering.Passes
 		private Vector3 listBoundsMin;
 		private Vector3 listBoundsMax;
 		private bool listValid;
+		private int loggedInterior = -1;
+		private int loggedExterior = -1;
 
 		private int[] listPositions = new int[0]; // probe index -> its position in the interior + exterior list
 		private readonly int[] priorityProbes = new int[PriorityCapacity];
@@ -140,8 +162,10 @@ namespace LELEngine.Rendering.Passes
 				trace = new ComputeShader("Engine/RadianceCacheTrace.shader");
 				resolve = new ComputeShader("Engine/RadianceCacheResolve.shader");
 				sh = new ComputeShader("Engine/RadianceCacheSH.shader");
+				reset = new ComputeShader("Engine/RadianceCacheReset.shader");
 				probeListBuffer = GL.GenBuffer();
 				probeFramesBuffer = GL.GenBuffer();
+				resetBuffer = GL.GenBuffer();
 			}
 
 			int perAxis = Math.Max(2, gi.RadianceCacheProbesPerAxis);
@@ -153,13 +177,29 @@ namespace LELEngine.Rendering.Passes
 			}
 			EnsureAtlas(perAxis, resolution);
 
+			// A volume that follows the camera: the grid in whole probe spacings, scrolled by the moves that keep part of
+			// it. Anything else (a fixed volume moved, a new spacing, a jump past the grid) starts the cache again.
 			float spacing = gi.GridSize / (perAxis - 1);
-			if (gi.GridMin != gridMin || spacing != probeSpacing)
+			bool follow = gi.FollowCamera;
+			Vector3i cell = follow
+				? new Vector3i((int)MathF.Round(gi.GridMin.X / spacing), (int)MathF.Round(gi.GridMin.Y / spacing), (int)MathF.Round(gi.GridMin.Z / spacing))
+				: default;
+			Vector3 min = follow ? new Vector3(cell.X, cell.Y, cell.Z) * spacing : gi.GridMin;
+			if (spacing != probeSpacing || follow != scrolling || (!follow && min != gridMin))
 			{
-				gridMin = gi.GridMin;
-				probeSpacing = spacing;
-				ClearAtlas();
-				listValid = false;
+				StartOver(min, spacing, follow, cell);
+			}
+			else if (follow && cell != gridCell)
+			{
+				Vector3i move = cell - gridCell;
+				if (Math.Abs(move.X) < probesPerAxis && Math.Abs(move.Y) < probesPerAxis && Math.Abs(move.Z) < probesPerAxis)
+				{
+					ScrollGrid(move, spacing);
+				}
+				else
+				{
+					StartOver(min, spacing, follow, cell);
+				}
 			}
 
 			// The interior / exterior split follows the static scene bounds, padded by one probe spacing.
@@ -288,6 +328,7 @@ namespace LELEngine.Rendering.Passes
 			program.SetVector3("rcGridMin", gridMin);
 			program.SetFloat("rcProbeSpacing", probeSpacing);
 			program.SetInt("rcProbesPerAxis", probesPerAxis);
+			program.SetInt3("rcScroll", scroll.X, scroll.Y, scroll.Z);
 			program.SetInt("rcProbesPerRow", probesPerRow);
 			program.SetInt("rcProbeResolution", probeResolution);
 			program.SetVector2("rcAtlasSize", new Vector2(atlasWidth, atlasHeight));
@@ -327,9 +368,16 @@ namespace LELEngine.Rendering.Passes
 			trace?.Delete();
 			resolve?.Delete();
 			sh?.Delete();
+			reset?.Delete();
 			trace = null;
 			resolve = null;
 			sh = null;
+			reset = null;
+			if (resetBuffer != 0)
+			{
+				GL.DeleteBuffer(resetBuffer);
+				resetBuffer = 0;
+			}
 			if (atlas != 0)
 			{
 				GL.DeleteTexture(atlas);
@@ -365,6 +413,8 @@ namespace LELEngine.Rendering.Passes
 			traceSlots = 0;
 			probeSpacing = 0f;
 			listValid = false;
+			loggedInterior = -1;
+			loggedExterior = -1;
 		}
 
 		/// <summary>This frame's cache for the material shaders' volume lighting (<see cref="Lighting.RadianceCache" />).</summary>
@@ -378,6 +428,7 @@ namespace LELEngine.Rendering.Passes
 				GridMin = gridMin,
 				ProbeSpacing = probeSpacing,
 				ProbesPerAxis = probesPerAxis,
+				Scroll = scroll,
 				ProbesPerRow = probesPerRow,
 				ProbeResolution = probeResolution,
 				AtlasSize = new Vector2(atlasWidth, atlasHeight)
@@ -498,6 +549,113 @@ namespace LELEngine.Rendering.Passes
 			interiorNext = 0;
 			exteriorNext = 0;
 			tracedSinceChange = 0;
+
+			// Every slot is empty: any mapping of grid coordinates to slots will do.
+			scroll = Vector3i.Zero;
+			freshProbes.Clear();
+			freshSet.Clear();
+		}
+
+		// The cache starts again over a grid at this place: every probe empty, the probe lists rebuilt.
+		private void StartOver(Vector3 min, float spacing, bool follow, Vector3i cell)
+		{
+			gridMin = min;
+			probeSpacing = spacing;
+			scrolling = follow;
+			gridCell = cell;
+			ClearAtlas();
+			listValid = false;
+		}
+
+		// The grid moved by whole probe spacings (fewer than the grid has per axis): the probes still inside keep their
+		// slots and data, those that left give their slots to those that entered, which start empty and are traced first.
+		private void ScrollGrid(Vector3i move, float spacing)
+		{
+			int n = probesPerAxis;
+			scroll = new Vector3i(Mod(scroll.X + move.X, n), Mod(scroll.Y + move.Y, n), Mod(scroll.Z + move.Z, n));
+			gridCell += move;
+			gridMin = new Vector3(gridCell.X, gridCell.Y, gridCell.Z) * spacing;
+
+			// Grid coordinate c was coordinate c + move before the move: where that is outside the grid, the probe is new.
+			resetList.Clear();
+			for (int z = 0; z < n; z++)
+			{
+				bool zNew = z + move.Z < 0 || z + move.Z >= n;
+				for (int y = 0; y < n; y++)
+				{
+					bool yNew = zNew || y + move.Y < 0 || y + move.Y >= n;
+					for (int x = 0; x < n; x++)
+					{
+						if (yNew || x + move.X < 0 || x + move.X >= n)
+						{
+							resetList.Add(SlotOf(x, y, z));
+						}
+					}
+				}
+			}
+
+			ResetProbes(resetList);
+			foreach (int probe in resetList)
+			{
+				if (freshSet.Add(probe))
+				{
+					freshProbes.Add(probe);
+				}
+			}
+
+			// The probes' places changed, so the interior / exterior split is made again; the round robin goes on where it was.
+			listValid = false;
+			keepSchedule = true;
+		}
+
+		// Empties the listed probe slots on the GPU (tiles, SH, frame counters).
+		private void ResetProbes(List<int> probes)
+		{
+			if (probes.Count == 0)
+			{
+				return;
+			}
+
+			int[] list = probes.ToArray();
+			GL.BindBuffer(BufferTarget.ShaderStorageBuffer, resetBuffer);
+			GL.BufferData(BufferTarget.ShaderStorageBuffer, list.Length * sizeof(int), list, BufferUsageHint.StreamDraw);
+			GL.BindBuffer(BufferTarget.ShaderStorageBuffer, 0);
+
+			reset.Use();
+			ShaderProgram program = reset.Program;
+			program.SetInt("probesPerRow", probesPerRow);
+			program.SetInt("tileSize", probeResolution + 2);
+			program.SetInt("probeCount", probeCount);
+			program.SetInt("resetCount", list.Length);
+			GL.BindImageTexture(0, atlas, 0, false, 0, TextureAccess.WriteOnly, SizedInternalFormat.Rgba16f);
+			GL.BindImageTexture(1, accumulator, 0, false, 0, TextureAccess.WriteOnly, SizedInternalFormat.Rgba32f);
+			GL.BindImageTexture(2, shTexture, 0, true, 0, TextureAccess.WriteOnly, SizedInternalFormat.Rgba16f);
+			GL.BindBufferBase(BufferRangeTarget.ShaderStorageBuffer, ProbeFramesBinding, probeFramesBuffer);
+			GL.BindBufferBase(BufferRangeTarget.ShaderStorageBuffer, ResetListBinding, resetBuffer);
+			reset.Dispatch(list.Length);
+			ComputeShader.Barrier(MemoryBarrierFlags.ShaderImageAccessBarrierBit | MemoryBarrierFlags.TextureFetchBarrierBit | MemoryBarrierFlags.ShaderStorageBarrierBit);
+		}
+
+		// The slot of grid coordinate (x, y, z), and the grid coordinate of a slot (Engine/RadianceCache.glsl).
+		private int SlotOf(int x, int y, int z)
+		{
+			int n = probesPerAxis;
+			return Mod(x + scroll.X, n) + (Mod(y + scroll.Y, n) + Mod(z + scroll.Z, n) * n) * n;
+		}
+
+		private Vector3 PositionOf(int slot)
+		{
+			int n = probesPerAxis;
+			int x = Mod(slot % n - scroll.X, n);
+			int y = Mod((slot / n) % n - scroll.Y, n);
+			int z = Mod(slot / (n * n) - scroll.Z, n);
+			return gridMin + new Vector3(x, y, z) * probeSpacing;
+		}
+
+		private static int Mod(int value, int n)
+		{
+			int m = value % n;
+			return m < 0 ? m + n : m;
 		}
 
 		private void EnsureTraceBuffer(int slots, int resolution)
@@ -531,20 +689,59 @@ namespace LELEngine.Rendering.Passes
 		///     The probes around this frame's change regions (LumenScene.ChangeRegions, padded by
 		///     <see cref="GlobalIlluminationSettings.RadianceCacheChangeRadius" /> probe spacings), nearest first, up to
 		///     <see cref="GlobalIlluminationSettings.RadianceCacheChangeProbesPerFrame" />, minus those the round robin updates
-		///     this frame anyway (a probe traced twice in one frame would have two work groups writing its tile). Uploaded after
-		///     the interior and exterior lists; the shaders take them first (SequenceProbe).
+		///     this frame anyway (a probe traced twice in one frame would have two work groups writing its tile); then the
+		///     probes a scroll brought in (empty until traced), a quarter of the per-frame budget at most. Uploaded after the
+		///     interior and exterior lists; the shaders take them first (SequenceProbe).
 		/// </summary>
 		private int BuildPriority(LumenScene scene, GlobalIlluminationSettings gi, int interiorCount, int exteriorCount)
 		{
-			IReadOnlyList<LumenScene.ChangeRegion> regions = scene.ChangeRegions;
-			int budget = Math.Min(PriorityCapacity, gi.RadianceCacheChangeProbesPerFrame);
-			if (regions.Count == 0 || budget <= 0 || listPositions.Length < probeCount)
+			priorityCandidates.Clear();
+			priorityTaken.Clear();
+			if (listPositions.Length < probeCount)
 			{
 				return 0;
 			}
 
-			priorityCandidates.Clear();
-			priorityTaken.Clear();
+			int count = PriorityFromChanges(scene, gi, interiorCount, exteriorCount);
+
+			// The probes the grid's moves brought in, oldest first; those the round robin reaches this frame need no slot.
+			int freshBudget = Math.Min(PriorityCapacity - count, Math.Max(16, gi.RadianceCacheProbesPerFrame / 4));
+			int taken = 0;
+			int consumed = 0;
+			while (consumed < freshProbes.Count && taken < freshBudget)
+			{
+				int probe = freshProbes[consumed++];
+				freshSet.Remove(probe);
+				if (InRoundRobin(listPositions[probe], interiorCount, exteriorCount) || !priorityTaken.Add(probe))
+				{
+					continue;
+				}
+
+				priorityProbes[count++] = probe;
+				taken++;
+			}
+
+			freshProbes.RemoveRange(0, consumed);
+			if (count > 0)
+			{
+				GL.BindBuffer(BufferTarget.ShaderStorageBuffer, probeListBuffer);
+				GL.BufferSubData(BufferTarget.ShaderStorageBuffer, (IntPtr)(probeCount * sizeof(int)), count * sizeof(int), priorityProbes);
+				GL.BindBuffer(BufferTarget.ShaderStorageBuffer, 0);
+			}
+
+			return count;
+		}
+
+		// The probes around this frame's change regions, nearest first (see BuildPriority).
+		private int PriorityFromChanges(LumenScene scene, GlobalIlluminationSettings gi, int interiorCount, int exteriorCount)
+		{
+			IReadOnlyList<LumenScene.ChangeRegion> regions = scene.ChangeRegions;
+			int budget = Math.Min(PriorityCapacity, gi.RadianceCacheChangeProbesPerFrame);
+			if (regions.Count == 0 || budget <= 0)
+			{
+				return 0;
+			}
+
 			float margin = Math.Max(0f, gi.RadianceCacheChangeRadius) * probeSpacing;
 			foreach (LumenScene.ChangeRegion region in regions)
 			{
@@ -560,7 +757,7 @@ namespace LELEngine.Rendering.Passes
 					{
 						for (int x = x0; x <= x1; x++)
 						{
-							int probe = x + (y + z * probesPerAxis) * probesPerAxis;
+							int probe = SlotOf(x, y, z);
 							Vector3 position = gridMin + new Vector3(x, y, z) * probeSpacing;
 							priorityCandidates.Add(((position - center).LengthSquared, probe));
 						}
@@ -583,13 +780,6 @@ namespace LELEngine.Rendering.Passes
 				}
 
 				priorityProbes[count++] = probe;
-			}
-
-			if (count > 0)
-			{
-				GL.BindBuffer(BufferTarget.ShaderStorageBuffer, probeListBuffer);
-				GL.BufferSubData(BufferTarget.ShaderStorageBuffer, (IntPtr)(probeCount * sizeof(int)), count * sizeof(int), priorityProbes);
-				GL.BindBuffer(BufferTarget.ShaderStorageBuffer, 0);
 			}
 
 			return count;
@@ -616,10 +806,7 @@ namespace LELEngine.Rendering.Passes
 			List<int> exterior = new List<int>();
 			for (int index = 0; index < probeCount; index++)
 			{
-				int x = index % probesPerAxis;
-				int y = (index / probesPerAxis) % probesPerAxis;
-				int z = index / (probesPerAxis * probesPerAxis);
-				Vector3 position = gridMin + new Vector3(x, y, z) * probeSpacing;
+				Vector3 position = PositionOf(index);
 				bool inside = position.X >= boundsMin.X && position.Y >= boundsMin.Y && position.Z >= boundsMin.Z
 					&& position.X <= boundsMax.X && position.Y <= boundsMax.Y && position.Z <= boundsMax.Z;
 				(inside ? interior : exterior).Add(index);
@@ -627,9 +814,20 @@ namespace LELEngine.Rendering.Passes
 
 			interiorTotal = interior.Count;
 			exteriorTotal = exterior.Count;
-			interiorNext = 0;
-			exteriorNext = 0;
-			tracedSinceChange = 0;
+			if (keepSchedule)
+			{
+				// A scroll: the round robin goes on where it was (restarting it at every move would leave the end of the
+				// lists without updates while the grid moves faster than a sweep).
+				interiorNext = interiorTotal > 0 ? interiorNext % interiorTotal : 0;
+				exteriorNext = exteriorTotal > 0 ? exteriorNext % exteriorTotal : 0;
+				keepSchedule = false;
+			}
+			else
+			{
+				interiorNext = 0;
+				exteriorNext = 0;
+				tracedSinceChange = 0;
+			}
 
 			// The interior list, the exterior list, then room for the frame's priority probes.
 			int[] list = new int[Math.Max(1, probeCount) + PriorityCapacity];
@@ -647,7 +845,15 @@ namespace LELEngine.Rendering.Passes
 			listBoundsMin = boundsMin;
 			listBoundsMax = boundsMax;
 			listValid = true;
-			Console.WriteLine($"[RadianceCache] {interiorTotal} interior probes, {exteriorTotal} exterior");
+
+			// The list is rebuilt whenever the grid moves (a volume that follows the camera: every frame it travels);
+			// only a different split is worth a line.
+			if (interiorTotal != loggedInterior || exteriorTotal != loggedExterior)
+			{
+				loggedInterior = interiorTotal;
+				loggedExterior = exteriorTotal;
+				Console.WriteLine($"[RadianceCache] {interiorTotal} interior probes, {exteriorTotal} exterior");
+			}
 		}
 
 		#endregion

@@ -15,6 +15,11 @@ namespace LELEngine.Rendering.Passes
 	///     every frame, but only inside their band-padded bounds (previous and current), which is exact
 	///     because the band limits how far an object can influence the field.
 	///
+	///     A volume that follows the camera moves in whole voxels. The fields then scroll: they are stored toroidally
+	///     (grid voxel v in texel (v + scroll) mod resolution, see Engine/DistanceField.glsl), so everything still inside
+	///     stays where it is and only the slabs that entered are composed (a full rebuild costs a few ms and would happen
+	///     nearly every frame of fast flight).
+	///
 	///     Consumers: Engine/DistanceField.glsl (sphere tracing) through Lighting.SetSdfUniforms.
 	/// </summary>
 	public sealed class GlobalDistanceFieldPass : RenderPass
@@ -36,6 +41,11 @@ namespace LELEngine.Rendering.Passes
 		private int staticIds;
 		private int globalIds;
 		private int currentResolution;
+
+		// Where grid voxel 0 is stored (toroidal), and the move in voxels waiting to be applied this frame.
+		private Vector3i scroll;
+		private Vector3i pendingScroll;
+		private readonly List<VoxelRegion> scrollRegions = new List<VoxelRegion>();
 
 		private List<VoxelRegion> previousRegions = new List<VoxelRegion>();
 		private List<VoxelRegion> currentRegions = new List<VoxelRegion>();
@@ -100,6 +110,15 @@ namespace LELEngine.Rendering.Passes
 				// The whole working field was replaced: dynamic objects must be stamped again this frame.
 				dynamicDue = true;
 			}
+			else if (pendingScroll != Vector3i.Zero)
+			{
+				profiler.Split("GlobalSDF.scroll");
+				ScrollStaticField(gi, scene);
+				dynamicDue = true;
+			}
+
+			pendingScroll = Vector3i.Zero;
+			gi.SdfScroll = scroll;
 
 			if (dynamicDue)
 			{
@@ -179,6 +198,9 @@ namespace LELEngine.Rendering.Passes
 			globalSdf = 0;
 			staticIds = 0;
 			globalIds = 0;
+			scroll = Vector3i.Zero;
+			pendingScroll = Vector3i.Zero;
+			Lighting.GI.SdfScroll = Vector3i.Zero;
 		}
 
 		// Object index + 1 of the nearest surface per voxel (0 = nothing within the band); fetched by texel.
@@ -204,9 +226,10 @@ namespace LELEngine.Rendering.Passes
 			GL.TexImage3D(TextureTarget.Texture3D, 0, PixelInternalFormat.R16f, resolution, resolution, resolution, 0, PixelFormat.Red, PixelType.Float, IntPtr.Zero);
 			GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Linear);
 			GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Linear);
-			GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureWrapS, (int)TextureWrapMode.ClampToEdge);
-			GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureWrapT, (int)TextureWrapMode.ClampToEdge);
-			GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureWrapR, (int)TextureWrapMode.ClampToEdge);
+			// Toroidal storage: the sampling wraps, the clamp to the grid's edge is SampleSdf's.
+			GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureWrapS, (int)TextureWrapMode.Repeat);
+			GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureWrapT, (int)TextureWrapMode.Repeat);
+			GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureWrapR, (int)TextureWrapMode.Repeat);
 			GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureMaxLevel, 0);
 			GL.BindTexture(TextureTarget.Texture3D, 0);
 			return texture;
@@ -214,22 +237,90 @@ namespace LELEngine.Rendering.Passes
 
 		private void DetectStaticChanges(GlobalIlluminationSettings gi, LumenScene scene)
 		{
+			bool moved = (gi.GridMin - lastGridMin).LengthSquared > 1e-6f;
 			bool changed =
-				(gi.GridMin - lastGridMin).LengthSquared > 1e-6f
-				|| Math.Abs(gi.GridSize - lastGridSize) > 1e-5f
+				Math.Abs(gi.GridSize - lastGridSize) > 1e-5f
 				|| scene.StaticObjectCount != lastStaticCount;
 
-			if (changed)
+			if (moved && !changed && !staticDirty)
 			{
-				staticDirty = true;
+				// A move by whole voxels that keeps part of the field scrolls it; anything else rebuilds it.
+				float voxel = gi.GridSize / currentResolution;
+				Vector3 cells = (gi.GridMin - lastGridMin) / voxel;
+				var move = new Vector3i((int)MathF.Round(cells.X), (int)MathF.Round(cells.Y), (int)MathF.Round(cells.Z));
+				Vector3 rest = cells - new Vector3(move.X, move.Y, move.Z);
+				bool whole = MathF.Abs(rest.X) < 1e-3f && MathF.Abs(rest.Y) < 1e-3f && MathF.Abs(rest.Z) < 1e-3f;
+				bool overlaps = Math.Abs(move.X) < currentResolution && Math.Abs(move.Y) < currentResolution && Math.Abs(move.Z) < currentResolution;
+				if (whole && overlaps)
+				{
+					pendingScroll = move;
+				}
+				else
+				{
+					changed = true;
+				}
+			}
+
+			if (moved || changed)
+			{
+				staticDirty |= changed;
 				lastGridMin = gi.GridMin;
 				lastGridSize = gi.GridSize;
 				lastStaticCount = scene.StaticObjectCount;
 			}
 		}
 
+		// The volume moved by pendingScroll voxels. Grid voxel v is now what grid voxel v + move was, which is stored in
+		// the same texel once the scroll takes the move: nothing is copied. The slabs that entered (their texels held the
+		// voxels that left) are composed, the static field from the static objects and the working field from it and the
+		// dynamic objects; the dynamic objects' stamps of the last frame move into the new grid coordinates.
+		private void ScrollStaticField(GlobalIlluminationSettings gi, LumenScene scene)
+		{
+			int n = currentResolution;
+			Vector3i move = pendingScroll;
+			scroll = new Vector3i(Mod(scroll.X + move.X, n), Mod(scroll.Y + move.Y, n), Mod(scroll.Z + move.Z, n));
+
+			// The slabs that entered, one per axis that moved (where two overlap, a corner is composed twice: harmless).
+			scrollRegions.Clear();
+			if (move.X != 0)
+			{
+				scrollRegions.Add(move.X > 0 ? new VoxelRegion(n - move.X, 0, 0, n, n, n) : new VoxelRegion(0, 0, 0, -move.X, n, n));
+			}
+			if (move.Y != 0)
+			{
+				scrollRegions.Add(move.Y > 0 ? new VoxelRegion(0, n - move.Y, 0, n, n, n) : new VoxelRegion(0, 0, 0, n, -move.Y, n));
+			}
+			if (move.Z != 0)
+			{
+				scrollRegions.Add(move.Z > 0 ? new VoxelRegion(0, 0, n - move.Z, n, n, n) : new VoxelRegion(0, 0, 0, n, n, -move.Z));
+			}
+
+			Compose(staticSdf, 0, 0, scene.StaticObjectCount, gi, scene, scrollRegions);
+			Compose(globalSdf, staticSdf, scene.StaticObjectCount, scene.Objects.Count - scene.StaticObjectCount, gi, scene, scrollRegions);
+
+			// Last frame's stamps, in this grid's voxels (the parts that left are gone with their slabs): the dynamic
+			// update clears them from the working field where the objects are no longer.
+			for (int i = 0; i < previousRegions.Count; i++)
+			{
+				VoxelRegion r = previousRegions[i];
+				previousRegions[i] = new VoxelRegion(
+					Math.Max(0, r.MinX - move.X), Math.Max(0, r.MinY - move.Y), Math.Max(0, r.MinZ - move.Z),
+					Math.Min(n, r.MaxX - move.X), Math.Min(n, r.MaxY - move.Y), Math.Min(n, r.MaxZ - move.Z));
+			}
+
+			scene.MarkChanged();
+		}
+
+		private static int Mod(int value, int n)
+		{
+			int m = value % n;
+			return m < 0 ? m + n : m;
+		}
+
 		private void RebuildStaticField(GlobalIlluminationSettings gi, LumenScene scene)
 		{
+			// Everything is composed again: the storage starts unscrolled.
+			scroll = Vector3i.Zero;
 			Compose(staticSdf, 0, 0, scene.StaticObjectCount, gi, scene, VoxelRegion.Full(currentResolution));
 
 			GL.CopyImageSubData(
@@ -314,6 +405,7 @@ namespace LELEngine.Rendering.Passes
 			compose.Program.SetFloat("gridSize", gi.GridSize);
 			compose.Program.SetInt("sdfResolution", currentResolution);
 			compose.Program.SetFloat("maxDistance", gi.SdfBandVoxels * gi.SdfVoxelSize);
+			compose.Program.SetInt3("storageScroll", scroll.X, scroll.Y, scroll.Z);
 
 			bool fromStatic = baseSdf != 0;
 			int targetIds = target == staticSdf ? staticIds : globalIds;

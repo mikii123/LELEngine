@@ -11,6 +11,7 @@ uniform sampler2D RadianceCacheAtlas;   // rgb radiance, a = hit distance + 1 (0
 uniform vec3 rcGridMin;
 uniform float rcProbeSpacing;
 uniform int rcProbesPerAxis;
+uniform ivec3 rcScroll;                 // the probe slot of grid coordinate 0 per axis (0..rcProbesPerAxis-1), see RadianceCacheProbeIndex
 uniform int rcProbesPerRow;             // probe tiles per atlas row
 uniform int rcProbeResolution;          // stored octahedral texels per probe; a tile adds a one texel border
 uniform vec2 rcAtlasSize;               // texels
@@ -34,15 +35,22 @@ int RadianceCacheTileSize()
 	return rcProbeResolution + 2;
 }
 
+// The probes are stored toroidally. A grid that follows the camera moves in whole probe spacings, and a probe keeps
+// its slot (atlas tile, history, SH, frame counters) for as long as its world position stays inside the grid: only the
+// slots of probes that leave are reused, for the ones that enter on the other side. Grid coordinate c (0..n-1 from
+// rcGridMin) lives in slot (c + rcScroll) mod n per axis; a grid that never moves has rcScroll 0.
 int RadianceCacheProbeIndex(ivec3 coord)
 {
-	return coord.x + (coord.y + coord.z * rcProbesPerAxis) * rcProbesPerAxis;
+	ivec3 slot = (coord + rcScroll) % rcProbesPerAxis;
+	return slot.x + (slot.y + slot.z * rcProbesPerAxis) * rcProbesPerAxis;
 }
 
+// The grid coordinate of the probe in this slot.
 ivec3 RadianceCacheProbeCoord(int probeIndex)
 {
 	int perAxis = rcProbesPerAxis;
-	return ivec3(probeIndex % perAxis, (probeIndex / perAxis) % perAxis, probeIndex / (perAxis * perAxis));
+	ivec3 slot = ivec3(probeIndex % perAxis, (probeIndex / perAxis) % perAxis, probeIndex / (perAxis * perAxis));
+	return (slot - rcScroll + perAxis) % perAxis;
 }
 
 ivec2 RadianceCacheTileOrigin(int probeIndex)
