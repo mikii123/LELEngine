@@ -379,7 +379,8 @@ namespace LELEngine
 		/// <summary>
 		///     Once per frame on the main thread, before the game logic: prepares the scenes and resources read in the
 		///     background for the GPU (within <see cref="BackgroundLoadingBudget" />), activates the loaded scenes that may
-		///     activate, in request order, completes the prepared resource requests, and runs the code awaiting on the
+		///     activate, in request order, completes the prepared resource requests, compiles the shader variants the game
+		///     asked for (<see cref="ShaderCompilation" />, in what is left of the budget), and runs the code awaiting on the
 		///     main thread (async methods continuing after an await).
 		/// </summary>
 		public static void Update()
@@ -388,6 +389,7 @@ namespace LELEngine
 			long deadline = Deadline();
 			UpdateOperations(deadline);
 			UpdateRequests(deadline);
+			ShaderCompilation.Update(deadline);
 			mainContext.Pump();
 		}
 
@@ -490,6 +492,7 @@ namespace LELEngine
 			operations.Clear();
 			requests.Clear();
 			mainContext?.Clear();
+			ShaderCompilation.DropAll();
 			foreach (Scene scene in loadedSnapshot)
 			{
 				scene.Unload();

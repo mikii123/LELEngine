@@ -120,19 +120,24 @@ namespace LELEngine
 		public static ShaderProgram GetOrCreateShader(string name)
 		{
 			string key = ShaderKey(name);
+			ShaderProgram made;
 			lock (Sync)
 			{
-				ShaderProgram sp;
-				Shaders.TryGetValue(key, out sp);
-				if (sp == null)
+				Shaders.TryGetValue(key, out ShaderProgram sp);
+				if (sp != null)
 				{
-					sp = new ShaderProgram(key);
-					Shaders.Add(key, sp);
-					shaderList = new List<ShaderProgram>(Shaders.Values).ToArray();
+					return sp;
 				}
 
-				return sp;
+				made = new ShaderProgram(key, Array.Empty<string>(), false);
+				Shaders.Add(key, made);
+				shaderList = new List<ShaderProgram>(Shaders.Values).ToArray();
 			}
+
+			// Started outside the lock: on the shader compile thread starting is building, and nothing else may wait on
+			// the asset caches meanwhile.
+			made.StartBuild();
+			return made;
 		}
 
 		/// <summary>
@@ -318,7 +323,7 @@ namespace LELEngine
 			return info.Exists ? info.LastWriteTimeUtc.Ticks ^ info.Length : 0;
 		}
 
-		private static string ShaderKey(string name)
+		internal static string ShaderKey(string name)
 		{
 			if (string.IsNullOrEmpty(name))
 			{

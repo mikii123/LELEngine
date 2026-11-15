@@ -29,13 +29,13 @@ namespace LELEngine.Shaders
 		public static string Folder { get; set; }
 
 		/// <summary>Programs loaded from the cache since the start.</summary>
-		public static int Loaded { get; private set; }
+		public static int Loaded => loaded;
 
 		/// <summary>Programs compiled and saved to the cache since the start.</summary>
-		public static int Saved { get; private set; }
+		public static int Saved => saved;
 
 		/// <summary>Binaries the driver no longer accepted (compiled again).</summary>
-		public static int Refused { get; private set; }
+		public static int Refused => refused;
 
 		/// <summary>The current driver's folder once the cache started (null: off or not available).</summary>
 		public static string DriverFolder { get; private set; }
@@ -52,8 +52,14 @@ namespace LELEngine.Shaders
 		// Driver folders kept (a laptop switching between its GPUs uses two).
 		private const int KeptDrivers = 3;
 
-		private static bool started;
+		private static volatile bool started;
 		private static bool warned;
+		private static int loaded;
+		private static int saved;
+		private static int refused;
+
+		// The start (driver folder, clean-up) once: the main thread and the shader compile thread both build programs.
+		private static readonly object startLock = new object();
 
 		#endregion
 
@@ -120,14 +126,14 @@ namespace LELEngine.Shaders
 				GL.GetProgram(program, GetProgramParameterName.LinkStatus, out int linked);
 				if (linked == 0)
 				{
-					Refused++;
+					System.Threading.Interlocked.Increment(ref refused);
 					File.Delete(file);
 					return false;
 				}
 
 				// Used now: kept by the clean-up of old binaries.
 				File.SetLastWriteTimeUtc(file, DateTime.UtcNow);
-				Loaded++;
+				System.Threading.Interlocked.Increment(ref loaded);
 				return true;
 			}
 			catch (Exception e) when (e is IOException || e is UnauthorizedAccessException)
@@ -135,6 +141,13 @@ namespace LELEngine.Shaders
 				Warn("cannot read " + file + ": " + e.Message);
 				return false;
 			}
+		}
+
+		/// <summary>A binary is saved under <paramref name="key" /> (whether the driver still takes it shows when it loads).</summary>
+		internal static bool Has(string key)
+		{
+			string file = FileOf(key);
+			return file != null && File.Exists(file);
 		}
 
 		/// <summary>Before a program links: asks the driver to keep its binary retrievable (when the cache works).</summary>
@@ -183,7 +196,7 @@ namespace LELEngine.Shaders
 					File.Move(temporary, file, true);
 				}
 
-				Saved++;
+				System.Threading.Interlocked.Increment(ref saved);
 			}
 			catch (Exception e) when (e is IOException || e is UnauthorizedAccessException)
 			{
@@ -208,7 +221,18 @@ namespace LELEngine.Shaders
 				return;
 			}
 
-			started = true;
+			lock (startLock)
+			{
+				if (!started)
+				{
+					StartLocked();
+					started = true;
+				}
+			}
+		}
+
+		private static void StartLocked()
+		{
 			try
 			{
 				GL.GetInteger(GetPName.NumProgramBinaryFormats, out int formats);

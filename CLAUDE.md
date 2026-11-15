@@ -387,8 +387,9 @@
   its renderer (`GameWindowOptions`), `Window.Show` puts the splash screen up as the first image (cloaked by DWM
   until presented: a swap on a hidden window is dropped and the window shows white), then `GameLoader` loads on a
   background thread: asset index, project settings and Game.dll while the window opens, then (the main thread hands
-  over the GL context) renderer, start scene and two offscreen warm-up frames (`GameHost.WarmUp`). The main thread
-  pumps events, takes the context back, waits out `Duration`, then `Run()` (lifecycle on the main thread).
+  over the GL context) renderer, the start scene's shader variants (only those: see "Shader compilation the game
+  controls"), start scene and two offscreen warm-up frames (`GameHost.WarmUp`). The main thread pumps events, takes
+  the context back, waits out `Duration`, then `Run()` (lifecycle on the main thread).
 - Only the context's holder may draw (the splash is redrawn after a resize between loader steps); GLFW size getters
   (`ClientSize`, `FramebufferSize`) are main-thread only; resize callbacks check `Context.IsCurrent` before GL work.
 - Settings: `ProjectSettings.SplashScreen` (logo stored as GUID), editor tab Project Settings > Splash Screen
@@ -570,9 +571,65 @@
   gl_BaseInstanceARB from GLSL 4.50 only, so the ARB profile's vertex stages are checked as `#version 450` (the no-draw-
   parameters profile checks the file's own 430). One that does not compile stops the build (`GameBuilder`
   `ValidateShaderVariants`); not covered: driver limits and bugs, the link between stages. ~350 ms for 13 variants
-  (64 stage sources). Listed in `Data/ShaderVariants.txt` (`ShaderVariantList`, "shader|KEYWORDS" lines); the player
-  compiles them in the loader step "shader variants" (after the renderer, before the scene). Runtime-made variants
-  still compile on first use.
+  (64 stage sources). Listed in `Data/ShaderVariants.txt` (`ShaderVariantList`, "shader|KEYWORDS" lines, then one
+  "scene|path|line numbers" line per build scene); the player compiles only its start scene's in the loader step
+  "start scene's shaders" (after the renderer, before the scene), the game asks for the rest (next section).
+  Runtime-made variants still compile on first use.
+- Shader compilation the game controls (2026-11-15, the user's ask: the splash compiled every variant of the build;
+  it must be short, compile only what the first scene needs, and the game's logic in the next scenes starts the full
+  compile). Build: `BuildDependencies` records what each asset uses (`uses`, engine resources included; `UsedBy` =
+  transitive), `CollectShaderVariants` returns a `ShaderVariantSet`: every variant, and per build scene the variants
+  of the materials in its closure plus the always included shaders (scripts load those by path, in any scene); the
+  build log names each scene's count. Player: `GameLoader.CompileShaderVariants` compiles `set.Of(startScene)` (all
+  when the start scene has no list, e.g. a `scene=` override outside the build) and sets `ShaderCompilation.ListFile`.
+  Runtime API (`LELEngine.Shaders.ShaderCompilation`): `CompileAll()` (one operation, returned again while it runs and
+  after; dropped by `SceneManager.UnloadAll`), `CompileScene(path)`, `Compile(variants)`, `AllVariants`,
+  `VariantsOf(scene)`; a `ShaderCompileOperation` (`Progress`, `DoneCount`, `IsDone`, `Failures`, `Completed`, awaitable,
+  `Complete()` = waits for the rest) is finished on the main thread (`SceneManager.Update`: continuations, `Completed`,
+  the log line `[Shader] Compiled <name>: N programs for M variants (K compiled already) in X ms over F frames (...)`).
+  Editor play mode: `EditorApplication.CollectBuildShaderVariants` (registered as `ShaderCompilation.EditorVariants`)
+  makes the build's set from the project on a worker thread at the first request of a play session (`IsListing`,
+  progress 0 meanwhile); on New Frontier the first listing of an editor session takes ~9 s (later ones ~0.1 s), which
+  on the main thread held play mode's first frame and tripped the script reload's leak check.
+- Where it compiles (the user, after the first version stalled the menu: "try a separate context"):
+  1. `ShaderCompileThread` (default, `ShaderCompilation.UseCompileThread`, `LEL_GL_DISABLE=compilethread` off): a hidden
+     1 x 1 GLFW window sharing the main context, made on the main thread at the first operation (`TryCreate`, GLFW's hint
+     defaults restored after); a worker thread makes it current only while it runs an operation (GLFW may destroy the
+     window at exit when idle) and sets 0 driver compiler threads on it. Operations run there in order, the main thread
+     only polls. On the compile thread `ShaderProgram.StartBuild` builds whole (compile, link, results, `glFinish` in
+     `MarkBuilt`) before `built` (volatile, set last) flips, so other contexts only see finished programs; every program
+     has a `buildLock` (`EnsureBuilt` / `StartBuild` / `Reload` / `Delete`), new programs are made unbuilt inside the cache
+     locks (`InternalStorage.GetOrCreateShader`, `GetVariant`, the instanced variant: internal constructor `start: false`)
+     and built after leaving them, the static `started` list is locked and never holds compile-thread programs, a
+     program another context started is left to it (`BuildStartedElsewhere`), `ProgramBinaryCache` starts under a lock
+     with atomic counters. `ShaderCompilation.DropAll` waits (max 10 s) for the thread to go idle.
+  2. `ShaderCompileHelper` (player only: `Executable` = the game's own exe, `shaderhelper=0` off; needs the binary
+     cache): the compile thread first checks which variants' programs (the shader's own, the variant, its instanced one)
+     the binary cache lacks (`ShaderProgram.BinariesCached`: sources read and hashed as the constructor would, no GL), starts
+     the game exe with `compileshaders=<request file in %TEMP%>` for those (GL version, data and cache folders, instanced,
+     parent pid, variant lines; `Program.Main` runs `RunHelper` before anything else: hidden context of that version,
+     `GLCapabilities`, `AssetDatabase`, cache folder; chunks of 8 started together, `done <i>` per variant on stdout; it
+     quits when the parent is gone), waits for each `done` and loads the binary. A variant the helper did not report
+     (it failed or ended) compiles on the thread. Dropping kills the helper.
+  Why both: AMD's OpenGL driver (780M) holds every context of a process while one compiles. Main thread with parallel
+  compile: the operation used 1.8 s of main-thread time but the menu drew ~24 frames in 14-15 s; compile thread: ~19
+  frames in 14-17 s (0 or 64 driver threads alike); a second process compiling cold did not slow another player at all
+  (900 frames 17.0 s alone, 17.1 s beside it). With the helper, cold: `CompileAll` 7.1-7.5 s over 308-324 frames (the
+  helper's driver uses its own threads); warm: helper skipped ("all in the binary cache"), 0.55-0.67 s over 14-17 frames
+  (loading a LitTextured binary still holds the main context 30-40 ms on AMD). The editor has no helper: compile thread
+  only (its binary cache is usually warm: 633 ms for 19 programs).
+- Measured on the 780M (New Frontier, 14 variants: Flight uses all 14, the menu 1; 22 programs with the instanced ones).
+  The AMD driver keeps its own GL cache per executable path (`%LOCALAPPDATA%\AMD\OglCache`; the program binary hint gives
+  other entries): a build copied to a new folder is cold for the driver, and a copy with its own boot.json `Title` has
+  its own (empty) program binary cache too (`%LOCALAPPDATA%\LELEngine\<title>`, delete after). Flight as start scene,
+  cold: the splash compiled 11.6 s (0.5-0.7 s warm); menu as start scene, cold: splash 1.7 s for its 1 variant, menu's
+  first frame ~4 s after the start.
+- Verify recipe (scratchpad `nfbuild` of session 72b68768): batch `-build`, the player with `scene=Scenes/Main.scene`
+  (the build's start scene stays as set), cold copies as above, `screenshot=dir screenshotframe=4` (the player keeps one
+  frame) for the menu's progress line, `exitframe=90` during the helper's compile (clean exit, no helper or request file
+  left); NEW GAME in the editor through a temporary editor script run by CLI `exec`
+  (`button.clickable.SimulateSingleClick(null)`): batch play mode's `key Enter` did not reach the menu's focused button.
+  Also checked: a project shader edited on disk reloads in the editor (Reload under the lock), TestGame lumen / vct render.
 - Program binary cache (`ProgramBinaryCache`, engine): `ShaderProgram.Build` (file programs, compute passes included)
   and `FromSources` (VFX kernels) load a program from the driver's binary (glProgramBinary) when one was saved for the
   same final stage sources, else compile, link (retrievable hint) and save (glGetProgramBinary). Files `<SHA-256 of

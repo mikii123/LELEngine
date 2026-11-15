@@ -243,12 +243,38 @@ namespace LELEngine.Editor
 
 		#region Constructors
 
+		/// <summary>
+		///     The shader variants a build of the open project would list (<see cref="LELEngine.Shaders.ShaderVariantList" />,
+		///     its start scene and build scenes), for <see cref="LELEngine.Shaders.ShaderCompilation" /> in play mode: made on
+		///     its first request, again in the next play session.
+		/// </summary>
+		private LELEngine.Shaders.ShaderVariantSet CollectBuildShaderVariants()
+		{
+			if (Project == null)
+			{
+				return null;
+			}
+
+			var watch = System.Diagnostics.Stopwatch.StartNew();
+			var scenes = new List<string>(Project.BuildScenes);
+			if (!string.IsNullOrEmpty(Project.StartScene) && !scenes.Contains(Project.StartScene))
+			{
+				scenes.Insert(0, Project.StartScene);
+			}
+
+			LELEngine.Shaders.ShaderVariantSet set = BuildDependencies.Collect(Project, scenes).CollectShaderVariants();
+			Console.WriteLine($"[Editor] The build's shader variants listed for play mode: {set.Variants.Count} in {watch.ElapsedMilliseconds} ms");
+			return set;
+		}
+
 		/// <param name="hasUI">False in batch mode: the editor runs without drawing (see <see cref="HasUI" />).</param>
 		public EditorApplication(MainWindow window, string layoutFile, string[] args, bool hasUI = true)
 		{
 			Instance = this;
 			Window = window;
 			HasUI = hasUI;
+			// Play mode's ShaderCompilation compiles the variants a build of the project would list.
+			LELEngine.Shaders.ShaderCompilation.EditorVariants = CollectBuildShaderVariants;
 			mainPanel = new Automation.MainWindowPanel(this);
 			uiBuilderPanel = new Automation.UIBuilderPanel(this);
 			audioStudioPanel = new Automation.AudioStudioPanel(this);

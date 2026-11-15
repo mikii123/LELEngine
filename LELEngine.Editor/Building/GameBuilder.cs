@@ -171,11 +171,16 @@ namespace LELEngine.Editor
 
 			// The shader variants the materials draw with, checked by the reference compiler (glslang: no GPU, the same
 			// verdict on every machine); one that does not compile stops the build.
-			List<ShaderVariant> variants = dependencies.CollectShaderVariants();
-			if (!ValidateShaderVariants(variants, log))
+			ShaderVariantSet variants = dependencies.CollectShaderVariants();
+			if (!ValidateShaderVariants(variants.Variants, log))
 			{
 				log("Error: shader variants do not compile; nothing was written.");
 				return false;
+			}
+
+			foreach (string scene in buildScenes)
+			{
+				log($"Shader variants of {scene}: {variants.Of(scene)?.Count ?? 0} of {variants.Variants.Count}" + (scene == settings.StartScene ? " (compiled while the player loads)" : ""));
 			}
 
 			log("Copying assets...");
@@ -267,7 +272,8 @@ namespace LELEngine.Editor
 			// The GUID index of the shipped assets: the player reads one file instead of every meta file.
 			AssetDatabase.WriteIndex(Path.Combine(data, AssetDatabase.IndexFileName), path => dependencies.Included.Contains(path));
 
-			// The shader variants for the player to compile while it loads (Data/ShaderVariants.txt).
+			// The shader variants for the player (Data/ShaderVariants.txt): its start scene's compile while it loads, the
+			// rest when the game asks (ShaderCompilation).
 			ShaderVariantList.Write(Path.Combine(data, ShaderVariantList.FileName), variants);
 
 			// 4b. The GI's mesh distance fields at the scales the scenes draw the meshes ("model.ext.sdf" next to each

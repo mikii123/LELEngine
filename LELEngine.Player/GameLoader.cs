@@ -180,7 +180,7 @@ namespace LELEngine.Player
 
 				host.Context.MakeCurrent();
 				Step("renderer", () => host.CreateRenderer(width, height));
-				Step("shader variants", CompileShaderVariants);
+				Step("start scene's shaders", CompileShaderVariants);
 				Step("scene", () =>
 				{
 					// Read and prepared for the GPU here; its lifecycle starts with the game loop (SceneManager.Lifecycle).
@@ -256,12 +256,23 @@ namespace LELEngine.Player
 		}
 
 		/// <summary>
-		///     Every shader variant the build's materials use (Data/ShaderVariants.txt, written by the build), compiled
-		///     now behind the splash screen: no material of a later scene or Resources load compiles during the game.
+		///     The shader variants the start scene uses (Data/ShaderVariants.txt, written by the build: its materials and
+		///     what it references, and the always included shaders), compiled now behind the splash screen. The rest wait
+		///     for the game to ask (<see cref="LELEngine.Shaders.ShaderCompilation" />: a menu or a loading screen compiles
+		///     them over its frames) or compile on first use; the splash screen stays as short as the start scene allows.
 		/// </summary>
 		private void CompileShaderVariants()
 		{
-			List<LELEngine.Shaders.ShaderVariant> variants = LELEngine.Shaders.ShaderVariantList.Read(Path.Combine(dataFolder, LELEngine.Shaders.ShaderVariantList.FileName));
+			string listFile = Path.Combine(dataFolder, LELEngine.Shaders.ShaderVariantList.FileName);
+			LELEngine.Shaders.ShaderCompilation.ListFile = listFile;
+			LELEngine.Shaders.ShaderVariantSet set = LELEngine.Shaders.ShaderVariantList.Read(listFile);
+			List<LELEngine.Shaders.ShaderVariant> variants = set.Of(startScene);
+			if (variants == null)
+			{
+				// A start scene the build has no list for (not one of its scenes): every variant.
+				variants = set.Variants;
+			}
+
 			if (variants.Count == 0)
 			{
 				return;
@@ -274,7 +285,7 @@ namespace LELEngine.Player
 				Debug.LogWarning("[Player] Shader variant " + failure);
 			}
 
-			Console.WriteLine($"[Player] Compiled {compiled} shader programs for {variants.Count} variants in {milliseconds} ms");
+			Console.WriteLine($"[Player] Compiled {compiled} shader programs for the start scene's {variants.Count} variants (of {set.Variants.Count}) in {milliseconds} ms; the game compiles the rest when it asks");
 		}
 
 		/// <summary>

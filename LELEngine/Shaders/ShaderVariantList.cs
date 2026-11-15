@@ -69,13 +69,46 @@ namespace LELEngine.Shaders
 	}
 
 	/// <summary>
+	///     The shader variants of a game build (<see cref="ShaderVariantList" />): every one, and the ones each build scene
+	///     uses.
+	/// </summary>
+	public sealed class ShaderVariantSet
+	{
+		#region PublicFields
+
+		/// <summary>Every variant of the build, each once.</summary>
+		public List<ShaderVariant> Variants { get; } = new List<ShaderVariant>();
+
+		/// <summary>
+		///     Per build scene (asset path), the variants of the materials the scene uses, directly or through what it
+		///     references (prefabs, ScriptableObjects, models), and the always included shaders; a subset of
+		///     <see cref="Variants" />, in its order.
+		/// </summary>
+		public Dictionary<string, List<ShaderVariant>> Scenes { get; } = new Dictionary<string, List<ShaderVariant>>(StringComparer.OrdinalIgnoreCase);
+
+		#endregion
+
+		#region PublicMethods
+
+		/// <summary>The variants of a build scene; null when the set has no list for it.</summary>
+		public List<ShaderVariant> Of(string scene)
+		{
+			return scene != null && Scenes.TryGetValue(scene.Replace('\\', '/').TrimStart('/'), out List<ShaderVariant> variants) ? variants : null;
+		}
+
+		#endregion
+	}
+
+	/// <summary>
 	///     The shader variants a game build's materials use, and the shaders the project always includes without keywords
 	///     (<see cref="GraphicsSettings.AlwaysIncludedShaders" />) (<see cref="ShaderVariant" />): the build checks each one with
 	///     the reference compiler (glslang, the editor's ShaderValidator; a variant that does not compile fails the build)
-	///     and writes the list to Data/ShaderVariants.txt (a line per variant: "shader path|KEYWORD KEYWORD"); the player
-	///     compiles them while it loads, before the first frame (<see cref="Compile" />; the program binary cache makes
-	///     that a load from disk after the first start), so none compiles in the middle of the game. Variants a script
-	///     makes at runtime (materials created or switched in code) still compile on first use.
+	///     and writes the list to Data/ShaderVariants.txt: a line per variant ("shader path|KEYWORD KEYWORD"), then a line
+	///     per build scene naming the variants it uses ("scene|Scenes/Main.scene|0 3 4", the variant lines counted from 0;
+	///     <see cref="ShaderVariantSet" />). The player compiles its start scene's while it loads, behind the splash screen
+	///     (<see cref="Compile" />; the program binary cache makes that a load from disk after the first start); the rest
+	///     compile when the game asks for them (<see cref="ShaderCompilation" />), or on first use. Variants a script makes
+	///     at runtime (materials created or switched in code) compile on first use.
 	/// </summary>
 	public static class ShaderVariantList
 	{
@@ -85,24 +118,49 @@ namespace LELEngine.Shaders
 
 		#endregion
 
+		#region PrivateFields
+
+		private const string SceneTag = "scene";
+
+		#endregion
+
 		#region PublicMethods
 
-		public static void Write(string file, IEnumerable<ShaderVariant> variants)
+		public static void Write(string file, ShaderVariantSet set)
 		{
 			var text = new StringBuilder();
-			text.Append("# Shader variants the game's materials use, and its always included shaders (shader path|keywords); the player compiles them while it loads.\n");
-			foreach (ShaderVariant variant in variants)
+			text.Append("# Shader variants the game's materials use, and its always included shaders (shader path|keywords), then the ones each build scene uses\n");
+			text.Append("# (scene|scene path|the variant lines above, counted from 0). The player compiles its start scene's while it loads, the game the rest when it asks.\n");
+			var index = new Dictionary<ShaderVariant, int>();
+			foreach (ShaderVariant variant in set.Variants)
 			{
+				index.TryAdd(variant, index.Count);
 				text.Append(variant.Shader).Append('|').Append(string.Join(" ", variant.Keywords)).Append('\n');
+			}
+
+			foreach (KeyValuePair<string, List<ShaderVariant>> scene in set.Scenes)
+			{
+				text.Append(SceneTag).Append('|').Append(scene.Key).Append('|');
+				bool first = true;
+				foreach (ShaderVariant variant in scene.Value)
+				{
+					if (index.TryGetValue(variant, out int line))
+					{
+						text.Append(first ? "" : " ").Append(line);
+						first = false;
+					}
+				}
+
+				text.Append('\n');
 			}
 
 			File.WriteAllText(file, text.ToString());
 		}
 
-		/// <summary>The variants of a list file (none when there is no file).</summary>
-		public static List<ShaderVariant> Read(string file)
+		/// <summary>The variants of a list file (empty when there is no file).</summary>
+		public static ShaderVariantSet Read(string file)
 		{
-			var result = new List<ShaderVariant>();
+			var result = new ShaderVariantSet();
 			if (!File.Exists(file))
 			{
 				return result;
@@ -115,10 +173,26 @@ namespace LELEngine.Shaders
 					continue;
 				}
 
-				int separator = line.IndexOf('|');
-				string shader = separator < 0 ? line : line.Substring(0, separator);
-				string keywords = separator < 0 ? "" : line.Substring(separator + 1);
-				result.Add(new ShaderVariant(shader.Trim(), keywords.Split(' ', StringSplitOptions.RemoveEmptyEntries)));
+				// A variant line has one separator (keywords hold none), a scene line three fields.
+				string[] fields = line.Split('|');
+				if (fields.Length == 3 && fields[0] == SceneTag)
+				{
+					var variants = new List<ShaderVariant>();
+					foreach (string number in fields[2].Split(' ', StringSplitOptions.RemoveEmptyEntries))
+					{
+						if (int.TryParse(number, out int at) && at >= 0 && at < result.Variants.Count)
+						{
+							variants.Add(result.Variants[at]);
+						}
+					}
+
+					result.Scenes[fields[1].Trim().Replace('\\', '/').TrimStart('/')] = variants;
+					continue;
+				}
+
+				string shader = fields[0];
+				string keywords = fields.Length > 1 ? fields[1] : "";
+				result.Variants.Add(new ShaderVariant(shader.Trim(), keywords.Split(' ', StringSplitOptions.RemoveEmptyEntries)));
 			}
 
 			return result;

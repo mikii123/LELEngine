@@ -66,6 +66,11 @@ namespace LELEngine.Editor
 
 		private readonly Queue<string> pending = new Queue<string>();
 
+		// The build scenes, and what each asset uses directly (engine resources included), for the variants per scene.
+		private readonly List<string> scenes = new List<string>();
+		private readonly Dictionary<string, HashSet<string>> uses = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+		private string user;
+
 		#endregion
 
 		#region PublicMethods
@@ -76,6 +81,12 @@ namespace LELEngine.Editor
 			var result = new BuildDependencies();
 			foreach (string scene in scenes)
 			{
+				string normalized = scene?.Replace('\\', '/').TrimStart('/');
+				if (!string.IsNullOrEmpty(normalized) && !result.scenes.Exists(other => string.Equals(other, normalized, StringComparison.OrdinalIgnoreCase)))
+				{
+					result.scenes.Add(normalized);
+				}
+
 				if (result.Add(scene, "build scene"))
 				{
 					result.SceneCount++;
@@ -124,6 +135,7 @@ namespace LELEngine.Editor
 			while (result.pending.Count > 0)
 			{
 				string assetPath = result.pending.Dequeue();
+				result.user = assetPath;
 				try
 				{
 					result.AddDependencies(assetPath);
@@ -134,6 +146,7 @@ namespace LELEngine.Editor
 				}
 			}
 
+			result.user = null;
 			return result;
 		}
 
@@ -229,11 +242,14 @@ namespace LELEngine.Editor
 		/// <summary>
 		///     The shader variants the build's materials draw with (each material's shader and the keywords of its values),
 		///     shipped materials and the built-in ones they use alike, and the always included shaders (without keywords):
-		///     the build compiles them and lists them for the player (<see cref="Shaders.ShaderVariantList" />).
+		///     the build compiles them and lists them for the player (<see cref="Shaders.ShaderVariantList" />). Per build
+		///     scene, the variants of the materials it uses, directly or through what it references, and the always included
+		///     shaders (scripts load those by path, in any scene): the player compiles its start scene's while it loads.
 		/// </summary>
-		public List<Shaders.ShaderVariant> CollectShaderVariants()
+		public Shaders.ShaderVariantSet CollectShaderVariants()
 		{
-			var variants = new List<Shaders.ShaderVariant>();
+			var set = new Shaders.ShaderVariantSet();
+			var ofMaterial = new Dictionary<string, Shaders.ShaderVariant>(StringComparer.OrdinalIgnoreCase);
 			var paths = new List<string>(Included);
 			paths.AddRange(EngineResources.Keys);
 			paths.Sort(StringComparer.OrdinalIgnoreCase);
@@ -251,23 +267,63 @@ namespace LELEngine.Editor
 				}
 
 				Shaders.ShaderVariant variant = Shaders.ShaderVariant.Of(material);
-				if (!variants.Contains(variant))
+				ofMaterial[path] = variant;
+				if (!set.Variants.Contains(variant))
 				{
-					variants.Add(variant);
+					set.Variants.Add(variant);
 				}
 			}
 
 			// The always included shaders as scripts load them by path: without keywords.
+			var always = new List<Shaders.ShaderVariant>();
 			foreach (string shader in AlwaysIncludedShaders)
 			{
 				var variant = new Shaders.ShaderVariant(shader, null);
-				if (!variants.Contains(variant))
+				always.Add(variant);
+				if (!set.Variants.Contains(variant))
 				{
-					variants.Add(variant);
+					set.Variants.Add(variant);
 				}
 			}
 
-			return variants;
+			foreach (string scene in scenes)
+			{
+				var used = new HashSet<Shaders.ShaderVariant>(always);
+				foreach (string path in UsedBy(scene))
+				{
+					if (ofMaterial.TryGetValue(path, out Shaders.ShaderVariant variant))
+					{
+						used.Add(variant);
+					}
+				}
+
+				set.Scenes[scene] = set.Variants.FindAll(used.Contains);
+			}
+
+			return set;
+		}
+
+		/// <summary>The asset and everything it uses, transitively (asset paths, engine resources included).</summary>
+		public HashSet<string> UsedBy(string assetPath)
+		{
+			var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+			var queue = new Queue<string>();
+			queue.Enqueue(assetPath);
+			while (queue.Count > 0)
+			{
+				string path = queue.Dequeue();
+				if (!result.Add(path) || !uses.TryGetValue(path, out HashSet<string> used))
+				{
+					continue;
+				}
+
+				foreach (string dependency in used)
+				{
+					queue.Enqueue(dependency);
+				}
+			}
+
+			return result;
 		}
 
 		/// <summary>The report written next to the project's other build data: every shipped file with its reason, then the files left out.</summary>
@@ -332,6 +388,16 @@ namespace LELEngine.Editor
 			}
 
 			assetPath = assetPath.Replace('\\', '/').TrimStart('/');
+			if (user != null)
+			{
+				if (!uses.TryGetValue(user, out HashSet<string> used))
+				{
+					uses[user] = used = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+				}
+
+				used.Add(assetPath);
+			}
+
 			if (AssetDatabase.IsEngineResource(assetPath))
 			{
 				if (EngineResources.TryAdd(assetPath, reason))

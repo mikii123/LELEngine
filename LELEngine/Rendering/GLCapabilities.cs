@@ -8,7 +8,8 @@ namespace LELEngine.Rendering
 	///     What the current OpenGL context offers beyond the 4.3 baseline the engine requires. Queried once after
 	///     context creation; passes use it to pick the native path and fall back to 4.3 code otherwise.
 	///     The environment variable LEL_GL_DISABLE (comma separated: drawparameters, indirectparameters, subgroups,
-	///     parallelcompile) turns detected features off, so the fallbacks can be tested on hardware that has everything;
+	///     parallelcompile, compilethread: <see cref="Shaders.ShaderCompilation.UseCompileThread" />) turns detected features
+	///     off, so the fallbacks can be tested on hardware that has everything;
 	///     LEL_GL_ENABLE keeps a feature a driver workaround would turn off.
 	/// </summary>
 	public static class GLCapabilities
@@ -70,6 +71,11 @@ namespace LELEngine.Rendering
 		///     asks for the results only when a program is first used). Without it the same code works, compiling in turn.
 		/// </summary>
 		public static bool ParallelShaderCompile { get; private set; }
+
+		/// <summary>The driver has KHR_ / ARB_parallel_shader_compile (also when LEL_GL_DISABLE switched it off): the compiler thread count can be set.</summary>
+		internal static bool ParallelShaderCompileKhr { get; private set; }
+
+		internal static bool ParallelShaderCompileArb { get; private set; }
 
 		public static bool Initialized { get; private set; }
 
@@ -135,6 +141,8 @@ namespace LELEngine.Rendering
 
 			bool parallelKhr = HasExtension("GL_KHR_parallel_shader_compile");
 			bool parallelArb = HasExtension("GL_ARB_parallel_shader_compile");
+			ParallelShaderCompileKhr = parallelKhr;
+			ParallelShaderCompileArb = parallelArb;
 			ParallelShaderCompile = parallelKhr || parallelArb;
 			ApplyDisabledFeatures(Environment.GetEnvironmentVariable("LEL_GL_DISABLE"));
 			if (parallelKhr || parallelArb)
@@ -196,6 +204,9 @@ namespace LELEngine.Rendering
 						break;
 					case "parallelcompile":
 						ParallelShaderCompile = false;
+						break;
+					case "compilethread":
+						Shaders.ShaderCompilation.UseCompileThread = false;
 						break;
 					default:
 						Console.WriteLine("[GL] LEL_GL_DISABLE: unknown feature '" + item + "'");

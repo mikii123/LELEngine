@@ -16,7 +16,8 @@ namespace LELEngine.Player
 	///     application (no console): the log goes to Player.log, with the startup times.
 	///     Command line overrides (testing): data=folder game=assembly.dll scene=assetPath fullscreen=0|1
 	///     screenshot=folder screenshotframe=N exitframe=N focus=0 shadercache=0 (no program binary cache)
-	///     vsync=0|1 (else Project Settings > Graphics > VSync).
+	///     vsync=0|1 (else Project Settings > Graphics > VSync) shaderhelper=0 (no compile helper process).
+	///     compileshaders=requestFile runs the game as its own shader compile helper (<see cref="Shaders.ShaderCompileHelper" />).
 	///     Linked shader programs are kept as the driver's binaries in the user's local app data
 	///     (LELEngine/&lt;title&gt;/ShaderCache, <see cref="Shaders.ProgramBinaryCache" />): later starts compile nothing.
 	/// </summary>
@@ -35,6 +36,13 @@ namespace LELEngine.Player
 
 		private static int Main(string[] args)
 		{
+			// The game started as its own shader compile helper: no window, no log of its own (the game reads its output).
+			string compileRequest = GetValue(args, Shaders.ShaderCompileHelper.Argument);
+			if (compileRequest != null)
+			{
+				return Shaders.ShaderCompileHelper.RunHelper(compileRequest);
+			}
+
 			clock = Stopwatch.StartNew();
 			mainStartUtc = DateTime.UtcNow;
 			string baseDirectory = AppContext.BaseDirectory;
@@ -116,6 +124,14 @@ namespace LELEngine.Player
 			{
 				Shaders.ProgramBinaryCache.Folder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "LELEngine",
 					string.IsNullOrWhiteSpace(boot.Title) ? "Game" : boot.Title, "ShaderCache");
+			}
+
+			// The game's own executable compiles what the game asks for (ShaderCompilation) in a process of its own, into
+			// the binary cache: drivers that stop every context of a process while one compiles then leave the game's
+			// frames alone. shaderhelper=0 compiles in the game's process.
+			if (GetValue(args, "shaderhelper") != "0")
+			{
+				Shaders.ShaderCompileHelper.Executable = Environment.ProcessPath;
 			}
 
 			// While the window opens: the splash screen's logo is read, and the loading that needs no GL context starts.

@@ -61,8 +61,41 @@ namespace LELEngine.Shaders
 			private set => linked = value;
 		}
 
-		/// <summary>Compiled and linked (or failed); false while the sources wait for a thread with the GL context or the driver.</summary>
-		public bool IsBuilt => pendingStages == null && startedShaders == null;
+		/// <summary>
+		///     Compiled and linked (or failed), with its results read: any thread with a GL context may use it. False while
+		///     the sources wait for a thread with the GL context, the driver, or the shader compile thread.
+		/// </summary>
+		public bool IsBuilt => built;
+
+		/// <summary>
+		///     <see cref="EnsureBuilt" /> would not wait for the driver (context thread): built, or started and finished on the
+		///     driver's threads (GL_COMPLETION_STATUS_KHR). Without parallel shader compile a started build counts as ready
+		///     (the driver compiles when asked, so there is nothing to wait for apart). False while not started.
+		/// </summary>
+		public bool IsBuildReady
+		{
+			get
+			{
+				if (built)
+				{
+					return true;
+				}
+
+				if (pendingStages != null)
+				{
+					return false;
+				}
+
+				int[] shaders = startedShaders;
+				if (shaders == null || !GLCapabilities.ParallelShaderCompile || !GraphicsThread.HasContext)
+				{
+					return true;
+				}
+
+				GL.GetProgram(handle, CompletionStatus, out int complete);
+				return complete != 0;
+			}
+		}
 
 		/// <summary>The .shader file this program was loaded from (null for programs built from sources).</summary>
 		public string SourcePath { get; }
@@ -121,6 +154,9 @@ namespace LELEngine.Shaders
 
 		private const string InstancingInclude = "Engine/Instancing.glsl";
 
+		// GL_COMPLETION_STATUS_KHR (KHR_parallel_shader_compile; ARB's has the same value).
+		private const GetProgramParameterName CompletionStatus = (GetProgramParameterName)0x91B1;
+
 		private int handle;
 		private bool linked;
 		private List<KeyValuePair<ShaderType, string>> pendingStages;
@@ -134,7 +170,16 @@ namespace LELEngine.Shaders
 		private string assetPath;
 		private ShaderProgram baseShader;
 		private ShaderProgram instancedVariant;
-		private bool instancedVariantCreated;
+		private volatile bool instancedVariantCreated;
+
+		// Built (its results read; set last, after the compile thread's glFinish): the lock-free check of every use.
+		private volatile bool built;
+
+		// One build at a time per program (the main thread and the shader compile thread may both want it).
+		private readonly object buildLock = new object();
+
+		// The instanced variant made by StartInstancedVariant, its build started, until GetInstancedVariant checks it.
+		private ShaderProgram startedInstancedVariant;
 		private string linkLog = "";
 		private string buildLog = "";
 
@@ -150,6 +195,57 @@ namespace LELEngine.Shaders
 
 		// Programs whose build was started and not finished (context thread only).
 		private static readonly List<ShaderProgram> started = new List<ShaderProgram>();
+
+		// Builds this thread started (compiled, or loaded from the binary cache): what a step of ShaderCompilation built.
+		[ThreadStatic]
+		private static int startedOnThisThread;
+
+		/// <summary>Program builds the calling thread started since the start (compiled or loaded from the binary cache).</summary>
+		internal static int StartedOnThisThread => startedOnThisThread;
+
+		/// <summary>Its build was started on a thread and not finished (the compile thread leaves those to that thread's context).</summary>
+		internal bool BuildStartedElsewhere => !built && startedShaders != null;
+
+		/// <summary>
+		///     The binary cache holds every program the variant needs: its shader's own program, the variant's, and its
+		///     instanced one when <paramref name="instanced" /> and the shader has one; loading them compiles nothing. Reads
+		///     the sources (no GL calls; any thread, once the cache has started). False when unsure.
+		/// </summary>
+		internal static bool BinariesCached(ShaderVariant variant, bool instanced)
+		{
+			if (!ProgramBinaryCache.Enabled || variant.Shader == null)
+			{
+				return false;
+			}
+
+			try
+			{
+				string path = InternalStorage.ShaderKey(variant.Shader);
+				if (!Cached(path, Array.Empty<string>(), out bool includesInstancing))
+				{
+					return false;
+				}
+
+				string[] keywords = variant.Keywords;
+				if (keywords.Length > 0 && !Cached(path, keywords, out _))
+				{
+					return false;
+				}
+
+				return !instanced || !includesInstancing || Cached(path, keywords.Append(InstancedDefine).ToArray(), out _);
+			}
+			catch (Exception e) when (e is IOException || e is UnauthorizedAccessException)
+			{
+				return false;
+			}
+		}
+
+		// The binary cache has the program of these sources (as the constructor reads them).
+		private static bool Cached(string path, string[] defines, out bool includesInstancing)
+		{
+			List<KeyValuePair<ShaderType, string>> stages = ReadStages(path, defines, new List<ShaderProperty>(), new ShaderRenderState(), ShaderFeatures.Current, false, out includesInstancing);
+			return ProgramBinaryCache.Has(ProgramBinaryCache.Key(stages));
+		}
 
 		// Keyword variants by their sorted keywords joined with spaces (only on the shader itself).
 		private readonly Dictionary<string, ShaderProgram> variants = new Dictionary<string, ShaderProgram>(StringComparer.Ordinal);
@@ -167,6 +263,7 @@ namespace LELEngine.Shaders
 			Name = name;
 			handle = GL.CreateProgram();
 			Link(shaders);
+			built = true;
 		}
 
 		// A program the binary cache linked (FromSources).
@@ -174,8 +271,9 @@ namespace LELEngine.Shaders
 		{
 			Name = name;
 			handle = linkedProgram;
-			IsLinked = true;
+			linked = true;
 			CollectUniforms();
+			built = true;
 		}
 
 		/// <summary>
@@ -187,6 +285,14 @@ namespace LELEngine.Shaders
 
 		/// <summary>Loads a .shader file with preprocessor symbols defined in every stage (variants of one source).</summary>
 		public ShaderProgram(string path, string[] defines)
+			: this(path, defines, true)
+		{ }
+
+		/// <param name="start">
+		///     Start the build now (<see cref="StartBuild" />); false for programs made inside a lock others wait on (the
+		///     shader caches): the caller starts it after leaving the lock, since on the compile thread starting is building.
+		/// </param>
+		internal ShaderProgram(string path, string[] defines, bool start)
 		{
 			Name = defines.Length == 0 ? path : path + " [" + string.Join(", ", defines) + "]";
 			SourcePath = path;
@@ -195,7 +301,10 @@ namespace LELEngine.Shaders
 			this.defines = defines;
 			keywords = defines.Where(define => define != InstancedDefine).OrderBy(define => define, StringComparer.Ordinal).ToArray();
 			ReadSource();
-			StartBuild();
+			if (start)
+			{
+				StartBuild();
+			}
 		}
 
 		#endregion
@@ -204,39 +313,78 @@ namespace LELEngine.Shaders
 
 		/// <summary>
 		///     Compiles and links the prepared sources when that has not happened yet and this thread holds the GL context,
-		///     waiting for a build already started (<see cref="StartBuild" />).
+		///     waiting for a build already started (<see cref="StartBuild" />), or for the shader compile thread building it
+		///     (<see cref="ShaderCompilation" />).
 		/// </summary>
 		public void EnsureBuilt()
 		{
-			if ((pendingStages != null || startedShaders != null) && GraphicsThread.HasContext)
+			if (built || !GraphicsThread.HasContext)
 			{
-				StartBuild();
+				return;
+			}
+
+			lock (buildLock)
+			{
+				if (built)
+				{
+					return;
+				}
+
+				if (pendingStages != null)
+				{
+					Start();
+				}
+
 				FinishBuild();
+				MarkBuilt();
 			}
 		}
 
 		/// <summary>
 		///     Hands the prepared sources to the driver without waiting for the result, when this thread holds the GL
 		///     context (a program made there does it itself): start every program a load needs before using one, and the
-		///     driver compiles them together. <see cref="EnsureBuilt" /> (any first use) waits for it.
+		///     driver compiles them together. <see cref="EnsureBuilt" /> (any first use) waits for it. On the shader compile
+		///     thread (<see cref="ShaderCompilation" />) the program is built whole here: nothing half built leaves it.
 		/// </summary>
 		public void StartBuild()
 		{
-			if (pendingStages != null && GraphicsThread.HasContext)
+			if (built || pendingStages == null || !GraphicsThread.HasContext)
 			{
+				return;
+			}
+
+			lock (buildLock)
+			{
+				if (pendingStages == null)
+				{
+					return;
+				}
+
 				Start();
+				if (startedShaders == null || ShaderCompilation.OnCompileThread)
+				{
+					// Loaded from the binary cache, or the compile thread: done here.
+					FinishBuild();
+					MarkBuilt();
+				}
 			}
 		}
 
 		/// <summary>Waits for every program whose build was started (context thread): their results and errors now.</summary>
 		public static void FinishStartedBuilds()
 		{
-			if (started.Count == 0)
+			ShaderProgram[] waiting;
+			lock (started)
 			{
-				return;
+				if (started.Count == 0)
+				{
+					return;
+				}
+
+				waiting = started.ToArray();
 			}
 
-			foreach (ShaderProgram program in started.ToArray())
+			foreach (ShaderProgram program in waiting)
 			{
 				program.EnsureBuilt();
 			}
@@ -337,19 +485,79 @@ namespace LELEngine.Shaders
 				return null;
 			}
 
-			if (!instancedVariantCreated)
+			if (instancedVariantCreated)
 			{
-				instancedVariantCreated = true;
-				instancedVariant = new ShaderProgram(SourcePath, defines.Append(InstancedDefine).ToArray());
-				if (!instancedVariant.IsLinked)
-				{
-					Console.WriteLine("[Shader] The instanced variant of " + Name + " does not link; its objects draw one by one.");
-					instancedVariant.Delete();
-					instancedVariant = null;
-				}
+				return instancedVariant;
 			}
 
-			return instancedVariant;
+			// Made under the lock, built outside it (the compile thread may be building it: this waits for that).
+			ShaderProgram made;
+			lock (variants)
+			{
+				if (instancedVariantCreated)
+				{
+					return instancedVariant;
+				}
+
+				made = startedInstancedVariant ??= new ShaderProgram(SourcePath, defines.Append(InstancedDefine).ToArray(), false);
+			}
+
+			made.StartBuild();
+			if (made.BuildStartedElsewhere && ShaderCompilation.OnCompileThread)
+			{
+				// The main thread started it (StartInstancedVariant): it finishes it, in its own context.
+				return null;
+			}
+
+			bool madeLinked = made.IsLinked;
+			lock (variants)
+			{
+				if (!instancedVariantCreated && startedInstancedVariant == made)
+				{
+					startedInstancedVariant = null;
+					if (madeLinked)
+					{
+						instancedVariant = made;
+					}
+					else
+					{
+						Console.WriteLine("[Shader] The instanced variant of " + Name + " does not link; its objects draw one by one.");
+						made.Delete();
+						instancedVariant = null;
+					}
+
+					instancedVariantCreated = true;
+				}
+
+				return instancedVariant;
+			}
+		}
+
+		/// <summary>
+		///     Makes the instanced variant (<see cref="GetInstancedVariant" />) and starts its build without waiting for it:
+		///     the program to wait for (<see cref="IsBuildReady" />), then <see cref="GetInstancedVariant" /> checks it. Null
+		///     when the shader has none, or when it was made already (then <see cref="GetInstancedVariant" /> is done).
+		/// </summary>
+		internal ShaderProgram StartInstancedVariant()
+		{
+			if (IsInstancedVariant || !SupportsInstancing || SourcePath == null || instancedVariantCreated)
+			{
+				return null;
+			}
+
+			ShaderProgram made;
+			lock (variants)
+			{
+				if (instancedVariantCreated)
+				{
+					return null;
+				}
+
+				made = startedInstancedVariant ??= new ShaderProgram(SourcePath, defines.Append(InstancedDefine).ToArray(), false);
+			}
+
+			made.StartBuild();
+			return made;
 		}
 
 		/// <summary>
@@ -371,18 +579,23 @@ namespace LELEngine.Shaders
 			}
 
 			string key = string.Join(" ", sorted);
+			ShaderProgram made;
 			lock (variants)
 			{
-				if (!variants.TryGetValue(key, out ShaderProgram variant))
+				if (variants.TryGetValue(key, out ShaderProgram existing))
 				{
-					// The shader's own defines (an engine pass's variant of a file) stay: the keywords add to them.
-					variant = new ShaderProgram(assetPath ?? SourcePath, defines.Concat(sorted).ToArray()) { baseShader = this };
-					variant.assetPath = assetPath;
-					variants.Add(key, variant);
+					return existing;
 				}
 
-				return variant;
+				// The shader's own defines (an engine pass's variant of a file) stay: the keywords add to them.
+				made = new ShaderProgram(assetPath ?? SourcePath, defines.Concat(sorted).ToArray(), false) { baseShader = this };
+				made.assetPath = assetPath;
+				variants.Add(key, made);
 			}
+
+			// Outside the lock: on the compile thread this builds it whole, and other threads may want other variants.
+			made.StartBuild();
+			return made;
 		}
 
 		/// <summary>A file the source was read from (the .shader or one of its includes) changed since, or is gone.</summary>
@@ -415,21 +628,26 @@ namespace LELEngine.Shaders
 				return false;
 			}
 
-			ReleaseProgram();
-			properties.Clear();
-			properties.AddRange(readProperties);
-			keywordProperties.Clear();
-			keywordProperties.AddRange(properties.Where(property => property.Keywords != null));
-			renderState.CopyFrom(readState);
-			SupportsInstancing = includesInstancing;
-			sourceFiles = files.ToArray();
-			sourceStamp = StampOf(sourceFiles);
-			uniformCache.Clear();
-			uniformTypes.Clear();
-			linked = false;
-			linkLog = "";
-			buildLog = "";
-			pendingStages = stages;
+			lock (buildLock)
+			{
+				built = false;
+				ReleaseProgram();
+				properties.Clear();
+				properties.AddRange(readProperties);
+				keywordProperties.Clear();
+				keywordProperties.AddRange(properties.Where(property => property.Keywords != null));
+				renderState.CopyFrom(readState);
+				SupportsInstancing = includesInstancing;
+				sourceFiles = files.ToArray();
+				sourceStamp = StampOf(sourceFiles);
+				uniformCache.Clear();
+				uniformTypes.Clear();
+				linked = false;
+				linkLog = "";
+				buildLog = "";
+				pendingStages = stages;
+			}
+
 			StartBuild();
 
 			if (instancedVariant != null && !SupportsInstancing)
@@ -441,6 +659,8 @@ namespace LELEngine.Shaders
 			instancedVariant?.Reload();
 			// A variant that did not link may now.
 			instancedVariantCreated = instancedVariant != null;
+			startedInstancedVariant?.Delete();
+			startedInstancedVariant = null;
 			lock (variants)
 			{
 				foreach (ShaderProgram variant in variants.Values)
@@ -454,9 +674,15 @@ namespace LELEngine.Shaders
 
 		public void Delete()
 		{
-			ReleaseProgram();
+			lock (buildLock)
+			{
+				ReleaseProgram();
+			}
+
 			instancedVariant?.Delete();
 			instancedVariant = null;
+			startedInstancedVariant?.Delete();
+			startedInstancedVariant = null;
 			lock (variants)
 			{
 				foreach (ShaderProgram variant in variants.Values)
@@ -840,7 +1066,10 @@ namespace LELEngine.Shaders
 
 				startedShaders = null;
 				startedStages = null;
-				started.Remove(this);
+				lock (started)
+				{
+					started.Remove(this);
+				}
 			}
 
 			if (handle != 0)
@@ -858,6 +1087,7 @@ namespace LELEngine.Shaders
 		{
 			List<KeyValuePair<ShaderType, string>> stages = pendingStages;
 			pendingStages = null;
+			startedOnThisThread++;
 			handle = GL.CreateProgram();
 
 			// The driver's binary of the same sources, when an earlier start saved one (ProgramBinaryCache).
@@ -879,7 +1109,26 @@ namespace LELEngine.Shaders
 			startedStages = stages;
 			startedCacheKey = cacheKey;
 			StartLink(startedShaders);
-			started.Add(this);
+			if (!ShaderCompilation.OnCompileThread)
+			{
+				// The compile thread finishes its own at once (StartBuild): never one for another context to wait on.
+				lock (started)
+				{
+					started.Add(this);
+				}
+			}
+		}
+
+		// The results are read: from now on any thread uses it without the lock. A program the compile thread built is
+		// finished on the GPU first (glFinish), so the other contexts see it whole.
+		private void MarkBuilt()
+		{
+			if (ShaderCompilation.OnCompileThread)
+			{
+				GL.Finish();
+			}
+
+			built = true;
 		}
 
 		/// <summary>
@@ -897,7 +1146,10 @@ namespace LELEngine.Shaders
 			List<KeyValuePair<ShaderType, string>> stages = startedStages;
 			startedShaders = null;
 			startedStages = null;
-			started.Remove(this);
+			lock (started)
+			{
+				started.Remove(this);
+			}
 
 			var log = new System.Text.StringBuilder();
 			bool compiled = true;
