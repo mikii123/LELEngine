@@ -2,8 +2,9 @@
 
 #version 430
 
-// How the lights of a volumetric object (up to 8: its own, VolumetricObjectBase.Lights, and the scene's Light components
-// that reach it) light its cloud, per voxel of a grid at half the density's resolution: lights 0-3 in A, 4-7 in B, linear
+// How the lights of a volumetric object (up to 8: its own, VolumetricObjectBase.Lights, the scene's directional lights
+// besides its sun, and the scene's Light components that reach it) light its cloud, per voxel of a grid at half the
+// density's resolution: lights 0-3 in A, 4-7 in B, linear
 // light at unit brightness (times the slot's factor). The cloud between the voxel and the light dims it; the glow is light
 // scattered on through the cloud (it gets through thick cloud), so a light deep in a cloud still lights the cloud around
 // it up. Only where the lights are is worked out here: their colour and intensity are applied when the cloud is drawn
@@ -11,6 +12,9 @@
 //   own light    a core of the slot's radius and a glow four times as wide (1 / (1 + (d / r)^2) each)
 //   scene light  the Light's physical falloff in world units (1 / d^2 from its source's radius, faded to 0 at its range,
 //                Engine/Lights.glsl) and its cone, times (range / 4)^2 so half floats keep it from the light to the range
+//   directional  no falloff: e^(-tau / 4) of the cloud towards the light out to the shadow reach (as the sun's optical
+//                depth in the lit voxels). The march rebuilds e^-tau and the softer orders of the multiple scattering
+//                from it (squares), and scatters it with the cloud's albedo and phase as it does the sun.
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
 layout(binding = 0, rgba16f) uniform writeonly image3D LightsA;
@@ -25,10 +29,12 @@ uniform vec3 volSize;
 uniform float volSigma;
 uniform float volVoxel;          // local units per voxel of the density
 uniform float volWorldScale;     // world units per local unit
-uniform vec4 volLights[8];       // xyz local position; w own: the core's radius (local, 0: no light), scene: the range (world)
-uniform vec4 volLightParams[8];  // x 0 own / 1 scene, y the source's radius (world), z cos outer (-2: no cone), w spot scale
+uniform vec4 volLights[8];       // xyz local position; w own: the core's radius (local, 0: no light), scene: the range (world);
+                                 // directional: xyz the local unit vector towards the light, w 1
+uniform vec4 volLightParams[8];  // x 0 own / 1 scene / 2 directional, y the source's radius (world), z cos outer (-2: no cone), w spot scale
 uniform vec4 volLightSpots[8];   // xyz the spot's direction (local), w the factor the light is held times
 uniform float volLightGlow;
+uniform float volShadowReach;    // how far the cloud is marched towards a directional light (local units)
 
 // The cloud between the voxel and the light: five samples at a mip that fits their spacing.
 float OpticalDepth(vec3 p, vec3 light, float dist)
@@ -45,6 +51,26 @@ float OpticalDepth(vec3 p, vec3 light, float dist)
 	return tau * len * volSigma;
 }
 
+// The cloud from p along dir out to the shadow reach: samples twice as long as the one before, at the middle of each
+// (VolumetricLight.shader's march towards the sun).
+float OpticalDepthAlong(vec3 p, vec3 dir)
+{
+	const int samples = 7;
+	float unit = volShadowReach / (exp2(float(samples)) - 1.0);
+	float dist = 0.0;
+	float tau = 0.0;
+	for (int k = 0; k < samples; k++)
+	{
+		float len = unit * exp2(float(k));
+		vec3 q = p + dir * (dist + len * 0.5);
+		float lod = max(log2(len / volVoxel) - 0.5, 0.0);
+		tau += textureLod(Density, q / volSize + 0.5, lod).r * len;
+		dist += len;
+	}
+
+	return tau * volSigma;
+}
+
 float LightAt(vec3 p, int i)
 {
 	vec4 light = volLights[i];
@@ -52,6 +78,12 @@ float LightAt(vec3 p, int i)
 	if (light.w <= 0.0)
 	{
 		return 0.0;
+	}
+
+	if (params.x > 1.5)
+	{
+		// A directional light: what gets through the cloud towards it, held as e^(-tau / 4).
+		return exp(-0.25 * OpticalDepthAlong(p, light.xyz));
 	}
 
 	float dist = distance(p, light.xyz);

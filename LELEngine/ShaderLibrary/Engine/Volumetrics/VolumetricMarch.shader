@@ -67,9 +67,14 @@ uniform float volDetailFrequency;    // detail tiles per local unit
 uniform float volDetailVoxel;        // local units per detail voxel
 uniform vec3 volDetailOffset;        // the detail's drift (wind x time), local units
 uniform int volLightsActive;
-uniform vec4 volLightColors[8];      // rgb: colour x intensity / the slot's factor
+uniform vec4 volLightColors[8];      // rgb: colour x intensity / the slot's factor (0 for a directional light's slot)
+uniform int volDirectionalCount;     // the scene's other directional lights among the slots (VolumetricLightTransport.shader)
+uniform ivec4 volDirectionalSlots;   // their slots
+uniform vec4 volDirectionalDirs[4];  // xyz: local, towards the light
+uniform vec4 volDirectionalColors[4]; // rgb: linear, times its strengths
 uniform mat4 volLocalToWorld;
 uniform int volReceiveShadows;
+uniform int volSunShadowLight;       // the sun's index among the directional lights: its shadow maps (Engine/Shadows.glsl)
 uniform float volShadowStrength;     // 1: the scene's shadows block the sun fully
 uniform float volExposure;
 uniform float volOpacity;
@@ -84,30 +89,24 @@ float VolPhase(float cosTheta, float g)
 	return (1.0 - g2) / pow(max(1e-4, 1.0 + g2 - 2.0 * g * cosTheta), 1.5);
 }
 
-// The scene's sun shadow at a point inside the cloud: one comparison in the cascade it falls in, faded out towards the
-// shadow distance; lit outside the cascades.
+// The scene's shadow of the cloud's sun at a point inside the cloud: one comparison in the cascade of the sun's it
+// falls in, faded out towards the shadow distance; lit outside the cascades.
 float VolSceneShadow(vec3 worldPos)
 {
-	if (shadowsEnabled == 0 || shadowCascadeCount <= 0)
+	if (!ShadowLightHasMap(volSunShadowLight))
 	{
 		return 1.0;
 	}
 
-	int cascade = ShadowCascade(worldPos);
-	vec4 rect = ShadowTileRect(cascade);
-	vec3 proj = (shadowMatrices[cascade] * vec4(worldPos, 1.0)).xyz;
+	int cascade = ShadowLightCascade(volSunShadowLight, worldPos);
+	vec4 rect = lelShadowCascades[cascade].rect;
+	vec3 proj = (lelShadowCascades[cascade].matrix * vec4(worldPos, 1.0)).xyz;
 	if (proj.z > 1.0 || any(lessThan(proj.xy, rect.xy)) || any(greaterThan(proj.xy, rect.zw)))
 	{
 		return 1.0;
 	}
 
-	float fade = 1.0;
-	if (shadowFade.w > 0.0)
-	{
-		fade = clamp((shadowFade.w - distance(worldPos, shadowFade.xyz)) / (shadowFade.w * 0.1), 0.0, 1.0);
-	}
-
-	return mix(1.0, texture(ShadowMap, proj), fade);
+	return mix(1.0, texture(ShadowMap, proj), ShadowFade(worldPos));
 }
 
 // Where the ray leaves the occupancy block p is in (local units along the ray from p).
@@ -147,6 +146,15 @@ void main()
 	float phase0 = VolPhase(cosSun, volPhaseG);
 	float phase1 = VolPhase(cosSun, volPhaseG * 0.5) * 0.5 * volMultipleScattering;
 	float phase2 = VolPhase(cosSun, volPhaseG * 0.25) * 0.25 * volMultipleScattering;
+	// The same for the scene's other directional lights (their light through the cloud is in the lights' transport).
+	vec3 directionalPhase[4];
+	for (int k = 0; k < volDirectionalCount; k++)
+	{
+		float cosLight = dot(ray.dir, volDirectionalDirs[k].xyz);
+		directionalPhase[k] = vec3(VolPhase(cosLight, volPhaseG), VolPhase(cosLight, volPhaseG * 0.5) * 0.5 * volMultipleScattering,
+			VolPhase(cosLight, volPhaseG * 0.25) * 0.25 * volMultipleScattering);
+	}
+
 	vec3 sky = vec3(0.0);
 	if (volSkyStrength > 0.0)
 	{
@@ -225,6 +233,23 @@ void main()
 				{
 					sun *= mix(1.0, VolSceneShadow((volLocalToWorld * vec4(p, 1.0)).xyz), volShadowStrength);
 				}
+
+				// The lights' transport: the other directional lights are scattered as the sun is (the slot holds
+				// e^(-tau / 4): its square and fourth power are the softer and the direct order), the rest are added below.
+				vec4 lightsA = vec4(0.0);
+				vec4 lightsB = vec4(0.0);
+				if (volLightsActive != 0)
+				{
+					lightsA = textureLod(volLightsA, uvw, max(lod - 1.0, 0.0));
+					lightsB = textureLod(volLightsB, uvw, max(lod - 1.0, 0.0));
+					for (int k = 0; k < volDirectionalCount; k++)
+					{
+						int slot = volDirectionalSlots[k];
+						float through = slot < 4 ? lightsA[slot] : lightsB[slot - 4];
+						float through2 = through * through;
+						sun += volDirectionalColors[k].rgb * dot(directionalPhase[k], vec3(through2 * through2, through2, through));
+					}
+				}
 				// The light around: the flat ambient through the cloud's openness, and the GI (from every side, dimmed by the
 				// cloud towards each, scattered towards the eye with the phase: a + g (b . ray)) or else the sky.
 				vec3 around = volAmbientColor * lit.b;
@@ -243,10 +268,8 @@ void main()
 				vec3 light = volAlbedo * (sun + around) * shade + volEmission * clamp(density * 1.5, 0.0, 1.0);
 				if (volLightsActive != 0)
 				{
-					vec4 a = textureLod(volLightsA, uvw, max(lod - 1.0, 0.0));
-					vec4 b = textureLod(volLightsB, uvw, max(lod - 1.0, 0.0));
-					light += a.x * volLightColors[0].rgb + a.y * volLightColors[1].rgb + a.z * volLightColors[2].rgb + a.w * volLightColors[3].rgb
-						+ b.x * volLightColors[4].rgb + b.y * volLightColors[5].rgb + b.z * volLightColors[6].rgb + b.w * volLightColors[7].rgb;
+					light += lightsA.x * volLightColors[0].rgb + lightsA.y * volLightColors[1].rgb + lightsA.z * volLightColors[2].rgb + lightsA.w * volLightColors[3].rgb
+						+ lightsB.x * volLightColors[4].rgb + lightsB.y * volLightColors[5].rgb + lightsB.z * volLightColors[6].rgb + lightsB.w * volLightColors[7].rgb;
 				}
 
 				color += weight * light;

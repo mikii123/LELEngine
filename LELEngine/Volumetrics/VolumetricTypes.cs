@@ -64,17 +64,30 @@ namespace LELEngine.Volumetrics
 
 	/// <summary>
 	///     One of the (up to 8) lights a cloud's light transport is worked out for: a light of its own
-	///     (<see cref="VolumetricObjectBase.Lights" />: a core and a glow) or a scene <see cref="global::Light" /> that
-	///     reaches the shape (physical falloff, its range and cone). The transport holds where the light goes through the
-	///     cloud at unit brightness (times <see cref="Normalization" />); the light's colour and intensity are applied when the
-	///     cloud is drawn.
+	///     (<see cref="VolumetricObjectBase.Lights" />: a core and a glow), a scene <see cref="global::DirectionalLight" />
+	///     other than the cloud's sun (no falloff: the cloud on the way towards it), or a scene <see cref="global::Light" />
+	///     that reaches the shape (physical falloff, its range and cone). The transport holds where the light goes through
+	///     the cloud at unit brightness (times <see cref="Normalization" />); the light's colour and intensity are applied
+	///     when the cloud is drawn.
 	/// </summary>
 	internal struct VolumeLightSlot
 	{
-		/// <summary>Local position; w: the core's radius (local units, own light) or the range (world units, scene light).</summary>
+		/// <summary>Params.x of a light of the cloud's own.</summary>
+		public const float KindOwn = 0f;
+
+		/// <summary>Params.x of a scene light (point, spot).</summary>
+		public const float KindScene = 1f;
+
+		/// <summary>Params.x of a directional light.</summary>
+		public const float KindDirectional = 2f;
+
+		/// <summary>
+		///     Local position; w: the core's radius (local units, own light) or the range (world units, scene light). A
+		///     directional light: the local unit vector towards it; w: 1.
+		/// </summary>
 		public Vector4 PositionSize;
 
-		/// <summary>x: 0 own light, 1 scene light; y: the source's radius (world); z: cos of the outer half angle (-2: no cone); w: 1 / (cos inner - cos outer).</summary>
+		/// <summary>x: 0 own light, 1 scene light, 2 directional light; y: the source's radius (world); z: cos of the outer half angle (-2: no cone); w: 1 / (cos inner - cos outer).</summary>
 		public Vector4 Params;
 
 		/// <summary>xyz: the spot's direction (local); w: the factor the transport holds the light times (the colour is divided by it).</summary>
@@ -86,6 +99,12 @@ namespace LELEngine.Volumetrics
 		/// <summary>The scene light (null for a light of its own).</summary>
 		public global::Light Scene;
 
+		/// <summary>The directional light (null for the other kinds).</summary>
+		public global::DirectionalLight Directional;
+
+		/// <summary>A directional light's slot: the march scatters it as the sun (albedo, phase, the softer orders), not as a glow.</summary>
+		public bool IsDirectional => Params.X > 1.5f;
+
 		/// <summary>
 		///     The light's colour x intensity right now (a scene light's times its volumetric strength), divided by the
 		///     transport's factor (what the march multiplies the transport by).
@@ -94,6 +113,11 @@ namespace LELEngine.Volumetrics
 		{
 			get
 			{
+				if (Directional != null)
+				{
+					return Directional.Shines && Directional.AffectsVolumes ? Directional.Radiance * System.MathF.Max(Directional.VolumetricStrength, 0f) : Vector3.Zero;
+				}
+
 				if (Scene != null)
 				{
 					return Scene.IsDestroyed || !Scene.isActiveAndEnabled ? Vector3.Zero : Scene.Radiance * System.MathF.Max(Scene.VolumetricStrength, 0f) / System.MathF.Max(Spot.W, 1e-12f);

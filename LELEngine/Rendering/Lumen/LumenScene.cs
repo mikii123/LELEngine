@@ -43,7 +43,10 @@ namespace LELEngine.Rendering.Lumen
 		/// <summary>True when any GI object's material colour or emission changed since the previous update.</summary>
 		public bool MaterialChanged { get; private set; } = true;
 
-		/// <summary>True when the directional light moved or changed colour or strength since the previous update.</summary>
+		/// <summary>
+		///     True when what a directional light gives the GI changed since the previous update: one turned, turned on or
+		///     off, changed colour, strength or its shadows (<see cref="DirectionalLightBuffer.GIVersion" />).
+		/// </summary>
 		public bool SunChanged { get; private set; } = true;
 
 		/// <summary>True when a local light the GI sees changed since the previous update (<see cref="LightBuffer.GIVersion" />).</summary>
@@ -94,9 +97,7 @@ namespace LELEngine.Rendering.Lumen
 		private int lastDynamicCount = -1;
 		private int lastStaticVersion = -1;
 		private int lastLightVersion = -1;
-		private Vector3 lastSunDirection;
-		private float lastSunStrength;
-		private Color4 lastSunColor;
+		private int lastSunVersion = -1;
 		// Never empty, like the object table: the card binding always has storage, also without cards (voxel cone tracing).
 		private CardData[] cardData = new CardData[1];
 		private int surfaceCacheSize;
@@ -149,11 +150,8 @@ namespace LELEngine.Rendering.Lumen
 
 			UploadTables();
 
-			Vector3 sunDirection = DirectionalLight.This != null ? DirectionalLight.This.transform.forward : -Vector3.UnitY;
-			SunChanged = (sunDirection - lastSunDirection).LengthSquared > 1e-8f || Lighting.Directional.Strength != lastSunStrength || Lighting.Directional.Color != lastSunColor;
-			lastSunDirection = sunDirection;
-			lastSunStrength = Lighting.Directional.Strength;
-			lastSunColor = Lighting.Directional.Color;
+			SunChanged = DirectionalLightBuffer.GIVersion != lastSunVersion;
+			lastSunVersion = DirectionalLightBuffer.GIVersion;
 			// A static invalidation (objects moved via InvalidateStatic) changes the lighting as much as a dynamic move.
 			bool staticChanged = gi.StaticVersion != lastStaticVersion;
 			lastStaticVersion = gi.StaticVersion;

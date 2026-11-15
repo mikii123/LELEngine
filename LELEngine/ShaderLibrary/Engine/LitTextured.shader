@@ -101,6 +101,7 @@ void main()
 #include "Engine/VoxelConeTracing.glsl"
 #include "Engine/StandardBRDF.glsl"
 #include "Engine/Lights.glsl"
+#include "Engine/DirectionalLights.glsl"
 
 // Lit with an albedo map (multiplies Color) and, each in a variant of its own that only the materials setting it pay
 // for, a tangent-space normal map, an emission map (multiplies Emissive), a mask map (metallic, occlusion, smoothness)
@@ -156,12 +157,6 @@ uniform sampler2D SpecularMap;
 #endif
 #endif
 
-struct Directional {
-	vec4 dirColor;
-	float dirStrength;
-	vec3 dirDirection;
-};
-
 struct Ambient {
 	vec4 ambColor;
 	float ambStrength;
@@ -173,7 +168,6 @@ struct Specular {
 	vec3 viewPos;
 };
 
-uniform Directional LDirectional;
 uniform Ambient LAmbient;
 uniform Specular LSpecular;
 
@@ -222,14 +216,9 @@ void main()
 	}
 #endif
 
-	vec3 L = normalize(-LDirectional.dirDirection);
 	vec3 V = normalize(LSpecular.viewPos - fPosition);
 
-	// Per channel: tinted transparent casters colour their shadows. The geometric normal biases the lookup.
-	vec3 shadow = SampleShadowRGB(fPosition, vertexNormal, L);
-
 	vec3 albedo = color.rgb;
-	vec3 lightColor = LDirectional.dirColor.rgb * LDirectional.dirStrength;
 
 	// Indirect: voxel cone tracing replaces most of the flat ambient term.
 	vec3 indirectDiffuse;
@@ -266,8 +255,21 @@ void main()
 	gi.specular *= surfaceOcclusion;
 #endif
 
-	vec3 result = LelStandardBRDF(diffColor, specColor, oneMinusReflectivity, roughness, N, V, L, lightColor * shadow, gi)
+	vec3 result = LelStandardBRDFIndirect(diffColor, specColor, oneMinusReflectivity, roughness, N, V, gi)
 		+ emissive.rgb * emissive.a;
+
+	// The directional lights (Engine/DirectionalLights.glsl), each behind its own shadows. Nothing is looked up for a
+	// light the surface faces away from.
+	for (int i = 0; i < LelDirectionalCount(); i++)
+	{
+		vec3 L = LelDirectionalTowards(i);
+		if (dot(N, L) > 0.0)
+		{
+			// Per channel: tinted transparent casters colour their shadows. The geometric normal biases the lookup.
+			vec3 lightColor = LelDirectionalRadiance(i) * SampleLightShadowRGB(i, fPosition, vertexNormal, L);
+			result += LelStandardBRDFDirect(diffColor, specColor, roughness, N, V, L, lightColor);
+		}
+	}
 
 	// The local lights (Engine/Lights.glsl): the same BRDF, unshadowed.
 	for (int i = 0; i < LelLightCount(); i++)
@@ -281,12 +283,6 @@ void main()
 	}
 #else
 	// Scene specular: Blinn-Phong with the scene's strength and shine (as Lit).
-	vec3 H = normalize(L + V);
-	float ndl = max(dot(N, L), 0.0);
-	vec3 diffuse = albedo * lightColor * ndl;
-	float spec = pow(max(dot(N, H), 0.0), LSpecular.specShine) * LSpecular.specStrength;
-	vec3 specular = lightColor * spec * ndl;
-
 	vec3 ambient = LAmbient.ambColor.rgb * LAmbient.ambStrength * albedo;
 	vec3 indirect = ambient * occlusion
 		+ indirectDiffuse * albedo
@@ -296,10 +292,24 @@ void main()
 #endif
 
 	vec3 result = indirect
-		+ (diffuse + specular) * shadow
 		+ emissive.rgb * emissive.a;
 
-	// The local lights (Engine/Lights.glsl), lit as the sun, unshadowed.
+	// The directional lights (Engine/DirectionalLights.glsl), each behind its own shadows. Nothing is looked up for a
+	// light the surface faces away from.
+	for (int i = 0; i < LelDirectionalCount(); i++)
+	{
+		vec3 L = LelDirectionalTowards(i);
+		float ndl = dot(N, L);
+		if (ndl > 0.0)
+		{
+			// Per channel: tinted transparent casters colour their shadows. The geometric normal biases the lookup.
+			vec3 lightColor = LelDirectionalRadiance(i) * SampleLightShadowRGB(i, fPosition, vertexNormal, L);
+			float spec = pow(max(dot(N, normalize(L + V)), 0.0), LSpecular.specShine) * LSpecular.specStrength;
+			result += (albedo + spec) * lightColor * ndl;
+		}
+	}
+
+	// The local lights (Engine/Lights.glsl), lit as the directional ones, unshadowed.
 	for (int i = 0; i < LelLightCount(); i++)
 	{
 		vec3 Li;

@@ -324,6 +324,7 @@ namespace LELEngine.Editor
 				VFX.VisualEffectInspector.DrawGizmos(selected);
 				VolumetricObjectInspector.DrawGizmos(editor, selected);
 				LightInspector.DrawGizmos(editor, selected);
+				DirectionalLightInspector.DrawGizmos(editor, selected);
 				CameraShakeInspector.DrawGizmos(editor, selected);
 				editor.Extensions.DrawSceneGUI(selected);
 			}

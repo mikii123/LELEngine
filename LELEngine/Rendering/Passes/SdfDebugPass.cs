@@ -51,7 +51,8 @@ namespace LELEngine.Rendering.Passes
 			Lighting.SetSdfUniforms(program);
 			program.SetMatrix4("invViewProjection", Matrix4.Invert(context.ViewProjection));
 			program.SetVector3("cameraPosition", context.CameraPosition);
-			program.SetVector3("lightDirection", DirectionalLight.This != null ? DirectionalLight.This.transform.forward : -Vector3.UnitY);
+			// The view's own shading: from the first directional light that shines.
+			program.SetVector3("lightDirection", Lighting.Directional.Direction.LengthSquared > 1e-12f ? Lighting.Directional.Direction : -Vector3.UnitY);
 
 			context.Fullscreen.Draw();
 

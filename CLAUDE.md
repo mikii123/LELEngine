@@ -1729,11 +1729,14 @@ Added for New Frontier's port of Unity's SpaceStonesPack (Standard materials wit
   intensity; `LightGlow`); quality (`VoxelSize` kept when the shape grows, up to 256^3 voxels and 512 per axis, then the
   voxel grows; `StepSize` in voxels; `TemporalFilter`, `HistoryWeight`; `RenderQueue`).
 - A light of its own: `Sun` may be a disabled `DirectionalLight`, which lights only the cloud (the scene's main light is
-  its first enabled one): a backdrop's own sun, but then no scene shadows (the shadow map is the main light's).
+  its first enabled one): a backdrop's own sun, but then no scene shadows (a light that is off has no shadow maps).
+  Since 2026-11-14 the scene's other directional lights light a cloud too, through the lights' transport (see
+  "Directional lights: several at once"); `SceneLights` off keeps them out.
   `OwnAmbient` replaces the scene's flat ambient light by `AmbientColor`.
-- Scene shadows (`ReceiveShadows`, `ShadowStrength` 1 = the sun fully blocked): per step one comparison in the main
-  light's cascade the point falls in (`VolSceneShadow`, faded out towards the shadow distance, lit outside the cascades),
-  on the sun term only; only for a cloud whose sun is the main light (`Sun` null or `DirectionalLight.This`). The scene's
+- Scene shadows (`ReceiveShadows`, `ShadowStrength` 1 = the sun fully blocked): per step one comparison in the cascade
+  of the sun's the point falls in (`VolSceneShadow`, faded out towards the shadow distance, lit outside the cascades),
+  on the sun term only; only for a cloud whose sun casts shadows (one of the shadowed directional lights; before
+  2026-11-14 only the main light, `Sun` null or `DirectionalLight.This`). The scene's
   shadow `Distance` must reach the cloud: New Frontier's Flight went from 250 to 600 (its storm lies 200-450 units from
   the camera; before, the shadows existed and were never seen there).
 - GI (`ReceiveGI`): a coarse grid in the object's space (`GICellSize` voxels a cell, at most 64 a side, a full pass over
@@ -1849,6 +1852,83 @@ Added for New Frontier's port of Unity's SpaceStonesPack (Standard materials wit
   (New Frontier's storm, Lumen) costs 0.90 ms calm and 1.04 ms with its 8 flash lights lit: the temporal filter 0.08 ms,
   GI + shadows 0.18 ms, the rest the wider transport and the distance target; the GI grid 0.11-0.15 ms in the
   `Volumetrics` pass. TestGame lumen, vct, gi=0, refraction, materials against the commit before: identical (max 2 / 255).
+
+## Directional lights: several at once (2026-11-14)
+
+- The user's ask: "the whole lighting system does not support several directional lights; add it to every built-in
+  shader and every lighting mode, mind the optimizations". Before, only `DirectionalLight.This` (the active scene's
+  first one) existed for the engine: three plain uniforms (`LDirectional.*`) set per program per draw.
+- `DirectionalLight` (`Mono/Behaviours/DirectionalLight.cs`): `Color`, `Strength`, and per light `CastShadows`,
+  `AffectsGI` + `IndirectStrength`, `AffectsVolumes` + `VolumetricStrength` (all on / 1 by default: a scene saved
+  before reads them so). `Towards`, `Radiance`, `Shines`. `Scene.DirectionalLights` (enabled ones, scene order; no
+  static registry: a preview or detached scene's lights never leak in), `SceneManager.GetDirectionalLights` (active
+  scene first, then the other loaded ones).
+- `Rendering/DirectionalLightBuffer` (static): `Update()` from `Lighting.BeginFrame` gathers the lights that shine
+  (enabled, strength, colour), at most `DirectionalLight.MaxLights` = 4: `SceneManager.MainLight` first when it shines,
+  then the others by luminance x strength (stable); `Shining`, `Main`, `IndexOf`, `CastsShadows(i)` (it asks, shadows
+  are on, and it is one of the first `ShadowSettings.ShadowedLights` of the list that ask), `ShadowedCount`,
+  `GIVersion` (a hash of what the GI takes: `LumenScene.SunChanged` compares it). A std140 uniform block on binding 6,
+  2 vec4 per light (towards + flags, radiance + GI strength), uploaded once a frame; `EnsureBound` from
+  `Lighting.SetUniforms`; `Forget` from the light's `OnDisable` / `OnDestroy` (no static list holds a light that is
+  off). `Engine/DirectionalLights.glsl`: `LelDirectionalCount`, `LelDirectionalTowards(i)`, `LelDirectionalRadiance(i)`,
+  `LelDirectionalGIStrength(i)`.
+- Shaders written for one sun keep working: `LDirectional.*` (and `lightPosition` / `lightColor`) carry the first light
+  of the list (`Lighting.Directional`), `SampleShadowRGB` / `SampleShadow` are light 0's shadows. No light shining:
+  strength 0 (before, a removed light kept shining from straight above with its last colour). The engine's own shaders
+  no longer declare `LDirectional`.
+- Shadows (`Engine/Shadows.glsl`, `Rendering/ShadowUniforms`): one atlas holds every map; the layout is a uniform
+  block on binding 5 (fade, biases, per light its first tile and tile count, per tile matrix + sphere + rectangle),
+  uploaded once per shadow pass instead of ~12 uniform calls (and an array allocation) per program per draw. Plain
+  uniforms left: `shadowsEnabled`, the samplers. `SampleLightShadowRGB(light, pos, normal, toLight)`,
+  `ShadowLightHasMap`, `ShadowLightCascade`, `ShadowFade`. `ShadowPass`: the first shadowed light's cascades as
+  before (`Cascades`, `MapSize`: a scene with one shadowed light has the atlas it always had), the others'
+  (`AdditionalLightCascades` Four, `AdditionalLightMapSize` 1024) in a column beside it; every tile GPU-culled and
+  drawn as before; transparent casters asked for once per pass (`TransparentShadows.HasCasters` / `DrawCasters`).
+  `Lighting.ShadowCascades` (`ShadowCascadeData`: `TileCount`, `LightFirst`, `LightCount`, `Matrices`, `Spheres`,
+  `Rects`), `Lighting.CameraShadows`. Project Settings > Lighting > Shadows shows the three new settings under
+  "Several directional lights".
+- Lit shaders (`Lit`, `LitTextured` all three workflows, `LitTransparent`, `VFX/VfxLighting.glsl`): a loop over the
+  lights, each behind its own shadows; no shadow lookup for a light the surface faces away from (also the one-light
+  case: the opaque pass got ~0.08 ms cheaper in the test room). `StandardBRDF.glsl`: `LelStandardBRDFIndirect` (the
+  GI's part) + `LelStandardBRDFDirect` per light replace the one-light `LelStandardBRDF` in `LitTextured` (kept for
+  project shaders).
+- GI: `VoxelInject.shader` and `CardLighting.shader` add every light with a GI strength, shadowed by
+  `Rendering/GridShadowMap` (now shared by `VoxelGIPass`, which had its own copy): one grid-covering tile per light
+  that both goes into the GI and casts shadows, side by side, its own `ShadowUniforms` bound for the dispatch (the
+  camera's is bound again by the next `Lighting.SetShadowUniforms`). No tile and no caster drawing for lights out of
+  the GI, without shadows, or with shadows off.
+- Volumetric objects: a cloud's sun stays `Sun` or the main light (the lit voxels). The other shining lights with
+  `AffectsVolumes` take slots of the lights' transport (with `SceneLights`; after the cloud's own lights, before the
+  local scene lights): `VolumeLightSlot.KindDirectional`, the slot holds e^(-tau / 4) of the cloud towards the light
+  out to the shadow reach (`VolumetricLightTransport.shader`), the march rebuilds e^-tau and the softer orders from
+  it and scatters it as the sun (albedo, phase, `SunStrength` x the light's `VolumetricStrength`), from the light's
+  exact direction; the slot's direction is snapped to ~0.35 degrees (`SnapDirection`) so a slowly turning light
+  reworks the transport a step at a time. Scene shadows fall into a cloud from its sun's maps when its sun is any of
+  the shadowed lights (`volSunShadowLight`), not only the main light.
+- Editor: `DirectionalLightInspector` (below the fields: "The main light (1 of 2 directional lights)" / "Shining" /
+  "Not shining: more than 4..." / "Off", and "Casts shadows" or why not; a ring and rays along the light in the scene
+  view while the component is expanded).
+- Fixed on the way (it was in HEAD): the `ShadowTransmittance` sampler got its unit only while the frame had a
+  transparent shadow caster; without one it stayed on unit 0 beside a sampler of another type and the GI's lighting
+  program did not run: no light went into the voxels (TestGame `gi=vct glass=0`, the outdoor yard: an empty
+  radiance volume, no bounce at all) or the cards (New Frontier's Flight in edit mode: no sun bounce).
+  `TransparentShadows.SetUniforms` and `Lighting.SetShadowUniforms` / `GridShadowMap.SetUniforms` now give the shadow
+  samplers their units always (also found as: night scene, no light shining, VCT lost its local lights' GI).
+- TestGame: `suns=N` (the sun and N - 1 coloured lights from other sides), `sunshadows=N`, `suncascades=1|2|4`,
+  `sunmap=size`, `sungi=0`, `sunvol=0`, `suncast=0`, `sunspin=deg/s` (`GITestScene.BuildExtraSuns`, every test scene).
+- Verified (780M, 1280 x 720): one light against the commit before (`animate=0 dumpframe=400`): gi=0, vct (also
+  trace=voxel, voxmips=sh / iso), lumen, outdoor, lights, materials, refraction, night within 0-5 / 255 where the
+  frame has transparent casters (without them the GI is brighter: the fix above; volumetrics, vfx, trails differ by
+  their own run-to-run noise, measured head against head). 2 / 3 / 6 suns: own shadows per light, the budget
+  (`sunshadows=1`: the second unshadowed), 6 asked: the 4 brightest; the second sun's bounce in Lumen and VCT
+  (`sungi=0` removes it), the storm cloud lit by it (`sunvol=0` removes it). 195 keyword variants of the lit shaders
+  pass glslang (3 GPU kinds) and 390 programs link (scratch probe `VariantCheck`); New Frontier's 16 own shaders
+  (planets reading `LDirectional`) validate and link; its 510 tests pass; its Flight scene in the editor equals the
+  commit before plus the sampler fix exactly.
+- Cost (same machine, the test room): one light is not slower (gi=0 GPU 1.25 -> 1.17 ms, vct 8.94 -> 8.73, lumen
+  6.34 -> 6.25). A second light without shadows: +0.01 ms. With shadows (4 cascades of 512): lumen 6.25 -> 7.03 ms
+  (Shadows +0.33, Opaque +0.10, SurfaceCache.shadow +0.16), vct 8.73 -> 9.97. Four lights all shadowed: lumen 8.38,
+  vct 12.10. Volumes: 3.23 -> 3.38 ms with four lights.
 
 ## Local lights (Light component; 2026-11-07)
 

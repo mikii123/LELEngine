@@ -118,14 +118,23 @@ namespace LELEngine
 		/// </summary>
 		public static bool ScreenGIView { get; internal set; } = true;
 
-		/// <summary>The cascades of <see cref="ShadowMap" />. Written by the shadow pass every frame.</summary>
+		/// <summary>The cascades of <see cref="ShadowMap" />, every shadowed directional light's. Written by the shadow pass every frame.</summary>
 		public static readonly ShadowCascadeData ShadowCascades = new ShadowCascadeData();
 
-		/// <summary>Depth texture of the directional light (an atlas of its cascades), or null when shadows are off.</summary>
+		/// <summary>
+		///     <see cref="ShadowCascades" /> as the shaders read them (Engine/Shadows.glsl): uploaded by the shadow pass,
+		///     bound by <see cref="SetShadowUniforms" />.
+		/// </summary>
+		public static readonly ShadowUniforms CameraShadows = new ShadowUniforms();
+
+		/// <summary>
+		///     Depth texture of the directional lights' shadows (an atlas: a tile per cascade of every light that casts
+		///     them), or null when shadows are off.
+		/// </summary>
 		public static RenderTexture ShadowMap;
 
 		/// <summary>
-		///     Transmittance of the transparent casters in the directional light's map (see <see cref="Rendering.TransparentShadows" />),
+		///     Transmittance of the transparent casters in the directional lights' map (see <see cref="Rendering.TransparentShadows" />),
 		///     or null when the frame drew none.
 		/// </summary>
 		public static RenderTexture ShadowTransmittance;
@@ -141,8 +150,6 @@ namespace LELEngine
 
 		#region PrivateFields
 
-		private static readonly string[] ShadowMatrixNames = { "shadowMatrices[0]", "shadowMatrices[1]", "shadowMatrices[2]", "shadowMatrices[3]" };
-
 		private static GIMode? giMethod;
 		private static bool giMethodWarned;
 		private static (GIMode, bool, bool, bool) giUsage;
@@ -152,17 +159,29 @@ namespace LELEngine
 		#region PublicMethods
 
 		/// <summary>
-		///     Per-frame sync before rendering: the sun's color and strength from the scene's directional light, the
-		///     environment into the uniform carriers and the renderer's clear color / exposure / tonemapping, the GI
-		///     method (<see cref="GIMethod" />) and the GI's sky.
+		///     Per-frame sync before rendering: the directional lights that shine (<see cref="DirectionalLightBuffer" />;
+		///     <see cref="Directional" /> carries the first one's colour, strength and direction for shaders written for
+		///     one sun), the environment into the uniform carriers and the renderer's clear color / exposure /
+		///     tonemapping, the GI method (<see cref="GIMethod" />) and the GI's sky.
 		/// </summary>
 		public static void BeginFrame(RenderSettings settings)
 		{
-			DirectionalLight light = DirectionalLight.This;
+			DirectionalLightBuffer.Update();
+			DirectionalLight light = DirectionalLightBuffer.Main;
 			if (light != null)
 			{
 				Directional.Color = light.Color;
 				Directional.Strength = light.Strength;
+				Directional.Direction = -light.Towards;
+			}
+			else
+			{
+				// No light shines: none is left over from an earlier frame. A main light that is on but dark keeps its
+				// colour and direction in the carrier (strength 0), as it always did.
+				DirectionalLight off = DirectionalLight.This;
+				Directional.Strength = 0f;
+				Directional.Color = off != null ? off.Color : Color4.Black;
+				Directional.Direction = off != null ? -off.Towards : -Vector3.UnitY;
 			}
 
 			Environment.ApplyTo(settings);
@@ -225,7 +244,9 @@ namespace LELEngine
 		{
 			Camera camera = Camera.current ?? Camera.main;
 			Vector3 camPos = camera != null ? camera.transform.position : Vector3.Zero;
-			Vector3 lightDir = DirectionalLight.This != null ? DirectionalLight.This.transform.forward : -Vector3.UnitY;
+			// The first directional light for shaders written for one sun; the engine's own read the whole list
+			// (Engine/DirectionalLights.glsl, a uniform block uploaded once a frame).
+			Vector3 lightDir = Directional.Direction.LengthSquared > 1e-12f ? Directional.Direction : -Vector3.UnitY;
 
 			// Legacy names used by older shaders (PBR / black hole)
 			program.SetVector3("lightPosition", lightDir);
@@ -250,6 +271,7 @@ namespace LELEngine
 			SetShadowUniforms(program, receiveShadows);
 			SetGIUniforms(program, receiveGI);
 			LightBuffer.EnsureBound();
+			DirectionalLightBuffer.EnsureBound();
 		}
 
 		/// <summary>
@@ -430,41 +452,28 @@ namespace LELEngine
 			program.SetInt("rcFarShortcut", GI.RadianceCacheFarShortcut ? 1 : 0);
 		}
 
+		/// <summary>
+		///     The camera's shadow maps for Engine/Shadows.glsl: whether this draw receives them, the atlas and its
+		///     transmittance. Where each light's cascades are in the atlas is <see cref="CameraShadows" />, a uniform
+		///     buffer the shadow pass uploaded this frame: bound here, nothing of it is uploaded per program.
+		/// </summary>
 		public static void SetShadowUniforms(ShaderProgram program, bool receiveShadows)
 		{
-			ShadowCascadeData cascades = ShadowCascades;
-			bool enabled = receiveShadows && Shadows.Enabled && ShadowMap != null && cascades.Count > 0;
+			// Bound whatever the draw receives: a program must never read an unbound block.
+			CameraShadows.Bind();
+			bool enabled = receiveShadows && Shadows.Enabled && ShadowMap != null && ShadowCascades.TileCount > 0;
 			program.SetInt("shadowsEnabled", enabled ? 1 : 0);
 			if (!enabled)
 			{
+				// The samplers keep their own units while there are no maps (no light shines or casts shadows): left on
+				// unit 0 they would share it with a sampler of another type.
+				program.SetInt("ShadowMap", ShadowMapTextureUnit);
+				program.SetInt("ShadowTransmittance", ShadowTransmittanceTextureUnit);
 				return;
 			}
 
-			program.SetInt("shadowCascadeCount", cascades.Count);
-			for (int i = 0; i < cascades.Count; i++)
-			{
-				program.SetMatrix4(ShadowMatrixNames[i], cascades.Matrices[i]);
-			}
-
-			program.SetVector4Array("shadowCascadeSpheres", cascades.Spheres);
-			program.SetVector4("shadowFade", new Vector4(cascades.FadeCenter, cascades.FadeDistance));
-			SetShadowBiasUniforms(program);
 			program.SetTexture("ShadowMap", TextureTarget.Texture2D, ShadowMap.Handle, ShadowMapTextureUnit);
 			TransparentShadows.SetUniforms(program, ShadowTransmittance, ShadowTransmittanceTextureUnit);
-		}
-
-		/// <summary>
-		///     Binds one shadow map that covers a region on its own (the GI passes' grid-covering maps) for
-		///     Engine/Shadows.glsl: a single cascade filling the map, no fade. The transmittance is bound separately.
-		/// </summary>
-		public static void SetShadowMapUniforms(ShaderProgram program, Matrix4 lightView, Matrix4 lightProjection, int depthTexture, int textureUnit)
-		{
-			program.SetInt("shadowsEnabled", Shadows.Enabled ? 1 : 0);
-			program.SetInt("shadowCascadeCount", 1);
-			program.SetMatrix4(ShadowMatrixNames[0], ShadowTextureMatrix(lightView, lightProjection, 0, 1, 1));
-			program.SetVector4("shadowFade", Vector4.Zero);
-			SetShadowBiasUniforms(program);
-			program.SetTexture("ShadowMap", TextureTarget.Texture2D, depthTexture, textureUnit);
 		}
 
 		/// <summary>
@@ -476,9 +485,18 @@ namespace LELEngine
 		{
 			float sx = 1f / columns;
 			float sy = 1f / rows;
-			float ox = tile % columns * sx;
-			float oy = tile / columns * sy;
-			Matrix4 clipToTexture = Matrix4.CreateScale(0.5f * sx, 0.5f * sy, 0.5f) * Matrix4.CreateTranslation(ox + 0.5f * sx, oy + 0.5f * sy, 0.5f);
+			return ShadowTextureMatrix(lightView, lightProjection, new Vector4(tile % columns * sx, tile / columns * sy, (tile % columns + 1) * sx, (tile / columns + 1) * sy));
+		}
+
+		/// <summary>
+		///     World position to shadow map texture space for Engine/Shadows.glsl: xy inside the rectangle
+		///     <paramref name="rect" /> of the atlas (texture coordinates: min.xy, max.xy), z the depth 0..1.
+		/// </summary>
+		public static Matrix4 ShadowTextureMatrix(Matrix4 lightView, Matrix4 lightProjection, Vector4 rect)
+		{
+			float sx = rect.Z - rect.X;
+			float sy = rect.W - rect.Y;
+			Matrix4 clipToTexture = Matrix4.CreateScale(0.5f * sx, 0.5f * sy, 0.5f) * Matrix4.CreateTranslation(rect.X + 0.5f * sx, rect.Y + 0.5f * sy, 0.5f);
 			return lightView * lightProjection * clipToTexture;
 		}
 
@@ -518,11 +536,6 @@ namespace LELEngine
 
 		#region PrivateMethods
 
-		private static void SetShadowBiasUniforms(ShaderProgram program)
-		{
-			program.SetFloat("shadowDepthBias", Shadows.DepthBiasTexels);
-			program.SetFloat("shadowNormalBias", Shadows.NormalBiasTexels);
-		}
 
 		// A changed GI.Mode becomes the method only where the editor allows it (edit mode); while the game runs it is
 		// reported once and ignored.
@@ -554,26 +567,54 @@ namespace LELEngine
 		#region NestedTypes
 
 		/// <summary>
-		///     The camera shadow map's cascades this frame (see <see cref="ShadowCascades" />): each covers a slice of the
-		///     view up to the shadow distance, rendered into its own tile of <see cref="ShadowMap" />.
+		///     A set of directional shadow maps in one atlas (the camera's this frame, <see cref="ShadowCascades" />; a GI
+		///     pass's grid-covering ones): every shadowed light's cascades as tiles. A camera cascade covers a slice of the
+		///     view up to the shadow distance. Lights are indexed as <see cref="DirectionalLightBuffer.Shining" />.
 		/// </summary>
 		public sealed class ShadowCascadeData
 		{
+			/// <summary>Cascades of one light at most.</summary>
 			public const int MaxCount = 4;
 
-			/// <summary>Cascades in use, 0 when there is no shadow map this frame.</summary>
-			public int Count;
+			public const int MaxLights = DirectionalLight.MaxLights;
 
-			/// <summary>World -> the cascade's tile of the map (<see cref="ShadowTextureMatrix" />).</summary>
-			public readonly Matrix4[] Matrices = new Matrix4[MaxCount];
+			/// <summary>Tiles of the atlas at most (every light's cascades).</summary>
+			public const int MaxTiles = MaxCount * MaxLights;
+
+			/// <summary>Tiles in use, 0 when there is no shadow map this frame.</summary>
+			public int TileCount;
+
+			/// <summary>Per light: its first tile.</summary>
+			public readonly int[] LightFirst = new int[MaxLights];
+
+			/// <summary>Per light: its cascades, 0 when it casts no shadows.</summary>
+			public readonly int[] LightCount = new int[MaxLights];
+
+			/// <summary>World -> the tile of the map (<see cref="ShadowTextureMatrix(Matrix4, Matrix4, Vector4)" />).</summary>
+			public readonly Matrix4[] Matrices = new Matrix4[MaxTiles];
 
 			/// <summary>xyz = center, w = squared radius inside which a receiver uses the cascade (world units).</summary>
-			public readonly Vector4[] Spheres = new Vector4[MaxCount];
+			public readonly Vector4[] Spheres = new Vector4[MaxTiles];
 
-			/// <summary>Shadows fade out toward <see cref="FadeDistance" /> from <see cref="FadeCenter" /> (the camera).</summary>
+			/// <summary>The tile in the atlas's texture coordinates (min.xy, max.xy).</summary>
+			public readonly Vector4[] Rects = new Vector4[MaxTiles];
+
+			/// <summary>Shadows fade out toward <see cref="FadeDistance" /> from <see cref="FadeCenter" /> (the camera); 0: no fade.</summary>
 			public Vector3 FadeCenter;
 
 			public float FadeDistance;
+
+			/// <summary>The main light's cascades (light 0), 0 when it has no shadow map this frame.</summary>
+			public int Count => LightCount[0];
+
+			/// <summary>No maps: no tiles, no light with cascades.</summary>
+			public void Clear()
+			{
+				TileCount = 0;
+				Array.Clear(LightFirst, 0, MaxLights);
+				Array.Clear(LightCount, 0, MaxLights);
+				FadeDistance = 0f;
+			}
 		}
 
 		/// <summary>GL handles and layout of a frame's radiance cache (see <see cref="RadianceCache" />).</summary>
@@ -672,8 +713,20 @@ namespace LELEngine
 		/// <summary>Receivers move this many texels along their normal, the more the more grazing the light (scaled like the depth bias).</summary>
 		public float NormalBiasTexels = 1f;
 
+		[Header("Several directional lights")]
+		[Tooltip("How many directional lights cast shadows at once: the main light first, then the brightest that ask (Cast Shadows on the light). Every one renders the scene again into its cascades")]
+		[Range(1, DirectionalLight.MaxLights)]
+		public int ShadowedLights = 2;
+
+		[Tooltip("Resolution of the shadow map of each directional light after the first that casts shadows (an atlas of its cascades, as Map Size is the first light's): half the first light's by default, so their shadows are a little softer")]
+		public int AdditionalLightMapSize = 1024;
+
+		[Tooltip("Cascades of each directional light after the first that casts shadows. Fewer cost less (every cascade renders the casters again) and blur the shadows near the camera")]
+		public ShadowCascadeCount AdditionalLightCascades = ShadowCascadeCount.Four;
+
 		// The cascade count comes last: the editor draws the splits on a bar below it (the split fields are hidden).
 
+		[Header("First light")]
 		public ShadowCascadeCount Cascades = ShadowCascadeCount.Four;
 
 		/// <summary>With two cascades: where the second begins, as a fraction of the shadow distance.</summary>

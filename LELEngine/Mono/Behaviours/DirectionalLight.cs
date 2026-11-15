@@ -1,12 +1,22 @@
 using LELEngine;
 using OpenTK.Mathematics;
 
-/// <summary>The sun: shines along its transform's forward axis. <see cref="This" /> is the active scene's first one.</summary>
+/// <summary>
+///     A light from infinitely far away, shining along its transform's forward axis: a sun, a moon, the light of a planet
+///     nearby. The loaded scenes may hold several: at most <see cref="MaxLights" /> shine at once (the main light, then
+///     the brightest; Rendering.DirectionalLightBuffer). Each lights the lit materials, the particles and the volumetric
+///     objects (<see cref="AffectsVolumes" />), goes into the GI (<see cref="AffectsGI" />) and casts shadows
+///     (<see cref="CastShadows" />; how many lights cast them at once and how fine the other lights' maps are is the
+///     project's <see cref="ShadowSettings" />). <see cref="This" /> is the main light: the active scene's first one.
+/// </summary>
 [ExecuteAlways]
 [InspectorColor(InspectorColorKind.Lighting)]
 public sealed class DirectionalLight : Behaviour
 {
 	#region PublicFields
+
+	/// <summary>Directional lights that shine at once (the shaders' list, Engine/DirectionalLights.glsl).</summary>
+	public const int MaxLights = 4;
 
 	public static DirectionalLight This => SceneManager.MainLight;
 
@@ -14,6 +24,61 @@ public sealed class DirectionalLight : Behaviour
 
 	/// <summary>Radiance units: a white surface facing the sun at strength 1 reflects about 1.</summary>
 	public float Strength = 1f;
+
+	[Header("Shadows")]
+	[Tooltip("Geometry blocks the light: it gets a shadow map of its own, when it is one of the lights the project lets cast shadows (Project Settings > Lighting > Shadows: the main light first, then the brightest)")]
+	public bool CastShadows = true;
+
+	[Header("Global illumination")]
+	[Tooltip("The light bounces off what it lights (the GI: voxel cone tracing, Lumen)")]
+	public bool AffectsGI = true;
+
+	[Tooltip("How much of the light goes into the GI")]
+	[Range(0f, 10f)]
+	public float IndirectStrength = 1f;
+
+	[Header("Volumes")]
+	[Tooltip("The light lights the volumetric objects, through their cloud (a cloud's own Sun always lights it)")]
+	public bool AffectsVolumes = true;
+
+	[Tooltip("How strongly it lights the volumetric objects, relative to surfaces")]
+	[Range(0f, 10f)]
+	public float VolumetricStrength = 1f;
+
+	#endregion
+
+	#region PublicProperties
+
+	/// <summary>The radiance a white surface facing the light reflects: colour x strength.</summary>
+	public Vector3 Radiance => new Vector3(Color.R, Color.G, Color.B) * Strength;
+
+	/// <summary>The unit vector towards the light (against its forward axis; straight up when the axis is degenerate).</summary>
+	public Vector3 Towards
+	{
+		get
+		{
+			Vector3 forward = transform.forward;
+			return forward.LengthSquared > 1e-12f ? -forward.Normalized() : Vector3.UnitY;
+		}
+	}
+
+	/// <summary>It shines: enabled on an active object, with a strength and a colour.</summary>
+	public bool Shines => !IsDestroyed && isActiveAndEnabled && Strength > 0f && (Color.R > 0f || Color.G > 0f || Color.B > 0f);
+
+	#endregion
+
+	#region LifecycleMethods
+
+	public override void OnDisable()
+	{
+		// The frame's list keeps no light that is off (it would hold its scene until the next frame rendered).
+		LELEngine.Rendering.DirectionalLightBuffer.Forget(this);
+	}
+
+	public override void OnDestroy()
+	{
+		LELEngine.Rendering.DirectionalLightBuffer.Forget(this);
+	}
 
 	#endregion
 }

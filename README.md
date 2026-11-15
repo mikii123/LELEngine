@@ -104,6 +104,10 @@ Built on .NET 10, OpenTK 4.9 (GLFW) and OpenGL 4.6 (4.3 minimum), developed and 
 **Rendering**
 - Pass-based renderer: HDR target, depth prepass, cascaded directional shadow maps (tent filtered), post-processing,
   GPU profiler.
+- Several directional lights at once (suns, moons; up to 4 shine, the brightest): each lights the lit materials, the
+  particles and the volumetric objects, goes into the GI of either mode and casts cascaded shadows of its own (one
+  atlas; how many lights cast shadows and how fine the other lights' maps are is a project setting). The lights and
+  the shadow maps' layout are uniform buffers uploaded once a frame.
 - Layers and camera stacking (as URP): 32 layers (the project names 8..31 in Project Settings > Layers), a culling
   mask per camera; a base camera clears and renders, the overlay cameras of its stack draw over it in order (optionally
   clearing the depth). One camera of the stack lights the world (screen-space GI, shadow cascades, GI volume, its

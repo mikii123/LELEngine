@@ -255,7 +255,7 @@ namespace LELEngine.Rendering.Passes
 			Lighting.SetUniforms(program, false, false);
 			// The local lights' shadow rays (GI shadows) trace the global distance field.
 			Lighting.SetSdfUniforms(program);
-			gridShadow.SetUniforms(program, 6);
+			gridShadow.SetUniforms(program, Lighting.ShadowMapTextureUnit, 6);
 			program.SetTexture("CardIndex", TextureTarget.Texture2D, atlas.CardIndex, 0);
 			program.SetTexture("CardAlbedo", TextureTarget.Texture2D, atlas.Albedo, 1);
 			program.SetTexture("CardNormal", TextureTarget.Texture2D, atlas.Normal, 2);

@@ -221,6 +221,30 @@ namespace TestGame.Scenes
 			/// <summary>No sun, no ambient, a black sky: the emitters are the only light, so their GI (and any lag of it) shows plainly.</summary>
 			public bool Night;
 
+			/// <summary>Directional lights in the scene: the sun and Suns - 1 coloured ones from other sides (blue, red, green, ...).</summary>
+			public int Suns = 1;
+
+			/// <summary>How many directional lights cast shadows (0: the project's setting).</summary>
+			public int SunShadows;
+
+			/// <summary>Cascades of the lights after the first that casts shadows: 1, 2 or 4 (0: the project's setting).</summary>
+			public int SunCascades;
+
+			/// <summary>The other lights' shadow map size (0: the project's setting).</summary>
+			public int SunMapSize;
+
+			/// <summary>The extra lights go into the GI.</summary>
+			public bool SunGI = true;
+
+			/// <summary>The extra lights light the volumetric objects.</summary>
+			public bool SunVolumes = true;
+
+			/// <summary>The extra lights cast shadows (when the budget lets them).</summary>
+			public bool SunCastShadows = true;
+
+			/// <summary>Degrees a second the extra lights turn about the vertical axis (0: still).</summary>
+			public float SunSpin;
+
 			// ---- Ghosting measurements (see GhostTest): scripted events, logged screen regions, a noise window ----
 
 			/// <summary>Frame at which the orb Orb0 jumps half its orbit (0 = never).</summary>
@@ -418,6 +442,7 @@ namespace TestGame.Scenes
 		/// </summary>
 		public static void ApplyHarness(Scene scene, Options options)
 		{
+			BuildExtraSuns(scene, options);
 			if (options.VoxelView)
 			{
 				LELEngine.Rendering.Passes.VoxelDebugPass voxelView = Game.Mono.Renderer.GetPass<LELEngine.Rendering.Passes.VoxelDebugPass>();
@@ -1202,6 +1227,59 @@ namespace TestGame.Scenes
 			light.Range = range;
 			return light;
 		}
+
+		/// <summary>
+		///     suns=N: N - 1 more directional lights, each of its own colour and from its own side, so every light's part of
+		///     the image can be told apart (lit sides, shadows, the GI's bounce, the clouds); sunshadows / suncascades /
+		///     sunmap set the project's shadow budget for them, sungi / sunvol / suncast the lights' own switches.
+		/// </summary>
+		private static void BuildExtraSuns(Scene scene, Options options)
+		{
+			if (options.SunShadows > 0)
+			{
+				Lighting.Shadows.ShadowedLights = options.SunShadows;
+			}
+
+			if (options.SunCascades > 0)
+			{
+				Lighting.Shadows.AdditionalLightCascades = options.SunCascades >= 4 ? ShadowCascadeCount.Four : options.SunCascades >= 2 ? ShadowCascadeCount.Two : ShadowCascadeCount.One;
+			}
+
+			if (options.SunMapSize > 0)
+			{
+				Lighting.Shadows.AdditionalLightMapSize = options.SunMapSize;
+			}
+
+			for (int i = 1; i < options.Suns; i++)
+			{
+				int k = (i - 1) % ExtraSunColors.Length;
+				GameObject go = scene.CreateGameObject("Sun " + (i + 1));
+				go.transform.rotation = QuaternionHelper.LookRotation(-ExtraSunDirections[k].Normalized(), Vector3.UnitY);
+				DirectionalLight light = go.AddComponent<DirectionalLight>();
+				light.Color = ExtraSunColors[k];
+				light.Strength = ExtraSunStrengths[k];
+				light.AffectsGI = options.SunGI;
+				light.AffectsVolumes = options.SunVolumes;
+				light.CastShadows = options.SunCastShadows;
+				if (options.SunSpin != 0f && options.Animate)
+				{
+					go.AddComponent<SunSpinner>().Speed = options.SunSpin;
+				}
+			}
+		}
+
+		// Towards the extra lights: the other side of the room from the sun, lower, from behind the camera, from the left.
+		private static readonly Vector3[] ExtraSunDirections =
+		{
+			new Vector3(-0.55f, 0.6f, 0.45f), new Vector3(0.2f, 0.35f, 0.9f), new Vector3(-0.8f, 0.5f, -0.3f), new Vector3(0.7f, 0.9f, 0.2f), new Vector3(-0.1f, 0.8f, -0.6f)
+		};
+
+		private static readonly Color4[] ExtraSunColors =
+		{
+			new Color4(0.35f, 0.55f, 1f, 1f), new Color4(1f, 0.3f, 0.25f, 1f), new Color4(0.35f, 1f, 0.45f, 1f), new Color4(1f, 0.85f, 0.3f, 1f), new Color4(0.9f, 0.4f, 1f, 1f)
+		};
+
+		private static readonly float[] ExtraSunStrengths = { 0.9f, 0.7f, 0.55f, 0.4f, 0.3f };
 
 		private static void BuildLight(Scene scene)
 		{

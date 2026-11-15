@@ -86,6 +86,16 @@ namespace LELEngine
 			}
 		}
 
+		/// <summary>The enabled directional lights on active objects, in the scene's order (<see cref="MainLight" /> first).</summary>
+		public IReadOnlyList<DirectionalLight> DirectionalLights
+		{
+			get
+			{
+				RebuildIfDirty();
+				return directionalLights;
+			}
+		}
+
 		/// <summary>The scene's 2D physics world (created on first use: a rigidbody or collider becoming active, a query).</summary>
 		public PhysicsScene2D Physics2D => physics2D ??= new PhysicsScene2D(this);
 
@@ -117,6 +127,7 @@ namespace LELEngine
 		/// <summary>The enabled cameras on active objects, in component order.</summary>
 		private List<Camera> cameras = new List<Camera>();
 		private DirectionalLight mainLight;
+		private List<DirectionalLight> directionalLights = new List<DirectionalLight>();
 		private bool dirty = true;
 		private double fixedAccumulator;
 		private int activationSuspended;
@@ -1041,7 +1052,7 @@ namespace LELEngine
 			var newRunning = new List<Behaviour>(components.Count);
 			var newRenderers = new List<MeshRenderer>();
 			var newCameras = new List<Camera>();
-			DirectionalLight light = null;
+			var newLights = new List<DirectionalLight>();
 			foreach (Behaviour component in components)
 			{
 				if (component.dead)
@@ -1067,8 +1078,8 @@ namespace LELEngine
 					case Camera cam:
 						newCameras.Add(cam);
 						break;
-					case DirectionalLight dir when light == null:
-						light = dir;
+					case DirectionalLight dir:
+						newLights.Add(dir);
 						break;
 				}
 			}
@@ -1077,7 +1088,8 @@ namespace LELEngine
 			running = newRunning;
 			renderers = newRenderers;
 			cameras = newCameras;
-			mainLight = light;
+			directionalLights = newLights;
+			mainLight = newLights.Count > 0 ? newLights[0] : null;
 		}
 
 		private static void Call(Behaviour component, Callback callback)

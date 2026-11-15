@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using LELEngine.Shaders;
 using OpenTK.Graphics.OpenGL4;
 using OpenTK.Mathematics;
@@ -6,13 +7,17 @@ using OpenTK.Mathematics;
 namespace LELEngine.Rendering.Passes
 {
 	/// <summary>
-	///     Renders the scene depth from the directional light into a cascaded shadow map: the view up to the shadow
-	///     distance is split into slices (<see cref="ShadowSettings.Cascades" />), each rendered into its own tile of
-	///     one atlas, so the slices near the camera get small, sharp texels. A cascade's orthographic frustum encloses
-	///     the bounding sphere of its slice (its size does not change as the camera turns) and is snapped to its texels
-	///     (the shadows do not shimmer as the camera moves). Results are published through
-	///     <see cref="Lighting.ShadowCascades" /> and <see cref="Lighting.ShadowMap" />.
-	///     GPU-driven: per cascade the opaque casters are culled against its view on the GPU and drawn by one indirect
+	///     Renders the scene depth from the directional lights that cast shadows (<see cref="DirectionalLightBuffer.CastsShadows" />)
+	///     into one atlas of cascaded shadow maps: for each light the view up to the shadow distance is split into slices
+	///     (<see cref="ShadowSettings.Cascades" /> for the first light, <see cref="ShadowSettings.AdditionalLightCascades" />
+	///     for the others), each rendered into its own tile, so the slices near the camera get small, sharp texels. A
+	///     cascade's orthographic frustum encloses the bounding sphere of its slice (its size does not change as the camera
+	///     turns) and is snapped to its texels (the shadows do not shimmer as the camera moves). The first light's tiles
+	///     fill the map as before (one fills it, two sit side by side, four in 2 x 2); the other lights' maps are stacked
+	///     beside it, so a scene with one shadowed light has the atlas it always had. Results are published through
+	///     <see cref="Lighting.ShadowCascades" /> (uploaded as <see cref="Lighting.CameraShadows" />) and
+	///     <see cref="Lighting.ShadowMap" />.
+	///     GPU-driven: per tile the opaque casters are culled against its view on the GPU and drawn by one indirect
 	///     call; the transparent casters follow into the map's transmittance attachment (<see cref="TransparentShadows" />,
 	///     published as <see cref="Lighting.ShadowTransmittance" />).
 	/// </summary>
@@ -25,11 +30,16 @@ namespace LELEngine.Rendering.Passes
 		public override RenderPassScope Scope => RenderPassScope.Frame;
 		public Framebuffer ShadowTarget => shadowTarget;
 
+		/// <summary>Tiles (cascades of every shadowed light) the last frame rendered.</summary>
+		public int TileCount { get; private set; }
+
 		#endregion
 
 		#region PrivateFields
 
-		private readonly Matrix4[] projections = new Matrix4[Lighting.ShadowCascadeData.MaxCount];
+		private readonly Matrix4[] projections = new Matrix4[Lighting.ShadowCascadeData.MaxTiles];
+		private readonly Matrix4[] views = new Matrix4[Lighting.ShadowCascadeData.MaxTiles];
+		private readonly Vector3i[] viewports = new Vector3i[Lighting.ShadowCascadeData.MaxTiles];
 		private Framebuffer shadowTarget;
 		private ShaderProgram instancedDepth;
 
@@ -46,25 +56,56 @@ namespace LELEngine.Rendering.Passes
 		{
 			ShadowSettings settings = Lighting.Shadows;
 			Lighting.ShadowCascadeData cascades = Lighting.ShadowCascades;
-			DirectionalLight light = DirectionalLight.This;
+			IReadOnlyList<DirectionalLight> lights = DirectionalLightBuffer.Shining;
+			cascades.Clear();
+			TileCount = 0;
 
-			if (!settings.Enabled || light == null || context.Camera == null)
+			if (!settings.Enabled || context.Camera == null || DirectionalLightBuffer.ShadowedCount == 0)
 			{
-				cascades.Count = 0;
 				Lighting.ShadowMap = null;
 				Lighting.ShadowTransmittance = null;
+				Lighting.CameraShadows.Upload(cascades);
 				return;
 			}
 
-			// Tiles: one cascade fills the map, two sit side by side, four in 2 x 2.
-			int count = settings.Cascades == ShadowCascadeCount.Four ? 4 : settings.Cascades == ShadowCascadeCount.Two ? 2 : 1;
-			int columns = count == 1 ? 1 : 2;
-			int rows = count == 4 ? 2 : 1;
-			int tileSize = Math.Max(16, count == 1 ? settings.MapSize : settings.MapSize / 2);
-			EnsureTarget(tileSize * columns, tileSize * rows);
+			// The first shadowed light's map as it always was; the other lights' maps in a column beside it.
+			Layout(settings.Cascades, settings.MapSize, out int mainCount, out int mainColumns, out int mainRows, out int mainTile);
+			Layout(settings.AdditionalLightCascades, settings.AdditionalLightMapSize, out int otherCount, out int otherColumns, out int otherRows, out int otherTile);
+			int others = DirectionalLightBuffer.ShadowedCount - 1;
+			int mainWidth = mainTile * mainColumns;
+			int mainHeight = mainTile * mainRows;
+			int otherHeight = otherTile * otherRows;
+			int atlasWidth = mainWidth + (others > 0 ? otherTile * otherColumns : 0);
+			int atlasHeight = Math.Max(mainHeight, others * otherHeight);
+			EnsureTarget(atlasWidth, atlasHeight);
 
-			Matrix4 lightView = LightView(light);
-			ComputeCascades(context, settings, lightView, count, columns, rows, tileSize, cascades);
+			int tiles = 0;
+			int shadowed = 0;
+			for (int i = 0; i < lights.Count; i++)
+			{
+				if (!DirectionalLightBuffer.CastsShadows(i))
+				{
+					continue;
+				}
+
+				bool main = shadowed == 0;
+				int count = main ? mainCount : otherCount;
+				int columns = main ? mainColumns : otherColumns;
+				int tileSize = main ? mainTile : otherTile;
+				var origin = new Vector2i(main ? 0 : mainWidth, main ? 0 : (shadowed - 1) * otherHeight);
+				Matrix4 lightView = LightView(lights[i].Towards);
+				cascades.LightFirst[i] = tiles;
+				cascades.LightCount[i] = count;
+				ComputeCascades(context, settings, lightView, count, columns, tileSize, origin, new Vector2(atlasWidth, atlasHeight), cascades, tiles);
+				tiles += count;
+				shadowed++;
+			}
+
+			cascades.TileCount = tiles;
+			cascades.FadeCenter = context.CameraPosition;
+			cascades.FadeDistance = Math.Max(settings.Distance, Math.Max(context.Camera.NearClip, 0.01f) + 0.1f);
+			Lighting.CameraShadows.Upload(cascades);
+			TileCount = tiles;
 
 			GpuScene gpu = context.Renderer.GpuScene;
 			bool gpuDriven = gpu.Active && instancedDepth != null && instancedDepth.IsLinked;
@@ -76,18 +117,18 @@ namespace LELEngine.Rendering.Passes
 			GLState.SetColorWrite(false);
 			GL.Clear(ClearBufferMask.DepthBufferBit);
 
-			for (int i = 0; i < count; i++)
+			for (int i = 0; i < tiles; i++)
 			{
-				SetTileViewport(i, columns, tileSize);
+				SetTileViewport(i);
 				if (gpuDriven)
 				{
 					// The culling dispatch binds its own program: the depth program is bound after it. The casters are
 					// the lighting camera's layers (the tables hold every camera's renderers).
-					gpu.CullShadows(lightView * projections[i], context.CullingMask);
+					gpu.CullShadows(views[i] * projections[i], context.CullingMask);
 				}
 
 				program.Use();
-				program.SetMatrix4("viewMatrix", lightView);
+				program.SetMatrix4("viewMatrix", views[i]);
 				program.SetMatrix4("projectionMatrix", projections[i]);
 
 				if (gpuDriven)
@@ -106,22 +147,26 @@ namespace LELEngine.Rendering.Passes
 				}
 			}
 
-			// Transparent casters: what they let through, in the map's transmittance attachment (cleared by the first cascade).
+			// Transparent casters: what they let through, in the map's transmittance attachment (cleared by the first tile).
+			// Whether the frame has any is asked once, not per tile.
 			RenderTexture transmittance = null;
-			for (int i = 0; i < count; i++)
+			if (TransparentShadows.HasCasters(context))
 			{
-				SetTileViewport(i, columns, tileSize);
-				transmittance = TransparentShadows.Draw(context, shadowTarget, lightView, projections[i], i == 0) ?? transmittance;
+				for (int i = 0; i < tiles; i++)
+				{
+					SetTileViewport(i);
+					transmittance = TransparentShadows.DrawCasters(context, shadowTarget, views[i], projections[i], i == 0) ?? transmittance;
+				}
 			}
 
 			// Particle outputs that cast shadows (alpha tested, depth only).
 			if (VFX.VfxRuntime.Instances.Count > 0)
 			{
 				GLState.SetColorWrite(false);
-				for (int i = 0; i < count; i++)
+				for (int i = 0; i < tiles; i++)
 				{
-					SetTileViewport(i, columns, tileSize);
-					VFX.VfxRuntime.DrawShadowCasters(context, lightView, projections[i]);
+					SetTileViewport(i);
+					VFX.VfxRuntime.DrawShadowCasters(context, views[i], projections[i]);
 				}
 			}
 
@@ -137,7 +182,7 @@ namespace LELEngine.Rendering.Passes
 			shadowTarget = null;
 			instancedDepth?.Delete();
 			instancedDepth = null;
-			Lighting.ShadowCascades.Count = 0;
+			Lighting.ShadowCascades.Clear();
 			Lighting.ShadowMap = null;
 			Lighting.ShadowTransmittance = null;
 		}
@@ -145,6 +190,15 @@ namespace LELEngine.Rendering.Passes
 		#endregion
 
 		#region PrivateMethods
+
+		// A light's map: one cascade fills it, two sit side by side (the map half as tall), four in 2 x 2.
+		private static void Layout(ShadowCascadeCount cascades, int mapSize, out int count, out int columns, out int rows, out int tileSize)
+		{
+			count = cascades == ShadowCascadeCount.Four ? 4 : cascades == ShadowCascadeCount.Two ? 2 : 1;
+			columns = count == 1 ? 1 : 2;
+			rows = count == 4 ? 2 : 1;
+			tileSize = Math.Max(16, count == 1 ? mapSize : mapSize / 2);
+		}
 
 		private void EnsureTarget(int width, int height)
 		{
@@ -161,30 +215,27 @@ namespace LELEngine.Rendering.Passes
 			shadowTarget.Validate();
 		}
 
-		private static void SetTileViewport(int tile, int columns, int tileSize)
+		private void SetTileViewport(int tile)
 		{
-			GL.Viewport(tile % columns * tileSize, tile / columns * tileSize, tileSize, tileSize);
+			Vector3i viewport = viewports[tile];
+			GL.Viewport(viewport.X, viewport.Y, viewport.Z, viewport.Z);
 		}
 
-		/// <summary>View from the light, origin at the world origin: the cascades are positioned by their projections.</summary>
-		private static Matrix4 LightView(DirectionalLight light)
+		/// <summary>View from a light (the unit vector towards it), origin at the world origin: the cascades are positioned by their projections.</summary>
+		private static Matrix4 LightView(Vector3 towards)
 		{
-			Vector3 direction = light.transform.forward;
-			if (direction.LengthSquared < 1e-6f)
-			{
-				direction = -Vector3.UnitY;
-			}
-			direction.Normalize();
-
-			Vector3 up = Math.Abs(direction.Y) > 0.99f ? Vector3.UnitZ : Vector3.UnitY;
-			return Matrix4.LookAt(-direction, Vector3.Zero, up);
+			Vector3 up = Math.Abs(towards.Y) > 0.99f ? Vector3.UnitZ : Vector3.UnitY;
+			return Matrix4.LookAt(towards, Vector3.Zero, up);
 		}
 
 		/// <summary>
-		///     Splits the view between the near plane and the shadow distance, fits every cascade's projection around
-		///     its slice and publishes the cascades.
+		///     Splits the view between the near plane and the shadow distance for one light, fits every cascade's
+		///     projection around its slice and writes the cascades as tiles <paramref name="firstTile" /> on: tile k of the
+		///     light sits at column k % <paramref name="columns" /> of its map, whose bottom left texel is
+		///     <paramref name="origin" />.
 		/// </summary>
-		private void ComputeCascades(RenderContext context, ShadowSettings settings, Matrix4 lightView, int count, int columns, int rows, int tileSize, Lighting.ShadowCascadeData cascades)
+		private void ComputeCascades(RenderContext context, ShadowSettings settings, Matrix4 lightView, int count, int columns, int tileSize, Vector2i origin, Vector2 atlasSize, Lighting.ShadowCascadeData cascades,
+			int firstTile)
 		{
 			Camera camera = context.Camera;
 
@@ -252,21 +303,24 @@ namespace LELEngine.Rendering.Passes
 				lightCenter.Y = MathF.Floor(lightCenter.Y / texel) * texel;
 
 				float depth = Math.Max(depthRange, radius);
-				projections[i] = Matrix4.CreateOrthographicOffCenter(
+				int tile = firstTile + i;
+				projections[tile] = Matrix4.CreateOrthographicOffCenter(
 					lightCenter.X - radius, lightCenter.X + radius,
 					lightCenter.Y - radius, lightCenter.Y + radius,
 					-lightCenter.Z - depth, -lightCenter.Z + depth);
+				views[tile] = lightView;
 
-				cascades.Matrices[i] = Lighting.ShadowTextureMatrix(lightView, projections[i], i, columns, rows);
+				int x = origin.X + i % columns * tileSize;
+				int y = origin.Y + i / columns * tileSize;
+				viewports[tile] = new Vector3i(x, y, tileSize);
+				var rect = new Vector4(x / atlasSize.X, y / atlasSize.Y, (x + tileSize) / atlasSize.X, (y + tileSize) / atlasSize.Y);
+				cascades.Rects[tile] = rect;
+				cascades.Matrices[tile] = Lighting.ShadowTextureMatrix(lightView, projections[tile], rect);
 
 				// A receiver uses the first cascade it is well inside of: room for the filter, the snap and the normal offset.
 				float inner = Math.Max(radius - texel * (5f + 2.5f * Math.Max(settings.NormalBiasTexels, 0f)), radius * 0.5f);
-				cascades.Spheres[i] = new Vector4(center, inner * inner);
+				cascades.Spheres[tile] = new Vector4(center, inner * inner);
 			}
-
-			cascades.Count = count;
-			cascades.FadeCenter = context.CameraPosition;
-			cascades.FadeDistance = distance;
 		}
 
 		#endregion

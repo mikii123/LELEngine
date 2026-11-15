@@ -5,10 +5,12 @@
 #include "Engine/Shadows.glsl"
 #include "Engine/VoxelConeTracingCore.glsl"
 #include "Engine/Lights.glsl"
+#include "Engine/DirectionalLights.glsl"
 
 // Voxel light injection: turns the cached geometry volumes into a radiance volume.
-//   radiance = albedo * (direct sun light with shadows + the local lights that go into the GI, blocked by the voxels
-//              towards them when they ask + bounce traced from the source volume) + emission
+//   radiance = albedo * (the directional lights that go into the GI, each with its shadows + the local lights that go
+//              into the GI, blocked by the voxels towards them when they ask + bounce traced from the source volume)
+//              + emission
 // VoxelGIPass runs it several times per frame: first without the bounce, then each time tracing the result of the
 // pass before (one more bounce per pass, nothing carried over between frames). Where static and dynamic geometry
 // share a voxel their attributes are averaged by occupancy. The radiance is stored premultiplied by the occupancy.
@@ -37,13 +39,6 @@ layout(binding = 6, rgba16f) uniform writeonly image3D RadianceOut;
 
 // VoxelRadiance (from the core include) is bound to the volume of the previous pass here (unused in the first one).
 
-struct Directional {
-	vec4 dirColor;
-	float dirStrength;
-	vec3 dirDirection;
-};
-uniform Directional LDirectional;
-
 uniform float giBounceStrength; // 0 = no bounce (the first pass of the frame)
 uniform int giBounceCones;      // 6 = hemisphere layout, otherwise a single wide cone
 uniform int injectShadowTaps;   // 4 = spread over the voxel's surface, otherwise 1
@@ -53,14 +48,19 @@ uniform int injectShadowTaps;   // 4 = spread over the voxel's surface, otherwis
 uniform sampler3D VoxelBounceCells;
 uniform int giBounceCells;
 
-// Sun light reaching the voxel's surface, per colour channel. Four taps a quarter voxel from its centre along the
-// surface: a voxel straddling a shadow edge gets the covered fraction, so the edge in the GI is a ramp, not a step
-// that crawls voxel by voxel when the sun moves.
-vec3 VoxelShadow(vec3 surface, vec3 N, vec3 L, float voxelSize)
+// A directional light's light reaching the voxel's surface, per colour channel. Four taps a quarter voxel from its
+// centre along the surface: a voxel straddling a shadow edge gets the covered fraction, so the edge in the GI is a
+// ramp, not a step that crawls voxel by voxel when the light moves.
+vec3 VoxelShadow(int light, vec3 surface, vec3 N, vec3 L, float voxelSize)
 {
+	if (!ShadowLightHasMap(light))
+	{
+		return vec3(1.0);
+	}
+
 	if (injectShadowTaps < 4)
 	{
-		return SampleShadowRGB(surface, N, L);
+		return SampleLightShadowRGB(light, surface, N, L);
 	}
 
 	float s = N.z >= 0.0 ? 1.0 : -1.0;
@@ -68,8 +68,8 @@ vec3 VoxelShadow(vec3 surface, vec3 N, vec3 L, float voxelSize)
 	float b = N.x * N.y * a;
 	vec3 tangent = vec3(1.0 + s * N.x * N.x * a, s * b, -s * N.x) * (voxelSize * 0.25);
 	vec3 bitangent = vec3(b, s + N.y * N.y * a, -N.y) * (voxelSize * 0.25);
-	return 0.25 * (SampleShadowRGB(surface + tangent + bitangent, N, L) + SampleShadowRGB(surface + tangent - bitangent, N, L)
-		+ SampleShadowRGB(surface - tangent + bitangent, N, L) + SampleShadowRGB(surface - tangent - bitangent, N, L));
+	return 0.25 * (SampleLightShadowRGB(light, surface + tangent + bitangent, N, L) + SampleLightShadowRGB(light, surface + tangent - bitangent, N, L)
+		+ SampleLightShadowRGB(light, surface - tangent + bitangent, N, L) + SampleLightShadowRGB(light, surface - tangent - bitangent, N, L));
 }
 
 // How much of a local light reaches a voxel's surface through the geometry: a march through the voxels' occupancy
@@ -127,15 +127,23 @@ void main()
 	float voxelSize = VoxelSize();
 	vec3 position = voxelGridMin + (vec3(coord) + 0.5) * voxelSize;
 
-	// Direct light. The shadow map is sampled on the surface side of the voxel, not at its center.
-	vec3 L = normalize(-LDirectional.dirDirection);
-	float ndl = max(dot(N, L), 0.0);
-	// Per channel: light through tinted transparent casters keeps their colour in the bounce.
-	vec3 shadow = ndl > 0.0 && LDirectional.dirStrength > 0.0 ? VoxelShadow(position + N * voxelSize * 0.5, N, L, voxelSize) : vec3(1.0);
-	vec3 direct = LDirectional.dirColor.rgb * LDirectional.dirStrength * ndl * shadow;
+	// Direct light: the directional lights that go into the GI (Engine/DirectionalLights.glsl), times their indirect
+	// strength. The shadow maps are sampled on the surface side of the voxel, not at its center.
+	vec3 surface = position + N * voxelSize * 0.5;
+	vec3 direct = vec3(0.0);
+	for (int i = 0; i < LelDirectionalCount(); i++)
+	{
+		float giStrength = LelDirectionalGIStrength(i);
+		vec3 L = LelDirectionalTowards(i);
+		float ndl = dot(N, L);
+		if (giStrength > 0.0 && ndl > 0.0)
+		{
+			// Per channel: light through tinted transparent casters keeps their colour in the bounce.
+			direct += LelDirectionalRadiance(i) * (giStrength * ndl) * VoxelShadow(i, surface, N, L, voxelSize);
+		}
+	}
 
 	// The local lights that go into the GI (Engine/Lights.glsl), times their indirect strength, at the voxel's surface.
-	vec3 surface = position + N * voxelSize * 0.5;
 	for (int i = 0; i < LelLightCount(); i++)
 	{
 		float giStrength = lelLights[i].radiance.w;

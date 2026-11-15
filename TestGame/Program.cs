@@ -30,6 +30,9 @@ namespace TestGame
 		///            Scenes: [outdoor=1 open-sky yard] [sky=0|1 procedural skybox] [skybox=asset path] [physics=1] [nav=1] [ui=1] [scene=path]
 		///            [volumetrics=1 volumetric objects: storm with flashes, HQ fog bank, glowing ball, nebula wisp] [volcube=1 a cube in the fog] [volhq=1 the storm as the high quality preset] [volgi=0 volumes without GI] [voltemporal=0 volumes without their temporal filter] [vollight=1|2|3 a lamp flying through the storm, 2: stopping at 6 s, 3: still] [volbig=1 the storm with about 11 M voxels]
 		///            [lights=1 local lights in the room: a point light, a spot, a lamp in a patch of fog (night=1: the sun down)]
+		///            [suns=N directional lights: the sun and N - 1 coloured ones from other sides] [sunshadows=N of them cast shadows]
+		///            [suncascades=1|2|4 and sunmap=size: the other lights' shadow maps] [sungi=0 sunvol=0 suncast=0: the extra lights out of
+		///            the GI / the volumes / the shadows] [sunspin=degrees a second they turn]
 		///            View: [view=ghost from under the ceiling down at the orbs] [camera=x,y,z] [look=x,y,z] [night=1 emitters only]
 		///            Ghosting measurements (GhostTest): [emitterstep=frame] [emitteroff=frame]
 		///            [mover=frame] [moverz=path depth] [moveremission=intensity] [regions=x,y,z;x,y,z;...] [regionsize=px] [regionstart=frame] [regionsource=scene|gi]
@@ -153,6 +156,14 @@ namespace TestGame
 				NoiseFrames = GetInt(args, "noise", 0),
 				NoiseStartFrame = GetInt(args, "noisestart", 1),
 				Night = GetBool(args, "night", false),
+				Suns = GetInt(args, "suns", 1),
+				SunShadows = GetInt(args, "sunshadows", 0),
+				SunCascades = GetInt(args, "suncascades", 0),
+				SunMapSize = GetInt(args, "sunmap", 0),
+				SunGI = GetBool(args, "sungi", true),
+				SunVolumes = GetBool(args, "sunvol", true),
+				SunCastShadows = GetBool(args, "suncast", true),
+				SunSpin = GetFloat(args, "sunspin", 0f),
 				CameraPosition = GetVector3(args, "camera"),
 				CameraLookAt = GetVector3(args, "look")
 			};

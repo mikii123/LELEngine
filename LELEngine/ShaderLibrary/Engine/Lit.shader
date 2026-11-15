@@ -45,6 +45,7 @@ void main()
 #include "Engine/Shadows.glsl"
 #include "Engine/VoxelConeTracing.glsl"
 #include "Engine/Lights.glsl"
+#include "Engine/DirectionalLights.glsl"
 
 // Material: Color, Emissive (rgb color, a intensity, also fed into the GI), Roughness (0 = unset -> 0.6).
 #include "Engine/Instancing.glsl"
@@ -52,12 +53,6 @@ void main()
 in vec3 fNormal;
 in vec3 fPosition;
 in vec2 fTexCoord;
-
-struct Directional {
-	vec4 dirColor;
-	float dirStrength;
-	vec3 dirDirection;
-};
 
 struct Ambient {
 	vec4 ambColor;
@@ -70,7 +65,6 @@ struct Specular {
 	vec3 viewPos;
 };
 
-uniform Directional LDirectional;
 uniform Ambient LAmbient;
 uniform Specular LSpecular;
 
@@ -84,22 +78,10 @@ void main()
 	float materialRoughness = material.params.x;
 
 	vec3 N = normalize(fNormal);
-	vec3 L = normalize(-LDirectional.dirDirection);
 	vec3 V = normalize(LSpecular.viewPos - fPosition);
-	vec3 H = normalize(L + V);
-
-	// Per channel: tinted transparent casters colour their shadows.
-	vec3 shadow = SampleShadowRGB(fPosition, N, L);
 
 	vec3 albedo = color.rgb;
-	vec3 lightColor = LDirectional.dirColor.rgb * LDirectional.dirStrength;
 	float roughness = materialRoughness > 0.0 ? materialRoughness : 0.6;
-
-	// Direct
-	float ndl = max(dot(N, L), 0.0);
-	vec3 diffuse = albedo * lightColor * ndl;
-	float spec = pow(max(dot(N, H), 0.0), LSpecular.specShine) * LSpecular.specStrength;
-	vec3 specular = lightColor * spec * ndl;
 
 	// Indirect: voxel cone tracing replaces most of the flat ambient term.
 	vec3 ambient = LAmbient.ambColor.rgb * LAmbient.ambStrength * albedo;
@@ -111,10 +93,24 @@ void main()
 	vec3 result = ambient * occlusion
 		+ indirectDiffuse * albedo
 		+ indirectSpecular * LSpecular.specStrength
-		+ (diffuse + specular) * shadow
 		+ emissive.rgb * emissive.a;
 
-	// The local lights (Engine/Lights.glsl), lit as the sun, unshadowed.
+	// The directional lights (Engine/DirectionalLights.glsl), each behind its own shadows: Lambert and Blinn-Phong.
+	// Nothing is looked up for a light the surface faces away from.
+	for (int i = 0; i < LelDirectionalCount(); i++)
+	{
+		vec3 L = LelDirectionalTowards(i);
+		float ndl = dot(N, L);
+		if (ndl > 0.0)
+		{
+			// Per channel: tinted transparent casters colour their shadows.
+			vec3 lightColor = LelDirectionalRadiance(i) * SampleLightShadowRGB(i, fPosition, N, L);
+			float spec = pow(max(dot(N, normalize(L + V)), 0.0), LSpecular.specShine) * LSpecular.specStrength;
+			result += (albedo + spec) * lightColor * ndl;
+		}
+	}
+
+	// The local lights (Engine/Lights.glsl), lit as the directional ones, unshadowed.
 	for (int i = 0; i < LelLightCount(); i++)
 	{
 		vec3 Li;

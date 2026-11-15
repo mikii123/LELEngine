@@ -122,6 +122,9 @@ namespace LELEngine.Volumetrics
 		private static readonly Dictionary<(Rendering.Renderer, Camera), ViewTargets> views = new Dictionary<(Rendering.Renderer, Camera), ViewTargets>();
 		private static readonly Dictionary<(Rendering.Renderer, Camera, VolumetricObjectBase), History> histories = new Dictionary<(Rendering.Renderer, Camera, VolumetricObjectBase), History>();
 		private static readonly Vector4[] lightColors = new Vector4[VolumetricObjectBase.MaxLights];
+		private static readonly Vector4[] directionalDirs = new Vector4[DirectionalLight.MaxLights];
+		private static readonly Vector4[] directionalColors = new Vector4[DirectionalLight.MaxLights];
+		private static readonly int[] directionalSlots = new int[DirectionalLight.MaxLights];
 		private static readonly List<(Rendering.Renderer, Camera, VolumetricObjectBase)> staleHistories = new List<(Rendering.Renderer, Camera, VolumetricObjectBase)>();
 
 		private static ComputeShader generate;
@@ -654,15 +657,18 @@ namespace LELEngine.Volumetrics
 			// A new sampling pattern every frame under the temporal filter (golden ratio steps: every offset in turn).
 			program.SetFloat("volJitterOffset", history != null ? history.Frame * 0.618034f % 1f : 0f);
 
-			// The sun, the sky and the flat ambient light (the scene's, or the volume's own). The scene's shadow map is its
-			// main light's: only a cloud lit by that light receives it.
+			// The sun, the sky and the flat ambient light (the scene's, or the volume's own). The scene's shadow maps are
+			// those of the directional lights that cast them: a cloud receives its sun's, when its sun is one of them.
 			DirectionalLight sun = volume.EffectiveSun;
-			bool shadows = volume.ReceiveShadows && sun != null && sun == DirectionalLight.This;
+			int sunIndex = sun != null ? Rendering.DirectionalLightBuffer.IndexOf(sun) : -1;
+			bool shadows = volume.ReceiveShadows && sunIndex >= 0 && Lighting.ShadowCascades.LightCount[sunIndex] > 0;
 			program.SetInt("volReceiveShadows", shadows ? 1 : 0);
+			program.SetInt("volSunShadowLight", Math.Max(sunIndex, 0));
 			program.SetFloat("volShadowStrength", Math.Clamp(volume.ShadowStrength, 0f, 1f));
 			Lighting.SetShadowUniforms(program, shadows);
+			Matrix4 worldToLocal = localToWorld.Inverted();
 			Vector3 towards = sun != null ? -sun.transform.forward : Vector3.UnitY;
-			Vector3 sunLocal = Vector3.TransformVector(towards, localToWorld.Inverted());
+			Vector3 sunLocal = Vector3.TransformVector(towards, worldToLocal);
 			sunLocal = sunLocal.LengthSquared > 1e-12f ? sunLocal.Normalized() : Vector3.UnitY;
 			Vector3 sunColor = sun != null ? new Vector3(sun.Color.R, sun.Color.G, sun.Color.B) * (sun.Strength * volume.SunStrength) : Vector3.Zero;
 			program.SetVector3("volSunDirection", sunLocal);
@@ -696,16 +702,48 @@ namespace LELEngine.Volumetrics
 			program.SetVector3("volDetailOffset", -volume.DetailWind * time);
 
 			// The lights (its own and the scene's, as their transport was worked out): colour x intensity right now.
+			// The scene's other directional lights among them are scattered as the sun is (the cloud's albedo and phase,
+			// its response to the sun), from where they are now: their slots hold only the cloud on the way.
 			program.SetInt("volLightsActive", lights ? 1 : 0);
+			int directional = 0;
 			if (lights)
 			{
 				for (int i = 0; i < lightColors.Length; i++)
 				{
-					lightColors[i] = i < data.LightCount ? new Vector4(data.LightSlots[i].Color, 0f) : Vector4.Zero;
+					VolumeLightSlot slot = data.LightSlots[i];
+					if (i >= data.LightCount)
+					{
+						lightColors[i] = Vector4.Zero;
+					}
+					else if (!slot.IsDirectional)
+					{
+						lightColors[i] = new Vector4(slot.Color, 0f);
+					}
+					else
+					{
+						lightColors[i] = Vector4.Zero;
+						Vector3 color = slot.Color * volume.SunStrength;
+						if (directional < directionalDirs.Length && slot.Directional != null && color.X + color.Y + color.Z > 1e-6f)
+						{
+							Vector3 local = Vector3.TransformVector(slot.Directional.Towards, worldToLocal);
+							directionalDirs[directional] = new Vector4(local.LengthSquared > 1e-12f ? local.Normalized() : Vector3.UnitY, 0f);
+							directionalColors[directional] = new Vector4(color, 0f);
+							directionalSlots[directional] = i;
+							directional++;
+						}
+					}
 				}
 
 				program.SetVector4Array("volLightColors", lightColors);
+				if (directional > 0)
+				{
+					program.SetVector4Array("volDirectionalDirs", directionalDirs);
+					program.SetVector4Array("volDirectionalColors", directionalColors);
+					GL.Uniform4(program.GetUniformLocation("volDirectionalSlots"), directionalSlots[0], directionalSlots[1], directionalSlots[2], directionalSlots[3]);
+				}
 			}
+
+			program.SetInt("volDirectionalCount", directional);
 
 			program.SetMatrix4("volLocalToWorld", localToWorld);
 			program.SetFloat("volExposure", volume.Exposure);

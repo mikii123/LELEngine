@@ -1058,12 +1058,14 @@ namespace LELEngine.Volumetrics
 			program.SetVector4Array("volLightSpots", slotSpots);
 			program.SetFloat("volWorldScale", owner.WorldScale);
 			program.SetFloat("volLightGlow", owner.LightGlow);
+			// How far the cloud is marched towards a directional light (as towards the sun).
+			program.SetFloat("volShadowReach", MathF.Max(owner.ShadowReach, 0.01f) * MathF.Max(owner.NoiseSize, 0.01f));
 		}
 
 		// What the whole transport depends on besides the lights' slots: a change of it reworks every voxel.
 		private int TransportSettingsHash()
 		{
-			return HashCode.Combine(owner.LightGlow, owner.Density, owner.NoiseSize, owner.WorldScale);
+			return HashCode.Combine(owner.LightGlow, owner.Density, owner.NoiseSize, owner.WorldScale, owner.ShadowReach);
 		}
 
 		/// <summary>
@@ -1095,7 +1097,7 @@ namespace LELEngine.Volumetrics
 			{
 				VolumeLightSlot was = LightSlots[i];
 				VolumeLightSlot now = captureSlots[i];
-				if (was.Own != now.Own || was.Scene != now.Scene || was.Params.X != now.Params.X)
+				if (was.Own != now.Own || was.Scene != now.Scene || !ReferenceEquals(was.Directional, now.Directional) || was.Params.X != now.Params.X)
 				{
 					return false;
 				}
@@ -1103,6 +1105,12 @@ namespace LELEngine.Volumetrics
 				if (was.PositionSize == now.PositionSize && was.Params == now.Params && was.Spot == now.Spot)
 				{
 					continue;
+				}
+
+				if (now.IsDirectional)
+				{
+					// A directional light turned against the cloud: its light changes in every voxel.
+					return false;
 				}
 
 				IncludeReach(was, resolution, ref lo, ref hi);

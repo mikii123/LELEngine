@@ -143,6 +143,28 @@ namespace LELEngine
 			}
 		}
 
+		/// <summary>
+		///     The enabled directional lights of the loaded scenes into <paramref name="lights" /> (emptied first): the
+		///     active scene's first (so <see cref="MainLight" /> leads), then the other scenes' in activation order.
+		/// </summary>
+		public static void GetDirectionalLights(List<DirectionalLight> lights)
+		{
+			lights.Clear();
+			Scene activeScene = ActiveScene;
+			if (activeScene != null)
+			{
+				lights.AddRange(activeScene.DirectionalLights);
+			}
+
+			foreach (Scene scene in loaded)
+			{
+				if (scene != activeScene)
+				{
+					lights.AddRange(scene.DirectionalLights);
+				}
+			}
+		}
+
 		/// <summary>The scene of the objects kept across Single loads (<see cref="DontDestroyOnLoad" />); created on first use.</summary>
 		public static Scene DontDestroyOnLoadScene
 		{

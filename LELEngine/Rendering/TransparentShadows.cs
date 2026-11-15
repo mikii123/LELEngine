@@ -56,8 +56,17 @@ namespace LELEngine.Rendering
 		/// </summary>
 		public static RenderTexture Draw(RenderContext context, Framebuffer target, Matrix4 lightView, Matrix4 lightProjection, bool clear = true)
 		{
+			return HasCasters(context) ? DrawCasters(context, target, lightView, lightProjection, clear) : null;
+		}
+
+		/// <summary>
+		///     <see cref="Draw" /> for a frame known to have casters (<see cref="HasCasters" />, asked once by a pass that
+		///     draws several tiles: the question walks every transparent renderer).
+		/// </summary>
+		public static RenderTexture DrawCasters(RenderContext context, Framebuffer target, Matrix4 lightView, Matrix4 lightProjection, bool clear = true)
+		{
 			ShaderProgram program = context.TransparentShadowProgram;
-			if (!HasCasters(context) || program == null || !program.IsLinked)
+			if (program == null || !program.IsLinked)
 			{
 				return null;
 			}
@@ -124,13 +133,22 @@ namespace LELEngine.Rendering
 			return transmittance;
 		}
 
-		/// <summary>Binds a transmittance map for Engine/Shadows.glsl (null: receivers use the opaque shadow only).</summary>
+		/// <summary>
+		///     Binds a transmittance map for Engine/Shadows.glsl (null: receivers use the opaque shadow only). The sampler
+		///     gets its unit either way: left on unit 0 it shares it with a sampler of another type, and a program lighting
+		///     the GI then did not run at all (no light went into the voxels or the cards of a frame without transparent
+		///     casters).
+		/// </summary>
 		public static void SetUniforms(ShaderProgram program, RenderTexture transmittance, int textureUnit)
 		{
 			program.SetInt("shadowTransmittanceEnabled", transmittance != null ? 1 : 0);
 			if (transmittance != null)
 			{
 				program.SetTexture("ShadowTransmittance", TextureTarget.Texture2D, transmittance.Handle, textureUnit);
+			}
+			else
+			{
+				program.SetInt("ShadowTransmittance", textureUnit);
 			}
 		}
 

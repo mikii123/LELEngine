@@ -76,7 +76,21 @@ vec3 LelStandardBRDF(vec3 diffColor, vec3 specColor, float oneMinusReflectivity,
 		+ surfaceReduction * gi.specular * fresnelLerp;
 }
 
-// The direct part alone, for the local lights (Unity's forward-add pass: the same BRDF without the GI).
+// The GI's part alone (what LelStandardBRDF adds to a light's): the irradiance scattered, and the reflection with its
+// loss on rough surfaces and its rise towards the silhouette. With LelStandardBRDFDirect per light it is the whole BRDF
+// for any number of lights.
+vec3 LelStandardBRDFIndirect(vec3 diffColor, vec3 specColor, float oneMinusReflectivity, float perceptualRoughness, vec3 N, vec3 V, LelIndirect gi)
+{
+	float nv = abs(dot(N, V));
+	float roughness = max(perceptualRoughness * perceptualRoughness, 0.002);
+	float surfaceReduction = 1.0 / (roughness * roughness + 1.0);
+	float grazingTerm = clamp(1.0 - perceptualRoughness + (1.0 - oneMinusReflectivity), 0.0, 1.0);
+	vec3 fresnelLerp = mix(specColor, vec3(grazingTerm), LelPow5(1.0 - nv));
+	return diffColor * gi.diffuse + surfaceReduction * gi.specular * fresnelLerp;
+}
+
+// The direct part alone, for one light (Unity's forward-add pass: the same BRDF without the GI): every directional
+// light and every local light.
 vec3 LelStandardBRDFDirect(vec3 diffColor, vec3 specColor, float perceptualRoughness, vec3 N, vec3 V, vec3 L, vec3 lightColor)
 {
 	vec3 H = normalize(L + V);

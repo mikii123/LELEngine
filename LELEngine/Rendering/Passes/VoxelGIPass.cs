@@ -111,8 +111,7 @@ namespace LELEngine.Rendering.Passes
 		private ComputeShader anisoBase;
 		private ComputeShader anisoMip;
 		private ComputeShader shBase;
-		private Framebuffer gridShadow;
-		private RenderTexture gridShadowTransmittance;
+		private GridShadowMap gridShadow;
 
 		private readonly List<MeshRenderer> staticRenderers = new List<MeshRenderer>();
 		private readonly List<MeshRenderer> dynamicRenderers = new List<MeshRenderer>();
@@ -168,12 +167,7 @@ namespace LELEngine.Rendering.Passes
 			{
 				accumulators.Delete();
 			}
-			if (gridShadow.Width != gi.GridShadowMapSize)
-			{
-				gridShadow.Delete();
-				gridShadowTransmittance = null;
-				CreateGridShadow(gi.GridShadowMapSize);
-			}
+			gridShadow.EnsureSize(gi.GridShadowMapSize);
 
 			gi.UpdateGridPlacement(context.CameraPosition, context.CameraForward);
 			PartitionRenderers(context.GIRenderers ?? context.Renderers);
@@ -198,12 +192,9 @@ namespace LELEngine.Rendering.Passes
 
 			if (lightingDue)
 			{
-				Matrix4 lightView;
-				Matrix4 lightProjection;
-				ComputeGridLightMatrices(gi, out lightView, out lightProjection);
-
+				// A grid-covering map per directional light that lights the GI with shadows.
 				profiler.Split("VoxelGI.shadow");
-				RenderGridShadow(context, context.GIRenderers ?? context.Renderers, lightView, lightProjection);
+				gridShadow.Render(context, context.GIRenderers ?? context.Renderers, gi);
 
 				profiler.Split("VoxelGI.blocks");
 				CompactOccupiedBlocks();
@@ -222,7 +213,7 @@ namespace LELEngine.Rendering.Passes
 
 					// Voxels dynamic objects left since this buffer was last written are not revisited; zero them.
 					ClearRadiance(target, radianceRegions[target]);
-					InjectLighting(target, gi, lightView, lightProjection, pass > 0, cells);
+					InjectLighting(target, gi, pass > 0, cells);
 					radianceRegions[target].Clear();
 					radianceRegions[target].AddRange(previousRegions);
 
@@ -290,7 +281,7 @@ namespace LELEngine.Rendering.Passes
 			coverageSamples = Math.Max(1, Math.Min(CoverageSamples, GL.GetInteger((GetPName)0x9318))); // GL_MAX_FRAMEBUFFER_SAMPLES
 			blockList = GL.GenBuffer();
 
-			CreateGridShadow(gi.GridShadowMapSize);
+			gridShadow = new GridShadowMap(gi.GridShadowMapSize);
 		}
 
 		private void Release()
@@ -315,7 +306,6 @@ namespace LELEngine.Rendering.Passes
 			}
 			gridShadow?.Delete();
 			gridShadow = null;
-			gridShadowTransmittance = null;
 			voxelize?.Delete();
 			voxelizeCoverage?.Delete();
 			clearGeometry?.Delete();
@@ -521,14 +511,6 @@ namespace LELEngine.Rendering.Passes
 			return texture;
 		}
 
-		private void CreateGridShadow(int size)
-		{
-			gridShadow = new Framebuffer(size, size);
-			RenderTexture depth = gridShadow.AddDepthAttachment(RenderTextureFormat.Depth32F, true, TextureWrapMode.ClampToBorder);
-			depth.SetBorderColor(1f, 1f, 1f, 1f);
-			depth.SetShadowCompare(true);
-			gridShadow.Validate();
-		}
 
 		// ---------------------------------------------------------------- per frame bookkeeping
 
@@ -935,50 +917,6 @@ namespace LELEngine.Rendering.Passes
 
 		// ---------------------------------------------------------------- lighting
 
-		// Orthographic light frustum that encloses the whole voxel cube.
-		private static void ComputeGridLightMatrices(GlobalIlluminationSettings gi, out Matrix4 lightView, out Matrix4 lightProjection)
-		{
-			Vector3 direction = DirectionalLight.This != null ? DirectionalLight.This.transform.forward : -Vector3.UnitY;
-			if (direction.LengthSquared < 1e-6f)
-			{
-				direction = -Vector3.UnitY;
-			}
-			direction.Normalize();
-			Vector3 up = Math.Abs(direction.Y) > 0.99f ? Vector3.UnitZ : Vector3.UnitY;
-
-			Vector3 center = gi.GridMin + new Vector3(gi.GridSize * 0.5f);
-			lightView = Matrix4.LookAt(center - direction * gi.GridSize, center, up);
-
-			// A cube of edge s projects to at most s * sqrt(3) / 2 from its center in any direction.
-			float extent = gi.GridSize * 0.87f;
-			lightProjection = Matrix4.CreateOrthographicOffCenter(-extent, extent, -extent, extent, 0.01f, gi.GridSize * 2f);
-		}
-
-		private void RenderGridShadow(RenderContext context, IReadOnlyList<MeshRenderer> casters, Matrix4 lightView, Matrix4 lightProjection)
-		{
-			gridShadow.Bind();
-			GLState.SetDepth(true, true);
-			GLState.SetCull(true, TriangleFace.Back);
-			GLState.SetColorWrite(false);
-			GL.Clear(ClearBufferMask.DepthBufferBit);
-
-			context.DepthOnlyProgram.Use();
-			context.DepthOnlyProgram.SetMatrix4("viewMatrix", lightView);
-			context.DepthOnlyProgram.SetMatrix4("projectionMatrix", lightProjection);
-
-			foreach (MeshRenderer renderer in casters)
-			{
-				if (renderer.CastShadows)
-				{
-					renderer.RenderShadowCastersWith(context.DepthOnlyProgram);
-				}
-			}
-
-			gridShadowTransmittance = TransparentShadows.Draw(context, gridShadow, lightView, lightProjection);
-
-			GLState.SetColorWrite(true);
-			GL.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
-		}
 
 		// Lists occupied blocks into the SSBO whose header is the indirect dispatch for injection.
 		private void CompactOccupiedBlocks()
@@ -1047,17 +985,16 @@ namespace LELEngine.Rendering.Passes
 
 		// One injection pass into radiance[target]; with bounce it lights from radiance[current] (the previous pass),
 		// through the bounce cells or by tracing from every voxel.
-		private void InjectLighting(int target, GlobalIlluminationSettings gi, Matrix4 lightView, Matrix4 lightProjection, bool bounce, bool cells)
+		private void InjectLighting(int target, GlobalIlluminationSettings gi, bool bounce, bool cells)
 		{
 			ComputeShader shader = inject[(int)mipMode] ??= new ComputeShader("Engine/VoxelInject.shader", MipModeDefines[(int)mipMode]);
 			ShaderProgram program = shader.Program;
 
 			shader.Use();
 
-			// Sun color/direction; shadows come from the grid-covering map, not the camera one.
+			// The lights' lists; shadows come from the grid-covering maps, not the camera's.
 			Lighting.SetUniforms(program, false, false);
-			Lighting.SetShadowMapUniforms(program, lightView, lightProjection, gridShadow.DepthAttachment.Handle, 1);
-			TransparentShadows.SetUniforms(program, gridShadowTransmittance, 2);
+			gridShadow.SetUniforms(program, 1, 2);
 			program.SetInt("injectShadowTaps", gi.InjectShadowTaps);
 
 			SetTraceUniforms(program, gi);

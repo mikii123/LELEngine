@@ -7,10 +7,12 @@
 #include "Engine/SceneObjects.glsl"
 #include "Engine/SurfaceCache.glsl"
 #include "Engine/Lights.glsl"
+#include "Engine/DirectionalLights.glsl"
 
 // Surface cache lighting, Lumen style, one thread per atlas texel:
-//   direct   = sun with shadows at the captured surface point, and the local lights that go into the GI, blocked by
-//              the global distance field towards them when they ask (recomputed every frame)
+//   direct   = the directional lights that go into the GI, each with its shadows at the captured surface point, and
+//              the local lights that go into the GI, blocked by the global distance field towards them when they ask
+//              (recomputed every frame)
 //   indirect = radiosity interpolated from the card's probes (CardRadiosityProbes.shader: one probe per 4x4
 //              texels, 16 rays per frame, accumulated over frames so multi-bounce lighting converges)
 //   final    = albedo * (direct + indirect) + emission
@@ -23,13 +25,6 @@ uniform sampler2D CardEmissive;
 uniform sampler2D RadiosityProbes;
 
 layout(binding = 0, rgba16f) uniform writeonly image2D FinalLighting;
-
-struct Directional {
-	vec4 dirColor;
-	float dirStrength;
-	vec3 dirDirection;
-};
-uniform Directional LDirectional;
 
 uniform ivec2 atlasRegion;        // texels to process (x = width, y = used rows)
 
@@ -104,12 +99,20 @@ void main()
 	// Cards store the emission colour; the (possibly animated) intensity comes from the object table.
 	vec3 emissive = texelFetch(CardEmissive, texel, 0).rgb * o.padding.w;
 
-	// ---- direct sun light (engine convention: lightColor = irradiance / pi)
-	vec3 L = normalize(-LDirectional.dirDirection);
-	float ndl = max(dot(N, L), 0.0);
-	// Per channel: light through tinted transparent casters keeps their colour in the bounce.
-	vec3 shadow = ndl > 0.0 ? SampleShadowRGB(position, N, L) : vec3(1.0);
-	vec3 direct = LDirectional.dirColor.rgb * LDirectional.dirStrength * ndl * shadow;
+	// ---- the directional lights that go into the GI (Engine/DirectionalLights.glsl), times their indirect strength
+	// (engine convention: lightColor = irradiance / pi)
+	vec3 direct = vec3(0.0);
+	for (int i = 0; i < LelDirectionalCount(); i++)
+	{
+		float giStrength = LelDirectionalGIStrength(i);
+		vec3 L = LelDirectionalTowards(i);
+		float ndl = dot(N, L);
+		if (giStrength > 0.0 && ndl > 0.0)
+		{
+			// Per channel: light through tinted transparent casters keeps their colour in the bounce.
+			direct += LelDirectionalRadiance(i) * (giStrength * ndl) * SampleLightShadowRGB(i, position, N, L);
+		}
+	}
 
 	// ---- the local lights that go into the GI (Engine/Lights.glsl), times their indirect strength
 	for (int i = 0; i < LelLightCount(); i++)

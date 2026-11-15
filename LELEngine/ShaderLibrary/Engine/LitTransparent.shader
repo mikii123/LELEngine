@@ -72,6 +72,7 @@ void main()
 // radiance cache probes), never from the screen-space resolve of the opaque surface behind them.
 #include "Engine/VolumeLighting.glsl"
 #include "Engine/Lights.glsl"
+#include "Engine/DirectionalLights.glsl"
 
 // Material: Color (a = opacity), Emissive (rgb color, a intensity), Roughness (0 = unset -> 0.2).
 #include "Engine/Instancing.glsl"
@@ -92,12 +93,6 @@ uniform sampler2D NormalMap;
 uniform float RefractionStrength;
 #endif
 
-struct Directional {
-	vec4 dirColor;
-	float dirStrength;
-	vec3 dirDirection;
-};
-
 struct Ambient {
 	vec4 ambColor;
 	float ambStrength;
@@ -109,7 +104,6 @@ struct Specular {
 	vec3 viewPos;
 };
 
-uniform Directional LDirectional;
 uniform Ambient LAmbient;
 uniform Specular LSpecular;
 
@@ -141,14 +135,9 @@ void main()
 		vertexNormal = -vertexNormal;
 	}
 
-	vec3 L = normalize(-LDirectional.dirDirection);
 	vec3 V = normalize(LSpecular.viewPos - fPosition);
-	vec3 H = normalize(L + V);
-
-	vec3 shadow = SampleShadowRGB(fPosition, vertexNormal, L);
 
 	vec3 albedo = color.rgb;
-	vec3 lightColor = LDirectional.dirColor.rgb * LDirectional.dirStrength;
 	float roughness = materialRoughness > 0.0 ? materialRoughness : 0.2;
 
 	// Glass reflects (and hides what is behind it) more at grazing angles: Schlick's Fresnel term lifts the
@@ -157,12 +146,6 @@ void main()
 	float opacity = mix(clamp(color.a, 0.0, 1.0), 1.0, fresnel);
 	float reflectance = mix(LSpecular.specStrength, 1.0, fresnel);
 
-	// Direct
-	float ndl = max(dot(N, L), 0.0);
-	vec3 diffuse = albedo * lightColor * ndl;
-	float spec = pow(max(dot(N, H), 0.0), LSpecular.specShine) * LSpecular.specStrength;
-	vec3 specular = lightColor * spec * ndl;
-
 	// Indirect from the GI volume.
 	vec3 ambient = LAmbient.ambColor.rgb * LAmbient.ambStrength * albedo;
 	vec3 indirectDiffuse;
@@ -170,10 +153,24 @@ void main()
 	vec3 indirectSpecular;
 	GetVolumeIndirectLighting(fPosition, N, V, roughness, indirectDiffuse, occlusion, indirectSpecular);
 
-	vec3 scattered = ambient * occlusion + indirectDiffuse * albedo + diffuse * shadow;
-	vec3 reflected = indirectSpecular * reflectance + specular * shadow + emissive.rgb * emissive.a;
+	vec3 scattered = ambient * occlusion + indirectDiffuse * albedo;
+	vec3 reflected = indirectSpecular * reflectance + emissive.rgb * emissive.a;
 
-	// The local lights (Engine/Lights.glsl), lit as the sun, unshadowed.
+	// The directional lights (Engine/DirectionalLights.glsl), each behind its own shadows. Nothing is looked up for a
+	// light the surface faces away from.
+	for (int i = 0; i < LelDirectionalCount(); i++)
+	{
+		vec3 L = LelDirectionalTowards(i);
+		float ndl = dot(N, L);
+		if (ndl > 0.0)
+		{
+			vec3 lightColor = LelDirectionalRadiance(i) * SampleLightShadowRGB(i, fPosition, vertexNormal, L);
+			scattered += albedo * lightColor * ndl;
+			reflected += lightColor * pow(max(dot(N, normalize(L + V)), 0.0), LSpecular.specShine) * LSpecular.specStrength * ndl;
+		}
+	}
+
+	// The local lights (Engine/Lights.glsl), lit as the directional ones, unshadowed.
 	for (int i = 0; i < LelLightCount(); i++)
 	{
 		vec3 Li;

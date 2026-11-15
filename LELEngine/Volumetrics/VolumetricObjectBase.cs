@@ -591,6 +591,7 @@ namespace LELEngine.Volumetrics
 			hash.Add(LightGlow);
 			hash.Add(Density);
 			hash.Add(NoiseSize);
+			hash.Add(ShadowReach);
 			hash.Add(hashSlots.Count);
 			foreach (VolumeLightSlot slot in hashSlots)
 			{
@@ -613,9 +614,10 @@ namespace LELEngine.Volumetrics
 		}
 
 		/// <summary>
-		///     The lights the cloud's light transport is worked out for: its own lights first, then the scene's lights that
-		///     reach the shape (with <see cref="SceneLights" />; nearest first), at most <see cref="MaxLights" />. A scene
-		///     light is in the set whatever its intensity (a flash going dark and bright again keeps its transport).
+		///     The lights the cloud's light transport is worked out for: its own lights first, then (with
+		///     <see cref="SceneLights" />) the scene's directional lights other than the cloud's sun, then the scene's
+		///     lights that reach the shape (nearest first), at most <see cref="MaxLights" />. A scene light is in the set
+		///     whatever its intensity (a flash going dark and bright again keeps its transport).
 		/// </summary>
 		internal void GatherLightSlots(List<VolumeLightSlot> slots)
 		{
@@ -630,12 +632,39 @@ namespace LELEngine.Volumetrics
 				}
 			}
 
-			if (!SceneLights || slots.Count >= MaxLights || global::Light.Active.Count == 0)
+			if (!SceneLights || slots.Count >= MaxLights)
 			{
 				return;
 			}
 
 			Matrix4 worldToLocal = transform.WorldToLocal;
+
+			// The directional lights that shine (the frame's list) besides the cloud's sun, which the lit voxels hold.
+			DirectionalLight ownSun = EffectiveSun;
+			IReadOnlyList<DirectionalLight> directional = LELEngine.Rendering.DirectionalLightBuffer.Shining;
+			for (int i = 0; i < directional.Count && slots.Count < MaxLights; i++)
+			{
+				DirectionalLight light = directional[i];
+				if (light == null || ReferenceEquals(light, ownSun) || !light.AffectsVolumes || light.VolumetricStrength <= 0f)
+				{
+					continue;
+				}
+
+				Vector3 towards = Vector3.TransformVector(light.Towards, worldToLocal);
+				slots.Add(new VolumeLightSlot
+				{
+					PositionSize = new Vector4(SnapDirection(towards), 1f),
+					Params = new Vector4(VolumeLightSlot.KindDirectional, 0f, -2f, 0f),
+					Spot = new Vector4(0f, 0f, 0f, 1f),
+					Directional = light
+				});
+			}
+
+			if (slots.Count >= MaxLights || global::Light.Active.Count == 0)
+			{
+				return;
+			}
+
 			float worldScale = WorldScale;
 			Vector3 half = Size * 0.5f;
 			sceneCandidates.Clear();
@@ -688,6 +717,45 @@ namespace LELEngine.Volumetrics
 					Scene = light
 				});
 			}
+		}
+
+		/// <summary>
+		///     A unit direction on a fixed grid of directions about a third of a degree apart (octahedral, 512 steps a side):
+		///     a directional light turning slowly against the cloud changes its slot, and so reworks the transport, a step
+		///     at a time, not every frame.
+		/// </summary>
+		private static Vector3 SnapDirection(Vector3 direction)
+		{
+			if (direction.LengthSquared < 1e-12f)
+			{
+				return Vector3.UnitY;
+			}
+
+			direction.Normalize();
+			float sum = MathF.Abs(direction.X) + MathF.Abs(direction.Y) + MathF.Abs(direction.Z);
+			float u = direction.X / sum;
+			float v = direction.Y / sum;
+			if (direction.Z < 0f)
+			{
+				float fu = (1f - MathF.Abs(v)) * (u >= 0f ? 1f : -1f);
+				float fv = (1f - MathF.Abs(u)) * (v >= 0f ? 1f : -1f);
+				u = fu;
+				v = fv;
+			}
+
+			const float steps = 256f;
+			u = MathF.Round(u * steps) / steps;
+			v = MathF.Round(v * steps) / steps;
+			var snapped = new Vector3(u, v, 1f - MathF.Abs(u) - MathF.Abs(v));
+			if (snapped.Z < 0f)
+			{
+				float fu = (1f - MathF.Abs(snapped.Y)) * (snapped.X >= 0f ? 1f : -1f);
+				float fv = (1f - MathF.Abs(snapped.X)) * (snapped.Y >= 0f ? 1f : -1f);
+				snapped.X = fu;
+				snapped.Y = fv;
+			}
+
+			return snapped.Normalized();
 		}
 
 		#endregion
