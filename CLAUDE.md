@@ -1013,6 +1013,17 @@ Added for New Frontier's port of Unity's SpaceStonesPack (Standard materials wit
   capture (`SceneViewPanel.RenderCapture` -> `DrawGizmos` -> `VisualEffectInspector.DrawGizmos`), then ImGui's "Missing
   End()" assert ended the process. Found by a game test that killed the ship whose child was selected; verified with
   the same run (kill, then `screenshot Scene`: no exception).
+- Temporary and read-only objects (2026-11-14, the user's ask: a scene's storm showed a fold arrow over nothing, its
+  script's lights and bolts being `HideAndDontSave`; "show them, as non-editable temp objects"): a row's arrow counts
+  only children the hierarchy lists (`TempObjects.HasVisibleChildren`; also the double click that frames a leaf).
+  `HideFlags.DontSave` (on the object or a parent) shows dimmed with a "temp" tag at the row's right end and a tooltip;
+  new `HideFlags.NotEditable` (4; `DontSaveAndNotEditable` for a script's own helpers) is shown but never changed by the
+  editor: inspector values, header (name, active, layer), component toggles and materials disabled (headers still
+  fold; no component menu, no Add Component), a note under the header; hierarchy rename / drag / drop / Duplicate /
+  Delete / Create Child off; no transform gizmo, collider handles take no drag; `DeleteSelected` / `DuplicateSelected`
+  refuse with a warning; automation `rename` / `set` / `reparent` / `addcomponent` throw (`TempObjects.RequireEditable`).
+  Scripts change such objects freely. Verified on a game's scene: the storm's eight flash lights listed under it,
+  tagged, the inspector disabled, CLI rename / set refused, a Delete from the context menu refused and logged.
 - Hierarchy folding (2026-10-24): rows start folded; `HierarchyExpansion` keeps the unfolded rows (`Expanded`) per project folder + scene / prefab path
   (object ids) in `%APPDATA%\LELEngine\Editor\hierarchy.json`, never in the project; saved 0.5 s after a change and
   in `SaveEditorState`. Automated runs read it and save nothing unless `hierarchyfile=path`. The editor has no

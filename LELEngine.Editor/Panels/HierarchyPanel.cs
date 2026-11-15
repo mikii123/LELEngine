@@ -344,7 +344,9 @@ namespace LELEngine.Editor
 
 			ImGui.PushID(go.Id.ToString());
 			ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags.OpenOnArrow | ImGuiTreeNodeFlags.OpenOnDoubleClick | ImGuiTreeNodeFlags.SpanFullWidth;
-			bool leaf = go.transform.childCount == 0;
+			// Hidden children do not count: an arrow over nothing would look like a broken object.
+			bool leaf = !TempObjects.HasVisibleChildren(go);
+			bool readOnly = TempObjects.IsReadOnly(go);
 			if (leaf)
 			{
 				flags |= ImGuiTreeNodeFlags.Leaf;
@@ -413,9 +415,15 @@ namespace LELEngine.Editor
 				}
 
 				DrawIcon(go, instance, rowX);
-				if (ImGui.IsItemHovered() && instance != null && !DragAndDrop.IsDragging)
+				string temporary = TempObjects.Describe(go);
+				if (temporary != null)
 				{
-					ImGui.SetTooltip(RowTooltip(go, instance));
+					DrawTempTag();
+				}
+
+				if (ImGui.IsItemHovered() && (instance != null || temporary != null) && !DragAndDrop.IsDragging)
+				{
+					ImGui.SetTooltip(instance != null ? RowTooltip(go, instance) : temporary);
 				}
 
 				// Selected when the click ends without a drag (as in Unity): dragging an object on to a field of the
@@ -437,7 +445,7 @@ namespace LELEngine.Editor
 					pressed = null;
 				}
 
-				if (EditorGui.IsItemDoubleClicked() && go.transform.childCount == 0)
+				if (EditorGui.IsItemDoubleClicked() && leaf)
 				{
 					editor.SceneView.FrameObject(go);
 				}
@@ -475,7 +483,8 @@ namespace LELEngine.Editor
 				revealSelection = null;
 			}
 
-			if (ImGui.BeginDragDropSource())
+			// A read-only object is not moved, and nothing goes under it (it would not be saved).
+			if (!readOnly && ImGui.BeginDragDropSource())
 			{
 				Dragged = go;
 				// Re-parents in the hierarchy; object fields take the object or its component of their type; the project panel makes a prefab of it.
@@ -483,7 +492,7 @@ namespace LELEngine.Editor
 				ImGui.EndDragDropSource();
 			}
 
-			if (ImGui.BeginDragDropTarget())
+			if (!readOnly && ImGui.BeginDragDropTarget())
 			{
 				if (AcceptObject() && Dragged != null && Dragged != go)
 				{
@@ -498,21 +507,21 @@ namespace LELEngine.Editor
 			if (EditorGui.BeginPopupContextItem("##object_context"))
 			{
 				editor.Select(go);
-				if (EditorMenu.Item("Rename", "F2"))
+				if (EditorMenu.Item("Rename", "F2", false, !readOnly))
 				{
 					StartRename(go);
 				}
 
-				if (EditorMenu.Item("Duplicate", "Ctrl+D")) editor.DuplicateSelected();
-				if (EditorMenu.Item("Delete", "Del")) editor.DeleteSelected();
+				if (EditorMenu.Item("Duplicate", "Ctrl+D", false, !readOnly)) editor.DuplicateSelected();
+				if (EditorMenu.Item("Delete", "Del", false, !readOnly)) editor.DeleteSelected();
 				ImGui.Separator();
-				if (EditorMenu.Begin("Create Child"))
+				if (EditorMenu.Begin("Create Child", !readOnly))
 				{
 					editor.DrawCreateMenu(go.transform);
 					EditorMenu.End();
 				}
 
-				if ((instance == null || PrefabUtility.IsPrefabInstanceRoot(go)) && go != editor.StageRoot && EditorMenu.Item("Save as Prefab", "", false, !editor.IsPlaying))
+				if ((instance == null || PrefabUtility.IsPrefabInstanceRoot(go)) && go != editor.StageRoot && EditorMenu.Item("Save as Prefab", "", false, !editor.IsPlaying && !TempObjects.IsTemporary(go)))
 				{
 					string folder = editor.ProjectFolder;
 					editor.Defer(() => editor.CreatePrefab(go, folder));
@@ -571,7 +580,19 @@ namespace LELEngine.Editor
 				return instance.IsMissing ? EditorStyle.PrefabMissing : go.activeInHierarchy ? EditorStyle.Prefab : EditorStyle.PrefabDim;
 			}
 
-			return go.activeInHierarchy ? (NVector4?)null : EditorStyle.Dim;
+			// A temporary object is dimmed like an inactive one, so the scene's own objects stand out.
+			return go.activeInHierarchy && !TempObjects.IsTemporary(go) ? (NVector4?)null : EditorStyle.Dim;
+		}
+
+		/// <summary>The "temp" tag at the right end of a temporary object's row (the last item is its tree node).</summary>
+		private static void DrawTempTag()
+		{
+			NVector2 min = ImGui.GetItemRectMin();
+			NVector2 max = ImGui.GetItemRectMax();
+			NVector2 size = ImGui.CalcTextSize(TempObjects.Tag);
+			// The row spans the window's width (SpanFullWidth): the tag sits at its right end.
+			float x = MathF.Max(min.X, max.X - size.X - 6f);
+			ImGui.GetWindowDrawList().AddText(new NVector2(x, min.Y + (max.Y - min.Y - size.Y) * 0.5f), ImGui.GetColorU32(EditorStyle.Dim), TempObjects.Tag);
 		}
 
 		/// <summary>The row's icon (the last item is its tree node): a cube; a solid prefab cube on instance roots and nested prefab roots; "+" on added objects.</summary>
@@ -725,6 +746,11 @@ namespace LELEngine.Editor
 
 		private void StartRename(GameObject go)
 		{
+			if (TempObjects.IsReadOnly(go))
+			{
+				return;
+			}
+
 			renaming = go;
 			renameText = go.Name;
 			focusRename = true;

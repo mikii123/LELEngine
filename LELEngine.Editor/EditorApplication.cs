@@ -1625,6 +1625,12 @@ namespace LELEngine.Editor
 				return;
 			}
 
+			if (TempObjects.IsReadOnly(target))
+			{
+				Debug.LogWarning($"[Editor] '{target.Name}' is not editable: a script keeps it.");
+				return;
+			}
+
 			RecordStructural("Delete " + target.Name, () =>
 			{
 				Selected = null;
@@ -1637,6 +1643,12 @@ namespace LELEngine.Editor
 			GameObject target = Selected;
 			if (target == null || Scene == null)
 			{
+				return;
+			}
+
+			if (TempObjects.IsReadOnly(target))
+			{
+				Debug.LogWarning($"[Editor] '{target.Name}' is not editable: a script keeps it.");
 				return;
 			}
 

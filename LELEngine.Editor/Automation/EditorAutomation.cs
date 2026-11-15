@@ -501,6 +501,7 @@ namespace LELEngine.Editor
 		public static void SetField(string objectPath, string fieldPath, string value)
 		{
 			(Behaviour component, string[] path) = ResolveField(objectPath, fieldPath);
+			TempObjects.RequireEditable(component.gameObject);
 			Editor.Edits.Begin(component);
 			WriteMember(component, path, 1, value);
 			Editor.Edits.RequestCommit();
@@ -517,6 +518,12 @@ namespace LELEngine.Editor
 				throw new ArgumentException($"{parent.Name} is {go.Name} or inside it.");
 			}
 
+			TempObjects.RequireEditable(go);
+			if (parent != null)
+			{
+				TempObjects.RequireEditable(parent);
+			}
+
 			Editor.RecordStructural("Re-parent " + go.Name, () => go.transform.SetParent(parent?.transform, true));
 		}
 
@@ -524,6 +531,7 @@ namespace LELEngine.Editor
 		public static void Rename(string objectPath, string name)
 		{
 			GameObject go = RequireObject(objectPath);
+			TempObjects.RequireEditable(go);
 			Editor.RecordStructural("Rename " + go.Name, () => go.Name = name);
 		}
 
@@ -531,6 +539,7 @@ namespace LELEngine.Editor
 		public static Behaviour AddComponent(string objectPath, string typeName)
 		{
 			GameObject go = RequireObject(objectPath);
+			TempObjects.RequireEditable(go);
 			Type type = TypeRegistry.Resolve(typeName) ?? throw new ArgumentException("Unknown component type " + typeName);
 			Behaviour added = null;
 			Editor.RecordStructural("Add " + type.Name, () =>

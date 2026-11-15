@@ -25,6 +25,9 @@ namespace LELEngine.Editor
 		private readonly InspectorContext materialContext;
 		private string nameBuffer = "";
 		private GameObject nameOwner;
+
+		// The shown object is read-only (HideFlags.NotEditable): values disabled, no component menu, no Add Component.
+		private bool readOnly;
 		private string componentFilter = "";
 		private List<Type> componentTypes;
 		private int componentTypesVersion = -1;
@@ -224,7 +227,17 @@ namespace LELEngine.Editor
 			context.LabelWidth = Math.Max(110f, ImGui.GetContentRegionAvail().X * 0.38f);
 			// A prefab instance's object: its overrides are marked (bold, the bar) and can be applied or reverted.
 			context.Overrides = PrefabInspector.OverridesOf(go.prefabInstance, editor.SceneVersion);
+			// A read-only object (HideFlags.NotEditable) is shown as it is: its values disabled, its headers still fold.
+			readOnly = TempObjects.IsReadOnly(go);
+			ImGui.BeginDisabled(readOnly);
 			DrawObjectHeader(go);
+			ImGui.EndDisabled();
+			string temporary = TempObjects.Describe(go);
+			if (temporary != null)
+			{
+				ImGui.TextDisabled(temporary);
+			}
+
 			ImGui.Separator();
 			PrefabInspector.DrawPrefabBar(editor, go, context);
 
@@ -239,8 +252,14 @@ namespace LELEngine.Editor
 			}
 
 			PrefabInspector.DrawRemovedComponents(editor, go, context);
-			DrawAddComponent(go);
+			if (!readOnly)
+			{
+				DrawAddComponent(go);
+			}
+
+			ImGui.BeginDisabled(readOnly);
 			DrawRendererMaterials(go);
+			ImGui.EndDisabled();
 		}
 
 		/// <summary>
@@ -434,7 +453,7 @@ namespace LELEngine.Editor
 				ImGui.EndDragDropSource();
 			}
 
-			if (EditorGui.BeginPopupContextItem("##component_context"))
+			if (!readOnly && EditorGui.BeginPopupContextItem("##component_context"))
 			{
 				if (!(component is Transform) && EditorMenu.Item("Remove Component"))
 				{
@@ -500,7 +519,10 @@ namespace LELEngine.Editor
 			{
 				ImGui.SameLine(ImGui.GetWindowWidth() - 34f);
 				bool enabled = component.enabled;
-				if (EditorGui.Checkbox("##enabled", ref enabled))
+				ImGui.BeginDisabled(readOnly);
+				bool toggled = EditorGui.Checkbox("##enabled", ref enabled);
+				ImGui.EndDisabled();
+				if (toggled)
 				{
 					editor.Edits.Begin(component);
 					component.enabled = enabled;
@@ -546,6 +568,19 @@ namespace LELEngine.Editor
 		}
 
 		private void DrawComponentBody(GameObject go, Behaviour component)
+		{
+			ImGui.BeginDisabled(readOnly);
+			try
+			{
+				DrawComponentFields(go, component);
+			}
+			finally
+			{
+				ImGui.EndDisabled();
+			}
+		}
+
+		private void DrawComponentFields(GameObject go, Behaviour component)
 		{
 			ImGui.Indent(4);
 			bool changed;

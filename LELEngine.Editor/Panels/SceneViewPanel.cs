@@ -501,7 +501,8 @@ namespace LELEngine.Editor
 			DrawSelectionBounds();
 			GameObject selected = SelectedInScene();
 			physicsGizmos.SetView(camera.ViewProjectionMatrix, viewMin, viewSize);
-			physicsGizmos.Update(selected, hovered && !flying && !gizmoWasUsing && !ImGui.IsMouseDown(ImGuiMouseButton.Middle));
+			// A read-only object shows its colliders' outlines, but its handles take no drag.
+			physicsGizmos.Update(selected, hovered && !flying && !gizmoWasUsing && !ImGui.IsMouseDown(ImGuiMouseButton.Middle) && !TempObjects.IsReadOnly(selected));
 			bool gizmoUsed = DrawGizmo();
 			physicsGizmos.Draw(selected);
 
@@ -973,7 +974,8 @@ namespace LELEngine.Editor
 		private bool DrawGizmo()
 		{
 			GameObject selected = editor.Selected;
-			if (selected == null || selected.scene != editor.Scene)
+			// A read-only object gets no transform gizmo: the editor does not move it.
+			if (selected == null || selected.scene != editor.Scene || TempObjects.IsReadOnly(selected))
 			{
 				gizmoWasUsing = false;
 				return false;

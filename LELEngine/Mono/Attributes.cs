@@ -187,9 +187,23 @@ namespace LELEngine
 		/// <summary>Not listed in the hierarchy.</summary>
 		HideInHierarchy = 1,
 
-		/// <summary>Not written when the scene is saved.</summary>
+		/// <summary>
+		///     Not written when the scene is saved. The hierarchy shows such an object (and what is under it) as temporary:
+		///     dimmed, tagged "temp".
+		/// </summary>
 		DontSave = 2,
 
-		HideAndDontSave = HideInHierarchy | DontSave
+		HideAndDontSave = HideInHierarchy | DontSave,
+
+		/// <summary>
+		///     Shown, but not changed in the editor (it and what is under it): the inspector shows it read-only, and it is
+		///     not renamed, moved, re-parented, deleted or duplicated there, nor through the editor's automation. Scripts
+		///     still change it. For what a script makes and keeps up to date itself (with <see cref="DontSave" />: a
+		///     temporary object to look at, not to edit).
+		/// </summary>
+		NotEditable = 4,
+
+		/// <summary>A temporary object shown read-only: made and kept by a script, never saved.</summary>
+		DontSaveAndNotEditable = DontSave | NotEditable
 	}
 }
