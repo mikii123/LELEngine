@@ -198,10 +198,10 @@ namespace LELEngine.UIElements
 			{
 				case CursorType.Text: return MouseCursor.IBeam;
 				case CursorType.ResizeHorizontal:
-				case CursorType.SplitResizeLeftRight: return MouseCursor.HResize;
+				case CursorType.SplitResizeLeftRight: return MouseCursor.ResizeEW;
 				case CursorType.ResizeVertical:
-				case CursorType.SplitResizeUpDown: return MouseCursor.VResize;
-				case CursorType.Link: return MouseCursor.Hand;
+				case CursorType.SplitResizeUpDown: return MouseCursor.ResizeNS;
+				case CursorType.Link: return MouseCursor.PointingHand;
 				case CursorType.MoveArrow:
 				case CursorType.Pan: return MouseCursor.Crosshair;
 				default: return MouseCursor.Default;

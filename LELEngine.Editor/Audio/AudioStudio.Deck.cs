@@ -27,7 +27,6 @@ namespace LELEngine.Editor.Audio
 		private static readonly string[] RolloffNames = { "Linear", "Linear Squared", "Inverse", "Inverse Tapered", "Custom Curve" };
 		private static readonly string[] LoadTypeNames = { "Decompress On Load (PCM in memory)", "Compressed In Memory (decoded at load)", "Streaming (from disk)" };
 		private string clipSearch = "";
-		private string selectedAutomationTarget;
 		private int selectedCurvePoint = -1;
 
 		#endregion

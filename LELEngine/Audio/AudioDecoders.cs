@@ -1323,6 +1323,9 @@ namespace LELEngine.Audio
 			int serial = 0;
 			bool haveSerial = false;
 			int headerPackets = 0;
+			// The identification header's bytes: one buffer for the scan (a stackalloc inside the loop would
+			// grow the stack with every page).
+			Span<byte> id = stackalloc byte[30];
 			while (position + 27 <= length)
 			{
 				if (AudioDecoder.ReadAt(stream, start + position, new Span<byte>(header, 0, 27)) < 27 || !AudioDecoder.HasTag(header, 0, "OggS") || header[4] != 0)
@@ -1365,7 +1368,6 @@ namespace LELEngine.Audio
 					if (index.Pages.Count == 0 && body >= 30)
 					{
 						// The identification header: "\x01vorbis", version, channels, rate, three bit rates, block sizes.
-						Span<byte> id = stackalloc byte[30];
 						if (AudioDecoder.ReadUpTo(stream, id) == 30 && id[0] == 1 && AudioDecoder.HasTag(id, 1, "vorbis"))
 						{
 							index.BlockSize0 = 1 << (id[28] & 0x0F);

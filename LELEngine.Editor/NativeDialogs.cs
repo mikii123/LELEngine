@@ -21,6 +21,7 @@ namespace LELEngine.Editor
 		#region PublicMethods
 
 		/// <summary>True when <see cref="PickFolder" /> shows a system dialog on this platform.</summary>
+		[System.Runtime.Versioning.SupportedOSPlatformGuard("windows")]
 		public static bool CanPickFolder => OperatingSystem.IsWindows();
 
 		/// <summary>

@@ -249,13 +249,25 @@ namespace LELEngine.Editor
 					window.Cursor = MouseCursor.IBeam;
 					break;
 				case ImGuiMouseCursor.ResizeEw:
-					window.Cursor = MouseCursor.HResize;
+					window.Cursor = MouseCursor.ResizeEW;
 					break;
 				case ImGuiMouseCursor.ResizeNs:
-					window.Cursor = MouseCursor.VResize;
+					window.Cursor = MouseCursor.ResizeNS;
+					break;
+				case ImGuiMouseCursor.ResizeNesw:
+					window.Cursor = MouseCursor.ResizeNESW;
+					break;
+				case ImGuiMouseCursor.ResizeNwse:
+					window.Cursor = MouseCursor.ResizeNWSE;
+					break;
+				case ImGuiMouseCursor.ResizeAll:
+					window.Cursor = MouseCursor.ResizeAll;
+					break;
+				case ImGuiMouseCursor.NotAllowed:
+					window.Cursor = MouseCursor.NotAllowed;
 					break;
 				case ImGuiMouseCursor.Hand:
-					window.Cursor = MouseCursor.Hand;
+					window.Cursor = MouseCursor.PointingHand;
 					break;
 				default:
 					window.Cursor = MouseCursor.Default;

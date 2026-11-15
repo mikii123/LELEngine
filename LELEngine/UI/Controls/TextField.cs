@@ -225,7 +225,6 @@ namespace LELEngine.UIElements
 			private long lastClickTime;
 			private int clickCount;
 			private float scrollX;
-			private bool revertOnEscape;
 			private string valueBeforeEdit;
 
 			public TextInput()

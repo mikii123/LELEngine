@@ -776,7 +776,6 @@ namespace LELEngine.Animation
 		private readonly AnimationBinding rootRotation;
 		private readonly float[] sample = new float[4];
 		private readonly float[] reference = new float[4];
-		private float[] referencePose;
 		private readonly int[] rootHints = new int[8];
 
 		#endregion

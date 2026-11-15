@@ -176,7 +176,6 @@ namespace LELEngine.Editor.Animation
 		private bool draggingPlayhead;
 		private bool draggingKeys;
 		private bool keysMoved;
-		private float dragStartTime;
 		private NVector2 dragStartMouse;
 		private readonly Dictionary<KeyRef, (float time, float value)> dragOrigins = new Dictionary<KeyRef, (float, float)>();
 		private bool boxSelecting;

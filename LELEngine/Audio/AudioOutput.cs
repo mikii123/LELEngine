@@ -353,7 +353,7 @@ namespace LELEngine.Audio
 
 					string id;
 					int hr = current.GetId(out id);
-					Marshal.ReleaseComObject(current);
+					Release(ref current);
 					return hr != 0 || !string.Equals(id, deviceId, StringComparison.Ordinal);
 				}
 				catch (Exception)
@@ -793,7 +793,9 @@ namespace LELEngine.Audio
 			private static void Release<T>(ref T comObject)
 				where T : class
 			{
-				if (comObject != null)
+				// The device only exists on Windows (the output thread opens it only there); the check states
+				// that for the platform analyzer, which cannot follow it through the thread's flag.
+				if (comObject != null && OperatingSystem.IsWindows())
 				{
 					try
 					{

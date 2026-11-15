@@ -264,7 +264,7 @@ namespace LELEngine.Rendering
 			}
 
 			GL.BindBuffer(BufferTarget.PixelPackBuffer, readback.Buffer);
-			IntPtr data = GL.MapBufferRange(BufferTarget.PixelPackBuffer, IntPtr.Zero, readback.Floats * sizeof(float), BufferAccessMask.MapReadBit);
+			IntPtr data = GL.MapBufferRange(BufferTarget.PixelPackBuffer, IntPtr.Zero, readback.Floats * sizeof(float), MapBufferAccessMask.MapReadBit);
 			if (data == IntPtr.Zero)
 			{
 				GL.BindBuffer(BufferTarget.PixelPackBuffer, 0);

@@ -123,7 +123,7 @@ void main()
 			GL.Disable(EnableCap.DepthTest);
 			GL.Disable(EnableCap.StencilTest);
 			GL.Enable(EnableCap.ScissorTest);
-			GL.PolygonMode(MaterialFace.FrontAndBack, PolygonMode.Fill);
+			GL.PolygonMode(TriangleFace.FrontAndBack, PolygonMode.Fill);
 			GL.Viewport(0, 0, framebufferWidth, framebufferHeight);
 
 			float left = displayPos.X;

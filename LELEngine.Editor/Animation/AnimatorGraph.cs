@@ -1150,7 +1150,9 @@ namespace LELEngine.Editor.Animation
 
 		public static ulong ChildId(BlendTree tree, int index)
 		{
-			return ((ulong)tree.GetHashCode() << 8 | (ulong)(index & 0xFF)) ^ TreeBit ^ 0x5151;
+			// Both parts widened from uint: an int cast straight to ulong sign-extends (a negative hash filled
+			// the high bits with ones).
+			return ((ulong)(uint)tree.GetHashCode() << 8 | (uint)(index & 0xFF)) ^ TreeBit ^ 0x5151;
 		}
 
 		private static string ChildLabel(BlendTree tree, int i)

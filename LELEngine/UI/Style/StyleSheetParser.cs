@@ -219,8 +219,8 @@ namespace LELEngine.UIElements
 			var result = new List<StyleSelector>();
 			var parts = new List<SimpleSelector>();
 			var combinators = new List<SelectorCombinator>();
+			// Between two simple selectors the combinator is a descendant one unless a '>' was seen.
 			SimpleSelector current = null;
-			bool pendingDescendant = false;
 			bool pendingChild = false;
 
 			void FinishSimple()
@@ -237,7 +237,6 @@ namespace LELEngine.UIElements
 
 				parts.Add(current);
 				current = null;
-				pendingDescendant = false;
 				pendingChild = false;
 			}
 
@@ -270,7 +269,6 @@ namespace LELEngine.UIElements
 					if (current != null)
 					{
 						FinishSimple();
-						pendingDescendant = true;
 					}
 
 					position++;

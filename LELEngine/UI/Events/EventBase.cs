@@ -396,7 +396,7 @@ namespace LELEngine.UIElements
 
 		public override bool IsCallback(Delegate other)
 		{
-			return callback == (Delegate)other || callback.Equals(other);
+			return ReferenceEquals(callback, other) || callback.Equals(other);
 		}
 	}
 

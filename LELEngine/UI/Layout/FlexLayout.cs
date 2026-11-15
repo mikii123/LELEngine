@@ -800,7 +800,6 @@ namespace LELEngine.UIElements
 					remainingAlignContentDim = availableInnerCrossDim - totalLineCrossDim;
 				}
 
-				float crossDimLead = 0f;
 				float currentLead = leadingPaddingAndBorderCross;
 				float extraPerLine = 0f;
 				switch (style.alignContent)
