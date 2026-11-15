@@ -1345,7 +1345,10 @@ Added for New Frontier's port of Unity's SpaceStonesPack (Standard materials wit
 - ImGui's asserts are on in the editor's own panels (only user callbacks run with error recovery): an unbalanced
   Push / Pop aborts the process (`Assertion failed ... "Calling PopStyleColor() too many times!"`, exit code 127).
   Pop by the condition that pushed, not by state the widget in between changed (the inspector lock crashed on its
-  first click that way until 2026-10-24).
+  first click that way until 2026-10-24). Never `return` between a `BeginChild` and its `EndChild`: the object picker
+  closed itself on a double click from inside its list's child window, and ImGui's "Must call EndChild() and not End()!"
+  ended the editor (0xC0000409; fixed 2026-11-14: a flag, closed after `EndChild`; reproduced and verified with a real
+  SendInput double click, scratchpad `balance/realpicker.ps1`). A scan of the editor found no other such return.
 - Test hooks (TestHooks / TestAnchors): `drag=N;from;to|...` (press N, hover N+10, drop N+12), `click=`,
   `doubleclick=`, `rclick=`, `ctrlclick=` (N;anchor|...), anchors `hierarchy:Name`, `project:Folder/File.ext`,
   `project:(empty)`, `component:Type`, `field:Type.field[@fraction]` (`anchor@fx,fy`: that point of any anchor's rectangle,

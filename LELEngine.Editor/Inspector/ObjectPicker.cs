@@ -581,20 +581,19 @@ namespace LELEngine.Editor
 			}
 
 			ImGui.Separator();
+			// A double click closes the picker once the list's child window has ended: returning from inside it left
+			// BeginChild without its EndChild, and ImGui's assert ended the editor.
+			bool close = false;
 			if (ImGui.BeginChild("##list", new NVector2(0, -ImGui.GetFrameHeightWithSpacing())))
 			{
 				float row = showScene ? ImGui.GetFrameHeight() + 4f : 36f;
 				if (EditorGui.Selectable("None", current == null, ImGuiSelectableFlags.AllowDoubleClick, new NVector2(0, row)))
 				{
 					Pick(default);
-					if (EditorGui.IsMouseDoubleClicked(ImGuiMouseButton.Left))
-					{
-						Close();
-						return;
-					}
+					close = EditorGui.IsMouseDoubleClicked(ImGuiMouseButton.Left);
 				}
 
-				for (int i = 0; i < entries.Count; i++)
+				for (int i = 0; i < entries.Count && !close; i++)
 				{
 					Entry entry = entries[i];
 					if (search.Length > 0 && entry.Label.IndexOf(search, StringComparison.OrdinalIgnoreCase) < 0)
@@ -610,8 +609,8 @@ namespace LELEngine.Editor
 						Pick(entry);
 						if (doubleClick)
 						{
-							Close();
-							return;
+							close = true;
+							break;
 						}
 					}
 
@@ -642,6 +641,12 @@ namespace LELEngine.Editor
 			}
 
 			ImGui.EndChild();
+			if (close)
+			{
+				Close();
+				return;
+			}
+
 			ImGui.TextDisabled(entries.Count + (showScene ? " objects" : " assets") + "; click assigns, double click closes");
 		}
 
