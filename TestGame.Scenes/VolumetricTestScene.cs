@@ -23,11 +23,45 @@ namespace TestGame.Scenes
 
 		public static void Load(Scene scene, GITestScene.Options options, bool cubeInFog, bool stormHQ)
 		{
-			options.Sky = true;
+			// night=1: no sun, no sky: only the clouds' own light is left (emission, their lights, the lamps), so what they
+			// send into the GI shows alone.
+			options.Sky = !options.Night;
 			receiveGI = options.VolumeGI;
+			contributeGI = options.VolumeContributeGI;
 			temporal = options.VolumeTemporal;
 			VfxTestScene.BuildEnvironment(scene, options);
+			if (options.Night)
+			{
+				DirectionalLight sun = scene.FindObjectOfType<DirectionalLight>();
+				if (sun != null)
+				{
+					sun.Strength = 0f;
+				}
+
+				Lighting.Environment.AmbientStrength = 0f;
+				Lighting.GI.SkyRadiance = new Vector3(0.004f, 0.005f, 0.008f);
+				Lighting.Environment.BackgroundColor = new Color4(0.004f, 0.005f, 0.008f, 1f);
+			}
+
+			if (options.LinearExposure > 0f)
+			{
+				Lighting.Environment.Tonemap = false;
+				Lighting.Environment.Exposure = options.LinearExposure;
+			}
+
 			Lighting.Shadows.Distance = 60f;
+			// volmedia=0: the project's switch (the GI sees no clouds); volmediares / volmediareach: the media volume.
+			Lighting.GI.VolumesInGI = (VolumeGIMode)Math.Clamp(options.VolumeMedia, 0, 2);
+			Lighting.GI.VolumeMediaResolution = options.VolumeMediaResolution;
+			Lighting.GI.VolumeMediaReach = options.VolumeMediaReach;
+			Lighting.GI.VolumeMediaSides = options.VolumeMediaSides;
+
+			if (options.VolumeTest > 0)
+			{
+				BuildLightTest(scene, options);
+				GITestScene.ApplyHarness(scene, options);
+				return;
+			}
 
 			VolumetricObjectBase storm = stormHQ
 				? Add<VolumetricObjectHQ>(scene, "Storm", new Vector3(0f, 14f, 42f))
@@ -47,8 +81,40 @@ namespace TestGame.Scenes
 			storm.EmissionStrength = 0.05f;
 			storm.Lights.Add(new VolumeLight { Position = new Vector3(-12f, 0f, -14f), Radius = 4f, Color = new Color4(0.8f, 0.72f, 1f, 1f) });
 			storm.Lights.Add(new VolumeLight { Position = new Vector3(14f, 2f, -6f), Radius = 5f, Color = new Color4(0.8f, 0.72f, 1f, 1f) });
-			storm.gameObject.AddComponent<VolumetricFlasher>();
+			// volflash=0: the storm's own lights stay dark; 2: lit all the time (steady costs).
+			if (options.VolumeFlash == 1)
+			{
+				storm.gameObject.AddComponent<VolumetricFlasher>();
+			}
+			else if (options.VolumeFlash == 2)
+			{
+				foreach (VolumeLight own in storm.Lights)
+				{
+					own.Intensity = 3f;
+				}
+			}
 
+			// vollamps=N: steady lamps (scene Lights) on rings inside the storm, each a colour of its own.
+			for (int i = 0; i < options.VolumeLamps; i++)
+			{
+				float ring = 8f + 10f * (i % 3);
+				float angle = i * 2.399963f;
+				GameObject lamp = scene.CreateGameObject("Storm Lamp " + (i + 1));
+				lamp.transform.position = new Vector3(MathF.Cos(angle) * ring, 14f + 2f * MathF.Sin(i * 1.7f), 42f + MathF.Sin(angle) * ring);
+				Light light = lamp.AddComponent<Light>();
+				float hue = i * 0.61803f % 1f;
+				light.Color = new Color4(0.55f + 0.45f * MathF.Cos(6.2832f * hue), 0.55f + 0.45f * MathF.Cos(6.2832f * (hue + 0.33f)), 0.55f + 0.45f * MathF.Cos(6.2832f * (hue + 0.67f)), 1f);
+				light.Intensity = 60f;
+				light.Range = options.VolumeLampRange;
+				light.SourceRadius = 0.5f;
+				if (options.VolumeLampPulse)
+				{
+					lamp.AddComponent<VolumetricLampPulse>().Phase = i * 0.9f;
+				}
+			}
+
+			// volstormonly=1: of the clouds only the storm lights the GI (what one thick cloud does, without the others' light).
+			contributeGI = contributeGI && !options.VolumeStormOnly;
 			VolumetricObjectHQ fog = Add<VolumetricObjectHQ>(scene, "Fog Bank", new Vector3(0f, 2f, 6f));
 			fog.Shape = VolumeShape.Box;
 			fog.Size = new Vector3(18f, 4f, 18f);
@@ -131,18 +197,83 @@ namespace TestGame.Scenes
 
 		#region PrivateMethods
 
+		/// <summary>
+		///     voltest=N: a cloud whose light on a floor is known, in place of the scene's clouds, over a grey plate
+		///     (Materials/LitGray, on the ground): black inside (it scatters nothing), opaque, giving off 1 everywhere, so
+		///     it looks 1 from every side (use night=1: nothing else lights the plate, and linear=x: the frame's pixels are
+		///     the light times x).
+		///     <list type="bullet">
+		///         <item>1: a ceiling (240 x 6 x 240 at y 14, far past the GI's volume). The plate gets the plate's colour x 1 everywhere.</item>
+		///         <item>2: a ball (6 across, 10 above the plate's middle). Below it the plate gets its colour x (3 / 10)^2 = 0.09.</item>
+		///         <item>3: the ball at 20 (inside the GI's volume still): its colour x 0.0225.</item>
+		///     </list>
+		/// </summary>
+		private static void BuildLightTest(Scene scene, GITestScene.Options options)
+		{
+			GameObject plate = SceneModels.Instantiate(scene, SceneModels.Cube, "Grey Plate");
+			plate.transform.position = new Vector3(0f, 0.03f, 0f);
+			plate.transform.localScale = new Vector3(11f, 0.03f, 11f);
+			MeshRenderer renderer = plate.GetComponent<MeshRenderer>();
+			renderer.SetMaterials(SceneModels.Material("LitGray.material"));
+			renderer.IsStatic = true;
+
+			if (options.VolumeTest == 4)
+			{
+				// The ball of 2 as a mesh that gives off 1: what the GI itself makes of such a light (the clouds' reference).
+				GameObject ball = SceneModels.Instantiate(scene, SceneModels.Sphere, "Mesh Ball");
+				ball.transform.position = new Vector3(0f, 10f, 0f);
+				ball.transform.scale = new Vector3(3f, 3f, 3f);
+				var glowing = new LELEngine.Shaders.Material(SceneModels.Material("LitGray.material").UsingShader);
+				glowing.SetColor("Color", new Color4(0f, 0f, 0f, 1f));
+				glowing.SetColor("Emissive", new Color4(1f, 1f, 1f, 1f));
+				MeshRenderer ballRenderer = ball.GetComponent<MeshRenderer>();
+				ballRenderer.SetMaterials(glowing);
+				ballRenderer.CastShadows = false;
+				return;
+			}
+
+			bool ceiling = options.VolumeTest == 1;
+			VolumetricObject cloud = Add<VolumetricObject>(scene, "Light Test", new Vector3(0f, ceiling ? 14f : options.VolumeTest == 2 ? 10f : 20f, 0f));
+			cloud.Shape = ceiling ? VolumeShape.Box : VolumeShape.Sphere;
+			cloud.Size = ceiling ? new Vector3(240f, 6f, 240f) : new Vector3(6f, 6f, 6f);
+			cloud.Noise = VolumeNoise.Perlin;
+			cloud.NoiseSize = 6f;
+			cloud.Coverage = 1f;
+			cloud.Softness = 0.02f;
+			cloud.ClumpSize = 0f;
+			cloud.SideSoftness = 0f;
+			cloud.CapSoftness = 0f;
+			cloud.TopRoughness = 0f;
+			cloud.BottomRoughness = 0f;
+			cloud.SideRoughness = 0f;
+			cloud.Density = 60f;
+			cloud.DetailStrength = 0f;
+			cloud.DetailShade = 0f;
+			cloud.VoxelSize = ceiling ? 1f : 0.1f;
+			cloud.Albedo = new Color4(0f, 0f, 0f, 1f);
+			cloud.EmissionColor = new Color4(1f, 1f, 1f, 1f);
+			cloud.EmissionStrength = 1f;
+			cloud.SkyStrength = 0f;
+			cloud.AmbientStrength = 0f;
+			cloud.ReceiveGI = false;
+			cloud.SceneLights = false;
+		}
+
 		private static T Add<T>(Scene scene, string name, Vector3 position) where T : VolumetricObjectBase
 		{
 			GameObject go = scene.CreateGameObject(name);
 			go.transform.position = position;
 			T volume = go.AddComponent<T>();
 			volume.ReceiveGI = receiveGI;
+			volume.ContributeGI = contributeGI;
 			volume.TemporalFilter = temporal;
 			return volume;
 		}
 
-		// volgi=0: the volumes do not receive the GI; voltemporal=0: no temporal filter (comparisons).
+		// volgi=0: the volumes do not receive the GI; volgiout=0: they do not light it; voltemporal=0: no temporal
+		// filter (comparisons).
 		private static bool receiveGI = true;
+		private static bool contributeGI = true;
 		private static bool temporal = true;
 
 		#endregion
@@ -167,6 +298,21 @@ namespace TestGame.Scenes
 			}
 
 			transform.position = new Vector3(x, 14f, 42f);
+		}
+	}
+
+	/// <summary>A lamp whose brightness changes every frame (vollamppulse=1): its light in a cloud has to follow.</summary>
+	public sealed class VolumetricLampPulse : Behaviour
+	{
+		public float Phase;
+
+		public override void Update()
+		{
+			Light light = GetComponent<Light>();
+			if (light != null)
+			{
+				light.Intensity = 60f * (0.6f + 0.4f * MathF.Sin((float)Time.timeD * 3f + Phase));
+			}
 		}
 	}
 

@@ -30,8 +30,18 @@ namespace LELEngine.Volumetrics
 		/// <summary>Most voxels along one axis.</summary>
 		public const int MaxVoxelsAlong = 512;
 
-		/// <summary>Most lights inside (<see cref="Lights" />).</summary>
+		/// <summary>
+		///     Most live lights: lights of its own (<see cref="Lights" />), the scene's other directional lights and the
+		///     scene lights with the longest ranges, each with a channel of the light transport, so their colour and intensity
+		///     can change every frame for nothing.
+		/// </summary>
 		public const int MaxLights = 8;
+
+		/// <summary>
+		///     Most baked lights: the scene lights that reach the shape beyond the live ones, summed into one texture with
+		///     their colours (the nearest to the shape first).
+		/// </summary>
+		public const int MaxBakedLights = 64;
 
 		[Header("Shape")]
 		public VolumeShape Shape = VolumeShape.Box;
@@ -194,8 +204,15 @@ namespace LELEngine.Volumetrics
 		[Range(1, 16)]
 		public int GIUpdateFrames = 4;
 
+		[Tooltip("The cloud lights the scene through the GI: what it scatters (the sun, its lights, the light around it) and gives off reaches the surfaces around it, and it hides what lies behind it from them (the sky, other light). Needs the scene's GI and Project Settings > Lighting > Volumes In GI; costs nothing per cloud beyond a coarse copy of its light made every frame")]
+		public bool ContributeGI = true;
+
+		[Tooltip("How much of the cloud's light goes into the GI (1: as it is seen)")]
+		[Range(0f, 10f)]
+		public float GIContribution = 1f;
+
 		[Header("Lights")]
-		[Tooltip("The scene's Light components that reach the shape (with Affects Volumes) light the cloud, through it: up to 8 lights with its own, the nearest first. Moving one works its light volume out again; intensity and colour are free")]
+		[Tooltip("The scene's Light components that reach the shape (with Affects Volumes) light the cloud, through it. Up to 8 lights are live (counting its own lights and the scene's other directional lights): intensity and colour are free, moving one works its light out again. When more reach the shape, the longest ranges stay live and up to 64 others are baked into one texture: they cost the same however many there are, and any change of one (place, colour, intensity) works its part of that texture out again, so they suit lights that stay as they are (lamps)")]
 		public bool SceneLights = true;
 
 		[Tooltip("Lights of its own inside the cloud (flashes, lamps, fires), lighting only the cloud. Moving one works the light volume out again; intensity and colour are free")]
@@ -236,7 +253,9 @@ namespace LELEngine.Volumetrics
 
 		private VolumetricData data;
 		private readonly List<VolumeLightSlot> hashSlots = new List<VolumeLightSlot>();
+		private readonly List<VolumeLightSlot> hashBaked = new List<VolumeLightSlot>();
 		private readonly List<(global::Light light, float distance)> sceneCandidates = new List<(global::Light, float)>();
+		private readonly List<(global::Light light, float distance)> bakedCandidates = new List<(global::Light, float)>();
 
 		#endregion
 
@@ -429,10 +448,16 @@ namespace LELEngine.Volumetrics
 		{
 			Vector3i grid = GridFor(Size, VoxelSize, out float voxel, out bool capped);
 			long voxels = (long)grid.X * grid.Y * grid.Z;
-			// Density r8 + lit rgba8, both with mips (a seventh more), the occupancy, the lights at half resolution.
-			double megabytes = voxels * (5.0 * 8.0 / 7.0) / (1024.0 * 1024.0) + (Lights.Count > 0 ? voxels / 8.0 * 8.0 / (1024.0 * 1024.0) : 0.0);
+			// Density r8 + lit rgba8, both with mips (a seventh more) and the occupancy; the lights' transport at half
+			// resolution (rgba16f with mips): two textures for the live lights, one for the baked ones.
+			double megabytes = voxels * (5.0 * 8.0 / 7.0) / (1024.0 * 1024.0);
+			long transportVoxels = (long)((grid.X + 1) / 2) * ((grid.Y + 1) / 2) * ((grid.Z + 1) / 2);
+			bool made = data != null && data.Ready;
+			int transportTextures = made ? (data.LightsA != 0 ? 2 : 0) + (data.LightsC != 0 ? 1 : 0) : Lights.Count > 0 ? 2 : 0;
+			megabytes += transportTextures * transportVoxels * (8.0 * 8.0 / 7.0) / (1024.0 * 1024.0);
 			string state = data == null ? "not made yet" : data.Ready ? data.Pending ? "ready, being made again" : "ready" : "being made";
-			string size = $"{grid.X} x {grid.Y} x {grid.Z} voxels of {voxel:0.###} units ({voxels / 1e6:0.##} M, about {megabytes:0} MB): {state}";
+			string lights = made && data.LightCount + data.BakedCount > 0 ? data.BakedCount > 0 ? $", {data.LightCount} live lights and {data.BakedCount} baked" : $", {data.LightCount} live lights" : "";
+			string size = $"{grid.X} x {grid.Y} x {grid.Z} voxels of {voxel:0.###} units ({voxels / 1e6:0.##} M, about {megabytes:0} MB{lights}): {state}";
 			return capped ? $"Too many voxels at {VoxelSize:0.###} units: {size}. Raise the voxel size or shrink the shape." : size;
 		}
 
@@ -482,6 +507,26 @@ namespace LELEngine.Volumetrics
 		///     alone), or the scene's main light.
 		/// </summary>
 		internal DirectionalLight EffectiveSun => Sun != null && !Sun.IsDestroyed ? Sun : DirectionalLight.This;
+
+		/// <summary>
+		///     The sun's light on the cloud right now (linear): the light's colour and strength, its own
+		///     <see cref="DirectionalLight.VolumetricStrength" /> and the cloud's <see cref="SunStrength" />; nothing from a
+		///     light with <see cref="DirectionalLight.AffectsVolumes" /> off (the switch counts for the cloud's sun as for
+		///     every other light: it used to be ignored there, so the main light lit every cloud whatever it said).
+		/// </summary>
+		internal Vector3 SunRadiance
+		{
+			get
+			{
+				DirectionalLight sun = EffectiveSun;
+				if (sun == null || !sun.AffectsVolumes)
+				{
+					return Vector3.Zero;
+				}
+
+				return new Vector3(sun.Color.R, sun.Color.G, sun.Color.B) * (sun.Strength * MathF.Max(sun.VolumetricStrength, 0f) * SunStrength);
+			}
+		}
 
 		/// <summary>
 		///     The cloud's density as a key that is the same in every run and on every machine (made clouds are found by it,
@@ -586,7 +631,7 @@ namespace LELEngine.Volumetrics
 		/// </summary>
 		internal int LightsHash()
 		{
-			GatherLightSlots(hashSlots);
+			GatherLightSlots(hashSlots, hashBaked);
 			var hash = new HashCode();
 			hash.Add(LightGlow);
 			hash.Add(Density);
@@ -598,6 +643,16 @@ namespace LELEngine.Volumetrics
 				hash.Add(slot.PositionSize);
 				hash.Add(slot.Params);
 				hash.Add(slot.Spot);
+			}
+
+			// The baked lights' colours are in their texture: a change of one works it out again.
+			hash.Add(hashBaked.Count);
+			foreach (VolumeLightSlot slot in hashBaked)
+			{
+				hash.Add(slot.PositionSize);
+				hash.Add(slot.Params);
+				hash.Add(slot.Spot);
+				hash.Add(slot.BakedColor);
 			}
 
 			return hash.ToHashCode();
@@ -614,14 +669,19 @@ namespace LELEngine.Volumetrics
 		}
 
 		/// <summary>
-		///     The lights the cloud's light transport is worked out for: its own lights first, then (with
-		///     <see cref="SceneLights" />) the scene's directional lights other than the cloud's sun, then the scene's
-		///     lights that reach the shape (nearest first), at most <see cref="MaxLights" />. A scene light is in the set
-		///     whatever its intensity (a flash going dark and bright again keeps its transport).
+		///     The lights the cloud's light transport is worked out for. Live (<paramref name="slots" />, at most
+		///     <see cref="MaxLights" />: a channel each, their colour and intensity free every frame): its own lights first,
+		///     then (with <see cref="SceneLights" />) the scene's directional lights other than the cloud's sun, then the
+		///     scene's lights that reach the shape, whatever their intensity (a flash going dark and bright again keeps its
+		///     transport). When more scene lights reach the shape than channels are left, the ones with the longest range
+		///     take them (working a large light out again costs the most, so those keep their brightness free) and the
+		///     others are baked (<paramref name="baked" />, at most <see cref="MaxBakedLights" />, the nearest first): summed
+		///     into one texture with their colour, worked out again around a light that changed.
 		/// </summary>
-		internal void GatherLightSlots(List<VolumeLightSlot> slots)
+		internal void GatherLightSlots(List<VolumeLightSlot> slots, List<VolumeLightSlot> baked)
 		{
 			slots.Clear();
+			baked.Clear();
 			int own = Math.Min(Lights.Count, MaxLights);
 			for (int i = 0; i < own; i++)
 			{
@@ -632,7 +692,7 @@ namespace LELEngine.Volumetrics
 				}
 			}
 
-			if (!SceneLights || slots.Count >= MaxLights)
+			if (!SceneLights)
 			{
 				return;
 			}
@@ -660,7 +720,7 @@ namespace LELEngine.Volumetrics
 				});
 			}
 
-			if (slots.Count >= MaxLights || global::Light.Active.Count == 0)
+			if (global::Light.Active.Count == 0)
 			{
 				return;
 			}
@@ -685,37 +745,83 @@ namespace LELEngine.Volumetrics
 				}
 			}
 
-			sceneCandidates.Sort((a, b) => a.distance.CompareTo(b.distance));
+			// More lights than channels left: the longest ranges keep a channel. (A stable sort: equal ranges keep the order
+			// the lights were enabled in, so the choice does not change from frame to frame.)
+			int free = MaxLights - slots.Count;
+			if (sceneCandidates.Count > free)
+			{
+				StableSort(sceneCandidates, (a, b) => b.light.Range.CompareTo(a.light.Range));
+				for (int i = free; i < sceneCandidates.Count; i++)
+				{
+					bakedCandidates.Add(sceneCandidates[i]);
+				}
+
+				sceneCandidates.RemoveRange(free, sceneCandidates.Count - free);
+			}
+
+			// Each set the nearest first.
+			StableSort(sceneCandidates, (a, b) => a.distance.CompareTo(b.distance));
 			foreach ((global::Light light, float _) in sceneCandidates)
 			{
-				if (slots.Count >= MaxLights)
+				slots.Add(SceneSlot(light, worldToLocal));
+			}
+
+			if (bakedCandidates.Count > 0)
+			{
+				StableSort(bakedCandidates, (a, b) => a.distance.CompareTo(b.distance));
+				for (int i = 0; i < bakedCandidates.Count && baked.Count < MaxBakedLights; i++)
 				{
-					break;
+					VolumeLightSlot slot = SceneSlot(bakedCandidates[i].light, worldToLocal);
+					slot.BakedColor = slot.Color;
+					baked.Add(slot);
 				}
 
-				Vector3 local = Vector3.TransformPosition(light.transform.position, worldToLocal);
-				Vector3 spot = Vector3.TransformVector(light.transform.forward, worldToLocal);
-				spot = spot.LengthSquared > 1e-12f ? spot.Normalized() : Vector3.UnitZ;
-				float cosOuter = -2f;
-				float spotScale = 0f;
-				if (light.Type == LightType.Spot)
+				bakedCandidates.Clear();
+			}
+		}
+
+		// A scene light as a slot of the transport (the cloud's local space).
+		private static VolumeLightSlot SceneSlot(global::Light light, Matrix4 worldToLocal)
+		{
+			Vector3 local = Vector3.TransformPosition(light.transform.position, worldToLocal);
+			Vector3 spot = Vector3.TransformVector(light.transform.forward, worldToLocal);
+			spot = spot.LengthSquared > 1e-12f ? spot.Normalized() : Vector3.UnitZ;
+			float cosOuter = -2f;
+			float spotScale = 0f;
+			if (light.Type == LightType.Spot)
+			{
+				float outer = MathHelper.DegreesToRadians(Math.Clamp(light.SpotAngle, 1f, 179f) * 0.5f);
+				float inner = outer * Math.Clamp(light.InnerSpot, 0f, 0.999f);
+				cosOuter = MathF.Cos(outer);
+				spotScale = 1f / MathF.Max(MathF.Cos(inner) - cosOuter, 1e-4f);
+			}
+
+			// The transport holds the falloff x (range / 4)^2: values about 1 across the light's reach, which half floats
+			// keep from the light to its range.
+			float normalization = light.Range * light.Range / 16f;
+			return new VolumeLightSlot
+			{
+				PositionSize = new Vector4(local, light.Range),
+				Params = new Vector4(1f, MathF.Max(light.SourceRadius, 1e-3f), cosOuter, spotScale),
+				Spot = new Vector4(spot, normalization),
+				Scene = light
+			};
+		}
+
+		// List.Sort is not stable: an insertion sort (the lists are short) keeps equal lights in their order.
+		private static void StableSort(List<(global::Light light, float distance)> list, Comparison<(global::Light light, float distance)> compare)
+		{
+			for (int i = 1; i < list.Count; i++)
+			{
+				(global::Light light, float distance) item = list[i];
+				int j = i - 1;
+				while (j >= 0 && compare(list[j], item) > 0)
 				{
-					float outer = MathHelper.DegreesToRadians(Math.Clamp(light.SpotAngle, 1f, 179f) * 0.5f);
-					float inner = outer * Math.Clamp(light.InnerSpot, 0f, 0.999f);
-					cosOuter = MathF.Cos(outer);
-					spotScale = 1f / MathF.Max(MathF.Cos(inner) - cosOuter, 1e-4f);
+					list[j + 1] = list[j];
+					j--;
 				}
 
-				// The transport holds the falloff x (range / 4)^2: values about 1 across the light's reach, which half floats
-				// keep from the light to its range.
-				float normalization = light.Range * light.Range / 16f;
-				slots.Add(new VolumeLightSlot
-				{
-					PositionSize = new Vector4(local, light.Range),
-					Params = new Vector4(1f, MathF.Max(light.SourceRadius, 1e-3f), cosOuter, spotScale),
-					Spot = new Vector4(spot, normalization),
-					Scene = light
-				});
+				list[j + 1] = item;
 			}
 		}
 

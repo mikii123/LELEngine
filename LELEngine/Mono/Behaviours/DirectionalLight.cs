@@ -38,10 +38,10 @@ public sealed class DirectionalLight : Behaviour
 	public float IndirectStrength = 1f;
 
 	[Header("Volumes")]
-	[Tooltip("The light lights the volumetric objects, through their cloud (a cloud's own Sun always lights it)")]
+	[Tooltip("The light lights the volumetric objects, through their cloud. Off: no cloud takes its light, also not one whose Sun it is (the main light is every cloud's sun unless the cloud names another)")]
 	public bool AffectsVolumes = true;
 
-	[Tooltip("How strongly it lights the volumetric objects, relative to surfaces")]
+	[Tooltip("How strongly it lights the volumetric objects, relative to surfaces (also as a cloud's sun)")]
 	[Range(0f, 10f)]
 	public float VolumetricStrength = 1f;
 

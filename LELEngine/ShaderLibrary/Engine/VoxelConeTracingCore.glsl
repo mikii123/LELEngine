@@ -35,6 +35,8 @@ uniform float giSdfDetailDistance;
 const float ConeOpacityExponent = 0.6;
 // Radiance arriving from outside the scene (cones that escape): the skybox or the constant sky color.
 #include "Engine/Sky.glsl"
+// The clouds on a cone's way (the volumetric objects): their light and what they hide, inside the volume and beyond it.
+#include "Engine/GIMedia.glsl"
 
 float VoxelSize()
 {
@@ -62,6 +64,59 @@ vec4 SdfHitRadiance(vec3 hit, vec3 direction, float aperture, float hitT)
 	return vec4(s.rgb / max(s.a, 0.25), 1.0);
 }
 
+// ---- The clouds on the cones' way (GI_MEDIA) ----
+// The programs that trace most of the GI's cones (the screen-space resolve, the volume's bounces) have a variant with
+// GI_MEDIA, used while a volumetric object contributes (Lighting.Media): its cones read the GI's media volume along
+// their way. Compiled in, not switched by a uniform: the switched-off reads still cost an eighth of the resolve. The
+// materials that trace cones themselves take the clouds in with one wide cone instead (Engine/VolumeLighting.glsl).
+#ifdef GI_MEDIA
+
+// A cone among the clouds: how far along it they were read, its phase factor (Engine/GIMedia.glsl: worked out at
+// the first cloud it meets), and the cone's step jitter (its stretches' lengths vary with it).
+struct ConeClouds
+{
+	float to;
+	float phase;
+	float jitter;
+};
+
+// The clouds on a cone's way, read ahead of its samples: once the sample at `dist` has passed what was read, the next
+// stretch (GIMediaStride: one and a quarter cone diameters, at least half a voxel of the media volume) goes in front of
+// what the cone gathers from there on. A cone's own steps are shorter (a diameter, half of one with distance field
+// opacity, a voxel near its start): the clouds are read once for several of them, five or six times along a diffuse
+// cone.
+void ConeMedia(vec3 origin, vec3 direction, float aperture, float dist, inout ConeClouds clouds, inout vec3 color, inout float alpha)
+{
+	if (dist < clouds.to)
+	{
+		return;
+	}
+
+	float len = GIMediaStride(aperture, clouds.to, clouds.jitter);
+	vec4 m = GIMediaSegment(origin + direction * clouds.to, clouds.to, direction, 2.0 * aperture * (clouds.to + len * 0.5), len, 0.5, clouds.phase);
+	color += (1.0 - alpha) * m.rgb;
+	alpha += (1.0 - alpha) * m.a;
+	clouds.to += len;
+}
+
+// The end of a cone's trace (rgb the radiance gathered so far, premultiplied; a its coverage): what the cone did not
+// hit sees the clouds beyond where they were read (the media volume reaches further than the GI's voxels), then the
+// sky, averaged over the cone's footprint.
+vec4 ConeEscape(vec4 traced, vec3 origin, vec3 direction, float aperture, ConeClouds clouds)
+{
+	if (traced.a < 0.95)
+	{
+		vec4 m = GIMediaRange(origin, direction, aperture, clouds.to, 1e30, clouds.jitter, clouds.phase);
+		traced.rgb += (1.0 - traced.a) * m.rgb;
+		traced.a += (1.0 - traced.a) * m.a;
+	}
+
+	traced.rgb += (1.0 - traced.a) * SkyRadiance(direction, aperture);
+	return traced;
+}
+
+#endif
+
 // aperture = tan(half angle). Marches from startDistance; returns premultiplied radiance in rgb and
 // accumulated occlusion in a. stepJitter in [0, 1) moves every sample that fraction of a step further out (the
 // steps grow with the distance, so one offset of the first step shifts them all alike).
@@ -76,6 +131,9 @@ vec4 TraceConeVoxel(vec3 origin, vec3 direction, float aperture, float startDist
 	float alpha = 0.0;
 	float dist = max(startDistance, voxelSize);
 	dist += stepJitter * max(voxelSize, 2.0 * aperture * dist);
+#ifdef GI_MEDIA
+	ConeClouds clouds = ConeClouds(0.0, GIMediaNoPhase, stepJitter);
+#endif
 
 	while (dist < maxDistance && alpha < 0.95)
 	{
@@ -85,6 +143,9 @@ vec4 TraceConeVoxel(vec3 origin, vec3 direction, float aperture, float startDist
 		vec3 uvw = (origin + direction * dist - voxelGridMin) / voxelGridSize;
 		if (any(lessThan(uvw, vec3(0.0))) || any(greaterThan(uvw, vec3(1.0)))) break;
 
+#ifdef GI_MEDIA
+		ConeMedia(origin, direction, aperture, dist, clouds, color, alpha);
+#endif
 		vec4 s = SampleVoxelCone(cone, uvw, mip);
 		color += (1.0 - alpha) * s.rgb;
 		alpha += (1.0 - alpha) * s.a;
@@ -94,9 +155,13 @@ vec4 TraceConeVoxel(vec3 origin, vec3 direction, float aperture, float startDist
 		dist += diameter;
 	}
 
+#ifdef GI_MEDIA
+	return ConeEscape(vec4(color, alpha), origin, direction, aperture, clouds);
+#else
 	// Whatever the cone did not hit sees the sky, averaged over the cone's footprint.
 	color += (1.0 - alpha) * SkyRadiance(direction, aperture);
 	return vec4(color, alpha);
+#endif
 }
 
 // Near field through the distance field, far field through the voxel mips.
@@ -106,7 +171,13 @@ vec4 TraceConeSdfDetail(vec3 origin, vec3 direction, float aperture, float maxDi
 	float hitT;
 	if (TraceSdf(origin, direction, detail, hitT))
 	{
-		return SdfHitRadiance(origin + direction * hitT, direction, aperture, hitT);
+		vec4 hit = SdfHitRadiance(origin + direction * hitT, direction, aperture, hitT);
+#ifdef GI_MEDIA
+		// The clouds between the surface and what it sees this near.
+		vec4 m = GIMediaRange(origin, direction, aperture, 0.0, hitT, stepJitter);
+		hit.rgb = m.rgb + (1.0 - m.a) * hit.rgb;
+#endif
+		return hit;
 	}
 
 	return TraceConeVoxel(origin, direction, aperture, detail, maxDistance, stepJitter);
@@ -135,6 +206,9 @@ vec4 TraceConeSdf(vec3 origin, vec3 direction, float aperture, float maxDistance
 	vec3 color = vec3(0.0);
 	float alpha = 0.0;
 	float dist = voxelSize + stepJitter * 0.5 * max(voxelSize, 2.0 * aperture * voxelSize);
+#ifdef GI_MEDIA
+	ConeClouds clouds = ConeClouds(0.0, GIMediaNoPhase, stepJitter);
+#endif
 	while (dist < maxDistance && alpha < 0.98)
 	{
 		vec3 p = origin + direction * dist;
@@ -143,6 +217,9 @@ vec4 TraceConeSdf(vec3 origin, vec3 direction, float aperture, float maxDistance
 
 		float diameter = max(voxelSize, 2.0 * aperture * dist);
 		float mip = min(log2(diameter / voxelSize), maxMip);
+#ifdef GI_MEDIA
+		ConeMedia(origin, direction, aperture, dist, clouds, color, alpha);
+#endif
 		vec4 s = SampleVoxelCone(cone, uvw, mip);
 
 		float fieldAlpha = 0.0;
@@ -171,9 +248,13 @@ vec4 TraceConeSdf(vec3 origin, vec3 direction, float aperture, float maxDistance
 		dist += diameter * 0.5;
 	}
 
+#ifdef GI_MEDIA
+	return ConeEscape(vec4(color, alpha), origin, direction, aperture, clouds);
+#else
 	// Whatever the cone did not hit sees the sky, averaged over the cone's footprint.
 	color += (1.0 - alpha) * SkyRadiance(direction, aperture);
 	return vec4(color, alpha);
+#endif
 }
 
 vec4 TraceConeJittered(vec3 origin, vec3 direction, float aperture, float maxDistance, float stepJitter)
@@ -339,11 +420,49 @@ vec4 TraceWideCone(vec3 position, vec3 normal)
 	return TraceWideConeFrom(position, normal, ConeStartOffset());
 }
 
-// Single cone along the mirror direction; roughness in [0,1] widens the cone.
-vec3 TraceSpecularCone(vec3 position, vec3 normal, vec3 viewDir, float roughness)
+// Single cone along the mirror direction; roughness in [0,1] widens the cone. rgb = radiance, a = its coverage.
+vec4 TraceSpecularConeCoverage(vec3 position, vec3 normal, vec3 viewDir, float roughness)
 {
 	vec3 reflected = reflect(-viewDir, normal);
 	float aperture = clamp(roughness, 0.03, 1.0);
 	vec3 origin = position + normal * ConeStartOffset();
-	return TraceCone(origin, reflected, aperture, ConeMaxDistance()).rgb;
+	return TraceCone(origin, reflected, aperture, ConeMaxDistance());
+}
+
+vec3 TraceSpecularCone(vec3 position, vec3 normal, vec3 viewDir, float roughness)
+{
+	return TraceSpecularConeCoverage(position, normal, viewDir, roughness).rgb;
+}
+
+// ---- The clouds for a gather that did not read them along its cones ----
+// (Programs without GI_MEDIA: the voxel volume's bounces, where six cones from every cell with geometry would read the
+// clouds seventy times for light that is reflected once more before it is seen; the screen-space resolve in its fast
+// mode.) One cone takes them in, where the gather's own cones got out past the surfaces (1 - their coverage: nothing
+// of a cloud comes through a wall), in place of the sky they saw there: the clouds' light, and the sky only through
+// what they leave uncovered. No clouds in the GI: one test of a uniform.
+
+// A hemisphere's gather (rgb irradiance / pi, a coverage): one cone of sixty degrees either side of the normal.
+vec4 ApplyCloudsToGather(vec4 gathered, vec3 position, vec3 normal)
+{
+	if (giMediaActive == 0)
+	{
+		return gathered;
+	}
+
+	vec4 m = GIMediaRange(position, normal, 1.732, 0.0, 1e30, 0.5);
+	gathered.rgb = max(gathered.rgb + (1.0 - gathered.a) * (m.rgb - m.a * SkyRadiance(normal, 1.732)), vec3(0.0));
+	return gathered;
+}
+
+// One cone's (rgb radiance, a coverage).
+vec4 ApplyCloudsToCone(vec4 traced, vec3 origin, vec3 direction, float aperture)
+{
+	if (giMediaActive == 0)
+	{
+		return traced;
+	}
+
+	vec4 m = GIMediaRange(origin, direction, aperture, 0.0, 1e30, 0.5);
+	traced.rgb = max(traced.rgb + (1.0 - traced.a) * (m.rgb - m.a * SkyRadiance(direction, aperture)), vec3(0.0));
+	return traced;
 }

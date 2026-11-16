@@ -226,6 +226,8 @@ namespace LELEngine.Rendering.Passes
 			probes.SetTexture("CardNormal", TextureTarget.Texture2D, atlas.Normal, 2);
 			probes.SetTexture("FinalLightingPrev", TextureTarget.Texture2D, atlas.FinalLightingPrevious, 4);
 			Lighting.SetSkyUniforms(probes);
+			// The clouds on the rays' way (the volumetric objects in the GI): surfaces they light pass the light on.
+			Lighting.SetMediaUniforms(probes);
 			probes.SetInt("frameIndex", frameIndex);
 			probes.SetFloat("radiosityBlend", gi.RadiosityBlend);
 			// While the scene is changing (or has just stopped) the probes track with a short history; once it has

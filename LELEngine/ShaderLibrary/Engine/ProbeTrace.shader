@@ -26,6 +26,7 @@ void main()
 #include "Engine/RadianceCache.glsl"
 #include "Engine/ScreenProbes.glsl"
 #include "Engine/Sky.glsl"
+#include "Engine/GIMedia.glsl"
 
 // Screen probe ray tracing (Lumen final gather, step 1): one probe per probeSpacing x probeSpacing pixels,
 // anchored at a jittered pixel of its cell, 64 rays per probe, exactly one ray per fragment.
@@ -111,8 +112,9 @@ bool ScreenTrace(vec3 origin, vec3 direction, float jitter, out vec3 hitPos, out
 	return false;
 }
 
-// Full trace of one ray: screen space first, then the distance field. Returns radiance and hit distance.
-vec4 TraceRay(vec3 position, vec3 normal, vec3 direction, float jitter)
+// Full trace of one ray: screen space first, then the distance field. Returns radiance and hit distance; reached is
+// how far along the ray what the radiance comes from lies (negative: the sky).
+vec4 TraceSurfaces(vec3 position, vec3 normal, vec3 direction, float jitter, out float reached)
 {
 	float voxel = SdfVoxelSize();
 	vec3 origin = position + normal * voxel * 0.5;
@@ -130,6 +132,7 @@ vec4 TraceRay(vec3 position, vec3 normal, vec3 direction, float jitter)
 				radiance = vec3(0.0);
 			}
 			float distance = length(hitPos - position);
+			reached = distance;
 			return vec4(radiance, SceneObjectMoved(objectIndex) ? EncodeMovingHit(distance) : distance);
 		}
 		origin += direction * max(travelled - voxel, 0.0);
@@ -146,8 +149,11 @@ vec4 TraceRay(vec3 position, vec3 normal, vec3 direction, float jitter)
 		// the occlusion test and leak the lighting of the other side, so such rays trace on instead.
 		vec3 far = origin + direction * maxDistance;
 		vec3 radiance;
-		if (SampleSdf(far) >= rcProbeSpacing * 0.25 && SampleRadianceCache(far, direction, radiance))
+		float beyond;
+		if (SampleSdf(far) >= rcProbeSpacing * 0.25 && SampleRadianceCache(far, direction, radiance, beyond))
 		{
+			// The probes' misses lie the field's size away: the sky.
+			reached = beyond >= sdfGridSize * 0.75 ? -1.0 : length(far - position) + beyond;
 			return vec4(radiance, -1.0);
 		}
 
@@ -165,10 +171,25 @@ vec4 TraceRay(vec3 position, vec3 normal, vec3 direction, float jitter)
 			radiance = vec3(0.0);
 		}
 		float distance = length(hitPos - position);
+		reached = distance;
 		return vec4(radiance, SceneObjectMoved(objectIndex) ? EncodeMovingHit(distance) : distance);
 	}
 
+	reached = -1.0;
 	return vec4(SkyRadiance(direction), -1.0);
+}
+
+// A probe's 64 rays cover its hemisphere: each stands for a cone of about ten degrees (tan 0.18), the width the
+// clouds on its way are read at.
+const float RayAperture = 0.18;
+
+// One ray: what it reaches, with the clouds on the way in front of it (the volumetric objects in the GI).
+vec4 TraceRay(vec3 position, vec3 normal, vec3 direction, float jitter)
+{
+	float reached;
+	vec4 ray = TraceSurfaces(position, normal, direction, jitter, reached);
+	ray.rgb = GIMediaApply(ray.rgb, position, direction, RayAperture, reached, jitter);
+	return ray;
 }
 
 void main()

@@ -37,6 +37,13 @@ namespace LELEngine.Rendering
 
 		/// <summary>Frames rendered so far; the one counter the passes share (per-pass counters can drift apart when passes are toggled).</summary>
 		public int FrameIndex { get; private set; }
+
+		/// <summary>
+		///     LEL_PASS_STATS=1: every renderer logs what each of its passes cost on the GPU, every 120th frame of its own
+		///     (`[PassStats] ...`): the costs of a project's own scene, in the editor's views or a player.
+		/// </summary>
+		public static readonly bool PassStatistics = Environment.GetEnvironmentVariable("LEL_PASS_STATS") == "1";
+
 		public Framebuffer SceneTarget { get; private set; }
 		public RenderTexture SceneColor => SceneTarget.ColorAttachments[0];
 		public RenderTexture SceneDepth => SceneTarget.DepthAttachment;
@@ -114,6 +121,7 @@ namespace LELEngine.Rendering
 			AddPass(new VfxSimulationPass());
 			AddPass(new VolumetricPass());
 			AddPass(new ShadowPass());
+			AddPass(new VolumetricMediaPass());
 			AddPass(new GlobalDistanceFieldPass());
 			AddPass(new SurfaceCachePass());
 			AddPass(new RadianceCachePass());
@@ -129,6 +137,7 @@ namespace LELEngine.Rendering
 			AddPass(new DebugDrawPass());
 			AddPass(new VoxelDebugPass());
 			AddPass(new SdfDebugPass());
+			AddPass(new VolumetricMediaDebugPass());
 			AddPass(new SurfaceCacheDebugPass());
 			AddPass(new ProbeDebugPass());
 			AddPass(new PostProcessPass());
@@ -319,6 +328,20 @@ namespace LELEngine.Rendering
 			RunScope(RenderPassScope.Final, lightingContext, executed);
 
 			Profiler.EndFrame();
+			if (PassStatistics && FrameIndex % 120 == 0)
+			{
+				// LEL_PASS_STATS=1: what each pass cost on the GPU (any host: the editor's views, a player), every 120th frame.
+				var line = new System.Text.StringBuilder($"[PassStats] {Width}x{Height} frame {FrameIndex}: GPU {Profiler.TotalMilliseconds:0.00} ms |");
+				foreach (KeyValuePair<string, double> pass in Profiler.Results)
+				{
+					if (pass.Value >= 0.005)
+					{
+						line.Append($" {pass.Key} {pass.Value:0.00}");
+					}
+				}
+
+				Console.WriteLine(line.ToString());
+			}
 
 			if (Statistics.Active)
 			{

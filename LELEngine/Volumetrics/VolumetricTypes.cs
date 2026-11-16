@@ -63,15 +63,20 @@ namespace LELEngine.Volumetrics
 	}
 
 	/// <summary>
-	///     One of the (up to 8) lights a cloud's light transport is worked out for: a light of its own
+	///     One of the lights a cloud's light transport is worked out for: a light of its own
 	///     (<see cref="VolumetricObjectBase.Lights" />: a core and a glow), a scene <see cref="global::DirectionalLight" />
 	///     other than the cloud's sun (no falloff: the cloud on the way towards it), or a scene <see cref="global::Light" />
-	///     that reaches the shape (physical falloff, its range and cone). The transport holds where the light goes through
-	///     the cloud at unit brightness (times <see cref="Normalization" />); the light's colour and intensity are applied
-	///     when the cloud is drawn.
+	///     that reaches the shape (physical falloff, its range and cone). Up to <see cref="VolumetricObjectBase.MaxLights" />
+	///     of them are live: each has a channel of the transport that holds where its light goes through the cloud at unit
+	///     brightness (times the slot's factor), and its colour and intensity are applied when the cloud is drawn. The
+	///     scene lights beyond those are baked: all of them summed into one texture with their colour in it
+	///     (<see cref="BakedColor" />), worked out again around a light when it changes.
 	/// </summary>
 	internal struct VolumeLightSlot
 	{
+		/// <summary>A baked light's colour as its part of the baked texture was worked out with (<see cref="Color" /> then).</summary>
+		public Vector3 BakedColor;
+
 		/// <summary>Params.x of a light of the cloud's own.</summary>
 		public const float KindOwn = 0f;
 
@@ -124,6 +129,28 @@ namespace LELEngine.Volumetrics
 				}
 
 				return Own != null ? new Vector3(Own.Color.R, Own.Color.G, Own.Color.B) * Own.Intensity : Vector3.Zero;
+			}
+		}
+
+		/// <summary>
+		///     How much of the light the GI takes (the cloud's light in the GI, VolumetricMedia): a scene light's Indirect
+		///     Strength, 0 with its Affects GI off; a light of the cloud's own counts whole.
+		/// </summary>
+		public float IndirectStrength
+		{
+			get
+			{
+				if (Directional != null)
+				{
+					return Directional.AffectsGI ? System.MathF.Max(Directional.IndirectStrength, 0f) : 0f;
+				}
+
+				if (Scene != null)
+				{
+					return Scene.AffectsGI ? System.MathF.Max(Scene.IndirectStrength, 0f) : 0f;
+				}
+
+				return 1f;
 			}
 		}
 	}

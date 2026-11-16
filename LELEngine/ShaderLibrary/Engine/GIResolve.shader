@@ -71,7 +71,15 @@ void main()
 		jitter = ConeJitterAtPosition(position, footprint * 3.0);
 	}
 	vec4 diffuse = TraceDiffuseConesJittered(position, N, ConeStartOffset(), jitter);
+#ifdef GI_MEDIA
+	// The cones read the clouds along their way (the accurate gather of the volumetric objects in the GI).
 	vec3 specular = TraceSpecularCone(position, N, V, roughness);
+#else
+	// The fast gather of the clouds: one wide cone for the hemisphere, one along the reflection (nothing without clouds).
+	diffuse = ApplyCloudsToGather(diffuse, position + N * ConeStartOffset(), N);
+	vec4 mirrored = TraceSpecularConeCoverage(position, N, V, roughness);
+	vec3 specular = ApplyCloudsToCone(mirrored, position + N * ConeStartOffset(), reflect(-V, N), clamp(roughness, 0.03, 1.0)).rgb;
+#endif
 	float linearDepth = dot(position - cameraPosition, cameraForward);
 
 	OutDiffuse = diffuse;

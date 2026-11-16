@@ -26,6 +26,7 @@ uniform usampler2D CardIndex;
 uniform sampler2D CardNormal;
 uniform sampler2D FinalLightingPrev;
 #include "Engine/Sky.glsl"
+#include "Engine/GIMedia.glsl"
 uniform int frameIndex;
 uniform float radiosityBlend;      // constant history weight per update when radiosityMaxSamples is 0
 uniform float radiosityMaxSamples; // sample-count accumulation cap (lower while the scene is changing, see SurfaceCachePass)
@@ -103,15 +104,20 @@ void main()
 	float maxDistance = rcNearDistance > 0.0 ? rcNearDistance : sdfGridSize;
 
 	vec3 radiance = SkyRadiance(direction);
+	// How far along the ray what the radiance comes from lies (negative: the sky).
+	float reached = -1.0;
 	float hitT;
 	bool hit = TraceSdf(origin, direction, maxDistance, hitT);
 	if (!hit && rcNearDistance > 0.0)
 	{
 		vec3 far = origin + direction * maxDistance;
 		vec3 cached;
-		if (SampleSdf(far) >= rcProbeSpacing * 0.25 && SampleRadianceCache(far, direction, cached))
+		float beyond;
+		if (SampleSdf(far) >= rcProbeSpacing * 0.25 && SampleRadianceCache(far, direction, cached, beyond))
 		{
 			radiance = cached;
+			// The probes' misses lie the field's size away: the sky.
+			reached = beyond >= sdfGridSize * 0.75 ? -1.0 : maxDistance + beyond;
 		}
 		else
 		{
@@ -126,7 +132,12 @@ void main()
 		int objectIndex;
 		radiance = SampleSurfaceCacheAtHitObject(hitPos, SdfNormal(hitPos), sdfVoxel * 2.0, FinalLightingPrev, lit, objectIndex) ? lit : vec3(0.0);
 		if (SceneObjectMoved(objectIndex)) atomicOr(movingMask, 1u);
+		reached = hitT;
 	}
+
+	// The clouds on the ray's way (the volumetric objects in the GI); a probe's 16 rays cover its hemisphere, each
+	// stands for a cone of about twenty degrees (tan 0.37).
+	radiance = GIMediaApply(radiance, origin, direction, 0.37, reached, jitter.y);
 
 	raySum[lane] = radiance;
 	barrier();

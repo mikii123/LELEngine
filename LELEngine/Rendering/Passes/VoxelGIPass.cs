@@ -981,6 +981,8 @@ namespace LELEngine.Rendering.Passes
 			}
 
 			Lighting.SetSkyUniforms(program);
+			// The clouds, taken in with one cone per cell (ApplyCloudsToGather): surfaces lit by a cloud pass its light on.
+			Lighting.SetMediaUniforms(program);
 		}
 
 		// One injection pass into radiance[target]; with bounce it lights from radiance[current] (the previous pass),

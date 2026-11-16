@@ -81,6 +81,7 @@ namespace LELEngine.Volumetrics
 		private const int DepthUnit = 5;
 		private const int GIAUnit = 6;
 		private const int GIBUnit = 7;
+		private const int LightsCUnit = 8;
 		private const int ResultUnit = 0;
 		private const int ResultDepthUnit = 1;
 		private const int SceneDepthUnit = 2;
@@ -131,10 +132,11 @@ namespace LELEngine.Volumetrics
 		private static ComputeShader generatePoints;
 		private static ComputeShader light;
 		private static ComputeShader lightTransport;
+		private static ComputeShader lightTransportBaked;
 		private static ComputeShader occupancy;
 		private static ComputeShader giShader;
-		private static ShaderProgram march;
-		private static ShaderProgram marchHQ;
+		// The march's programs by variant: bit 0 the high quality preset, bit 1 live lights lit, bit 2 baked lights.
+		private static readonly ShaderProgram[] marchPrograms = new ShaderProgram[8];
 		private static ShaderProgram depthDownsample;
 		private static ShaderProgram temporal;
 		private static ShaderProgram composite;
@@ -150,6 +152,7 @@ namespace LELEngine.Volumetrics
 		internal static ComputeShader GeneratePoints => generatePoints ??= new ComputeShader("Engine/Volumetrics/VolumetricGenerate.shader", "VOL_POINTS");
 		internal static ComputeShader Light => light ??= new ComputeShader("Engine/Volumetrics/VolumetricLight.shader");
 		internal static ComputeShader LightTransport => lightTransport ??= new ComputeShader("Engine/Volumetrics/VolumetricLightTransport.shader");
+		internal static ComputeShader LightTransportBaked => lightTransportBaked ??= new ComputeShader("Engine/Volumetrics/VolumetricLightTransport.shader", "VOL_BAKED");
 		internal static ComputeShader OccupancyShader => occupancy ??= new ComputeShader("Engine/Volumetrics/VolumetricOccupancy.shader");
 		internal static ComputeShader GIShader => giShader ??= new ComputeShader("Engine/Volumetrics/VolumetricGI.shader");
 
@@ -240,6 +243,38 @@ namespace LELEngine.Volumetrics
 		{
 			foreach (global::Light light in lights)
 			{
+				// Worked out again only when what it depends on changed: where the light is and how far it reaches, and the
+				// clouds within its range (which ones, where they are, what they hold). Steady lights in a cloud cost
+				// nothing (144 samples of the voxels per light and cloud every frame before: 1.6 ms of the CPU for thirty
+				// lamps in a storm).
+				Vector3 origin = light.transform.position;
+				var state = new HashCode();
+				state.Add(origin);
+				state.Add(light.Range);
+				state.Add(light.VolumetricShadows);
+				if (light.VolumetricShadows)
+				{
+					foreach (VolumetricObjectBase volume in objects)
+					{
+						if (volume.isActiveAndEnabled && volume.Ready && Reaches(volume, origin, light.Range))
+						{
+							state.Add(System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(volume));
+							state.Add(volume.CloudVersion);
+							state.Add(volume.transform.LocalToWorld);
+							state.Add(volume.LightGlow);
+							state.Add(volume.Data.Sigma);
+						}
+					}
+				}
+
+				int key = state.ToHashCode();
+				if (light.CloudTransmittanceKnown && light.CloudTransmittanceKey == key)
+				{
+					continue;
+				}
+
+				light.CloudTransmittanceKey = key;
+				light.CloudTransmittanceKnown = true;
 				float[] transmittance = light.CloudTransmittance;
 				for (int k = 0; k < 6; k++)
 				{
@@ -251,7 +286,6 @@ namespace LELEngine.Volumetrics
 					continue;
 				}
 
-				Vector3 origin = light.transform.position;
 				foreach (VolumetricObjectBase volume in objects)
 				{
 					if (!volume.isActiveAndEnabled || !volume.Ready || !Reaches(volume, origin, light.Range))
@@ -377,7 +411,7 @@ namespace LELEngine.Volumetrics
 			GL.ClearColor(0f, 0f, 0f, 0f);
 			GL.Clear(ClearBufferMask.ColorBufferBit);
 
-			ShaderProgram program = hq ? marchHQ : march;
+			ShaderProgram program = MarchProgram(hq, data.LightsA != 0 && AnyLightLit(volume, data), data.LightsC != 0 && data.BakedLit);
 			program.Use();
 			SetViewUniforms(program, context, volume, data, worldToLocal, invViewProjection, lowWidth, lowHeight);
 			SetMarchUniforms(program, context, volume, data, localToWorld, scale, lowHeight, history, depth, lowDepth, depthParams);
@@ -444,14 +478,7 @@ namespace LELEngine.Volumetrics
 			GLState.SetBlend(false);
 			GLState.SetDepth(true, false, DepthFunction.Lequal);
 			GLState.SetCull(true, TriangleFace.Back);
-			for (int unit = 0; unit <= GIBUnit; unit++)
-			{
-				GL.ActiveTexture(TextureUnit.Texture0 + unit);
-				GL.BindTexture(TextureTarget.Texture3D, 0);
-				GL.BindTexture(TextureTarget.Texture2D, 0);
-			}
-
-			GL.ActiveTexture(TextureUnit.Texture0);
+			UnbindCloudTextures();
 			drawnThisFrame++;
 		}
 
@@ -502,8 +529,6 @@ namespace LELEngine.Volumetrics
 
 		private static void EnsurePrograms()
 		{
-			march ??= new ShaderProgram("Engine/Volumetrics/VolumetricMarch.shader");
-			marchHQ ??= new ShaderProgram("Engine/Volumetrics/VolumetricMarch.shader", new[] { "VOL_HQ" });
 			depthDownsample ??= new ShaderProgram("Engine/Volumetrics/VolumetricDepth.shader");
 			temporal ??= new ShaderProgram("Engine/Volumetrics/VolumetricTemporal.shader");
 			composite ??= new ShaderProgram("Engine/Volumetrics/VolumetricComposite.shader");
@@ -511,6 +536,37 @@ namespace LELEngine.Volumetrics
 			{
 				detailTexture = MakeDetail();
 			}
+		}
+
+		/// <summary>
+		///     The march's program for a preset and the lights lit right now (VolumetricMarch.shader's variants: the lights'
+		///     fetches are compiled in only where a light shines). A preset's four variants are made together, so a light
+		///     going on later (a first flash) finds its program started, not a compile in the frame it lights up.
+		/// </summary>
+		private static ShaderProgram MarchProgram(bool hq, bool lights, bool baked)
+		{
+			int preset = hq ? 1 : 0;
+			int index = preset | (lights ? 2 : 0) | (baked ? 4 : 0);
+			if (marchPrograms[index] == null)
+			{
+				var defines = new List<string>(3);
+				for (int variant = 0; variant < 4; variant++)
+				{
+					int i = preset | (variant << 1);
+					if (marchPrograms[i] != null)
+					{
+						continue;
+					}
+
+					defines.Clear();
+					if (hq) defines.Add("VOL_HQ");
+					if ((variant & 1) != 0) defines.Add("VOL_LIGHTS");
+					if ((variant & 2) != 0) defines.Add("VOL_BAKED_LIGHTS");
+					marchPrograms[i] = new ShaderProgram("Engine/Volumetrics/VolumetricMarch.shader", defines.ToArray());
+				}
+			}
+
+			return marchPrograms[index];
 		}
 
 		// The tiling detail noise every object shares: made once.
@@ -619,12 +675,8 @@ namespace LELEngine.Volumetrics
 			program.SetInt("ShadowMap", Lighting.ShadowMapTextureUnit);
 			program.SetInt("ShadowTransmittance", Lighting.ShadowTransmittanceTextureUnit);
 			program.SetInt("giSkybox", Lighting.SkyboxTextureUnit);
-			program.SetTexture("volLit", TextureTarget.Texture3D, data.Lit, LitUnit);
 			program.SetTexture("volOccupancy", TextureTarget.Texture3D, data.Occupancy, OccupancyUnit);
 			program.SetTexture("volDetail", TextureTarget.Texture3D, detailTexture, DetailUnit);
-			bool lights = data.LightsA != 0 && AnyLightLit(volume, data);
-			program.SetTexture("volLightsA", TextureTarget.Texture3D, lights ? data.LightsA : 0, LightsAUnit);
-			program.SetTexture("volLightsB", TextureTarget.Texture3D, lights ? data.LightsB : 0, LightsBUnit);
 			if (lowDepth != null)
 			{
 				program.SetTexture("volDepth", TextureTarget.Texture2D, lowDepth.ColorAttachments[0].Handle, DepthUnit);
@@ -657,39 +709,9 @@ namespace LELEngine.Volumetrics
 			// A new sampling pattern every frame under the temporal filter (golden ratio steps: every offset in turn).
 			program.SetFloat("volJitterOffset", history != null ? history.Frame * 0.618034f % 1f : 0f);
 
-			// The sun, the sky and the flat ambient light (the scene's, or the volume's own). The scene's shadow maps are
-			// those of the directional lights that cast them: a cloud receives its sun's, when its sun is one of them.
-			DirectionalLight sun = volume.EffectiveSun;
-			int sunIndex = sun != null ? Rendering.DirectionalLightBuffer.IndexOf(sun) : -1;
-			bool shadows = volume.ReceiveShadows && sunIndex >= 0 && Lighting.ShadowCascades.LightCount[sunIndex] > 0;
-			program.SetInt("volReceiveShadows", shadows ? 1 : 0);
-			program.SetInt("volSunShadowLight", Math.Max(sunIndex, 0));
-			program.SetFloat("volShadowStrength", Math.Clamp(volume.ShadowStrength, 0f, 1f));
-			Lighting.SetShadowUniforms(program, shadows);
 			Matrix4 worldToLocal = localToWorld.Inverted();
-			Vector3 towards = sun != null ? -sun.transform.forward : Vector3.UnitY;
-			Vector3 sunLocal = Vector3.TransformVector(towards, worldToLocal);
-			sunLocal = sunLocal.LengthSquared > 1e-12f ? sunLocal.Normalized() : Vector3.UnitY;
-			Vector3 sunColor = sun != null ? new Vector3(sun.Color.R, sun.Color.G, sun.Color.B) * (sun.Strength * volume.SunStrength) : Vector3.Zero;
-			program.SetVector3("volSunDirection", sunLocal);
-			program.SetVector3("volSunColor", sunColor);
-			Lighting.SetSkyUniforms(program);
-			program.SetFloat("volSkyStrength", volume.SkyStrength);
-			Vector3 ambient = volume.OwnAmbient
-				? new Vector3(volume.AmbientColor.R, volume.AmbientColor.G, volume.AmbientColor.B)
-				: new Vector3(Lighting.Ambient.Color.R, Lighting.Ambient.Color.G, Lighting.Ambient.Color.B) * Lighting.Ambient.Strength;
-			program.SetVector3("volAmbientColor", ambient * volume.AmbientStrength);
-			program.SetVector3("volAlbedo", new Vector3(volume.Albedo.R, volume.Albedo.G, volume.Albedo.B));
-			program.SetVector3("volEmission", new Vector3(volume.EmissionColor.R, volume.EmissionColor.G, volume.EmissionColor.B) * volume.EmissionStrength);
+			SetCloudLightUniforms(program, volume, data, worldToLocal);
 			program.SetFloat("volPhaseG", Math.Clamp(volume.PhaseG, -0.95f, 0.95f));
-			program.SetFloat("volMultipleScattering", volume.MultipleScattering);
-
-			// The GI it receives, once its grid has been worked out whole.
-			bool gi = volume.ReceiveGI && data.GIValid && SceneGIAvailable;
-			program.SetInt("volGIActive", gi ? 1 : 0);
-			program.SetTexture("volGIA", TextureTarget.Texture3D, gi ? data.GIA : 0, GIAUnit);
-			program.SetTexture("volGIB", TextureTarget.Texture3D, gi ? data.GIB : 0, GIBUnit);
-			program.SetFloat("volGIStrength", volume.GIStrength);
 
 			// The detail: its tile in local units, drifting with the wind.
 			float detailTile = MathF.Max(volume.DetailSize, 0.01f) * noiseSize;
@@ -701,7 +723,64 @@ namespace LELEngine.Volumetrics
 			program.SetFloat("volDetailVoxel", detailTile / DetailResolution);
 			program.SetVector3("volDetailOffset", -volume.DetailWind * time);
 
-			// The lights (its own and the scene's, as their transport was worked out): colour x intensity right now.
+			program.SetMatrix4("volLocalToWorld", localToWorld);
+			program.SetFloat("volExposure", volume.Exposure);
+			program.SetFloat("volOpacity", Math.Clamp(volume.Opacity, 0f, 1f));
+		}
+
+		/// <summary>
+		///     How a cloud is lit right now, for a program that reads its lit voxels (the march; the GI's media volume,
+		///     VolumetricMedia.shader): the lit voxels, the sun (direction, colour, the scene's shadows of it), the sky and the
+		///     flat ambient light, the albedo and emission, the GI the cloud receives, and its lights (the live ones' channels
+		///     with their colour x intensity right now, the baked ones' texture). Texture units 0 and 3..8 of the program.
+		///     <paramref name="forGI" />: the light as the GI takes it, each light's times its Indirect Strength, nothing of
+		///     one with Affects GI off (the baked lights' texture holds their sum: they count as they are seen).
+		/// </summary>
+		internal static void SetCloudLightUniforms(ShaderProgram program, VolumetricObjectBase volume, VolumetricData data, Matrix4 worldToLocal, bool forGI = false)
+		{
+			program.SetTexture("volLit", TextureTarget.Texture3D, data.Lit, LitUnit);
+			bool lights = data.LightsA != 0 && AnyLightLit(volume, data);
+			program.SetTexture("volLightsA", TextureTarget.Texture3D, lights ? data.LightsA : 0, LightsAUnit);
+			program.SetTexture("volLightsB", TextureTarget.Texture3D, lights ? data.LightsB : 0, LightsBUnit);
+			bool baked = data.LightsC != 0 && data.BakedLit;
+			program.SetTexture("volLightsC", TextureTarget.Texture3D, baked ? data.LightsC : 0, LightsCUnit);
+			program.SetInt("volBakedActive", baked ? 1 : 0);
+			program.SetFloat("volSigma", data.Sigma);
+			program.SetFloat("volTauMax", VolumetricData.TauMax);
+
+			// The sun, the sky and the flat ambient light (the scene's, or the volume's own). The scene's shadow maps are
+			// those of the directional lights that cast them: a cloud receives its sun's, when its sun is one of them.
+			DirectionalLight sun = volume.EffectiveSun;
+			int sunIndex = sun != null ? Rendering.DirectionalLightBuffer.IndexOf(sun) : -1;
+			bool shadows = volume.ReceiveShadows && sunIndex >= 0 && Lighting.ShadowCascades.LightCount[sunIndex] > 0;
+			program.SetInt("volReceiveShadows", shadows ? 1 : 0);
+			program.SetInt("volSunShadowLight", Math.Max(sunIndex, 0));
+			program.SetFloat("volShadowStrength", Math.Clamp(volume.ShadowStrength, 0f, 1f));
+			Lighting.SetShadowUniforms(program, shadows);
+			Vector3 towards = sun != null ? -sun.transform.forward : Vector3.UnitY;
+			Vector3 sunLocal = Vector3.TransformVector(towards, worldToLocal);
+			sunLocal = sunLocal.LengthSquared > 1e-12f ? sunLocal.Normalized() : Vector3.UnitY;
+			program.SetVector3("volSunDirection", sunLocal);
+			float sunIndirect = !forGI ? 1f : sun != null && sun.AffectsGI ? MathF.Max(sun.IndirectStrength, 0f) : 0f;
+			program.SetVector3("volSunColor", volume.SunRadiance * sunIndirect);
+			Lighting.SetSkyUniforms(program);
+			program.SetFloat("volSkyStrength", volume.SkyStrength);
+			Vector3 ambient = volume.OwnAmbient
+				? new Vector3(volume.AmbientColor.R, volume.AmbientColor.G, volume.AmbientColor.B)
+				: new Vector3(Lighting.Ambient.Color.R, Lighting.Ambient.Color.G, Lighting.Ambient.Color.B) * Lighting.Ambient.Strength;
+			program.SetVector3("volAmbientColor", ambient * volume.AmbientStrength);
+			program.SetVector3("volAlbedo", new Vector3(volume.Albedo.R, volume.Albedo.G, volume.Albedo.B));
+			program.SetVector3("volEmission", new Vector3(volume.EmissionColor.R, volume.EmissionColor.G, volume.EmissionColor.B) * volume.EmissionStrength);
+			program.SetFloat("volMultipleScattering", volume.MultipleScattering);
+
+			// The GI it receives, once its grid has been worked out whole.
+			bool gi = volume.ReceiveGI && data.GIValid && SceneGIAvailable;
+			program.SetInt("volGIActive", gi ? 1 : 0);
+			program.SetTexture("volGIA", TextureTarget.Texture3D, gi ? data.GIA : 0, GIAUnit);
+			program.SetTexture("volGIB", TextureTarget.Texture3D, gi ? data.GIB : 0, GIBUnit);
+			program.SetFloat("volGIStrength", volume.GIStrength);
+
+			// The live lights (its own and the scene's, as their transport was worked out): colour x intensity right now.
 			// The scene's other directional lights among them are scattered as the sun is (the cloud's albedo and phase,
 			// its response to the sun), from where they are now: their slots hold only the cloud on the way.
 			program.SetInt("volLightsActive", lights ? 1 : 0);
@@ -711,18 +790,19 @@ namespace LELEngine.Volumetrics
 				for (int i = 0; i < lightColors.Length; i++)
 				{
 					VolumeLightSlot slot = data.LightSlots[i];
+					float indirect = forGI ? slot.IndirectStrength : 1f;
 					if (i >= data.LightCount)
 					{
 						lightColors[i] = Vector4.Zero;
 					}
 					else if (!slot.IsDirectional)
 					{
-						lightColors[i] = new Vector4(slot.Color, 0f);
+						lightColors[i] = new Vector4(slot.Color * indirect, 0f);
 					}
 					else
 					{
 						lightColors[i] = Vector4.Zero;
-						Vector3 color = slot.Color * volume.SunStrength;
+						Vector3 color = slot.Color * (volume.SunStrength * indirect);
 						if (directional < directionalDirs.Length && slot.Directional != null && color.X + color.Y + color.Z > 1e-6f)
 						{
 							Vector3 local = Vector3.TransformVector(slot.Directional.Towards, worldToLocal);
@@ -744,10 +824,38 @@ namespace LELEngine.Volumetrics
 			}
 
 			program.SetInt("volDirectionalCount", directional);
+		}
 
-			program.SetMatrix4("volLocalToWorld", localToWorld);
-			program.SetFloat("volExposure", volume.Exposure);
-			program.SetFloat("volOpacity", Math.Clamp(volume.Opacity, 0f, 1f));
+		/// <summary>
+		///     The detail that eats into a cloud's edges, for a program that takes it at its mean (the GI's media volume):
+		///     the shared detail texture and the cloud's detail settings.
+		/// </summary>
+		internal static void SetDetailUniforms(ShaderProgram program, VolumetricObjectBase volume)
+		{
+			if (detailTexture == 0)
+			{
+				detailTexture = MakeDetail();
+				// MakeDetail used its own program.
+				program.Use();
+			}
+
+			program.SetTexture("volDetail", TextureTarget.Texture3D, detailTexture, DetailUnit);
+			program.SetFloat("volDetailStrength", volume.DetailStrength);
+			program.SetFloat("volDetailShade", volume.DetailShade);
+			program.SetFloat("volEdgeBand", MathF.Max(volume.EdgeBand, 0.05f));
+		}
+
+		// The units a cloud's textures were bound to (SetCloudLightUniforms, the march): nothing of them stays bound.
+		internal static void UnbindCloudTextures()
+		{
+			for (int unit = 0; unit <= LightsCUnit; unit++)
+			{
+				GL.ActiveTexture(TextureUnit.Texture0 + unit);
+				GL.BindTexture(TextureTarget.Texture3D, 0);
+				GL.BindTexture(TextureTarget.Texture2D, 0);
+			}
+
+			GL.ActiveTexture(TextureUnit.Texture0);
 		}
 
 		private static readonly Vector3[] Axes = { Vector3.UnitX, -Vector3.UnitX, Vector3.UnitY, -Vector3.UnitY, Vector3.UnitZ, -Vector3.UnitZ };

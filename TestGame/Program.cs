@@ -29,6 +29,10 @@ namespace TestGame
 		///            [sdfatlas=1 distance field atlas check: many box shapes in steps, logged as [SdfAtlasProbe]]
 		///            Scenes: [outdoor=1 open-sky yard] [sky=0|1 procedural skybox] [skybox=asset path] [physics=1] [nav=1] [ui=1] [scene=path]
 		///            [volumetrics=1 volumetric objects: storm with flashes, HQ fog bank, glowing ball, nebula wisp] [volcube=1 a cube in the fog] [volhq=1 the storm as the high quality preset] [volgi=0 volumes without GI] [voltemporal=0 volumes without their temporal filter] [vollight=1|2|3 a lamp flying through the storm, 2: stopping at 6 s, 3: still] [volbig=1 the storm with about 11 M voxels]
+		///            [vollamps=N steady lamps in the storm] [vollamprange=units] [vollamppulse=1 their brightness changes every frame] [volflash=0|2 the storm's own lights dark / lit all the time]
+		///            [volgiout=0 the clouds do not light the GI] [volmedia=0|1|2 the project's switch for that: off, fast, accurate] [volmediares=N] [volmediareach=x the GI's media volume] [mediaview=1|2 the clouds as the GI sees them: the volume itself / as a cone reads it] [mediaaperture=x that cone]
+		///            [voltest=1|2|3|4 a cloud whose light on a grey plate is known: ceiling, ball at 10, ball at 20, the ball as a mesh] [linear=x no tonemapping, exposure x] (night=1: no sun or sky here either)
+		///            [volstormonly=1 of the clouds only the storm lights the GI] [mediafaces=0 the GI takes the clouds' mean over all sides, not their look from the reader's side]
 		///            [lights=1 local lights in the room: a point light, a spot, a lamp in a patch of fog (night=1: the sun down)]
 		///            [suns=N directional lights: the sun and N - 1 coloured ones from other sides] [sunshadows=N of them cast shadows]
 		///            [suncascades=1|2|4 and sunmap=size: the other lights' shadow maps] [sungi=0 sunvol=0 suncast=0: the extra lights out of
@@ -144,6 +148,20 @@ namespace TestGame
 				VolumeTemporal = GetBool(args, "voltemporal", true),
 				VolumeMovingLight = GetInt(args, "vollight", 0),
 				VolumeBig = GetBool(args, "volbig", false),
+				VolumeLamps = GetInt(args, "vollamps", 0),
+				VolumeLampRange = GetFloat(args, "vollamprange", 9f),
+				VolumeLampPulse = GetBool(args, "vollamppulse", false),
+				VolumeFlash = GetInt(args, "volflash", 1),
+				VolumeContributeGI = GetBool(args, "volgiout", true),
+				VolumeMedia = GetInt(args, "volmedia", 1),
+				VolumeMediaResolution = GetInt(args, "volmediares", 64),
+				VolumeMediaReach = GetFloat(args, "volmediareach", 8f),
+				VolumeMediaView = GetInt(args, "mediaview", 0),
+				VolumeMediaViewAperture = GetFloat(args, "mediaaperture", 0.002f),
+				LinearExposure = GetFloat(args, "linear", 0f),
+				VolumeTest = GetInt(args, "voltest", 0),
+				VolumeStormOnly = GetBool(args, "volstormonly", false),
+				VolumeMediaSides = GetBool(args, "mediafaces", true),
 				EmitterStepFrame = GetInt(args, "emitterstep", 0),
 				EmitterOffFrame = GetInt(args, "emitteroff", 0),
 				MoverFrame = GetInt(args, "mover", 0),

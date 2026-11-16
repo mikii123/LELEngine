@@ -43,8 +43,11 @@ namespace LELEngine.Rendering.Passes
 		private RenderTexture final;
 
 		// Variants by the voxel mips the cones read, indexed by VoxelMipMode (compiled in, see Engine/VoxelRadiance.glsl).
+		// The second three: the same with GI_MEDIA, the cones reading the clouds on their way (Engine/GIMedia.glsl), used
+		// while a volumetric object contributes to the GI and the project asks for the accurate gather
+		// (GlobalIlluminationSettings.VolumesInGI).
 		private static readonly string[] VariantDefines = { "LEL_VOXEL_ISO", "LEL_VOXEL_ANISO", "LEL_VOXEL_SH" };
-		private readonly ShaderProgram[] programs = new ShaderProgram[3];
+		private readonly ShaderProgram[] programs = new ShaderProgram[6];
 		private ShaderProgram filter;
 
 		#endregion
@@ -79,7 +82,15 @@ namespace LELEngine.Rendering.Passes
 
 			// The variant of the mips the volume has (compiled when first needed).
 			int variant = (int)Lighting.EffectiveVoxelMips(gi.VoxelVolume, Lighting.VoxelDirectionalTextureUnit);
-			ShaderProgram program = programs[variant] ??= new ShaderProgram("Engine/GIResolve.shader", new[] { VariantDefines[variant] });
+			if (Lighting.MediaAlongConesExpected)
+			{
+				// Started ahead: no compile in the frame the first cloud's light arrives.
+				programs[variant + 3] ??= new ShaderProgram("Engine/GIResolve.shader", new[] { VariantDefines[variant], "GI_MEDIA" });
+			}
+
+			ShaderProgram program = Lighting.MediaAlongCones
+				? programs[variant + 3] ??= new ShaderProgram("Engine/GIResolve.shader", new[] { VariantDefines[variant], "GI_MEDIA" })
+				: programs[variant] ??= new ShaderProgram("Engine/GIResolve.shader", new[] { VariantDefines[variant] });
 			program.Use();
 			// The resolve itself always traces; make sure it does not try to read its own output.
 			gi.ResolveActive = false;

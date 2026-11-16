@@ -212,6 +212,51 @@ namespace TestGame.Scenes
 			/// <summary>volbig=1: the volumetric test scene's storm with about 11 M voxels (a large game's storm).</summary>
 			public bool VolumeBig;
 
+			/// <summary>vollamps=N: N steady lamps (scene Lights of range <see cref="VolumeLampRange" />) on rings inside the storm.</summary>
+			public int VolumeLamps;
+
+			/// <summary>vollamprange=units: the lamps' range (default 9: small against the storm).</summary>
+			public float VolumeLampRange = 9f;
+
+			/// <summary>vollamppulse=1: the lamps' brightness changes every frame (each with its own phase).</summary>
+			public bool VolumeLampPulse;
+
+			/// <summary>volflash=0: the storm's own lights stay dark (steady costs); 2: they stay lit.</summary>
+			public int VolumeFlash = 1;
+
+			/// <summary>volgiout=0: the test volumes do not light the GI (comparisons).</summary>
+			public bool VolumeContributeGI = true;
+
+			/// <summary>volmedia=0|1|2: the project's switch (GlobalIlluminationSettings.VolumesInGI): the GI sees no clouds, the fast gather (the default), the accurate one.</summary>
+			public int VolumeMedia = 1;
+
+			/// <summary>volmediares=N: voxels along the longest side of the GI's media volume.</summary>
+			public int VolumeMediaResolution = 64;
+
+			/// <summary>volmediareach=x: how far the GI sees clouds, in GI volume sizes.</summary>
+			public float VolumeMediaReach = 8f;
+
+			/// <summary>mediaview=1: the clouds as the GI sees them from the camera, in place of the scene (VolumetricMediaDebugPass); 2: read as coarsely as a narrow cone does.</summary>
+			public int VolumeMediaView;
+
+			/// <summary>mediaaperture=x: with mediaview=2, the cone each pixel stands for (0.577: a diffuse cone, 0.18: a Lumen ray).</summary>
+			public float VolumeMediaViewAperture = 0.002f;
+
+			/// <summary>volstormonly=1: of the volumetric test scene's clouds only the storm lights the GI.</summary>
+			public bool VolumeStormOnly;
+
+			/// <summary>mediafaces=0: the GI reads a cloud's mean light, not its look from the reader's side (comparisons; GlobalIlluminationSettings.VolumeMediaSides).</summary>
+			public bool VolumeMediaSides = true;
+
+			/// <summary>voltest=1|2|3: a cloud whose light on a grey plate is known (VolumetricTestScene.BuildLightTest), in place of the scene's clouds.</summary>
+			public int VolumeTest;
+
+			/// <summary>
+			///     linear=x: no tonemapping and exposure x in the volumetric test scene, so a frame's pixels are the light times
+			///     x (measuring how much light arrives; pick x so nothing clips).
+			/// </summary>
+			public float LinearExposure;
+
 			/// <summary>Start position of the player's eye (null = the usual spot by the open side of the room).</summary>
 			public Vector3? CameraPosition;
 
@@ -452,6 +497,15 @@ namespace TestGame.Scenes
 			if (options.SdfView)
 			{
 				Game.Mono.Renderer.GetPass<LELEngine.Rendering.Passes.SdfDebugPass>().Enabled = true;
+			}
+			if (options.VolumeMediaView > 0)
+			{
+				LELEngine.Rendering.Passes.VolumetricMediaDebugPass mediaView = Game.Mono.Renderer.GetPass<LELEngine.Rendering.Passes.VolumetricMediaDebugPass>();
+				mediaView.Enabled = true;
+				// mediaview=1: steps of a voxel (the volume itself); 2: all of the way in sixteen steps, as coarse as a
+				// narrow cone reads it; N > 2: N - 2 stretches of voxel steps first.
+				mediaView.Stretches = options.VolumeMediaView == 1 ? 24 : options.VolumeMediaView - 2;
+				mediaView.Aperture = options.VolumeMediaViewAperture;
 			}
 			if (options.SurfaceCacheView)
 			{

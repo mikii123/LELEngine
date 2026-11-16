@@ -104,8 +104,11 @@ vec4 RadianceCacheProbeSample(ivec3 coord, vec3 direction)
 //    ceiling edge instead of the ceiling). The probes' hit distances give the surface point p would see,
 //    and each probe is looked up towards that point instead. When that surface is closer than
 //    1.5 probe spacings the correction is too coarse and the function returns false: the caller traces on.
-bool SampleRadianceCache(vec3 p, vec3 direction, out vec3 radiance)
+// hitDistance: how far from p along the direction the surface (or the sky) the radiance comes from lies, as the
+// probes measured it (callers that put the clouds on the way in front of it, Engine/GIMedia.glsl).
+bool SampleRadianceCache(vec3 p, vec3 direction, out vec3 radiance, out float hitDistance)
 {
+	hitDistance = 0.0;
 	vec3 g = (p - rcGridMin) / rcProbeSpacing;
 	ivec3 base = clamp(ivec3(floor(g)), ivec3(0), ivec3(rcProbesPerAxis - 2));
 	vec3 f = clamp(g - vec3(base), vec3(0.0), vec3(1.0));
@@ -161,6 +164,7 @@ bool SampleRadianceCache(vec3 p, vec3 direction, out vec3 radiance)
 	radiance = vec3(0.0);
 	if (weightSum <= 1e-3) return false;
 	if (hitMin < rcProbeSpacing * 1.5) return false;
+	hitDistance = hitSum / weightSum;
 
 	// Far targets: the parallax between a probe and p is below the map's texel size, so the samples along
 	// the ray direction already are the answer and the second lookup pass is skipped -- but only when the
@@ -201,4 +205,10 @@ bool SampleRadianceCache(vec3 p, vec3 direction, out vec3 radiance)
 	if (visibleWeightSum <= 1e-3) return false;
 	radiance = sum / visibleWeightSum;
 	return true;
+}
+
+bool SampleRadianceCache(vec3 p, vec3 direction, out vec3 radiance)
+{
+	float hitDistance;
+	return SampleRadianceCache(p, direction, radiance, hitDistance);
 }

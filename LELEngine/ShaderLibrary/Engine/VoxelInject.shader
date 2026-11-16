@@ -175,6 +175,8 @@ void main()
 			// The position is the voxel center, inside the geometry: start past the voxel's surface side.
 			float offset = voxelSize * 1.5;
 			vec4 irradiance = giBounceCones >= 6 ? TraceDiffuseConesFrom(position, N, offset) : TraceWideConeFrom(position, N, offset);
+			// The clouds (the volumetric objects in the GI) with one cone: what they light passes their light on.
+			irradiance = ApplyCloudsToGather(irradiance, position + N * offset, N);
 			bounce = irradiance.rgb * giBounceStrength;
 		}
 	}

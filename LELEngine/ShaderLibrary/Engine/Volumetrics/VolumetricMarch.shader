@@ -25,6 +25,10 @@ void main()
 //   default   seen from outside (VolumetricObject): even steps through the shape, at most volMaxSteps of them.
 //   VOL_HQ    high quality, good inside (VolumetricObjectHQ): steps that grow with the distance from the camera (fine
 //             near the camera, where the cloud fills the view when it is inside).
+//   VOL_LIGHTS        the live lights' transport (two fetches a step): only while one of them is lit.
+//   VOL_BAKED_LIGHTS  the baked lights' texture (one fetch a step): only while there are baked lights that shine.
+// The lights are variants, not uniform switches: a switched-off fetch in the loop still cost a tenth of the march on
+// AMD (the driver flattens the branch), and most clouds have no light lit most of the time.
 
 #include "Engine/Volumetrics/VolumetricCommon.glsl"
 #include "Engine/Shadows.glsl"
@@ -33,8 +37,13 @@ void main()
 uniform sampler3D volLit;            // rgba8: density, sqrt(sun optical depth / volTauMax), ambient openness
 uniform sampler3D volOccupancy;      // r8: densest voxel per 4^3 block (and the voxel around it)
 uniform sampler3D volDetail;         // r8, tiling
+#ifdef VOL_LIGHTS
 uniform sampler3D volLightsA;        // lights 0-3: linear light at unit brightness (times the slot's factor), half resolution
 uniform sampler3D volLightsB;        // lights 4-7
+#endif
+#ifdef VOL_BAKED_LIGHTS
+uniform sampler3D volLightsC;        // the baked lights (the scene lights beyond those eight): rgb their light, colours in it
+#endif
 uniform sampler3D volGIA;            // the GI received (VolumetricGI.shader): mean radiance, a coarse grid
 uniform sampler3D volGIB;            // its directional term (luminance, local axes)
 uniform int volGIActive;             // 1: the GI in place of the sky light
@@ -66,12 +75,13 @@ uniform float volEdgeBand;
 uniform float volDetailFrequency;    // detail tiles per local unit
 uniform float volDetailVoxel;        // local units per detail voxel
 uniform vec3 volDetailOffset;        // the detail's drift (wind x time), local units
-uniform int volLightsActive;
+#ifdef VOL_LIGHTS
 uniform vec4 volLightColors[8];      // rgb: colour x intensity / the slot's factor (0 for a directional light's slot)
 uniform int volDirectionalCount;     // the scene's other directional lights among the slots (VolumetricLightTransport.shader)
 uniform ivec4 volDirectionalSlots;   // their slots
 uniform vec4 volDirectionalDirs[4];  // xyz: local, towards the light
 uniform vec4 volDirectionalColors[4]; // rgb: linear, times its strengths
+#endif
 uniform mat4 volLocalToWorld;
 uniform int volReceiveShadows;
 uniform int volSunShadowLight;       // the sun's index among the directional lights: its shadow maps (Engine/Shadows.glsl)
@@ -146,6 +156,7 @@ void main()
 	float phase0 = VolPhase(cosSun, volPhaseG);
 	float phase1 = VolPhase(cosSun, volPhaseG * 0.5) * 0.5 * volMultipleScattering;
 	float phase2 = VolPhase(cosSun, volPhaseG * 0.25) * 0.25 * volMultipleScattering;
+#ifdef VOL_LIGHTS
 	// The same for the scene's other directional lights (their light through the cloud is in the lights' transport).
 	vec3 directionalPhase[4];
 	for (int k = 0; k < volDirectionalCount; k++)
@@ -154,6 +165,7 @@ void main()
 		directionalPhase[k] = vec3(VolPhase(cosLight, volPhaseG), VolPhase(cosLight, volPhaseG * 0.5) * 0.5 * volMultipleScattering,
 			VolPhase(cosLight, volPhaseG * 0.25) * 0.25 * volMultipleScattering);
 	}
+#endif
 
 	vec3 sky = vec3(0.0);
 	if (volSkyStrength > 0.0)
@@ -234,22 +246,19 @@ void main()
 					sun *= mix(1.0, VolSceneShadow((volLocalToWorld * vec4(p, 1.0)).xyz), volShadowStrength);
 				}
 
+#ifdef VOL_LIGHTS
 				// The lights' transport: the other directional lights are scattered as the sun is (the slot holds
 				// e^(-tau / 4): its square and fourth power are the softer and the direct order), the rest are added below.
-				vec4 lightsA = vec4(0.0);
-				vec4 lightsB = vec4(0.0);
-				if (volLightsActive != 0)
+				vec4 lightsA = textureLod(volLightsA, uvw, max(lod - 1.0, 0.0));
+				vec4 lightsB = textureLod(volLightsB, uvw, max(lod - 1.0, 0.0));
+				for (int k = 0; k < volDirectionalCount; k++)
 				{
-					lightsA = textureLod(volLightsA, uvw, max(lod - 1.0, 0.0));
-					lightsB = textureLod(volLightsB, uvw, max(lod - 1.0, 0.0));
-					for (int k = 0; k < volDirectionalCount; k++)
-					{
-						int slot = volDirectionalSlots[k];
-						float through = slot < 4 ? lightsA[slot] : lightsB[slot - 4];
-						float through2 = through * through;
-						sun += volDirectionalColors[k].rgb * dot(directionalPhase[k], vec3(through2 * through2, through2, through));
-					}
+					int slot = volDirectionalSlots[k];
+					float through = slot < 4 ? lightsA[slot] : lightsB[slot - 4];
+					float through2 = through * through;
+					sun += volDirectionalColors[k].rgb * dot(directionalPhase[k], vec3(through2 * through2, through2, through));
 				}
+#endif
 				// The light around: the flat ambient through the cloud's openness, and the GI (from every side, dimmed by the
 				// cloud towards each, scattered towards the eye with the phase: a + g (b . ray)) or else the sky.
 				vec3 around = volAmbientColor * lit.b;
@@ -266,11 +275,13 @@ void main()
 				}
 
 				vec3 light = volAlbedo * (sun + around) * shade + volEmission * clamp(density * 1.5, 0.0, 1.0);
-				if (volLightsActive != 0)
-				{
-					light += lightsA.x * volLightColors[0].rgb + lightsA.y * volLightColors[1].rgb + lightsA.z * volLightColors[2].rgb + lightsA.w * volLightColors[3].rgb
-						+ lightsB.x * volLightColors[4].rgb + lightsB.y * volLightColors[5].rgb + lightsB.z * volLightColors[6].rgb + lightsB.w * volLightColors[7].rgb;
-				}
+#ifdef VOL_LIGHTS
+				light += lightsA.x * volLightColors[0].rgb + lightsA.y * volLightColors[1].rgb + lightsA.z * volLightColors[2].rgb + lightsA.w * volLightColors[3].rgb
+					+ lightsB.x * volLightColors[4].rgb + lightsB.y * volLightColors[5].rgb + lightsB.z * volLightColors[6].rgb + lightsB.w * volLightColors[7].rgb;
+#endif
+#ifdef VOL_BAKED_LIGHTS
+				light += textureLod(volLightsC, uvw, max(lod - 1.0, 0.0)).rgb;
+#endif
 
 				color += weight * light;
 				distanceSum += weight * t;

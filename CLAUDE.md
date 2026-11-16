@@ -819,8 +819,10 @@ Added for New Frontier's port of the FORGE3D planets (Unity shaders reading uv2,
   The Assimp backend reads texture coordinate channel 1. Imported-model format 2 (`ModelAssets.FormatVersion`): every
   model imports once again. Anything that builds vertices from others (`WithTangents`, the import's scaling) keeps it.
 - Material textures past 8 (`Material.TextureUnitAt`): a material's first 8 textures go on units 0..7, the rest on
-  `Material.ExtraTextureUnitStart` (23, above the engine's reserved units 8..22) and up, as far as the context has
-  units (`Material.MaxTextures`: 8 + GL_MAX_TEXTURE_IMAGE_UNITS - 23, 17 on 32-unit GPUs); past that a warning.
+  `Material.ExtraTextureUnitStart` (27 since 2026-11-16, above the engine's reserved units 8..26: 23 to 26 are the
+  GI's media volume, see "Volumetric objects: more lights, light into the GI"; it was 23) and up, as far as the
+  context has units (`Material.MaxTextures`: 8 + GL_MAX_TEXTURE_IMAGE_UNITS - 27, 13 on 32-unit GPUs); past that a
+  warning.
 - `uniform vec4 lelTime` (`Lighting.TimeName`, set with the other lighting uniforms): Unity's `_Time` from
   `Time.timeD`: t / 20, t, 2t, 3t. It runs in edit mode too (the window advances `Time.timeD`); play mode restarts it.
 - Assimp import (backend version 2):
@@ -1819,8 +1821,10 @@ Added for New Frontier's port of Unity's SpaceStonesPack (Standard materials wit
   frame time doubles during the storm's flash bursts whatever the lamp does (Lumen's surface cache: the eight flash
   lights, range 2500, change every frame).
 - Scene lights (`SceneLights`): `Light` components whose range reaches the shape take the transport's slots left after
-  the cloud's own `Lights`, nearest first, whatever their intensity (a flash going dark keeps its slot: no rework when it
-  flickers); `Light.VolumetricStrength` scales what the cloud takes (see "Local lights").
+  the cloud's own `Lights`, whatever their intensity (a flash going dark keeps its slot: no rework when it flickers);
+  `Light.VolumetricStrength` scales what the cloud takes (see "Local lights"). Since 2026-11-16 the lights past the
+  eight slots are not dropped: the longest ranges keep the slots and the rest are baked into one texture (next
+  section).
 - Made on the GPU from the settings (`VolumetricData`, compute shaders in `ShaderLibrary/Engine/Volumetrics`), unless
   kept (see "Made clouds kept" below):
   density R8 with mips (`VolumetricGenerate.shader`, noise in `VolumetricNoise.glsl`), occupancy (densest voxel per 4^3
@@ -1910,6 +1914,169 @@ Added for New Frontier's port of Unity's SpaceStonesPack (Standard materials wit
   GI + shadows 0.18 ms, the rest the wider transport and the distance target; the GI grid 0.11-0.15 ms in the
   `Volumetrics` pass. TestGame lumen, vct, gi=0, refraction, materials against the commit before: identical (max 2 / 255).
 
+## Volumetric objects: more lights, light into the GI (2026-11-16)
+
+The user's three asks: the sun's Affects Volumes did nothing; many lights in a cloud (lamps of a station in a storm) no
+longer got into it ("how far can the count go before performance drops?"); clouds should contribute to the GI, with
+switches.
+
+- The sun's switches: a cloud took its sun (`Sun` or the main light) as colour x strength x `SunStrength`, whatever the
+  light's `AffectsVolumes` / `VolumetricStrength` said (only the other directional lights and the local lights honoured
+  them). `VolumetricObjectBase.SunRadiance` is the sun's light on the cloud now (zero with `AffectsVolumes` off, times
+  `VolumetricStrength`); the march and the GI's media volume read it.
+- Lights past the eight live ones are baked (`MaxLights` 8, `MaxBakedLights` 64; `GatherLightSlots(slots, baked)`):
+  live = the cloud's own `Lights`, the scene's other directional lights, then the scene lights with the longest ranges
+  (a stable sort: equal ranges keep their order, so the choice does not flip between frames); a channel each, colour
+  and intensity free. The rest, nearest to the shape first, are summed with their colours into one RGBA16F texture at
+  the transport's resolution (`VolumetricData.LightsC`; `VolumetricLightTransport.shader` variant `VOL_BAKED`, 16 lights
+  a dispatch, later pages add to the texture; build phase `Baked` after `Lights`). Any change of a baked light (place,
+  range, colour, intensity: `VolumeLightSlot.BakedColor` is in `LightsHash`) reworks its part: in place when the boxes of
+  the changed lights (before and after) fit the frame's budget (`TryUpdateLightsInPlace`: the lights are matched by
+  their `Light`, in any order; one box around all of them or one each, whichever is fewer voxels; `BakeRegion` bakes
+  every light reaching a box), else as a build in the background. A build that only changes one kind keeps the other's
+  textures (`KeepLive` / `KeepBaked`). The inspector's line (`Describe`) counts both and their textures.
+- The march's lights are compile-time variants (`VOL_LIGHTS`: the two live textures, `VOL_BAKED_LIGHTS`: the baked one;
+  `VolumetricRuntime.MarchProgram(hq, lights, baked)`, a preset's four made together): a fetch switched off by a
+  uniform in the loop still cost 0.14 ms of 1.45 on the 780M (the driver flattens the branch).
+- `VolumetricRuntime.UpdateLightTransmittance` (each light's six-way transmittance through the clouds, on the CPU) is
+  worked out again only when its key changes (the light's place and range, the clouds in reach: which, their
+  `CloudVersion`, transform, glow, density; `Light.CloudTransmittanceKey`): it was 144 voxel samples per light and
+  cloud every frame, 1.6 ms of the CPU for thirty lamps in a storm.
+- Measured (780M, 1280 x 720, TestGame `volumetrics=1 volbig=1 gi=0 camera=0,17,2 look=0,14,42`: a storm of 11.6 M
+  voxels marched at half resolution filling the view): no light lit 1.16 ms; the eight live channels lit + 0.06-0.11 ms
+  (two fetches a step); the baked texture + 0.1-0.2 ms for any number of lights (9 / 30 / 60 lamps: 1.85 / 1.88 /
+  1.86 ms against 1.77 with eight live), 13 MB there (16.5 MB for a 400 x 90 x 400 cloud). More live channels would
+  have cost a texture of that size and about 0.05 ms per four lights, and 0.7 voxels of work per light and voxel on
+  every rework. A baked light that changes costs its box: thirty lamps of range 9 pulsing every frame 2.1 ms in the
+  `Volumetrics` pass, of range 3 0.7 ms; steady ones nothing, and the CPU went from 2.43 to 1.89 ms a frame with thirty
+  lamps (the transmittance key). So baked lights suit lights that stay as they are; ones that flicker should have the
+  longest ranges (they keep a live channel) or be the cloud's own. With the storm's own lights lit or dark and eight
+  scene lights or fewer the frames are the commit before's bit for bit (TestGame `gi=0 volumetrics=1 volflash=0|2
+  camera=0,17,2 look=0,14,42 dumpframe=400`: max 0 of 255).
+- TestGame: `vollamps=N` steady scene lamps on rings in the storm (`vollamprange=`, default 9), `vollamppulse=1`
+  their brightness changing every frame, `volflash=0|2` the storm's own lights dark / lit all the time.
+
+Clouds in the GI:
+
+- Switches: per object `ContributeGI` (on) and `GIContribution` (0..10, how much of its light the GI takes; 0 still
+  hides); project `GlobalIlluminationSettings.VolumesInGI` (`VolumeGIMode` Off / Fast / Accurate, default Fast),
+  `VolumeMediaSides` (on: a cloud as it looks from the reader's side, below), `VolumeMediaResolution` (64, 16..128)
+  and `VolumeMediaReach` (8); a light's `AffectsGI` / `IndirectStrength` count for the cloud's sun and the live lights
+  (`SetCloudLightUniforms(..., forGI)`, `VolumeLightSlot.IndirectStrength`; the baked lights' texture holds their sum:
+  they count as seen).
+- The media volume (`Volumetrics/VolumetricMedia.cs`, `Rendering/Passes/VolumetricMediaPass.cs`: Frame scope, after
+  the shadow pass, one per renderer, published as `Lighting.Media`): a world-aligned cube of voxels, made again every
+  frame. It covers the contributing clouds' boxes within `VolumeMediaReach` GI volumes around the GI volume's centre
+  (clouds far larger than the GI volume count: New Frontier's storm is 4000 units, its GI volume 384); the voxel is
+  that box's longest side over one less than the resolution, rounded up to a quarter of a power of two (a cloud that
+  turns keeps its voxels; with all of the resolution the voxel more the cube needs doubled its side for one in ten
+  sizes of cloud), the cube's side a power of two, the part in use in its middle (`MediaBinding.Used`, uniform
+  `giMediaUsed`: the coarsest levels are centred on the clouds; with them in a corner the one voxel of the top level
+  stood half the texture off), on the voxel grid (fixed in the world: nothing swims when a GI volume follows the
+  camera).
+  - `VolumetricMedia.shader` (one dispatch per cloud over the voxels its box covers, adding to the clouds before): the
+    cloud's light as the march has it (sun with its orders and the scene's shadows, other directional lights, ambient,
+    the GI it receives or the sky, emission, live and baked lights) at the phase's mean, the detail at its mean (the
+    detail texture's coarsest level: thin clouds are much thinner drawn than their voxels say), times `Exposure` and
+    `GIContribution`; a = how much of a path across the voxel the cloud covers (1 - e^-depth), rgb premultiplied.
+    A second texture (`MediaSun`): of that light the directional lights' luminance (w) and that times the mean cosine
+    of its scattering towards the light (xyz).
+  - Levels, not a box filter (with box-filtered coverage a small thick cloud became a wide solid one in the coarse
+    levels: thirteen times its light in wide cones). A level's voxel is the clouds in it as seen from outside, from
+    each of the six sides: `FacePlus` / `FaceMinus` (RGBA16F, levels above the finest) hold the luminance seen from the
+    + and - side of x, y, z (premultiplied by what is covered) and in a the coverage along x and along y; `Media` the
+    mean light (rgb, its colour from the eight voxels below, scaled to the looks' mean) and the mean coverage of the
+    three axes (a, so along z = 3 a - the other two); `MediaSun` from the eight below. The looks and coverages are the
+    means of columns (`VolumetricMediaColumns.shader`): rows of finest voxels along each axis put together front to back
+    from both ends (light from either end, coverage), a level's columns made from the level below's (two end to end)
+    and as thin as two finest voxels, or a sixteenth of the level's voxel from where that is wider (the top levels'
+    voxels would average thousands: 0.27 ms for the top level's one voxel). The first version put the eight voxels
+    below one in front of the other: that takes the front voxel's coverage as spread evenly over its face, while a
+    cloud's parts lie behind one another (an opaque ball covered 1.37 times its outline; a flat storm seen from its edge
+    showed two thirds of every part through the one in front: its dark side 5 times too bright). Checked:
+    `LEL_MEDIA_LOOKS=1` logs the six looks and three coverages from the finest voxels (CPU) and from the top level:
+    exact with full columns; with the thin ones the storm's within 4-30 % (its darkest side 0.0082 for 0.0063, the
+    mean 6 % over).
+- Reading it (`Engine/GIMedia.glsl`): `GIMediaRead` (the level whose voxels are as large as the footprint, fractional;
+  a path n voxels of that level long lets (1 - coverage)^n through, n at most 1, counting only the stretch's length
+  within the part in use along the cone and, where that part is thinner than the voxel, a crossing of it as one: a
+  coarse voxel is as large as all the clouds and its filter reaches a voxel further, so a stretch that ended above a
+  flat storm took it in, and the next one again), the phase put back for the direction as a Henyey-Greenstein lobe of
+  the stored mean cosine, once per cone at its first cloud; `GIMediaSegment` (a wide cone: the mean over its
+  cross-section, and where that is thick a walk along its middle, front to back, halving its steps down to a voxel,
+  whose light replaces the mean: a thick cloud shows its near side; a narrow cone: the walk alone); `GIMediaStride` (a
+  stretch is 1.25 cone diameters, jittered 0.7-1.3 with the pass's cone jitter: equal stretches drew shells around
+  every surface point); `GIMediaRange`; `GIMediaApply`.
+  - Sides (the wide reads, from the second level on, `VolumeMediaSides`, uniform `giMediaSides`): the three looks the
+    read faces and the three coverages blended by the squares of its direction's parts; their ratio is the clouds'
+    light from there, the root of the coverages' squares so blended what they cover (an ellipsoid's outline: exact for
+    one and a ball, a box shows up to 1.4 times more between its axes). Two more fetches a wide read.
+  - A footprint larger than the whole volume reads the volume as one, as the cone sees it from its start: the share of
+    the cone's solid angle the volume's face takes (face^2 / distance^2 / (2 pi (1 - cos half angle)) / 1.03), whole
+    within 0.7 of the cone's angle from its axis and down to nothing at 1.3, seen from the cone's start towards the
+    volume's middle (which side shows), and along the cone the share of the volume's length the stretch covers. The
+    planar share it replaced (the cone's cross-section where it is read, fading over the footprint) took a 30 degree
+    cone's angle as small (a flat storm read from up to 90 degrees off the axis) and the fast gather's 60 degree cone at
+    a third of a ball's light; the fade along the axis took a small cloud in at 0.65 (stretches are longer than it).
+- Voxel cone tracing: Accurate = the resolve's `GI_MEDIA` variant (`GIResolvePass`, three more programs, started ahead
+  while the scene has volumetric objects: `Lighting.MediaAlongCones` / `MediaAlongConesExpected`): `ConeMedia` reads the
+  next stretch ahead of the cone's samples, `ConeEscape` goes on through the clouds beyond the GI volume before the sky.
+  Compiled in, because the reads switched off by a uniform cost an eighth of the resolve. Fast, and always the volume's
+  bounces (`VoxelInject.shader`, `VoxelBounceCells.shader`) = `ApplyCloudsToGather` / `ApplyCloudsToCone`: one cone of
+  sixty degrees either side of the normal (and one along the reflection), counted where the gather's own cones got out
+  past the surfaces, in place of the sky there. Materials that trace themselves (transparent ones, effects, the
+  cameras of a stack other than its lighting camera) take the clouds in the same way (`ApplyMediaToIndirect` in
+  `Engine/VolumeLighting.glsl`). Reading the clouds along the bounces' cones cost 0.8 ms on New Frontier's Flight.
+- Lumen: the screen probes' rays (`ProbeTrace.shader`: `TraceSurfaces` + `GIMediaApply`) and the radiosity rays
+  (`CardRadiosityProbes.shader`) put the clouds in front of what they reach (`SampleRadianceCache` has an overload
+  that returns how far that is). The radiance cache itself holds no clouds: the clouds' own GI reads its SH, and their
+  light would come back to them. For the same reason `VolumetricData.UpdateGI` switches the media off for its cones.
+- Texture units 23 to 26 (`Lighting.MediaTextureUnit`, `MediaSunTextureUnit`, `MediaFacePlusTextureUnit`,
+  `MediaFaceMinusTextureUnit`; `Lighting.SetMediaUniforms`); the materials' further textures start at 27 (13 a material
+  on 32-unit GPUs); a context with fewer than 27 units gets no media volume.
+- Known answers (TestGame `volumetrics=1 night=1 linear=x voltest=N camera=0,7,-9 look=0,0,0`,
+  `VolumetricTestScene.BuildLightTest`: a black, opaque cloud that gives off 1 over a grey plate of 0.5; `linear=x` = no
+  tonemapping, exposure x; the plate's light in pixels 600..680 x 300..360 over what it should be; scratchpad
+  `vol/known.ps1` of session 72b68768):
+  1 a ceiling 240 x 6 x 240 (plate 0.5): voxel cone tracing 0.58 Accurate / 0.50 Fast, Lumen 1.13;
+  2 a ball 6 across 10 above (0.045 under it): voxel cone tracing 0.82 / 0.70, Lumen 2.81; the same ball as an emissive
+  mesh (4) 0.67, so cloud and mesh agree within the method's own error (Lumen over-reads small bright things: 1.9 for
+  the mesh);
+  3 the ball at 20: 0.99 (voxel cone tracing Accurate), 2.58 (Lumen).
+  Before the columns and the solid-angle share: 0.48 / 0.31 / 1.17, 1.07 / 0.71 / 3.0, 1.25 / 3.0.
+- A cone's read against the truth (`mediaview=1`: the volume itself, 2: as a cone reads it, `mediaaperture=x`, `mediafaces=0`
+  without the sides; `VolumetricMediaDebugPass`; scratchpad `vol/conecheck.ps1`: the drawn picture's light over the
+  sky integrated over the cone's solid angle through the frame's middle, pixels weighted by cos^3 of their angle,
+  TestGame's camera has a 75 degree vertical field of view) for the storm alone (`volflash=2 night=1 linear=2.5
+  volstormonly=1 look=0,10,42`, lit from inside near its top), a 0.577 cone: from its dark side (`camera=0,40,150`)
+  0.72 with the sides, 2.07 without; from its lit side (`camera=0,40,-70`) 0.71 / 0.91; from above (`camera=0,130,41`)
+  1.16 / 0.53. Without the sides the dark side read brighter than the lit one (it is half as bright). From above,
+  narrower cones read less (0.71 at 0.1, 0.58 at 0.3: the coarse levels). A glowing ball (`voltest=2 night=1
+  linear=0.8 camera=0,10,-25 look=0,10,0`): a Lumen ray (0.18) 0.90, a 0.577 cone 0.87.
+- What it does not do: the coarse levels under-read a cloud as narrow cones see it (0.6-0.7, above), and an opaque layer
+  thinner than the cone is wide (the ceiling). The sides blend by the squares of the direction's parts: seen at an
+  angle, a flat cloud's top counts less than the share of it a camera sees (from 15 degrees above its edge 0.07 of the
+  weight, where a box's faces would give it 0.22; the dark and the lit side still read alike, 0.71-0.72). Voxel cone tracing
+  and Lumen differ by up to three times on small bright clouds. The fast gather has a cloud's light from all of the half
+  space at once.
+- Costs (780M, measured while another process used about half of the GPU, so high): the volume 0.2 ms (kernel) + 0.35-0.40
+  ms (levels) a frame in TestGame (three clouds; uncontended the levels took 0.2), 0.08-0.14 + 0.31-0.45 ms on Flight
+  (one); 9.7 MB at 64 (four RGBA16F textures and the columns), 128 about 2.5 ms and 80 MB. Resolve, TestGame
+  1280 x 720 at half resolution (`camera=0,1.6,6 look=0,1.6,20` in the fog / `camera=0,40,150 look=0,10,42` afar): 1.89 ->
+  2.04 Fast / 3.43 Accurate, 0.17 -> 0.17 / 0.21; the sides cost nothing measurable. Without contributing clouds
+  nothing: the frames of lumen / vct / vct trace=voxel / gi=0 / materials=1 and the storm without GI are the build's
+  before the media volume (max 1-2 of 255, `dumpframe=400`; the storm with `gi=0` bit for bit), and the volumetric
+  scene's with `volgiout=0` within its run-to-run difference when both are paced by the display (`vsync=1`: the fog's
+  detail drifts with the clock, so unpaced builds of different speed differ by 59 of 255).
+- `LEL_PASS_STATS=1`: every renderer logs its passes' GPU times every 120th frame (`[PassStats]`), in the editor's
+  views and in players (not in batch screenshots: their frames are drawn back to back and the queries are not in yet).
+- Verified besides: the three trace modes (Fast and Accurate) and Lumen without shader errors; New Frontier's Flight in
+  the batch editor (the storm takes 8 + 13 lights, three views with and without the storm in the GI: +1-3 % on the
+  station, no artefacts: that storm is dark, albedo 0.1, and its flashes light the cloud at 3 %) and in the editor
+  (`LEL_PASS_STATS`, no errors), its 510 tests, and a batch build (17 material variants, 112 stage sources through glslang).
+- TestGame: `volstormonly=1` (of the clouds only the storm lights the GI: one thick cloud without the others' light),
+  `mediafaces=0` (`VolumeMediaSides` off).
+
 ## Directional lights: several at once (2026-11-14)
 
 - The user's ask: "the whole lighting system does not support several directional lights; add it to every built-in
@@ -1954,7 +2121,8 @@ Added for New Frontier's port of Unity's SpaceStonesPack (Standard materials wit
   that both goes into the GI and casts shadows, side by side, its own `ShadowUniforms` bound for the dispatch (the
   camera's is bound again by the next `Lighting.SetShadowUniforms`). No tile and no caster drawing for lights out of
   the GI, without shadows, or with shadows off.
-- Volumetric objects: a cloud's sun stays `Sun` or the main light (the lit voxels). The other shining lights with
+- Volumetric objects: a cloud's sun stays `Sun` or the main light (the lit voxels; since 2026-11-16 its
+  `AffectsVolumes` and `VolumetricStrength` count there too, `VolumetricObjectBase.SunRadiance`). The other shining lights with
   `AffectsVolumes` take slots of the lights' transport (with `SceneLights`; after the cloud's own lights, before the
   local scene lights): `VolumeLightSlot.KindDirectional`, the slot holds e^(-tau / 4) of the cloud towards the light
   out to the shadow reach (`VolumetricLightTransport.shader`), the march rebuilds e^-tau and the softer orders from

@@ -98,6 +98,14 @@ public sealed class Light : Behaviour
 	/// </summary>
 	public float[] CloudTransmittance { get; } = { 1f, 1f, 1f, 1f, 1f, 1f };
 
+	/// <summary>
+	///     What <see cref="CloudTransmittance" /> was worked out for (the light's place and range, the clouds within it):
+	///     Volumetrics.VolumetricRuntime works it out again only when that changes.
+	/// </summary>
+	internal int CloudTransmittanceKey;
+
+	internal bool CloudTransmittanceKnown;
+
 	#endregion
 
 	#region LifecycleMethods

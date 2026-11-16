@@ -63,6 +63,16 @@ namespace LELEngine.Volumetrics
 		public readonly VolumeLightSlot[] LightSlots = new VolumeLightSlot[VolumetricObjectBase.MaxLights];
 		public int LightCount;
 
+		/// <summary>
+		///     The baked lights (the scene lights beyond the live ones): rgb = the sum of their light through the cloud with
+		///     their colours, at the transport's resolution (0: none); the lights as it was worked out, and whether any of
+		///     them shines.
+		/// </summary>
+		public int LightsC;
+		public readonly VolumeLightSlot[] BakedSlots = new VolumeLightSlot[VolumetricObjectBase.MaxBakedLights];
+		public int BakedCount;
+		public bool BakedLit;
+
 		/// <summary>The GI the cloud receives (Engine/Volumetrics/VolumetricGI.shader): rgba16f mean radiance + 1, its directional term.</summary>
 		public int GIA;
 		public int GIB;
@@ -83,7 +93,10 @@ namespace LELEngine.Volumetrics
 			Lights,
 
 			// The density (and the lit voxels when they fit the sun) from a file (VolumeCache), then mips and occupancy.
-			Upload
+			Upload,
+
+			// The baked lights' texture, sixteen lights a pass (after the live lights' transport).
+			Baked
 		}
 
 		// A build in progress: its textures (swapped in when complete) and where it stands.
@@ -112,10 +125,19 @@ namespace LELEngine.Volumetrics
 			public readonly VolumeLightSlot[] Lights = new VolumeLightSlot[VolumetricObjectBase.MaxLights];
 			public int LightCount;
 
+			// The baked lights, the pass of sixteen being worked out, and what of the drawn transport stays as it is (only the
+			// other kind of lights changed: a lamp moved among the baked ones leaves the live lights' channels alone).
+			public int LightsC;
+			public readonly VolumeLightSlot[] Baked = new VolumeLightSlot[VolumetricObjectBase.MaxBakedLights];
+			public int BakedCount;
+			public int BakedPage;
+			public bool KeepLive;
+			public bool KeepBaked;
+
 			// When it started (Clock seconds), the frames it worked in, and with LEL_VOL_PROFILE=1 the GPU's milliseconds per phase.
 			public double Started;
 			public int Frames;
-			public readonly double[] GpuMilliseconds = new double[5];
+			public readonly double[] GpuMilliseconds = new double[6];
 
 			// What it makes, as files know it (VolumeCache): the density's key and the lit voxels' settings.
 			public string DensityKey;
@@ -157,10 +179,20 @@ namespace LELEngine.Volumetrics
 		private byte[] cpuDensity;
 		private bool disposed;
 		private readonly System.Collections.Generic.List<VolumeLightSlot> captureSlots = new System.Collections.Generic.List<VolumeLightSlot>();
+		private readonly System.Collections.Generic.List<VolumeLightSlot> captureBaked = new System.Collections.Generic.List<VolumeLightSlot>();
 		private readonly Vector4[] slotPositions = new Vector4[VolumetricObjectBase.MaxLights];
 		private readonly Vector4[] slotParams = new Vector4[VolumetricObjectBase.MaxLights];
 		private readonly Vector4[] slotSpots = new Vector4[VolumetricObjectBase.MaxLights];
 		private readonly VolumeLightSlot[] movedSlots = new VolumeLightSlot[VolumetricObjectBase.MaxLights];
+
+		// A pass of the baked lights (BakedPageSize of them a dispatch): the kernel's arrays and the lights of a box.
+		private const int BakedPageSize = 16;
+		private readonly Vector4[] bakedPositions = new Vector4[BakedPageSize];
+		private readonly Vector4[] bakedParams = new Vector4[BakedPageSize];
+		private readonly Vector4[] bakedSpots = new Vector4[BakedPageSize];
+		private readonly Vector4[] bakedColors = new Vector4[BakedPageSize];
+		private readonly System.Collections.Generic.List<VolumeLightSlot> regionLights = new System.Collections.Generic.List<VolumeLightSlot>();
+		private readonly System.Collections.Generic.List<(Vector3i lo, Vector3i hi)> bakedRegions = new System.Collections.Generic.List<(Vector3i, Vector3i)>();
 		private int giSlice;
 
 		// The drawn transport's grid and what it was worked out with besides the slots (TransportSettingsHash).
@@ -172,6 +204,10 @@ namespace LELEngine.Volumetrics
 		private int spareLightsA;
 		private int spareLightsB;
 		private Vector3i spareLightsResolution;
+
+		// The same for the baked lights' texture.
+		private int spareLightsC;
+		private Vector3i spareLightsCResolution;
 
 		// The drawn cloud as files know it (VolumeCache).
 		private string drawnDensityKey;
@@ -397,6 +433,10 @@ namespace LELEngine.Volumetrics
 			program.SetInt("GlobalSdfObjectIds", Lighting.GlobalSdfObjectIdTextureUnit);
 			program.SetInt("giSkybox", Lighting.SkyboxTextureUnit);
 			Lighting.SetVolumeGIUniforms(program, true);
+			// What the clouds put into the GI (Lighting.Media) is not read back by them: the light scattered on inside a
+			// cloud is in its own lighting already (multiple scattering, the lights' glow), and through the GI it would
+			// count again, more every frame.
+			Lighting.SetMediaUniforms(program, false);
 			program.SetTexture("Density", TextureTarget.Texture3D, Density, 0);
 			program.SetInt3("volResolution", resolution.X, resolution.Y, resolution.Z);
 			program.SetInt("volSliceOffset", giSlice);
@@ -518,8 +558,10 @@ namespace LELEngine.Volumetrics
 			DeleteTexture(ref Lit);
 			DeleteTexture(ref LightsA);
 			DeleteTexture(ref LightsB);
+			DeleteTexture(ref LightsC);
 			DeleteTexture(ref spareLightsA);
 			DeleteTexture(ref spareLightsB);
+			DeleteTexture(ref spareLightsC);
 			DeleteTexture(ref GIA);
 			DeleteTexture(ref GIB);
 			cpuDensity = null;
@@ -804,16 +846,83 @@ namespace LELEngine.Volumetrics
 				LitKey = drawnLitKey
 			};
 			CaptureLights(build);
+
+			// Only one kind of lights changed (and nothing else the transport depends on): the other kind's textures stay.
+			if (transportSettingsHash == TransportSettingsHash() && lightsResolution == build.LightsResolution)
+			{
+				build.KeepLive = SameLiveLights(build);
+				build.KeepBaked = SameBakedLights(build);
+				if (build.KeepLive)
+				{
+					build.LightsA = LightsA;
+					build.LightsB = LightsB;
+				}
+
+				if (build.KeepBaked)
+				{
+					build.LightsC = LightsC;
+				}
+			}
 		}
 
 		private void CaptureLights(Build b)
 		{
-			owner.GatherLightSlots(captureSlots);
+			owner.GatherLightSlots(captureSlots, captureBaked);
 			b.LightCount = Math.Min(captureSlots.Count, VolumetricObjectBase.MaxLights);
 			for (int i = 0; i < VolumetricObjectBase.MaxLights; i++)
 			{
 				b.Lights[i] = i < b.LightCount ? captureSlots[i] : default;
 			}
+
+			b.BakedCount = Math.Min(captureBaked.Count, VolumetricObjectBase.MaxBakedLights);
+			for (int i = 0; i < VolumetricObjectBase.MaxBakedLights; i++)
+			{
+				b.Baked[i] = i < b.BakedCount ? captureBaked[i] : default;
+			}
+		}
+
+		// The build's live lights are the drawn transport's, slot by slot.
+		private bool SameLiveLights(Build b)
+		{
+			if (b.LightCount != LightCount || LightCount > 0 && LightsA == 0)
+			{
+				return false;
+			}
+
+			for (int i = 0; i < LightCount; i++)
+			{
+				if (!SameSlot(b.Lights[i], LightSlots[i], false))
+				{
+					return false;
+				}
+			}
+
+			return true;
+		}
+
+		// The build's baked lights are the drawn texture's (the same lights in the same order, where they were, as bright).
+		private bool SameBakedLights(Build b)
+		{
+			if (b.BakedCount != BakedCount || BakedCount > 0 && LightsC == 0)
+			{
+				return false;
+			}
+
+			for (int i = 0; i < BakedCount; i++)
+			{
+				if (!SameSlot(b.Baked[i], BakedSlots[i], true))
+				{
+					return false;
+				}
+			}
+
+			return true;
+		}
+
+		private static bool SameSlot(VolumeLightSlot a, VolumeLightSlot b, bool colour)
+		{
+			return a.Own == b.Own && a.Scene == b.Scene && ReferenceEquals(a.Directional, b.Directional) && a.PositionSize == b.PositionSize && a.Params == b.Params && a.Spot == b.Spot
+			       && (!colour || a.BakedColor == b.BakedColor);
 		}
 
 		// Advances the build by up to budget voxels of work; swaps it in when complete.
@@ -857,9 +966,9 @@ namespace LELEngine.Volumetrics
 
 						break;
 					case Phase.Lights:
-						if (build.LightCount == 0)
+						if (build.LightCount == 0 || build.KeepLive)
 						{
-							NextPhase(Phase.Idle);
+							NextPhase(Phase.Baked);
 							break;
 						}
 
@@ -891,7 +1000,59 @@ namespace LELEngine.Volumetrics
 							GL.MemoryBarrier(MemoryBarrierFlags.AllBarrierBits);
 							GenerateMipmaps(build.LightsA);
 							GenerateMipmaps(build.LightsB);
+							NextPhase(Phase.Baked);
+						}
+
+						break;
+					case Phase.Baked:
+						if (build.BakedCount == 0 || build.KeepBaked)
+						{
 							NextPhase(Phase.Idle);
+							break;
+						}
+
+						if (build.LightsC == 0)
+						{
+							if (spareLightsC != 0 && spareLightsCResolution == build.LightsResolution)
+							{
+								build.LightsC = spareLightsC;
+								spareLightsC = 0;
+							}
+							else
+							{
+								DeleteTexture(ref spareLightsC);
+								build.LightsC = CreateTexture(SizedInternalFormat.Rgba16f, build.LightsResolution, true, false);
+							}
+						}
+
+						// Sixteen lights a pass over the grid: the first writes the sum, the next ones add to it. A voxel costs as
+						// many lights as reach it on average (a lamp's reach is a small box of the grid).
+						{
+							int first = build.BakedPage * BakedPageSize;
+							int count = Math.Min(BakedPageSize, build.BakedCount - first);
+							double reached = 0.0;
+							long gridVoxels = (long)build.LightsResolution.X * build.LightsResolution.Y * build.LightsResolution.Z;
+							for (int i = first; i < first + count; i++)
+							{
+								var lo = new Vector3i(int.MaxValue);
+								var hi = new Vector3i(int.MinValue);
+								IncludeReach(build.Baked[i], build.LightsResolution, build.Size, ref lo, ref hi);
+								reached += Math.Min(1.0, (double)Math.Max(0, hi.X - lo.X) * Math.Max(0, hi.Y - lo.Y) * Math.Max(0, hi.Z - lo.Z) / gridVoxels);
+							}
+
+							used += DispatchSlices(VolumetricRuntime.LightTransportBaked, build.LightsResolution, budget - used, SetBakedBuildUniforms, build.LightsC, SizedInternalFormat.Rgba16f, 0, 0,
+								0.25 + TransportCostPerLight * reached, TextureAccess.ReadWrite);
+							if (build.NextSlice >= build.LightsResolution.Z)
+							{
+								GL.MemoryBarrier(MemoryBarrierFlags.AllBarrierBits);
+								build.BakedPage++;
+								build.NextSlice = 0;
+								if (build.BakedPage * BakedPageSize >= build.BakedCount)
+								{
+									GenerateMipmaps(build.LightsC);
+									NextPhase(Phase.Idle);
+								}
+							}
 						}
 
 						break;
@@ -942,12 +1103,13 @@ namespace LELEngine.Volumetrics
 
 		// Dispatches as many z slices as the budget allows (at least one), each dispatch a short one; a voxel counts cost
 		// voxels of the budget.
-		private long DispatchSlices(ComputeShader shader, Vector3i resolution, long budget, Action<ShaderProgram> setUniforms, int image, SizedInternalFormat format, int secondImage, int secondBinding, double cost = 1.0)
+		private long DispatchSlices(ComputeShader shader, Vector3i resolution, long budget, Action<ShaderProgram> setUniforms, int image, SizedInternalFormat format, int secondImage, int secondBinding, double cost = 1.0,
+			TextureAccess access = TextureAccess.WriteOnly)
 		{
 			ShaderProgram program = shader.Program;
 			program.Use();
 			setUniforms(program);
-			GL.BindImageTexture(0, image, 0, true, 0, TextureAccess.WriteOnly, format);
+			GL.BindImageTexture(0, image, 0, true, 0, access, format);
 			if (secondImage != 0)
 			{
 				GL.BindImageTexture(secondBinding, secondImage, 0, true, 0, TextureAccess.WriteOnly, format);
@@ -1062,6 +1224,47 @@ namespace LELEngine.Volumetrics
 			program.SetFloat("volShadowReach", MathF.Max(owner.ShadowReach, 0.01f) * MathF.Max(owner.NoiseSize, 0.01f));
 		}
 
+		// The build's pass of baked lights (the first pass writes the sum, the next ones add to it).
+		private void SetBakedBuildUniforms(ShaderProgram program)
+		{
+			int first = build.BakedPage * BakedPageSize;
+			SetBakedUniforms(program, build.Density, build.LightsResolution, build.Size, build.Voxel, build.Baked, first, Math.Min(BakedPageSize, build.BakedCount - first), build.BakedPage > 0, Vector3i.Zero,
+				build.LightsResolution);
+		}
+
+		// The baked lights' kernel (VolumetricLightTransport.shader, VOL_BAKED): the density, the grid, up to sixteen of the
+		// lights with their colours, the box worked out, and whether the result is added to what the texture holds.
+		private void SetBakedUniforms(ShaderProgram program, int density, Vector3i resolution, Vector3 size, float voxel, System.Collections.Generic.IReadOnlyList<VolumeLightSlot> lights, int first, int count,
+			bool accumulate, Vector3i regionMin, Vector3i regionMax)
+		{
+			program.SetTexture("Density", TextureTarget.Texture3D, density, 0);
+			program.SetInt3("volResolution", resolution.X, resolution.Y, resolution.Z);
+			program.SetInt3("volRegionMin", regionMin.X, regionMin.Y, regionMin.Z);
+			program.SetInt3("volRegionMax", regionMax.X, regionMax.Y, regionMax.Z);
+			program.SetVector3("volSize", size);
+			program.SetFloat("volSigma", Sigma);
+			program.SetFloat("volVoxel", voxel);
+			for (int i = 0; i < BakedPageSize; i++)
+			{
+				bool used = i < count;
+				VolumeLightSlot slot = used ? lights[first + i] : default;
+				bakedPositions[i] = used ? slot.PositionSize : Vector4.Zero;
+				bakedParams[i] = used ? slot.Params : new Vector4(0f, 0f, -2f, 0f);
+				bakedSpots[i] = used ? slot.Spot : new Vector4(0f, 0f, 0f, 1f);
+				bakedColors[i] = used ? new Vector4(slot.BakedColor, 0f) : Vector4.Zero;
+			}
+
+			program.SetVector4Array("volLights", bakedPositions);
+			program.SetVector4Array("volLightParams", bakedParams);
+			program.SetVector4Array("volLightSpots", bakedSpots);
+			program.SetVector4Array("volLightColors", bakedColors);
+			program.SetInt("volLightCount", count);
+			program.SetInt("volAccumulate", accumulate ? 1 : 0);
+			program.SetFloat("volWorldScale", owner.WorldScale);
+			program.SetFloat("volLightGlow", owner.LightGlow);
+			program.SetFloat("volShadowReach", MathF.Max(owner.ShadowReach, 0.01f) * MathF.Max(owner.NoiseSize, 0.01f));
+		}
+
 		// What the whole transport depends on besides the lights' slots: a change of it reworks every voxel.
 		private int TransportSettingsHash()
 		{
@@ -1078,19 +1281,21 @@ namespace LELEngine.Volumetrics
 		/// </summary>
 		private bool TryUpdateLightsInPlace(int newLightsHash)
 		{
-			if (LightsA == 0 || build != null || transportSettingsHash != TransportSettingsHash())
+			if (build != null || transportSettingsHash != TransportSettingsHash())
 			{
 				return false;
 			}
 
-			owner.GatherLightSlots(captureSlots);
+			owner.GatherLightSlots(captureSlots, captureBaked);
 			int count = Math.Min(captureSlots.Count, VolumetricObjectBase.MaxLights);
-			if (count != LightCount || count == 0)
+			int bakedCount = Math.Min(captureBaked.Count, VolumetricObjectBase.MaxBakedLights);
+			if (count != LightCount || bakedCount != BakedCount || count + bakedCount == 0 || count > 0 && LightsA == 0 || bakedCount > 0 && LightsC == 0)
 			{
 				return false;
 			}
 
 			Vector3i resolution = lightsResolution;
+			long limit = Math.Min(InPlaceMaxVoxels, (long)resolution.X * resolution.Y * resolution.Z / 3);
 			var lo = new Vector3i(int.MaxValue);
 			var hi = new Vector3i(int.MinValue);
 			for (int i = 0; i < count; i++)
@@ -1113,19 +1318,93 @@ namespace LELEngine.Volumetrics
 					return false;
 				}
 
-				IncludeReach(was, resolution, ref lo, ref hi);
-				IncludeReach(now, resolution, ref lo, ref hi);
+				IncludeReach(was, resolution, Size, ref lo, ref hi);
+				IncludeReach(now, resolution, Size, ref lo, ref hi);
 			}
 
-			if (lo.X < hi.X && lo.Y < hi.Y && lo.Z < hi.Z)
+			bool liveBox = lo.X < hi.X && lo.Y < hi.Y && lo.Z < hi.Z;
+			if (liveBox && BoxVoxels(lo, hi) > limit)
 			{
-				Vector3i extent = hi - lo;
-				long voxels = (long)extent.X * extent.Y * extent.Z;
-				if (voxels > Math.Min(InPlaceMaxVoxels, (long)resolution.X * resolution.Y * resolution.Z / 3))
+				return false;
+			}
+
+			// The baked lights: the same lights (in any order: they are kept the nearest first), and for each that moved or
+			// changed its colour, reach or cone the box it reached before and reaches now. Boxes far apart are worked out one
+			// by one (two lamps at the cloud's ends changing would otherwise span all of it).
+			bakedRegions.Clear();
+			var unionLo = new Vector3i(int.MaxValue);
+			var unionHi = new Vector3i(int.MinValue);
+			long separate = 0;
+			for (int i = 0; i < bakedCount; i++)
+			{
+				VolumeLightSlot now = captureBaked[i];
+				int before = -1;
+				for (int k = 0; k < BakedCount; k++)
+				{
+					if (BakedSlots[k].Scene == now.Scene)
+					{
+						before = k;
+						break;
+					}
+				}
+
+				if (before < 0)
 				{
 					return false;
 				}
 
+				if (SameSlot(BakedSlots[before], now, true))
+				{
+					continue;
+				}
+
+				var boxLo = new Vector3i(int.MaxValue);
+				var boxHi = new Vector3i(int.MinValue);
+				IncludeReach(BakedSlots[before], resolution, Size, ref boxLo, ref boxHi);
+				IncludeReach(now, resolution, Size, ref boxLo, ref boxHi);
+				if (boxLo.X >= boxHi.X || boxLo.Y >= boxHi.Y || boxLo.Z >= boxHi.Z)
+				{
+					continue;
+				}
+
+				bakedRegions.Add((boxLo, boxHi));
+				unionLo = Vector3i.ComponentMin(unionLo, boxLo);
+				unionHi = Vector3i.ComponentMax(unionHi, boxHi);
+				separate += BoxVoxels(boxLo, boxHi);
+			}
+
+			if (bakedRegions.Count > 1)
+			{
+				if (BoxVoxels(unionLo, unionHi) <= Math.Min(limit, separate))
+				{
+					bakedRegions.Clear();
+					bakedRegions.Add((unionLo, unionHi));
+				}
+				else if (separate > limit)
+				{
+					return false;
+				}
+			}
+			else if (bakedRegions.Count == 1 && separate > limit)
+			{
+				return false;
+			}
+
+			if (bakedRegions.Count > 0)
+			{
+				foreach ((Vector3i regionLo, Vector3i regionHi) in bakedRegions)
+				{
+					BakeRegion(regionLo, regionHi, resolution);
+				}
+
+				GL.MemoryBarrier(MemoryBarrierFlags.AllBarrierBits);
+				GenerateMipmaps(LightsC);
+				InPlaceUpdates++;
+			}
+
+			if (liveBox)
+			{
+				Vector3i extent = hi - lo;
 				ShaderProgram program = VolumetricRuntime.LightTransport.Program;
 				program.Use();
 				captureSlots.CopyTo(0, movedSlots, 0, count);
@@ -1147,8 +1426,69 @@ namespace LELEngine.Volumetrics
 				LightSlots[i] = captureSlots[i];
 			}
 
+			for (int i = 0; i < bakedCount; i++)
+			{
+				BakedSlots[i] = captureBaked[i];
+			}
+
+			BakedLit = AnyBakedLit();
 			lightsHash = newLightsHash;
 			return true;
+		}
+
+		private static long BoxVoxels(Vector3i lo, Vector3i hi)
+		{
+			return (long)Math.Max(0, hi.X - lo.X) * Math.Max(0, hi.Y - lo.Y) * Math.Max(0, hi.Z - lo.Z);
+		}
+
+		private bool AnyBakedLit()
+		{
+			for (int i = 0; i < BakedCount; i++)
+			{
+				Vector3 colour = BakedSlots[i].BakedColor;
+				if (colour.X + colour.Y + colour.Z > 1e-6f)
+				{
+					return true;
+				}
+			}
+
+			return false;
+		}
+
+		// A box of the drawn baked texture worked out again, from the lights as they are now (captureBaked): those that
+		// reach the box, sixteen a dispatch (the first writes, the next add); none: the box is cleared.
+		private void BakeRegion(Vector3i lo, Vector3i hi, Vector3i resolution)
+		{
+			regionLights.Clear();
+			foreach (VolumeLightSlot slot in captureBaked)
+			{
+				var reachLo = new Vector3i(int.MaxValue);
+				var reachHi = new Vector3i(int.MinValue);
+				IncludeReach(slot, resolution, Size, ref reachLo, ref reachHi);
+				if (reachLo.X < hi.X && reachHi.X > lo.X && reachLo.Y < hi.Y && reachHi.Y > lo.Y && reachLo.Z < hi.Z && reachHi.Z > lo.Z)
+				{
+					regionLights.Add(slot);
+				}
+			}
+
+			Vector3i extent = hi - lo;
+			ShaderProgram program = VolumetricRuntime.LightTransportBaked.Program;
+			program.Use();
+			GL.BindImageTexture(0, LightsC, 0, true, 0, TextureAccess.ReadWrite, SizedInternalFormat.Rgba16f);
+			int first = 0;
+			do
+			{
+				int count = Math.Min(BakedPageSize, regionLights.Count - first);
+				SetBakedUniforms(program, Density, resolution, Size, Voxel, regionLights, first, count, first > 0, lo, hi);
+				program.SetInt("volSliceOffset", 0);
+				GL.DispatchCompute((extent.X + 7) / 8, (extent.Y + 7) / 8, extent.Z);
+				// The next lights add to what this dispatch wrote.
+				GL.MemoryBarrier(MemoryBarrierFlags.ShaderImageAccessBarrierBit);
+				first += BakedPageSize;
+			}
+			while (first < regionLights.Count);
+
+			GL.BindImageTexture(0, 0, 0, true, 0, TextureAccess.ReadWrite, SizedInternalFormat.Rgba16f);
 		}
 
 		/// <summary>Light transport boxes worked out in place since the start (diagnostics: a moving light should use these).</summary>
@@ -1159,11 +1499,10 @@ namespace LELEngine.Volumetrics
 
 		// Widens the box (transport voxels, max exclusive) by where a slot's light reaches: an own light's glow ends at 8 core
 		// radii, a scene light at its range; a voxel more on every side for the sampling between voxels.
-		private void IncludeReach(VolumeLightSlot slot, Vector3i resolution, ref Vector3i lo, ref Vector3i hi)
+		private void IncludeReach(VolumeLightSlot slot, Vector3i resolution, Vector3 size, ref Vector3i lo, ref Vector3i hi)
 		{
 			Vector3 centre = slot.PositionSize.Xyz;
 			float reach = slot.Params.X < 0.5f ? slot.PositionSize.W * 8f : slot.PositionSize.W / owner.WorldScale;
-			Vector3 size = Size;
 			for (int axis = 0; axis < 3; axis++)
 			{
 				float min = ((centre[axis] - reach) / size[axis] + 0.5f) * resolution[axis] - 0.5f;
@@ -1246,11 +1585,20 @@ namespace LELEngine.Volumetrics
 
 				LightsA = b.LightsA;
 				LightsB = b.LightsB;
+				if (LightsC != b.LightsC)
+				{
+					KeepSpareBaked(ref LightsC, lightsResolution);
+				}
+
+				LightsC = b.LightsC;
 				lightsResolution = b.LightsResolution;
 				transportSettingsHash = TransportSettingsHash();
 				lightsHash = b.LightsHash;
 				Array.Copy(b.Lights, LightSlots, LightSlots.Length);
 				LightCount = b.LightCount;
+				Array.Copy(b.Baked, BakedSlots, BakedSlots.Length);
+				BakedCount = b.BakedCount;
+				BakedLit = AnyBakedLit();
 			}
 
 			// The first cloud of an object (how long it took to show), every build while profiling.
@@ -1258,9 +1606,12 @@ namespace LELEngine.Volumetrics
 			{
 				double ms = (Clock.Elapsed.TotalSeconds - b.Started) * 1000.0;
 				long voxels = (long)b.Resolution.X * b.Resolution.Y * b.Resolution.Z;
-				string gpu = Profile ? $"; GPU: upload {b.GpuMilliseconds[(int)Phase.Upload]:0.0} ms, generate {b.GpuMilliseconds[(int)Phase.Generate]:0.0} ms, light {b.GpuMilliseconds[(int)Phase.Light]:0.0} ms, lights {b.GpuMilliseconds[(int)Phase.Lights]:0.0} ms" : "";
+				string gpu = Profile
+					? $"; GPU: upload {b.GpuMilliseconds[(int)Phase.Upload]:0.0} ms, generate {b.GpuMilliseconds[(int)Phase.Generate]:0.0} ms, light {b.GpuMilliseconds[(int)Phase.Light]:0.0} ms, lights {b.GpuMilliseconds[(int)Phase.Lights]:0.0} ms, baked lights {b.GpuMilliseconds[(int)Phase.Baked]:0.0} ms"
+					: "";
 				string how = b.File != null ? b.UploadLit ? "read from its file" : "read from its file and lit" : b.NewDensity ? "made" : b.Relight ? "lit" : "lights";
-				Console.WriteLine($"[Volumetrics] {owner.gameObject?.Name}: {how} {b.Resolution.X}x{b.Resolution.Y}x{b.Resolution.Z} ({voxels / 1e6:0.0} M voxels, {b.LightCount} lights) in {b.Frames} frames, {ms:0} ms{gpu}");
+				string baked = b.BakedCount > 0 ? $" and {b.BakedCount} baked" : "";
+				Console.WriteLine($"[Volumetrics] {owner.gameObject?.Name}: {how} {b.Resolution.X}x{b.Resolution.Y}x{b.Resolution.Z} ({voxels / 1e6:0.0} M voxels, {b.LightCount} lights{baked}) in {b.Frames} frames, {ms:0} ms{gpu}");
 			}
 
 			ready = true;
@@ -1425,6 +1776,30 @@ namespace LELEngine.Volumetrics
 			{
 				KeepSpareLights(ref b.LightsA, ref b.LightsB, b.LightsResolution);
 			}
+
+			if (b.LightsC != LightsC)
+			{
+				KeepSpareBaked(ref b.LightsC, b.LightsResolution);
+			}
+		}
+
+		// A baked lights' texture no longer drawn: kept as the spare when there is none, else deleted.
+		private void KeepSpareBaked(ref int texture, Vector3i resolution)
+		{
+			if (texture == 0)
+			{
+				return;
+			}
+
+			if (spareLightsC == 0)
+			{
+				spareLightsC = texture;
+				spareLightsCResolution = resolution;
+				texture = 0;
+				return;
+			}
+
+			DeleteTexture(ref texture);
 		}
 
 		// A pair of transport textures no longer drawn: kept as the spare when there is none, else deleted.
@@ -1449,7 +1824,7 @@ namespace LELEngine.Volumetrics
 			DeleteTexture(ref b);
 		}
 
-		private static int CreateTexture(SizedInternalFormat format, Vector3i size, bool mipmaps, bool zeroBorder)
+		internal static int CreateTexture(SizedInternalFormat format, Vector3i size, bool mipmaps, bool zeroBorder)
 		{
 			int levels = mipmaps ? 1 + (int)MathF.Floor(MathF.Log2(Math.Max(size.X, Math.Max(size.Y, size.Z)))) : 1;
 			int texture = GL.GenTexture();
@@ -1471,14 +1846,14 @@ namespace LELEngine.Volumetrics
 			return texture;
 		}
 
-		private static void GenerateMipmaps(int texture)
+		internal static void GenerateMipmaps(int texture)
 		{
 			GL.BindTexture(TextureTarget.Texture3D, texture);
 			GL.GenerateMipmap(GenerateMipmapTarget.Texture3D);
 			GL.BindTexture(TextureTarget.Texture3D, 0);
 		}
 
-		private static void DeleteTexture(ref int texture)
+		internal static void DeleteTexture(ref int texture)
 		{
 			if (texture != 0)
 			{

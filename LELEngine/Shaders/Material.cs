@@ -26,8 +26,11 @@ namespace LELEngine.Shaders
 		/// </summary>
 		public const int MaxTextureUnits = 8;
 
-		/// <summary>The first texture unit above the engine's reserved ones: a material's ninth texture and on.</summary>
-		public const int ExtraTextureUnitStart = 23;
+		/// <summary>
+		///     The first texture unit above the engine's reserved ones (8..26; the last four are the GI's media volume,
+		///     <see cref="Lighting.MediaTextureUnit" />): a material's ninth texture and on.
+		/// </summary>
+		public const int ExtraTextureUnitStart = 27;
 
 		/// <summary>How many textures a material can bind on this context (8 below the engine's units, the rest above them).</summary>
 		public static int MaxTextures => MaxTextureUnits + Math.Max(0, Rendering.GLCapabilities.MaxTextureUnits - ExtraTextureUnitStart);

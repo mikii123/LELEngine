@@ -21,6 +21,22 @@ uniform int giEnabled;
 #endif
 uniform int giVolumeMode; // 0 none, 1 voxel cones, 2 radiance cache probes
 
+// The clouds (the volumetric objects in the GI, Engine/GIMedia.glsl) for a material that lights from the GI volume
+// itself: its cones and the probes do not read them (the screen-space GI's cones and rays do, all along their way),
+// so one wide cone along the normal and one along the reflection take them in: the clouds' light, in front of what was
+// gathered, which they hide. No clouds in the GI: one test of a uniform.
+void ApplyMediaToIndirect(vec3 position, vec3 normal, vec3 viewDir, float roughness, inout vec3 diffuse, inout float occlusion, inout vec3 specular)
+{
+	if (giMediaActive == 0) return;
+
+	vec4 around = GIMediaRange(position, normal, 1.0, 0.0, 1e30, 0.5);
+	diffuse = around.rgb * giDiffuseStrength + (1.0 - around.a) * diffuse;
+	occlusion *= clamp(1.0 - around.a * giOcclusionStrength, 0.0, 1.0);
+
+	vec4 mirrored = GIMediaRange(position, reflect(-viewDir, normal), clamp(roughness > 0.0 ? roughness : 0.6, 0.03, 1.0), 0.0, 1e30, 0.5);
+	specular = mirrored.rgb * giSpecularStrength + (1.0 - mirrored.a) * specular;
+}
+
 // The radiance cache probes around the point (Lumen): irradiance / pi and the radiance along the reflection, both
 // scaled by the GI strengths. Leaves them as they are where the cache has no valid probe.
 void GetProbeIndirectLighting(vec3 position, vec3 normal, vec3 viewDir, float roughness, inout vec3 diffuse, inout vec3 specular)
@@ -67,10 +83,13 @@ void GetVolumeIndirectLighting(vec3 position, vec3 normal, vec3 viewDir, float r
 		diffuse = diffuseCoverage.rgb * giDiffuseStrength;
 		occlusion = clamp(1.0 - diffuseCoverage.a * giOcclusionStrength, 0.0, 1.0);
 		specular = TraceSpecularCone(position, normal, viewDir, roughness) * giSpecularStrength;
-		return;
+	}
+	else
+	{
+		GetProbeIndirectLighting(position, normal, viewDir, roughness, diffuse, specular);
 	}
 
-	GetProbeIndirectLighting(position, normal, viewDir, roughness, diffuse, specular);
+	ApplyMediaToIndirect(position, normal, viewDir, roughness, diffuse, occlusion, specular);
 }
 
 #endif

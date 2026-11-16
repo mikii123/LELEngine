@@ -72,6 +72,8 @@ void main()
 	// average the prints of the six cones away.
 	vec2 jitter = giConeJitter != 0 ? ConeJitterAt(cell) : vec2(0.0);
 	vec4 irradiance = TraceDiffuseConesJittered(surface, N, voxelSize * 1.5, jitter);
+	// The clouds (the volumetric objects in the GI) with one cone: what they light passes their light on.
+	irradiance = ApplyCloudsToGather(irradiance, surface + N * (voxelSize * 1.5), N);
 	imageStore(BounceOut, cell, vec4(irradiance.rgb, 1.0));
 }
 

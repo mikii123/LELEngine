@@ -2,9 +2,9 @@
 
 #version 430
 
-// How the lights of a volumetric object (up to 8: its own, VolumetricObjectBase.Lights, the scene's directional lights
-// besides its sun, and the scene's Light components that reach it) light its cloud, per voxel of a grid at half the
-// density's resolution: lights 0-3 in A, 4-7 in B, linear
+// How the live lights of a volumetric object (up to 8: its own, VolumetricObjectBase.Lights, the scene's directional
+// lights besides its sun, and the scene's Light components with the longest ranges that reach it) light its cloud, per
+// voxel of a grid at half the density's resolution: lights 0-3 in A, 4-7 in B, linear
 // light at unit brightness (times the slot's factor). The cloud between the voxel and the light dims it; the glow is light
 // scattered on through the cloud (it gets through thick cloud), so a light deep in a cloud still lights the cloud around
 // it up. Only where the lights are is worked out here: their colour and intensity are applied when the cloud is drawn
@@ -15,10 +15,24 @@
 //   directional  no falloff: e^(-tau / 4) of the cloud towards the light out to the shadow reach (as the sun's optical
 //                depth in the lit voxels). The march rebuilds e^-tau and the softer orders of the multiple scattering
 //                from it (squares), and scatters it with the cloud's albedo and phase as it does the sun.
+//
+// VOL_BAKED: the scene lights beyond those eight (VolumetricObjectBase.GatherLightSlots: the ones with shorter ranges),
+// all summed into one texture with their colours, sixteen lights a dispatch (the first writes the sum, the next ones
+// add to it): rgb = sum of colour x the scene light's transport above. Any number of lights costs the march one fetch;
+// a light that changes is worked out again in the box it reaches (its neighbours there with it).
 
 layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+#ifdef VOL_BAKED
+#define VOL_SLOTS 16
+layout(binding = 0, rgba16f) uniform image3D LightsC;
+uniform vec4 volLightColors[VOL_SLOTS]; // rgb: colour x intensity / the slot's factor
+uniform int volLightCount;       // lights of this dispatch
+uniform int volAccumulate;       // 1: added to what the texture holds (the lights after the first sixteen)
+#else
+#define VOL_SLOTS 8
 layout(binding = 0, rgba16f) uniform writeonly image3D LightsA;
 layout(binding = 1, rgba16f) uniform writeonly image3D LightsB;
+#endif
 
 uniform sampler3D Density;       // r8 with mips; zero outside
 uniform ivec3 volResolution;     // of this grid
@@ -29,10 +43,10 @@ uniform vec3 volSize;
 uniform float volSigma;
 uniform float volVoxel;          // local units per voxel of the density
 uniform float volWorldScale;     // world units per local unit
-uniform vec4 volLights[8];       // xyz local position; w own: the core's radius (local, 0: no light), scene: the range (world);
-                                 // directional: xyz the local unit vector towards the light, w 1
-uniform vec4 volLightParams[8];  // x 0 own / 1 scene / 2 directional, y the source's radius (world), z cos outer (-2: no cone), w spot scale
-uniform vec4 volLightSpots[8];   // xyz the spot's direction (local), w the factor the light is held times
+uniform vec4 volLights[VOL_SLOTS];       // xyz local position; w own: the core's radius (local, 0: no light), scene: the range (world);
+                                         // directional: xyz the local unit vector towards the light, w 1
+uniform vec4 volLightParams[VOL_SLOTS];  // x 0 own / 1 scene / 2 directional, y the source's radius (world), z cos outer (-2: no cone), w spot scale
+uniform vec4 volLightSpots[VOL_SLOTS];   // xyz the spot's direction (local), w the factor the light is held times
 uniform float volLightGlow;
 uniform float volShadowReach;    // how far the cloud is marched towards a directional light (local units)
 
@@ -138,8 +152,23 @@ void main()
 	}
 
 	vec3 p = ((vec3(v) + 0.5) / vec3(volResolution) - 0.5) * volSize;
+#ifdef VOL_BAKED
+	vec3 sum = volAccumulate != 0 ? imageLoad(LightsC, v).rgb : vec3(0.0);
+	for (int i = 0; i < volLightCount; i++)
+	{
+		float light = LightAt(p, i);
+		if (light > 0.0)
+		{
+			sum += volLightColors[i].rgb * light;
+		}
+	}
+
+	// Half floats: a voxel right at a bright light stays finite.
+	imageStore(LightsC, v, vec4(min(sum, vec3(60000.0)), 0.0));
+#else
 	imageStore(LightsA, v, vec4(LightAt(p, 0), LightAt(p, 1), LightAt(p, 2), LightAt(p, 3)));
 	imageStore(LightsB, v, vec4(LightAt(p, 4), LightAt(p, 5), LightAt(p, 6), LightAt(p, 7)));
+#endif
 }
 
 /////Compute

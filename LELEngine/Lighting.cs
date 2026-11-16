@@ -111,6 +111,17 @@ namespace LELEngine
 		public const int VoxelDirectionalTextureUnit = 18;
 
 		/// <summary>
+		///     Texture units of the GI's media volume (<see cref="Media" />, Engine/GIMedia.glsl: the clouds' light, the
+		///     directional lights' part of it, and its luminance seen from the + and from the - sides): above the units of
+		///     the grab pass (21) and the scene depth (22), below the materials' further textures
+		///     (<see cref="Shaders.Material.ExtraTextureUnitStart" />). Used only when the context has the units.
+		/// </summary>
+		public const int MediaTextureUnit = 23;
+		public const int MediaSunTextureUnit = 24;
+		public const int MediaFacePlusTextureUnit = 25;
+		public const int MediaFaceMinusTextureUnit = 26;
+
+		/// <summary>
 		///     The view being drawn is its stack's lighting camera (<see cref="Camera.GetStackLightingCamera" />): the
 		///     materials read the screen-space GI its view computed (the resolve buffers). The other cameras of a stack
 		///     light from the GI volume: voxel cones per fragment, or Lumen's radiance cache probes. Set by the renderer
@@ -145,6 +156,26 @@ namespace LELEngine
 		///     default (invalid) binding while the cache is off.
 		/// </summary>
 		public static RadianceCacheBinding RadianceCache;
+
+		/// <summary>
+		///     What the volumetric objects put into the GI this frame (Engine/GIMedia.glsl): a coarse volume of the light
+		///     their clouds scatter and of how much they hide. Published by VolumetricMediaPass every frame; a default
+		///     (inactive) binding when no cloud contributes.
+		/// </summary>
+		public static MediaBinding Media;
+
+		/// <summary>
+		///     Clouds contribute to the GI this frame and the project asks for the accurate gather
+		///     (<see cref="VolumeGIMode.Accurate" />): the screen-space resolve runs its GI_MEDIA variant, which reads
+		///     <see cref="Media" /> along every cone.
+		/// </summary>
+		public static bool MediaAlongCones => Media.Active && GI.Enabled && GI.VolumesInGI == VolumeGIMode.Accurate;
+
+		/// <summary>
+		///     The scene has volumetric objects and the project asks for the accurate gather: the resolve starts its
+		///     GI_MEDIA variant ahead, so the frame a cloud's light first arrives in compiles nothing.
+		/// </summary>
+		public static bool MediaAlongConesExpected => GI.Enabled && GI.VolumesInGI == VolumeGIMode.Accurate && Volumetrics.VolumetricRuntime.Objects.Count > 0 && MediaFaceMinusTextureUnit < GLCapabilities.MaxTextureUnits;
 
 		#endregion
 
@@ -312,6 +343,8 @@ namespace LELEngine
 			SetVoxelRadianceUniforms(program, GI.VoxelVolume, VoxelTextureUnit, VoxelDirectionalTextureUnit);
 
 			SetSkyUniforms(program);
+			// The clouds on the cones' way (the cones are traced with the voxel volume only).
+			SetMediaUniforms(program, voxels);
 			bool sdf = GI.DistanceFieldEnabled && GI.GlobalSdf != 0;
 			program.SetInt("giTraceMode", TraceModeUniform(sdf));
 			program.SetFloat("giSdfDetailDistance", GI.SdfDetailDistance);
@@ -359,6 +392,7 @@ namespace LELEngine
 			program.SetFloat("giSpecularStrength", GI.SpecularStrength);
 			program.SetFloat("giOcclusionStrength", GI.OcclusionStrength);
 			SetSkyUniforms(program);
+			SetMediaUniforms(program, voxels);
 			if (voxels)
 			{
 				program.SetVector3("voxelGridMin", GI.GridMin);
@@ -450,6 +484,40 @@ namespace LELEngine
 			program.SetVector2("rcAtlasSize", cache.AtlasSize);
 			program.SetFloat("rcNearDistance", GI.RadianceCacheNearDistance);
 			program.SetInt("rcFarShortcut", GI.RadianceCacheFarShortcut ? 1 : 0);
+		}
+
+		/// <summary>
+		///     The GI's media volume for Engine/GIMedia.glsl (every program that traces the GI's cones or rays includes
+		///     it): bound when clouds contribute this frame and <paramref name="enabled" />, else switched off. The sampler
+		///     keeps its own unit either way (a 3D sampler left on unit 0 would share it with a 2D one).
+		/// </summary>
+		public static void SetMediaUniforms(ShaderProgram program, bool enabled = true)
+		{
+			if (MediaFaceMinusTextureUnit >= GLCapabilities.MaxTextureUnits)
+			{
+				program.SetInt("giMediaActive", 0);
+				return;
+			}
+
+			MediaBinding media = Media;
+			bool active = enabled && media.Active && GI.Enabled;
+			program.SetInt("giMediaActive", active ? 1 : 0);
+			program.SetTexture("giMedia", TextureTarget.Texture3D, active ? media.Texture : 0, MediaTextureUnit);
+			program.SetTexture("giMediaSun", TextureTarget.Texture3D, active ? media.SunTexture : 0, MediaSunTextureUnit);
+			program.SetTexture("giMediaFacePlus", TextureTarget.Texture3D, active ? media.FacePlusTexture : 0, MediaFacePlusTextureUnit);
+			program.SetTexture("giMediaFaceMinus", TextureTarget.Texture3D, active ? media.FaceMinusTexture : 0, MediaFaceMinusTextureUnit);
+			if (!active)
+			{
+				return;
+			}
+
+			program.SetInt("giMediaSides", GI.VolumeMediaSides ? 1 : 0);
+			program.SetVector3("giMediaMin", media.Min);
+			program.SetVector3("giMediaInvSize", media.InvSize);
+			program.SetVector3("giMediaUsed", media.Used);
+			program.SetVector3("giMediaExtent", media.Extent);
+			program.SetFloat("giMediaVoxel", media.Voxel);
+			program.SetFloat("giMediaMaxLod", media.MaxLod);
 		}
 
 		/// <summary>
@@ -637,6 +705,47 @@ namespace LELEngine
 			public int ProbesPerRow;
 			public int ProbeResolution;
 			public Vector2 AtlasSize;
+		}
+
+		/// <summary>
+		///     A frame's GI media volume (see <see cref="Media" />): a world-aligned cube of voxels with levels, rgb the
+		///     light the clouds send out along a path across one voxel (premultiplied by a), a how much of that path they
+		///     cover (each level's voxels are the clouds in them as they look from outside: Engine/Volumetrics/VolumetricMediaMip.shader);
+		///     a second texture of the directional lights' part of that light (how much of it, and which way it is
+		///     scattered on: clouds are brighter seen against the light); and two of how the clouds look from each of
+		///     the six sides and how much they cover along each axis. Only the part <see cref="Used" /> ..
+		///     <see cref="Used" /> + <see cref="Extent" /> holds clouds.
+		/// </summary>
+		public struct MediaBinding
+		{
+			public bool Active;
+			public int Texture;
+			public int SunTexture;
+
+			/// <summary>
+			///     The light's luminance as the clouds look from the + side of x, y, z and from the - side (the levels above
+			///     the finest): a thick cloud lit from one side is bright from there, dark from behind.
+			/// </summary>
+			public int FacePlusTexture;
+			public int FaceMinusTexture;
+
+			/// <summary>World position of the texture's first corner.</summary>
+			public Vector3 Min;
+
+			/// <summary>1 / the world size of the whole texture.</summary>
+			public Vector3 InvSize;
+
+			/// <summary>World position of the first corner of the part in use (it sits in the texture's middle).</summary>
+			public Vector3 Used;
+
+			/// <summary>World size of the part in use (from <see cref="Used" />).</summary>
+			public Vector3 Extent;
+
+			/// <summary>World units per texel.</summary>
+			public float Voxel;
+
+			/// <summary>The coarsest mip level.</summary>
+			public float MaxLod;
 		}
 
 		public class LightProperties
@@ -1282,6 +1391,23 @@ namespace LELEngine
 		/// <summary>Length of the SDF detail trace at the start of every cone (world units).</summary>
 		[GIMethod(GIMode.VoxelConeTracing)] public float SdfDetailDistance = 1.5f;
 
+		// ---- Volumetric objects in the GI (VolumetricMediaPass) ----
+
+		[Header("Volumetric Objects")]
+		[Tooltip("The volumetric objects light the scene through the GI (those with Contribute GI): the light their clouds scatter and give off reaches the surfaces around them, and they hide the sky and the light behind them. A coarse volume of that is made every frame (about 0.2 ms on an integrated GPU). Fast: every pixel takes the clouds in with one wide cone (and one along its reflection), where its GI saw the sky; a cloud's light comes from all of the half space the surface faces at once; next to nothing on top. Accurate (voxel cone tracing): every cone of the screen-space GI reads the clouds on its way, so their light comes from where they are and stops at what stands in front of them; about half as much again for the GI's resolve where clouds are all around. Lumen's rays always read them on their way. Off: the GI does not see clouds at all")]
+		public VolumeGIMode VolumesInGI = VolumeGIMode.Fast;
+
+		[Tooltip("The GI takes a cloud as it looks from where the light is going: lit from one side (or from inside near one side) it is bright from there and dark from behind, and a flat cloud covers more seen from above than from its edge. Off: its light and what it covers are the mean of all its sides, the same every way (two fetches fewer per read of a cloud)")]
+		public bool VolumeMediaSides = true;
+
+		[Tooltip("Voxels of that volume along its longest side: more show smaller clouds and lights in the GI and cost more to make each frame (on an integrated GPU 64: about 0.3 ms and 10 MB; 128: about 2.5 ms and 80 MB)")]
+		[Range(16, 128)]
+		public int VolumeMediaResolution = 64;
+
+		[Tooltip("How far the GI sees clouds, as a multiple of the GI volume's size around its centre: cones leaving the GI volume go on through the clouds beyond it (a storm far larger than the GI volume still lights what is in it). The volume covers the clouds within this reach, so a longer reach makes its voxels larger")]
+		[Range(1f, 32f)]
+		public float VolumeMediaReach = 8f;
+
 		// ---- Runtime data written by VoxelGIPass / GIResolvePass ----
 
 		/// <summary>GL handle of the 3D radiance texture, 0 when unavailable.</summary>
@@ -1350,6 +1476,22 @@ namespace LELEngine
 		}
 
 		#endregion
+	}
+
+	/// <summary>How the GI takes the volumetric objects in (<see cref="GlobalIlluminationSettings.VolumesInGI" />).</summary>
+	public enum VolumeGIMode
+	{
+		/// <summary>The GI does not see clouds.</summary>
+		Off,
+
+		/// <summary>One wide cone per pixel (and one along its reflection), counted where the pixel's GI saw the sky.</summary>
+		Fast,
+
+		/// <summary>
+		///     Voxel cone tracing: every cone of the screen-space resolve reads the clouds along its way (the volume's bounces
+		///     and the materials that trace themselves still take them in as <see cref="Fast" /> does).
+		/// </summary>
+		Accurate
 	}
 
 	/// <summary>What the voxel radiance volume's mips keep of the direction its surfaces face.</summary>

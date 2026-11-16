@@ -284,6 +284,8 @@ namespace LELEngine.Rendering.Passes
 			trace.SetTexture("ProbeSelection", TextureTarget.Texture2D, selectionTexture, 3);
 			trace.SetTexture("ProbeRayTable", TextureTarget.Texture2D, rayTableTexture, 4);
 			Lighting.SetSkyUniforms(trace);
+			// The clouds on the rays' way (the volumetric objects in the GI).
+			Lighting.SetMediaUniforms(trace);
 			trace.SetMatrix4("viewProjection", context.ViewProjection);
 			trace.SetVector3("cameraPosition", context.CameraPosition);
 			trace.SetVector3("cameraForward", context.Camera.transform.forward);

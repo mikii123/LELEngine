@@ -121,6 +121,7 @@ void GetIndirectLighting(vec3 position, vec3 normal, vec3 viewDir, float roughne
 	if (giResolveMode == 2)
 	{
 		GetProbeIndirectLighting(position, normal, viewDir, roughness, diffuse, specular);
+		ApplyMediaToIndirect(position, normal, viewDir, roughness, diffuse, occlusion, specular);
 		return;
 	}
 
@@ -139,4 +140,10 @@ void GetIndirectLighting(vec3 position, vec3 normal, vec3 viewDir, float roughne
 	diffuse = diffuseCoverage.rgb * giDiffuseStrength;
 	occlusion = clamp(1.0 - diffuseCoverage.a * giOcclusionStrength, 0.0, 1.0);
 	specular = specularRadiance * giSpecularStrength;
+	if (giResolveMode == 0)
+	{
+		// The fragment traced its own cones (a camera of a stack other than its lighting camera, or no screen-space
+		// resolve): the clouds with one wide cone (the resolve's cones read them all along their way).
+		ApplyMediaToIndirect(position, normal, viewDir, roughness, diffuse, occlusion, specular);
+	}
 }
