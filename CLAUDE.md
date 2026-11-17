@@ -1468,6 +1468,17 @@ Added for New Frontier's port of Unity's SpaceStonesPack (Standard materials wit
   dragging a hierarchy object on a project folder creates a prefab (an instance root asks Original / Variant).
   Scene view: a click selects the instance root first, prefabs drop where the mouse points. Bold font:
   `EditorFonts.PushBold` (segoeuib.ttf per ImGui context).
+- Prefab mode's light (2026-11-17, the user's ask: "give that scene its own light, always along the camera"): a stage is
+  a scene of the prefab's objects alone, with no light, so it showed only what glows. Before the several-directional-
+  lights change (2026-11-14) it was lit by accident: the last scene's sun colour and strength stayed in the old static
+  carrier, shining down. Now `EditorApplication.AimStageLight` (called by `SceneViewPanel.Render` / `RenderCapture` right
+  before rendering) keeps a "Prefab Stage Light" in the stage's scene, a `DirectionalLight` turned like the scene
+  camera (a headlight: white, strength 1, no shadows, not in the GI or in volumetric objects, which would rework on
+  every camera move), `HideAndDontSave | NotEditable`: out of the hierarchy, the prefab's file (`SavePrefabScene`
+  skips DontSave roots, `StageRoot` too) and the undo snapshots; made again after an undo replaced the stage's scene.
+  A prefab's own lights shine besides it. Verified on a game's ship model prefab: lit from two views, a rename saved
+  by Auto Save without the light in the file, undo reverted it and the stage stayed lit. The stage's environment
+  (ambient, sky) is still the prefab scene's defaults, black.
 - Verified 2026-10-21 with a probe project (scratchpad `PrefabProbe`, batch `-executeMethod ProbeTests.Run`, 67
   checks: overrides of every kind incl. polymorphic lists / dictionaries / interface references, JSON / binary /
   typeless conversion, base changes reaching variants, nested apply to outer / inner prefab, structure overrides,

@@ -68,6 +68,9 @@ namespace LELEngine.Editor
 
 		private readonly List<StageFrame> stageFrames = new List<StageFrame>();
 
+		/// <summary>The prefab stage's own light (<see cref="AimStageLight" />); gone with the stage's scene.</summary>
+		private DirectionalLight stageLight;
+
 		/// <summary>The stage with unsaved changes asks before it closes; what runs after the answer.</summary>
 		private bool openStagePopup;
 
@@ -484,6 +487,36 @@ namespace LELEngine.Editor
 		}
 
 		/// <summary>Prefab mode, every frame: automatic saving once an edit settles (no button held, nothing being typed).</summary>
+		/// <summary>
+		///     Lights the prefab stage with a light of its own: a directional light shining along the scene view's view (a
+		///     headlight), so the prefab is lit from wherever it is looked at. A stage is a scene of the prefab's objects
+		///     alone, with no light; it showed only what glows. The light is hidden, never saved (the prefab's file and the
+		///     undo snapshots leave DontSave objects out, and the stage's root is its first saved root) and not editable,
+		///     and is made again when an undo replaced the stage's scene. It casts no shadows (they fall behind what it
+		///     lights, out of sight), stays out of the GI (it turns with every camera move: the GI would never settle) and
+		///     out of volumetric objects (their light transport would be worked out again on every move). Called by the
+		///     scene view right before it renders.
+		/// </summary>
+		internal void AimStageLight(Quaternion viewRotation)
+		{
+			if (Stage == null || Scene == null)
+			{
+				return;
+			}
+
+			if (stageLight == null || stageLight.IsDestroyed || stageLight.gameObject.scene != Scene)
+			{
+				GameObject lightObject = Scene.CreateGameObject("Prefab Stage Light");
+				lightObject.hideFlags = HideFlags.HideAndDontSave | HideFlags.NotEditable;
+				stageLight = lightObject.AddComponent<DirectionalLight>();
+				stageLight.CastShadows = false;
+				stageLight.AffectsGI = false;
+				stageLight.AffectsVolumes = false;
+			}
+
+			stageLight.transform.rotation = viewRotation;
+		}
+
 		private void UpdatePrefabStage()
 		{
 			PrefabStage stage = Stage;

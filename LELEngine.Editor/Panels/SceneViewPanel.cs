@@ -282,6 +282,7 @@ namespace LELEngine.Editor
 		{
 			(int, int) mark = Rendering.DebugDraw.Mark;
 			ApplyCamera();
+			editor.AimStageLight(cameraObject.transform.rotation);
 			LELEngine.VFX.VfxRuntime.FallbackCamera = camera;
 			target.Renderer.Settings.DebugPrimitives = true;
 			target.Renderer.Settings.RenderUI = false;
@@ -302,6 +303,8 @@ namespace LELEngine.Editor
 			ViewRenderer.EnsureSize((int)viewSize.X, (int)viewSize.Y);
 			depthProbe.Update();
 			ApplyCamera();
+			// A prefab stage is lit by a light along this view.
+			editor.AimStageLight(cameraObject.transform.rotation);
 			// Effects orient and sort for the scene camera when the scene has no camera of its own.
 			LELEngine.VFX.VfxRuntime.FallbackCamera = camera;
 			if (refresh.ShouldRender(camera, ViewRenderer.Width, ViewRenderer.Height, editor.SceneVersion, continuous))
