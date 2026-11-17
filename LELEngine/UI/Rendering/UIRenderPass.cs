@@ -53,10 +53,11 @@ namespace LELEngine.Rendering.Passes
 
 				try
 				{
-					document.PreparePanel(context.Width, context.Height);
+					// The window's size: the UI is never super sampled (it draws over the filtered image).
+					document.PreparePanel(context.OutputWidth, context.OutputHeight);
 					panel.Update(now);
 					panel.renderer ??= new UIElements.Rendering.UIRenderer();
-					panel.renderer.Render(panel, context.Width, context.Height);
+					panel.renderer.Render(panel, context.OutputWidth, context.OutputHeight);
 				}
 				catch (System.Exception e)
 				{

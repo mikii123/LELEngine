@@ -192,6 +192,9 @@ namespace LELEngine.Rendering
 		{
 			if (ReadSource == Source.SceneColor)
 			{
+				// The scene's size (super sampled: larger than the window's).
+				width = renderer.RenderWidth;
+				height = renderer.RenderHeight;
 				GL.BindFramebuffer(FramebufferTarget.ReadFramebuffer, renderer.SceneTarget.Handle);
 				GL.ReadBuffer(ReadBufferMode.ColorAttachment0);
 				return true;
@@ -200,6 +203,8 @@ namespace LELEngine.Rendering
 			int texture;
 			if (ReadSource == Source.Motion)
 			{
+				width = renderer.RenderWidth;
+				height = renderer.RenderHeight;
 				texture = renderer.GetPass<Passes.GeometryPrepass>()?.Motion?.Handle ?? 0;
 			}
 			else

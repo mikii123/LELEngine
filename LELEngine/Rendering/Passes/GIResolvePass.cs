@@ -70,8 +70,10 @@ namespace LELEngine.Rendering.Passes
 				return;
 			}
 
-			int width = Math.Max(1, (int)Math.Ceiling(context.Width * gi.ResolveScale));
-			int height = Math.Max(1, (int)Math.Ceiling(context.Height * gi.ResolveScale));
+			// Super sampled: resolved at the window's density (soft light needs no more pixels; the upsampling fills the scene's).
+			float resolveScale = gi.ResolveScale / Math.Max(1f, context.SuperSampling);
+			int width = Math.Max(1, (int)Math.Ceiling(context.Width * resolveScale));
+			int height = Math.Max(1, (int)Math.Ceiling(context.Height * resolveScale));
 			EnsureTargets(width, height);
 			Matrix4 invViewProjection = Matrix4.Invert(context.ViewProjection);
 			Vector3 cameraForward = context.Camera.transform.forward;

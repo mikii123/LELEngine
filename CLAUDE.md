@@ -381,6 +381,39 @@
   processes on the machine?); a second run had none. A probe for that: a thread sleeping 1 ms and recording its
   oversleep, which tells a machine-wide stall from the game's.
 
+## Super sampling anti-aliasing (2026-11-17)
+
+- The user's ask: SSAA, optimal, with settings, designed around NVIDIA's DSR / DLDSR factors (my reading of "their
+  hardware supersampling with its multipliers": DSR is a driver feature with no API for a game, DLAA / DLSS have no
+  OpenGL SDK). `SuperSamplingSettings` (`Rendering/SuperSampling.cs`, in `GraphicsSettings.SuperSampling`, Project
+  Settings > Graphics > Anti-aliasing; `QualitySettings.superSampling` / `superSamplingFilter` /
+  `superSamplingSmoothness` / `superSamplingFactors` at run time): `Factor` = the pixel count against the window's, DSR's
+  list (1, 1.20, 1.50, 1.78, 2.00, 2.25, 3.00, 4.00; 1.78 taken as 16/9 = 4/3 per axis), `Filter` Gaussian (DSR's,
+  `Smoothness` 0..1, default 0.33 as DSR's 33 %: sigma = 0.25 + 0.5 x smoothness window pixels) / Area (exact footprint
+  average) / Lanczos (Lanczos-2, the crisp DLDSR-like look). The combo labels say what a factor makes of 1080p.
+- `Renderer`: `Width` / `Height` stay the output's (what `Resize` sets: hosts, dumps, `BindOutput`, the camera's
+  aspect); `RenderWidth` / `RenderHeight` are the scene's (`SceneTarget`, every pass's `Resize`, `RenderContext.Width`),
+  times `SuperSamplingScale` per axis. `RenderFrame` calls `ResizeScene(false)`, so a changed factor applies on the next
+  frame. `RenderSettings.SuperSampling` (a reference, null = off) is set by the hosts every frame: `GameHost` (player,
+  TestGame) and the editor's Game view (also its captures) from the project; the Scene view and cameras' texture
+  renderers never super sample. `RenderContext.OutputWidth/Height` (the UI draws there) and `SuperSampling` (the scale).
+- Resolve (`PostProcessPass`, `Engine/SuperSampling.shader`): separable, across then down; across reads the HDR scene,
+  applies exposure and the tonemap per sample and writes linear display values (RGBA16F, window width x scene height),
+  down filters those, encodes sRGB and dithers at the window's pixels. Filtering after the tonemap bounds every sample,
+  so edges against bright light are anti-aliased (an HDR average lets one hot sample light the pixel); no full-size
+  tonemapped copy is written. The UI draws after it at the window's size.
+- Optimal: soft light keeps the window's density, so its cost does not grow. Lumen's screen probes: spacing x scale
+  (a multiple of 4 for the adaptive halves / quarters) and resolve scale / scale; the VCT screen-space resolve: resolve
+  scale / scale; clouds march at the whole number of scene pixels nearest to resolution x scale on a log scale
+  (`VolumetricRuntime.MarchScale`: 1.33 -> 1, 1.5 -> 2, Half at 1.33 -> 3; the view targets are kept per scale up to 8).
+  Shadows, voxels, distance fields and the surface cache never depended on the screen.
+- TestGame `ssaa=2.25 ssaafilter=gaussian|area|lanczos ssaasmooth=0.33`. Measured once (780M, 1280 x 720 window,
+  default room, Lumen; pass times in ms, off / 2.25x Gaussian / 4x Area): GeometryPrepass 0.16 / 0.23 / 0.33, Opaque
+  0.59 / 1.31 / 1.70, Transparent 1.12 / 1.62 / 1.96, PostProcess 0.09 / 0.36 / 0.36, ProbeGather.trace 3.1 / 2.4 /
+  2.0 (no growth); the log's `[Renderer] Super sampling 2.25x: the scene at 1920x1080 for 1280x720`; the box's diagonal
+  edge staircased off, smooth at 4x. Editor: the Graphics tab draws the section (New Frontier, settings untouched).
+  Not checked: Lanczos and Smoothness by eye, a player build, GI quality at the larger probe spacing.
+
 ## Player startup and splash screen
 
 - `LELEngine.Player/Program.cs`: boot.json (source-generated STJ, `BootConfigJson`), the window opens hidden without
@@ -1107,6 +1140,16 @@ Added for New Frontier's port of Unity's SpaceStonesPack (Standard materials wit
   ImGui 1.92 (Project 0x9C21DE82, Console 0xEA83D666, Inspector 0x36DC96AB, Lighting 0x29B5A1D1, Scene 0xE601B12F,
   Game 0xD1EB2482, Hierarchy 0xBABDAE5E). The user's `layout.ini` had not been written since 2026-10-22 although their
   editor (Editor.cmd, Release) wrote it when reproduced: not explained, and no longer depends on ImGui's exit save.
+- Maximize On Play (2026-11-17, the user's ask; Unity's): a checkbox in the Game window's toolbar row (above the image:
+  the game's height is the rest), kept in the preferences' toggles (`Game/Maximize On Play`, `GameViewPanel.MaximizeOnPlay`).
+  While the game plays or is paused the Game window is drawn as a window of its own ("Game###GameMaximized": undocked,
+  unsaved, fixed over the main viewport's work area, so the menu bar with Play stays) and `DrawUI` draws no other window
+  (the scene view is `Hide()`n: no render; script windows keep their Update without GUI; deferred work and modals still
+  run); the docked "Game" is simply not submitted, so the layout never changes. Back in edit mode every window appears
+  again and ImGui focuses each in turn (Console took its dock's front tab): the start's focus drop (`startupFocusFrames`)
+  runs again. Verified on New Frontier's Flight (`preferencesfile=` with the toggle, `playframe=`, `stopframe=`,
+  `screenshotframe=`): full-size game while playing, the layout and front tabs before and after identical. A
+  `SetCursorPos` with no item after it (the toolbar's gap while the scene loads) is ImGui's assert, 0xC0000409.
 - The editor crashed when exiting after a transform gizmo drag (access violation in cimguizmo.dll at 0x33914 / 0x33923;
   WER logged 50 of them on 2026-11-02 and the user's on 2026-11-08): cimguizmo.dll links its own copy of ImGui, whose
   context pointer (`ImGuizmo.SetImGuiContext`) still pointed at the destroyed context, and ImGuizmo's static buffers

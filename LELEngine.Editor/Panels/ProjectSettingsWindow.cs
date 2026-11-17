@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Threading.Tasks;
 using Hexa.NET.ImGui;
+using LELEngine.Rendering;
 using LELEngine.Serialization;
 using OpenTK.Mathematics;
 using NVector2 = System.Numerics.Vector2;
@@ -815,6 +816,94 @@ namespace LELEngine.Editor
 		///     that takes shader files dropped on it from the Project panel, a row each (a click shows the file, X takes
 		///     it off), and a combo of the project's other shaders. Undoable, saved with the project settings.
 		/// </summary>
+		/// <summary>
+		///     Super sampling anti-aliasing: the factor (NVIDIA DSR's, with what it makes of a 1080p window), the filter and
+		///     the Gaussian's smoothness. Undoable, applied on the next frame of the Game view and the player.
+		/// </summary>
+		private bool DrawSuperSampling(SuperSamplingSettings content)
+		{
+			bool changed = false;
+			ImGui.SeparatorText("Anti-aliasing");
+			FieldDrawer.Label("Super Sampling", null, context);
+			ImGui.SetNextItemWidth(-1f);
+			if (EditorGui.BeginCombo("##supersampling", FactorLabel(content.Factor)))
+			{
+				foreach (float factor in SuperSamplingSettings.Factors)
+				{
+					bool selected = Math.Abs(factor - content.Factor) < 0.005f;
+					if (EditorGui.Selectable(FactorLabel(factor), selected) && !selected)
+					{
+						content.Factor = factor;
+						context.Track(true);
+						changed = true;
+					}
+				}
+
+				EditorGui.EndCombo();
+			}
+
+			Tooltip("The scene renders at this many times the window's pixels and is filtered down to it after tonemapping\n" +
+				"(the UI draws at the window's resolution). The factors are NVIDIA DSR's: 1.78x and 2.25x are also DLDSR's.\n" +
+				"DSR does the same in the driver (the game at a larger 'display' resolution); both at once multiply the cost.\n" +
+				"The screen-space GI and the clouds keep the window's density: their cost does not grow with it.\n" +
+				"Games change it at run time: QualitySettings.superSampling.");
+
+			if (content.Factor > 1.001f)
+			{
+				FieldDrawer.Label("Filter", null, context);
+				ImGui.SetNextItemWidth(-1f);
+				if (EditorGui.BeginCombo("##supersamplingfilter", content.Filter.ToString()))
+				{
+					foreach (SuperSamplingFilter filter in Enum.GetValues<SuperSamplingFilter>())
+					{
+						bool selected = filter == content.Filter;
+						if (EditorGui.Selectable(filter.ToString(), selected) && !selected)
+						{
+							content.Filter = filter;
+							context.Track(true);
+							changed = true;
+						}
+					}
+
+					EditorGui.EndCombo();
+				}
+
+				Tooltip("Gaussian: soft, no ringing (DSR's filter; Smoothness widens it).\n" +
+					"Area: each window pixel the exact average of what it covers: the sharpest without ringing.\n" +
+					"Lanczos: the crispest (a sharpened look, like DLDSR's), a little ringing at hard edges.");
+
+				if (content.Filter == SuperSamplingFilter.Gaussian)
+				{
+					float smoothness = content.Smoothness;
+					FieldDrawer.Label("Smoothness", null, context);
+					ImGui.SetNextItemWidth(-1f);
+					bool edited = EditorGui.SliderFloat("##supersamplingsmoothness", ref smoothness, 0f, 1f, "%.2f");
+					Tooltip("DSR's Smoothness: 0 keeps the most detail, 1 is soft (0.33 by default, as DSR's 33 %).");
+					context.Track(edited);
+					if (edited)
+					{
+						content.Smoothness = Math.Clamp(smoothness, 0f, 1f);
+						changed = true;
+					}
+				}
+			}
+
+			return changed;
+		}
+
+		/// <summary>"1.78x (2560 x 1440 at 1080p)", "Off".</summary>
+		private static string FactorLabel(float factor)
+		{
+			if (!(factor > 1.001f))
+			{
+				return "Off";
+			}
+
+			(int width, int height) = SuperSamplingSettings.RenderSize(1920, 1080, factor);
+			string dl = Math.Abs(factor - 1.78f) < 0.005f || Math.Abs(factor - 2.25f) < 0.005f ? ", DSR / DLDSR" : ", DSR";
+			return $"{SuperSamplingSettings.Label(factor)}  ({width} x {height} at 1080p{dl})";
+		}
+
 		private bool DrawGraphics(GraphicsSettings content)
 		{
 			bool changed = false;
@@ -831,6 +920,9 @@ namespace LELEngine.Editor
 				content.VSync = vsync;
 				changed = true;
 			}
+
+			ImGui.Spacing();
+			changed |= DrawSuperSampling(content.SuperSampling ??= new SuperSamplingSettings());
 
 			ImGui.Spacing();
 			ImGui.SeparatorText("Always Included Shaders");

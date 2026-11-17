@@ -537,6 +537,33 @@ namespace LELEngine.Editor
 				BeginLoadingInputLock();
 			}
 
+			// Maximize On Play: the Game window alone over the dock space; the others are not drawn (script windows keep
+			// their Update), their docked places stay as they are.
+			bool gameMaximized = !capture && !loading && GameView.Maximized;
+			if (!capture)
+			{
+				// Back from the maximized Game window: every window appears again and ImGui gives each the focus in drawing
+				// order, so the last one of a dock (Console) would bring its tab over the one in front before; dropped as at start.
+				if (gameWasMaximized && !gameMaximized)
+				{
+					startupFocusFrames = Math.Max(startupFocusFrames, 2);
+				}
+
+				gameWasMaximized = gameMaximized;
+			}
+
+			if (gameMaximized)
+			{
+				SceneView.Hide();
+				GameView.Draw();
+				Extensions.UpdateWindows(false);
+				Extensions.EndFrame();
+				Edits.Flush();
+				RunDeferred();
+				DrawModals();
+				return;
+			}
+
 			hierarchy.Draw();
 			SceneView.Draw();
 			GameView.Draw();
@@ -648,6 +675,7 @@ namespace LELEngine.Editor
 
 		// UI frames left in which the focus windows took by appearing is dropped (set when a project opens).
 		private int startupFocusFrames;
+		private bool gameWasMaximized;
 
 		/// <summary>
 		///     The layout records each dock's front tab (Console or Inspector where both share a place), but ImGui writes the

@@ -144,9 +144,17 @@ namespace LELEngine.Rendering.Passes
 			}
 
 			frameIndex++;
+			// Super sampled: as many probes and resolved pixels as in the window (the spacing in scene pixels times the scale,
+			// kept a multiple of 4 for the adaptive levels' halves and quarters): soft light needs no more of them.
+			float superSampling = Math.Max(1f, context.SuperSampling);
 			int spacing = Math.Max(4, gi.ProbeSpacing);
+			if (superSampling > 1f)
+			{
+				spacing = Math.Max(4, (int)MathF.Round(spacing * superSampling / 4f) * 4);
+			}
+
 			lastSpacing = spacing;
-			EnsureTargets(context.Width, context.Height, spacing, MathHelper.Clamp(gi.ScreenProbeResolveScale, 0.25f, 1f), gi.ProbeAdaptivePlacement ? gi.ProbeAdaptiveFraction : 0f);
+			EnsureTargets(context.Width, context.Height, spacing, MathHelper.Clamp(gi.ScreenProbeResolveScale, 0.25f, 1f) / superSampling, gi.ProbeAdaptivePlacement ? gi.ProbeAdaptiveFraction : 0f);
 
 			// Jitter: probe anchor inside its cell and ray direction inside its octahedral texel (R2 sequence).
 			float anchorScale = gi.ProbeJitter ? MathHelper.Clamp(gi.ProbeAnchorJitter, 0f, 1f) : 0f;

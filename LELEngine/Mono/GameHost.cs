@@ -92,6 +92,8 @@ namespace LELEngine
 			target.Validate();
 			Framebuffer output = Renderer.OutputTarget;
 			Renderer.OutputTarget = target;
+			// At the size the game will render at (the scene's targets made now, not on the first shown frame).
+			Renderer.Settings.SuperSampling = ProjectSettings.Current?.Graphics?.SuperSampling;
 			try
 			{
 				for (int i = 0; i < frames; i++)
@@ -229,7 +231,13 @@ namespace LELEngine
 			renderStopwatch.Start();
 
 			SceneManager.GetRenderLists(out var renderers, out var behaviours);
-			Renderer?.RenderFrame(SceneManager.MainCamera, renderers, behaviours, RenderQueue);
+			if (Renderer != null)
+			{
+				// The project's super sampling (QualitySettings.superSampling changes it at run time).
+				Renderer.Settings.SuperSampling = ProjectSettings.Current?.Graphics?.SuperSampling;
+				Renderer.RenderFrame(SceneManager.MainCamera, renderers, behaviours, RenderQueue);
+			}
+
 			Time.cpuRenderMs = renderStopwatch.Elapsed.TotalMilliseconds;
 			DebugDraw.Clear();
 

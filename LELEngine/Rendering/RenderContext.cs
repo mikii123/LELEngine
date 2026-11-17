@@ -33,9 +33,22 @@ namespace LELEngine.Rendering
 		/// <summary>The camera's view direction (world, normalized).</summary>
 		public Vector3 CameraForward;
 
-		/// <summary>Window (backbuffer) size.</summary>
+		/// <summary>
+		///     The scene's size (<see cref="SceneTarget" />): the window's times <see cref="SuperSampling" /> along each axis.
+		///     What every scene pass renders at.
+		/// </summary>
 		public int Width;
 		public int Height;
+
+		/// <summary>The window's (the output's) size: what the image is filtered down to and the UI draws at.</summary>
+		public int OutputWidth;
+		public int OutputHeight;
+
+		/// <summary>
+		///     Super sampling's scale along each axis (1: none). Passes of soft, costly light (the screen-space GI's probes
+		///     and resolve, the clouds' march) divide their resolution by it: their cost stays the window's.
+		/// </summary>
+		public float SuperSampling = 1f;
 
 		/// <summary>
 		///     The camera's renderers (on its layers) with opaque sub-meshes: the depth prepass and opaque pass draw them;

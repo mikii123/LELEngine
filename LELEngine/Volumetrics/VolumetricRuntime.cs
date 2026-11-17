@@ -93,13 +93,28 @@ namespace LELEngine.Volumetrics
 		// distance moves with the march's jitter by a few percent; an object in front, or other cloud, is far further off).
 		private const float HistoryDistanceTolerance = 0.2f;
 
-		// A view's targets, per resolution (index 0 full, 1 half, 2 quarter): objects of different resolutions in one view
-		// keep their own instead of resizing shared ones back and forth every frame.
+		// A view's targets, per march scale (index = scene pixels per march pixel along each axis, 1..MaxMarchScale): objects
+		// of different resolutions in one view keep their own instead of resizing shared ones back and forth every frame.
 		private sealed class ViewTargets
 		{
-			public readonly Framebuffer[] March = new Framebuffer[3];
-			public readonly Framebuffer[] Depth = new Framebuffer[3];
-			public readonly long[] DepthStamp = { -1, -1, -1 };
+			public readonly Framebuffer[] March = new Framebuffer[MaxMarchScale + 1];
+			public readonly Framebuffer[] Depth = new Framebuffer[MaxMarchScale + 1];
+			public readonly long[] DepthStamp = { -1, -1, -1, -1, -1, -1, -1, -1, -1 };
+		}
+
+		private const int MaxMarchScale = 8;
+
+		/// <summary>
+		///     Scene pixels per march pixel: the object's resolution (1, 2, 4) against the window's, so a super sampled scene
+		///     (<see cref="RenderContext.SuperSampling" />) marches about as many pixels as the window has (soft light needs
+		///     no more): the whole number nearest to resolution x scale on a log scale (1.33 -> 1, 1.5 -> 2, 2.67 -> 3).
+		/// </summary>
+		private static int MarchScale(int resolution, float superSampling)
+		{
+			float wanted = resolution * Math.Max(1f, superSampling);
+			int below = Math.Max(1, (int)MathF.Floor(wanted));
+			int scale = wanted / below <= (below + 1) / wanted ? below : below + 1;
+			return Math.Clamp(scale, 1, MaxMarchScale);
 		}
 
 		private sealed class History
@@ -375,8 +390,8 @@ namespace LELEngine.Volumetrics
 			}
 
 			bool hq = volume is VolumetricObjectHQ;
-			int level = volume.Resolution switch { VolumetricResolution.Half => 1, VolumetricResolution.Quarter => 2, _ => 0 };
-			int scale = 1 << level;
+			int scale = MarchScale(volume.Resolution switch { VolumetricResolution.Half => 2, VolumetricResolution.Quarter => 4, _ => 1 }, context.SuperSampling);
+			int level = scale;
 			int lowWidth = (width + scale - 1) / scale;
 			int lowHeight = (height + scale - 1) / scale;
 			ViewTargets view = Targets(context);
@@ -524,7 +539,7 @@ namespace LELEngine.Volumetrics
 			foreach ((Rendering.Renderer, Camera) key in stale)
 			{
 				ViewTargets view = views[key];
-				for (int i = 0; i < 3; i++)
+				for (int i = 0; i <= MaxMarchScale; i++)
 				{
 					view.March[i]?.Delete();
 					view.Depth[i]?.Delete();

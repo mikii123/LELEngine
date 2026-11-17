@@ -54,8 +54,21 @@ namespace LELEngine.Rendering
 
 		public FullscreenQuad Fullscreen { get; private set; }
 		public IReadOnlyList<RenderPass> Passes => passes;
+
+		/// <summary>The output's (window's) size: what <see cref="Resize" /> sets, the final image and the UI.</summary>
 		public int Width { get; private set; }
 		public int Height { get; private set; }
+
+		/// <summary>
+		///     The scene's size (<see cref="SceneTarget" />, every scene pass): <see cref="Width" /> x <see cref="Height" />
+		///     times the super sampling's scale along each axis (<see cref="RenderSettings.SuperSampling" />), the same
+		///     without it.
+		/// </summary>
+		public int RenderWidth { get; private set; }
+		public int RenderHeight { get; private set; }
+
+		/// <summary>The super sampling's scale along each axis the scene renders at now (1: none).</summary>
+		public float SuperSamplingScale { get; private set; } = 1f;
 
 		/// <summary>
 		///     Where the final (tonemapped) image goes: null renders to the window's default framebuffer, otherwise
@@ -94,6 +107,8 @@ namespace LELEngine.Rendering
 		{
 			Width = Math.Max(1, width);
 			Height = Math.Max(1, height);
+			RenderWidth = Width;
+			RenderHeight = Height;
 
 			SceneTarget = new Framebuffer(Width, Height);
 			SceneTarget.AddColorAttachment(RenderTextureFormat.RGBA16F);
@@ -195,15 +210,42 @@ namespace LELEngine.Rendering
 			}
 		}
 
+		/// <summary>The output's size (the window's); the scene's follows it with the super sampling.</summary>
 		public void Resize(int width, int height)
 		{
 			Width = Math.Max(1, width);
 			Height = Math.Max(1, height);
-			SceneTarget.Resize(Width, Height);
+			ResizeScene(true);
+		}
 
+		/// <summary>
+		///     The scene's size from the output's and the super sampling's factor (a camera's texture renderer never
+		///     super samples); its targets and the passes' resized when it changed (or <paramref name="always" />).
+		/// </summary>
+		private void ResizeScene(bool always)
+		{
+			float factor = isTargetRenderer || Settings.SuperSampling == null ? 1f : Settings.SuperSampling.Factor;
+			(int width, int height) = SuperSamplingSettings.RenderSize(Width, Height, factor);
+			float scale = SuperSamplingSettings.AxisScale(factor);
+			if (!always && width == RenderWidth && height == RenderHeight)
+			{
+				return;
+			}
+
+			if (scale != SuperSamplingScale)
+			{
+				Console.WriteLine(scale > 1f
+					? $"[Renderer] Super sampling {SuperSamplingSettings.Label(factor)}: the scene at {width}x{height} for {Width}x{Height}"
+					: "[Renderer] Super sampling off");
+			}
+
+			SuperSamplingScale = scale;
+			RenderWidth = width;
+			RenderHeight = height;
+			SceneTarget.Resize(RenderWidth, RenderHeight);
 			foreach (RenderPass pass in passes)
 			{
-				pass.Resize(Width, Height);
+				pass.Resize(RenderWidth, RenderHeight);
 			}
 		}
 
@@ -222,6 +264,8 @@ namespace LELEngine.Rendering
 				RenderTargetCameras(camera, renderers, behaviours, queue);
 			}
 
+			// A changed super sampling factor resizes the scene now.
+			ResizeScene(false);
 			Lighting.BeginFrame(Settings);
 			LightBuffer.Update(camera);
 			if (camera == null)
@@ -236,6 +280,8 @@ namespace LELEngine.Rendering
 					Settings = Settings,
 					Width = Width,
 					Height = Height,
+					OutputWidth = Width,
+					OutputHeight = Height,
 					Renderers = renderers,
 					Behaviours = behaviours,
 					RenderQueue = queue,
@@ -331,7 +377,8 @@ namespace LELEngine.Rendering
 			if (PassStatistics && FrameIndex % 120 == 0)
 			{
 				// LEL_PASS_STATS=1: what each pass cost on the GPU (any host: the editor's views, a player), every 120th frame.
-				var line = new System.Text.StringBuilder($"[PassStats] {Width}x{Height} frame {FrameIndex}: GPU {Profiler.TotalMilliseconds:0.00} ms |");
+				string size = RenderWidth != Width || RenderHeight != Height ? $"{Width}x{Height} (scene {RenderWidth}x{RenderHeight})" : $"{Width}x{Height}";
+				var line = new System.Text.StringBuilder($"[PassStats] {size} frame {FrameIndex}: GPU {Profiler.TotalMilliseconds:0.00} ms |");
 				foreach (KeyValuePair<string, double> pass in Profiler.Results)
 				{
 					if (pass.Value >= 0.005)
@@ -464,8 +511,11 @@ namespace LELEngine.Rendering
 				ViewProjection = camera.ViewProjectionMatrix,
 				CameraPosition = camera.transform.position,
 				CameraForward = camera.transform.forward,
-				Width = Width,
-				Height = Height,
+				Width = RenderWidth,
+				Height = RenderHeight,
+				OutputWidth = Width,
+				OutputHeight = Height,
+				SuperSampling = SuperSamplingScale,
 				Renderers = lists.Opaque,
 				GIRenderers = index == lightingIndex && lists.HasGI ? lists.GI : lists.Opaque,
 				TransparentRenderers = lists.Transparent,

@@ -98,7 +98,7 @@ namespace LELEngine.Rendering.Passes
 			program = new ShaderProgram("Engine/GBuffer.shader");
 			instancedProgram = program.GetInstancedVariant();
 
-			gbuffer = new Framebuffer(renderer.Width, renderer.Height);
+			gbuffer = new Framebuffer(renderer.RenderWidth, renderer.RenderHeight);
 			normalRoughness = gbuffer.AddColorAttachment(RenderTextureFormat.RGBA16F, false);
 			motion = gbuffer.AddColorAttachment(RenderTextureFormat.RGBA16F, false);
 			gbuffer.AttachSharedDepth(renderer.SceneDepth);

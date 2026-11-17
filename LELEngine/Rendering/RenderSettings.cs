@@ -47,6 +47,12 @@ namespace LELEngine.Rendering
 		public bool RenderUI = true;
 
 		/// <summary>
+		///     Super sampling of this renderer's image (the host sets the project's: the player, the editor's Game view);
+		///     null: none. Read every frame: a changed factor resizes the scene's targets on the next one.
+		/// </summary>
+		public SuperSamplingSettings SuperSampling;
+
+		/// <summary>
 		///     The output keeps the scene's alpha (the clear color's where nothing drew) instead of writing 1: for a
 		///     camera's <see cref="Camera.targetTexture" /> shown over other content.
 		/// </summary>

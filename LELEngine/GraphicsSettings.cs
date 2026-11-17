@@ -62,6 +62,13 @@ namespace LELEngine
 		public bool VSync = true;
 
 		/// <summary>
+		///     Super sampling anti-aliasing of the game's image (the player and the editor's Game view; the Scene view never):
+		///     the factor (NVIDIA DSR's), the filter down to the window and its smoothness. Games change it at run time through
+		///     <see cref="QualitySettings.superSampling" />.
+		/// </summary>
+		public Rendering.SuperSamplingSettings SuperSampling = new Rendering.SuperSamplingSettings();
+
+		/// <summary>
 		///     Shaders every build ships, with their #include files, although no material of the build uses them: the
 		///     shaders scripts load by path (<c>new ShaderProgram("Shaders/Fog.shader")</c>). The build also checks that
 		///     they compile, and the built game compiles them while it loads.

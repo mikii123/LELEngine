@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using Hexa.NET.ImGui;
+using LELEngine.Rendering;
 using OpenTK.Mathematics;
 using NVector2 = System.Numerics.Vector2;
 
@@ -22,6 +23,26 @@ namespace LELEngine.Editor
 		/// <summary>The mouse is over the game image.</summary>
 		public bool IsMouseOverImage { get; private set; }
 
+		/// <summary>
+		///     Unity's Maximize On Play (the toolbar's toggle, kept in the editor's preferences): while the game plays (or is
+		///     paused) the Game window fills the editor below the menu bar and the other windows are not drawn; stopping gives
+		///     the layout back as it was (nothing of it changes: the maximized window is a window of its own, not docked).
+		/// </summary>
+		public static bool MaximizeOnPlay
+		{
+			get => EditorPreferences.GetToggle(MaximizeOnPlayToggle, false);
+			set => EditorPreferences.SetToggle(MaximizeOnPlayToggle, value);
+		}
+
+		/// <summary>The Game window fills the editor now (see <see cref="MaximizeOnPlay" />).</summary>
+		public bool Maximized => Open && MaximizeOnPlay && editor.IsPlaying;
+
+		#endregion
+
+		#region PrivateFields
+
+		private const string MaximizeOnPlayToggle = "Game/Maximize On Play";
+
 		#endregion
 
 		#region PrivateFields
@@ -31,6 +52,8 @@ namespace LELEngine.Editor
 		private readonly List<Camera> stack = new List<Camera>();
 		private bool visible;
 		private bool focusRequested;
+		private bool wasMaximized;
+		private float renderedFactor = 1f;
 		private NVector2 viewSize = new NVector2(640, 360);
 
 		#endregion
@@ -88,14 +111,31 @@ namespace LELEngine.Editor
 				return;
 			}
 
-			if (focusRequested)
+			bool maximized = Maximized;
+			if (focusRequested || (maximized && !wasMaximized))
 			{
 				ImGui.SetNextWindowFocus();
 				focusRequested = false;
 			}
 
+			wasMaximized = maximized;
 			ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, new NVector2(0, 0));
-			visible = ImGui.Begin("Game", ref Open);
+			if (maximized)
+			{
+				// Over the dock space below the menu bar (Play stays there), undocked and unsaved: the docked "Game" window
+				// is simply not drawn meanwhile, so the layout is untouched.
+				ImGuiViewportPtr viewport = ImGui.GetMainViewport();
+				ImGui.SetNextWindowPos(viewport.WorkPos);
+				ImGui.SetNextWindowSize(viewport.WorkSize);
+				ImGui.SetNextWindowViewport(viewport.ID);
+				visible = ImGui.Begin("Game###GameMaximized", ImGuiWindowFlags.NoDocking | ImGuiWindowFlags.NoMove | ImGuiWindowFlags.NoResize
+					| ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.NoSavedSettings);
+			}
+			else
+			{
+				visible = ImGui.Begin("Game", ref Open);
+			}
+
 			ImGui.PopStyleVar();
 			HasInputFocus = visible && ImGui.IsWindowFocused(ImGuiFocusedFlags.RootAndChildWindows);
 			if (visible)
@@ -130,11 +170,12 @@ namespace LELEngine.Editor
 			ImGui.PopStyleVar();
 			if (shown && editor.Scene != null)
 			{
+				DrawToolbar();
 				NVector2 available = ImGui.GetContentRegionAvail();
 				var size = new NVector2(Math.Max(16, available.X), Math.Max(16, available.Y));
 				if (SceneManager.MainCamera == null)
 				{
-					ImGui.SetCursorPos(new NVector2(12, 12));
+					ImGui.SetCursorPos(ImGui.GetCursorPos() + new NVector2(12, 8));
 					ImGui.TextColored(EditorStyle.Warning, "No base camera in the scene (add a GameObject with a Camera component, Render Type Base).");
 				}
 				else
@@ -143,7 +184,7 @@ namespace LELEngine.Editor
 					ImGui.Image(EditorGui.Texture(texture), size, new NVector2(0, 1), new NVector2(1, 0));
 					if (!editor.IsPlaying)
 					{
-						ImGui.SetCursorPos(new NVector2(10, 8));
+						ImGui.SetCursorPos(ImGui.GetItemRectMin() - ImGui.GetWindowPos() + new NVector2(10, 8));
 						ImGui.TextDisabled("Edit mode - press Play (Ctrl+P) to run the game");
 					}
 				}
@@ -168,6 +209,7 @@ namespace LELEngine.Editor
 			}
 
 			stack.Clear();
+			target.Renderer.Settings.SuperSampling = ProjectSettings.Current.Graphics.SuperSampling;
 			target.RenderLoadedScenes(camera);
 		}
 
@@ -194,7 +236,12 @@ namespace LELEngine.Editor
 
 			// No camera kept between frames (it would hold an unloaded scene).
 			stack.Clear();
-			if (refresh.ShouldRender(camera, signature, ViewRenderer.Width, ViewRenderer.Height, editor.SceneVersion, continuous))
+			// The game's super sampling (Project Settings > Graphics): the view shows what the player will.
+			SuperSamplingSettings superSampling = ProjectSettings.Current.Graphics.SuperSampling;
+			bool superSamplingChanged = superSampling.Factor != renderedFactor;
+			renderedFactor = superSampling.Factor;
+			ViewRenderer.Renderer.Settings.SuperSampling = superSampling;
+			if (refresh.ShouldRender(camera, signature, ViewRenderer.Width, ViewRenderer.Height, editor.SceneVersion, continuous) || superSamplingChanged)
 			{
 				ViewRenderer.RenderLoadedScenes(camera);
 			}
@@ -212,6 +259,7 @@ namespace LELEngine.Editor
 
 		private void DrawContent()
 		{
+			DrawToolbar();
 			NVector2 available = ImGui.GetContentRegionAvail();
 			viewSize = new NVector2(Math.Max(16, available.X), Math.Max(16, available.Y));
 			Scene scene = editor.Scene;
@@ -222,7 +270,7 @@ namespace LELEngine.Editor
 
 			if (SceneManager.MainCamera == null)
 			{
-				ImGui.SetCursorPos(new NVector2(12, 12));
+				ImGui.SetCursorPos(ImGui.GetCursorPos() + new NVector2(12, 8));
 				ImGui.TextColored(EditorStyle.Warning, "No base camera in the scene (add a GameObject with a Camera component, Render Type Base).");
 				return;
 			}
@@ -242,9 +290,28 @@ namespace LELEngine.Editor
 
 			if (!editor.IsPlaying)
 			{
-				ImGui.SetCursorPos(new NVector2(10, 8));
+				ImGui.SetCursorPos(ImageOrigin - ImGui.GetWindowPos() + new NVector2(10, 8));
 				ImGui.TextDisabled("Edit mode - press Play (Ctrl+P) to run the game");
 			}
+		}
+
+		/// <summary>The row above the game's image (its height is not the game's).</summary>
+		private void DrawToolbar()
+		{
+			ImGui.SetCursorPos(ImGui.GetCursorPos() + new NVector2(6, 3));
+			bool maximize = MaximizeOnPlay;
+			if (EditorGui.Checkbox("Maximize On Play", ref maximize))
+			{
+				MaximizeOnPlay = maximize;
+			}
+
+			if (ImGui.IsItemHovered())
+			{
+				ImGui.SetTooltip("While the game plays, the Game window fills the editor; stopping brings the windows back.");
+			}
+
+			// A gap as an item (moving the cursor alone, with nothing drawn after it while the scene loads, is ImGui's assert).
+			ImGui.Dummy(new NVector2(0, 1));
 		}
 
 		#endregion

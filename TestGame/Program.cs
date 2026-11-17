@@ -198,6 +198,24 @@ namespace TestGame
 				options.CameraLookAt ??= GITestScene.GhostViewLookAt;
 			}
 
+			// ssaa=2.25 super sampling (the factor; DSR's 1.2 .. 4), ssaafilter=gaussian|area|lanczos, ssaasmooth=0..1.
+			string ssaa = GetValue(args, "ssaa");
+			if (ssaa != null && float.TryParse(ssaa, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float factor))
+			{
+				QualitySettings.superSampling = factor;
+			}
+
+			if (Enum.TryParse(GetValue(args, "ssaafilter") ?? "", true, out LELEngine.Rendering.SuperSamplingFilter ssaaFilter))
+			{
+				QualitySettings.superSamplingFilter = ssaaFilter;
+			}
+
+			string ssaaSmooth = GetValue(args, "ssaasmooth");
+			if (ssaaSmooth != null && float.TryParse(ssaaSmooth, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float smoothness))
+			{
+				QualitySettings.superSamplingSmoothness = smoothness;
+			}
+
 			// genmeta=dir1;dir2 creates missing .meta files for the asset files below the folders, then exits.
 			string genMeta = GetValue(args, "genmeta");
 			if (genMeta != null)
