@@ -12,6 +12,24 @@ public enum LightType
 	Spot
 }
 
+/// <summary>How the volumetric objects take a <see cref="Light" />: set on each light, never chosen by the engine.</summary>
+public enum LightVolumeMode
+{
+	/// <summary>
+	///     A channel of each cloud's light transport of its own: its colour and intensity are free every frame, and it may
+	///     move (its part is worked out again around it). A cloud has 8 channels, shared with its own lights and the scene's
+	///     other directional lights; live lights past them are left out (warned once a cloud).
+	/// </summary>
+	Live,
+
+	/// <summary>
+	///     Summed into one texture of each cloud with its other baked lights (up to 64 a cloud, the nearest): they cost the
+	///     same however many there are, and any change of one (place, range, colour, intensity, on or off) works its part
+	///     of the texture out again. For lights that stay as they are (lamps).
+	/// </summary>
+	Baked
+}
+
 /// <summary>
 ///     A local light: a point light at its transform's position, or a spot shining along its forward axis. Physical
 ///     falloff: the inverse square of the distance (from a source of <see cref="SourceRadius" />), faded to nothing at
@@ -69,8 +87,13 @@ public sealed class Light : Behaviour
 	[Tooltip("The light lights the volumetric objects within its range, through their cloud")]
 	public bool AffectsVolumes = true;
 
+	[Tooltip("How the volumetric objects take it. Live: a channel of the cloud's light transport of its own (8 a cloud, shared with the cloud's own lights and the other directional lights; live lights past them are left out, with a warning): colour and intensity free every frame, it may move. Baked: summed into one texture with the cloud's other baked lights (up to 64): any change of it (place, range, colour, intensity, on or off) works its part out again, so it suits lights that stay as they are. A script that makes a light sets this right after AddComponent, before the frame renders")]
+	[ShowIf(nameof(AffectsVolumes))]
+	public LightVolumeMode VolumeMode = LightVolumeMode.Live;
+
 	[Tooltip("How strongly it lights the volumetric objects, relative to surfaces (HDRP's Volumetric Multiplier): a flash inside a cloud can light the ships around brightly and the cloud less")]
 	[Range(0f, 10f)]
+	[ShowIf(nameof(AffectsVolumes))]
 	public float VolumetricStrength = 1f;
 
 	[Tooltip("Clouds between the light and what it lights dim it: a flash deep in a storm lights the ships above it less than one near its top")]

@@ -1935,17 +1935,26 @@ switches.
   light's `AffectsVolumes` / `VolumetricStrength` said (only the other directional lights and the local lights honoured
   them). `VolumetricObjectBase.SunRadiance` is the sun's light on the cloud now (zero with `AffectsVolumes` off, times
   `VolumetricStrength`); the march and the GI's media volume read it.
-- Lights past the eight live ones are baked (`MaxLights` 8, `MaxBakedLights` 64; `GatherLightSlots(slots, baked)`):
-  live = the cloud's own `Lights`, the scene's other directional lights, then the scene lights with the longest ranges
-  (a stable sort: equal ranges keep their order, so the choice does not flip between frames); a channel each, colour
-  and intensity free. The rest, nearest to the shape first, are summed with their colours into one RGBA16F texture at
-  the transport's resolution (`VolumetricData.LightsC`; `VolumetricLightTransport.shader` variant `VOL_BAKED`, 16 lights
-  a dispatch, later pages add to the texture; build phase `Baked` after `Lights`). Any change of a baked light (place,
-  range, colour, intensity: `VolumeLightSlot.BakedColor` is in `LightsHash`) reworks its part: in place when the boxes of
-  the changed lights (before and after) fit the frame's budget (`TryUpdateLightsInPlace`: the lights are matched by
-  their `Light`, in any order; one box around all of them or one each, whichever is fewer voxels; `BakeRegion` bakes
-  every light reaching a box), else as a build in the background. A build that only changes one kind keeps the other's
-  textures (`KeepLive` / `KeepBaked`). The inspector's line (`Describe`) counts both and their textures.
+- Live or baked is each light's own setting, `Light.VolumeMode` (`LightVolumeMode` Live, the default, / Baked; shown
+  with Affects Volumes), never the engine's choice (2026-11-17, the user's rule: "nie dawać silnikowi decydować"; until
+  then the longest ranges took the live channels, so a shield's short break flash near the game's storm joined the
+  baked lights and reworked all 22 of them as it came and as it went: 8 and 2 ms of GPU in one frame each, a hitch in
+  combat). `MaxLights` 8, `MaxBakedLights` 64; `GatherLightSlots(slots, baked)`: live = the cloud's own `Lights`, the
+  scene's other directional lights, then the Live scene lights that reach the shape in `Light.Active` order (the order
+  they were enabled: a light that comes later never takes another's channel); live lights past the 8 channels are left
+  out of that cloud (`VolumetricObjectBase.LiveLeftOut`, a warning once per cloud, and the inspector's line says how
+  many). A script that makes a light sets its mode right after `AddComponent`: clouds gather their lights when the
+  frame renders, so it is never in the wrong set for a frame. Baked = the Baked lights that reach the shape, nearest
+  first, summed with their colours into one RGBA16F texture at the transport's resolution (`VolumetricData.LightsC`;
+  `VolumetricLightTransport.shader` variant `VOL_BAKED`, 16 lights a dispatch, later pages add to the texture; build
+  phase `Baked` after `Lights`). Any change of a baked light (place, range, colour, intensity, coming or going:
+  `VolumeLightSlot.BakedColor` is in `LightsHash`) reworks its part: in place when the boxes fit the frame's budget
+  (`TryUpdateLightsInPlace`: the lights are matched by their `Light`, in any order; a light that came adds the box it
+  reaches, one that went the box it reached, each box baked again with the lights there are now; one box around all of
+  them or one each, whichever is fewer voxels; `BakeRegion` bakes every light reaching a box), else as a build in the
+  background. A change of the live set (a light's mode switched, a live light coming or going) is a build in the
+  background. A build that only changes one kind keeps the other's textures (`KeepLive` / `KeepBaked`). The inspector's
+  line (`Describe`) counts both and their textures. TestGame's lamps (`vollamps=N`) are Baked, `vollamplive=1` Live.
 - The march's lights are compile-time variants (`VOL_LIGHTS`: the two live textures, `VOL_BAKED_LIGHTS`: the baked one;
   `VolumetricRuntime.MarchProgram(hq, lights, baked)`, a preset's four made together): a fetch switched off by a
   uniform in the loop still cost 0.14 ms of 1.45 on the 780M (the driver flattens the branch).
@@ -1960,8 +1969,8 @@ switches.
   have cost a texture of that size and about 0.05 ms per four lights, and 0.7 voxels of work per light and voxel on
   every rework. A baked light that changes costs its box: thirty lamps of range 9 pulsing every frame 2.1 ms in the
   `Volumetrics` pass, of range 3 0.7 ms; steady ones nothing, and the CPU went from 2.43 to 1.89 ms a frame with thirty
-  lamps (the transmittance key). So baked lights suit lights that stay as they are; ones that flicker should have the
-  longest ranges (they keep a live channel) or be the cloud's own. With the storm's own lights lit or dark and eight
+  lamps (the transmittance key). So baked lights suit lights that stay as they are; ones that flicker should be Live
+  or the cloud's own. With the storm's own lights lit or dark and eight
   scene lights or fewer the frames are the commit before's bit for bit (TestGame `gi=0 volumetrics=1 volflash=0|2
   camera=0,17,2 look=0,14,42 dumpframe=400`: max 0 of 255).
 - TestGame: `vollamps=N` steady scene lamps on rings in the storm (`vollamprange=`, default 9), `vollamppulse=1`

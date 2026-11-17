@@ -107,6 +107,8 @@ namespace TestGame.Scenes
 				light.Intensity = 60f;
 				light.Range = options.VolumeLampRange;
 				light.SourceRadius = 0.5f;
+				// vollamplive=1: the lamps take live channels (8 a cloud: the rest are left out) instead of the baked texture.
+				light.VolumeMode = options.VolumeLampsLive ? LightVolumeMode.Live : LightVolumeMode.Baked;
 				if (options.VolumeLampPulse)
 				{
 					lamp.AddComponent<VolumetricLampPulse>().Phase = i * 0.9f;

@@ -1276,8 +1276,9 @@ namespace LELEngine.Volumetrics
 		///     the transport changes only where it reached before and where it reaches now, so only that box is worked out
 		///     again, in the drawn textures and at once (the box is small: a light dragged through a big cloud reworked all of
 		///     it every frame, 2026-11-08, ~1.6 M voxels of eight lights and a new pair of 25 MB textures a frame for New
-		///     Frontier's storm). False when the set of lights or the cloud's settings changed, or the box is large: the whole
-		///     transport is made again then.
+		///     Frontier's storm). Baked lights may also come or go: the box of each is baked again with the lights there are
+		///     now. False when the live lights or the cloud's settings changed, or the box is large: the whole transport is
+		///     made again then.
 		/// </summary>
 		private bool TryUpdateLightsInPlace(int newLightsHash)
 		{
@@ -1289,7 +1290,10 @@ namespace LELEngine.Volumetrics
 			owner.GatherLightSlots(captureSlots, captureBaked);
 			int count = Math.Min(captureSlots.Count, VolumetricObjectBase.MaxLights);
 			int bakedCount = Math.Min(captureBaked.Count, VolumetricObjectBase.MaxBakedLights);
-			if (count != LightCount || bakedCount != BakedCount || count + bakedCount == 0 || count > 0 && LightsA == 0 || bakedCount > 0 && LightsC == 0)
+			// The baked lights may come and go (a short flash near a big cloud: each of its arrival and its leaving reworked
+			// all of the baked texture, 8 and 2 ms of the GPU in one frame for a storm of 14.4 M voxels); the live ones may
+			// not (they have a channel each: a new one changes the channels).
+			if (count != LightCount || count + bakedCount == 0 || count > 0 && LightsA == 0 || bakedCount > 0 && LightsC == 0)
 			{
 				return false;
 			}
@@ -1328,40 +1332,46 @@ namespace LELEngine.Volumetrics
 				return false;
 			}
 
-			// The baked lights: the same lights (in any order: they are kept the nearest first), and for each that moved or
-			// changed its colour, reach or cone the box it reached before and reaches now. Boxes far apart are worked out one
-			// by one (two lamps at the cloud's ends changing would otherwise span all of it).
+			// The baked lights (in any order: they are kept the nearest first): for each that moved or changed its colour,
+			// reach or cone the box it reached before and reaches now; for one that came, the box it reaches; for one that
+			// went (out of reach, off, or past the nearest MaxBakedLights), the box it reached. Each box is baked again with
+			// the lights there are now, which adds the new light and takes the gone one out. Boxes far apart are worked out
+			// one by one (two lamps at the cloud's ends changing would otherwise span all of it).
 			bakedRegions.Clear();
 			var unionLo = new Vector3i(int.MaxValue);
 			var unionHi = new Vector3i(int.MinValue);
 			long separate = 0;
-			for (int i = 0; i < bakedCount; i++)
+			for (int i = 0; i < bakedCount + BakedCount; i++)
 			{
-				VolumeLightSlot now = captureBaked[i];
-				int before = -1;
-				for (int k = 0; k < BakedCount; k++)
-				{
-					if (BakedSlots[k].Scene == now.Scene)
-					{
-						before = k;
-						break;
-					}
-				}
-
-				if (before < 0)
-				{
-					return false;
-				}
-
-				if (SameSlot(BakedSlots[before], now, true))
-				{
-					continue;
-				}
-
 				var boxLo = new Vector3i(int.MaxValue);
 				var boxHi = new Vector3i(int.MinValue);
-				IncludeReach(BakedSlots[before], resolution, Size, ref boxLo, ref boxHi);
-				IncludeReach(now, resolution, Size, ref boxLo, ref boxHi);
+				if (i < bakedCount)
+				{
+					VolumeLightSlot now = captureBaked[i];
+					int before = FindBaked(BakedSlots, BakedCount, now.Scene);
+					if (before >= 0 && SameSlot(BakedSlots[before], now, true))
+					{
+						continue;
+					}
+
+					if (before >= 0)
+					{
+						IncludeReach(BakedSlots[before], resolution, Size, ref boxLo, ref boxHi);
+					}
+
+					IncludeReach(now, resolution, Size, ref boxLo, ref boxHi);
+				}
+				else
+				{
+					VolumeLightSlot was = BakedSlots[i - bakedCount];
+					if (FindBaked(captureBaked, bakedCount, was.Scene) >= 0)
+					{
+						continue;
+					}
+
+					IncludeReach(was, resolution, Size, ref boxLo, ref boxHi);
+				}
+
 				if (boxLo.X >= boxHi.X || boxLo.Y >= boxHi.Y || boxLo.Z >= boxHi.Z)
 				{
 					continue;
@@ -1431,9 +1441,24 @@ namespace LELEngine.Volumetrics
 				BakedSlots[i] = captureBaked[i];
 			}
 
+			BakedCount = bakedCount;
 			BakedLit = AnyBakedLit();
 			lightsHash = newLightsHash;
 			return true;
+		}
+
+		// The index of a scene light's slot among the first count of a list of baked slots, or -1.
+		private static int FindBaked(System.Collections.Generic.IList<VolumeLightSlot> slots, int count, global::Light light)
+		{
+			for (int k = 0; k < count; k++)
+			{
+				if (slots[k].Scene == light)
+				{
+					return k;
+				}
+			}
+
+			return -1;
 		}
 
 		private static long BoxVoxels(Vector3i lo, Vector3i hi)

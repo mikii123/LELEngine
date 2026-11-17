@@ -32,14 +32,14 @@ namespace LELEngine.Volumetrics
 
 		/// <summary>
 		///     Most live lights: lights of its own (<see cref="Lights" />), the scene's other directional lights and the
-		///     scene lights with the longest ranges, each with a channel of the light transport, so their colour and intensity
-		///     can change every frame for nothing.
+		///     scene lights set to <see cref="LightVolumeMode.Live" /> that reach the shape, in the order they were enabled,
+		///     each with a channel of the light transport, so their colour and intensity can change every frame for nothing.
 		/// </summary>
 		public const int MaxLights = 8;
 
 		/// <summary>
-		///     Most baked lights: the scene lights that reach the shape beyond the live ones, summed into one texture with
-		///     their colours (the nearest to the shape first).
+		///     Most baked lights: the scene lights set to <see cref="LightVolumeMode.Baked" /> that reach the shape, summed
+		///     into one texture with their colours (the nearest to the shape first).
 		/// </summary>
 		public const int MaxBakedLights = 64;
 
@@ -212,7 +212,7 @@ namespace LELEngine.Volumetrics
 		public float GIContribution = 1f;
 
 		[Header("Lights")]
-		[Tooltip("The scene's Light components that reach the shape (with Affects Volumes) light the cloud, through it. Up to 8 lights are live (counting its own lights and the scene's other directional lights): intensity and colour are free, moving one works its light out again. When more reach the shape, the longest ranges stay live and up to 64 others are baked into one texture: they cost the same however many there are, and any change of one (place, colour, intensity) works its part of that texture out again, so they suit lights that stay as they are (lamps)")]
+		[Tooltip("The scene's Light components that reach the shape (with Affects Volumes) light the cloud, through it, as each light's Volume Mode says. Live: up to 8 (counting its own lights and the scene's other directional lights), in the order they were enabled; intensity and colour free, moving one works its light out again; live lights past the 8 are left out (warned once). Baked: up to 64 (the nearest) summed into one texture: they cost the same however many there are, and any change of one (place, range, colour, intensity, on or off) works its part of that texture out again, so they suit lights that stay as they are (lamps)")]
 		public bool SceneLights = true;
 
 		[Tooltip("Lights of its own inside the cloud (flashes, lamps, fires), lighting only the cloud. Moving one works the light volume out again; intensity and colour are free")]
@@ -254,8 +254,8 @@ namespace LELEngine.Volumetrics
 		private VolumetricData data;
 		private readonly List<VolumeLightSlot> hashSlots = new List<VolumeLightSlot>();
 		private readonly List<VolumeLightSlot> hashBaked = new List<VolumeLightSlot>();
-		private readonly List<(global::Light light, float distance)> sceneCandidates = new List<(global::Light, float)>();
 		private readonly List<(global::Light light, float distance)> bakedCandidates = new List<(global::Light, float)>();
+		private bool warnedLeftOut;
 
 		#endregion
 
@@ -443,6 +443,9 @@ namespace LELEngine.Volumetrics
 			data?.Invalidate();
 		}
 
+		/// <summary>Live scene lights that reached the shape beyond its channels at the last count, left out of its light.</summary>
+		public int LiveLeftOut { get; private set; }
+
 		/// <summary>A short line about the cloud: voxels, memory, state (the inspector shows it).</summary>
 		public string Describe()
 		{
@@ -457,6 +460,10 @@ namespace LELEngine.Volumetrics
 			megabytes += transportTextures * transportVoxels * (8.0 * 8.0 / 7.0) / (1024.0 * 1024.0);
 			string state = data == null ? "not made yet" : data.Ready ? data.Pending ? "ready, being made again" : "ready" : "being made";
 			string lights = made && data.LightCount + data.BakedCount > 0 ? data.BakedCount > 0 ? $", {data.LightCount} live lights and {data.BakedCount} baked" : $", {data.LightCount} live lights" : "";
+			if (LiveLeftOut > 0)
+			{
+				lights += $"; {LiveLeftOut} more live lights reach it and are left out (8 channels: set lamps to Baked)";
+			}
 			string size = $"{grid.X} x {grid.Y} x {grid.Z} voxels of {voxel:0.###} units ({voxels / 1e6:0.##} M, about {megabytes:0} MB{lights}): {state}";
 			return capped ? $"Too many voxels at {VoxelSize:0.###} units: {size}. Raise the voxel size or shrink the shape." : size;
 		}
@@ -672,16 +679,20 @@ namespace LELEngine.Volumetrics
 		///     The lights the cloud's light transport is worked out for. Live (<paramref name="slots" />, at most
 		///     <see cref="MaxLights" />: a channel each, their colour and intensity free every frame): its own lights first,
 		///     then (with <see cref="SceneLights" />) the scene's directional lights other than the cloud's sun, then the
-		///     scene's lights that reach the shape, whatever their intensity (a flash going dark and bright again keeps its
-		///     transport). When more scene lights reach the shape than channels are left, the ones with the longest range
-		///     take them (working a large light out again costs the most, so those keep their brightness free) and the
-		///     others are baked (<paramref name="baked" />, at most <see cref="MaxBakedLights" />, the nearest first): summed
-		///     into one texture with their colour, worked out again around a light that changed.
+		///     scene's lights set to <see cref="LightVolumeMode.Live" /> that reach the shape, whatever their intensity (a
+		///     flash going dark and bright again keeps its transport), in the order they were enabled (a light that comes
+		///     later never takes another's channel: the channels stay as they are). Live lights past the channels are left
+		///     out (<see cref="LiveLeftOut" />, warned once). Baked (<paramref name="baked" />): the lights set to
+		///     <see cref="LightVolumeMode.Baked" /> that reach the shape, at most <see cref="MaxBakedLights" />, the nearest
+		///     first: summed into one texture with their colour, worked out again around a light that changed, came or went.
+		///     The engine never chooses which is which (it did by range until 2026-11-17: a short flash near a big cloud then
+		///     joined the baked lights and reworked them all as it came and as it went).
 		/// </summary>
 		internal void GatherLightSlots(List<VolumeLightSlot> slots, List<VolumeLightSlot> baked)
 		{
 			slots.Clear();
 			baked.Clear();
+			LiveLeftOut = 0;
 			int own = Math.Min(Lights.Count, MaxLights);
 			for (int i = 0; i < own; i++)
 			{
@@ -727,7 +738,7 @@ namespace LELEngine.Volumetrics
 
 			float worldScale = WorldScale;
 			Vector3 half = Size * 0.5f;
-			sceneCandidates.Clear();
+			int leftOut = 0;
 			foreach (global::Light light in global::Light.Active)
 			{
 				if (light == null || light.IsDestroyed || !light.isActiveAndEnabled || !light.AffectsVolumes || light.VolumetricStrength <= 0f || light.Range <= 0f)
@@ -739,31 +750,31 @@ namespace LELEngine.Volumetrics
 				Vector3 local = Vector3.TransformPosition(light.transform.position, worldToLocal);
 				Vector3 outside = Vector3.ComponentMax(Vector3.ComponentMax(-half - local, local - half), Vector3.Zero);
 				float distance = outside.Length * worldScale;
-				if (distance < light.Range)
+				if (distance >= light.Range)
 				{
-					sceneCandidates.Add((light, distance));
+					continue;
+				}
+
+				if (light.VolumeMode == LightVolumeMode.Baked)
+				{
+					bakedCandidates.Add((light, distance));
+				}
+				else if (slots.Count < MaxLights)
+				{
+					// The live lights in the order they were enabled (Light.Active's): the channels stay as they are.
+					slots.Add(SceneSlot(light, worldToLocal));
+				}
+				else
+				{
+					leftOut++;
 				}
 			}
 
-			// More lights than channels left: the longest ranges keep a channel. (A stable sort: equal ranges keep the order
-			// the lights were enabled in, so the choice does not change from frame to frame.)
-			int free = MaxLights - slots.Count;
-			if (sceneCandidates.Count > free)
+			LiveLeftOut = leftOut;
+			if (leftOut > 0 && !warnedLeftOut)
 			{
-				StableSort(sceneCandidates, (a, b) => b.light.Range.CompareTo(a.light.Range));
-				for (int i = free; i < sceneCandidates.Count; i++)
-				{
-					bakedCandidates.Add(sceneCandidates[i]);
-				}
-
-				sceneCandidates.RemoveRange(free, sceneCandidates.Count - free);
-			}
-
-			// Each set the nearest first.
-			StableSort(sceneCandidates, (a, b) => a.distance.CompareTo(b.distance));
-			foreach ((global::Light light, float _) in sceneCandidates)
-			{
-				slots.Add(SceneSlot(light, worldToLocal));
+				warnedLeftOut = true;
+				Debug.LogWarning($"[Volumetrics] {gameObject?.Name}: {leftOut} live lights reach it beyond its {MaxLights} channels (its own lights and the other directional lights count) and are left out of its light; set steady ones (lamps) to Volume Mode Baked");
 			}
 
 			if (bakedCandidates.Count > 0)
