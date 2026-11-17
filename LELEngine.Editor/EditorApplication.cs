@@ -1414,6 +1414,9 @@ namespace LELEngine.Editor
 			CollectionDrawers.Reset();
 			// Every scene goes: play mode may have loaded more (additively, DontDestroyOnLoad, in the background).
 			SceneManager.UnloadAll(true);
+			// The prefab stage's light went with its scene: a reference kept to it held that scene, and with it the old
+			// scripts through every reload (AimStageLight makes it again in a stage).
+			stageLight = null;
 			SceneManager.SetActiveScene(scene);
 			scene?.StartLifecycle(playing);
 			SceneView.InvalidateCaches();
@@ -2224,6 +2227,7 @@ namespace LELEngine.Editor
 		public void ClearTypeCaches()
 		{
 			Extensions.OnDomainUnloading();
+			stageLight = null;
 			// Controllers and clips may hold script types (behaviours, custom parameter values, event payloads).
 			animatorWindow.OnDomainUnloading();
 			animationWindow.OnDomainUnloading();
