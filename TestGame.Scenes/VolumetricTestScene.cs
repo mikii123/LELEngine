@@ -81,6 +81,20 @@ namespace TestGame.Scenes
 			storm.EmissionStrength = 0.05f;
 			storm.Lights.Add(new VolumeLight { Position = new Vector3(-12f, 0f, -14f), Radius = 4f, Color = new Color4(0.8f, 0.72f, 1f, 1f) });
 			storm.Lights.Add(new VolumeLight { Position = new Vector3(14f, 2f, -6f), Radius = 5f, Color = new Color4(0.8f, 0.72f, 1f, 1f) });
+			if (options.VolumeMovingLight == 4)
+			{
+				// vollight=4 (a light sweeping sideways in front of a camera inside, the temporal filter's test): the storm is a
+				// thin, even fog filling its box, so the light's glow shows where it is and any trail behind it.
+				storm.Shape = VolumeShape.Box;
+				storm.Noise = VolumeNoise.Perlin;
+				storm.NoiseSize = 25f;
+				storm.Coverage = 0.95f;
+				storm.Softness = 1f;
+				storm.ClumpSize = 0f;
+				storm.Density = 1f;
+				storm.EmissionStrength = 0f;
+				storm.Lights.Clear();
+			}
 			// volflash=0: the storm's own lights stay dark; 2: lit all the time (steady costs).
 			if (options.VolumeFlash == 1)
 			{
@@ -183,6 +197,14 @@ namespace TestGame.Scenes
 				light.Intensity = 120f;
 				light.Range = 14f;
 				light.SourceRadius = 0.5f;
+				if (options.VolumeMovingLight == 4)
+				{
+					// A small fast light (a tracer's size), its glow a few units across in the thin fog.
+					light.Intensity = 30f;
+					light.Range = 5f;
+					light.SourceRadius = 0.3f;
+				}
+
 				// vollightdynamic=1: worked out in the march (nothing reworked as it moves).
 				light.VolumeMode = options.VolumeMovingLightDynamic ? LightVolumeMode.Dynamic : LightVolumeMode.Live;
 				lamp.AddComponent<VolumetricLightMover>();
@@ -303,7 +325,9 @@ namespace TestGame.Scenes
 	/// <summary>
 	///     Moves its object back and forth along x through the storm (x -80 .. 80 over 8 s), every frame (vollight=1); with
 	///     vollight=2 the same until 6 s, then still at x = 10; with vollight=3 at x = 10 from the start (the transport worked
-	///     out in place along a path against one made at once).
+	///     out in place along a path against one made at once); with vollight=4 a small light sideways at an even 60 units a
+	///     second across x -24 .. 24 and back, 12 units in front of a camera inside the storm (made a thin even fog) at
+	///     (0, 14, 30) looking along +z (the clouds' temporal filter against a light that moves: no trail may follow it).
 	/// </summary>
 	public sealed class VolumetricLightMover : Behaviour
 	{
@@ -316,6 +340,12 @@ namespace TestGame.Scenes
 			if (Mode == 3 || Mode == 2 && time >= 6f)
 			{
 				x = 10f;
+			}
+			else if (Mode == 4)
+			{
+				// A triangle wave: 48 units each way at 60 units a second.
+				float phase = time * 60f / 96f % 1f;
+				x = phase < 0.5f ? -24f + phase * 96f : 72f - phase * 96f;
 			}
 
 			transform.position = new Vector3(x, 14f, 42f);

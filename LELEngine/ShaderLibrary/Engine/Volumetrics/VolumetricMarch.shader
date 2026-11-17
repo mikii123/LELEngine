@@ -29,10 +29,21 @@ void main()
 //   VOL_BAKED_LIGHTS  the baked lights' texture (one fetch a step): only while there are baked lights that shine.
 //   VOL_DYNAMIC_LIGHTS  the scene lights set to Dynamic (Light.VolumeMode) that reach the cloud this frame, worked out
 //                     here with nothing made beforehand: the pixel's ray first takes up to 16 of them whose reach it
-//                     crosses inside the shape (the list is the nearest to the camera first), then each step inside a
-//                     light's reach adds its light as the transport has it (VolumetricLightTransport.shader's scene
-//                     light: the falloff in world units, the cone, the cloud on the way and the glow), with the cloud on
-//                     the way from two samples at a level that fits their spacing (the transport takes five).
+//                     crosses inside the shape (the list is the nearest to the camera first), then every step adds the
+//                     light each of them scatters along a stretch of the ray: from where the last stretch ended (an empty
+//                     block hands on only where the ray leaves it) to the end of the step's cell of the grid without the
+//                     jitter, so the stretches are the same every frame. The falloff in world units integrated exactly over the stretch (1 / u; fade^2 at
+//                     its centre of light), then the cone, the cloud on the way (two samples at a level that fits their
+//                     spacing; the transport takes five), the glow as VolumetricLightTransport.shader's scene light has
+//                     them and the density, at the stretch's centre of light; the light through the cloud in front from
+//                     the step. One sample a step (as before) missed a
+//                     small light's peak by up to half a step (steps of tens of units in a large cloud), noise the
+//                     temporal filter smeared into a trail behind a moving light. Their light goes to an output of its own
+//                     (FragDynamic), which the composite adds after the temporal filter: a light that moves leaves nothing
+//                     behind, and nothing in it may move with the jitter (the step's own density sample did: dither, and
+//                     squares where steps without cloud merged). (Worked out once per light after the march instead, it
+//                     either needed the light through the cloud kept along the ray, which cost every ray a tenth of a
+//                     millisecond, or missed the clumps.)
 // The lights are variants, not uniform switches: a switched-off fetch in the loop still cost a tenth of the march on
 // AMD (the driver flattens the branch), and most clouds have no light lit most of the time.
 
@@ -111,6 +122,9 @@ uniform float volOpacity;
 
 layout(location = 0) out vec4 FragColor;
 layout(location = 1) out float FragDistance;
+#ifdef VOL_DYNAMIC_LIGHTS
+layout(location = 2) out vec4 FragDynamic;   // the dynamic lights' light, premultiplied (rgb), as FragColor's
+#endif
 
 // Henyey-Greenstein, scaled so isotropic scattering is 1.
 float VolPhase(float cosTheta, float g)
@@ -140,30 +154,62 @@ float VolSceneShadow(vec3 worldPos)
 }
 
 #ifdef VOL_DYNAMIC_LIGHTS
-// A dynamic light's light at p (local), as the transport works out a scene light's: radiance x falloff x cone x the cloud
-// on the way (and its glow). Zero beyond its reach.
-vec3 VolDynamicLight(vec3 p, int i)
+// Dynamic light i scattered towards the eye along the ray from 'from' to 'to' (local units along it), as the march's
+// steps add the rest (times the extinction and the density, per local unit, through the cloud in front). The falloff
+// fade^2 / (d^2 + r^2) along the ray in units of the light's range is fade^2 / u, u = b^2 + x^2 (b: the ray's closest
+// approach to the light, with the source's radius; x: the way along the ray from there; fade = 1 - u^2, nought at the
+// range, as the transport's 1 - d^4 / range^4): 1 / u integrated exactly over the stretch, fade^2 taken at its centre of
+// light (the mean of x weighted by 1 / u), with the cone, the cloud between the light and the stretch (and its glow) and
+// the density; the light through the cloud in front from the step's ('transmittance' at its end, raised back over it with
+// its 'density', not before it).
+vec3 VolDynamicStretch(int i, VolRay ray, float from, float to, float stepStart, float stepEnd, float transmittance, float density)
 {
 	vec4 position = volDynamicPosition[i];
-	vec3 offset = position.xyz - p;
-	float dist = length(offset);
-	float d = dist * volWorldScale;
-	float range = position.w;
-	if (d >= range)
+	vec3 toLight = position.xyz - ray.origin;
+	float along = dot(toLight, ray.dir);
+	float across2 = max(dot(toLight, toLight) - along * along, 0.0);
+	float invRange = 1.0 / position.w;
+	// Range units per local unit along the ray; the stretch inside the light's reach (without the source's radius: a
+	// little wider, so the colour is read only for a stretch that may get light).
+	float perLocal = volWorldScale * invRange;
+	float bare2 = across2 * (perLocal * perLocal);
+	if (bare2 >= 1.0 || (from - along) * perLocal >= 1.0 || (to - along) * perLocal <= -1.0)
 	{
 		return vec3(0.0);
 	}
 
 	vec4 colour = volDynamicColor[i];
-	float d2 = d * d;
-	float r2 = range * range;
-	float fade = clamp(1.0 - (d2 * d2) / (r2 * r2), 0.0, 1.0);
-	float falloff = fade * fade / max(d2, colour.w * colour.w);
+	float b2 = max(bare2 + colour.w * colour.w * (invRange * invRange), 1e-8);
+	if (b2 >= 1.0)
+	{
+		return vec3(0.0);
+	}
+
+	float reach = sqrt(1.0 - b2);
+	float x0 = clamp((from - along) * perLocal, -reach, reach);
+	float x1 = clamp((to - along) * perLocal, -reach, reach);
+	if (x1 <= x0)
+	{
+		return vec3(0.0);
+	}
+
+	// The integral of 1 / u over the stretch: the angle it spans seen from the light (atan(x1 / b) - atan(x0 / b) in one
+	// arctangent, exact also for a short stretch far out) over b; per local unit along the ray in world units squared as
+	// the falloff: (range x world scale) per x.
+	float b = sqrt(b2);
+	float spread = atan(b * (x1 - x0), b2 + x0 * x1);
+	float x = spread > 1e-6 ? clamp(0.5 * b * log((b2 + x1 * x1) / (b2 + x0 * x0)) / spread, x0, x1) : 0.5 * (x0 + x1);
+	float u = b2 + x * x;
+	float fade = 1.0 - u * u;
+	float falloff = spread / b * (fade * fade) / (position.w * volWorldScale);
+	float tc = along + x / perLocal;
+	vec3 c = ray.origin + ray.dir * tc;
+	vec3 offset = position.xyz - c;
+	float dist = length(offset);
 	vec4 spot = volDynamicSpot[i];
 	if (spot.w > -1.5)
 	{
-		vec3 towards = offset / max(dist, 1e-6);
-		float cone = clamp((dot(-towards, spot.xyz) - spot.w) * volDynamicCone[i].x, 0.0, 1.0);
+		float cone = clamp((dot(-offset / max(dist, 1e-6), spot.xyz) - spot.w) * volDynamicCone[i].x, 0.0, 1.0);
 		falloff *= cone * cone;
 		if (falloff <= 0.0)
 		{
@@ -171,12 +217,23 @@ vec3 VolDynamicLight(vec3 p, int i)
 		}
 	}
 
-	// The cloud between: two samples a quarter and three quarters of the way, at the level of their spacing.
+	// The density at the centre of light, eaten at the edges by the detail as the march's (the step's own sample moves with
+	// the jitter: unfiltered over frames, that was dither and the occupancy blocks' squares).
+	float footprint = tc * volPixelAngle;
+	float here = textureLod(volLit, c / volSize + 0.5, log2(max(footprint / volVoxel, 1.0))).r;
+	if (volDetailStrength > 0.0 && here < volEdgeBand)
+	{
+		float detail = textureLod(volDetail, (c + volDetailOffset) * volDetailFrequency, log2(max(footprint / volDetailVoxel, 1.0))).r;
+		here = clamp(here - volDetailStrength * (1.0 - here / volEdgeBand) * (1.0 - detail), 0.0, 1.0);
+	}
+
+	// The cloud between it and the light: two samples a quarter and three quarters of the way, at the level of their spacing.
 	float spacing = dist * 0.5;
 	float lod = max(log2(max(spacing, 1e-6) / volVoxel) - 0.5, 0.0);
-	float tau = (textureLod(volLit, (p + offset * 0.25) / volSize + 0.5, lod).r + textureLod(volLit, (p + offset * 0.75) / volSize + 0.5, lod).r)
+	float tau = (textureLod(volLit, (c + offset * 0.25) / volSize + 0.5, lod).r + textureLod(volLit, (c + offset * 0.75) / volSize + 0.5, lod).r)
 		* spacing * volSigma;
-	return colour.rgb * (falloff * (exp(-tau) + volDynamicGlow * exp(-tau * 0.15)));
+	float seen = min(transmittance * exp(density * volSigma * (stepEnd - clamp(tc, stepStart, stepEnd))), 1.0);
+	return colour.rgb * (falloff * here * volSigma * seen * (exp(-tau) + volDynamicGlow * exp(-tau * 0.15)));
 }
 #endif
 
@@ -206,6 +263,9 @@ void main()
 	range.y = min(range.y, eye / cosForward * ray.scale);
 
 	FragDistance = 0.0;
+#ifdef VOL_DYNAMIC_LIGHTS
+	FragDynamic = vec4(0.0);
+#endif
 	if (range.y <= range.x)
 	{
 		FragColor = vec4(0.0);
@@ -264,6 +324,10 @@ void main()
 		dynamicList[dynamicCount >> 2] |= uint(i) << uint((dynamicCount & 3) * 8);
 		dynamicCount++;
 	}
+
+	// Their light, and where the stretches done so far end (a step without cloud leaves its part to the next one).
+	vec3 dynamicColor = vec3(0.0);
+	float dynamicFrom = range.x;
 #endif
 
 	float distanceSum = 0.0;
@@ -291,6 +355,10 @@ void main()
 		if (texelFetch(volOccupancy, ivec3(clamp(uvw, 0.0, 0.99999) * volBlocks), 0).r < 0.002)
 		{
 			float blockEnd = t + VolBlockExit(p, ray.dir) + 0.01 * volVoxel;
+#ifdef VOL_DYNAMIC_LIGHTS
+			// Nothing to light up to where the ray leaves the block.
+			dynamicFrom = max(dynamicFrom, blockEnd);
+#endif
 #ifdef VOL_HQ
 			t = blockEnd + jitter * clamp(blockEnd * volNearStepScale, volMinStep, volStep);
 #else
@@ -371,13 +439,6 @@ void main()
 #ifdef VOL_BAKED_LIGHTS
 				light += textureLod(volLightsC, uvw, max(lod - 1.0, 0.0)).rgb;
 #endif
-#ifdef VOL_DYNAMIC_LIGHTS
-				for (int k = 0; k < dynamicCount; k++)
-				{
-					int index = int((dynamicList[k >> 2] >> uint((k & 3) * 8)) & 255u);
-					light += VolDynamicLight(p, index);
-				}
-#endif
 
 				color += weight * light;
 				distanceSum += weight * t;
@@ -391,9 +452,30 @@ void main()
 			}
 		}
 
+#ifdef VOL_DYNAMIC_LIGHTS
+		// The dynamic lights along the stretch from where the last one ended to the end of this step's cell of the grid
+		// without the jitter (t - jitter x dt .. + dt; with the last step, the ray's end), at every step that is not an
+		// empty block: the same stretches every frame, as nothing filters their light over frames (leaving steps without
+		// cloud to the next one was cheaper by nothing measurable and twice as noisy). After the step's own light, where
+		// its values are free (fewer registers live through their work).
+		if (dynamicCount > 0)
+		{
+			float stretchEnd = t + dt >= range.y ? range.y : t + (1.0 - jitter) * dt;
+			for (int k = 0; k < dynamicCount; k++)
+			{
+				int index = int((dynamicList[k >> 2] >> uint((k & 3) * 8)) & 255u);
+				dynamicColor += VolDynamicStretch(index, ray, dynamicFrom, stretchEnd, t, t + dt, transmittance, density);
+			}
+
+			dynamicFrom = stretchEnd;
+		}
+#endif
 		t += dt;
 	}
 
+#ifdef VOL_DYNAMIC_LIGHTS
+	FragDynamic = vec4(dynamicColor * (volExposure * volOpacity), 0.0);
+#endif
 	// World units along the ray (the temporal filter reprojects the light from there).
 	FragDistance = (weightSum > 1e-4 ? distanceSum / weightSum : (range.x + range.y) * 0.5) / ray.scale;
 	FragColor = vec4(color * volExposure, 1.0 - transmittance) * volOpacity;

@@ -85,6 +85,7 @@ namespace LELEngine.Volumetrics
 		private const int ResultUnit = 0;
 		private const int ResultDepthUnit = 1;
 		private const int SceneDepthUnit = 2;
+		private const int DynamicResultUnit = 3;
 		private const int HistoryUnit = 2;
 		private const int HistoryMetaUnit = 3;
 
@@ -404,10 +405,20 @@ namespace LELEngine.Volumetrics
 				}
 			}
 
+			// The dynamic lights that reach it this frame (worked out in the march, nothing made beforehand).
+			volume.GatherDynamicLights(dynamicSlots, worldToLocal, context.CameraPosition);
+			bool dynamic = dynamicSlots.Count > 0;
+
 			// The march, inside the object's rectangle at its resolution: light and transmittance, and the light's mean
-			// distance along the ray (the temporal filter reprojects with it).
+			// distance along the ray (the temporal filter reprojects with it); with dynamic lights also their light, kept
+			// out of the temporal filter (a third target, made the first time a cloud has them).
 			Ensure(ref view.March[level], lowWidth, lowHeight, RenderTextureFormat.RGBA16F, true, RenderTextureFormat.R32F);
 			Framebuffer target = view.March[level];
+			if (dynamic && target.ColorAttachments.Count < 3)
+			{
+				target.AddColorAttachment(RenderTextureFormat.RGBA16F, true);
+				target.Validate();
+			}
 
 			var lowRect = new PixelRect(rect.X0 / scale, rect.Y0 / scale, Math.Min(lowWidth, (rect.X1 + scale - 1) / scale + 1), Math.Min(lowHeight, (rect.Y1 + scale - 1) / scale + 1));
 			History history = volume.TemporalFilter ? HistoryOf(context, volume, lowWidth, lowHeight) : null;
@@ -419,9 +430,6 @@ namespace LELEngine.Volumetrics
 			GL.ClearColor(0f, 0f, 0f, 0f);
 			GL.Clear(ClearBufferMask.ColorBufferBit);
 
-			// The dynamic lights that reach it this frame (worked out in the march, nothing made beforehand).
-			volume.GatherDynamicLights(dynamicSlots, worldToLocal, context.CameraPosition);
-			bool dynamic = dynamicSlots.Count > 0;
 			ShaderProgram program = MarchProgram(hq, data.LightsA != 0 && AnyLightLit(volume, data), data.LightsC != 0 && data.BakedLit, dynamic);
 			program.Use();
 			SetViewUniforms(program, context, volume, data, worldToLocal, invViewProjection, lowWidth, lowHeight);
@@ -486,6 +494,9 @@ namespace LELEngine.Volumetrics
 			composite.SetTexture("volResult", TextureTarget.Texture2D, result.Handle, ResultUnit);
 			composite.SetTexture("volResultDepth", TextureTarget.Texture2D, lowDepth != null ? lowDepth.ColorAttachments[0].Handle : 0, ResultDepthUnit);
 			composite.SetTexture("volSceneDepth", TextureTarget.Texture2D, depth.Depth.Handle, SceneDepthUnit);
+			// This frame's dynamic light, not through the temporal filter: a moving light leaves no trail.
+			composite.SetTexture("volDynamic", TextureTarget.Texture2D, dynamic ? target.ColorAttachments[2].Handle : 0, DynamicResultUnit);
+			composite.SetInt("volDynamicActive", dynamic ? 1 : 0);
 			composite.SetVector4("volDepthParams", depthParams);
 			composite.SetInt("volUpsample", scale > 1 ? 1 : 0);
 			context.Fullscreen.Draw();

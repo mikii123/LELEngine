@@ -1962,12 +1962,45 @@ switches.
   (the rest left out, warned once); `VolumetricRuntime.SetDynamicLights` writes them into a std140 uniform buffer on
   binding 8 (`VolDynamicLights`: local position + range, radiance x volumetric strength + source radius, spot direction
   + cos outer, spot scale; orphaned per cloud). The pixel's ray first keeps up to 16 (`VOL_DYNAMIC_PER_RAY`, eight-bit
-  indices packed in a uvec4) whose range sphere it crosses inside the shape and in front of the scene; each step with
-  cloud adds `VolDynamicLight`: the scene light of the transport exactly (falloff in world units, cone, e^-tau +
-  glow e^-0.15 tau) with tau from two samples at 1/4 and 3/4 of the way at the level of their spacing (the transport
-  takes five). Not in the transport (`GatherLightSlots` skips them) nor in the cloud's light in the GI (the media
-  volume). The march's variants are 16 now (`MarchProgram(hq, lights, baked, dynamic)`), a preset's 8 made together.
-  The inspector's line counts them ("N dynamic").
+  indices packed in a uvec4) whose range sphere it crosses inside the shape and in front of the scene; every step that is
+  not an empty block adds `VolDynamicStretch` for each of them, at the end of the step (after its own light: fewer
+  registers live): the light it scatters along a stretch of the ray from where the last stretch ended (an empty block
+  moves that to where the ray leaves it) to the end of the step's cell of the grid without the jitter (t - jitter dt ..
+  + dt), so the stretches are the same every frame and nothing of it moves with the jitter. The scene light of the
+  transport (falloff fade^2 / (d^2 + r^2) in world units, cone, e^-tau + glow e^-0.15 tau, tau from two samples at 1/4
+  and 3/4 of the way at the level of their spacing; the transport takes five): 1 / u (u = b^2 + x^2 in units of the
+  range) integrated exactly over the stretch (one arctangent for the angle the stretch spans), and fade^2, the cone, tau
+  and the density (with the detail's erosion) at the stretch's centre of light (the 1 / u-weighted mean); the light
+  through the cloud in front is the step's, raised back over the step with its density. Their light goes to the march
+  target's third attachment (`FragDynamic`, RGBA16F, added the first time a cloud has dynamic lights) and the composite
+  adds it after the temporal filter (`volDynamic`, unit 3, `volDynamicActive`), upsampled as the rest.
+  Not in the transport (`GatherLightSlots` skips them) nor in the cloud's light in the GI (the media volume). The
+  march's variants are 16 now (`MarchProgram(hq, lights, baked, dynamic)`), a preset's 8 made together. The inspector's
+  line counts them ("N dynamic").
+  - Ghosting (2026-11-17, the user: "tragiczny ghosting" behind New Frontier's PhotonBullet light, range 72, source
+    radius 0.1, in the Flight storm, VolumetricObject at full resolution: even steps of ~28 units): the first version took
+    one sample of the light a step, so a small light's peak was hit or missed by up to half a step (per-frame noise of
+    hundreds of percent), the temporal filter's 3 x 3 clamp opened to that noise and kept the old glow for ~10 frames
+    (HistoryWeight 0.9). Now nothing of a dynamic light goes through the history (no trail by construction), and the
+    exact integral keeps it smooth without it: frame-to-frame change around the resting bullet 10.6 -> 1.1 mean, p99
+    55 -> 6 (0..255). The exact integral is also brighter where steps are long against the light (the old per-step weight
+    T (1 - e^-k dt) under-counts light at a point: ~0.85 of it in TestGame's lamp scene; Dynamic is now ~1.1x Live
+    there, was 0.94x). Tried and dropped (in the
+    march's comment): working each light out once after the march (two sides or six equal-angle segments), which either
+    needed the light through the cloud kept along the ray (a profile of 8 knots: +0.1 ms on every ray of the cloud) or
+    missed the clumps (two density samples a light: holes, a third of the light).
+  - Noise (same day, the user's screenshots of dither and squares in lit clouds, "jeszcze gorzej"): a cheaper version took
+    the density from the step's own sample (except for the stretch holding the peak) and let steps without cloud hand
+    their stretch to the next: both move with the jitter, and with no temporal filter on this light that showed as dither
+    and as the occupancy blocks' squares. Hence the grid without the jitter and the density at every stretch's centre of
+    light. TestGame's lamp in the clumpy storm: frame-to-frame change 0.4 (0..255, temporal filter on).
+  - Its cost (TestGame, 780M, 1280 x 720, the clouds' draw over no lights; the GPU shared with another process, so the
+    absolute times vary run to run): the lamp +0.29 ms, 64 tracers +1.0 ms (the first version: +0.06 / +0.17 to +0.35).
+    New Frontier's Flight with the bullet 15 units from the scene camera (its reach covers the view), an earlier
+    version of the fix: 7.3-7.9 -> 7.9-8.1 ms. Tried for less, no gain or worse: the third target is free; reading the
+    density only at the peak (cheaper, but the noise above); evaluating only steps with cloud (as cheap, twice the
+    noise); stretches merged to two voxels (dearer: a second call site); a midpoint rule for far stretches; the fade's
+    polynomial integral replaced by fade^2 at the centre of light (kept: simpler).
   - Verified (TestGame, night, the storm from inside): the same lamp (`vollight=3`) Live and Dynamic: the frames look the
     same, Dynamic 0.93-0.94 of Live's light (the two-sample tau). Tracers (`volbullets=N`: lights of range 6 crossing
     the storm at 60 u/s, `volbulletshadows=0` their Volumetric Shadows off): the clouds' draw (`Transparent.Volumetrics`,

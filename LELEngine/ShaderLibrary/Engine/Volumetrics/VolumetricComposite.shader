@@ -18,13 +18,16 @@ void main()
 // the transparent pass where the object sorts. Where the opaque surface is in front of the shape the pixel is left
 // alone (the shape's entry point is computed exactly, so objects in front of a volume get no halo). A march at reduced
 // resolution is upsampled from its four nearest texels weighted by how well each one's depth matches the pixel's (the
-// depth checkerboard gives each silhouette both sides).
+// depth checkerboard gives each silhouette both sides). The dynamic lights' light of this frame's march is added after
+// the temporal filter (VolumetricMarch.shader, VOL_DYNAMIC_LIGHTS), upsampled the same way.
 
 #include "Engine/Volumetrics/VolumetricCommon.glsl"
 
 uniform sampler2D volResult;        // premultiplied light, 1 - transmittance
 uniform sampler2D volResultDepth;   // eye depth each result texel marched to (reduced resolution only)
 uniform sampler2D volSceneDepth;    // window depth, full resolution
+uniform sampler2D volDynamic;       // the dynamic lights' light, premultiplied (rgb), at the march's resolution
+uniform int volDynamicActive;       // 1: the march had dynamic lights (else volDynamic holds nothing)
 uniform vec4 volDepthParams;
 uniform int volUpsample;            // 0: the result is full resolution
 
@@ -45,6 +48,11 @@ void main()
 	if (volUpsample == 0)
 	{
 		FragColor = texelFetch(volResult, ivec2(pixel), 0);
+		if (volDynamicActive != 0)
+		{
+			FragColor.rgb += texelFetch(volDynamic, ivec2(pixel), 0).rgb;
+		}
+
 		return;
 	}
 
@@ -53,6 +61,7 @@ void main()
 	ivec2 base = ivec2(floor(position));
 	vec2 f = position - vec2(base);
 	vec4 sum = vec4(0.0);
+	vec3 dynamicSum = vec3(0.0);
 	float weights = 0.0;
 	for (int y = 0; y <= 1; y++)
 	{
@@ -63,11 +72,16 @@ void main()
 			float mismatch = abs(texelFetch(volResultDepth, texel, 0).r - eye) / max(eye, 1e-3);
 			float w = (bilinear + 1e-3) / (0.02 + mismatch);
 			sum += texelFetch(volResult, texel, 0) * w;
+			if (volDynamicActive != 0)
+			{
+				dynamicSum += texelFetch(volDynamic, texel, 0).rgb * w;
+			}
+
 			weights += w;
 		}
 	}
 
-	FragColor = sum / max(weights, 1e-6);
+	FragColor = (sum + vec4(dynamicSum, 0.0)) / max(weights, 1e-6);
 }
 
 /////Fragment
