@@ -135,8 +135,16 @@ namespace LELEngine.Volumetrics
 		private static ComputeShader lightTransportBaked;
 		private static ComputeShader occupancy;
 		private static ComputeShader giShader;
-		// The march's programs by variant: bit 0 the high quality preset, bit 1 live lights lit, bit 2 baked lights.
-		private static readonly ShaderProgram[] marchPrograms = new ShaderProgram[8];
+		// The march's programs by variant: bit 0 the high quality preset, bit 1 live lights lit, bit 2 baked lights, bit 3
+		// dynamic lights.
+		private static readonly ShaderProgram[] marchPrograms = new ShaderProgram[16];
+
+		// The dynamic lights' uniform buffer (VolumetricMarch.shader's VolDynamicLights block): positions, colours, spots and
+		// cones, MaxDynamicLights each, a block after the other.
+		private const int DynamicLightBinding = 8;
+		private static readonly float[] dynamicData = new float[VolumetricObjectBase.MaxDynamicLights * 4 * 4];
+		private static readonly List<VolumeLightSlot> dynamicSlots = new List<VolumeLightSlot>();
+		private static int dynamicBuffer;
 		private static ShaderProgram depthDownsample;
 		private static ShaderProgram temporal;
 		private static ShaderProgram composite;
@@ -411,10 +419,18 @@ namespace LELEngine.Volumetrics
 			GL.ClearColor(0f, 0f, 0f, 0f);
 			GL.Clear(ClearBufferMask.ColorBufferBit);
 
-			ShaderProgram program = MarchProgram(hq, data.LightsA != 0 && AnyLightLit(volume, data), data.LightsC != 0 && data.BakedLit);
+			// The dynamic lights that reach it this frame (worked out in the march, nothing made beforehand).
+			volume.GatherDynamicLights(dynamicSlots, worldToLocal, context.CameraPosition);
+			bool dynamic = dynamicSlots.Count > 0;
+			ShaderProgram program = MarchProgram(hq, data.LightsA != 0 && AnyLightLit(volume, data), data.LightsC != 0 && data.BakedLit, dynamic);
 			program.Use();
 			SetViewUniforms(program, context, volume, data, worldToLocal, invViewProjection, lowWidth, lowHeight);
 			SetMarchUniforms(program, context, volume, data, localToWorld, scale, lowHeight, history, depth, lowDepth, depthParams);
+			if (dynamic)
+			{
+				SetDynamicLights(program, volume, dynamicSlots);
+			}
+
 			context.Fullscreen.Draw();
 
 			if (Debug && frameStamp % 120 == 1)
@@ -540,17 +556,18 @@ namespace LELEngine.Volumetrics
 
 		/// <summary>
 		///     The march's program for a preset and the lights lit right now (VolumetricMarch.shader's variants: the lights'
-		///     fetches are compiled in only where a light shines). A preset's four variants are made together, so a light
-		///     going on later (a first flash) finds its program started, not a compile in the frame it lights up.
+		///     fetches are compiled in only where a light shines, the dynamic lights' loop only while one reaches the cloud). A
+		///     preset's eight variants are made together, so a light going on later (a first flash, a first bullet) finds its
+		///     program started, not a compile in the frame it lights up.
 		/// </summary>
-		private static ShaderProgram MarchProgram(bool hq, bool lights, bool baked)
+		private static ShaderProgram MarchProgram(bool hq, bool lights, bool baked, bool dynamic)
 		{
 			int preset = hq ? 1 : 0;
-			int index = preset | (lights ? 2 : 0) | (baked ? 4 : 0);
+			int index = preset | (lights ? 2 : 0) | (baked ? 4 : 0) | (dynamic ? 8 : 0);
 			if (marchPrograms[index] == null)
 			{
-				var defines = new List<string>(3);
-				for (int variant = 0; variant < 4; variant++)
+				var defines = new List<string>(4);
+				for (int variant = 0; variant < 8; variant++)
 				{
 					int i = preset | (variant << 1);
 					if (marchPrograms[i] != null)
@@ -562,11 +579,61 @@ namespace LELEngine.Volumetrics
 					if (hq) defines.Add("VOL_HQ");
 					if ((variant & 1) != 0) defines.Add("VOL_LIGHTS");
 					if ((variant & 2) != 0) defines.Add("VOL_BAKED_LIGHTS");
+					if ((variant & 4) != 0) defines.Add("VOL_DYNAMIC_LIGHTS");
 					marchPrograms[i] = new ShaderProgram("Engine/Volumetrics/VolumetricMarch.shader", defines.ToArray());
 				}
 			}
 
 			return marchPrograms[index];
+		}
+
+		/// <summary>
+		///     The cloud's dynamic lights for the march (VOL_DYNAMIC_LIGHTS): their places, reaches, colours and cones in a
+		///     uniform buffer on <see cref="DynamicLightBinding" />, written for each cloud drawn.
+		/// </summary>
+		private static void SetDynamicLights(ShaderProgram program, VolumetricObjectBase volume, List<VolumeLightSlot> slots)
+		{
+			int count = Math.Min(slots.Count, VolumetricObjectBase.MaxDynamicLights);
+			const int stride = VolumetricObjectBase.MaxDynamicLights * 4;
+			for (int i = 0; i < count; i++)
+			{
+				VolumeLightSlot slot = slots[i];
+				// The slot's colour is divided by the transport's factor (the march here has none).
+				Vector3 colour = slot.Color * slot.Spot.W;
+				int at = i * 4;
+				dynamicData[at + 0] = slot.PositionSize.X;
+				dynamicData[at + 1] = slot.PositionSize.Y;
+				dynamicData[at + 2] = slot.PositionSize.Z;
+				dynamicData[at + 3] = slot.PositionSize.W;
+				dynamicData[stride + at + 0] = colour.X;
+				dynamicData[stride + at + 1] = colour.Y;
+				dynamicData[stride + at + 2] = colour.Z;
+				dynamicData[stride + at + 3] = slot.Params.Y;
+				dynamicData[stride * 2 + at + 0] = slot.Spot.X;
+				dynamicData[stride * 2 + at + 1] = slot.Spot.Y;
+				dynamicData[stride * 2 + at + 2] = slot.Spot.Z;
+				dynamicData[stride * 2 + at + 3] = slot.Params.Z;
+				dynamicData[stride * 3 + at + 0] = slot.Params.W;
+				dynamicData[stride * 3 + at + 1] = 0f;
+				dynamicData[stride * 3 + at + 2] = 0f;
+				dynamicData[stride * 3 + at + 3] = 0f;
+			}
+
+			if (dynamicBuffer == 0)
+			{
+				dynamicBuffer = GL.GenBuffer();
+				GL.BindBuffer(BufferTarget.UniformBuffer, dynamicBuffer);
+				GL.BufferData(BufferTarget.UniformBuffer, dynamicData.Length * sizeof(float), IntPtr.Zero, BufferUsageHint.StreamDraw);
+			}
+
+			// A new store for each cloud (orphaned): the last cloud's draw may still read the old one.
+			GL.BindBuffer(BufferTarget.UniformBuffer, dynamicBuffer);
+			GL.BufferData(BufferTarget.UniformBuffer, dynamicData.Length * sizeof(float), dynamicData, BufferUsageHint.StreamDraw);
+			GL.BindBuffer(BufferTarget.UniformBuffer, 0);
+			GL.BindBufferBase(BufferRangeTarget.UniformBuffer, DynamicLightBinding, dynamicBuffer);
+			program.SetInt("volDynamicCount", count);
+			program.SetFloat("volWorldScale", volume.WorldScale);
+			program.SetFloat("volDynamicGlow", volume.LightGlow);
 		}
 
 		// The tiling detail noise every object shares: made once.

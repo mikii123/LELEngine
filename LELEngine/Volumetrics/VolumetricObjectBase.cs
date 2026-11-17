@@ -43,6 +43,12 @@ namespace LELEngine.Volumetrics
 		/// </summary>
 		public const int MaxBakedLights = 64;
 
+		/// <summary>
+		///     Most dynamic lights: the scene lights set to <see cref="LightVolumeMode.Dynamic" /> that reach the shape, the
+		///     nearest to the camera first, worked out in the march (a pixel's ray takes up to 16 of them).
+		/// </summary>
+		public const int MaxDynamicLights = 128;
+
 		[Header("Shape")]
 		public VolumeShape Shape = VolumeShape.Box;
 
@@ -255,7 +261,9 @@ namespace LELEngine.Volumetrics
 		private readonly List<VolumeLightSlot> hashSlots = new List<VolumeLightSlot>();
 		private readonly List<VolumeLightSlot> hashBaked = new List<VolumeLightSlot>();
 		private readonly List<(global::Light light, float distance)> bakedCandidates = new List<(global::Light, float)>();
+		private readonly List<(global::Light light, float distance)> dynamicCandidates = new List<(global::Light, float)>();
 		private bool warnedLeftOut;
+		private bool warnedDynamicLeftOut;
 
 		#endregion
 
@@ -446,6 +454,9 @@ namespace LELEngine.Volumetrics
 		/// <summary>Live scene lights that reached the shape beyond its channels at the last count, left out of its light.</summary>
 		public int LiveLeftOut { get; private set; }
 
+		/// <summary>Dynamic scene lights in the cloud's light when it was last drawn.</summary>
+		public int DynamicCount { get; private set; }
+
 		/// <summary>A short line about the cloud: voxels, memory, state (the inspector shows it).</summary>
 		public string Describe()
 		{
@@ -460,6 +471,11 @@ namespace LELEngine.Volumetrics
 			megabytes += transportTextures * transportVoxels * (8.0 * 8.0 / 7.0) / (1024.0 * 1024.0);
 			string state = data == null ? "not made yet" : data.Ready ? data.Pending ? "ready, being made again" : "ready" : "being made";
 			string lights = made && data.LightCount + data.BakedCount > 0 ? data.BakedCount > 0 ? $", {data.LightCount} live lights and {data.BakedCount} baked" : $", {data.LightCount} live lights" : "";
+			if (made && DynamicCount > 0)
+			{
+				lights += $", {DynamicCount} dynamic";
+			}
+
 			if (LiveLeftOut > 0)
 			{
 				lights += $"; {LiveLeftOut} more live lights reach it and are left out (8 channels: set lamps to Baked)";
@@ -755,6 +771,12 @@ namespace LELEngine.Volumetrics
 					continue;
 				}
 
+				if (light.VolumeMode == LightVolumeMode.Dynamic)
+				{
+					// Worked out in the march (GatherDynamicLights): no part of the transport.
+					continue;
+				}
+
 				if (light.VolumeMode == LightVolumeMode.Baked)
 				{
 					bakedCandidates.Add((light, distance));
@@ -789,6 +811,61 @@ namespace LELEngine.Volumetrics
 
 				bakedCandidates.Clear();
 			}
+		}
+
+		/// <summary>
+		///     The scene lights set to <see cref="LightVolumeMode.Dynamic" /> that reach the shape this frame, as slots in the
+		///     cloud's local space (the march works them out at each step, VolumetricMarch.shader's VOL_DYNAMIC_LIGHTS), the
+		///     nearest to <paramref name="camera" /> first, at most <see cref="MaxDynamicLights" /> (the rest are left out,
+		///     warned once). Their colour is <see cref="VolumeLightSlot.Color" /> times the slot's factor: the radiance times
+		///     the volumetric strength.
+		/// </summary>
+		internal void GatherDynamicLights(List<VolumeLightSlot> slots, Matrix4 worldToLocal, Vector3 camera)
+		{
+			slots.Clear();
+			DynamicCount = 0;
+			if (!SceneLights || global::Light.Active.Count == 0)
+			{
+				return;
+			}
+
+			float worldScale = WorldScale;
+			Vector3 half = Size * 0.5f;
+			foreach (global::Light light in global::Light.Active)
+			{
+				if (light == null || light.IsDestroyed || !light.isActiveAndEnabled || light.VolumeMode != LightVolumeMode.Dynamic || !light.AffectsVolumes
+				    || light.VolumetricStrength <= 0f || light.Range <= 0f || light.Intensity <= 0f)
+				{
+					continue;
+				}
+
+				Vector3 local = Vector3.TransformPosition(light.transform.position, worldToLocal);
+				Vector3 outside = Vector3.ComponentMax(Vector3.ComponentMax(-half - local, local - half), Vector3.Zero);
+				if (outside.Length * worldScale < light.Range)
+				{
+					dynamicCandidates.Add((light, (light.transform.position - camera).LengthSquared));
+				}
+			}
+
+			if (dynamicCandidates.Count > 1)
+			{
+				StableSort(dynamicCandidates, (a, b) => a.distance.CompareTo(b.distance));
+			}
+
+			int count = Math.Min(dynamicCandidates.Count, MaxDynamicLights);
+			for (int i = 0; i < count; i++)
+			{
+				slots.Add(SceneSlot(dynamicCandidates[i].light, worldToLocal));
+			}
+
+			if (dynamicCandidates.Count > MaxDynamicLights && !warnedDynamicLeftOut)
+			{
+				warnedDynamicLeftOut = true;
+				Debug.LogWarning($"[Volumetrics] {gameObject?.Name}: {dynamicCandidates.Count} dynamic lights reach it, more than {MaxDynamicLights}: the ones furthest from the camera are left out of its light");
+			}
+
+			DynamicCount = count;
+			dynamicCandidates.Clear();
 		}
 
 		// A scene light as a slot of the transport (the cloud's local space).

@@ -27,7 +27,16 @@ public enum LightVolumeMode
 	///     same however many there are, and any change of one (place, range, colour, intensity, on or off) works its part
 	///     of the texture out again. For lights that stay as they are (lamps).
 	/// </summary>
-	Baked
+	Baked,
+
+	/// <summary>
+	///     Worked out where the cloud is drawn, at each step of its march, with nothing made beforehand: it may move,
+	///     come and go every frame for nothing (bullets, explosions, engines). It takes no channel (up to 128 a cloud, the
+	///     nearest to the camera; a pixel's ray takes the first 16 whose reach it crosses) and costs the pixels whose rays
+	///     pass through its reach. The cloud between it and a point is a rough estimate (two samples), and its light is not
+	///     in the cloud's light in the GI.
+	/// </summary>
+	Dynamic
 }
 
 /// <summary>
@@ -87,7 +96,7 @@ public sealed class Light : Behaviour
 	[Tooltip("The light lights the volumetric objects within its range, through their cloud")]
 	public bool AffectsVolumes = true;
 
-	[Tooltip("How the volumetric objects take it. Live: a channel of the cloud's light transport of its own (8 a cloud, shared with the cloud's own lights and the other directional lights; live lights past them are left out, with a warning): colour and intensity free every frame, it may move. Baked: summed into one texture with the cloud's other baked lights (up to 64): any change of it (place, range, colour, intensity, on or off) works its part out again, so it suits lights that stay as they are. A script that makes a light sets this right after AddComponent, before the frame renders")]
+	[Tooltip("How the volumetric objects take it. Live: a channel of the cloud's light transport of its own (8 a cloud, shared with the cloud's own lights and the other directional lights; live lights past them are left out, with a warning): colour and intensity free every frame; moving works its part out again. Baked: summed into one texture with the cloud's other baked lights (up to 64): any change of it (place, range, colour, intensity, on or off) works its part out again, so it suits lights that stay as they are. Dynamic: worked out at each step of the cloud's march, nothing made beforehand: it may move, come and go every frame for nothing (bullets, explosions), costs the pixels whose rays cross its reach; the cloud between it and a point is a rough estimate. A script that makes a light sets this right after AddComponent, before the frame renders")]
 	[ShowIf(nameof(AffectsVolumes))]
 	public LightVolumeMode VolumeMode = LightVolumeMode.Live;
 

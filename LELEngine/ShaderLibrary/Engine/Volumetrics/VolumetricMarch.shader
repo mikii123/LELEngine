@@ -27,6 +27,12 @@ void main()
 //             near the camera, where the cloud fills the view when it is inside).
 //   VOL_LIGHTS        the live lights' transport (two fetches a step): only while one of them is lit.
 //   VOL_BAKED_LIGHTS  the baked lights' texture (one fetch a step): only while there are baked lights that shine.
+//   VOL_DYNAMIC_LIGHTS  the scene lights set to Dynamic (Light.VolumeMode) that reach the cloud this frame, worked out
+//                     here with nothing made beforehand: the pixel's ray first takes up to 16 of them whose reach it
+//                     crosses inside the shape (the list is the nearest to the camera first), then each step inside a
+//                     light's reach adds its light as the transport has it (VolumetricLightTransport.shader's scene
+//                     light: the falloff in world units, the cone, the cloud on the way and the glow), with the cloud on
+//                     the way from two samples at a level that fits their spacing (the transport takes five).
 // The lights are variants, not uniform switches: a switched-off fetch in the loop still cost a tenth of the march on
 // AMD (the driver flattens the branch), and most clouds have no light lit most of the time.
 
@@ -82,6 +88,20 @@ uniform ivec4 volDirectionalSlots;   // their slots
 uniform vec4 volDirectionalDirs[4];  // xyz: local, towards the light
 uniform vec4 volDirectionalColors[4]; // rgb: linear, times its strengths
 #endif
+#ifdef VOL_DYNAMIC_LIGHTS
+#define VOL_MAX_DYNAMIC 128
+#define VOL_DYNAMIC_PER_RAY 16
+layout(std140, binding = 8) uniform VolDynamicLights
+{
+	vec4 volDynamicPosition[VOL_MAX_DYNAMIC]; // xyz local, w its range (world units)
+	vec4 volDynamicColor[VOL_MAX_DYNAMIC];    // rgb radiance x volumetric strength, w the source's radius (world units)
+	vec4 volDynamicSpot[VOL_MAX_DYNAMIC];     // xyz the spot's direction (local, unit), w cos outer (-2: no cone)
+	vec4 volDynamicCone[VOL_MAX_DYNAMIC];     // x the spot's scale
+};
+uniform int volDynamicCount;
+uniform float volWorldScale;         // world units per local unit
+uniform float volDynamicGlow;        // the cloud's light glow (VolumetricObjectBase.LightGlow)
+#endif
 uniform mat4 volLocalToWorld;
 uniform int volReceiveShadows;
 uniform int volSunShadowLight;       // the sun's index among the directional lights: its shadow maps (Engine/Shadows.glsl)
@@ -118,6 +138,47 @@ float VolSceneShadow(vec3 worldPos)
 
 	return mix(1.0, texture(ShadowMap, proj), ShadowFade(worldPos));
 }
+
+#ifdef VOL_DYNAMIC_LIGHTS
+// A dynamic light's light at p (local), as the transport works out a scene light's: radiance x falloff x cone x the cloud
+// on the way (and its glow). Zero beyond its reach.
+vec3 VolDynamicLight(vec3 p, int i)
+{
+	vec4 position = volDynamicPosition[i];
+	vec3 offset = position.xyz - p;
+	float dist = length(offset);
+	float d = dist * volWorldScale;
+	float range = position.w;
+	if (d >= range)
+	{
+		return vec3(0.0);
+	}
+
+	vec4 colour = volDynamicColor[i];
+	float d2 = d * d;
+	float r2 = range * range;
+	float fade = clamp(1.0 - (d2 * d2) / (r2 * r2), 0.0, 1.0);
+	float falloff = fade * fade / max(d2, colour.w * colour.w);
+	vec4 spot = volDynamicSpot[i];
+	if (spot.w > -1.5)
+	{
+		vec3 towards = offset / max(dist, 1e-6);
+		float cone = clamp((dot(-towards, spot.xyz) - spot.w) * volDynamicCone[i].x, 0.0, 1.0);
+		falloff *= cone * cone;
+		if (falloff <= 0.0)
+		{
+			return vec3(0.0);
+		}
+	}
+
+	// The cloud between: two samples a quarter and three quarters of the way, at the level of their spacing.
+	float spacing = dist * 0.5;
+	float lod = max(log2(max(spacing, 1e-6) / volVoxel) - 0.5, 0.0);
+	float tau = (textureLod(volLit, (p + offset * 0.25) / volSize + 0.5, lod).r + textureLod(volLit, (p + offset * 0.75) / volSize + 0.5, lod).r)
+		* spacing * volSigma;
+	return colour.rgb * (falloff * (exp(-tau) + volDynamicGlow * exp(-tau * 0.15)));
+}
+#endif
 
 // Where the ray leaves the occupancy block p is in (local units along the ray from p).
 float VolBlockExit(vec3 p, vec3 dir)
@@ -176,6 +237,34 @@ void main()
 
 	float jitter = fract(VolNoise(pixel) + volJitterOffset);
 	vec3 rayDir = normalize(ray.dir);
+
+#ifdef VOL_DYNAMIC_LIGHTS
+	// The dynamic lights whose reach this ray crosses inside the shape (in front of the scene): their indices, eight bits
+	// each, sixteen at most; the steps below look at these alone.
+	uvec4 dynamicList = uvec4(0u);
+	int dynamicCount = 0;
+	for (int i = 0; i < volDynamicCount && dynamicCount < VOL_DYNAMIC_PER_RAY; i++)
+	{
+		vec4 position = volDynamicPosition[i];
+		float reach = position.w / volWorldScale;
+		vec3 toLight = position.xyz - ray.origin;
+		float along = dot(toLight, ray.dir);
+		float across2 = dot(toLight, toLight) - along * along;
+		if (across2 >= reach * reach)
+		{
+			continue;
+		}
+
+		float chord = sqrt(reach * reach - across2);
+		if (along + chord <= range.x || along - chord >= range.y)
+		{
+			continue;
+		}
+
+		dynamicList[dynamicCount >> 2] |= uint(i) << uint((dynamicCount & 3) * 8);
+		dynamicCount++;
+	}
+#endif
 
 	float distanceSum = 0.0;
 	float weightSum = 0.0;
@@ -281,6 +370,13 @@ void main()
 #endif
 #ifdef VOL_BAKED_LIGHTS
 				light += textureLod(volLightsC, uvw, max(lod - 1.0, 0.0)).rgb;
+#endif
+#ifdef VOL_DYNAMIC_LIGHTS
+				for (int k = 0; k < dynamicCount; k++)
+				{
+					int index = int((dynamicList[k >> 2] >> uint((k & 3) * 8)) & 255u);
+					light += VolDynamicLight(p, index);
+				}
 #endif
 
 				color += weight * light;

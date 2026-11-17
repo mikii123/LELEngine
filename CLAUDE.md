@@ -1955,6 +1955,26 @@ switches.
   background. A change of the live set (a light's mode switched, a live light coming or going) is a build in the
   background. A build that only changes one kind keeps the other's textures (`KeepLive` / `KeepBaked`). The inspector's
   line (`Describe`) counts both and their textures. TestGame's lamps (`vollamps=N`) are Baked, `vollamplive=1` Live.
+- Dynamic lights (`LightVolumeMode.Dynamic`, 2026-11-17, the user's ask: lights moving every frame with each bullet):
+  worked out in the march (`VolumetricMarch.shader` variant `VOL_DYNAMIC_LIGHTS`), with nothing made beforehand, so they
+  move, come and go every frame for nothing. `VolumetricObjectBase.GatherDynamicLights` (each draw, per cloud and camera):
+  the Dynamic lights whose range reaches the shape, the nearest to the camera first, at most `MaxDynamicLights` 128
+  (the rest left out, warned once); `VolumetricRuntime.SetDynamicLights` writes them into a std140 uniform buffer on
+  binding 8 (`VolDynamicLights`: local position + range, radiance x volumetric strength + source radius, spot direction
+  + cos outer, spot scale; orphaned per cloud). The pixel's ray first keeps up to 16 (`VOL_DYNAMIC_PER_RAY`, eight-bit
+  indices packed in a uvec4) whose range sphere it crosses inside the shape and in front of the scene; each step with
+  cloud adds `VolDynamicLight`: the scene light of the transport exactly (falloff in world units, cone, e^-tau +
+  glow e^-0.15 tau) with tau from two samples at 1/4 and 3/4 of the way at the level of their spacing (the transport
+  takes five). Not in the transport (`GatherLightSlots` skips them) nor in the cloud's light in the GI (the media
+  volume). The march's variants are 16 now (`MarchProgram(hq, lights, baked, dynamic)`), a preset's 8 made together.
+  The inspector's line counts them ("N dynamic").
+  - Verified (TestGame, night, the storm from inside): the same lamp (`vollight=3`) Live and Dynamic: the frames look the
+    same, Dynamic 0.93-0.94 of Live's light (the two-sample tau). Tracers (`volbullets=N`: lights of range 6 crossing
+    the storm at 60 u/s, `volbulletshadows=0` their Volumetric Shadows off): the clouds' draw (`Transparent.Volumetrics`,
+    780M, 1280 x 720) 0.76 ms with none, +0.14 / +0.26 / +0.44 ms with 16 / 64 / 128; 20 lamps Dynamic 1.07 ms against
+    0.90 Baked. CPU: +1.2 ms a frame for 64 moving lights, of which ~0.65 ms is `UpdateLightTransmittance` (each moved
+    light's six-way cloud transmittance for surfaces, for the up to 32 lights that shine): bullets should have Volumetric
+    Shadows off. The rest is per-light bookkeeping (light list, slots).
 - The march's lights are compile-time variants (`VOL_LIGHTS`: the two live textures, `VOL_BAKED_LIGHTS`: the baked one;
   `VolumetricRuntime.MarchProgram(hq, lights, baked)`, a preset's four made together): a fetch switched off by a
   uniform in the loop still cost 0.14 ms of 1.45 on the 780M (the driver flattens the branch).

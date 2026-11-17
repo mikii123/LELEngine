@@ -224,6 +224,18 @@ namespace TestGame.Scenes
 			/// <summary>vollamplive=1: the lamps are live lights of the clouds (Light.VolumeMode); default baked.</summary>
 			public bool VolumeLampsLive;
 
+			/// <summary>vollampdynamic=1: the lamps are dynamic lights of the clouds (worked out in the march).</summary>
+			public bool VolumeLampsDynamic;
+
+			/// <summary>vollightdynamic=1: the moving lamp (vollight=) is a dynamic light of the clouds; default live.</summary>
+			public bool VolumeMovingLightDynamic;
+
+			/// <summary>volbullets=N: small dynamic lights flying through the storm (tracer rounds).</summary>
+			public int VolumeBullets;
+
+			/// <summary>volbulletshadows=0: the tracers' Volumetric Shadows off (clouds do not dim their light on surfaces).</summary>
+			public bool VolumeBulletShadows = true;
+
 			/// <summary>volflash=0: the storm's own lights stay dark (steady costs); 2: they stay lit.</summary>
 			public int VolumeFlash = 1;
 

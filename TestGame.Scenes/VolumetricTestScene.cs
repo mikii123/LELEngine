@@ -107,8 +107,9 @@ namespace TestGame.Scenes
 				light.Intensity = 60f;
 				light.Range = options.VolumeLampRange;
 				light.SourceRadius = 0.5f;
-				// vollamplive=1: the lamps take live channels (8 a cloud: the rest are left out) instead of the baked texture.
-				light.VolumeMode = options.VolumeLampsLive ? LightVolumeMode.Live : LightVolumeMode.Baked;
+				// vollamplive=1: the lamps take live channels (8 a cloud: the rest are left out) instead of the baked texture;
+				// vollampdynamic=1: they are worked out in the march.
+				light.VolumeMode = options.VolumeLampsDynamic ? LightVolumeMode.Dynamic : options.VolumeLampsLive ? LightVolumeMode.Live : LightVolumeMode.Baked;
 				if (options.VolumeLampPulse)
 				{
 					lamp.AddComponent<VolumetricLampPulse>().Phase = i * 0.9f;
@@ -182,7 +183,25 @@ namespace TestGame.Scenes
 				light.Intensity = 120f;
 				light.Range = 14f;
 				light.SourceRadius = 0.5f;
+				// vollightdynamic=1: worked out in the march (nothing reworked as it moves).
+				light.VolumeMode = options.VolumeMovingLightDynamic ? LightVolumeMode.Dynamic : LightVolumeMode.Live;
 				lamp.AddComponent<VolumetricLightMover>();
+			}
+
+			// volbullets=N: small dynamic lights flying straight through the storm and round again, like tracer rounds.
+			for (int i = 0; i < options.VolumeBullets; i++)
+			{
+				GameObject bullet = scene.CreateGameObject("Bullet " + (i + 1));
+				Light light = bullet.AddComponent<Light>();
+				light.VolumeMode = LightVolumeMode.Dynamic;
+				light.Color = i % 3 == 0 ? new Color4(0.35f, 0.75f, 1f, 1f) : new Color4(1f, 0.6f, 0.25f, 1f);
+				light.Intensity = 40f;
+				light.Range = 6f;
+				light.SourceRadius = 0.3f;
+				light.AffectsGI = false;
+				// volbulletshadows=0: clouds do not dim their light on surfaces (no CPU transmittance as they move).
+				light.VolumetricShadows = options.VolumeBulletShadows;
+				bullet.AddComponent<VolumetricBullet>().Index = i;
 			}
 
 			if (cubeInFog)
@@ -300,6 +319,26 @@ namespace TestGame.Scenes
 			}
 
 			transform.position = new Vector3(x, 14f, 42f);
+		}
+	}
+
+	/// <summary>
+	///     A tracer round (volbullets=N): flies straight across the storm at 60 units a second along a line of its own and
+	///     starts over, its place a function of the time (frames dumped at a time are the same in every run).
+	/// </summary>
+	public sealed class VolumetricBullet : Behaviour
+	{
+		public int Index;
+
+		public override void Update()
+		{
+			// A line through the storm per bullet (golden-angle spread), 120 units long, two seconds a pass.
+			float angle = Index * 2.399963f;
+			float height = 10f + 8f * MathF.Sin(Index * 1.31f);
+			var across = new Vector3(MathF.Cos(angle), 0.15f * MathF.Sin(Index * 0.7f), MathF.Sin(angle));
+			var middle = new Vector3(MathF.Sin(Index * 0.9f) * 12f, height, 42f + MathF.Cos(Index * 1.7f) * 12f);
+			float phase = ((float)Time.timeD * 0.5f + Index * 0.37f) % 1f;
+			transform.position = middle + across.Normalized() * ((phase - 0.5f) * 120f);
 		}
 	}
 
