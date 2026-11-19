@@ -76,6 +76,10 @@ namespace LELEngine.Editor
 		private string iconPadding = "";
 		private float iconPaddingFont;
 
+		// The visibility column at the window's left (the eye: hidden in the scene view), the rows indented past it.
+		private float gutterX;
+		private float gutterWidth;
+
 		#endregion
 
 		#region Constructors
@@ -224,12 +228,16 @@ namespace LELEngine.Editor
 			GameObject deferredReparent = null;
 			Transform deferredParent = null;
 			rows.Clear();
+			gutterX = ImGui.GetCursorScreenPos().X;
+			gutterWidth = ImGui.GetTextLineHeight() + 2f * RowPadding + 2f;
+			ImGui.Indent(gutterWidth);
 			foreach (GameObject root in scene.GetRootGameObjects())
 			{
 				DrawNode(root, ref deferredReparent, ref deferredParent);
 			}
 
 			(rows, shownRows) = (shownRows, rows);
+			ImGui.Unindent(gutterWidth);
 
 			// Not drawn at all (hidden from the hierarchy): nothing to reveal.
 			revealSelection = null;
@@ -361,7 +369,7 @@ namespace LELEngine.Editor
 			}
 
 			ImGui.PushID(go.Id.ToString());
-			ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags.OpenOnArrow | ImGuiTreeNodeFlags.OpenOnDoubleClick | ImGuiTreeNodeFlags.SpanFullWidth;
+			ImGuiTreeNodeFlags flags = ImGuiTreeNodeFlags.OpenOnArrow | ImGuiTreeNodeFlags.SpanFullWidth;
 			// Hidden children do not count: an arrow over nothing would look like a broken object.
 			bool leaf = !TempObjects.HasVisibleChildren(go);
 			bool readOnly = TempObjects.IsReadOnly(go);
@@ -389,6 +397,8 @@ namespace LELEngine.Editor
 			PrefabInstance instance = go.prefabInstance;
 			Prefab openTarget = instance == null ? null : PrefabUtility.IsPrefabInstanceRoot(go) ? instance.Prefab : PrefabUtility.GetNestedPrefab(go);
 			bool open;
+			NVector2 rowMin;
+			NVector2 rowMax;
 			flags |= ImGuiTreeNodeFlags.FramePadding;
 			PushRowStyle();
 			ImGui.SetNextItemAllowOverlap();
@@ -397,6 +407,8 @@ namespace LELEngine.Editor
 			if (renaming == go)
 			{
 				open = EditorGui.TreeNodeEx(iconPadding + "###node", flags);
+				rowMin = ImGui.GetItemRectMin();
+				rowMax = ImGui.GetItemRectMax();
 				DrawIcon(go, instance, rowX);
 				ImGui.SameLine();
 				if (focusRename)
@@ -426,6 +438,8 @@ namespace LELEngine.Editor
 				}
 
 				open = EditorGui.TreeNodeEx(iconPadding + go.Name + "###node", flags);
+				rowMin = ImGui.GetItemRectMin();
+				rowMax = ImGui.GetItemRectMax();
 				// From the label on: the row spans the arrow too, and a click there would fold instead of select.
 				TestAnchors.Record("hierarchy:" + go.Name, new NVector2(rowX + ImGui.GetTreeNodeToLabelSpacing(), ImGui.GetItemRectMin().Y), ImGui.GetItemRectMax());
 				if (color.HasValue)
@@ -466,7 +480,8 @@ namespace LELEngine.Editor
 					pressed = null;
 				}
 
-				if (EditorGui.IsItemDoubleClicked() && leaf)
+				// A double click frames the object, as in Unity; only the arrow folds (a double click there folds twice).
+				if (EditorGui.IsItemDoubleClicked() && !ImGui.IsItemToggledOpen())
 				{
 					editor.SceneView.FrameObject(go);
 				}
@@ -561,6 +576,12 @@ namespace LELEngine.Editor
 				}
 
 				PrefabMenus.DrawObjectMenu(editor, go);
+				ImGui.Separator();
+				if (EditorMenu.Item("Show All in Scene View", "", false, editor.Visibility.AnyHidden))
+				{
+					editor.Visibility.ShowAll();
+				}
+
 				ImGui.EndPopup();
 			}
 
@@ -574,6 +595,7 @@ namespace LELEngine.Editor
 				DrawOpenArrow(openTarget);
 			}
 
+			DrawVisibility(go, rowMin, rowMax);
 			if (open)
 			{
 				foreach (Transform child in new System.Collections.Generic.List<Transform>(go.transform.Children))
@@ -652,6 +674,50 @@ namespace LELEngine.Editor
 		}
 
 		/// <summary>The arrow at the end of a prefab root's row: opens the prefab for editing.</summary>
+		/// <summary>
+		///     The eye in the column at the row's left (Unity's scene visibility): a click hides the object and everything under
+		///     it in the scene view, or shows them again; Alt + click only the object. Shown while the row is hovered, and
+		///     always for a hidden object (a closed eye) or one with hidden objects under it (a dim eye).
+		/// </summary>
+		private void DrawVisibility(GameObject go, NVector2 rowMin, NVector2 rowMax)
+		{
+			float height = rowMax.Y - rowMin.Y;
+			var min = new NVector2(gutterX, rowMin.Y);
+			ImGui.SameLine();
+			ImGui.SetCursorScreenPos(min);
+			// The last item of the row: it decides where the next row starts.
+			PushRowStyle();
+			bool clicked = EditorGui.InvisibleButton("Visibility " + go.Name + "###visibility", new NVector2(gutterWidth, height));
+			ImGui.PopStyleVar(2);
+			SceneVisibility visibility = editor.Visibility;
+			bool hidden = visibility.IsHidden(go);
+			bool hovered = ImGui.IsItemHovered();
+			if (clicked)
+			{
+				visibility.SetHidden(go, !hidden, ImGui.GetIO().KeyAlt);
+				hidden = !hidden;
+			}
+
+			bool hiddenBelow = !hidden && visibility.HasHiddenChildren(go);
+			ImDrawListPtr draw = ImGui.GetWindowDrawList();
+			if (hovered)
+			{
+				draw.AddRectFilled(ImGui.GetItemRectMin(), ImGui.GetItemRectMax(), ImGui.GetColorU32(ImGuiCol.ButtonHovered), 2f);
+				ImGui.SetTooltip((hidden ? "Show in the Scene view" : "Hide in the Scene view") + " with the objects under it (Alt: the object alone)");
+			}
+
+			bool rowHovered = ImGui.IsWindowHovered() && ImGui.IsMouseHoveringRect(min, rowMax);
+			if (!hidden && !hiddenBelow && !rowHovered)
+			{
+				return;
+			}
+
+			float icon = ImGui.GetTextLineHeight() * 0.95f;
+			NVector2 at = min + new NVector2((gutterWidth - icon) * 0.5f, (height - icon) * 0.5f);
+			uint color = hidden || hovered ? ImGui.GetColorU32(ImGuiCol.Text) : ImGui.GetColorU32(ImGuiCol.TextDisabled);
+			EditorIcons.Draw(draw, at, icon, hidden ? IconKind.EyeClosed : IconKind.Eye, color);
+		}
+
 		private void DrawOpenArrow(Prefab prefab)
 		{
 			NVector2 rowMin = ImGui.GetItemRectMin();

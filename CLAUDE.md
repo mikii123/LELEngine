@@ -1334,7 +1334,7 @@ lighting and the engine's other features. Octahedral impostors, baked into atlas
   the same run (kill, then `screenshot Scene`: no exception).
 - Temporary and read-only objects (2026-11-14, the user's ask: a scene's storm showed a fold arrow over nothing, its
   script's lights and bolts being `HideAndDontSave`; "show them, as non-editable temp objects"): a row's arrow counts
-  only children the hierarchy lists (`TempObjects.HasVisibleChildren`; also the double click that frames a leaf).
+  only children the hierarchy lists (`TempObjects.HasVisibleChildren`).
   `HideFlags.DontSave` (on the object or a parent) shows dimmed with a "temp" tag at the row's right end and a tooltip;
   new `HideFlags.NotEditable` (4; `DontSaveAndNotEditable` for a script's own helpers) is shown but never changed by the
   editor: inspector values, header (name, active, layer), component toggles and materials disabled (headers still
@@ -1343,6 +1343,24 @@ lighting and the engine's other features. Octahedral impostors, baked into atlas
   refuse with a warning; automation `rename` / `set` / `reparent` / `addcomponent` throw (`TempObjects.RequireEditable`).
   Scripts change such objects freely. Verified on a game's scene: the storm's eight flash lights listed under it,
   tagged, the inspector disabled, CLI rename / set refused, a Delete from the context menu refused and logged.
+- Scene visibility (2026-11-19, the user's ask: the eye beside an object in the hierarchy; Unity's): a column at the
+  hierarchy's left (`HierarchyPanel.DrawVisibility`, element `button:Visibility <name>`); a click hides the object and
+  everything under it in the scene view or shows them, Alt + click the object alone; a closed eye on hidden objects, a dim
+  eye on one with hidden objects under it, an open eye on a hovered row; row menu "Show All in Scene View". The scene view
+  draws nothing of a hidden object and its clicks and navigation depth go through it; the game view, play mode's game and
+  builds draw it as always. Engine: `Renderer.HiddenObjects` (`Func<GameObject, bool>`, null = none; `RenderContext.Hides`):
+  `Partition` leaves the renderers out of every list (drawing, shadows, GI, GPU scene), trails and custom renderers
+  (`TransparentPass`), clouds (`VolumetricRuntime.Collect`, `VolumetricMedia`) and effects (`VfxInstance.Owner`) are
+  skipped; only the scene view's renderer gets a filter (`SceneVisibility.Filter`, also its sized captures). The state is
+  the user's view, not the scene's data: `SceneVisibility` keeps object ids per project and scene / prefab in
+  hierarchy.json (`HierarchyExpansion` entries have `Hidden` beside `Expanded`), no undo, the scene is not dirtied; a new
+  scene keeps its hidden objects when first saved. Verified on a scratch project by CLI (`click "button:Visibility Cube"`,
+  sized screenshots): the cube and its shadow gone from Scene, still in Game, in play mode too; a parent hid its child,
+  shown again; the dim eye; kept over a restart (`hierarchyfile=`); the scene not dirtied. Not checked by a run: Alt + click
+  and the hover eye (no CLI modifier or hover), effects, clouds and trails hidden (same check as the meshes).
+- A double click on a hierarchy row frames the object in the scene view, with or without children, and never folds
+  it: only the arrow folds (2026-11-19, the user's ask; no `OpenOnDoubleClick`, and a double click on the arrow, which
+  toggles twice, frames nothing).
 - Hierarchy folding (2026-10-24): rows start folded; `HierarchyExpansion` keeps the unfolded rows (`Expanded`) per project folder + scene / prefab path
   (object ids) in `%APPDATA%\LELEngine\Editor\hierarchy.json`, never in the project; saved 0.5 s after a change and
   in `SaveEditorState`. Automated runs read it and save nothing unless `hierarchyfile=path`. The editor has no

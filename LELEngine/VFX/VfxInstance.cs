@@ -234,6 +234,9 @@ namespace LELEngine.VFX
 		/// <summary>The component's layer: the cameras whose culling mask has it draw the effect (and its shadows count with the lighting camera's).</summary>
 		public int Layer;
 
+		/// <summary>The component's object: a renderer that hides it (<see cref="Rendering.Renderer.HiddenObjects" />) draws nothing of the effect.</summary>
+		public GameObject Owner;
+
 		public bool Playing { get; private set; }
 		public bool Paused;
 		public float PlayRate = 1f;
@@ -517,7 +520,7 @@ namespace LELEngine.VFX
 		/// <summary>The outputs of the given kind visible in the view, for the renderer's passes.</summary>
 		public void CollectDraws(RenderContext renderContext, List<VfxDrawEntry> entries, bool transparent)
 		{
-			if (disposed || !enabled || programs == null || programs.HasErrors || !OnLayers(renderContext.CullingMask))
+			if (disposed || !enabled || programs == null || programs.HasErrors || !OnLayers(renderContext.CullingMask) || renderContext.Hides(Owner))
 			{
 				return;
 			}
@@ -595,7 +598,7 @@ namespace LELEngine.VFX
 		/// <summary>Draws the shadow-casting outputs into the bound shadow map (the light's view, culled by its frustum).</summary>
 		public void DrawShadows(RenderContext renderContext, Matrix4 lightView, Matrix4 lightProjection)
 		{
-			if (disposed || !enabled || programs == null || programs.HasErrors || !HasShadowCasters || !OnLayers(renderContext.CullingMask))
+			if (disposed || !enabled || programs == null || programs.HasErrors || !HasShadowCasters || !OnLayers(renderContext.CullingMask) || renderContext.Hides(Owner))
 			{
 				return;
 			}
@@ -671,6 +674,7 @@ namespace LELEngine.VFX
 
 			Disable();
 			disposed = true;
+			Owner = null;
 			ReleaseSystems();
 		}
 

@@ -77,6 +77,14 @@ namespace LELEngine.Rendering
 		/// </summary>
 		public Framebuffer OutputTarget { get; set; }
 
+		/// <summary>
+		///     Objects this renderer leaves out (null: none): true for an object nothing of it draws, in any camera of the
+		///     stack, its shadows and GI included (mesh renderers, trails, custom renderers, visual effects, volumetric
+		///     objects). Asked for every drawable object each frame, so keep it cheap. Other renderers of the same scene
+		///     (another view, cameras rendering into textures) draw them as usual.
+		/// </summary>
+		public Func<GameObject, bool> HiddenObjects { get; set; }
+
 		#endregion
 
 		#region PrivateFields
@@ -522,6 +530,7 @@ namespace LELEngine.Rendering
 				GIRenderers = index == lightingIndex && lists.HasGI ? lists.GI : lists.Opaque,
 				TransparentRenderers = lists.Transparent,
 				Behaviours = behaviours,
+				HiddenObjects = HiddenObjects,
 				RenderQueue = queue,
 				SceneTarget = SceneTarget,
 				OutputTarget = OutputTarget,
@@ -557,12 +566,13 @@ namespace LELEngine.Rendering
 			}
 
 			CameraLists lighting = cameraLists[lightingIndex];
+			Func<GameObject, bool> hidden = HiddenObjects;
 			stackOpaqueRenderers.Clear();
 			bool several = stack.Count > 1;
 			foreach (MeshRenderer renderer in renderers)
 			{
 				int bit = 1 << (renderer.gameObject.layer & 31);
-				if ((union & bit) == 0)
+				if ((union & bit) == 0 || hidden != null && hidden(renderer.gameObject))
 				{
 					continue;
 				}

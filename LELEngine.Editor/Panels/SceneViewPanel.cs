@@ -348,6 +348,7 @@ namespace LELEngine.Editor
 			target.Renderer.Settings.DebugPrimitives = true;
 			target.Renderer.Settings.RenderUI = false;
 			DrawGizmos();
+			target.Renderer.HiddenObjects = editor.Visibility.Filter;
 			target.Render(camera, editor.Scene);
 			// The gizmos queued for this image only: the editor's own frame queues its own.
 			Rendering.DebugDraw.Truncate(mark);
@@ -374,6 +375,8 @@ namespace LELEngine.Editor
 				// Game UI belongs to the game view only.
 				ViewRenderer.Renderer.Settings.RenderUI = false;
 				DrawGizmos();
+				// Objects hidden with the hierarchy's eye: this view only (the game view's renderer has no filter).
+				ViewRenderer.Renderer.HiddenObjects = editor.Visibility.Filter;
 				ViewRenderer.Render(camera, editor.Scene);
 				depthProbe.Capture(ViewRenderer.Renderer, camera);
 			}
@@ -924,7 +927,7 @@ namespace LELEngine.Editor
 			foreach (MeshRenderer renderer in scene.Renderers)
 			{
 				Mesh mesh = renderer.Mesh;
-				if (mesh != null && renderer.isActiveAndEnabled && renderer.gameObject.hideFlags == HideFlags.None)
+				if (mesh != null && renderer.isActiveAndEnabled && renderer.gameObject.hideFlags == HideFlags.None && !editor.Visibility.IsHidden(renderer.gameObject))
 				{
 					NearestBox(mesh.BoundsMin, mesh.BoundsMax, renderer.transform.LocalToWorld, ref distance);
 				}
@@ -932,7 +935,7 @@ namespace LELEngine.Editor
 
 			foreach (Volumetrics.VolumetricObjectBase volume in Volumetrics.VolumetricRuntime.Objects)
 			{
-				if (volume.isActiveAndEnabled && volume.gameObject?.scene == scene)
+				if (volume.isActiveAndEnabled && volume.gameObject?.scene == scene && !editor.Visibility.IsHidden(volume.gameObject))
 				{
 					NearestBox(volume.Size * -0.5f, volume.Size * 0.5f, volume.transform.LocalToWorld, ref distance);
 				}
@@ -969,7 +972,7 @@ namespace LELEngine.Editor
 			distance = float.MaxValue;
 			foreach (Volumetrics.VolumetricObjectBase volume in Volumetrics.VolumetricRuntime.Objects)
 			{
-				if (volume.isActiveAndEnabled && volume.gameObject?.scene == editor.Scene && volume.Raycast(position, ray, Math.Min(maxDistance, distance), out float t))
+				if (volume.isActiveAndEnabled && volume.gameObject?.scene == editor.Scene && !editor.Visibility.IsHidden(volume.gameObject) && volume.Raycast(position, ray, Math.Min(maxDistance, distance), out float t))
 				{
 					distance = Math.Min(distance, t);
 				}
@@ -1354,7 +1357,7 @@ namespace LELEngine.Editor
 			foreach (MeshRenderer renderer in scene.Renderers)
 			{
 				Mesh mesh = renderer.Mesh;
-				if (mesh == null || renderer.gameObject.hideFlags != HideFlags.None)
+				if (mesh == null || renderer.gameObject.hideFlags != HideFlags.None || editor.Visibility.IsHidden(renderer.gameObject))
 				{
 					continue;
 				}

@@ -340,7 +340,7 @@ namespace LELEngine.Volumetrics
 			var screen = new PixelRect(0, 0, context.Width, context.Height);
 			foreach (VolumetricObjectBase volume in objects)
 			{
-				if (!volume.isActiveAndEnabled || !volume.Ready || (context.CullingMask & (1 << (volume.gameObject.layer & 31))) == 0)
+				if (!volume.isActiveAndEnabled || !volume.Ready || (context.CullingMask & (1 << (volume.gameObject.layer & 31))) == 0 || context.Hides(volume.gameObject))
 				{
 					continue;
 				}

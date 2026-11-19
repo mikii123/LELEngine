@@ -43,6 +43,12 @@ namespace LELEngine.Editor
 		/// <summary>A right-pointing arrow head (open a prefab).</summary>
 		Open,
 
+		/// <summary>An open eye: shown in the scene view (the hierarchy's visibility column).</summary>
+		Eye,
+
+		/// <summary>A closed eye with lashes: hidden in the scene view.</summary>
+		EyeClosed,
+
 		// File kinds of the project panel (EditorIcons.KindOfFile).
 
 		Folder,
@@ -435,6 +441,38 @@ namespace LELEngine.Editor
 				case IconKind.Open:
 					draw.AddTriangleFilled(center + new NVector2(-s * 0.25f, -s * 0.45f), center + new NVector2(s * 0.35f, 0f), center + new NVector2(-s * 0.25f, s * 0.45f), color);
 					break;
+				case IconKind.Eye:
+				{
+					// Two lids (arcs of circles below and above the centre, meeting at the corners) and the iris.
+					float lid = s * 1.3f;
+					float drop = MathF.Sqrt(lid * lid - s * 0.9f * s * 0.9f);
+					float half = MathF.Asin(s * 0.9f / lid);
+					draw.PathArcTo(center + new NVector2(0f, drop), lid, -MathF.PI * 0.5f - half, -MathF.PI * 0.5f + half, 12);
+					draw.PathStroke(color, ImDrawFlags.None, thickness * 1.2f);
+					draw.PathArcTo(center - new NVector2(0f, drop), lid, MathF.PI * 0.5f - half, MathF.PI * 0.5f + half, 12);
+					draw.PathStroke(color, ImDrawFlags.None, thickness * 1.2f);
+					draw.AddCircleFilled(center, s * 0.3f, color, 12);
+					break;
+				}
+				case IconKind.EyeClosed:
+				{
+					// The lids shut (one arc sagging below the centre line) and three lashes hanging from it.
+					float lid = s * 1.3f;
+					float drop = MathF.Sqrt(lid * lid - s * 0.9f * s * 0.9f);
+					float half = MathF.Asin(s * 0.9f / lid);
+					NVector2 middle = center - new NVector2(0f, drop + s * 0.15f);
+					draw.PathArcTo(middle, lid, MathF.PI * 0.5f - half, MathF.PI * 0.5f + half, 12);
+					draw.PathStroke(color, ImDrawFlags.None, thickness * 1.2f);
+					for (int i = -1; i <= 1; i++)
+					{
+						float x = i * s * 0.48f;
+						// Where the lid passes this x, and a lash leaning outwards from there.
+						var from = new NVector2(center.X + x, middle.Y + MathF.Sqrt(lid * lid - x * x));
+						draw.AddLine(from, from + new NVector2(i * s * 0.2f, s * 0.32f), color, thickness);
+					}
+
+					break;
+				}
 			}
 		}
 

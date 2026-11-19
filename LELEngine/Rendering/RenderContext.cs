@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using LELEngine.Shaders;
 using OpenTK.Mathematics;
@@ -68,6 +69,15 @@ namespace LELEngine.Rendering
 
 		public IReadOnlyList<Behaviour> Behaviours;
 		public RenderQueue RenderQueue;
+
+		/// <summary>The renderer's <see cref="Renderer.HiddenObjects" />: <see cref="Renderers" /> are filtered by it already.</summary>
+		public Func<GameObject, bool> HiddenObjects;
+
+		/// <summary>The renderer leaves the object out (<see cref="Renderer.HiddenObjects" />).</summary>
+		public bool Hides(GameObject go)
+		{
+			return HiddenObjects != null && go != null && HiddenObjects(go);
+		}
 
 		/// <summary>HDR color + depth the scene is rendered into before post-processing.</summary>
 		public Framebuffer SceneTarget;

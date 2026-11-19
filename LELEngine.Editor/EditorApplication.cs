@@ -90,6 +90,9 @@ namespace LELEngine.Editor
 		public SceneViewPanel SceneView { get; }
 		public GameViewPanel GameView { get; }
 
+		/// <summary>Objects hidden in the scene view (the hierarchy's eye): the user's view, not the scene's data.</summary>
+		internal SceneVisibility Visibility { get; }
+
 		/// <summary>The game's keyboard and mouse inside the editor (automation holds keys for the game through it).</summary>
 		internal GameInputHost GameInput => gameInput;
 
@@ -332,6 +335,7 @@ namespace LELEngine.Editor
 			LELEngine.Audio.AudioSystem.Initialize(new LELEngine.Audio.AudioSettings());
 			layoutFileExisted = File.Exists(layoutFile);
 
+			Visibility = new SceneVisibility(this);
 			hierarchy = new HierarchyPanel(this);
 			inspector = new InspectorPanel(this);
 			SceneView = new SceneViewPanel(this);

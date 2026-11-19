@@ -122,6 +122,7 @@ namespace LELEngine.VFX
 
 			instance.LocalToWorld = transform.LocalToWorld;
 			instance.Layer = gameObject?.layer ?? 0;
+			instance.Owner = gameObject;
 			instance.Paused = pause;
 			instance.PlayRate = playRate;
 			instance.ResetSeedOnPlay = resetSeedOnPlay && startSeed == 0;
@@ -195,6 +196,7 @@ namespace LELEngine.VFX
 
 			instance.LocalToWorld = transform.LocalToWorld;
 			instance.Layer = gameObject?.layer ?? 0;
+			instance.Owner = gameObject;
 			for (int i = 0; i < steps; i++)
 			{
 				instance.Simulate(stepDeltaTime);
@@ -301,6 +303,7 @@ namespace LELEngine.VFX
 
 			instance.LocalToWorld = transform?.LocalToWorld ?? Matrix4.Identity;
 			instance.Layer = gameObject?.layer ?? 0;
+			instance.Owner = gameObject;
 			instance.SetOverrides(propertyOverrides);
 		}
 

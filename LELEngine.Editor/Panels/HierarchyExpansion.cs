@@ -7,10 +7,11 @@ using System.Text.Json;
 namespace LELEngine.Editor
 {
 	/// <summary>
-	///     Which hierarchy rows the user unfolded (rows start folded), per project folder and scene (or prefab): hierarchy.json in the
-	///     editor's data folder (%APPDATA%/LELEngine/Editor), next to layout.ini, never in the project. Objects are
-	///     known by their scene id, so the state survives reloads, play mode and restarts. Automated runs read the
-	///     user's file and save nothing, unless hierarchyfile=path names a file of their own.
+	///     The hierarchy's state per user, per project folder and scene (or prefab): which rows the user unfolded (rows start
+	///     folded) and which objects the scene view hides (<see cref="SceneVisibility" />). hierarchy.json in the editor's data
+	///     folder (%APPDATA%/LELEngine/Editor), next to layout.ini, never in the project. Objects are known by their scene id,
+	///     so the state survives reloads, play mode and restarts. Automated runs read the user's file and save nothing,
+	///     unless hierarchyfile=path names a file of their own.
 	/// </summary>
 	internal static class HierarchyExpansion
 	{
@@ -56,16 +57,32 @@ namespace LELEngine.Editor
 		/// <summary>The ids of the unfolded objects of the scene; empty when none were saved.</summary>
 		public static HashSet<ulong> Load(string key)
 		{
-			if (key != null && Read().TryGetValue(key, out Entry entry) && entry.Expanded != null)
-			{
-				return new HashSet<ulong>(entry.Expanded);
-			}
+			return key != null && Read().TryGetValue(key, out Entry entry) && entry.Expanded != null ? new HashSet<ulong>(entry.Expanded) : new HashSet<ulong>();
+		}
 
-			return new HashSet<ulong>();
+		/// <summary>The ids of the objects the scene view hides in the scene; empty when none were saved.</summary>
+		public static HashSet<ulong> LoadHidden(string key)
+		{
+			return key != null && Read().TryGetValue(key, out Entry entry) && entry.Hidden != null ? new HashSet<ulong>(entry.Hidden) : new HashSet<ulong>();
 		}
 
 		/// <summary>Writes the scene's unfolded objects (read first: other scenes and other editors' changes stay).</summary>
 		public static void Save(string key, HashSet<ulong> expanded)
+		{
+			Update(key, entry => entry.Expanded = expanded.Count == 0 ? null : expanded.OrderBy(id => id).ToList());
+		}
+
+		/// <summary>Writes the objects the scene view hides in the scene (read first, as <see cref="Save" />).</summary>
+		public static void SaveHidden(string key, HashSet<ulong> hidden)
+		{
+			Update(key, entry => entry.Hidden = hidden.Count == 0 ? null : hidden.OrderBy(id => id).ToList());
+		}
+
+		#endregion
+
+		#region PrivateMethods
+
+		private static void Update(string key, Action<Entry> change)
 		{
 			if (!writable || key == null || file == null)
 			{
@@ -73,13 +90,20 @@ namespace LELEngine.Editor
 			}
 
 			Dictionary<string, Entry> entries = Read();
-			if (expanded.Count == 0)
+			if (!entries.TryGetValue(key, out Entry entry))
+			{
+				entry = new Entry();
+			}
+
+			change(entry);
+			entry.Used = DateTime.UtcNow;
+			if ((entry.Expanded == null || entry.Expanded.Count == 0) && (entry.Hidden == null || entry.Hidden.Count == 0))
 			{
 				entries.Remove(key);
 			}
 			else
 			{
-				entries[key] = new Entry { Expanded = expanded.OrderBy(id => id).ToList(), Used = DateTime.UtcNow };
+				entries[key] = entry;
 			}
 
 			if (entries.Count > MaxEntries)
@@ -90,17 +114,13 @@ namespace LELEngine.Editor
 			try
 			{
 				Directory.CreateDirectory(Path.GetDirectoryName(file));
-				File.WriteAllText(file, JsonSerializer.Serialize(entries, new JsonSerializerOptions { WriteIndented = true }));
+				File.WriteAllText(file, JsonSerializer.Serialize(entries, new JsonSerializerOptions { WriteIndented = true, DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull }));
 			}
 			catch (Exception e) when (e is IOException || e is UnauthorizedAccessException)
 			{
-				Debug.LogWarning("[Editor] Cannot save the hierarchy's unfolded objects: " + e.Message);
+				Debug.LogWarning("[Editor] Cannot save the hierarchy's state: " + e.Message);
 			}
 		}
-
-		#endregion
-
-		#region PrivateMethods
 
 		private static Dictionary<string, Entry> Read()
 		{
@@ -125,6 +145,9 @@ namespace LELEngine.Editor
 		{
 			/// <summary>The unfolded objects (entries of the earlier format, which listed folded ones, read as empty).</summary>
 			public List<ulong> Expanded { get; set; }
+
+			/// <summary>The objects hidden in the scene view.</summary>
+			public List<ulong> Hidden { get; set; }
 
 			/// <summary>Last saved (the oldest entries are dropped).</summary>
 			public DateTime Used { get; set; }

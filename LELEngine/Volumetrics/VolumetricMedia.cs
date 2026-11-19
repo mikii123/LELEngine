@@ -99,7 +99,7 @@ namespace LELEngine.Volumetrics
 			var unionMax = new Vector3(float.MinValue);
 			foreach (VolumetricObjectBase volume in VolumetricRuntime.Objects)
 			{
-				if (!volume.ContributeGI || !volume.isActiveAndEnabled || !volume.Ready || (context.CullingMask & (1 << (volume.gameObject.layer & 31))) == 0)
+				if (!volume.ContributeGI || !volume.isActiveAndEnabled || !volume.Ready || (context.CullingMask & (1 << (volume.gameObject.layer & 31))) == 0 || context.Hides(volume.gameObject))
 				{
 					continue;
 				}

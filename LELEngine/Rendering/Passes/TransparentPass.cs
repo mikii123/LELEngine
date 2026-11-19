@@ -480,7 +480,7 @@ namespace LELEngine.Rendering.Passes
 			bool orthographic = System.MathF.Abs(context.Projection.M34) < 1e-6f;
 			foreach (Behaviour behaviour in behaviours)
 			{
-				if (behaviour is not TrailRenderer trail || !trail.isActiveAndEnabled || (context.CullingMask & (1 << (trail.gameObject.layer & 31))) == 0 || !HasDrawableMaterial(trail))
+				if (behaviour is not TrailRenderer trail || !trail.isActiveAndEnabled || (context.CullingMask & (1 << (trail.gameObject.layer & 31))) == 0 || context.Hides(trail.gameObject) || !HasDrawableMaterial(trail))
 				{
 					continue;
 				}
@@ -522,7 +522,7 @@ namespace LELEngine.Rendering.Passes
 			bool grabs = false;
 			foreach (Behaviour behaviour in behaviours)
 			{
-				if (behaviour is not ICustomRenderer custom || !behaviour.isActiveAndEnabled || (context.CullingMask & (1 << (behaviour.gameObject.layer & 31))) == 0)
+				if (behaviour is not ICustomRenderer custom || !behaviour.isActiveAndEnabled || (context.CullingMask & (1 << (behaviour.gameObject.layer & 31))) == 0 || context.Hides(behaviour.gameObject))
 				{
 					continue;
 				}
