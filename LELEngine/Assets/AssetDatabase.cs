@@ -947,21 +947,40 @@ namespace LELEngine
 				return;
 			}
 
-			foreach (string meta in Directory.EnumerateFiles(root, "*" + MetaExtension, SearchOption.AllDirectories))
+			// The meta files are read on every core: each is a small file of its own, and a cold disk or a virus scanner
+			// opens files one after another slowly. They are registered in the listing's order, so a duplicate GUID names
+			// the same pair whatever thread read it first.
+			string[] metas = Directory.GetFiles(root, "*" + MetaExtension, SearchOption.AllDirectories);
+			var guids = new string[metas.Length];
+			var orphans = new bool[metas.Length];
+			System.Threading.Tasks.Parallel.For(0, metas.Length, i =>
 			{
-				string assetFile = meta.Substring(0, meta.Length - MetaExtension.Length);
+				string assetFile = metas[i].Substring(0, metas[i].Length - MetaExtension.Length);
 				if (!File.Exists(assetFile) && !Directory.Exists(assetFile))
+				{
+					orphans[i] = true;
+					return;
+				}
+
+				guids[i] = ReadGuid(metas[i]);
+			});
+
+			for (int i = 0; i < metas.Length; i++)
+			{
+				if (orphans[i])
 				{
 					continue;
 				}
 
-				string guid = ReadGuid(meta);
+				string meta = metas[i];
+				string guid = guids[i];
 				if (guid == null)
 				{
 					Debug.LogWarning("[Assets] Unreadable meta file " + meta);
 					continue;
 				}
 
+				string assetFile = meta.Substring(0, meta.Length - MetaExtension.Length);
 				string assetPath = Normalize(assetFile.Substring(root.TrimEnd(Path.DirectorySeparatorChar).Length + 1));
 				string other;
 				if (pathsByGuid.TryGetValue(guid, out other))

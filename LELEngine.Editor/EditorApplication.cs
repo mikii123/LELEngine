@@ -247,6 +247,19 @@ namespace LELEngine.Editor
 		private int loadingFramesDrawn;
 		private int loadingUpdatesWithoutFrame;
 
+		// The wait for the first frames is timed as a step of its own (it was counted in the assets' step, which runs after it).
+		private bool firstFramesTimed;
+
+		// The asset index read on a worker thread while the first frames draw (OpenProjectSteps), and how long it took there.
+		private System.Threading.Tasks.Task assetIndexRead;
+		private double assetIndexReadMs = -1;
+
+		// The scripts' domain while its start (the build, when the scripts changed) runs on a worker thread from the load's
+		// first step; handed over to Scripts at the scripts' step. The build's own time, for the load's summary.
+		private ScriptDomain startupScripts;
+		private System.Threading.Tasks.Task<bool> startupScriptsStart;
+		private double startupBuildMs = -1;
+
 		/// <summary>
 		///     Frames drawn before the load's first step: ImGui docks windows from the layout in the next frame's NewFrame, so
 		///     the first frame shows the menu bar and the empty dock space only, the second the windows (measured: frame 1 without
@@ -990,6 +1003,9 @@ namespace LELEngine.Editor
 			projectLoadTimes.Clear();
 			loadingFramesDrawn = 0;
 			loadingUpdatesWithoutFrame = 0;
+			firstFramesTimed = false;
+			assetIndexReadMs = -1;
+			startupBuildMs = -1;
 			loadingStatus = null;
 			SetLoadingStatus("Opening the project");
 			AdvanceProjectLoad(!HasUI);
@@ -1012,9 +1028,24 @@ namespace LELEngine.Editor
 			Extensions.LoadOpenWindows(project);
 			PrepareLoadingWindows(states);
 			startupFocusFrames = 4;
+			// The asset index (every meta file, missing ones made) is read on a worker thread while the first frames draw: it
+			// needs no GL, and nothing reads the database before AssetsReady (a call that does waits on its lock).
+			string assetsPath = project.AssetsPath;
+			assetIndexRead = System.Threading.Tasks.Task.Run(() =>
+			{
+				long start = System.Diagnostics.Stopwatch.GetTimestamp();
+				AssetDatabase.Initialize(assetsPath, true);
+				assetIndexReadMs = System.Diagnostics.Stopwatch.GetElapsedTime(start).TotalMilliseconds;
+			});
+			// The scripts' build (when they changed since the last one) starts now too, on a worker thread: it reads only the
+			// project's files, and its process compiles while the first frames, the assets, the models and the views load
+			// (before, it started after them). The domain is handed over at the scripts' step; nothing reads it before.
+			var scripts = new ScriptDomain(this, project);
+			startupScripts = scripts;
+			startupScriptsStart = System.Threading.Tasks.Task.Run(() => scripts.StartStartupBuild());
 			yield return "Reading the assets";
 
-			AssetDatabase.Initialize(project.AssetsPath, true);
+			WaitForAssetIndex(true);
 			AssetsReady = true;
 			ModelAssets.CacheFolder = project.ModelCachePath;
 			AssetThumbnails.CacheFolder = project.ThumbnailCachePath;
@@ -1061,8 +1092,10 @@ namespace LELEngine.Editor
 			settingsWatcher.EnableRaisingEvents = true;
 			yield return "Loading the scripts";
 
-			Scripts = new ScriptDomain(this, project);
-			if (Scripts.BeginStartup())
+			// The domain whose start (and build) began in the first step.
+			Scripts = startupScripts;
+			startupScripts = null;
+			if (WaitForScriptsStart(true))
 			{
 				// The scripts compile in a process of their own; the window keeps drawing meanwhile (batch mode waits), and the
 				// scene opens with their types.
@@ -1077,7 +1110,12 @@ namespace LELEngine.Editor
 					yield return "Compiling scripts";
 				}
 
+				startupBuildMs = Scripts.LastBuildMilliseconds;
 				Scripts.FinishStartup();
+			}
+			else
+			{
+				Scripts.LoadCurrentAssemblies();
 			}
 
 			// The windows as they were (not in automated runs: they get the default ones, unless given a windows file of their
@@ -1113,6 +1151,16 @@ namespace LELEngine.Editor
 			if (loadingFramesDrawn < LoadingFramesFirst && ++loadingUpdatesWithoutFrame < 10)
 			{
 				return;
+			}
+
+			if (!firstFramesTimed)
+			{
+				// The window's first frames (ImGui's start, the windows drawn the first time) as a step of their own in the
+				// summary, so the next step's time is that step's alone.
+				firstFramesTimed = true;
+				long now = System.Diagnostics.Stopwatch.GetTimestamp();
+				projectLoadTimes.Add(("First frames", System.Diagnostics.Stopwatch.GetElapsedTime(loadingStatusSince, now).TotalMilliseconds));
+				loadingStatusSince = now;
 			}
 
 			try
@@ -1173,10 +1221,70 @@ namespace LELEngine.Editor
 			loadingStatusSince = now;
 		}
 
+		// Waits for the asset index read on a worker thread (OpenProjectSteps). With rethrow its error is the load's step's;
+		// without (a load that ends early), the read only has to be over before anything else initializes the database.
+		private void WaitForAssetIndex(bool rethrow)
+		{
+			System.Threading.Tasks.Task read = assetIndexRead;
+			assetIndexRead = null;
+			if (read == null)
+			{
+				return;
+			}
+
+			if (rethrow)
+			{
+				read.GetAwaiter().GetResult();
+				return;
+			}
+
+			try
+			{
+				read.Wait();
+			}
+			catch (AggregateException)
+			{
+				// The load ended anyway; its error does not matter any more.
+			}
+		}
+
+		// Waits for the scripts' start begun in the load's first step: true when it started their build. With rethrow its error
+		// is the scripts' step's; without (a load that ends early) only its end matters (the domain is dropped after).
+		private bool WaitForScriptsStart(bool rethrow)
+		{
+			System.Threading.Tasks.Task<bool> start = startupScriptsStart;
+			startupScriptsStart = null;
+			if (start == null)
+			{
+				return false;
+			}
+
+			if (rethrow)
+			{
+				return start.GetAwaiter().GetResult();
+			}
+
+			try
+			{
+				start.Wait();
+			}
+			catch (AggregateException)
+			{
+				// The load ended anyway.
+			}
+
+			return false;
+		}
+
 		private void EndProjectLoad(bool completed)
 		{
 			IEnumerator<string> load = projectLoad;
 			projectLoad = null;
+			WaitForAssetIndex(false);
+			// A load that ended before its scripts' step: the domain started in its first step loaded nothing (its watcher stops).
+			WaitForScriptsStart(false);
+			startupScripts?.DropUnloaded();
+			startupScripts = null;
 			if (completed)
 			{
 				SetLoadingStatus(null);
@@ -1187,7 +1295,11 @@ namespace LELEngine.Editor
 					steps.Append(steps.Length > 0 ? ", " : "").Append(step).Append(' ').Append(ms.ToString("F0")).Append(" ms");
 				}
 
-				Debug.Log($"[Editor] Project {Project?.Name} loaded in {System.Diagnostics.Stopwatch.GetElapsedTime(projectLoadStart).TotalMilliseconds:F0} ms{(HasUI ? ", its windows up meanwhile" : "")} ({steps})");
+				// The asset index's own time on its worker thread (the step's time is only the wait for what was left of it).
+				string assetIndex = assetIndexReadMs >= 0 ? $"; asset index read in {assetIndexReadMs:F0} ms on a worker thread" : "";
+				// The same for the scripts' build, started in the first step ("Compiling scripts" is what was left of it).
+				string scriptsBuild = startupBuildMs >= 0 ? $"; scripts compiled in {startupBuildMs:F0} ms beside the load" : "";
+				Debug.Log($"[Editor] Project {Project?.Name} loaded in {System.Diagnostics.Stopwatch.GetElapsedTime(projectLoadStart).TotalMilliseconds:F0} ms{(HasUI ? ", its windows up meanwhile" : "")} ({steps}{assetIndex}{scriptsBuild})");
 			}
 
 			loadingStatus = null;

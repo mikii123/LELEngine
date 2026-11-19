@@ -383,6 +383,25 @@
   frame with the windows ~1.3 s (the window and GL context alone ~1.0 s), then assets ~0.3 s, scripts 0.07 s (current) or
   ~5-6 s (compiling, the windows drawing), the scene ~1.3-2 s (still one blocking step: the window shows "Opening
   Scenes/Flight.scene" meanwhile).
+- Asset index beside the first frames (2026-11-19, the user's report: "Reading the assets 8595 ms" on a start right after
+  `Editor.cmd` rebuilt the editor). `OpenProject` runs in the editor's constructor, before the first frame, and the load's
+  first step waited for `LoadingFramesFirst` frames: the step's time held the window's first frames (ImGui's start, every
+  window drawn the first time, the JIT of a fresh build) and the read. The wait is now its own entry ("First frames"); the
+  index (`AssetDatabase.Initialize`, missing metas made) is read by `Task.Run` from the first step while those frames
+  draw, the "Reading the assets" step waits for what is left of it (`WaitForAssetIndex`; `EndProjectLoad` waits too, so a
+  load closed meanwhile cannot finish its index after the next project's), and the summary ends with "asset index read in
+  N ms on a worker thread". `AssetDatabase.Rebuild` reads the meta files with `Parallel.For` and registers them in the
+  listing's order (the same duplicate-GUID warning). The I/O measured warm on New Frontier (2,859 metas, 2 MB JSON, 357
+  folders): ~260 ms in one thread. Built only; not measured in a running editor yet.
+- The scripts' startup build starts in that first step too (the user's ask, same day): `ScriptDomain.BeginStartup` is split
+  into `StartStartupBuild` (any thread: IDE project, watcher, the build when the scripts are stale; reads only the
+  project's files, the generated projects go to the project's root) and `LoadCurrentAssemblies` (main thread, no build);
+  `BeginStartup` = both (batch `Initialize`). The editor runs `StartStartupBuild` by `Task.Run` beside the asset index and
+  keeps the domain in `startupScripts` until the scripts' step hands it to `Scripts` (40-odd places read `Scripts`), so
+  the build's process compiles while the first frames, assets, models, audio and views load; "Compiling scripts" is only
+  what is left of it and the summary adds "scripts compiled in N ms beside the load" (`ScriptDomain.LastBuildMilliseconds`).
+  A load closed before that step drops the domain (`DropUnloaded`: watcher off, the build runs to its end unread, no
+  unload and no `ClearTypeCaches`). Built only; not measured in a running editor yet.
 - Frames of automated runs count from the end of the load: `screenshotframe=`, `exitframe=` (`MainWindow.frame`) and the
   test hooks (`TestHooks.Update` runs after it), so frame N means the scene's Nth frame as before. `loadingshots=folder`
   writes per step the frame shown while it runs (`folder/loadNN/frame_000.bmp`, `[Test] Loading frame NN: step`).

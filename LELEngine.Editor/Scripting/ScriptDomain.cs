@@ -67,6 +67,9 @@ namespace LELEngine.Editor
 		/// <summary>The project had test scripts at the last load or build.</summary>
 		public bool HasTests { get; private set; }
 
+		/// <summary>How long the last build ran on its worker thread (its compile and weaving; tests included), -1 before one ended.</summary>
+		public double LastBuildMilliseconds { get; private set; } = -1;
+
 		/// <summary>Diagnostics of the last build of the tests (their errors keep the tests unloaded).</summary>
 		public System.Collections.Generic.IReadOnlyList<BuildDiagnostic> TestDiagnostics { get; private set; } = Array.Empty<BuildDiagnostic>();
 
@@ -168,6 +171,25 @@ namespace LELEngine.Editor
 		/// </summary>
 		public bool BeginStartup()
 		{
+			if (StartStartupBuild())
+			{
+				return true;
+			}
+
+			LoadCurrentAssemblies();
+			return false;
+		}
+
+		/// <summary>
+		///     The first half of <see cref="BeginStartup" />, on any thread: the IDE project, the file watcher, and the build
+		///     when the scripts changed since the last one (true: it started). It reads only the project's files, not the asset
+		///     database, so the editor runs it from the load's first step, beside the first frames and the asset index: the
+		///     build's process compiles meanwhile (2026-11-19, the user's ask). Nothing else may use the domain until it
+		///     returned; then <see cref="StartupBuildRunning" /> / <see cref="FinishStartup" />, or without a build
+		///     <see cref="LoadCurrentAssemblies" />, on the main thread.
+		/// </summary>
+		public bool StartStartupBuild()
+		{
 			ProjectGenerator.Generate(project);
 
 			watcher = new FileSystemWatcher(project.AssetsPath, "*.cs") { IncludeSubdirectories = true, NotifyFilter = NotifyFilters.FileName | NotifyFilters.LastWrite | NotifyFilters.DirectoryName };
@@ -185,9 +207,14 @@ namespace LELEngine.Editor
 				return true;
 			}
 
+			return false;
+		}
+
+		/// <summary>The second half of <see cref="BeginStartup" /> when no build started: the last built assemblies loaded (main thread).</summary>
+		public void LoadCurrentAssemblies()
+		{
 			startedSources = SourceStamp(project, true);
 			LoadBuiltAssemblies();
-			return false;
 		}
 
 		/// <summary>The build <see cref="BeginStartup" /> started has not finished yet.</summary>
@@ -540,6 +567,18 @@ namespace LELEngine.Editor
 			}
 		}
 
+		/// <summary>
+		///     Drops a domain whose start began (<see cref="StartStartupBuild" />) but that never loaded anything (the project
+		///     closed during its load): the watcher stops, a build it started runs to its end unread. No unload: nothing of it
+		///     is loaded, and the type caches it would clear belong to the editor.
+		/// </summary>
+		public void DropUnloaded()
+		{
+			disposed = true;
+			watcher?.Dispose();
+			watcher = null;
+		}
+
 		public void Dispose()
 		{
 			disposed = true;
@@ -647,12 +686,14 @@ namespace LELEngine.Editor
 			buildIncludesEditor = editorScripts;
 			buildTask = Task.Run(() =>
 			{
+				long start = Stopwatch.GetTimestamp();
 				BuildResult result = testsOnly ? new BuildResult { Success = true, TestsOnly = true } : ScriptBuilder.Build(file, "Debug", null, editorScripts);
 				if (result.Success && testScripts)
 				{
 					result.Tests = ScriptBuilder.BuildTests(file, "Debug");
 				}
 
+				LastBuildMilliseconds = Stopwatch.GetElapsedTime(start).TotalMilliseconds;
 				return result;
 			});
 		}
