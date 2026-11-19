@@ -108,6 +108,33 @@ namespace LELEngine
 			return reloaded;
 		}
 
+		/// <summary>
+		///     The keys of <paramref name="loaded" /> whose files changed since they were noted, for caches that cannot read a
+		///     file again into the same object: each is noted as it is now, so it is reported once. A file that is gone is
+		///     not a change.
+		/// </summary>
+		public List<string> TakeChanged(IEnumerable<string> loaded)
+		{
+			var changed = new List<string>();
+			foreach (string key in loaded)
+			{
+				long stamp = StampOf(AssetDatabase.ToAbsolute(key));
+				lock (stamps)
+				{
+					if (stamp == 0 || !stamps.TryGetValue(key, out long known) || known == stamp)
+					{
+						continue;
+					}
+
+					stamps[key] = stamp;
+				}
+
+				changed.Add(key);
+			}
+
+			return changed;
+		}
+
 		/// <summary>Write time and length of a file in one number (0: no file).</summary>
 		public static long StampOf(string absolutePath)
 		{

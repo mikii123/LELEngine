@@ -373,6 +373,14 @@ namespace LELEngine.Editor
 			{
 				Checked = () => testRunnerWindow.Open
 			});
+			all.Add(new EditorAction("Window/Mesh Baker", () =>
+			{
+				if (meshBakerWindow.Open) meshBakerWindow.Open = false;
+				else meshBakerWindow.Show();
+			})
+			{
+				Checked = () => meshBakerWindow.Open
+			});
 			all.Add(new EditorAction("Window/UI Builder", () =>
 			{
 				if (uiBuilder != null && uiBuilder.IsOpen) uiBuilder.Close();

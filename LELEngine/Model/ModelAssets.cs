@@ -43,8 +43,14 @@ namespace LELEngine
 	{
 		#region PublicFields
 
+		/// <summary>
+		///     Extension of a mesh asset: a mesh made in the engine (<see cref="SaveMesh" />, e.g. a combined mesh), kept as
+		///     imported model data of one node. It needs no importer and has no import settings.
+		/// </summary>
+		public const string MeshExtension = ".mesh";
+
 		/// <summary>File extensions loaded as models (their meshes are sub-assets).</summary>
-		public static readonly string[] Extensions = { ".obj", ".fbx", ".gltf", ".glb", ".dae", ".3ds", ".blend", ".ply", ".stl" };
+		public static readonly string[] Extensions = { ".obj", ".fbx", ".gltf", ".glb", ".dae", ".3ds", ".blend", ".ply", ".stl", MeshExtension };
 
 		/// <summary>Folder of the import cache (null: no cache, every load imports).</summary>
 		public static string CacheFolder { get; set; }
@@ -60,10 +66,15 @@ namespace LELEngine
 		#region PrivateFields
 
 		// 2 (2026-10-25): vertices carry a second UV set (Vertex.texcoord2).
+		// Mesh assets (MeshExtension) are project files in this format, not a cache that an import makes again: a version
+		// after 2 has to go on reading the versions mesh assets were written in.
 		private const int FormatVersion = 2;
 		private static readonly byte[] Magic = Encoding.ASCII.GetBytes("LELMODEL");
 		private static readonly object sync = new object();
 		private static readonly Dictionary<string, Model> models = new Dictionary<string, Model>(StringComparer.OrdinalIgnoreCase);
+
+		// The loaded mesh assets' files as they were read or written: no import notices one changed outside the editor.
+		private static readonly AssetFileStamps meshFileStamps = new AssetFileStamps();
 		private static readonly List<IModelImportBackend> backends = new List<IModelImportBackend> { new ObjModelBackend() };
 
 		#endregion
@@ -86,6 +97,12 @@ namespace LELEngine
 			return Array.Exists(Extensions, e => string.Equals(e, extension, StringComparison.OrdinalIgnoreCase));
 		}
 
+		/// <summary>The file is a mesh asset (<see cref="MeshExtension" />): a mesh made in the engine, without a source file or import settings.</summary>
+		public static bool IsMeshFile(string path)
+		{
+			return path != null && path.EndsWith(MeshExtension, StringComparison.OrdinalIgnoreCase);
+		}
+
 		/// <summary>The model of a file (cached after the first load).</summary>
 		public static Model Load(string assetPath)
 		{
@@ -95,6 +112,12 @@ namespace LELEngine
 				{
 					return cached;
 				}
+			}
+
+			if (IsMeshFile(assetPath))
+			{
+				// Before it is read: a write in between counts as a change.
+				meshFileStamps.Note(assetPath);
 			}
 
 			ModelData data = LoadData(assetPath);
@@ -155,6 +178,12 @@ namespace LELEngine
 			}
 
 			Mesh mesh = model.FindMesh(meshName);
+			if (mesh == null && IsMeshFile(assetPath) && model.Meshes.Count == 1)
+			{
+				// A mesh asset is its one mesh, whatever the reference calls it (the file replaced by another mesh asset).
+				return model.Meshes[0];
+			}
+
 			if (mesh == null)
 			{
 				Debug.LogWarning($"[Model] {assetPath} has no mesh '{meshName}'");
@@ -170,6 +199,8 @@ namespace LELEngine
 			{
 				models.Remove(assetPath);
 			}
+
+			meshFileStamps.Forget(assetPath);
 		}
 
 		public static void Clear()
@@ -178,6 +209,119 @@ namespace LELEngine
 			{
 				models.Clear();
 			}
+
+			meshFileStamps.Clear();
+		}
+
+		/// <summary>
+		///     Writes <paramref name="mesh" /> as a mesh asset (<paramref name="assetPath" /> ends with
+		///     <see cref="MeshExtension" />; its meta file is made when it has none) and returns the asset's mesh: the object
+		///     scenes reference from then on. A mesh asset holds the geometry and its sub-meshes, no materials: those are the
+		///     renderer's. Written over an existing mesh asset, the mesh keeps the name references know it by, and the model
+		///     loaded from the old file is forgotten (a renderer still holding the old mesh draws it until it is given the
+		///     new one). Main thread.
+		/// </summary>
+		public static Mesh SaveMesh(string assetPath, Mesh mesh)
+		{
+			if (mesh == null)
+			{
+				throw new ArgumentNullException(nameof(mesh));
+			}
+
+			assetPath = (assetPath ?? "").Replace('\\', '/').TrimStart('/');
+			if (!IsMeshFile(assetPath) || Path.GetFileNameWithoutExtension(assetPath).Length == 0)
+			{
+				throw new ArgumentException("A mesh asset's path ends with " + MeshExtension + " (got '" + assetPath + "')", nameof(assetPath));
+			}
+
+			if (assetPath.StartsWith(AssetDatabase.EnginePrefix, StringComparison.OrdinalIgnoreCase))
+			{
+				throw new ArgumentException("Engine/ holds the engine's own assets: a mesh asset goes elsewhere (got '" + assetPath + "')", nameof(assetPath));
+			}
+
+			string file = AssetDatabase.ToRootAbsolute(assetPath);
+			string name = Path.GetFileNameWithoutExtension(assetPath);
+			var subMeshes = new SubMesh[mesh.SubMeshCount];
+			var materials = new int[subMeshes.Length];
+			for (int i = 0; i < subMeshes.Length; i++)
+			{
+				subMeshes[i] = mesh.SubMeshes[i];
+				materials[i] = -1;
+			}
+
+			var data = new ModelData();
+			data.Nodes.Add(new ModelNode { Name = name, Mesh = 0 });
+			data.Meshes.Add(new ModelMeshData
+			{
+				// References name the mesh inside its file: the one a file already there has stays.
+				Name = FirstMeshName(file) ?? name,
+				Vertices = mesh.Vertices,
+				Indices = mesh.Indices,
+				SubMeshes = subMeshes,
+				Materials = materials
+			});
+
+			// Whole or not at all: written beside it (a dot file is no asset) and put in its place.
+			string folder = Path.GetDirectoryName(file);
+			Directory.CreateDirectory(folder);
+			string temporary = Path.Combine(folder, "." + Path.GetFileName(file) + ".writing");
+			try
+			{
+				using (FileStream stream = File.Create(temporary))
+				{
+					Write(stream, data, null);
+				}
+
+				File.Move(temporary, file, true);
+			}
+			finally
+			{
+				if (File.Exists(temporary))
+				{
+					File.Delete(temporary);
+				}
+			}
+
+			AssetDatabase.EnsureMeta(assetPath);
+
+			Model previous;
+			lock (sync)
+			{
+				models.Remove(assetPath, out previous);
+			}
+
+			if (previous != null)
+			{
+				foreach (Mesh old in previous.Meshes)
+				{
+					Rendering.GeometryPool.Release(old);
+				}
+			}
+
+			Model model = Load(assetPath);
+			return model.Meshes[0];
+		}
+
+		/// <summary>
+		///     The loaded mesh assets whose files changed since they were read or written (a checkout, another program), each
+		///     reported once. Their meshes are the old files': the caller unloads them and loads what uses them again.
+		/// </summary>
+		public static List<string> TakeChangedMeshFiles()
+		{
+			List<string> loaded;
+			lock (sync)
+			{
+				loaded = new List<string>();
+				foreach (string path in models.Keys)
+				{
+					if (IsMeshFile(path))
+					{
+						loaded.Add(path);
+					}
+				}
+			}
+
+			return meshFileStamps.TakeChanged(loaded);
 		}
 
 		/// <summary>
@@ -199,6 +343,7 @@ namespace LELEngine
 						}
 					}
 				});
+				meshFileStamps.Moved(fromPath, toPath);
 
 				foreach (Model model in models.Values)
 				{
@@ -279,7 +424,9 @@ namespace LELEngine
 			IModelImportBackend backend = FindBackend(assetPath);
 			if (backend == null)
 			{
-				throw new InvalidOperationException(assetPath + " is a source model file that only the editor imports (builds contain the imported data).");
+				throw new InvalidOperationException(IsMeshFile(assetPath)
+					? assetPath + " is not a mesh asset the engine wrote (missing, cut short or another file under that name)."
+					: assetPath + " is a source model file that only the editor imports (builds contain the imported data).");
 			}
 
 			ModelImporter settings = AssetDatabase.GetImporter<ModelImporter>(assetPath);
@@ -472,6 +619,50 @@ namespace LELEngine
 		#endregion
 
 		#region PrivateMethods
+
+		/// <summary>The name of the first mesh of an imported file, read from its start (the geometry is not); null when the file is none.</summary>
+		private static string FirstMeshName(string file)
+		{
+			if (!File.Exists(file))
+			{
+				return null;
+			}
+
+			try
+			{
+				using (var reader = new BinaryReader(File.OpenRead(file), Encoding.UTF8))
+				{
+					byte[] magic = reader.ReadBytes(Magic.Length);
+					if (!magic.AsSpan().SequenceEqual(Magic) || reader.ReadInt32() != FormatVersion)
+					{
+						return null;
+					}
+
+					reader.ReadString();
+					int nodes = reader.ReadInt32();
+					for (int i = 0; i < nodes; i++)
+					{
+						reader.ReadString();
+						// Parent, position, rotation, scale, mesh.
+						reader.BaseStream.Seek(4 + 12 + 16 + 12 + 4, SeekOrigin.Current);
+					}
+
+					int materials = reader.ReadInt32();
+					for (int i = 0; i < materials; i++)
+					{
+						reader.ReadString();
+						reader.ReadString();
+					}
+
+					string name = reader.ReadInt32() > 0 ? reader.ReadString() : null;
+					return string.IsNullOrEmpty(name) ? null : name;
+				}
+			}
+			catch (Exception e) when (e is IOException || e is UnauthorizedAccessException || e is ArgumentException)
+			{
+				return null;
+			}
+		}
 
 		private static IModelImportBackend FindBackend(string assetPath)
 		{

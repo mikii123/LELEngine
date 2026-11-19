@@ -25,6 +25,12 @@ namespace LELEngine.Editor
 
 		public static void Draw(string assetPath, InspectorContext context)
 		{
+			if (ModelAssets.IsMeshFile(assetPath))
+			{
+				DrawMeshAsset(assetPath, context);
+				return;
+			}
+
 			if (!string.Equals(path, assetPath, StringComparison.OrdinalIgnoreCase) || working == null)
 			{
 				Load(assetPath);
@@ -84,6 +90,45 @@ namespace LELEngine.Editor
 		#endregion
 
 		#region PrivateMethods
+
+		/// <summary>A mesh asset (.mesh, made in the engine: a baked mesh): nothing to import, so only what it holds.</summary>
+		private static void DrawMeshAsset(string assetPath, InspectorContext context)
+		{
+			context.UndoTarget = null;
+			Model model;
+			try
+			{
+				model = ModelAssets.Load(assetPath);
+			}
+			catch (Exception e)
+			{
+				ImGui.TextColored(EditorStyle.Error, "Cannot read: " + e.Message);
+				return;
+			}
+
+			ImGui.TextDisabled("A mesh made in the engine (no source file, no import settings); its materials are the renderer's.");
+			ImGui.Spacing();
+			if (EditorGui.Button("Add to Scene", new NVector2(-1, 0)))
+			{
+				context.Editor.InstantiateModel(assetPath);
+			}
+
+			foreach (Mesh mesh in model.Meshes)
+			{
+				ImGui.Spacing();
+				ImGui.TextUnformatted($"{mesh.Vertices.Length:N0} vertices, {mesh.TriangleCount:N0} triangles, {mesh.SubMeshCount} sub-mesh(es)");
+				OpenTK.Mathematics.Vector3 size = mesh.BoundsMax - mesh.BoundsMin;
+				ImGui.TextDisabled(string.Format(System.Globalization.CultureInfo.InvariantCulture, "Size {0:0.###} x {1:0.###} x {2:0.###} m", size.X, size.Y, size.Z));
+				for (int i = 0; i < mesh.SubMeshCount; i++)
+				{
+					ImGui.Bullet();
+					ImGui.SameLine();
+					ImGui.TextDisabled($"Sub-mesh {i}: {mesh.SubMeshes[i].IndexCount / 3:N0} triangles");
+				}
+			}
+
+			AssetInspectors.DrawFileInfo(AssetDatabase.ToAbsolute(assetPath));
+		}
 
 		private static void Load(string assetPath)
 		{

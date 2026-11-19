@@ -89,6 +89,9 @@ Built on .NET 10, OpenTK 4.9 (GLFW) and OpenGL 4.6 (4.3 minimum), developed and 
   cached in `Library/ModelCache`; the materials of a model become `.material` assets (`Materials/` next to it,
   `LitTextured` with its albedo and normal maps; embedded textures go to `Textures/`). Builds ship the imported
   data under the model's own name, so the player has no importer.
+- Mesh assets: a mesh made in the engine is saved as a `.mesh` file (`ModelAssets.SaveMesh`: the imported model
+  format with one node, no importer and no import settings) and referenced like any model's mesh.
+  `MeshCombiner.Combine` merges meshes into one, a sub-mesh per material, at runtime too.
 
 **2D physics (Box2D v3)**
 - Box2D v3 in pure C# (Box2D.NET): soft-step solver with sub-steps, sleeping islands, continuous collision, and
@@ -300,6 +303,9 @@ GPU event, ribbons and soft smoke puffs, all simulated and drawn on the GPU.*
 - Several objects can be selected at once: Ctrl click adds one or takes it out, Shift click selects a range of
   hierarchy rows (in the scene view both add or remove the object under the mouse). Delete, Duplicate, dragging in
   the hierarchy and the transform gizmo act on all of them; the inspector shows the one selected last.
+- **Window > Mesh Baker** merges the meshes of the selected objects, with everything under them, into one mesh asset
+  and puts one object in their place: one draw call per material. One level of each LOD group is baked, transparent
+  renderers too (they can be left out), and the originals are deleted, switched off or kept. One undo step.
 - The open scene follows its file when something else changes it (git, a text editor): without unsaved changes it
   reloads; with them the file's changes merge into the scene value by value (`SceneMerge`, a three-way merge of
   scene documents: properties, nested objects, objects, components, prefab overrides, the order of siblings) and
@@ -618,6 +624,8 @@ or arrows between nodes (both directions side by side, a label, a travelling dot
   dirty, `OnValidate` runs), `Undo.RecordSceneChange(name, () => ...)` for creating or deleting objects.
 - `Selection.activeGameObject`, `Selection.gameObjects` (every selected object), `Selection.topLevelGameObjects`
   (those none of whose parents is selected), `Selection.activeAssetPath`.
+- `MeshBaker.Bake(objects, options)` / `MeshBaker.BakeSelection(options)`: what Window > Mesh Baker does, from a
+  script (`MeshBakeOptions`: name, folder, LOD level, transparent renderers, what becomes of the originals).
 
 An exception in editor code is logged once and shown in the window or inspector; the ImGui scopes it left open are
 closed, so the rest of the editor keeps working.

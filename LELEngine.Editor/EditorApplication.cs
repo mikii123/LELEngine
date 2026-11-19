@@ -130,6 +130,7 @@ namespace LELEngine.Editor
 		private int errorsSeen;
 		private readonly InputManagerWindow inputManagerWindow;
 		private readonly TestRunnerWindow testRunnerWindow;
+		private readonly MeshBakerWindow meshBakerWindow;
 		private readonly GameInputHost gameInput;
 		private readonly TestHooks testHooks;
 		private readonly bool layoutFileExisted;
@@ -345,6 +346,7 @@ namespace LELEngine.Editor
 			timelineWindow = new Animation.TimelineWindow(this);
 			inputManagerWindow = new InputManagerWindow(this);
 			testRunnerWindow = new TestRunnerWindow(this);
+			meshBakerWindow = new MeshBakerWindow(this);
 
 			gameInput = new GameInputHost(window, () => PlayState == PlayState.Playing && GameView.HasInputFocus);
 			Input.Host = gameInput;
@@ -667,6 +669,7 @@ namespace LELEngine.Editor
 			timelineWindow.Draw();
 			inputManagerWindow.Draw();
 			testRunnerWindow.Draw();
+			meshBakerWindow.Draw();
 			if (loading)
 			{
 				DrawLoadingScriptWindows();
@@ -863,7 +866,7 @@ namespace LELEngine.Editor
 			var panels = new List<IEditorPanel>
 			{
 				mainPanel, hierarchy, SceneView, GameView, inspector, projectPanel, consolePanel, lightingPanel,
-				projectSettingsWindow, preferencesWindow, vfxGraphWindow, animatorWindow, animationWindow, timelineWindow, inputManagerWindow, testRunnerWindow, uiBuilderPanel, audioStudioPanel
+				projectSettingsWindow, preferencesWindow, vfxGraphWindow, animatorWindow, animationWindow, timelineWindow, inputManagerWindow, testRunnerWindow, meshBakerWindow, uiBuilderPanel, audioStudioPanel
 			};
 			panels.AddRange(Extensions.OpenWindowPanels());
 			return panels;
@@ -1348,6 +1351,7 @@ namespace LELEngine.Editor
 			lightingPanel.Open = Saved("Lighting", true);
 			inputManagerWindow.Open = Saved("Input Manager", false);
 			testRunnerWindow.Open = Saved("Test Runner", false);
+			meshBakerWindow.Open = Saved("Mesh Baker", false);
 			vfxGraphWindow.Open = Saved("VFX Graph", false);
 			animatorWindow.Open = Saved("Animator", false);
 			animationWindow.Open = Saved("Animation", false);
@@ -1456,6 +1460,7 @@ namespace LELEngine.Editor
 			timelineWindow.Reset();
 			Tests.Reset();
 			testRunnerWindow.Reset();
+			meshBakerWindow.Reset();
 			Undo.Clear();
 			Edits.Cancel();
 			ScriptableObjectAssets.UnloadAll();
@@ -3209,12 +3214,19 @@ namespace LELEngine.Editor
 		private void ImportChangedModels(bool verifyMaterials = false)
 		{
 			List<string> imported = ModelAssets.ImportOutdated(verifyMaterials);
-			if (imported.Count == 0)
+			List<string> loaded = imported.FindAll(ModelAssets.IsLoaded);
+			if (!IsPlaying)
 			{
-				return;
+				// Mesh assets (.mesh) are not imported: the loaded ones whose file changed (a checkout, another program)
+				// are read again the same way.
+				List<string> meshes = ModelAssets.TakeChangedMeshFiles();
+				if (meshes.Count > 0)
+				{
+					loaded.AddRange(meshes);
+					Debug.Log("[Editor] Reloaded (changed on disk): " + string.Join(", ", meshes));
+				}
 			}
 
-			List<string> loaded = imported.FindAll(ModelAssets.IsLoaded);
 			if (loaded.Count > 0 && !IsPlaying)
 			{
 				ReloadScene(() => loaded.ForEach(ModelAssets.Unload));
@@ -3528,6 +3540,7 @@ namespace LELEngine.Editor
 			states.Open["Timeline"] = timelineWindow.Open;
 			states.Open["Input Manager"] = inputManagerWindow.Open;
 			states.Open["Test Runner"] = testRunnerWindow.Open;
+			states.Open["Mesh Baker"] = meshBakerWindow.Open;
 			string graph = vfxGraphWindow.Document?.AssetPath;
 			if (graph != null)
 			{
@@ -3583,6 +3596,7 @@ namespace LELEngine.Editor
 			lightingPanel.Open = Saved("Lighting", true);
 			inputManagerWindow.Open = Saved("Input Manager", false);
 			testRunnerWindow.Open = Saved("Test Runner", false);
+			meshBakerWindow.Open = Saved("Mesh Baker", false);
 			if (Saved("Project Settings", false))
 			{
 				projectSettingsWindow.Restore(Enum.TryParse(states.ProjectSettingsTab, out ProjectSettingsWindow.Tab tab) ? tab : ProjectSettingsWindow.Tab.Lighting);

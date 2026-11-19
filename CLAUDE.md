@@ -70,6 +70,8 @@
   Unity's SkyCar.fbx (2.32 x 1.45 x 4.47 m). Node matrices from Silk.NET are row-major with the translation in the
   4th column: transpose before `Matrix4x4.Decompose`.
 - Test hook: `addmodel=N;Models/Car.fbx|M;...` instantiates model files at frames N, M.
+- Mesh assets (2026-11-19): `ModelAssets.MeshExtension` ".mesh" is a model file holding imported data (`LELMODEL`),
+  one node and one mesh; see "Mesh Baker, MeshCombiner, mesh assets" below.
 
 ## Layers and camera stack
 
@@ -3008,9 +3010,84 @@ texture read back), see the port's `PORTING.md` "UI".
   meshes are fine) and adds one entry each at the centre of its bounds (sorting; grab rectangles from the local bounds
   with the world matrix); drawn with the component's transform and the block on top of the material, no shadows, no
   GI. The inspector lists the material in the component's material section (`InspectorPanel`).
+## Mesh Baker, MeshCombiner, mesh assets (2026-11-19)
+
+- The user's ask: a "mesh baker" that merges meshes into one. First written as a component; the user's correction the
+  same day: an editor window, "you select objects and bake in that window, and it replaces them all with one".
+- `LELEngine/Mesh/MeshCombiner.cs` (public, works in a game too): `MeshCombiner.Combine(IReadOnlyList<CombineInstance>,
+  name)` -> `CombinedMesh` (`Mesh`, `Materials` = one per sub-mesh, `InstanceCount`). `CombineInstance` = mesh, `Transform`
+  (mesh space to the combined mesh's space, row vectors as `Transform.LocalToWorld`), `Materials` (a renderer's slots: the
+  last repeats). One sub-mesh per material (by reference, in the order of first use; no material is one more), every
+  instance's vertices appended whole (`baseVertex` per instance), the indices sub-mesh after sub-mesh. Normals go through
+  the cofactors of the linear part (the inverse transpose without its division: no inverse to fail on a flattened object),
+  times -1 for a mirroring transform; tangents and bitangents through the linear part; a mirroring transform (negative
+  determinant) swaps two corners of each triangle. Instances fill their own ranges, in parallel from 65536 vertices.
+  More than int.MaxValue - 64 vertices or indices throws.
+- Mesh assets: `ModelAssets.MeshExtension` (".mesh", in `ModelAssets.Extensions`) = the imported model format
+  (`LELMODEL`, what the import cache and builds hold) written as a project file: one node, one mesh, no materials (they
+  are the renderer's). `ModelAssets.SaveMesh(assetPath, mesh)` writes it whole (a dot file beside it, then moved), makes
+  the meta file, forgets the model loaded from the old file (`GeometryPool.Release` of its meshes) and returns the mesh of
+  the file as loaded: the object to reference. Being a model file, everything that knows models knows it: the project
+  panel (model icon, the mesh as a sub-asset row), Mesh fields and their picker, dragging it into the scene or the
+  hierarchy (the default material), `BuildDependencies`, the build (shipped as it is, with its `.mesh.sdf`), the release
+  of unused meshes. No importer reads it (`IsImportedFile`), `ImportOutdated` leaves it alone, and the inspector shows
+  what it holds instead of import settings (`ModelImporterInspector.DrawMeshAsset`).
+  - A reference names a mesh inside its file; a mesh asset is its one mesh whatever the reference calls it
+    (`LoadMesh`: found by name, else the only mesh of a .mesh file), and `SaveMesh` over a file keeps the name it had.
+    Found by the probe: another mesh asset copied over the file left the scene's renderers without a mesh.
+  - `FormatVersion` (2) is now the format of project files too: a later version has to go on reading the versions
+    mesh assets were written in (a cache or a build is made again, a mesh asset is not).
+  - Changed on disk (a checkout, another program): nothing imports it, so `ModelAssets` keeps the stamps of the loaded
+    mesh files (`AssetFileStamps.TakeChanged`, `TakeChangedMeshFiles`) and `EditorApplication.ImportChangedModels` reloads
+    the scene around unloading them, as for a reimported model ("[Editor] Reloaded (changed on disk): ...").
+- Editor: `Meshes/MeshBaking.cs` (internal: `Describe`, `Bake`, `MeshBakeRecord`), `Extensions/MeshBaker.cs` (public for
+  editor scripts: `MeshBaker.Describe / Bake / BakeSelection`, `MeshBakeOptions`, `MeshBakeSummary`, `MeshBakeOriginals`),
+  `Panels/MeshBakerWindow.cs` (Window > Mesh Baker, `IEditorPanel` "Mesh Baker", open state saved with the windows).
+  - What is baked: the objects given without those under another of them, each with everything under it; renderers
+    active, enabled, with triangles, not temporary (`HideFlags.DontSave`); of an enabled LOD group (under the objects or
+    above them) only level `LodLevel` (clamped to the group's levels; a renderer in several levels counts for the one
+    asked); renderers with a transparent material unless `IncludeTransparent` is off (on by default since the user's
+    question the same day, "why doesn't it merge transparent ones? it should": it was off because one mesh's transparent
+    parts sort as one object and blend in the mesh's order where they overlap on screen, a rare case; a renderer is taken
+    whole or not at all).
+  - Where the result stands: one object baked -> its parent, local transform and sibling index (the pivot stays);
+    several -> under their parent when they share one (else the scene, in prefab mode the stage root), at the middle of
+    the meshes' world bounds. The mesh is in the baked object's space (`renderer.LocalToWorld * baked.WorldToLocal`).
+    Its MeshRenderer takes the first source's flags (shadows, GI, static) and the first object's layer.
+  - The asset: `<Name>.mesh` in `Folder` (relative to Assets, made when missing; empty: the folder of the scene or of the
+    edited prefab), never over a file (" 1", " 2"...). `Name` empty: the object's name, "Baked Mesh" for several.
+  - Originals: Delete (default, "replaces them all with one"), Deactivate, Keep.
+  - One undo step (`MeshBakeRecord`): the scene before and after as snapshots, the selection, and the asset: undo
+    deletes the file and its meta (their bytes held by the record only while it is undone), redo writes them back
+    under the same GUID. A file renamed or moved since is left where it is.
+  - Refused with a reason (`MeshBakeSummary.Problem`, shown in the window, logged by `Bake`): nothing selected, play mode,
+    the root of the edited prefab, a read-only object, no meshes, too many vertices, a folder outside Assets.
+  - The window works out its summary when the selection or an option changes, and at most every 0.3 s while only the
+    scene changes; Bake runs after the frame (`Defer`). `MeshBaker.IncludeTransparent` is a preference toggle (default on); the
+    other options last the session.
+- Not done: no texture atlas (materials stay as they are: one sub-mesh each), no re-bake of a baked object (the originals
+  are gone; undo, or Keep / Deactivate and bake again), collision shapes are not merged (the originals' colliders go
+  with them on Delete). One baked mesh gets one distance field and one set of surface cards: a large merged area is
+  coarser in the GI than its parts were.
+- Seen while testing, not changed: a renderer with a mirroring scale (-1, 1, 1) draws inside out (the passes do not flip
+  the front face for a negative determinant); its baked copy is right (the triangles are turned), so baking changes how
+  such an object looks.
+- Verified: scratchpad `bake/BakeProbe` of session 40ffdb3b (`Assets/Editor/BakeProbe.cs`, batch `-executeMethod
+  BakeProbe.Run`: 68 checks: the combiner alone (sub-meshes, counts, bounds, every triangle facing its normals under a
+  mirrored and a squashed transform), a hierarchy with a non-uniform and a mirrored scale, a nested child, a LOD group, a
+  transparent and an inactive object (same triangles, world bounds, surface and centroids before and after; pivot;
+  sub-mesh per material), the asset and its GUID, undo / redo with the file, several objects with a name, a folder and
+  each Originals, siblings under a turned and scaled parent, folders refused, the scene saved and opened again, the
+  file changed on disk, `SaveMesh` over a file). GUI editor through the CLI: the window's elements (`input:Name`,
+  `input:Folder`, `input:LOD Level`, `checkbox:Include Transparent`, `combo:Originals`, `button:Bake`), a bake of three
+  selected objects, scene screenshots before and after (the same picture, but for the mirrored sphere), undo and redo.
+  A player build of the probe's scene: the .mesh files shipped with their distance fields, the scene drawn. Not run:
+  New Frontier's tests (the worktree held LFS pointers only). Not exercised: a bake in prefab mode, the refusals of
+  play mode and of a read-only object, a mesh of millions of triangles (the parallel fill).
+
 ## Selection of several objects (2026-11-19)
 
-- The user's ask: "add multi-select to the editor right away" (asked together with a Mesh Baker tool working on the selection).
+- The user's ask, with the Mesh Baker: "add multi-select to the editor right away".
 - `EditorApplication.Selection.cs`: `Selected` stays the one object everything written for a single selection uses (the
   inspector, the gizmo's pivot, component gizmos, the windows following the selection): with several selected it is the
   active one, the object selected last. `SelectedObjects` (all of them, in the order selected), `IsSelected`,
@@ -3042,7 +3119,7 @@ texture read back), see the port's `PORTING.md` "UI".
   carries the keys, `InvokedCtrl` / `InvokedShift`: code that reads the keyboard for a click reads these for an invoked
   one). Test entry `exec TestHooks.DragSelection dx dy dz` and the `dragselected=` hook go through the gizmo's own path
   (`SceneViewPanel.BeginGizmoDrag` / `MoveSelectedAsGizmo` / `EndGizmoDrag`).
-- Verified (GUI editor through the CLI, scratchpad `bake/BakeProbe` of session 40ffdb3b): Ctrl clicks adding and removing rows, a Shift range, the
+- Verified (GUI editor through the CLI, the probe above): Ctrl clicks adding and removing rows, a Shift range, the
   highlighted rows and the scene view's boxes on screenshots, the inspector's line, the context menu's Duplicate on two
   selected rows (the copies selected) and its undo (both originals selected again), a context menu on an unselected
   row; `DragSelection 1 2 3` on four selected objects (a parent, its child and two others): each root moved once, the
