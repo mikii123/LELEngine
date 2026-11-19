@@ -66,8 +66,12 @@ namespace LELEngine.Editor.Automation
 			"                                         --editor: the editor's focused window\n" +
 			"  type <text> [--window W | --editor]    characters: play mode the game UI's focused text field, else the\n" +
 			"                                         editor's active text field\n" +
-			"  menus [filter]                         every main menu item with its path (enabled, ticked, shortcut)\n" +
-			"  menu <path>                            run a main menu item: \"GameObject/Create Empty\", \"Window/Reset Layout\"\n" +
+			"  actions [filter]                       every editor action by its menu path (enabled, ticked, shortcut), the\n" +
+			"                                         editor scripts' [MenuItem]s too (menus: the same)\n" +
+			"  action <path>                          runs the action itself, no menu or window, nothing asked:\n" +
+			"                                         \"GameObject/Create Empty\", \"Window/Reset Layout\" (menu: the same); one that\n" +
+			"                                         needs an answer fails and says why\n" +
+			"  reserialize                            Force Reserialize All Assets; answers when it has ended, with its summary\n" +
 			"  hierarchy                              the open scene's objects (ids, components)\n" +
 			"  select <object>|none                   object: Parent/Child, a unique name, or #id\n" +
 			"  select-asset <assetPath>\n" +
@@ -77,15 +81,18 @@ namespace LELEngine.Editor.Automation
 			"  get <object> <Component.field>\n" +
 			"  set <object> <Component.field> <value> one undo step; values: 1.5, true, EnumName, 1,2,3, null, new:Class\n" +
 			"  add-component <object> <Type>\n" +
-			"  scene open <path> | scene save | scene new\n" +
+			"  scene open <path> [--save|--discard] | scene new [--save|--discard] | scene save [path]\n" +
+			"                                         unsaved changes (scene, prefab) without --save / --discard: it fails\n" +
 			"  play | stop | pause | step | undo | redo\n" +
 			"  refresh                                import changed files now, also those the watchers have not reported yet\n" +
 			"                                         (every command first imports what changed since the last one)\n" +
 			"  console [N] [--errors] [--clear]       the last N (30) messages\n" +
 			"  wait <frames> | wait idle [seconds]    idle: scripts built, assets refreshed, loads done\n" +
 			"  exec <Namespace.Type.Method> [args]    a static method of the scripts / engine / editor (Task allowed)\n" +
-			"  quit [--discard]                       batch mode: end; the editor's window: close it (asks about unsaved changes\n" +
-			"                                         unless --discard)\n";
+			"  quit [--save|--discard]                ends the editor; unsaved changes without --save / --discard: it fails\n" +
+			"Commands run one at a time, in the order they come (from any number of clients), each once the one before\n" +
+			"has answered. None opens a window or asks; the ones acting on windows (click, input, key, type, context,\n" +
+			"scroll, focus) are the only ones that touch the UI.\n";
 
 		#endregion
 
@@ -289,10 +296,11 @@ namespace LELEngine.Editor.Automation
 					break;
 				}
 
+				case "actions":
 				case "menus":
 				{
 					string filter = args.Count > 0 ? Joined(args) : null;
-					foreach (MenuItemInfo item in EditorAutomation.GetMenuItems())
+					foreach (MenuItemInfo item in EditorAutomation.GetActions())
 					{
 						if (filter == null || item.Path.Contains(filter, StringComparison.OrdinalIgnoreCase))
 						{
@@ -303,15 +311,20 @@ namespace LELEngine.Editor.Automation
 					break;
 				}
 
+				case "action":
 				case "menu":
-					Need(args, 1, "menu <path>");
-					if (!EditorAutomation.ExecuteMenuItem(Joined(args)))
+					Need(args, 1, "action <path>");
+					if (!EditorAutomation.RunAction(Joined(args)))
 					{
-						return CommandResult.Fail($"No enabled menu item '{Joined(args)}' (list them: menus)");
+						return CommandResult.Fail($"No action '{Joined(args)}' (list them: actions)");
 					}
 
 					await EditorAutomation.NextFrame(2);
 					text.Append("Ran ").Append(Joined(args)).Append('\n');
+					break;
+
+				case "reserialize":
+					text.Append(await EditorAutomation.ReserializeAllAssets()).Append('\n');
 					break;
 
 				case "hierarchy":
@@ -357,21 +370,21 @@ namespace LELEngine.Editor.Automation
 				}
 
 				case "scene":
-					Need(args, 1, "scene open <path> | scene save | scene new");
+					Need(args, 1, "scene open <path> [--save | --discard] | scene save [path] | scene new [--save | --discard]");
 					switch (args[0].ToLowerInvariant())
 					{
 						case "open":
-							Need(args, 2, "scene open <path>");
-							EditorAutomation.OpenScene(string.Join(" ", args.Skip(1)));
+							Need(args, 2, "scene open <path> [--save | --discard]");
+							EditorAutomation.OpenScene(string.Join(" ", args.Skip(1)), Unsaved(options));
 							break;
 						case "save":
-							EditorAutomation.SaveScene();
+							EditorAutomation.SaveScene(args.Count > 1 ? string.Join(" ", args.Skip(1)) : null);
 							break;
 						case "new":
-							EditorAutomation.Editor.NewScene();
+							EditorAutomation.NewScene(Unsaved(options));
 							break;
 						default:
-							throw new ArgumentException("scene open <path> | scene save | scene new");
+							throw new ArgumentException("scene open <path> [--save | --discard] | scene save [path] | scene new [--save | --discard]");
 					}
 
 					await EditorAutomation.NextFrame(3);
@@ -470,7 +483,7 @@ namespace LELEngine.Editor.Automation
 				}
 
 				case "quit":
-					EditorAutomation.Quit(options.ContainsKey("discard"));
+					EditorAutomation.Quit(Unsaved(options));
 					text.Append("Quitting\n");
 					break;
 
@@ -480,6 +493,17 @@ namespace LELEngine.Editor.Automation
 
 			result.Output = text.ToString();
 			return result;
+		}
+
+		/// <summary>--save / --discard: what a command that would lose unsaved changes does with them (neither: it refuses).</summary>
+		private static UnsavedChanges Unsaved(Dictionary<string, string> options)
+		{
+			if (options.ContainsKey("save") && options.ContainsKey("discard"))
+			{
+				throw new ArgumentException("--save or --discard, not both");
+			}
+
+			return options.ContainsKey("save") ? UnsavedChanges.Save : options.ContainsKey("discard") ? UnsavedChanges.Discard : UnsavedChanges.Refuse;
 		}
 
 		private static string Status()

@@ -17,14 +17,19 @@ namespace LELEngine.Editor.Automation
 	///     reachable by the user who runs the editor only (<see cref="PipeOptions.CurrentUserOnly" />). A client
 	///     (LELEngine.Editor.Console -command, <see cref="AutomationClient" />) connects, sends one request line
 	///     <c>{"command": "screenshot Inspector"}</c> and reads one answer line <c>{"ok", "output", "error", "files"}</c>.
-	///     Commands run on the main thread between frames (<see cref="AutomationCommands" />); connections are served in
-	///     parallel, their commands interleave at their awaits.
+	///     Commands run on the main thread between frames (<see cref="AutomationCommands" />), one at a time in the order they
+	///     came from every connection (<see cref="RunQueue" />): the next starts when the one before has answered. Before
+	///     2026-11-19 connections ran in parallel and their commands interleaved at their awaits.
 	/// </summary>
 	internal sealed class AutomationServer : IDisposable
 	{
 		#region PrivateFields
 
 		private readonly CancellationTokenSource cancel = new CancellationTokenSource();
+
+		// The commands of every connection in the order they came, with where each one's answer goes.
+		private readonly System.Threading.Channels.Channel<(string command, TaskCompletionSource<CommandResult> answer)> queue =
+			System.Threading.Channels.Channel.CreateUnbounded<(string, TaskCompletionSource<CommandResult>)>(new System.Threading.Channels.UnboundedChannelOptions { SingleReader = true });
 
 		#endregion
 
@@ -63,6 +68,7 @@ namespace LELEngine.Editor.Automation
 			// Fails now (not in the loop) when another editor serves this project already.
 			NamedPipeServerStream first = CreatePipe();
 			Task.Run(() => AcceptLoop(first));
+			Task.Run(RunQueue);
 		}
 
 		public void Dispose()
@@ -140,6 +146,32 @@ namespace LELEngine.Editor.Automation
 						command = request.RootElement.GetProperty("command").GetString() ?? "";
 					}
 
+					var answer = new TaskCompletionSource<CommandResult>(TaskCreationOptions.RunContinuationsAsynchronously);
+					queue.Writer.TryWrite((command, answer));
+					CommandResult result = await answer.Task.WaitAsync(cancel.Token);
+					await writer.WriteLineAsync(JsonSerializer.Serialize(new Answer
+					{
+						ok = result.Ok,
+						output = result.Output,
+						error = result.Error,
+						files = result.Files.ToArray()
+					}));
+				}
+				catch (Exception e) when (e is IOException or JsonException or KeyNotFoundException or InvalidOperationException or OperationCanceledException)
+				{
+					// The client went away or sent something else: nothing to answer.
+					Console.WriteLine("[Automation] Request dropped: " + e.Message);
+				}
+			}
+		}
+
+		/// <summary>Runs the queued commands one after another, each to its end (its answer), in the order they came.</summary>
+		private async Task RunQueue()
+		{
+			try
+			{
+				await foreach ((string command, TaskCompletionSource<CommandResult> answer) in queue.Reader.ReadAllAsync(cancel.Token))
+				{
 					CommandResult result;
 					if (!EditorAutomation.IsRunning)
 					{
@@ -158,19 +190,12 @@ namespace LELEngine.Editor.Automation
 						}
 					}
 
-					await writer.WriteLineAsync(JsonSerializer.Serialize(new Answer
-					{
-						ok = result.Ok,
-						output = result.Output,
-						error = result.Error,
-						files = result.Files.ToArray()
-					}));
+					answer.TrySetResult(result);
 				}
-				catch (Exception e) when (e is IOException or JsonException or KeyNotFoundException or InvalidOperationException or OperationCanceledException)
-				{
-					// The client went away or sent something else: nothing to answer.
-					Console.WriteLine("[Automation] Request dropped: " + e.Message);
-				}
+			}
+			catch (OperationCanceledException)
+			{
+				// The editor closes.
 			}
 		}
 

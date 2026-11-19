@@ -117,7 +117,8 @@ namespace LELEngine.Editor
 		}
 
 		/// <summary>One console line for the whole run, the changed files' count by kind; failures and skips as warnings.</summary>
-		public void Report()
+		/// <summary>Logs the run's summary (and the files skipped or failed); returns the summary line.</summary>
+		public string Report()
 		{
 			var byKind = new SortedDictionary<string, int>(StringComparer.Ordinal);
 			foreach (string path in Changed)
@@ -132,9 +133,10 @@ namespace LELEngine.Editor
 				kinds.Add(entry.Value + " " + entry.Key);
 			}
 
-			Debug.Log($"[Editor] Force Reserialize All Assets: {files.Count} files in {clock.Elapsed.TotalSeconds:F1} s; {Changed.Count} written again"
+			string summary = $"Force Reserialize All Assets: {files.Count} files in {clock.Elapsed.TotalSeconds:F1} s; {Changed.Count} written again"
 				+ (kinds.Count > 0 ? " (" + string.Join(", ", kinds) + ")" : "") + $", {unchanged} already as the editor writes them"
-				+ (Skipped.Count > 0 ? $", {Skipped.Count} left as they are" : "") + (Failed.Count > 0 ? $", {Failed.Count} failed" : ""));
+				+ (Skipped.Count > 0 ? $", {Skipped.Count} left as they are" : "") + (Failed.Count > 0 ? $", {Failed.Count} failed" : "");
+			Debug.Log("[Editor] " + summary);
 			if (Skipped.Count > 0)
 			{
 				Debug.LogWarning("[Editor] Force Reserialize All Assets left these files as they are:\n" + string.Join("\n", Skipped));
@@ -144,6 +146,8 @@ namespace LELEngine.Editor
 			{
 				Debug.LogError("[Editor] Force Reserialize All Assets could not reserialize:\n" + string.Join("\n", Failed));
 			}
+
+			return summary;
 		}
 
 		/// <summary>The bytes the editor writes for this document file (null with a reason when it should be left alone).</summary>

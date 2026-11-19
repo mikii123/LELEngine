@@ -538,6 +538,47 @@ namespace LELEngine.Editor
 			return true;
 		}
 
+		/// <summary>The [MenuItem] method at <paramref name="path" /> (case and spaces around '/' do not matter), or null.</summary>
+		public MethodInfo FindMenuMethod(string path)
+		{
+			List<MenuNode> level = menus;
+			MenuNode node = null;
+			foreach (string part in path.Split('/'))
+			{
+				node = level.Find(n => string.Equals(n.Name, part.Trim(), StringComparison.OrdinalIgnoreCase));
+				if (node == null)
+				{
+					return null;
+				}
+
+				level = node.Children;
+			}
+
+			return node?.Method;
+		}
+
+		/// <summary>The paths of every [MenuItem] of the editor scripts, in menu order.</summary>
+		public List<string> MenuPaths()
+		{
+			var paths = new List<string>();
+			void Collect(List<MenuNode> level, string prefix)
+			{
+				foreach (MenuNode node in level)
+				{
+					string path = prefix + node.Name;
+					if (node.Method != null)
+					{
+						paths.Add(path);
+					}
+
+					Collect(node.Children, path + "/");
+				}
+			}
+
+			Collect(menus, "");
+			return paths;
+		}
+
 		// ---------------------------------------------------------------- windows
 
 		public T GetWindow<T>(string title, bool focus) where T : EditorWindow, new()

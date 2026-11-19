@@ -229,8 +229,9 @@
 - The user wants AI to drive the editor natively (no MCP, no mouse simulation): `LELEngine.Editor/Automation`.
   `EditorAutomation` (public, static) is the C# API: windows (`GetWindows`, `OpenWindow`, `FocusWindow`,
   `CloseWindow`), `GetScreenshot(window, w, h, layout, viewFrames)` (also `EditorWindow.GetScreenshot(w, h)`), UI
-  elements (`GetElements`, `Click`, `DoubleClick`, `OpenContextMenu`, `Input`, `Scroll`, `Key`, `TypeText`), menus
-  (`GetMenuItems`, `ExecuteMenuItem`), scene and objects (`OpenScene`, `SaveScene`, `FindObject` "A/B" / name / "#id",
+  elements (`GetElements`, `Click`, `DoubleClick`, `OpenContextMenu`, `Input`, `Scroll`, `Key`, `TypeText`), actions
+  (`GetActions`, `RunAction`, `ReserializeAllAssets`), scene and objects (`OpenScene` / `NewScene` with `UnsavedChanges`,
+  `SaveScene(path)`, `FindObject` "A/B" / name / "#id",
   `Select`, `SelectAsset`, `DescribeHierarchy`, `DescribeObject`, `GetField`, `SetField`, `Reparent`, `Rename`,
   `AddComponent`), `Play` / `Stop` / `Pause` / `Step` / `Undo` / `Redo` / `RefreshAssets`, console, waits
   (`NextFrame`, `WaitUntil`, `WaitForIdle`). Everything runs on the main thread between frames (`AutomationContext`,
@@ -239,8 +240,31 @@
   SHA-256 of the lowercased project path; owner and ACL = the user, the client checks the owner). `LELEngine.Editor.Console
   [-projectPath P] -command <words...>` (everything after `-command` is the command), `-script file`, `-json`; exit 0 /
   1 failed / 2 no editor. `-command help` lists the commands (`AutomationCommands`). Screenshots default to
-  `<project>/Library/Screenshots/`. Batch: `-batchmode -projectPath P -listen` serves until `quit [--discard]`;
+  `<project>/Library/Screenshots/`. Batch: `-batchmode -projectPath P -listen` serves until `quit [--save|--discard]`;
   `-executeMethod Type.Method` may return void / bool / int / Task / Task<T> (`string[] args` optional).
+- Commands are actions, not UI (2026-11-19, the user, after a `menu` + `click "button:Reserialize"` lost its question
+  twice: "it has to fire the ACTION, not the menu"; "everything has to fire like that"). The main menu's items are
+  `EditorAction`s (`EditorActions.cs`; registered in `EditorApplication.Actions.cs`: path = menu path, `Run` the action,
+  `Click` the menu's own click when it asks first, label / shortcut / enabled / ticked / separator). The menu bar draws them
+  (`EditorActions.DrawMenu`; the hierarchy's Create Child draws the GameObject ones with `createParent`), automation runs
+  `Run` (`EditorApplication.RunAction`; an editor script's [MenuItem] method is called at once): CLI `action <path>` /
+  `actions [filter]` (`menu` / `menus` the same), `reserialize` (answers with the summary when the run ended). The menu
+  pass that ran `DrawMenus` in a hidden ImGui context (`EditorMenu.List` / `Execute`) is gone; `EditorMenu` only draws.
+  An action asks nothing and opens no window: what needs the user's word throws `InvalidOperationException` with the
+  reason (the command fails with it): unsaved scene / prefab / tool documents for `scene new` / `scene open` / `quit` /
+  File > New Scene / Close Project / Exit unless `--save` / `--discard` (`UnsavedChanges`, `SettleUnsaved`: checked before
+  anything changes; prefab stages are left either way), Save Scene As (`scene save <path>`), `play` with a prefab that
+  has unsaved changes and no Auto Save, a disabled action. Only commands acting on windows touch the UI (click, input,
+  key, type, context, scroll, focus, screenshot, elements).
+- One command at a time (`AutomationServer.RunQueue`, a channel of every connection's commands in arrival order): the
+  next starts when the one before has answered; before, connections ran in parallel and interleaved at their awaits. And
+  commands start only `EditorAutomation.SettleFrames` (8) ticks after a project's load: in its first frames the windows
+  restore and the editor drops the focus they took by appearing (`startupFocusFrames`: `ImGui.SetWindowFocus(null)`, which
+  closes ImGui's popups, so a question opened then vanished: the 'button:... is not shown any more (its window is closed)'
+  failure). Verified with scratchpad `autorel/stress.ps1` of session 0ec30c68: 8 fresh starts with the action as the very
+  first command, 8 ran; a `status` sent 0.3 s into another client's `wait 120` answered after it; 20 clients at once all
+  answered; actions, their refusals and `--save` / `--discard`; the File menu and the hierarchy's Create Child still drawn
+  and clickable; batch `-listen` the same.
 - Batch mode draws no UI at all (the user's call): `BatchEditor` makes `EditorApplication(hasUI: false)` in a hidden
   `MainWindow`, ticks it at 60 Hz without UI frames, waits for `IsBusy` (scripts, assets, settings, window restore,
   scene loads) to settle. UI elements and keys need the GUI editor (clear error in batch); screenshots and element

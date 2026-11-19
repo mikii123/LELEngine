@@ -36,6 +36,10 @@ namespace LELEngine.Editor
 		private static int frame;
 		private static AutomationServer server;
 		private static string pendingMethod;
+
+		// Editor ticks since the project's load ended; commands start after SettleFrames of them (see Pump).
+		private static int framesSinceLoad;
+		private const int SettleFrames = 8;
 		private static string[] pendingMethodArgs;
 
 		#endregion
@@ -362,35 +366,55 @@ namespace LELEngine.Editor
 			});
 		}
 
-		// ---------------------------------------------------------------- menus
+		// ---------------------------------------------------------------- actions
 
-		/// <summary>Every item of the main menu bar ("File/Save Scene", "GameObject/Cube", "Tools/..." of editor scripts).</summary>
-		public static IReadOnlyList<MenuItemInfo> GetMenuItems()
+		/// <summary>
+		///     Every editor action by the path of its menu item ("File/Save", "GameObject/Cube", "Assets/Force Reserialize All
+		///     Assets"), the editor scripts' [MenuItem]s too.
+		/// </summary>
+		public static IReadOnlyList<MenuItemInfo> GetActions()
 		{
-			return Editor.ListMenuItems().Select(e => new MenuItemInfo(e.Path, e.Enabled, e.Selected, e.Shortcut)).ToList();
+			return Editor.ListActions().Select(e => new MenuItemInfo(e.path, e.enabled, e.ticked, e.shortcut)).ToList();
 		}
 
-		/// <summary>Runs a main menu item as if clicked; false when there is no such item or it is disabled.</summary>
-		public static bool ExecuteMenuItem(string path)
+		/// <summary>
+		///     Runs the action itself (not its menu, no window, nothing asked); false when there is none. An action that cannot run
+		///     now, or not without the user's word, throws <see cref="InvalidOperationException" /> with the reason.
+		/// </summary>
+		public static bool RunAction(string path)
 		{
-			return Editor.ExecuteMenuItem(path);
+			return Editor.RunAction(path);
+		}
+
+		/// <summary>
+		///     Assets > Force Reserialize All Assets, the action: runs it (nothing asked) and completes when it has ended, with its
+		///     summary line.
+		/// </summary>
+		public static async Task<string> ReserializeAllAssets()
+		{
+			Editor.ForceReserializeAllAssets();
+			await WaitUntil(() => !Editor.IsReserializing, 3600);
+			return Editor.LastReserializeReport;
 		}
 
 		// ---------------------------------------------------------------- scene, selection, objects
 
-		public static void OpenScene(string assetPath)
+		/// <summary>Opens a scene; unsaved changes (the scene, prefab stages) as <paramref name="unsaved" /> says (refused: an exception naming them).</summary>
+		public static void OpenScene(string assetPath, UnsavedChanges unsaved = UnsavedChanges.Refuse)
 		{
-			if (!System.IO.File.Exists(AssetDatabase.ToAbsolute(assetPath)))
-			{
-				throw new ArgumentException("No scene at " + assetPath);
-			}
-
-			Editor.OpenScene(assetPath);
+			Editor.OpenSceneAction(assetPath, unsaved);
 		}
 
-		public static void SaveScene()
+		/// <summary>A new scene; unsaved changes as <paramref name="unsaved" /> says.</summary>
+		public static void NewScene(UnsavedChanges unsaved = UnsavedChanges.Refuse)
 		{
-			Editor.SaveScene();
+			Editor.NewSceneAction(unsaved);
+		}
+
+		/// <summary>Saves the scene (prefab mode: the prefab), to <paramref name="assetPath" /> when given (a scene without a file needs one).</summary>
+		public static void SaveScene(string assetPath = null)
+		{
+			Editor.SaveSceneAction(assetPath);
 		}
 
 		/// <summary>
@@ -552,12 +576,23 @@ namespace LELEngine.Editor
 
 		// ---------------------------------------------------------------- play mode, undo
 
+		/// <summary>
+		///     Play mode (it waits for scripts being compiled, see <see cref="IsWaitingToPlay" />). Prefab mode is left first;
+		///     a prefab with unsaved changes that does not save itself stops it (save it: <see cref="SaveScene" />).
+		/// </summary>
 		public static void Play()
 		{
-			if (!Editor.IsPlaying)
+			if (Editor.IsPlaying)
 			{
-				Editor.EnterPlayMode();
+				return;
 			}
+
+			if (Editor.Stage != null && Editor.SceneDirty && !Editor.Stage.AutoSave)
+			{
+				throw new InvalidOperationException("The prefab " + Editor.Stage.AssetPath + " has unsaved changes: save it first (scene save).");
+			}
+
+			Editor.EnterPlayMode();
 		}
 
 		public static void Stop()
@@ -651,17 +686,16 @@ namespace LELEngine.Editor
 		/// <summary>An automation command asked to end: batch mode's loop ends (see <see cref="BatchEditor" />).</summary>
 		internal static bool QuitRequested { get; private set; }
 
-		/// <summary>Batch mode: ends the run. The editor's window: closes it (unsaved changes are asked about unless <paramref name="discard" />).</summary>
-		internal static void Quit(bool discard)
+		/// <summary>
+		///     Ends the editor (batch mode: the run). Unsaved changes (the scene, prefab stages, the tools' documents) as
+		///     <paramref name="unsaved" /> says: refused, an exception names them and nothing closes. Nothing is asked.
+		/// </summary>
+		internal static void Quit(UnsavedChanges unsaved)
 		{
+			Editor.PrepareClose(unsaved);
 			QuitRequested = true;
 			if (Editor.HasUI)
 			{
-				if (discard)
-				{
-					Editor.DiscardChangesOnClose();
-				}
-
 				Editor.Window.Close();
 			}
 		}
@@ -680,8 +714,16 @@ namespace LELEngine.Editor
 		/// </summary>
 		internal static void Pump()
 		{
-			// A project that loads over frames (EditorApplication.OpenProject): commands wait until it is there.
+			// A project that loads over frames (EditorApplication.OpenProject): commands wait until it is there, and then
+			// for the first frames after it, in which the windows restore and take their places and the editor drops the
+			// focus they took by appearing (a focus change closes ImGui's popups: a question opened then was closed again).
 			if (editor == null || editor.IsLoadingProject)
+			{
+				framesSinceLoad = 0;
+				return;
+			}
+
+			if (++framesSinceLoad <= SettleFrames)
 			{
 				return;
 			}

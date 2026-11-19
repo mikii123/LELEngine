@@ -2767,349 +2767,39 @@ namespace LELEngine.Editor
 			ImGui.EndMainMenuBar();
 		}
 
-		/// <summary>Every item of the main menu bar, with its path ("File/Save Scene", "GameObject/Physics 2D/...", "Tools/...").</summary>
-		public List<EditorMenu.Entry> ListMenuItems()
-		{
-			return Project == null ? new List<EditorMenu.Entry>() : EditorMenu.List(DrawMenus);
-		}
-
-		/// <summary>Runs a main menu item as if clicked ("File/Save Scene", "Window/Reset Layout"); false when there is no such enabled item.</summary>
-		public bool ExecuteMenuItem(string menuPath)
-		{
-			return Project != null && EditorMenu.Execute(menuPath, DrawMenus);
-		}
-
-		/// <summary>The menus of the main menu bar (drawn, or walked by a menu pass: <see cref="EditorMenu" />).</summary>
+		/// <summary>The menus of the main menu bar: the editor's actions (<see cref="Actions" />) and the editor scripts' items.</summary>
 		private void DrawMenus()
 		{
-			if (EditorMenu.Begin("File"))
+			// The built-in actions (EditorApplication.Actions.cs), then the editor scripts' items of each menu.
+			foreach (string menu in new[] { "File", "Edit", "Assets", "GameObject", "Window" })
 			{
-				if (EditorMenu.Item("New Scene", "Ctrl+N")) NewScene();
-				if (EditorMenu.Item((Stage != null ? "Save Prefab" : "Save Scene") + "###Save", "Ctrl+S", false, !IsPlaying)) SaveScene();
-				if (EditorMenu.Item("Save Scene As...", "Ctrl+Shift+S", false, !IsPlaying && Stage == null)) SaveSceneAs();
-				ImGui.Separator();
-				if (EditorMenu.Item("Open Script Project", "", false, Scripts != null)) Scripts.OpenInIde();
-				if (EditorMenu.Item("Rebuild Scripts", "", false, Scripts != null && !IsPlaying)) Scripts.RequestBuild();
-				ImGui.Separator();
-				if (EditorMenu.Item("Build Settings...", "Ctrl+Shift+B")) ShowBuildWindow();
-				ImGui.Separator();
-				if (EditorMenu.Item("Close Project")) ConfirmToolChanges(() => LeaveAllStages(() => ConfirmDiscard(CloseProject)));
-				if (EditorMenu.Item("Exit")) Window.Close();
-				Extensions.DrawMenuItems("File");
-				EditorMenu.End();
-			}
-
-			if (EditorMenu.Begin("Edit"))
-			{
-				// The item's id stays "Undo" / "Redo" whatever the text says (menu paths of automation).
-				if (EditorMenu.Item((Undo.CanUndo ? "Undo " + Undo.UndoName : "Undo") + "###Undo", "Ctrl+Z", false, Undo.CanUndo)) UndoLast();
-				if (EditorMenu.Item((Undo.CanRedo ? "Redo " + Undo.RedoName : "Redo") + "###Redo", "Ctrl+Y", false, Undo.CanRedo)) RedoLast();
-				ImGui.Separator();
-				if (EditorMenu.Item("Duplicate", "Ctrl+D", false, Selected != null)) DuplicateSelected();
-				if (EditorMenu.Item("Delete", "Del", false, Selected != null)) DeleteSelected();
-				ImGui.Separator();
-				if (EditorMenu.Item("Reload Scripts On Play", "", reloadScriptsOnPlay, Project != null))
+				if (EditorMenu.Begin(menu))
 				{
-					reloadScriptsOnPlay = !reloadScriptsOnPlay;
-					SaveWindowStates();
+					Actions.DrawMenu(menu);
+					Extensions.DrawMenuItems(menu);
+					EditorMenu.End();
 				}
-
-				ImGui.Separator();
-				if (EditorMenu.Item("Project Settings...")) ShowProjectSettings();
-				if (EditorMenu.Item("Preferences...")) ShowPreferences();
-				Extensions.DrawMenuItems("Edit");
-				EditorMenu.End();
-			}
-
-			if (EditorMenu.Begin("Assets"))
-			{
-				// Imports what changed on disk now (it also happens by itself when the editor comes to the front).
-				if (EditorMenu.Item("Refresh", "", false, reserializer == null)) ImportChangesNow();
-				ImGui.Separator();
-				if (EditorMenu.Item("Force Reserialize All Assets", "", false, reserializer == null && !IsPlaying && Stage == null)) ForceReserializeAllAssets();
-				Extensions.DrawMenuItems("Assets");
-				EditorMenu.End();
-			}
-
-			if (EditorMenu.Begin("GameObject"))
-			{
-				DrawCreateMenu(null);
-				Extensions.DrawMenuItems("GameObject");
-				EditorMenu.End();
-			}
-
-			if (EditorMenu.Begin("Window"))
-			{
-				// Ticked windows are open; a closed one comes back where it was docked (layout.ini keeps its place).
-				if (EditorMenu.Item("Scene", "", SceneView.Open))
-				{
-					if (SceneView.Open) SceneView.Open = false;
-					else SceneView.Focus();
-				}
-
-				if (EditorMenu.Item("Game", "", GameView.Open))
-				{
-					if (GameView.Open) GameView.Open = false;
-					else GameView.Focus();
-				}
-
-				ToggleMenuItem("Hierarchy", ref hierarchy.Open);
-				ToggleMenuItem("Inspector", ref inspector.Open);
-				ToggleMenuItem("Project", ref projectPanel.Open);
-				ToggleMenuItem("Console", ref consolePanel.Open);
-				ToggleMenuItem("Lighting", ref lightingPanel.Open);
-				ImGui.Separator();
-				if (EditorMenu.Item("Project Settings", "", projectSettingsWindow.Open))
-				{
-					if (projectSettingsWindow.Open) projectSettingsWindow.Open = false;
-					else ShowProjectSettings();
-				}
-
-				if (EditorMenu.Item("VFX Graph", "", vfxGraphWindow.Open))
-				{
-					if (vfxGraphWindow.Open) vfxGraphWindow.Close();
-					else OpenVfxGraph(null);
-				}
-
-				if (EditorMenu.Item("Animator", "", animatorWindow.Open))
-				{
-					if (animatorWindow.Open) animatorWindow.Close();
-					else OpenAnimator((string)null);
-				}
-
-				if (EditorMenu.Item("Animation", "", animationWindow.Open))
-				{
-					if (animationWindow.Open) animationWindow.Close();
-					else OpenAnimationWindow(null);
-				}
-
-				if (EditorMenu.Item("Timeline", "", timelineWindow.Open))
-				{
-					if (timelineWindow.Open) timelineWindow.Close();
-					else OpenTimeline((string)null);
-				}
-
-				if (EditorMenu.Item("Input Manager", "", inputManagerWindow.Open))
-				{
-					if (inputManagerWindow.Open) inputManagerWindow.Open = false;
-					else OpenInputManager(null);
-				}
-
-				if (EditorMenu.Item("Test Runner", "", testRunnerWindow.Open))
-				{
-					if (testRunnerWindow.Open) testRunnerWindow.Open = false;
-					else testRunnerWindow.Show();
-				}
-
-				bool builderOpen = uiBuilder != null && uiBuilder.IsOpen;
-				if (EditorMenu.Item("UI Builder", "", builderOpen))
-				{
-					if (builderOpen) uiBuilder.Close();
-					else OpenUIBuilder(null);
-				}
-
-				bool studioOpen = audioStudio != null && audioStudio.IsOpen;
-				if (EditorMenu.Item("Audio Studio", "", studioOpen))
-				{
-					if (studioOpen) audioStudio.Close();
-					else OpenAudioStudio(null, null);
-				}
-
-				ImGui.Separator();
-				if (EditorMenu.Item("Reset Layout"))
-				{
-					// Every panel open, docked as by default.
-					SceneView.Open = GameView.Open = hierarchy.Open = inspector.Open = projectPanel.Open = consolePanel.Open = lightingPanel.Open = true;
-					SceneView.Maximized = false;
-					resetLayoutRequested = true;
-				}
-
-				Extensions.DrawMenuItems("Window");
-				EditorMenu.End();
 			}
 
 			// Menus of the project's editor scripts ([MenuItem("Tools/...")]).
 			Extensions.DrawExtraMenus();
 		}
 
-		/// <summary>A Window menu entry: ticked while the window is open, a click opens or closes it.</summary>
-		private static void ToggleMenuItem(string label, ref bool open)
-		{
-			if (EditorMenu.Item(label, "", open))
-			{
-				open = !open;
-			}
-		}
-
-		/// <summary>Create entries (also used by the hierarchy's context menu).</summary>
+		/// <summary>GameObject > ... entries under <paramref name="parent" /> (the hierarchy's context menu; null: the scene's root).</summary>
 		public void DrawCreateMenu(Transform parent)
 		{
-			if (EditorMenu.Item("Create Empty")) CreateObject("GameObject", null, parent);
-			ImGui.Separator();
-			if (EditorMenu.Item("Cube")) CreateModelObject("Cube", DefaultScene.CubeModel, null, parent);
-			if (EditorMenu.Item("Sphere")) CreateModelObject("Sphere", DefaultScene.SphereModel, null, parent);
-			if (EditorMenu.Item("Quad")) CreateModelObject("Quad", DefaultScene.QuadModel, null, parent);
-			ImGui.Separator();
-			if (EditorMenu.Begin("Navigation"))
+			Actions.DrawMenu("GameObject", action =>
 			{
-				if (EditorMenu.Item("NavMesh Surface")) CreateObject("NavMesh Surface", go => go.AddComponent<Navigation.NavMeshSurface>(), parent);
-				if (EditorMenu.Item("NavMesh Agent"))
+				createParent = parent;
+				try
 				{
-					CreateModelObject("NavMesh Agent", DefaultScene.CubeModel, go =>
-					{
-						go.transform.localScale = new Vector3(0.35f, 0.9f, 0.35f);
-						Navigation.NavMeshAgent agent = go.AddComponent<Navigation.NavMeshAgent>();
-						agent.radius = 0.35f;
-						agent.height = 1.8f;
-						agent.baseOffset = 0.9f;
-					}, parent);
+					EditorActions.InvokeFromMenu(action);
 				}
-
-				if (EditorMenu.Item("NavMesh Obstacle"))
+				finally
 				{
-					CreateModelObject("NavMesh Obstacle", DefaultScene.CubeModel, go =>
-					{
-						Navigation.NavMeshObstacle obstacle = go.AddComponent<Navigation.NavMeshObstacle>();
-						obstacle.size = new Vector3(2f, 2f, 2f);
-					}, parent);
+					createParent = null;
 				}
-
-				EditorMenu.End();
-			}
-
-			if (EditorMenu.Begin("Physics 2D"))
-			{
-				if (EditorMenu.Item("Dynamic Box (Rigidbody2D + BoxCollider2D)"))
-				{
-					CreateModelObject("Box 2D", DefaultScene.CubeModel, go =>
-					{
-						// Cube.obj spans -1..1, so the scale is the half size; the colliders fit the mesh like Unity's Reset.
-						go.transform.localScale = Planar(0.5f, 0.5f, 0.25f);
-						go.AddComponent<Rigidbody2D>();
-						go.AddComponent<BoxCollider2D>().FitToRenderer();
-					}, parent);
-				}
-
-				if (EditorMenu.Item("Dynamic Circle (Rigidbody2D + CircleCollider2D)"))
-				{
-					CreateModelObject("Circle 2D", DefaultScene.SphereModel, go =>
-					{
-						go.transform.localScale = new Vector3(0.5f, 0.5f, 0.5f);
-						go.AddComponent<Rigidbody2D>();
-						go.AddComponent<CircleCollider2D>().FitToRenderer();
-					}, parent);
-				}
-
-				if (EditorMenu.Item("Static Ground (BoxCollider2D)"))
-				{
-					CreateModelObject("Ground 2D", DefaultScene.CubeModel, go =>
-					{
-						go.transform.localScale = Planar(5f, 0.25f, 0.25f);
-						if (go.GetComponent<MeshRenderer>() is MeshRenderer renderer)
-						{
-							renderer.IsStatic = true;
-						}
-
-						go.AddComponent<BoxCollider2D>().FitToRenderer();
-					}, parent);
-				}
-
-				if (EditorMenu.Item("Dynamic Capsule (Rigidbody2D + CapsuleCollider2D)"))
-				{
-					CreateModelObject("Capsule 2D", DefaultScene.CubeModel, go =>
-					{
-						go.transform.localScale = Planar(0.25f, 0.5f, 0.25f);
-						go.AddComponent<Rigidbody2D>();
-						go.AddComponent<CapsuleCollider2D>().FitToRenderer();
-					}, parent);
-				}
-
-				if (EditorMenu.Item("Edge Ground (EdgeCollider2D)"))
-				{
-					CreateObject("Edge 2D", go => go.AddComponent<EdgeCollider2D>(), parent);
-				}
-
-				ImGui.Separator();
-				if (EditorMenu.Item("Hinge Chain (3 links)"))
-				{
-					CreateObject("Chain Anchor", go =>
-					{
-						Rigidbody2D anchor = go.AddComponent<Rigidbody2D>();
-						anchor.bodyType = RigidbodyType2D.Static;
-						Rigidbody2D previous = anchor;
-						for (int i = 0; i < 3; i++)
-						{
-							GameObject link = DefaultScene.Instantiate(Scene, DefaultScene.CubeModel, "Link " + (i + 1), go.transform);
-							// Links of 0.25 x 0.6 m hanging end to end; the anchor is in unscaled local space (the mesh top).
-							link.transform.localPosition = Planar(0f, -0.3f - 0.6f * i, 0f);
-							link.transform.localScale = Planar(0.125f, 0.3f, 0.125f);
-							Rigidbody2D body = link.AddComponent<Rigidbody2D>();
-							link.AddComponent<BoxCollider2D>().FitToRenderer();
-							HingeJoint2D hinge = link.AddComponent<HingeJoint2D>();
-							hinge.connectedBody = previous;
-							hinge.anchor = new Vector2(0f, 1f);
-							previous = body;
-						}
-					}, parent);
-				}
-
-				EditorMenu.End();
-			}
-
-			ImGui.Separator();
-			if (EditorMenu.Item("Visual Effect"))
-			{
-				CreateObject("Visual Effect", go =>
-				{
-					var effect = go.AddComponent<LELEngine.VFX.VisualEffect>();
-					string first = AssetDatabase.FindAssets(typeof(LELEngine.VFX.VfxGraph)).Count > 0 ? AssetDatabase.FindAssets(typeof(LELEngine.VFX.VfxGraph))[0] : null;
-					if (first != null)
-					{
-						effect.visualEffectAsset = LELEngine.VFX.VfxGraph.Load(first);
-					}
-				}, parent);
-			}
-
-			if (EditorMenu.Item("Trail"))
-			{
-				// With the default line material, as the inspector's Add Component gives it.
-				CreateObject("Trail", go => go.AddComponent<TrailRenderer>().Reset(), parent);
-			}
-
-			if (EditorMenu.Begin("Audio"))
-			{
-				if (EditorMenu.Item("Audio Listener")) CreateObject("Audio Listener", go => go.AddComponent<LELEngine.Audio.AudioListener>(), parent);
-				if (EditorMenu.Item("Audio Event Emitter")) CreateObject("Audio Emitter", go => go.AddComponent<LELEngine.Audio.AudioEventEmitter>(), parent);
-				if (EditorMenu.Item("Audio Bank Loader")) CreateObject("Audio Bank Loader", go => go.AddComponent<LELEngine.Audio.AudioBankLoader>(), parent);
-				if (EditorMenu.Item("Audio Snapshot Trigger")) CreateObject("Audio Snapshot Trigger", go => go.AddComponent<LELEngine.Audio.AudioSnapshotTrigger>(), parent);
-				EditorMenu.End();
-			}
-
-			ImGui.Separator();
-			if (EditorMenu.Item("Camera")) CreateObject("Camera", go => go.AddComponent<Camera>(), parent);
-			if (EditorMenu.Item("Directional Light"))
-			{
-				CreateObject("Directional Light", go =>
-				{
-					go.transform.rotation = QuaternionHelper.LookRotation(new Vector3(-0.45f, -0.75f, 0.35f).Normalized(), Vector3.UnitY);
-					go.AddComponent<DirectionalLight>();
-				}, parent);
-			}
-
-			if (EditorMenu.Item("Point Light"))
-			{
-				CreateObject("Point Light", go => go.AddComponent<Light>(), parent);
-			}
-
-			if (EditorMenu.Item("Spot Light"))
-			{
-				CreateObject("Spot Light", go =>
-				{
-					// Shining down at what is in front of it.
-					go.transform.rotation = QuaternionHelper.LookRotation(new Vector3(0f, -1f, 0.35f).Normalized(), Vector3.UnitZ);
-					go.AddComponent<Light>().Type = LightType.Spot;
-				}, parent);
-			}
+			});
 		}
 
 		/// <summary>A vector of the 2D physics plane (x and y in the plane, depth along its normal): XY → (x, y, depth), XZ → (x, depth, y).</summary>

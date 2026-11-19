@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.IO;
 using Hexa.NET.ImGui;
@@ -20,11 +21,28 @@ namespace LELEngine.Editor
 		/// <summary>Force Reserialize All Assets is running (<see cref="AssetReserializer" />).</summary>
 		public bool IsReserializing => reserializer != null;
 
+		/// <summary>The last run's summary line (null before one ended).</summary>
+		public string LastReserializeReport { get; private set; }
+
 		/// <summary>
-		///     Starts Force Reserialize All Assets (asks first in the editor's window; batch mode starts at once). Not in play mode
-		///     or prefab mode, whose open files the run would read under them.
+		///     The action: starts Force Reserialize All Assets, asking nothing (the menu item asks,
+		///     <see cref="AskForceReserializeAllAssets" />; automation calls this). Not in play mode or prefab mode, whose open
+		///     files the run would read under them, nor while a run goes on.
 		/// </summary>
-		public void ForceReserializeAllAssets(bool ask = true)
+		/// <exception cref="InvalidOperationException">It cannot start now (the reason).</exception>
+		public void ForceReserializeAllAssets()
+		{
+			if (Project == null || reserializer != null || IsPlaying || Stage != null)
+			{
+				throw new InvalidOperationException("Force Reserialize All Assets cannot start: "
+					+ (Project == null ? "no project is open" : reserializer != null ? "it runs already" : IsPlaying ? "leave play mode first" : "leave prefab mode first"));
+			}
+
+			StartReserialize();
+		}
+
+		/// <summary>Assets > Force Reserialize All Assets: asks first in the editor's window (without one it starts at once).</summary>
+		public void AskForceReserializeAllAssets()
 		{
 			if (Project == null || reserializer != null)
 			{
@@ -37,7 +55,7 @@ namespace LELEngine.Editor
 				return;
 			}
 
-			if (ask && HasUI)
+			if (HasUI)
 			{
 				openReserializePopup = true;
 				return;
@@ -79,7 +97,7 @@ namespace LELEngine.Editor
 
 			AssetReserializer done = reserializer;
 			reserializer = null;
-			done.Report();
+			LastReserializeReport = done.Report();
 
 			// The open scene's and the settings' files changed under the editor, with the same contents: the editor's own
 			// writes, so neither reloads (the other assets reload in place through the watcher, as after a checkout).
