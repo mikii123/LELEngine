@@ -56,6 +56,8 @@ namespace LELEngine.Player
 					Console.SetError(new TeeWriter(Console.Error, file));
 				}
 
+				// Player.log: every message with its call stack (Debug's carry theirs, console writes get the writer's).
+				ConsoleLogWriter.Install();
 				try
 				{
 					return Run(args, baseDirectory, boot);

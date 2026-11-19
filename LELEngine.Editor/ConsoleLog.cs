@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Text;
 
 namespace LELEngine.Editor
 {
@@ -118,15 +117,14 @@ namespace LELEngine.Editor
 	/// <summary>
 	///     The console's messages: the engine's log (<see cref="Debug.MessageLogged" />, with call stacks and context
 	///     objects), script build diagnostics (<see cref="Add" />) and everything else written to the console (shader
-	///     compiler messages, build output, Console.WriteLine of scripts, with the writer's call stack), which it still
-	///     forwards to the original output. Every message is the game's or the editor's (<see cref="ConsoleSource" />).
-	///     Thread safe: script builds and game threads report from the background.
+	///     compiler messages, build output, Console.WriteLine of scripts, with the writer's call stack). It still writes all
+	///     of it to the original output, each message with its call stack (or a diagnostic's source line) on the lines after
+	///     it (<see cref="ConsoleLogWriter" />): only the console window folds the stack away. Every message is the game's or
+	///     the editor's (<see cref="ConsoleSource" />). Thread safe: script builds and game threads report from the background.
 	/// </summary>
-	internal sealed class ConsoleLog : TextWriter
+	internal sealed class ConsoleLog : ConsoleLogWriter
 	{
 		#region PublicFields
-
-		public override Encoding Encoding => Encoding.UTF8;
 
 		/// <summary>Bumped on every change (panels re-filter, and scroll to the bottom on new messages).</summary>
 		public int Version { get; private set; }
@@ -141,8 +139,6 @@ namespace LELEngine.Editor
 
 		#region PrivateFields
 
-		private readonly TextWriter original;
-		private readonly StringBuilder line = new StringBuilder();
 		private readonly List<ConsoleEntry> entries = new List<ConsoleEntry>();
 		private readonly object sync = new object();
 		private long nextId;
@@ -158,63 +154,23 @@ namespace LELEngine.Editor
 
 		#region Constructors
 
-		private ConsoleLog(TextWriter original)
+		private ConsoleLog(TextWriter original) : base(original)
 		{
-			this.original = original;
 		}
 
 		#endregion
 
 		#region PublicMethods
 
-		public static ConsoleLog Install()
+		public new static ConsoleLog Install()
 		{
-			var log = new ConsoleLog(Console.Out);
+			// In place of the log writer the host installed (the same output under it), not over it.
+			var log = new ConsoleLog(ConsoleOutput);
 			Console.SetOut(log);
-			// The engine's messages come with their call stack from the event; their text goes straight to the output.
-			Debug.Output = log.original;
+			// The engine's messages come with their call stack, in their text and in the event: the text goes straight out.
+			Debug.Output = log.Output;
 			Debug.MessageLogged += log.OnMessageLogged;
 			return log;
-		}
-
-		public override void Write(char value)
-		{
-			original.Write(value);
-			lock (sync)
-			{
-				if (value == '\n')
-				{
-					FlushLine();
-				}
-				else if (value != '\r')
-				{
-					line.Append(value);
-				}
-			}
-		}
-
-		public override void Write(string value)
-		{
-			if (value == null)
-			{
-				return;
-			}
-
-			original.Write(value);
-			lock (sync)
-			{
-				foreach (char c in value)
-				{
-					if (c == '\n')
-					{
-						FlushLine();
-					}
-					else if (c != '\r')
-					{
-						line.Append(c);
-					}
-				}
-			}
 		}
 
 		/// <summary>
@@ -239,8 +195,9 @@ namespace LELEngine.Editor
 				AddEntry(new ConsoleEntry { Text = text, Type = type, File = file, Line = lineNumber, Sticky = sticky });
 			}
 
-			// Prefixed as Debug writes its messages ("[Error] ..."): batch logs show these errors like any other.
-			original.WriteLine(type == LogType.Log ? text : "[" + type + "] " + text);
+			// Prefixed as Debug writes its messages ("[Error] ..."), with the source line as their stack: batch logs show these
+			// errors like any other.
+			Output.WriteLine((type == LogType.Log ? text : "[" + type + "] " + text) + (file != null ? "\n   at " + file + ":line " + lineNumber : ""));
 		}
 
 		public List<ConsoleEntry> Snapshot()
@@ -300,46 +257,38 @@ namespace LELEngine.Editor
 			}
 		}
 
-		private void FlushLine()
+		/// <summary>
+		///     Written to the console directly (Console.WriteLine): a message per line, each with the writer's call stack (past
+		///     the runtime's writer frames; null when the text brings its own: its "   at" lines join the message before them).
+		/// </summary>
+		protected override void OnMessage(IReadOnlyList<string> lines, string stackTrace)
 		{
-			string text = line.ToString();
-			line.Clear();
-			if (text.Length == 0)
+			lock (sync)
 			{
-				return;
-			}
-
-			LogType type = LogType.Log;
-			if (text.StartsWith("[Exception]", StringComparison.Ordinal) || text.StartsWith("[Error]", StringComparison.Ordinal)
-				|| text.IndexOf("error", StringComparison.OrdinalIgnoreCase) >= 0 && text.StartsWith("[Shader]", StringComparison.Ordinal))
-			{
-				type = LogType.Error;
-			}
-			else if (text.StartsWith("[Warning]", StringComparison.Ordinal))
-			{
-				type = LogType.Warning;
-			}
-			else if (text.StartsWith("   at ", StringComparison.Ordinal) && entries.Count > 0)
-			{
-				// Stack trace line of something printed to the console: belongs to the previous entry.
-				ConsoleEntry last = entries[entries.Count - 1];
-				entries[entries.Count - 1] = new ConsoleEntry
+				foreach (string text in lines)
 				{
-					Id = last.Id, Source = last.Source, Text = last.Text, Type = last.Type, Time = last.Time, Frame = last.Frame, Context = last.Context, Sticky = last.Sticky,
-					File = last.File, Line = last.Line, StackTrace = last.StackTrace != null ? last.StackTrace + "\n" + text : text
-				};
-				Version++;
-				RemovalVersion++;
-				return;
+					if (text.Length == 0)
+					{
+						continue;
+					}
+
+					if (IsStackTraceLine(text) && entries.Count > 0)
+					{
+						// Stack trace line of something printed to the console: belongs to the previous entry.
+						ConsoleEntry last = entries[entries.Count - 1];
+						entries[entries.Count - 1] = new ConsoleEntry
+						{
+							Id = last.Id, Source = last.Source, Text = last.Text, Type = last.Type, Time = last.Time, Frame = last.Frame, Context = last.Context, Sticky = last.Sticky,
+							File = last.File, Line = last.Line, StackTrace = last.StackTrace != null ? last.StackTrace + "\n" + text : text
+						};
+						Version++;
+						RemovalVersion++;
+						continue;
+					}
+
+					AddEntry(new ConsoleEntry { Text = text, Type = TypeOf(text), StackTrace = stackTrace });
+				}
 			}
-
-			// Written to the console directly (Console.WriteLine): the call stack is the writer's, past the runtime's writer frames.
-			AddEntry(new ConsoleEntry { Text = text, Type = type, StackTrace = Debug.CaptureStackTrace(Debug.GetStackTraceLogType(type), IsWriterFrame) });
-		}
-
-		private static bool IsWriterFrame(Type type)
-		{
-			return type == typeof(ConsoleLog) || (type.Namespace != null && (type.Namespace == "System" || type.Namespace.StartsWith("System.", StringComparison.Ordinal)));
 		}
 
 		/// <summary>The project's scripts logged it (a frame of theirs in the call stack, a diagnostic of their file) or game code was running.</summary>

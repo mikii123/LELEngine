@@ -98,7 +98,9 @@ namespace LELEngine.Testing
 			if (result != null && result.Output.Count > 0)
 			{
 				xml.WriteStartElement("system-out");
-				xml.WriteString(string.Join("\n", result.Output.Select(e => e.IsOutput ? e.Text.TrimEnd('\n') : "[" + e.Type + "] " + e.Text)));
+				// Log messages with their call stack, as every text log writes them.
+				xml.WriteString(string.Join("\n", result.Output.Select(e => e.IsOutput ? e.Text.TrimEnd('\n')
+					: "[" + e.Type + "] " + e.Text + (e.StackTrace != null ? "\n" + e.StackTrace : ""))));
 				xml.WriteEndElement();
 			}
 

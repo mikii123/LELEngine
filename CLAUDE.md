@@ -1241,12 +1241,26 @@ lighting and the engine's other features. Octahedral impostors, baked into atlas
 ## Console, editor preferences, theme (2026-10-22)
 
 - `Debug` records the caller's stack for every message (`Debug.SetStackTraceLogType(LogType, StackTraceLogType)`,
-  Unity's None / ScriptOnly / Full; ScriptOnly drops System/Microsoft/OpenTK/Hexa/Silk frames; nothing is captured
-  without a `MessageLogged` subscriber). Stdout still gets the text (stack only for exceptions, plus inner exceptions
-  as `--- Caused by` lines); `Debug.Output` routes it: the editor points it at the real stdout and takes the message
-  from `MessageLogged`, so `ConsoleLog` no longer parses Debug text (only other console writes, as before).
+  Unity's None / ScriptOnly / Full; ScriptOnly drops System/Microsoft/OpenTK/Hexa/Silk frames), in every host since
+  2026-11-19 (before, only with a `MessageLogged` subscriber). `Debug.Output` routes the text: the editor points it at
+  the real stdout and takes the message from `MessageLogged`, so `ConsoleLog` never parses Debug text.
 - Direct console writes (the engine's 70-odd `Console.WriteLine`s: `[ProbeGather]`, `[SDF]`, ...) get the writer's
-  call stack too (`Debug.CaptureStackTrace(mode, skipCaller)`, skipping ConsoleLog and System writer frames).
+  call stack too (`Debug.CaptureStackTrace(mode, skipCaller)`, skipping log writers' and System writer frames).
+- Text logs show the stack at once (2026-11-19, the user's rule: "the editor's console hides the stack trace, but in
+  CLI mode, in the logs in files and everywhere else logs must show the stack trace right away"). Every message is
+  written out with its stack on the lines after it, the format of exception stacks: Debug's messages (an exception's
+  own stack, else the caller's), direct console writes (`ConsoleLogWriter`, engine, `Mono/ConsoleLogWriter.cs`: a
+  `TextWriter` over `Console.Out` that writes a message at a time, the lines one write completes, then the writer's
+  stack as the first line's type records it; text bringing its own "   at" lines, such as an exception written whole,
+  and empty lines as they are; `Flush` writes an open line without a stack), build diagnostics (their
+  `   at file:line N`). `ConsoleLogWriter.Install()` in the player (after the Player.log tee, so not in the shader
+  compile helper, whose stdout is its protocol), TestGame, batch mode (after the `-logFile` tee) and the editor's
+  `RunEditor` (the project chooser too); `ConsoleLog` derives from it and takes its place (`ConsoleOutput`: the output
+  under the installed writer while it is still the console's), adding the entries in `OnMessage`. CLI `console`
+  (`ConsoleMessage.ToString`) and JUnit `system-out` print the stack under each message too; the console window's
+  export and copy did already (`ToFullText`). Not touched: `Console.Error` (the CLI client's own errors, the helper),
+  the CLI client's output, the benchmarks' report. Costs a stack capture (file and line from the PDBs) per message in
+  players too, as Unity's logs.
 - Every entry is `ConsoleSource.Game` (a frame in the project folder, a diagnostic of a project file, or logged inside
   `ConsoleLog.BeginGame/EndGame`: play mode frames, the play scene's start, Step) or `Editor`. Preferences > Console >
   Editor messages hides the editor's plain messages (not counted either); its warnings and errors always show. The

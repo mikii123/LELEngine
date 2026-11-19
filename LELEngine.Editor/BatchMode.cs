@@ -83,6 +83,9 @@ namespace LELEngine.Editor
 					Console.SetError(new TeeWriter(Console.Error, file));
 				}
 
+				// Every message of the run with its call stack, in the output and the log file (a batch editor's console log
+				// takes its place).
+				ConsoleLogWriter.Install();
 				int code = Execute(options, args);
 				Console.WriteLine(code == 0 ? "[Batch] Done" : $"[Batch] Failed (exit code {code})");
 				return code;

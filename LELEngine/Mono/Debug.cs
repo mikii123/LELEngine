@@ -28,8 +28,8 @@ namespace LELEngine
 	/// <summary>
 	///     Engine log. Writes to the console and raises <see cref="MessageLogged" /> so hosts (the editor console)
 	///     can collect messages. Exceptions thrown by component callbacks are reported here instead of escaping
-	///     the game loop. Every message records the call stack that logged it (<see cref="SetStackTraceLogType" />);
-	///     the console output shows it for exceptions only.
+	///     the game loop. Every message records the call stack that logged it (<see cref="SetStackTraceLogType" />) and is
+	///     written out with it, on the lines after the message: only the editor's console shows the stack on demand.
 	/// </summary>
 	public static class Debug
 	{
@@ -39,8 +39,9 @@ namespace LELEngine
 		public static event Action<string, string, LogType, object> MessageLogged;
 
 		/// <summary>
-		///     Where the log text is written (null: <see cref="Console.Out" />). The editor writes it past its console
-		///     capture: its console gets the message from <see cref="MessageLogged" />.
+		///     Where the log text is written (null: <see cref="Console.Out" />). A host's console log writer
+		///     (<see cref="ConsoleLogWriter" />) points it past itself: the messages carry their stack already, and the editor's
+		///     console gets them from <see cref="MessageLogged" />.
 		/// </summary>
 		public static TextWriter Output;
 
@@ -153,12 +154,12 @@ namespace LELEngine
 
 		private static void Write(string message, string stackTrace, LogType type, object context)
 		{
+			// An exception's own stack, else the caller's as this type records it: written out with the message (log files,
+			// batch runs, the player's log), and the same one to the subscribers (the editor's console folds it away).
+			stackTrace ??= CaptureStackTrace(stackTraceTypes[(int)type], null);
 			string prefix = type == LogType.Log ? "" : "[" + type + "] ";
 			(Output ?? Console.Out).WriteLine(prefix + message + (stackTrace != null ? "\n" + stackTrace : ""));
-			if (MessageLogged != null)
-			{
-				MessageLogged.Invoke(message, stackTrace ?? CaptureStackTrace(stackTraceTypes[(int)type], null), type, context);
-			}
+			MessageLogged?.Invoke(message, stackTrace, type, context);
 		}
 
 		private static bool IsLibrary(Type type)

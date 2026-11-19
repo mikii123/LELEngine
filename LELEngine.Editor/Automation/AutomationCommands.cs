@@ -90,7 +90,7 @@ namespace LELEngine.Editor.Automation
 			"  play | stop | pause | step | undo | redo\n" +
 			"  refresh                                import changed files now, also those the watchers have not reported yet\n" +
 			"                                         (every command first imports what changed since the last one)\n" +
-			"  console [N] [--errors] [--clear]       the last N (30) messages\n" +
+			"  console [N] [--errors] [--clear]       the last N (30) messages, each with its call stack\n" +
 			"  wait <frames> | wait idle [seconds]    idle: scripts built, assets refreshed, loads done\n" +
 			"  exec <Namespace.Type.Method> [args]    a static method of the scripts / engine / editor (Task allowed)\n" +
 			"  quit [--save|--discard]                ends the editor; unsaved changes without --save / --discard: it fails\n" +
