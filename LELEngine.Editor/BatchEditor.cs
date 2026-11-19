@@ -69,8 +69,14 @@ namespace LELEngine.Editor
 					}
 				}
 
-				// The scripts as they are now: built (or the built ones loaded) before anything runs.
-				if (!TickUntil(Tick, () => !editor.IsBusy, 900))
+				// The scripts as they are now: built (or the built ones loaded) before anything runs. The batch run is a command
+				// (ImportPendingChanges): what waits for one imports now, a build the load asked for included (tests older than
+				// the scripts). Without it that build waited for a command that never came, and -runTests found no tests (exit 0).
+				if (!TickUntil(Tick, () =>
+				    {
+					    editor.ImportPendingChanges();
+					    return !editor.IsBusy;
+				    }, 900))
 				{
 					Debug.LogError("[Batch] The editor is still busy after 15 minutes (scripts, assets).");
 					return 1;

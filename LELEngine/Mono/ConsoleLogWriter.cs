@@ -7,8 +7,9 @@ namespace LELEngine
 {
 	/// <summary>
 	///     The console as a log, written as <see cref="Debug" /> writes its messages: each message (the lines one write
-	///     completes: a WriteLine, an exception written whole) is followed by the call stack of the code that wrote it, as its
-	///     type records it (<see cref="Debug.GetStackTraceLogType" />). A message that brings its own stack ("   at ..." lines)
+	///     completes: a WriteLine, an exception written whole) that is a warning or an error (<see cref="TypeOf" />,
+	///     <see cref="Debug.WritesStackTrace" />) is followed by the call stack of the code that wrote it, as its type records
+	///     it (<see cref="Debug.GetStackTraceLogType" />); plain messages are written alone. A message that brings its own stack ("   at ..." lines)
 	///     is written as it is, and so are empty lines. Hosts put it over the console (<see cref="Install" />): the engine's
 	///     direct console writes and the game's Console.WriteLine then show where they come from in every text log (log
 	///     files, a batch run's output), as Debug's messages do. The editor's console log is one too: its console keeps the
@@ -148,11 +149,15 @@ namespace LELEngine
 
 		#endregion
 
+		/// <summary>Whether plain messages' stacks are captured for <see cref="OnMessage" /> too (they are never written out).</summary>
+		protected virtual bool KeepsPlainStackTraces => false;
+
 		#region ProtectedMethods
 
 		/// <summary>
 		///     A message was written (called before it is written out): its lines and the writer's call stack, null when the
-		///     message brings its own, has no text or its type records none.
+		///     message brings its own, has no text or its type records none (or it is a plain message and
+		///     <see cref="KeepsPlainStackTraces" /> is off).
 		/// </summary>
 		protected virtual void OnMessage(IReadOnlyList<string> lines, string stackTrace)
 		{
@@ -185,7 +190,11 @@ namespace LELEngine
 			string[] lines = completed.ToArray();
 			completed.Clear();
 			string first = FirstText(lines);
-			string stackTrace = first != null && !BringsStackTrace(lines) ? Debug.CaptureStackTrace(Debug.GetStackTraceLogType(TypeOf(first)), IsWriterFrame) : null;
+			LogType type = first != null ? TypeOf(first) : LogType.Log;
+			bool writesStack = Debug.WritesStackTrace(type);
+			string stackTrace = first != null && (writesStack || KeepsPlainStackTraces) && !BringsStackTrace(lines)
+				? Debug.CaptureStackTrace(Debug.GetStackTraceLogType(type), IsWriterFrame)
+				: null;
 			OnMessage(lines, stackTrace);
 			for (int i = 0; i < lines.Length; i++)
 			{
@@ -194,7 +203,7 @@ namespace LELEngine
 			}
 
 			lineWritten = 0;
-			if (stackTrace != null)
+			if (stackTrace != null && writesStack)
 			{
 				Output.WriteLine(stackTrace);
 			}

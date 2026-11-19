@@ -1443,6 +1443,16 @@ lighting and the engine's other features. Octahedral impostors, baked into atlas
   export and copy did already (`ToFullText`). Not touched: `Console.Error` (the CLI client's own errors, the helper),
   the CLI client's output, the benchmarks' report. Costs a stack capture (file and line from the PDBs) per message in
   players too, as Unity's logs.
+- Only warnings, errors and exceptions since 2026-11-20 (the user's word: "daj tylko dla warningów i błędów", after a
+  CI build's output in Forgejo, 15,874 lines of which 14,992 stack frames, crashed the browser). `Debug.WritesStackTrace(type)`
+  (type != Log) decides for `Debug`'s text and for `ConsoleLogWriter` (the line's `TypeOf`: "[Warning]", "[Error]",
+  "[Exception]", a "[Shader]" line with "error"); a plain message is written alone and its stack is not even captured
+  unless someone keeps it: `MessageLogged` subscribers and `ConsoleLog` (`KeepsPlainStackTraces`): the editor's console
+  still shows any message's stack on demand. NF's `-runTests -build` locally: 706 lines, 151 of them stacks (the 6
+  warnings and errors), 510 test lines without one.
+- Batch mode imports what waits before it runs anything (`BatchEditor.Run`: `ImportPendingChanges` while it waits for
+  `!IsBusy`), as a CLI command does: a build the load asked for (tests older than the scripts) waited for a command that
+  never came, so `-runTests` printed "No tests in this project" and exited 0 (found 2026-11-20 on New Frontier).
 - Every entry is `ConsoleSource.Game` (a frame in the project folder, a diagnostic of a project file, or logged inside
   `ConsoleLog.BeginGame/EndGame`: play mode frames, the play scene's start, Step) or `Editor`. Preferences > Console >
   Editor messages hides the editor's plain messages (not counted either); its warnings and errors always show. The

@@ -261,6 +261,9 @@ namespace LELEngine.Editor
 		///     Written to the console directly (Console.WriteLine): a message per line, each with the writer's call stack (past
 		///     the runtime's writer frames; null when the text brings its own: its "   at" lines join the message before them).
 		/// </summary>
+		/// <summary>The console shows any message's stack on demand, plain ones too.</summary>
+		protected override bool KeepsPlainStackTraces => true;
+
 		protected override void OnMessage(IReadOnlyList<string> lines, string stackTrace)
 		{
 			lock (sync)

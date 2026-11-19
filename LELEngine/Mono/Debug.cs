@@ -28,8 +28,9 @@ namespace LELEngine
 	/// <summary>
 	///     Engine log. Writes to the console and raises <see cref="MessageLogged" /> so hosts (the editor console)
 	///     can collect messages. Exceptions thrown by component callbacks are reported here instead of escaping
-	///     the game loop. Every message records the call stack that logged it (<see cref="SetStackTraceLogType" />) and is
-	///     written out with it, on the lines after the message: only the editor's console shows the stack on demand.
+	///     the game loop. Every message records the call stack that logged it (<see cref="SetStackTraceLogType" />); warnings,
+	///     errors and exceptions are written out with it, on the lines after the message (<see cref="WritesStackTrace" />),
+	///     plain messages alone. The editor's console keeps every message's stack and shows it on demand.
 	/// </summary>
 	public static class Debug
 	{
@@ -87,6 +88,16 @@ namespace LELEngine
 		}
 
 		/// <summary>How much of the call stack messages of this type record (ScriptOnly by default, as Unity's).</summary>
+		/// <summary>
+		///     Whether text logs (log files, a batch run's or CI's output, the player's log) write a message's call stack after
+		///     it: for warnings, errors and exceptions. Plain messages go alone: a stack after every progress line (a test's
+		///     result, a build step) buried the log in lines that tell nothing (a CI build's output was 94 % stack frames).
+		/// </summary>
+		public static bool WritesStackTrace(LogType type)
+		{
+			return type != LogType.Log;
+		}
+
 		public static StackTraceLogType GetStackTraceLogType(LogType type)
 		{
 			return stackTraceTypes[(int)type];
@@ -154,11 +165,17 @@ namespace LELEngine
 
 		private static void Write(string message, string stackTrace, LogType type, object context)
 		{
-			// An exception's own stack, else the caller's as this type records it: written out with the message (log files,
-			// batch runs, the player's log), and the same one to the subscribers (the editor's console folds it away).
-			stackTrace ??= CaptureStackTrace(stackTraceTypes[(int)type], null);
+			// An exception's own stack, else the caller's as this type records it: written out with a warning, an error or an
+			// exception (log files, batch runs, the player's log), and to the subscribers for every message (the editor's
+			// console folds it away). Not captured for a plain message nobody keeps.
+			bool writesStack = WritesStackTrace(type);
+			if (stackTrace == null && (writesStack || MessageLogged != null))
+			{
+				stackTrace = CaptureStackTrace(stackTraceTypes[(int)type], null);
+			}
+
 			string prefix = type == LogType.Log ? "" : "[" + type + "] ";
-			(Output ?? Console.Out).WriteLine(prefix + message + (stackTrace != null ? "\n" + stackTrace : ""));
+			(Output ?? Console.Out).WriteLine(prefix + message + (writesStack && stackTrace != null ? "\n" + stackTrace : ""));
 			MessageLogged?.Invoke(message, stackTrace, type, context);
 		}
 
