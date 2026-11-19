@@ -45,6 +45,8 @@ flat out uint lelInstance;
 flat out uint lelMaterialIndex;
 mat4 LelModelMatrix() { return lelInstances[LEL_INSTANCE_INDEX].model; }
 mat3 LelNormalMatrix() { return mat3(lelInstances[LEL_INSTANCE_INDEX].normalMatrix); }
+// World to object: the table's normal matrix is the inverse's transpose.
+mat4 LelInverseModelMatrix() { return transpose(lelInstances[LEL_INSTANCE_INDEX].normalMatrix); }
 void LelVertexSetup()
 {
 	lelInstance = LEL_INSTANCE_INDEX;
@@ -64,6 +66,7 @@ mat4 LelPreviousModelMatrix() { return lelPreviousModels[LEL_INSTANCE_INDEX]; }
 uniform mat4 modelMatrix;
 mat4 LelModelMatrix() { return modelMatrix; }
 mat3 LelNormalMatrix() { return mat3(transpose(inverse(modelMatrix))); }
+mat4 LelInverseModelMatrix() { return inverse(modelMatrix); }
 void LelVertexSetup() { }
 #ifdef LEL_PREVIOUS_MODELS
 uniform mat4 previousModelMatrix;

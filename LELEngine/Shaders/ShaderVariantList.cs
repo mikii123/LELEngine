@@ -244,12 +244,15 @@ namespace LELEngine.Shaders
 				}
 
 				compiled++;
+				// The programs of the passes the shader draws itself (its own shadow caster, geometry prepass) with it.
+				compiled += program.BuildPassVariants();
 				if (gpuDriven && program.SupportsInstancing)
 				{
 					ShaderProgram instanced = program.GetInstancedVariant();
 					if (instanced != null)
 					{
 						compiled++;
+						compiled += instanced.BuildPassVariants();
 					}
 				}
 			}

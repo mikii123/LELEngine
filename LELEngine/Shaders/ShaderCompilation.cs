@@ -768,10 +768,27 @@ namespace LELEngine.Shaders
 					alreadyCompiledCount++;
 				}
 
+				BuildPassVariants(program, gpuDriven);
 				return null;
 			}
 
 			return new Entry { Variant = variant, Program = program, BaseDone = true, Instanced = instanced };
+		}
+
+		// The programs of the passes the variant's shader draws itself (its own shadow caster, geometry prepass), of the
+		// variant's program and of its instanced one, built on this thread (few shaders have any).
+		private void BuildPassVariants(ShaderProgram program, bool gpuDriven)
+		{
+			int builtNow = program.BuildPassVariants();
+			if (gpuDriven && program.SupportsInstancing)
+			{
+				builtNow += program.GetInstancedVariant()?.BuildPassVariants() ?? 0;
+			}
+
+			for (int i = 0; i < builtNow; i++)
+			{
+				CountProgram();
+			}
 		}
 
 		// The compile thread: the variant's program and its instanced one built whole here. A program whose build another
@@ -798,9 +815,11 @@ namespace LELEngine.Shaders
 					return;
 				}
 
+				// With it the programs of the passes the shader draws itself (its own shadow caster, geometry prepass).
+				program.BuildPassVariants();
 				if (gpuDriven && program.SupportsInstancing)
 				{
-					program.GetInstancedVariant();
+					program.GetInstancedVariant()?.BuildPassVariants();
 				}
 			}
 			catch (Exception e)
@@ -849,6 +868,11 @@ namespace LELEngine.Shaders
 					}
 
 					entry.Instanced = gpuDriven ? entry.Program.StartInstancedVariant() : null;
+					if (entry.Instanced == null)
+					{
+						BuildPassVariants(entry.Program, gpuDriven);
+					}
+
 					return entry.Instanced == null;
 				}
 
@@ -857,6 +881,7 @@ namespace LELEngine.Shaders
 					CountProgram();
 				}
 
+				BuildPassVariants(entry.Program, gpuDriven);
 				return true;
 			}
 			catch (Exception e)

@@ -29,6 +29,8 @@ OcclusionStrength ("Occlusion Strength", Range(0, 1)) = 1
 DetailAlbedoMap_ST ("Detail Tiling Offset", Vector) = (1, 1, 0, 0)
 [Toggle(DETAIL_NORMAL_MAP)] DetailNormalMap ("Detail Normal Map", 2D) = "bump" {}
 DetailNormalScale ("Detail Normal Scale", Float) = 1
+// The LEL_SURFACE_CAPTURE variant writes the surface instead of lighting it (impostor bakes).
+SurfaceCapture On
 /////Properties
 
 //Vertex
@@ -97,11 +99,16 @@ void main()
 
 #version 430
 
+// LEL_SURFACE_CAPTURE (ShaderPass.SurfaceCapture): the surface is written, not lit, so nothing of the lighting is read.
+#ifndef LEL_SURFACE_CAPTURE
 #include "Engine/Shadows.glsl"
 #include "Engine/VoxelConeTracing.glsl"
+#endif
 #include "Engine/StandardBRDF.glsl"
+#ifndef LEL_SURFACE_CAPTURE
 #include "Engine/Lights.glsl"
 #include "Engine/DirectionalLights.glsl"
+#endif
 
 // Lit with an albedo map (multiplies Color) and, each in a variant of its own that only the materials setting it pay
 // for, a tangent-space normal map, an emission map (multiplies Emissive), a mask map (metallic, occlusion, smoothness)
@@ -171,7 +178,15 @@ struct Specular {
 uniform Ambient LAmbient;
 uniform Specular LSpecular;
 
+#ifdef LEL_SURFACE_CAPTURE
+// The surface (ShaderPass.SurfaceCapture).
+layout(location = 0) out vec4 CaptureDiffuse;   // rgb: the colour the surface scatters
+layout(location = 1) out vec4 CaptureNormal;    // xyz: the shading normal (world)
+layout(location = 2) out vec4 CaptureSpecular;  // rgb: the specular colour (0: the scene workflow), a: smoothness
+layout(location = 3) out vec4 CaptureEmission;  // rgb: the emitted radiance, a: the occlusion of the indirect light
+#else
 out vec4 FragColor;
+#endif
 
 void main()
 {
@@ -216,6 +231,37 @@ void main()
 	}
 #endif
 
+#ifdef LEL_SURFACE_CAPTURE
+	// What the workflows below shade with: their diffuse and specular colours (the scene workflow has no specular
+	// colour of its own: zero), the roughness as smoothness, the mask's occlusion.
+	vec3 captureDiffuse = color.rgb;
+	vec3 captureSpecular = vec3(0.0);
+#if defined(WORKFLOW_METALLIC) || defined(WORKFLOW_SPECULAR)
+	float captureOneMinusReflectivity;
+#ifdef WORKFLOW_METALLIC
+#ifdef MASK_MAP
+	float captureMetallic = mask.r;
+#else
+	float captureMetallic = Metallic;
+#endif
+	captureDiffuse = LelDiffuseAndSpecularFromMetallic(color.rgb, captureMetallic, captureSpecular, captureOneMinusReflectivity);
+#else
+	captureSpecular = SpecularColor.rgb;
+#ifdef SPECULAR_MAP
+	captureSpecular *= texture(SpecularMap, fTexCoord).rgb;
+#endif
+	captureDiffuse = LelEnergyConservation(color.rgb, captureSpecular, captureOneMinusReflectivity);
+#endif
+#endif
+	float captureOcclusion = 1.0;
+#ifdef MASK_MAP
+	captureOcclusion = surfaceOcclusion;
+#endif
+	CaptureDiffuse = vec4(captureDiffuse, 1.0);
+	CaptureNormal = vec4(N, 1.0);
+	CaptureSpecular = vec4(captureSpecular, 1.0 - roughness);
+	CaptureEmission = vec4(emissive.rgb * emissive.a, captureOcclusion);
+#else
 	vec3 V = normalize(LSpecular.viewPos - fPosition);
 
 	vec3 albedo = color.rgb;
@@ -322,6 +368,7 @@ void main()
 	}
 #endif
 	FragColor = vec4(result, color.a);
+#endif
 }
 
 /////Fragment

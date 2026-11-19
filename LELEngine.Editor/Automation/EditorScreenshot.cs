@@ -120,9 +120,13 @@ namespace LELEngine.Editor
 
 		#region PublicMethods
 
-		public static byte[] Encode(byte[] rgba, int width, int height)
+		/// <summary>
+		///     The image as a PNG file's bytes. <paramref name="rgba" /> holds the top row first, or the bottom row first with
+		///     <paramref name="bottomUp" /> (how the engine stores textures).
+		/// </summary>
+		public static byte[] Encode(byte[] rgba, int width, int height, bool bottomUp = false)
 		{
-			if (rgba == null || rgba.Length < width * height * 4)
+			if (rgba == null || rgba.Length < (long)width * height * 4)
 			{
 				throw new ArgumentException("The pixel buffer is smaller than width x height x 4.");
 			}
@@ -145,7 +149,7 @@ namespace LELEngine.Editor
 					for (int y = 0; y < height; y++)
 					{
 						zlib.WriteByte(0);
-						zlib.Write(rgba, y * row, row);
+						zlib.Write(rgba, (bottomUp ? height - 1 - y : y) * row, row);
 					}
 				}
 

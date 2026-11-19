@@ -37,6 +37,15 @@ namespace TestGame
 		///            [suns=N directional lights: the sun and N - 1 coloured ones from other sides] [sunshadows=N of them cast shadows]
 		///            [suncascades=1|2|4 and sunmap=size: the other lights' shadow maps] [sungi=0 sunvol=0 suncast=0: the extra lights out of
 		///            the GI / the volumes / the shadows] [sunspin=degrees a second they turn]
+		///            [impostors=1 impostors beside the meshes they stand for, in an open yard (baked at start): a ship, an axe, a car, a group]
+		///            [impostorframes=N views a side] [impostorsize=texels of a view] [impostorhemi=1] [impostorsamples=1..4]
+		///            [impostoryaw=deg] [impostorpitch=deg] [impostorspin=deg/s] [impostorspinframe=deg a frame] [impostorscale=x,y,z] [impostorshow=both|mesh|impostor]
+		///            [impostorswap=frame the meshes until then, the impostors in their places after: frames dumped around it compare the two]
+		///            [impostorfield=N ships a side with LOD groups] [impostorlod=height] [impostordump=folder for the atlases]
+		///            [impostorparallax=0..1] [impostorsteps=1..4] [impostorcutoff=0..1] [impostorbias=radii]
+		///            [impostorheight=y the pairs' height: low, they cut into the ground] [impostorprepass=0] [impostorlights=1 local lights]
+		///            [impostormotion=frame the prepass's motion vectors summed up per quarter of the view at that frame]
+		///            [impostorrepeat=N every prop baked N times more, the bakes compared]
 		///            View: [view=ghost from under the ceiling down at the orbs] [camera=x,y,z] [look=x,y,z] [night=1 emitters only]
 		///            Ghosting measurements (GhostTest): [emitterstep=frame] [emitteroff=frame]
 		///            [mover=frame] [moverz=path depth] [moveremission=intensity] [regions=x,y,z;x,y,z;...] [regionsize=px] [regionstart=frame] [regionsource=scene|gi]
@@ -303,6 +312,39 @@ namespace TestGame
 				scene.Name = "VolumetricTest";
 				VolumetricTestScene.Load(scene, options, GetBool(args, "volcube", false), GetBool(args, "volhq", false));
 				Game.Mono.Renderer.Settings.GpuDriven = options.GpuDriven;
+			}
+			else if (GetBool(args, "impostors", false))
+			{
+				// impostors=1: impostors beside the meshes they stand for (baked while the scene is built).
+				scene = Game.Mono.LoadEmptyScene();
+				scene.Name = "ImpostorTest";
+				ImpostorTestScene.Load(scene, options, new ImpostorTestScene.Options
+				{
+					Frames = GetInt(args, "impostorframes", 12),
+					FrameSize = GetInt(args, "impostorsize", 128),
+					Hemisphere = GetBool(args, "impostorhemi", false),
+					Supersampling = GetInt(args, "impostorsamples", 4),
+					Yaw = GetFloat(args, "impostoryaw", 0f),
+					Pitch = GetFloat(args, "impostorpitch", 0f),
+					Spin = GetFloat(args, "impostorspin", 0f),
+					SpinPerFrame = GetFloat(args, "impostorspinframe", 0f),
+					MotionFrame = GetInt(args, "impostormotion", 0),
+					Repeat = GetInt(args, "impostorrepeat", 0),
+					Scale = GetVector3(args, "impostorscale") ?? OpenTK.Mathematics.Vector3.One,
+					Show = GetValue(args, "impostorshow") ?? "both",
+					SwapFrame = GetInt(args, "impostorswap", 0),
+					Field = GetInt(args, "impostorfield", 0),
+					FieldLodHeight = GetFloat(args, "impostorlod", 0.12f),
+					DumpDirectory = GetValue(args, "impostordump"),
+					Parallax = GetFloat(args, "impostorparallax", 1f),
+					Cutoff = GetFloat(args, "impostorcutoff", 0.5f),
+					ShadowBias = GetFloat(args, "impostorbias", -1f),
+					ParallaxSteps = GetInt(args, "impostorsteps", 0),
+					Agreement = GetFloat(args, "impostoragree", -1f),
+					Height = GetFloat(args, "impostorheight", 3f),
+					Prepass = GetBool(args, "impostorprepass", true),
+					Lights = GetBool(args, "impostorlights", false)
+				});
 			}
 			else if (GetBool(args, "ui", false))
 			{

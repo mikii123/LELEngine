@@ -17,6 +17,9 @@ namespace LELEngine.Rendering.Passes
 	///     the normals and roughness the shading uses; everything else is drawn with the vertex normal and the material's
 	///     roughness. Shares the depth texture with the scene target. GPU-driven: every visible instance without maps in
 	///     one indirect call, then a call per bucket with maps.
+	///     A shader whose surface is not its mesh's (render state <c>GeometryPrepass Custom</c>: impostors write the depth
+	///     of the surface they stand for) is drawn with its own <see cref="ShaderPass.GeometryPrepass" /> variant and the
+	///     material's values, after the others: a call per bucket GPU-driven, a draw per sub-mesh otherwise.
 	/// </summary>
 	public sealed class GeometryPrepass : RenderPass
 	{
@@ -142,23 +145,54 @@ namespace LELEngine.Rendering.Passes
 				Use(instancedProgram, context);
 				gpu.DrawCameraPlainGeometry();
 				IReadOnlyList<OpaqueBucket> buckets = gpu.Buckets;
-				for (int i = 0; i < buckets.Count; i++)
+				for (int i = gpu.PlainBucketCount; i < buckets.Count; i++)
 				{
 					OpaqueBucket bucket = buckets[i];
-					if (bucket.GeometryMaps == 0)
+					ShaderProgram variant = null;
+					bool own = false;
+					if (bucket.CustomGeometryPrepass)
 					{
-						continue;
+						// The materials' shader draws the prepass itself: its variant of the pass (instanced, as the bucket's).
+						variant = bucket.Program.GetPassVariant(ShaderPass.GeometryPrepass);
+						own = variant != null && variant.IsLinked;
 					}
 
-					// A variant that does not link still draws the bucket's depth, with the vertex normals.
-					ShaderProgram variant = MapProgram(bucket.GeometryMaps, true) ?? instancedProgram;
+					if (!own)
+					{
+						// A variant that does not link still draws the bucket's depth, with the vertex normals.
+						variant = bucket.GeometryMaps != 0 ? MapProgram(bucket.GeometryMaps, true) ?? instancedProgram : instancedProgram;
+					}
+
 					Use(variant, context);
 					if (variant != instancedProgram)
 					{
-						bucket.Material.SetUniforms(variant);
+						if (bucket.Material != null)
+						{
+							bucket.Material.SetUniforms(variant);
+						}
+						else
+						{
+							Material.SetDefaultTextures(variant);
+						}
+					}
+
+					if (own)
+					{
+						variant.RenderState.ApplyCull();
 					}
 
 					gpu.DrawCameraBucket(i);
+					if (own)
+					{
+						GLState.SetCull(true, TriangleFace.Back);
+					}
+				}
+
+				// Sub-meshes of such shaders outside the tables (a property block, no instanced variant), one by one.
+				IReadOnlyList<RendererPart> ownParts = gpu.OwnPassParts;
+				if (ownParts.Count > 0)
+				{
+					DrawOwnPassParts(ownParts, context);
 				}
 			}
 			else
@@ -173,6 +207,14 @@ namespace LELEngine.Rendering.Passes
 						Material material = renderer.GetMaterial(i);
 						if (material != null && material.IsTransparent)
 						{
+							continue;
+						}
+
+						if (material != null && material.RenderState.CustomGeometryPrepass && renderer.RenderSubMeshPass(i, ShaderPass.GeometryPrepass, context.View, context.Projection, previousModel))
+						{
+							// Its shader drew it; the next sub-mesh binds the engine's program again.
+							current = null;
+							GLState.SetCull(true, TriangleFace.Back);
 							continue;
 						}
 
@@ -230,6 +272,40 @@ namespace LELEngine.Rendering.Passes
 			target.Use();
 			target.SetMatrix4("viewMatrix", context.View);
 			target.SetMatrix4("projectionMatrix", context.Projection);
+		}
+
+		// The sub-meshes on this camera's layers whose shader draws the prepass itself and that are in no table, each with
+		// its own program; those of them whose shader only casts its own shadows, with the G-buffer program.
+		private void DrawOwnPassParts(IReadOnlyList<RendererPart> ownParts, RenderContext context)
+		{
+			ObjectMotion objectMotion = context.Renderer.Motion;
+			foreach (RendererPart part in ownParts)
+			{
+				MeshRenderer renderer = part.Renderer;
+				if ((context.CullingMask & (1 << (renderer.gameObject.layer & 31))) == 0)
+				{
+					continue;
+				}
+
+				Matrix4 previousModel = objectMotion.GetPrevious(renderer, renderer.transform.LocalToWorld);
+				if (renderer.RenderSubMeshPass(part.SubMesh, ShaderPass.GeometryPrepass, context.View, context.Projection, previousModel))
+				{
+					continue;
+				}
+
+				Use(program, context);
+				Material.ResetStandardUniforms(program);
+				Material material = part.Material;
+				if (material != null && material.TryGetFloat("Roughness", out float roughness))
+				{
+					program.SetFloat("Roughness", roughness);
+				}
+
+				program.SetMatrix4("previousModelMatrix", previousModel);
+				renderer.RenderSubMeshWith(program, part.SubMesh);
+			}
+
+			GLState.SetCull(true, TriangleFace.Back);
 		}
 
 		// The variant for the map bits (instanced or per object); null when it does not link.

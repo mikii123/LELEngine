@@ -80,11 +80,34 @@ namespace LELEngine.Editor
 				var reported = new HashSet<string>(StringComparer.Ordinal);
 				foreach (ShaderVariant variant in variants)
 				{
-					bool instancing = Check(api, compiler, options, variant, variant.Keywords, false, checkedSources, reported, result);
+					bool instancing = Check(api, compiler, options, variant, variant.Keywords, "", checkedSources, reported, result);
 					if (instancing)
 					{
 						var instanced = new List<string>(variant.Keywords) { ShaderProgram.InstancedDefine };
-						Check(api, compiler, options, variant, instanced, true, checkedSources, reported, result);
+						Check(api, compiler, options, variant, instanced, " (instanced)", checkedSources, reported, result);
+					}
+
+					// The programs of the passes the shader draws itself (its own shadow caster, geometry prepass): the
+					// player builds them with the variant.
+					List<string> passes;
+					try
+					{
+						passes = ShaderProgram.ReadPassDefines(variant.Shader, variant.Keywords);
+					}
+					catch (Exception)
+					{
+						// Unreadable: reported with the variant above.
+						continue;
+					}
+
+					foreach (string pass in passes)
+					{
+						Check(api, compiler, options, variant, new List<string>(variant.Keywords) { pass }, " (" + pass + ")", checkedSources, reported, result);
+						if (instancing)
+						{
+							var instanced = new List<string>(variant.Keywords) { ShaderProgram.InstancedDefine, pass };
+							Check(api, compiler, options, variant, instanced, " (" + pass + ", instanced)", checkedSources, reported, result);
+						}
 					}
 				}
 			}
@@ -104,7 +127,7 @@ namespace LELEngine.Editor
 
 		// One program of a variant for every kind of GPU; true when the shader is drawn GPU-driven too (it includes the
 		// instancing library).
-		private static bool Check(Shaderc api, Compiler* compiler, CompileOptions* options, ShaderVariant variant, IReadOnlyList<string> defines, bool instanced,
+		private static bool Check(Shaderc api, Compiler* compiler, CompileOptions* options, ShaderVariant variant, IReadOnlyList<string> defines, string which,
 			HashSet<string> checkedSources, HashSet<string> reported, Result result)
 		{
 			// Each stage's code per kind of GPU, the same code once with the kinds that get it (most stages: all of them).
@@ -164,7 +187,7 @@ namespace LELEngine.Editor
 				if (errors != null && reported.Add(errors))
 				{
 					string gpus = profiles.Count == Profiles.Length ? "every kind of GPU" : string.Join("; ", profiles);
-					result.Errors.Add($"{variant}{(instanced ? " (instanced)" : "")}, {type.ToString().Replace("Shader", "").ToLowerInvariant()} stage ({gpus}):\n{errors}");
+					result.Errors.Add($"{variant}{which}, {type.ToString().Replace("Shader", "").ToLowerInvariant()} stage ({gpus}):\n{errors}");
 				}
 			}
 

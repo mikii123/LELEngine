@@ -75,6 +75,22 @@ namespace LELEngine.Rendering
 		/// </summary>
 		public int GeometryMaps { get; internal set; }
 
+		/// <summary>
+		///     The materials' shader draws the geometry prepass itself (<see cref="ShaderRenderState.CustomGeometryPrepass" />):
+		///     the prepass draws the bucket with <see cref="Program" />'s variant of that pass.
+		/// </summary>
+		public bool CustomGeometryPrepass { get; internal set; }
+
+		/// <summary>
+		///     The materials' shader draws its shadow casters itself (<see cref="ShaderRenderState.CustomShadowCaster" />):
+		///     the shadow pass draws the bucket on its own (<see cref="GpuScene.DrawShadowBucket" />) with
+		///     <see cref="Program" />'s variant of that pass.
+		/// </summary>
+		public bool CustomShadowCaster { get; internal set; }
+
+		/// <summary>The shader draws one of the depth passes itself: every depth pass draws the bucket on its own.</summary>
+		public bool HasOwnPasses => CustomGeometryPrepass || CustomShadowCaster;
+
 		/// <summary>First instance of the bucket in the instance table, and their number.</summary>
 		public int Start { get; internal set; }
 
@@ -98,8 +114,12 @@ namespace LELEngine.Rendering
 	///     a shadow map) is culled by Engine/InstanceCull.shader against its frustum and its layer mask (an instance
 	///     holds the bit of its object's layer), which writes the draw commands, and drawn by one multi-draw indirect
 	///     call per bucket. The instance table holds the buckets whose materials draw maps into the G-buffer
-	///     (<see cref="OpaqueBucket.GeometryMaps" />) last, so the geometry prepass draws everything before them in one
-	///     call (<see cref="DrawCameraPlainGeometry" />).
+	///     (<see cref="OpaqueBucket.GeometryMaps" />) after the others, so the geometry prepass draws everything before
+	///     them in one call (<see cref="DrawCameraPlainGeometry" />), and last the buckets whose shader draws a depth pass
+	///     itself (<see cref="OpaqueBucket.HasOwnPasses" />: billboards standing for a mesh, surfaces cut out by alpha),
+	///     so the shadow pass draws everything before those in one call (<see cref="DrawShadowCasters" />) and each of
+	///     them with its own program (<see cref="DrawShadowBucket" />). Sub-meshes of such shaders that cannot be in a
+	///     bucket (<see cref="OwnPassParts" />) are in no table: every pass draws them one by one.
 	///     Native path: commands compacted in instance order, the draw count read by the GPU
 	///     (glMultiDrawElementsIndirectCount), the instance index from gl_BaseInstance, the culling scan with subgroup
 	///     operations. Fallbacks, each on its own: one command per instance with instance count 0 when culled, a
@@ -143,6 +163,25 @@ namespace LELEngine.Rendering
 		/// <summary>Sub-meshes the opaque pass draws one by one: their material's shader has no instanced variant.</summary>
 		public IReadOnlyList<RendererPart> PerObjectParts => perObject;
 
+		/// <summary>
+		///     The sub-meshes among <see cref="PerObjectParts" /> whose shader draws a depth pass itself: they are not in the
+		///     instance table (its depth draws would place their raw mesh), the geometry prepass and the shadow passes draw
+		///     them one by one too (<see cref="MeshRenderer.RenderSubMeshPass" />).
+		/// </summary>
+		public IReadOnlyList<RendererPart> OwnPassParts => ownPassParts;
+
+		/// <summary>
+		///     The buckets before this index (in <see cref="Buckets" />) are drawn by the geometry prepass in one call
+		///     (<see cref="DrawCameraPlainGeometry" />); it draws each bucket from here on by itself.
+		/// </summary>
+		public int PlainBucketCount { get; private set; }
+
+		/// <summary>
+		///     The buckets from this index on (in <see cref="Buckets" />) are those with <see cref="OpaqueBucket.HasOwnPasses" />:
+		///     the shadow pass draws each by itself (<see cref="DrawShadowBucket" />), everything before in one call.
+		/// </summary>
+		public int FirstOwnPassBucket { get; private set; }
+
 		#endregion
 
 		#region PrivateFields
@@ -152,6 +191,8 @@ namespace LELEngine.Rendering
 		private readonly List<OpaqueBucket> bucketPool = new List<OpaqueBucket>();
 		private readonly List<OpaqueBucket> activeBuckets = new List<OpaqueBucket>();
 		private readonly List<OpaqueBucket> mapBuckets = new List<OpaqueBucket>();
+		private readonly List<OpaqueBucket> ownPassBuckets = new List<OpaqueBucket>();
+		private readonly List<RendererPart> ownPassParts = new List<RendererPart>();
 		private readonly List<RendererPart> perObject = new List<RendererPart>();
 		private readonly List<RendererPart> unbucketed = new List<RendererPart>();
 		private readonly List<RendererPart> parts = new List<RendererPart>();
@@ -172,8 +213,11 @@ namespace LELEngine.Rendering
 		private int culledLayerMask;
 		private bool reported;
 
-		// Instances before the first bucket with G-buffer maps (every instance when there is none).
+		// Instances before the first bucket the geometry prepass draws by itself (every instance when there is none).
 		private int plainGeometryCount;
+
+		// Instances before the first bucket whose shader draws a depth pass itself (every instance when there is none).
+		private int plainShadowCount;
 
 		#endregion
 
@@ -212,13 +256,23 @@ namespace LELEngine.Rendering
 				}
 
 				Material material = part.Material;
+				ShaderProgram program = material?.Program;
 				// A renderer with shader values of its own (a property block) draws with them, one by one.
-				ShaderProgram instanced = renderer.HasPropertyBlock ? null : material?.Program?.GetInstancedVariant();
+				ShaderProgram instanced = renderer.HasPropertyBlock ? null : program?.GetInstancedVariant();
 				if (instanced == null)
 				{
+					if (program != null && (program.RenderState.CustomGeometryPrepass || program.RenderState.CustomShadowCaster))
+					{
+						// Its shader draws a depth pass itself: the tables' depth draws would place its raw mesh, so
+						// every pass draws it one by one.
+						ownPassParts.Add(part);
+						perObject.Add(part);
+						continue;
+					}
+
 					// Depth passes still draw it from the tables; the opaque pass draws it per object.
 					unbucketed.Add(part);
-					if (material?.Program != null)
+					if (program != null)
 					{
 						perObject.Add(part);
 					}
@@ -231,10 +285,18 @@ namespace LELEngine.Rendering
 
 			parts.Clear();
 
-			// The buckets with G-buffer maps go last (in their order), after the instances drawn one by one.
+			// The buckets with G-buffer maps go after the instances drawn one by one (in their order), and the buckets
+			// whose shader draws a depth pass itself last.
 			mapBuckets.Clear();
+			ownPassBuckets.Clear();
 			activeBuckets.RemoveAll(bucket =>
 			{
+				if (bucket.HasOwnPasses)
+				{
+					ownPassBuckets.Add(bucket);
+					return true;
+				}
+
 				if (bucket.GeometryMaps == 0)
 				{
 					return false;
@@ -245,7 +307,12 @@ namespace LELEngine.Rendering
 			});
 			int plainBuckets = activeBuckets.Count;
 			activeBuckets.AddRange(mapBuckets);
+			int firstOwnPassBucket = activeBuckets.Count;
+			activeBuckets.AddRange(ownPassBuckets);
 			mapBuckets.Clear();
+			ownPassBuckets.Clear();
+			PlainBucketCount = plainBuckets;
+			FirstOwnPassBucket = firstOwnPassBucket;
 
 			materials.Add(null); // index 0: no material (the standard defaults)
 			int count = unbucketed.Count;
@@ -283,6 +350,7 @@ namespace LELEngine.Rendering
 			}
 
 			plainGeometryCount = plainBuckets < activeBuckets.Count ? activeBuckets[plainBuckets].Start : index;
+			plainShadowCount = firstOwnPassBucket < activeBuckets.Count ? activeBuckets[firstOwnPassBucket].Start : index;
 			InstanceCount = index;
 			Active = index > 0;
 			cameraCulled = false;
@@ -342,8 +410,16 @@ namespace LELEngine.Rendering
 				return;
 			}
 
+			// Everything the engine's depth program draws in one call, then each bucket whose shader draws a depth pass
+			// itself (the commands of a bucket sit at its instances' places, as the camera's).
 			shadowView.Segments.Clear();
-			shadowView.Segments.Add(new CullSegment { InstanceStart = 0, InstanceCount = (uint)InstanceCount, CommandOffset = 0, RequiredFlags = CastsShadowsFlag });
+			shadowView.Segments.Add(new CullSegment { InstanceStart = 0, InstanceCount = (uint)plainShadowCount, CommandOffset = 0, RequiredFlags = CastsShadowsFlag });
+			for (int i = FirstOwnPassBucket; i < activeBuckets.Count; i++)
+			{
+				OpaqueBucket bucket = activeBuckets[i];
+				shadowView.Segments.Add(new CullSegment { InstanceStart = (uint)bucket.Start, InstanceCount = (uint)bucket.Count, CommandOffset = (uint)bucket.Start, RequiredFlags = CastsShadowsFlag });
+			}
+
 			Dispatch(shadowView, lightViewProjection, layerMask, InstanceCount);
 		}
 
@@ -368,10 +444,25 @@ namespace LELEngine.Rendering
 			Draw(cameraView, bucket);
 		}
 
-		/// <summary>The shadow casters inside the light's view with the bound program. Needs <see cref="CullShadows" />.</summary>
+		/// <summary>
+		///     The shadow casters inside the light's view with the bound program: every instance but those of the buckets
+		///     whose shader draws a depth pass itself (<see cref="DrawShadowBucket" />). Needs <see cref="CullShadows" />.
+		/// </summary>
 		public void DrawShadowCasters()
 		{
 			Draw(shadowView, 0);
+		}
+
+		/// <summary>
+		///     The shadow casters of one bucket from <see cref="FirstOwnPassBucket" /> on (its index in <see cref="Buckets" />)
+		///     inside the light's view, with the bound program. Needs <see cref="CullShadows" />.
+		/// </summary>
+		public void DrawShadowBucket(int bucket)
+		{
+			if (bucket >= FirstOwnPassBucket)
+			{
+				Draw(shadowView, 1 + bucket - FirstOwnPassBucket);
+			}
 		}
 
 		/// <summary>Drops every reference to renderers and materials (end of the frame, scene replaced).</summary>
@@ -386,11 +477,14 @@ namespace LELEngine.Rendering
 
 			activeBuckets.Clear();
 			perObject.Clear();
+			ownPassParts.Clear();
 			unbucketed.Clear();
 			materials.Clear();
 			materialIndices.Clear();
 			Active = false;
 			InstanceCount = 0;
+			PlainBucketCount = 0;
+			FirstOwnPassBucket = 0;
 		}
 
 		public void Dispose()
@@ -430,6 +524,9 @@ namespace LELEngine.Rendering
 			bucket.ReceiveShadows = receiveShadows;
 			bucket.ReceiveGI = receiveGI;
 			bucket.GeometryMaps = Passes.GeometryPrepass.MapsOf(uniformSource);
+			// The instanced variant reads the same Properties block with the same keywords: its state is the material's.
+			bucket.CustomGeometryPrepass = program.RenderState.CustomGeometryPrepass;
+			bucket.CustomShadowCaster = program.RenderState.CustomShadowCaster;
 			activeBuckets.Add(bucket);
 			return bucket;
 		}

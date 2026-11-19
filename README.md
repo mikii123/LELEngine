@@ -163,6 +163,23 @@ Built on .NET 10, OpenTK 4.9 (GLFW) and OpenGL 4.6 (4.3 minimum), developed and 
   carries the depth).
 - Skybox materials (`Engine/Skybox.shader` for cubemaps, `Engine/SkyboxPanoramic.shader` for panoramas) set in
   the scene's environment settings.
+- Levels of detail: `LODGroup` (Unity's API: levels of renderers by the object's height on screen, a project-wide
+  bias); the GI always sees the first level.
+- Impostors: an object far away drawn as six triangles that look like it from every side. An `Impostor` asset (Create
+  Impostor on a prefab or a model) bakes the object from a grid of directions (12 x 12 over the sphere by default, or
+  over its upper half) into atlases of its colour, normals, depth and coverage, with the specular colour and the
+  emission when it has them; `Engine/Impostor.shader` rebuilds the surface per pixel from the three views nearest to
+  the camera, with parallax, and writes its depth. So an impostor is lit by the scene's lights and the GI of either
+  mode, casts and receives shadows and cuts into other geometry as the mesh did, and is drawn GPU-driven like any
+  mesh. It is the last level of the object's `LODGroup` (the group's inspector adds it; `impostor.AddToLODGroup`), and
+  `Impostor.Bake(gameObject)` makes one at run time of an object the game builds. A bake of the same object writes
+  the same files every time. Measured on an integrated GPU: 3,600 ships of 2,200 triangles 24.8 ms as meshes, 6.6 ms
+  as impostors.
+- A material shader can draw the engine's depth passes itself: `ShadowCaster Custom` and `GeometryPrepass Custom` in
+  its Properties block make the shadow maps and the geometry prepass draw its objects with the same file compiled
+  with the pass's define (`LEL_SHADOW_CASTER`, `LEL_GEOMETRY_PREPASS`), for surfaces that are not their mesh's
+  (impostors do); `SurfaceCapture On` (`LEL_SURFACE_CAPTURE`) has a shader write its surface instead of lighting it,
+  for bakes. Builds check and compile these variants with the material's own.
 
 ![Lumen-style global illumination in the test room](docs/images/lumen-gi.png)
 *Lumen mode GI: color bleeding from the red and green walls and light from emissive objects, with no analytic

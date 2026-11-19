@@ -289,6 +289,8 @@ namespace LELEngine.Editor
 			{
 				Click = AskForceReserializeAllAssets, Enabled = () => reserializer == null && !IsPlaying && Stage == null, SeparatorBefore = true
 			});
+			// Impostors: of the selected prefab or model, the selected impostor asset, or all of the project's.
+			AddImpostorActions(all);
 
 			// GameObject (the hierarchy's context menu creates the same under the clicked object)
 			AddCreateActions(all);

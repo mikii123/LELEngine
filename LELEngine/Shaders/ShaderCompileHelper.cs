@@ -109,9 +109,14 @@ namespace LELEngine.Shaders
 				for (int i = 0; i < count; i++)
 				{
 					ShaderProgram program = programs[i];
-					if (program != null && request.GpuDriven && program.IsLinked)
+					if (program != null && program.IsLinked)
 					{
-						program.GetInstancedVariant();
+						// With it the programs of the passes the shader draws itself (its own shadow caster, geometry prepass).
+						program.BuildPassVariants();
+						if (request.GpuDriven)
+						{
+							program.GetInstancedVariant()?.BuildPassVariants();
+						}
 					}
 
 					Console.Out.WriteLine(DoneLine + (first + i).ToString(CultureInfo.InvariantCulture));

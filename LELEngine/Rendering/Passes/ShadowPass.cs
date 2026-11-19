@@ -20,6 +20,9 @@ namespace LELEngine.Rendering.Passes
 	///     GPU-driven: per tile the opaque casters are culled against its view on the GPU and drawn by one indirect
 	///     call; the transparent casters follow into the map's transmittance attachment (<see cref="TransparentShadows" />,
 	///     published as <see cref="Lighting.ShadowTransmittance" />).
+	///     Casters whose shader draws its own shadow (render state <c>ShadowCaster Custom</c>: impostors, anything whose
+	///     silhouette is not its mesh's) follow the plain ones with the shader's <see cref="ShaderPass.ShadowCaster" />
+	///     variant and the material's values: a call per bucket GPU-driven, a draw per sub-mesh otherwise.
 	/// </summary>
 	public sealed class ShadowPass : RenderPass
 	{
@@ -134,6 +137,7 @@ namespace LELEngine.Rendering.Passes
 				if (gpuDriven)
 				{
 					gpu.DrawShadowCasters();
+					DrawOwnPassCasters(gpu, context, views[i], projections[i]);
 				}
 				else
 				{
@@ -143,6 +147,21 @@ namespace LELEngine.Rendering.Passes
 						{
 							renderer.RenderShadowCastersWith(context.DepthOnlyProgram);
 						}
+					}
+
+					// The casters whose shader draws them itself (ShadowCaster Custom), each with its own program.
+					bool own = false;
+					foreach (MeshRenderer renderer in context.Renderers)
+					{
+						if (renderer.CastShadows)
+						{
+							own |= renderer.RenderOwnShadowCasters(views[i], projections[i]);
+						}
+					}
+
+					if (own)
+					{
+						GLState.SetCull(true, TriangleFace.Back);
 					}
 				}
 			}
@@ -190,6 +209,83 @@ namespace LELEngine.Rendering.Passes
 		#endregion
 
 		#region PrivateMethods
+
+		// The casters of the buckets whose shader draws a depth pass itself (the last of the tables: billboards standing
+		// for a mesh, surfaces cut out by alpha), each bucket with its shader's shadow caster variant, or the engine's
+		// depth program when the shader only draws the geometry prepass itself; then such sub-meshes outside the tables,
+		// one by one. Leaves the engine's depth program unbound.
+		private void DrawOwnPassCasters(GpuScene gpu, RenderContext context, Matrix4 view, Matrix4 projection)
+		{
+			IReadOnlyList<OpaqueBucket> buckets = gpu.Buckets;
+			bool cullChanged = false;
+			for (int i = gpu.FirstOwnPassBucket; i < buckets.Count; i++)
+			{
+				OpaqueBucket bucket = buckets[i];
+				ShaderProgram variant = bucket.CustomShadowCaster ? bucket.Program.GetPassVariant(ShaderPass.ShadowCaster) : null;
+				bool own = variant != null && variant.IsLinked;
+				if (!own)
+				{
+					variant = instancedDepth;
+				}
+
+				variant.Use();
+				variant.SetMatrix4("viewMatrix", view);
+				variant.SetMatrix4("projectionMatrix", projection);
+				if (own)
+				{
+					if (bucket.Material != null)
+					{
+						bucket.Material.SetUniforms(variant);
+					}
+					else
+					{
+						Material.SetDefaultTextures(variant);
+					}
+
+					variant.RenderState.ApplyCull();
+					cullChanged = true;
+				}
+				else if (cullChanged)
+				{
+					GLState.SetCull(true, TriangleFace.Back);
+					cullChanged = false;
+				}
+
+				gpu.DrawShadowBucket(i);
+			}
+
+			foreach (RendererPart part in gpu.OwnPassParts)
+			{
+				MeshRenderer renderer = part.Renderer;
+				if (!renderer.CastShadows || !renderer.IsSubMeshShadowCaster(part.SubMesh) || (context.CullingMask & (1 << (renderer.gameObject.layer & 31))) == 0)
+				{
+					continue;
+				}
+
+				if (renderer.RenderSubMeshPass(part.SubMesh, ShaderPass.ShadowCaster, view, projection))
+				{
+					cullChanged = true;
+					continue;
+				}
+
+				if (cullChanged)
+				{
+					GLState.SetCull(true, TriangleFace.Back);
+					cullChanged = false;
+				}
+
+				ShaderProgram depth = context.DepthOnlyProgram;
+				depth.Use();
+				depth.SetMatrix4("viewMatrix", view);
+				depth.SetMatrix4("projectionMatrix", projection);
+				renderer.RenderSubMeshWith(depth, part.SubMesh);
+			}
+
+			if (cullChanged)
+			{
+				GLState.SetCull(true, TriangleFace.Back);
+			}
+		}
 
 		// A light's map: one cascade fills it, two sit side by side (the map half as tall), four in 2 x 2.
 		private static void Layout(ShadowCascadeCount cascades, int mapSize, out int count, out int columns, out int rows, out int tileSize)

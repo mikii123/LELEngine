@@ -51,6 +51,12 @@ namespace LELEngine.Editor
 				asset.Validate();
 				context.Editor.NotifySceneChanged();
 			}
+
+			// An impostor is made by its bake: the button, what it made and a look at it stand below its settings.
+			if (asset is Impostor impostor)
+			{
+				ImpostorInspector.Draw(impostor, context);
+			}
 		}
 
 		#endregion
