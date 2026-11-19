@@ -47,6 +47,13 @@ namespace LELEngine.Editor
 		[JsonIgnore] public string AssetsPath => Path.Combine(RootPath, "Assets");
 		[JsonIgnore] public string LibraryPath => Path.Combine(RootPath, "Library");
 
+		/// <summary>
+		///     <see cref="LELEngine.Application.persistentDataPath" /> in the editor: the files play mode keeps between runs
+		///     (PlayerPrefs, remapped controls), the project's own and not the built game's; not in git, kept when Library is
+		///     cleared.
+		/// </summary>
+		[JsonIgnore] public string PersistentDataPath => Path.Combine(RootPath, "PersistentData");
+
 		/// <summary>Imported models (see <see cref="ModelAssets" />), per asset GUID.</summary>
 		[JsonIgnore] public string ModelCachePath => Path.Combine(LibraryPath, "ModelCache");
 		[JsonIgnore] public string ThumbnailCachePath => Path.Combine(LibraryPath, "ThumbnailCache");
@@ -133,7 +140,7 @@ namespace LELEngine.Editor
 			string gitignore = Path.Combine(root, ".gitignore");
 			if (!File.Exists(gitignore))
 			{
-				File.WriteAllText(gitignore, "Library/\nBuild/\nbin/\nobj/\n.vs/\n.idea/\n*.user\n");
+				File.WriteAllText(gitignore, "Library/\nBuild/\nPersistentData/\nbin/\nobj/\n.vs/\n.idea/\n*.user\n");
 			}
 
 			project.Save();

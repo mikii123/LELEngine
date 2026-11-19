@@ -15,11 +15,27 @@ namespace LELEngine.UIElements
 		private readonly VisualElement outer;
 		private VisualElement root;
 
+		// The rectangle the menu opened at (panel space): it goes below it, or above it when there is no room below.
+		private Rect anchor;
+		private bool placed;
+
+		// An item acts on a release only after a press inside the menu. The press that opened the menu (on the field) ends
+		// with its release wherever the pointer is then, and the menu may lie under it (opened above the field, or pushed
+		// into the panel): that release picked the item under the pointer, so a click on the field chose a value at once.
+		private bool pressedInside;
+
 		public GenericDropdownMenu()
 		{
 			outer = new VisualElement { name = "unity-dropdown-menu" };
 			outer.AddToClassList(containerOuterUssClassName);
 			outer.AddToClassList(ussClassName);
+			outer.RegisterCallback<PointerDownEvent>(evt =>
+			{
+				if (evt.button == 0)
+				{
+					pressedInside = true;
+				}
+			}, TrickleDown.TrickleDown);
 		}
 
 		public void AddItem(string itemName, bool isChecked, Action action)
@@ -29,7 +45,7 @@ namespace LELEngine.UIElements
 			item.EnableInClassList(checkedItemUssClassName, isChecked);
 			item.RegisterCallback<PointerUpEvent>(evt =>
 			{
-				if (evt.button == 0)
+				if (evt.button == 0 && pressedInside)
 				{
 					Hide();
 					action?.Invoke();
@@ -69,6 +85,9 @@ namespace LELEngine.UIElements
 
 			root = targetElement.panel.visualTree;
 			Rect world = targetElement.LocalToWorld(position);
+			anchor = world;
+			placed = false;
+			pressedInside = false;
 			outer.style.left = world.x;
 			outer.style.top = world.yMax;
 			outer.style.minWidth = anchored ? Math.Max(world.width, 80f) : 80f;
@@ -98,18 +117,25 @@ namespace LELEngine.UIElements
 
 		private void OnMenuGeometry(GeometryChangedEvent evt)
 		{
-			// Flip above the field when the menu runs past the bottom of the panel.
-			if (root == null)
+			// Once, at its first size: above the field when the menu runs past the bottom of the panel and fits above it
+			// (whole: never over the field), else on the side with more room, kept inside the panel.
+			if (root == null || placed || outer.layout.height <= 0f)
 			{
 				return;
 			}
 
+			placed = true;
 			float panelHeight = root.layout.height;
-			if (outer.layout.yMax > panelHeight)
+			float height = outer.layout.height;
+			float below = panelHeight - anchor.yMax;
+			float above = anchor.y;
+			if (height <= below)
 			{
-				float top = outer.layout.y;
-				outer.style.top = Math.Max(0f, top - outer.layout.height - 24f);
+				return;
 			}
+
+			float top = height <= above || above > below ? anchor.y - height : anchor.yMax;
+			outer.style.top = Math.Max(0f, Math.Min(top, panelHeight - height));
 		}
 
 		private void KeepInPanel(Rect world)

@@ -32,8 +32,16 @@ namespace LELEngine.InputSystem
 		/// <summary>Remapping: listens for the next element pressed and binds it to an action (a controls menu).</summary>
 		public static InputMapper Mapper { get; } = new InputMapper();
 
-		/// <summary>Where <see cref="SaveUserData" /> writes the players' remapped maps (the editor uses the project's Library).</summary>
-		public static string UserDataPath { get; set; } = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "LELEngine", AppName(), "InputUserData.json");
+		/// <summary>
+		///     Where <see cref="SaveUserData" /> writes the players' remapped maps: InputUserData.json in
+		///     <see cref="Application.persistentDataPath" /> unless set (a built game: the user's local app data; the editor:
+		///     the project's PersistentData).
+		/// </summary>
+		public static string UserDataPath
+		{
+			get => userDataPath ?? Path.Combine(Application.persistentDataPath, "InputUserData.json");
+			set => userDataPath = value;
+		}
 
 		public static event Action<Controller> ControllerConnected;
 		public static event Action<Controller> ControllerDisconnected;
@@ -42,6 +50,7 @@ namespace LELEngine.InputSystem
 
 		#region PrivateFields
 
+		private static string userDataPath;
 		private static readonly List<InputPlayer> players = new List<InputPlayer>();
 		private static readonly List<GamepadController> gamepads = new List<GamepadController>();
 		private static readonly HashSet<string> warnedActions = new HashSet<string>(StringComparer.Ordinal);
@@ -415,19 +424,6 @@ namespace LELEngine.InputSystem
 			}
 
 			best?.AddController(gamepad);
-		}
-
-		private static string AppName()
-		{
-			try
-			{
-				string name = Path.GetFileNameWithoutExtension(Environment.ProcessPath);
-				return string.IsNullOrEmpty(name) ? "Game" : name;
-			}
-			catch (Exception)
-			{
-				return "Game";
-			}
 		}
 
 		#endregion

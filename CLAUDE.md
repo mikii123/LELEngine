@@ -2998,6 +2998,49 @@ texture read back), see the port's `PORTING.md` "UI".
   auto margins read it.
 - Scene documents: objects must follow their parent in the file (`[Scene] 'X': parent N not found ... kept at the
   root` otherwise); hand-written objects go after the parent's entry.
+- Drop down lists (`GenericDropdownMenu`, 2026-11-19, the user's report: "a click on the drop down takes the same click
+  as choosing an entry"): the list opens on the field's press and an item acts on a release; the list went above the
+  field when it ran past the panel's bottom, but only 24 px up (fields are 32 px in NF's theme), so it lay over the
+  field and the opening click's release chose the item under the pointer. Now an item acts only after a press inside
+  the list (`pressedInside`: the opening press, even dragged onto an item, chooses nothing), and the list is placed once
+  at its first size: below the field, else above it by its real height when it fits, else on the roomier side, kept in
+  the panel. Verified in NF's main menu (play mode, clicks through `BaseVisualElementPanel.ProcessPointerDown / Up` from
+  a CLI `exec` probe): both settings fields open without choosing; a 30-entry test field at the panel's bottom opened
+  above it, its opening press released over an item chose nothing, a click on an item chose it and closed the list.
+
+## PlayerPrefs and Application.persistentDataPath (2026-11-19)
+
+- The user's ask: PlayerPrefs, kept on disk in the persistent data path, never in the registry; in the editor in a
+  folder of the project's own outside Assets; `persistentDataPath` in the engine as well.
+- `Application.persistentDataPath` (`Mono/Application.cs`): a built game's is `PersistentDataPathFor(boot.Title)` =
+  LELEngine/<title> in the user's local app data (the player sets it first thing in `Run`; its Player.log fallback and
+  `ShaderCache` were already there and now come from it); the editor's is the project's `PersistentData` folder beside
+  Assets (`ProjectInfo.PersistentDataPath`, set when a project opens; batch editors too), in new projects' .gitignore and
+  New Frontier's, kept when Library is cleared; other hosts (TestGame, tools): LELEngine/<executable's name>. Made when
+  something writes. Setting it saves PlayerPrefs to the old folder and drops what was read.
+- `PlayerPrefs` (`Mono/PlayerPrefs.cs`, namespace LELEngine, Unity's API): `Set/GetInt`, `Set/GetFloat` (finite only),
+  `Set/GetString`, `HasKey`, `DeleteKey`, `DeleteAll`, `Save`, plus `GetKeys`, `FilePath`. One file, `PlayerPrefs.json`:
+  `{ "ints": {}, "floats": {}, "strings": {} }`, keys sorted, text unescaped (relaxed encoder), written beside and moved
+  over (`.tmp`), only when something changed (setting the same value is no change). Read lazily, thread safe (one lock).
+  A key holds one type (setting another type replaces it; reading as another type gives the default). An unreadable
+  file: a warning, a copy as `PlayerPrefs.json.unreadable`, empty values. Saved by `Save`, when the player's loop ends
+  (after `host.Run`), when the editor leaves play mode (`ExitPlayMode`) and when it closes a project. Edit > Clear All
+  PlayerPrefs (the log names the file).
+- `Screen` remembers what the game sets (Unity's Screenmanager keys): `fullScreen` = and `SetResolution` write
+  `Screen.FullScreen` / `Screen.Width` / `Screen.Height` and save at once, in the editor too (where they are not
+  applied). The player opens its window with them (boot.json's size and mode are the defaults, `fullscreen=` wins; log
+  `[Player] Window 1100x650 windowed (the game's last choice, PlayerPrefs)`); full screen opens at the display's own mode,
+  so a smaller full screen mode is set again by `Screen.SetResolution` after the window is made. F12's toggle (`Window`)
+  is not remembered.
+- `InputManager.UserDataPath` (remapped controls) is `InputUserData.json` in `persistentDataPath` unless set: a built game
+  had it under LELEngine/<executable's name>, the editor in Library; both now in the persistent data folder.
+- Verified on a scratch project (`PrefsProbe`: counts its runs without calling Save, keeps a float and a string with
+  quotes and Polish letters, asks for 1100x650 on its first run, quits at frame 40): editor play twice -> the project's
+  `PersistentData/PlayerPrefs.json` with runs 2 and the screen keys, Clear All PlayerPrefs emptied it; the built game
+  three times -> runs 1, 2, 3 in LocalAppData/LELEngine/SsaaProbe, the second and third opened at 1100x650; a truncated
+  file -> the warning, the `.unreadable` copy, runs from 1. New Frontier's settings menu (editor play, Full Screen picked
+  by pointer events) wrote `Screen.FullScreen: 1` to `NewFrontier/PersistentData`. Not run: a full screen start (it takes
+  the display), a remapped control saved to the new path.
 
 ## UI text: distance field range, shadows and outlines (2026-11-11)
 

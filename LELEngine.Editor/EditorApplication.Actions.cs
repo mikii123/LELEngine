@@ -232,6 +232,15 @@ namespace LELEngine.Editor
 			}
 		}
 
+		/// <summary>Edit > Clear All PlayerPrefs: every key of the project's play mode, written at once (the log names the file).</summary>
+		private void ClearAllPlayerPrefs()
+		{
+			int count = PlayerPrefs.GetKeys().Length;
+			PlayerPrefs.DeleteAll();
+			PlayerPrefs.Save();
+			Debug.Log($"[PlayerPrefs] Cleared {count} key(s): {PlayerPrefs.FilePath}");
+		}
+
 		private EditorActions BuildActions()
 		{
 			var all = new EditorActions();
@@ -279,6 +288,8 @@ namespace LELEngine.Editor
 			{
 				Checked = () => reloadScriptsOnPlay, SeparatorBefore = true
 			});
+			// Unity's: what play mode remembered (the project's PersistentData/PlayerPrefs.json), for testing a first start.
+			all.Add(new EditorAction("Edit/Clear All PlayerPrefs", ClearAllPlayerPrefs) { Enabled = () => Project != null });
 			all.Add(new EditorAction("Edit/Project Settings...", () => ShowProjectSettings()) { SeparatorBefore = true });
 			all.Add(new EditorAction("Edit/Preferences...", () => ShowPreferences()));
 

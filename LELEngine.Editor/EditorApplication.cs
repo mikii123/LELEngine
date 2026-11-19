@@ -1079,8 +1079,9 @@ namespace LELEngine.Editor
 			yield return "Importing models";
 
 			ImportChangedModels(true);
-			// Remapped controls of play mode are the project's, not the user's (a built game keeps them in AppData).
-			LELEngine.InputSystem.InputManager.UserDataPath = Path.Combine(project.LibraryPath, "InputUserData.json");
+			// What play mode keeps between runs (PlayerPrefs, remapped controls) is the project's, in its PersistentData
+			// folder, not the built game's (the user's local app data).
+			LELEngine.Application.persistentDataPath = project.PersistentDataPath;
 			yield return "Loading the audio project";
 
 			OpenAudioProjectForEditor();
@@ -1435,6 +1436,8 @@ namespace LELEngine.Editor
 				ExitPlayMode();
 			}
 
+			// Edit mode scripts and editor tools write PlayerPrefs too.
+			PlayerPrefs.Save();
 			stageFrames.Clear();
 			SceneManager.UnloadAll(true);
 			PrefabCache.Clear();
@@ -2204,6 +2207,8 @@ namespace LELEngine.Editor
 			Input.SetCursorLocked(false);
 			// The next play starts the input system again (with the configuration as edited meanwhile).
 			LELEngine.InputSystem.InputManager.Shutdown();
+			// What the game set and did not save itself (a built game saves when it quits).
+			PlayerPrefs.Save();
 			PlayState = PlayState.Edit;
 			SceneManager.Lifecycle = SceneLifecycle.Edit;
 			LELEngine.Audio.AudioSystem.StopAll();

@@ -20,9 +20,17 @@ namespace LELEngine
 	/// <summary>
 	///     The game's image and window (Unity's Screen): its size in pixels, full screen on or off, the modes the display
 	///     offers. In the editor the size is the game view's; the window settings are the editor's own and stay as they are.
+	///     What the game sets (<see cref="fullScreen" />, <see cref="SetResolution" />) is remembered in
+	///     <see cref="PlayerPrefs" /> (<see cref="FullScreenKey" />, <see cref="WidthKey" />, <see cref="HeightKey" />), as
+	///     Unity does, and the player opens its window with it on the next start (boot.json's size and mode are the
+	///     defaults). The editor records it too (its project's PersistentData), without applying it.
 	/// </summary>
 	public static class Screen
 	{
+		public const string FullScreenKey = "Screen.FullScreen";
+		public const string WidthKey = "Screen.Width";
+		public const string HeightKey = "Screen.Height";
+
 		/// <summary>Width of the game's image in pixels (the game view in the editor).</summary>
 		public static int width => Input.Host != null ? Math.Max(1, Input.Host.ClientSize.X) : 1280;
 
@@ -36,6 +44,8 @@ namespace LELEngine
 			get => Game.Mono != null && Game.Mono.WindowState == WindowState.Fullscreen;
 			set
 			{
+				PlayerPrefs.SetInt(FullScreenKey, value ? 1 : 0);
+				PlayerPrefs.Save();
 				GameHost host = Game.Mono;
 				if (host == null || fullScreen == value)
 				{
@@ -103,15 +113,19 @@ namespace LELEngine
 		/// </summary>
 		public static void SetResolution(int newWidth, int newHeight, bool fullscreen)
 		{
+			newWidth = Math.Max(16, newWidth);
+			newHeight = Math.Max(16, newHeight);
+			PlayerPrefs.SetInt(WidthKey, newWidth);
+			PlayerPrefs.SetInt(HeightKey, newHeight);
+			PlayerPrefs.SetInt(FullScreenKey, fullscreen ? 1 : 0);
+			PlayerPrefs.Save();
 			GameHost host = Game.Mono;
 			if (host == null)
 			{
-				Debug.Log("[Screen] SetResolution ignored in the editor");
+				Debug.Log("[Screen] SetResolution ignored in the editor (remembered in PlayerPrefs)");
 				return;
 			}
 
-			newWidth = Math.Max(16, newWidth);
-			newHeight = Math.Max(16, newHeight);
 			if (fullscreen)
 			{
 				// Leave full screen first so the new size takes; GLFW then uses the closest video mode.

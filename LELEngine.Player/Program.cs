@@ -84,7 +84,7 @@ namespace LELEngine.Player
 			string[] folders =
 			{
 				baseDirectory,
-				Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "LELEngine", string.IsNullOrWhiteSpace(title) ? "Game" : title)
+				Application.PersistentDataPathFor(title)
 			};
 
 			foreach (string folder in folders)
@@ -122,11 +122,14 @@ namespace LELEngine.Player
 				return 1;
 			}
 
+			// The game's own files between runs (PlayerPrefs, remapped controls): LELEngine/<title> in the local app data.
+			Application.persistentDataPath = Application.PersistentDataPathFor(boot.Title);
+			Log("Persistent data " + Application.persistentDataPath);
+
 			// The driver's binaries of the programs an earlier start linked (before the loader builds the first shader).
 			if (GetValue(args, "shadercache") != "0")
 			{
-				Shaders.ProgramBinaryCache.Folder = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "LELEngine",
-					string.IsNullOrWhiteSpace(boot.Title) ? "Game" : boot.Title, "ShaderCache");
+				Shaders.ProgramBinaryCache.Folder = Path.Combine(Application.persistentDataPath, "ShaderCache");
 			}
 
 			// The game's own executable compiles what the game asks for (ShaderCompilation) in a process of its own, into
@@ -147,19 +150,38 @@ namespace LELEngine.Player
 			loader.SettingsLoaded = () => ApplySuperSampling(args);
 			loader.Start();
 
+			// The window the game chose last time (Screen keeps it in PlayerPrefs), else boot.json's; fullscreen=0|1 wins.
+			bool savedSize = PlayerPrefs.HasKey(Screen.WidthKey) && PlayerPrefs.HasKey(Screen.HeightKey);
+			int width = savedSize ? Math.Max(16, PlayerPrefs.GetInt(Screen.WidthKey)) : boot.Width;
+			int height = savedSize ? Math.Max(16, PlayerPrefs.GetInt(Screen.HeightKey)) : boot.Height;
+			bool savedMode = PlayerPrefs.HasKey(Screen.FullScreenKey);
+			bool full = fullscreen != null ? fullscreen == "1" : savedMode ? PlayerPrefs.GetInt(Screen.FullScreenKey) != 0 : boot.Fullscreen;
+			Log($"Window {width}x{height} {(full ? "full screen" : "windowed")}" + (fullscreen != null ? " (command line)" : savedSize || savedMode ? " (the game's last choice, PlayerPrefs)" : ""));
+
 			// The window opens hidden and at its final size and state; it appears with the splash screen drawn, so its
 			// first image is never blank. The engine's shaders compile later, on the loader thread.
 			Window.StartFocused = GetValue(args, "focus") != "0";
 			Game.CreateWindow(new GameWindowOptions
 			{
-				Width = boot.Width,
-				Height = boot.Height,
+				Width = width,
+				Height = height,
 				Title = boot.Title,
-				Fullscreen = fullscreen == "1" || (fullscreen == null && boot.Fullscreen),
+				Fullscreen = full,
 				Visible = false,
 				CreateRenderer = false
 			});
 			GameHost host = Game.Mono;
+
+			// Full screen opens at the display's own mode: a smaller mode the game chose is set again.
+			if (full && savedSize)
+			{
+				Resolution display = Screen.currentResolution;
+				if (display.width != width || display.height != height)
+				{
+					Screen.SetResolution(width, height, true);
+				}
+			}
+
 			host.RunInBackground = boot.RunInBackground;
 			Action<FramebufferResizeEventArgs> resized = e => loader.RequestSplashRedraw(e.Width, e.Height);
 			host.FramebufferResize += resized;
@@ -220,6 +242,8 @@ namespace LELEngine.Player
 
 			// The scene's lifecycle starts when the window loads (GameHost.OnLoad), on this thread.
 			host.Run();
+			// What the game set and did not save itself (Unity saves PlayerPrefs on quit too).
+			PlayerPrefs.Save();
 			return 0;
 		}
 
