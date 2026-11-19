@@ -504,6 +504,19 @@
   scale / scale; clouds march at the whole number of scene pixels nearest to resolution x scale on a log scale
   (`VolumetricRuntime.MarchScale`: 1.33 -> 1, 1.5 -> 2, Half at 1.33 -> 3; the view targets are kept per scale up to 8).
   Shadows, voxels, distance fields and the surface cache never depended on the screen.
+- Saved with the project settings and shipped as a build's defaults (2026-11-19, the user's report: "the super sampling
+  settings are not saved in the project settings"). The Graphics tab's Super Sampling and Filter combos changed the value
+  before `InspectorContext.Track(true)` took the edit's "before" state, so the edit showed no difference: no undo step,
+  no save (`EditTracker.Commit`), the value lived in memory until the editor closed (the Build button's
+  `SaveProjectSettings` wrote it by chance; CI builds read the file). Now `BeginEdit` / change / `EndEdit`. The player
+  starts with the build's settings; `ssaa=` / `ssaafilter=` / `ssaasmooth=` on its command line override them
+  (`Program.ApplySuperSampling`, run by `GameLoader.SettingsLoaded` right after the settings are read, before the
+  renderer's targets are made; Player.log `[Player] Super sampling 2.25x Lanczos (command line)`), and the game changes
+  them at run time (`QualitySettings`). Verified on a scratch project: GUI editor + CLI `click combo:Super Sampling`,
+  the item, `combo:Filter` / `item:Filter/Lanczos`: the file written at once, two undos and two redos written too; batch
+  `-build`, the player without arguments (2.25x Lanczos from the build), `ssaa=4 ssaafilter=area`, `ssaa=1`,
+  `ssaafilter=gaussian ssaasmooth=0.5`, invalid values (ignored). Not saved anywhere by the engine: a player's own
+  choice between runs is the game's to keep (its options file).
 - TestGame `ssaa=2.25 ssaafilter=gaussian|area|lanczos ssaasmooth=0.33`. Measured once (780M, 1280 x 720 window,
   default room, Lumen; pass times in ms, off / 2.25x Gaussian / 4x Area): GeometryPrepass 0.16 / 0.23 / 0.33, Opaque
   0.59 / 1.31 / 1.70, Transparent 1.12 / 1.62 / 1.96, PostProcess 0.09 / 0.36 / 0.36, ProbeGather.trace 3.1 / 2.4 /

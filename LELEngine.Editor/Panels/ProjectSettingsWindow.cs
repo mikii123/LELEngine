@@ -833,8 +833,11 @@ namespace LELEngine.Editor
 					bool selected = Math.Abs(factor - content.Factor) < 0.005f;
 					if (EditorGui.Selectable(FactorLabel(factor), selected) && !selected)
 					{
+						// The "before" state is taken first: taken after the change, the edit showed no difference and was
+						// neither saved nor undoable (the value lived in memory only until the editor closed).
+						context.BeginEdit();
 						content.Factor = factor;
-						context.Track(true);
+						context.EndEdit();
 						changed = true;
 					}
 				}
@@ -846,7 +849,8 @@ namespace LELEngine.Editor
 				"(the UI draws at the window's resolution). The factors are NVIDIA DSR's: 1.78x and 2.25x are also DLDSR's.\n" +
 				"DSR does the same in the driver (the game at a larger 'display' resolution); both at once multiply the cost.\n" +
 				"The screen-space GI and the clouds keep the window's density: their cost does not grow with it.\n" +
-				"Games change it at run time: QualitySettings.superSampling.");
+				"Builds start with this; games change it at run time (QualitySettings.superSampling) and the player's\n" +
+				"command line overrides it: ssaa=2.25 ssaafilter=lanczos ssaasmooth=0.33.");
 
 			if (content.Factor > 1.001f)
 			{
@@ -859,8 +863,9 @@ namespace LELEngine.Editor
 						bool selected = filter == content.Filter;
 						if (EditorGui.Selectable(filter.ToString(), selected) && !selected)
 						{
+							context.BeginEdit();
 							content.Filter = filter;
-							context.Track(true);
+							context.EndEdit();
 							changed = true;
 						}
 					}

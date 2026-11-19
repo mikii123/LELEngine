@@ -16,7 +16,8 @@ namespace LELEngine.Player
 	///     application (no console): the log goes to Player.log, with the startup times.
 	///     Command line overrides (testing): data=folder game=assembly.dll scene=assetPath fullscreen=0|1
 	///     screenshot=folder screenshotframe=N exitframe=N focus=0 shadercache=0 (no program binary cache)
-	///     vsync=0|1 (else Project Settings > Graphics > VSync) shaderhelper=0 (no compile helper process).
+	///     vsync=0|1 (else Project Settings > Graphics > VSync) shaderhelper=0 (no compile helper process)
+	///     ssaa=factor ssaafilter=gaussian|area|lanczos ssaasmooth=0..1 (else Project Settings > Graphics > Super Sampling).
 	///     compileshaders=requestFile runs the game as its own shader compile helper (<see cref="Shaders.ShaderCompileHelper" />).
 	///     Linked shader programs are kept as the driver's binaries in the user's local app data
 	///     (LELEngine/&lt;title&gt;/ShaderCache, <see cref="Shaders.ProgramBinaryCache" />): later starts compile nothing.
@@ -143,6 +144,7 @@ namespace LELEngine.Player
 				string.IsNullOrEmpty(boot.ProjectSettings) ? null : Path.GetFullPath(Path.Combine(baseDirectory, boot.ProjectSettings)),
 				string.IsNullOrEmpty(gameAssembly) ? null : Path.GetFullPath(Path.Combine(baseDirectory, gameAssembly)),
 				startScene);
+			loader.SettingsLoaded = () => ApplySuperSampling(args);
 			loader.Start();
 
 			// The window opens hidden and at its final size and state; it appears with the splash screen drawn, so its
@@ -328,6 +330,46 @@ namespace LELEngine.Player
 					Game.Mono.Close();
 				}
 			};
+		}
+
+		/// <summary>
+		///     Super sampling starts as the project set it (Project Settings > Graphics, shipped in the build's settings);
+		///     ssaa=factor (1 off .. 4), ssaafilter=gaussian|area|lanczos and ssaasmooth=0..1 on the command line win, and
+		///     the game may change it at any time (<see cref="QualitySettings.superSampling" />).
+		/// </summary>
+		private static void ApplySuperSampling(string[] args)
+		{
+			var culture = System.Globalization.CultureInfo.InvariantCulture;
+			var style = System.Globalization.NumberStyles.Float;
+			bool overridden = false;
+			if (float.TryParse(GetValue(args, "ssaa"), style, culture, out float factor))
+			{
+				QualitySettings.superSampling = factor;
+				overridden = true;
+			}
+
+			if (Enum.TryParse(GetValue(args, "ssaafilter") ?? "", true, out SuperSamplingFilter filter) && Enum.IsDefined(filter))
+			{
+				QualitySettings.superSamplingFilter = filter;
+				overridden = true;
+			}
+
+			if (float.TryParse(GetValue(args, "ssaasmooth"), style, culture, out float smoothness))
+			{
+				QualitySettings.superSamplingSmoothness = smoothness;
+				overridden = true;
+			}
+
+			SuperSamplingSettings settings = ProjectSettings.Current.Graphics?.SuperSampling;
+			if (settings == null)
+			{
+				return;
+			}
+
+			string text = settings.Factor > 1.001f
+				? $"{SuperSamplingSettings.Label(settings.Factor)} {settings.Filter}" + (settings.Filter == SuperSamplingFilter.Gaussian ? $" (smoothness {settings.Smoothness.ToString("0.00", culture)})" : "")
+				: "off";
+			Log("Super sampling " + text + (overridden ? " (command line)" : ""));
 		}
 
 		private static string GetValue(string[] args, string name)

@@ -32,6 +32,9 @@ namespace LELEngine.Player
 		/// <summary>Why the loading failed (null: it did not).</summary>
 		public Exception Error { get; private set; }
 
+		/// <summary>Runs on the loader thread once the project settings are read, before the renderer is made.</summary>
+		public Action SettingsLoaded { get; set; }
+
 		/// <summary>Milliseconds per step, for the log.</summary>
 		public string Summary
 		{
@@ -152,6 +155,9 @@ namespace LELEngine.Player
 				{
 					Step("settings", () => ProjectSettings.Load(projectSettings));
 				}
+
+				// Command line overrides of the settings, before anything is made from them (the renderer's targets).
+				SettingsLoaded?.Invoke();
 
 				if (gameAssembly != null)
 				{
