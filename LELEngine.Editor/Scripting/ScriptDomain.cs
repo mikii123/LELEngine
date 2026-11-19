@@ -820,12 +820,15 @@ namespace LELEngine.Editor
 				GameAssembly = null;
 			}
 
-			// Editor scripts: not registered for serialization (components there could not exist in a player).
+			// Editor scripts: registered for serialization too, so scenes and prefabs can hold their components (tools that
+			// exist in the editor only). A player has no such class: game builds leave those components out of every scene
+			// and prefab (Building/EditorScriptComponents).
 			if (GameAssembly != null && editorAssemblyBytes != null)
 			{
 				try
 				{
 					EditorAssembly = context.Load(editorAssemblyBytes, editorSymbolBytes);
+					TypeRegistry.Register(EditorAssembly);
 				}
 				catch (Exception e)
 				{
@@ -858,7 +861,8 @@ namespace LELEngine.Editor
 			{
 				foreach (Behaviour component in go.Components)
 				{
-					if (component.GetType().Assembly == GameAssembly)
+					Assembly from = component.GetType().Assembly;
+					if (from == GameAssembly || (EditorAssembly != null && from == EditorAssembly))
 					{
 						trackedComponents.Add((new WeakReference(component), go.Name + "/" + component.GetType().Name));
 					}
@@ -881,7 +885,11 @@ namespace LELEngine.Editor
 				GameAssembly = null;
 			}
 
-			EditorAssembly = null;
+			if (EditorAssembly != null)
+			{
+				TypeRegistry.Unregister(EditorAssembly);
+				EditorAssembly = null;
+			}
 
 			if (context == null)
 			{

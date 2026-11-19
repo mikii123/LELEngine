@@ -407,7 +407,20 @@ namespace LELEngine.Editor
 		{
 			try
 			{
-				Documents.ConvertFile(source, target, DocumentFormat.Binary);
+				// Scenes and prefabs go without the editor scripts' components (a player has no such class).
+				byte[] bytes = EditorScriptComponents.Strip(File.ReadAllBytes(source), out int editorComponents);
+				if (editorComponents > 0)
+				{
+					log($"{relative}: {editorComponents} editor script component{(editorComponents == 1 ? "" : "s")} left out");
+				}
+
+				string directory = Path.GetDirectoryName(target);
+				if (!string.IsNullOrEmpty(directory))
+				{
+					Directory.CreateDirectory(directory);
+				}
+
+				File.WriteAllBytes(target, Documents.IsDocument(bytes) ? Documents.Convert(bytes, DocumentFormat.Binary) : bytes);
 				return true;
 			}
 			catch (Exception e)

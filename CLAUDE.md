@@ -100,9 +100,27 @@
   (`<Name>.Editor.csproj`, ProjectReference to `<Name>.csproj`, which excludes `Assets\**\Editor\**` and
   `Assets\**\Tests\**`; Tests folders are the third project, see "Unit tests of games"). Each project has its own obj
   folder (`Library/obj/<project>/`). Player builds compile only the game project.
-- `Game.Editor.dll` loads into the same collectible `GameLoadContext` as `Game.dll` and is not registered in
-  `TypeRegistry` (only temporarily while a window state is restored). Everything holding a type of it must be dropped
-  in `EditorExtensions.OnDomainUnloading` (called from `EditorApplication.ClearTypeCaches`). `GameLoadContext` must
+- `Game.Editor.dll` loads into the same collectible `GameLoadContext` as `Game.dll`. Everything holding a type of it must
+  be dropped in `EditorExtensions.OnDomainUnloading` (called from `EditorApplication.ClearTypeCaches`).
+- Editor script components (2026-11-19, the user's ask for a generator that is "editor only": "there is the editor
+  scripts' assembly: make it there, and make the build simply ignore such components in the scene"). A `Behaviour` in an
+  Editor folder is a component like any other in the editor: `ScriptDomain.LoadDomain` registers `Game.Editor.dll` in
+  `TypeRegistry` (unregistered in `UnloadDomain`; before, it was left out on purpose: "components there could not exist
+  in a player"), so Add Component lists it, scenes and prefabs store it ("Type, Game.Editor") with its serializable
+  classes, and it survives saving, reopening and script reloads. Without the assembly (its build failed) it loads as a
+  `MissingComponent` with its data kept, as any missing script. Game builds leave such components out
+  (`Building/EditorScriptComponents.Strip`, on documents as generic data, by the assembly name in the stored type):
+  `GameBuilder.ConvertDocument` strips every scene and prefab it writes (log: "Scenes\Main.scene: 1 editor script
+  component left out"; those on objects and those added to prefab instances), and `BuildDependencies.AddDependencies`
+  strips before it collects types and references, so `CheckTypes` no longer reports them and what only they reference is
+  not shipped. Not stripped: an instance's modifications of an editor component inside a prefab (they find no target and
+  do nothing), editor types stored elsewhere (a ScriptableObject asset, a game component's polymorphic field: reported
+  by `CheckTypes` as before). In the editor's play mode the component is there (it is the editor).
+  Verified with scratchpad `edonly/test.ps1` of session 0ec30c68 (scratch project: an editor component with a list of a
+  serializable class, a prefab reference and a scene object reference, on a scene object and inside a prefab): data kept
+  over save + reopen and over a script reload; batch `-build` left one out of the scene and one out of the prefab, no
+  built file holds the type's name, no Game.Editor.dll in the build, the player ran 40 frames and exited 0 with a clean
+  log. `GameLoadContext` must
   not keep its own list of the assemblies it loaded: that kept the old context alive (leak warning after every
   reload); it resolves Game.dll for Game.Editor.dll through its `Assemblies`.
 - Batch mode (since 2026-10-22) builds the editor project too when the project has editor scripts, loads both

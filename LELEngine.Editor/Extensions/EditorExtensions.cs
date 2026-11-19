@@ -970,8 +970,8 @@ namespace LELEngine.Editor
 
 		private void Apply(EditorWindow window, byte[] state)
 		{
-			// Field values of types from the editor scripts resolve by name while the assembly is registered.
-			TypeRegistry.Register(assembly);
+			// Field values of types from the editor scripts resolve by name: their assembly is registered while it is
+			// loaded (ScriptDomain.LoadDomain).
 			try
 			{
 				EditorSerialization.ApplyObject(window, state, editor.Scene);
@@ -979,10 +979,6 @@ namespace LELEngine.Editor
 			catch (Exception e)
 			{
 				Debug.LogWarning($"[Editor] Cannot restore the state of the window {window.GetType().Name}: {e.Message}");
-			}
-			finally
-			{
-				TypeRegistry.Unregister(assembly);
 			}
 		}
 

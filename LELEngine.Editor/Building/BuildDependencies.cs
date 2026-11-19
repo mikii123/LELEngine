@@ -437,6 +437,8 @@ namespace LELEngine.Editor
 					return;
 				}
 
+				// The editor scripts' components are not in the build: neither are their types, nor what only they reference.
+				data = EditorScriptComponents.Strip(data, out _);
 				DocumentReferences references = DocumentReferences.Collect(data);
 				foreach (string typeName in references.TypeNames)
 				{
