@@ -540,6 +540,8 @@ namespace LELEngine.Editor
 					string text = System.IO.File.ReadAllText(parts[1]);
 					System.IO.File.WriteAllText(parts[1], text.Replace("/*v1*/", "/*v2*/"));
 					Debug.Log("[Test] Touched " + parts[1]);
+					// An outside edit, and then the user back at the editor (an automated run is never in front).
+					editor.RequestImport();
 				}
 			}
 
@@ -1022,7 +1024,8 @@ namespace LELEngine.Editor
 			At("applyprefab", parts => PrefabMenus.ApplyAll(editor, Find(scene, parts[1]).prefabInstance));
 			At("revertprefab", parts => PrefabMenus.RevertAll(editor, Find(scene, parts[1]).prefabInstance));
 			At("undoat", parts => editor.UndoLast());
-			// replacetext=N;assetPath;old;new: an edit of a file outside the editor (the file watcher notices it).
+			// replacetext=N;assetPath;old;new: an edit of a file outside the editor, imported the next frame (as when the user
+			// comes back to the editor: an automated run is never in front).
 			// inputmanager=N;Page: Window > Input Manager on the project's configuration, showing a page (Actions, KeyboardMaps, ...).
 			At("inputmanager", parts => editor.OpenInputManager(null, parts.Length > 1 ? parts[1] : null));
 			// preferences=N;Section: Edit > Preferences on a section (Theme, Console, ExternalTools).
@@ -1040,6 +1043,7 @@ namespace LELEngine.Editor
 				string text = System.IO.File.ReadAllText(file);
 				System.IO.File.WriteAllText(file, text.Replace(parts[2], parts[3]));
 				Debug.Log($"[Test] Replaced '{parts[2]}' with '{parts[3]}' in {parts[1]} ({(text.Contains(parts[2]) ? "found" : "not found")})");
+				editor.RequestImport();
 			});
 			At("destroyobject", parts =>
 			{

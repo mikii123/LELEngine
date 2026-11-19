@@ -253,7 +253,9 @@ namespace LELEngine.Serialization
 		{
 			Context = context ?? new SerializationContext();
 			Kind = kind ?? BinaryDocument.KindObject;
-			Json = new Utf8JsonWriter(buffer, new JsonWriterOptions { Indented = true, Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping });
+			// "\n" on every system (Environment.NewLine by default: CRLF on Windows), so a document is the same bytes wherever
+			// it was written.
+			Json = new Utf8JsonWriter(buffer, new JsonWriterOptions { Indented = true, NewLine = "\n", Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping });
 			Json.WriteStartObject();
 			Json.WriteString(JsonDocumentFormat.FormatKey, JsonDocumentFormat.Format);
 			Json.WriteNumber(JsonDocumentFormat.VersionKey, JsonDocumentFormat.Version);
@@ -602,8 +604,12 @@ namespace LELEngine.Serialization
 
 		private void WriteTypes()
 		{
+			// By name, not in the order the types were met: adding or moving one object reordered the whole table, and the
+			// same contents written by different paths (an edit, a conversion) gave different tables.
+			var sorted = new List<SchemaType>(schemas);
+			sorted.Sort((a, b) => string.CompareOrdinal(a.Name, b.Name));
 			Json.WriteStartObject(JsonDocumentFormat.TypesKey);
-			foreach (SchemaType schema in schemas)
+			foreach (SchemaType schema in sorted)
 			{
 				Json.WriteStartObject(schema.Name);
 				foreach (SchemaField field in schema.Fields)
@@ -886,6 +892,7 @@ namespace LELEngine.Serialization
 				}
 			}
 
+			SortEntries(entries);
 			if (IsNameKey(keyTag))
 			{
 				Json.WriteStartObject();
@@ -930,6 +937,74 @@ namespace LELEngine.Serialization
 					return named.ToString();
 				default:
 					return Convert.ToString(key, CultureInfo.InvariantCulture);
+			}
+		}
+
+		/// <summary>
+		///     A dictionary's entries in a fixed order: it has none of its own, and the order it was filled in (edits, removals,
+		///     a key added back) made the same contents write differently. Text keys (strings, chars, enums by name, as a typeless
+		///     document holds them) ordinal, numbers by value, false before true; other keys (references) keep their order.
+		/// </summary>
+		private static void SortEntries(List<KeyValuePair<object, object>> entries)
+		{
+			if (entries.Count < 2)
+			{
+				return;
+			}
+
+			int kind = KeyKind(entries[0].Key);
+			if (kind == 0 || entries.Exists(entry => KeyKind(entry.Key) != kind))
+			{
+				return;
+			}
+
+			entries.Sort((a, b) => CompareKeys(a.Key, b.Key, kind));
+		}
+
+		/// <summary>1 text, 2 a number, 3 a bool, 0 anything else.</summary>
+		private static int KeyKind(object key)
+		{
+			switch (key)
+			{
+				case string _:
+				case char _:
+				case Enum _:
+					return 1;
+				case bool _:
+					return 3;
+				case sbyte _:
+				case byte _:
+				case short _:
+				case ushort _:
+				case int _:
+				case uint _:
+				case long _:
+				case ulong _:
+				case float _:
+				case double _:
+				case decimal _:
+					return 2;
+				default:
+					return 0;
+			}
+		}
+
+		private static int CompareKeys(object a, object b, int kind)
+		{
+			switch (kind)
+			{
+				case 1:
+					return string.CompareOrdinal(KeyName(a), KeyName(b));
+				case 3:
+					return ((bool)a).CompareTo((bool)b);
+				default:
+					// Integers exactly (decimal holds every long and ulong), floating point as doubles.
+					if (a is float || a is double || b is float || b is double)
+					{
+						return Convert.ToDouble(a, CultureInfo.InvariantCulture).CompareTo(Convert.ToDouble(b, CultureInfo.InvariantCulture));
+					}
+
+					return Convert.ToDecimal(a, CultureInfo.InvariantCulture).CompareTo(Convert.ToDecimal(b, CultureInfo.InvariantCulture));
 			}
 		}
 

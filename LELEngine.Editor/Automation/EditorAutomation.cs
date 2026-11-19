@@ -593,10 +593,13 @@ namespace LELEngine.Editor
 			Editor.RedoLast();
 		}
 
-		/// <summary>Reads changed asset files now (as the file watcher does after a moment).</summary>
+		/// <summary>
+		///     Imports the files changed on disk now (as the file watchers do after a moment while the editor is in front; an
+		///     editor in the background waits for the user to come back otherwise): assets, settings, the scene, scripts.
+		/// </summary>
 		public static void RefreshAssets()
 		{
-			AssetDatabase.Refresh(true);
+			Editor.ImportChangesNow();
 			Editor.NotifyAssetsChanged();
 		}
 

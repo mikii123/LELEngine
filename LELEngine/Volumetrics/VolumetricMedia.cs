@@ -337,6 +337,16 @@ namespace LELEngine.Volumetrics
 			}
 		}
 
+		/// <summary>
+		///     Drops the last frame's clouds (the rendered scene was replaced). A renderer that draws no frame meanwhile (a view
+		///     behind another tab or under a maximized window) kept them, and with them the old scene and its scripts' assembly
+		///     after a script reload, until it drew again.
+		/// </summary>
+		public void ReleaseSceneReferences()
+		{
+			clouds.Clear();
+		}
+
 		/// <summary>Frees the volume (the GI no longer reads clouds).</summary>
 		public void Release()
 		{

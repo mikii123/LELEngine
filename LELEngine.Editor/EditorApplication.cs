@@ -155,6 +155,24 @@ namespace LELEngine.Editor
 		private FileStamp sceneStamp;
 
 		/// <summary>
+		///     The editor is not the application in front (<see cref="EditorFocus" />) and nobody asked for an import
+		///     (<see cref="ImportPendingChanges" />, <see cref="ImportChangesNow" />): changes on disk wait (the watchers only note
+		///     them) and import together when it comes back, as Unity's Auto Refresh does. Automated and batch runs wait too (never
+		///     in front, they import when a command comes): an agent's edits one file after another each started a build there
+		///     (the user's correction, 2026-11-19).
+		/// </summary>
+		public bool ImportsPaused { get; private set; }
+
+		/// <summary>
+		///     An import was asked for (a command of the automation, Refresh, a test hook): the editor imports as in front until
+		///     nothing of it is left (<see cref="ImportWorkLeft" />: the build and the scene's reload included).
+		/// </summary>
+		private bool importingOnRequest;
+
+		/// <summary>A test hook wrote a file: the next frame imports it (<see cref="RequestImport" />).</summary>
+		private bool importRequested;
+
+		/// <summary>
 		///     The open scene's file changed on disk: reloaded when the scene has no unsaved changes, merged otherwise (after
 		///     play mode; EditorApplication.SceneMerge.cs).
 		/// </summary>
@@ -416,10 +434,25 @@ namespace LELEngine.Editor
 			// method it started with.
 			Lighting.AllowGIMethodChange = PlayState == PlayState.Edit;
 
-			RefreshAssetsIfChanged();
-			RefreshSettingsIfChanged();
-			ReloadSceneIfChangedOnDisk();
-			Scripts?.Update();
+			// Changes on disk (assets, settings, the scene, scripts) import only while the editor is in front: reverting files one
+			// by one in git or an IDE imported every step (builds, scene reloads, merges of half the change).
+			if (importRequested)
+			{
+				importRequested = false;
+				ImportChangesNow();
+			}
+
+			UpdateImportsPaused();
+			// Force Reserialize All Assets writes files over frames: what it writes is read once it is done.
+			UpdateReserialize();
+			if (!ImportsPaused && reserializer == null)
+			{
+				RefreshAssetsIfChanged();
+				RefreshSettingsIfChanged();
+				ReloadSceneIfChangedOnDisk();
+			}
+
+			Scripts?.Update(!ImportsPaused);
 			if (playAfterCompile && (Scripts == null || !Scripts.IsCompiling))
 			{
 				playAfterCompile = false;
@@ -537,25 +570,41 @@ namespace LELEngine.Editor
 				BeginLoadingInputLock();
 			}
 
-			// Maximize On Play: the Game window alone over the dock space; the others are not drawn (script windows keep
-			// their Update), their docked places stay as they are.
-			bool gameMaximized = !capture && !loading && GameView.Maximized;
-			if (!capture)
+			// A maximized window alone over the dock space (the Scene window's Maximize, the Game window's Maximize On Play);
+			// the others are not drawn (script windows keep their Update), their docked places stay as they are. Play gives a
+			// maximized Scene window back to the layout (EnterPlayMode); maximized during play, it covers the Game window.
+			bool sceneMaximized = !capture && !loading && SceneView.Open && SceneView.Maximized;
+			bool gameMaximized = !capture && !loading && !sceneMaximized && GameView.Maximized;
+			string maximized = sceneMaximized ? "Scene" : gameMaximized ? "Game" : null;
+			if (!capture && maximized != maximizedWindow)
 			{
-				// Back from the maximized Game window: every window appears again and ImGui gives each the focus in drawing
-				// order, so the last one of a dock (Console) would bring its tab over the one in front before; dropped as at start.
-				if (gameWasMaximized && !gameMaximized)
+				// Back from a maximized window: every window appears again and ImGui gives each the focus in drawing order, so
+				// the last one of a dock (Console) would bring its tab over the one in front before; dropped as at start. The
+				// restored Scene window then takes the focus (its tab to the front, keys to the view), or the Game window when
+				// Play restored it.
+				if (maximizedWindow != null && maximized == null)
 				{
 					startupFocusFrames = Math.Max(startupFocusFrames, 2);
+					focusAfterRestore = maximizedWindow == "Scene" ? restoreFocusTo ?? "Scene" : null;
 				}
 
-				gameWasMaximized = gameMaximized;
+				restoreFocusTo = null;
+				maximizedWindow = maximized;
 			}
 
-			if (gameMaximized)
+			if (sceneMaximized)
+			{
+				GameView.Hide();
+				SceneView.Draw();
+			}
+			else if (gameMaximized)
 			{
 				SceneView.Hide();
 				GameView.Draw();
+			}
+
+			if (maximized != null)
+			{
 				Extensions.UpdateWindows(false);
 				Extensions.EndFrame();
 				Edits.Flush();
@@ -620,6 +669,13 @@ namespace LELEngine.Editor
 				ImGui.SetWindowFocus((string)null);
 			}
 
+			// After the last dropped frame: a focus given earlier would be dropped again by the next one.
+			if (focusAfterRestore != null && startupFocusFrames == 0)
+			{
+				ImGui.SetWindowFocus(focusAfterRestore);
+				focusAfterRestore = null;
+			}
+
 			if (testHooks.PendingFocus != null)
 			{
 				ImGui.SetWindowFocus(testHooks.PendingFocus);
@@ -675,7 +731,12 @@ namespace LELEngine.Editor
 
 		// UI frames left in which the focus windows took by appearing is dropped (set when a project opens).
 		private int startupFocusFrames;
-		private bool gameWasMaximized;
+
+		// The window maximized last frame ("Scene", "Game" or null), the one to focus once the windows are back, and the
+		// one the next restore of the Scene window focuses instead of it (Play: the Game window).
+		private string maximizedWindow;
+		private string focusAfterRestore;
+		private string restoreFocusTo;
 
 		/// <summary>
 		///     The layout records each dock's front tab (Console or Inspector where both share a place), but ImGui writes the
@@ -742,7 +803,9 @@ namespace LELEngine.Editor
 		///     The editor has work in flight: a script build (or one waiting), changed assets or settings not refreshed yet, a
 		///     scene or resource loading in the background. Automation waits for this to end (<see cref="EditorAutomation.WaitForIdle" />).
 		/// </summary>
-		public bool IsBusy => Project != null && (projectLoad != null || Scripts != null && !Scripts.IsIdle || assetsChanged || settingsChanged || restoreWindowsPending || SceneManager.PendingLoads.Count > 0 || Tests.IsRunning);
+		/// <remarks>Changes on disk waiting for the editor to come to the front (<see cref="ImportsPaused" />) are not work in flight.</remarks>
+		public bool IsBusy => Project != null && (projectLoad != null || reserializer != null || Scripts != null && (Scripts.HasWorkInFlight || !ImportsPaused && Scripts.WaitsForBuild)
+			|| !ImportsPaused && (assetsChanged || settingsChanged || SceneReloadWaiting) || restoreWindowsPending || SceneManager.PendingLoads.Count > 0 || Tests.IsRunning);
 
 		/// <summary>A project is opening: its windows stand empty until the load's steps are done (see <see cref="OpenProject" />).</summary>
 		public bool IsLoadingProject => projectLoad != null;
@@ -1880,6 +1943,12 @@ namespace LELEngine.Editor
 				return;
 			}
 
+			if (reserializer != null)
+			{
+				Debug.LogWarning("[Editor] Play waits: Force Reserialize All Assets is running");
+				return;
+			}
+
 			// Scripts being compiled may not compile: play waits for their build and starts only from a good one
 			// (Update calls this again).
 			if (Scripts != null && Scripts.IsCompiling)
@@ -1946,6 +2015,14 @@ namespace LELEngine.Editor
 				ConsoleLog.EndGame();
 			}
 			Selected = selected != 0 ? play.FindObjectById(selected) : null;
+			// Play shows the game (the user's ask, 2026-11-18): a maximized Scene window goes back to the layout and the Game
+			// window takes the focus once the windows are back (after the restore's dropped focus frames).
+			if (SceneView.Maximized)
+			{
+				SceneView.Maximized = false;
+				restoreFocusTo = "Game";
+			}
+
 			GameView.Focus();
 			Undo.Clear();
 		}
@@ -2585,6 +2662,7 @@ namespace LELEngine.Editor
 		{
 			DrawPrefabModals();
 			DrawUnsavedToolsModal();
+			DrawReserializeModal();
 			if (openUnsavedPopup)
 			{
 				ImGui.OpenPopup("Unsaved changes");
@@ -2743,6 +2821,16 @@ namespace LELEngine.Editor
 				EditorMenu.End();
 			}
 
+			if (EditorMenu.Begin("Assets"))
+			{
+				// Imports what changed on disk now (it also happens by itself when the editor comes to the front).
+				if (EditorMenu.Item("Refresh", "", false, reserializer == null)) ImportChangesNow();
+				ImGui.Separator();
+				if (EditorMenu.Item("Force Reserialize All Assets", "", false, reserializer == null && !IsPlaying && Stage == null)) ForceReserializeAllAssets();
+				Extensions.DrawMenuItems("Assets");
+				EditorMenu.End();
+			}
+
 			if (EditorMenu.Begin("GameObject"))
 			{
 				DrawCreateMenu(null);
@@ -2832,6 +2920,7 @@ namespace LELEngine.Editor
 				{
 					// Every panel open, docked as by default.
 					SceneView.Open = GameView.Open = hierarchy.Open = inspector.Open = projectPanel.Open = consolePanel.Open = lightingPanel.Open = true;
+					SceneView.Maximized = false;
 					resetLayoutRequested = true;
 				}
 
@@ -3046,7 +3135,7 @@ namespace LELEngine.Editor
 
 		private void DrawStatus()
 		{
-			string status = projectLoad != null ? LoadingText() : Scripts?.StatusText;
+			string status = projectLoad != null ? LoadingText() : reserializer?.Status ?? Scripts?.StatusText;
 			if (string.IsNullOrEmpty(status))
 			{
 				return;
@@ -3171,6 +3260,98 @@ namespace LELEngine.Editor
 		{
 			assetsChangedAt = Time.timeD;
 			assetsChanged = true;
+		}
+
+		/// <summary>
+		///     Asked once a frame: is the editor in front, or is an import asked for still going (<see cref="ImportsPaused" />)?
+		///     Back in front with changes waiting, one console line says they import now.
+		/// </summary>
+		private void UpdateImportsPaused()
+		{
+			if (importingOnRequest && !ImportWorkLeft)
+			{
+				importingOnRequest = false;
+			}
+
+			bool paused = !importingOnRequest && !EditorFocus.IsInFront(Window);
+			if (paused == ImportsPaused)
+			{
+				return;
+			}
+
+			ImportsPaused = paused;
+			if (!paused && ChangesWaiting)
+			{
+				Debug.Log("[Editor] Back in front: importing the files changed meanwhile");
+			}
+		}
+
+		/// <summary>Files changed on disk the editor has noted and not imported yet.</summary>
+		private bool ChangesWaiting => assetsChanged || settingsChanged || sceneChangedOnDisk || Scripts != null && Scripts.WaitsForBuild;
+
+		/// <summary>The open scene's file changed on disk and its reload waits only for its moment (not for play or prefab mode, or a merge).</summary>
+		private bool SceneReloadWaiting => sceneChangedOnDisk && !IsPlaying && Stage == null && pendingMerge == null;
+
+		/// <summary>An import has work left: changes noted, a build running or waiting, the scene's reload.</summary>
+		private bool ImportWorkLeft => assetsChanged || settingsChanged || Scripts != null && Scripts.IsCompiling || SceneReloadWaiting;
+
+		/// <summary>
+		///     A command of the automation comes (CLI, <c>-script</c>): it is the automation coming back to the editor, as the user
+		///     comes back to an editor in front, so what changed on disk meanwhile imports now, before the command runs, and the
+		///     editor imports as in front until it is done (the build and the scene's reload included). An automated run is never
+		///     in front: its changes wait for this. In front the editor imports by itself.
+		/// </summary>
+		public void ImportPendingChanges()
+		{
+			if (!ImportsPaused || !ChangesWaiting || Project == null || projectLoad != null || reserializer != null)
+			{
+				return;
+			}
+
+			Debug.Log("[Editor] A command came: importing the files changed meanwhile");
+			ImportNow(false);
+		}
+
+		/// <summary>
+		///     Imports what changed on disk now, in front or not, without the watchers' moment to settle (Assets > Refresh, the
+		///     automation's refresh): assets (the files compared with what is loaded), project settings, the open scene, a build
+		///     of changed scripts (also when the watcher has not told yet).
+		/// </summary>
+		public void ImportChangesNow()
+		{
+			if (Project == null || projectLoad != null || reserializer != null)
+			{
+				return;
+			}
+
+			assetsChanged = true;
+			ImportNow(true);
+		}
+
+		/// <summary>A test hook wrote a file outside the editor's own saving: the next frame imports it (<see cref="ImportChangesNow" />).</summary>
+		public void RequestImport()
+		{
+			importRequested = true;
+		}
+
+		private void ImportNow(bool checkScripts)
+		{
+			importingOnRequest = true;
+			ImportsPaused = false;
+			if (assetsChanged)
+			{
+				assetsChangedAt = double.MinValue;
+				RefreshAssetsIfChanged();
+			}
+
+			if (settingsChanged)
+			{
+				settingsChangedAt = double.MinValue;
+				RefreshSettingsIfChanged();
+			}
+
+			Scripts?.BuildChangedNow(checkScripts);
+			ReloadSceneIfChangedOnDisk();
 		}
 
 		/// <summary>
@@ -3484,6 +3665,7 @@ namespace LELEngine.Editor
 		private void FillWindowStates(WindowStates states)
 		{
 			states.Open["Scene"] = SceneView.Open;
+			states.Maximized = SceneView.Maximized ? "Scene" : null;
 			states.Open["Game"] = GameView.Open;
 			states.Open["Hierarchy"] = hierarchy.Open;
 			states.Open["Inspector"] = inspector.Open;
@@ -3544,6 +3726,7 @@ namespace LELEngine.Editor
 
 			bool Saved(string name, bool fallback) => states.Open.TryGetValue(name, out bool open) ? open : fallback;
 			SceneView.Open = Saved("Scene", true);
+			SceneView.Maximized = SceneView.Open && states.Maximized == "Scene";
 			GameView.Open = Saved("Game", true);
 			hierarchy.Open = Saved("Hierarchy", true);
 			inspector.Open = Saved("Inspector", true);
@@ -3604,6 +3787,9 @@ namespace LELEngine.Editor
 		{
 			public Dictionary<string, bool> Open { get; set; } = new Dictionary<string, bool>();
 			public string ProjectSettingsTab { get; set; }
+
+			/// <summary>The maximized window ("Scene"), null when none.</summary>
+			public string Maximized { get; set; }
 
 			/// <summary>Per project folder: the graph the VFX Graph window showed.</summary>
 			public Dictionary<string, string> VfxGraphs { get; set; } = new Dictionary<string, string>();

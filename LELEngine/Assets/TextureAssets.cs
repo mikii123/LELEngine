@@ -805,6 +805,12 @@ namespace LELEngine
 				Entry cached;
 				if (entries.TryGetValue(key, out cached))
 				{
+					// Loaded by an on-demand batch and never drawn: imported now with this load's other textures.
+					if (cached.Texture is Texture2D unread && unread.PendingImport != null)
+					{
+						TextureImportBatch.Current?.Adopt(unread.PendingImport);
+					}
+
 					return cached;
 				}
 			}

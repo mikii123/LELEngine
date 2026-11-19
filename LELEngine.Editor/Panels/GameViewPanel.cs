@@ -94,6 +94,18 @@ namespace LELEngine.Editor
 		NVector2 IEditorPanel.DefaultCaptureSize => new NVector2(1280, 720);
 		void IEditorPanel.Focus() => Focus();
 
+		/// <summary>Not drawn this frame (the Scene window is maximized): nothing to render, no game input.</summary>
+		public void Hide()
+		{
+			visible = false;
+			HasInputFocus = false;
+			IsMouseOverImage = false;
+			if (Input.cursorLocked)
+			{
+				Input.SetCursorLocked(false);
+			}
+		}
+
 		public void Draw()
 		{
 			if (Automation.WindowCapture.Active)

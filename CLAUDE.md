@@ -1150,6 +1150,35 @@ Added for New Frontier's port of Unity's SpaceStonesPack (Standard materials wit
   runs again. Verified on New Frontier's Flight (`preferencesfile=` with the toggle, `playframe=`, `stopframe=`,
   `screenshotframe=`): full-size game while playing, the layout and front tabs before and after identical. A
   `SetCursorPos` with no item after it (the toolbar's gap while the scene loads) is ImGui's assert, 0xC0000409.
+- Scene window Maximize / Minimize (2026-11-18, the user's ask): a video player's full screen button at the right end of
+  the Scene toolbar (corners out: `button:maximize`; corners in: `button:minimize`; `Icon.Maximize` / `Icon.Minimize`). A
+  right-click menu on the tab came first; the user wanted the icon instead. `SceneViewPanel.Maximized` draws the window as
+  Maximize On Play draws the Game window ("Scene###SceneMaximized", `IEditorPanel.ImGuiName` then names it, so `windows`,
+  `elements`, `click` and screenshots find it) and `DrawUI` draws no other window (`GameView.Hide()`: no render, no game
+  input). Play switches to the game (the user's correction: Unity would keep the Scene maximized): `EnterPlayMode` sets
+  `Maximized` false and the Game window takes the focus (its tab in front) once the windows are back; with Maximize On
+  Play the maximized Game takes over at once. After Minimize the start's focus drop runs, then the Scene window takes the
+  focus (`focusAfterRestore`; `restoreFocusTo` = "Game" for Play's restore). Maximized during play (Maximize On Play off)
+  it covers the Game window. Kept in windows.json (`Maximized`, set after the project's load), cleared by Reset Layout
+  and by closing the window.
+- Scene toolbar (2026-11-18, the user's ask: "the toolbox as icons, not text" and a lower row): Move / Rotate / Scale and
+  Local / World are `EditorGui.IconButton`s drawn as Unity's icons (`Icon.Move` cross of arrows, `Rotate` arc, `Scale` box
+  with an arrow, `World` globe, `Local` cube; tooltips name them and their keys); element names stay `button:Move` etc.
+  The row pushes `FramePadding` (4, 1): 19 px buttons instead of 23, 2 px above. Always Refresh and Nav stay checkboxes
+  with text (Unity keeps them out of its tools too).
+  - `TestAnchors.CurrentWindowId` read the window through `ImGuiP.GetCurrentWindow()`, which sets `WriteAccessed`; after
+    that ImGui's `IsItemHovered` refuses the title bar / tab item `Begin` leaves, so `BeginPopupContextItem` right after
+    `Begin` (a tab's context menu) never saw the mouse once an element was recorded. It reads the context's
+    `CurrentWindow` now.
+  - `VolumetricMediaPass` kept the last frame's clouds through `ReleaseSceneReferences`: a view that drew no frame (Game
+    under the maximized Scene, or behind its tab) held the old scene and scripts after the play reload ("unloaded after
+    all, 26.8 s"). Cleared now ("unloaded (5 GC passes)").
+  - Verified on New Frontier with copies of the user's state files (scratchpad `maxscene/` of session 0ec30c68:
+    `start.ps1`, `input.ps1` with SendInput at absolute positions, `stop.ps1`): Maximize / Minimize and the tool buttons by
+    real clicks (one Minimize click of the first run did nothing, not reproduced in 5 more), `windows` before and after
+    identical, a real click on Play while maximized (layout back, Game tab in front; with Maximize On Play the maximized
+    Game), a restart opens maximized, screenshots
+    of the maximized window (live and laid out at a size), the user's files unchanged.
 - The editor crashed when exiting after a transform gizmo drag (access violation in cimguizmo.dll at 0x33914 / 0x33923;
   WER logged 50 of them on 2026-11-02 and the user's on 2026-11-08): cimguizmo.dll links its own copy of ImGui, whose
   context pointer (`ImGuizmo.SetImGuiContext`) still pointed at the destroyed context, and ImGuizmo's static buffers
@@ -2802,6 +2831,40 @@ texture read back), see the port's `PORTING.md` "UI".
   (clean: 5 kept, was 1 before; dirty: kept with the unsaved change), a change on disk during play merged after Stop.
   Not verified: the prefab-mode wait, batch-mode conflicts.
 
+## Deterministic documents, Force Reserialize All Assets (2026-11-18)
+
+- The user's report: saves produced empty changes, elements swapped or only line breaks changed, on different machines.
+  Found in New Frontier's history (semantic diff of the user's commits): (1) 1078 files written by other tools (Unity
+  converters, agents' edits) with one-line objects (`{ "guid": ..., "path": ... }`), `+` escapes, no `$types`,
+  another entry order; the editor's first save of each rewrote it; (2) the `$types` table in the order the writer met the
+  types, so adding or moving one object reordered it (CapsuleModel.prefab, 23d3795); (3) one reorder-only file:
+  ProjectSettings.asset's `LOD` before `GI` (3f33bb4), not what the engine writes now (not explained; .NET 10's
+  GetFields gave declaration order in every probe, including after GetField / GetMember lookups).
+- The JSON writer (`JsonDocumentWriter`, the only one) now writes the same bytes for the same contents anywhere:
+  `NewLine = "\n"` (was Environment.NewLine: CRLF on Windows, LF elsewhere), `$types` sorted by type name (ordinal),
+  dictionaries' entries sorted by key (`SortEntries`: text keys (strings, chars, enums by name) ordinal, numbers by
+  value, bools; reference keys keep their order), fields in declaration order (`SerializationUtility.Collect` sorts by
+  `MetadataToken`; reflection promises no order). Binary documents (snapshots, builds) are unchanged.
+- Assets > Force Reserialize All Assets (`AssetReserializer`, `EditorApplication.Reserialize.cs`; also Assets > Refresh =
+  `ImportChangesNow`): asks first, then every document of Assets (Documents.Extensions, hidden folders left out) and
+  ProjectSettings.asset, in ordinal order, ~40 ms of them a frame (menu bar status "Reserializing N / M: file"; `IsBusy`,
+  play waits): read fresh from the file with the live types (never the loaded copy: windows may hold unsaved edits),
+  written as the editor writes it (scenes `SaveToBytes`, prefabs `SavePrefabToBytes` of the one root as prefab mode,
+  other documents `ReadObject` + `WriteObject` with the asset named after its file as every Save does), and the file
+  written only when the bytes differ. Left alone and listed: types not loaded (missing scripts), a prefab without one
+  root, the VFX graph / audio project open with unsaved changes. Not in play or prefab mode. The open scene's file is
+  read from disk too (its unsaved changes stay in the editor) and taken as the editor's own write (`sceneFileBase`,
+  `sceneStamp`), so it neither reloads nor merges; the other assets reload in place through the watcher afterwards.
+  Images are read from their headers only: `TextureImportBatch.BeginOnDemand` (an on-demand batch's textures read their
+  file when their texels are first asked for; a later load meeting one adopts it into its own batch, `Adopt`).
+- Verified on a copy of New Frontier (scratchpad `reser/` of session 0ec30c68: `run.ps1`, `openscene.ps1`, `jsoncmp/` = a
+  semantic JSON diff; Planets.scene left out of the copy): 4454 files, 79 s, 2249 written (1669 with content changes for
+  git, the rest CRLF -> LF only), peak 2.9 GB; the semantic diff shows only normalisation (key order, escapes, entry order
+  by hierarchy) and what the editor adds (missing `$types`, shader GUIDs, fields classes gained, a VFX setting, the
+  always-written root overrides of nested prefabs), nothing lost. Run again in a new process: 0 written; again with
+  `DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1 DOTNET_PROCESSOR_COUNT=2`: 0 written. Flight open with an unsaved rename: 20
+  files written, no reload or merge, the rename kept. NF's 510 tests pass on the reserialized copy.
+
 ## Files changed on disk: what reloads in the editor (2026-10-31)
 
 - The user's ask: every kind of file changed outside the editor must come back in by itself. Audited and verified in
@@ -2809,6 +2872,48 @@ texture read back), see the port's `PORTING.md` "UI".
   edited by PowerShell). The asset watcher (debounced 0.5 s) runs `RefreshAssetsIfChanged` -> `AssetDatabase.Refresh`
   (also drops the meta cache: import settings are read again), then each cache below; the settings watcher runs
   `RefreshSettingsIfChanged`; `ScriptDomain` has its own watcher.
+- Changes on disk import when the editor is in front (2026-11-18, the user's ask: reverting files one by one in git or
+  an IDE broke the editor, which imported every step: builds of half-reverted scripts, scene reloads and merges of half
+  the change). `EditorApplication.ImportsPaused` (asked once a frame, `EditorFocus.IsInFront`: on Windows the foreground
+  window belongs to the editor's process, so the Audio Studio, the UI Builder and its own dialogs count; elsewhere the
+  main window's focus): the watchers only note changes, and `RefreshAssetsIfChanged`, `RefreshSettingsIfChanged`,
+  `ReloadSceneIfChangedOnDisk`, the start of a script build (`ScriptDomain.Update(startBuilds)`) and the inspector's
+  prefab preview wait. Back in front everything imports together ("[Editor] Back in front: importing the files changed
+  meanwhile"), as Unity's Auto Refresh. Waiting changes are not busy work (`IsBusy`, CLI `wait idle`).
+  Verified with scratchpad `bgimport/test.ps1` of session 0ec30c68 (scratch project, another process's window put in
+  front): in the background a new script written three times (the middle one does not compile) and the scene's camera
+  renamed on disk: nothing for 4 s; in front: one build without errors and one scene reload; in front a change imports
+  at once; in the background `refresh` imports at once.
+- Automated and batch runs wait too (2026-11-19, the user's correction: they imported in the background, so an agent's
+  edits one file after another each started a build that the next edit made useless). They are never in front: a
+  command is the automation coming back to the editor. Every CLI command but `quit`, `help` and `refresh` first calls
+  `EditorApplication.ImportPendingChanges` ("[Editor] A command came: importing the files changed meanwhile"), and
+  `refresh` / Assets > Refresh / `EditorAutomation.RefreshAssets` call `ImportChangesNow` (also compares the scripts on
+  disk with the last build, `ScriptDomain.BuildChangedNow(checkFiles)`: a file written a moment ago). Either starts an
+  import on request (`importingOnRequest`): the editor imports as in front until nothing is left (`ImportWorkLeft`:
+  changes noted, a build running or waiting, the open scene's reload; `IsBusy` counts the scene's waiting reload too), so
+  a command followed by `wait idle` sees every change loaded. Test hooks that write files (`touchscript=`,
+  `replacetext=`) call `RequestImport` (the next frame imports). The command runs at once, not after the import: wait
+  for `Busy no` before reading what changed. `pauseimports=` is gone.
+- Scripts changed while a build runs (2026-11-19, same correction): the build is not loaded ("[Scripts] Scripts changed
+  while they compiled: that build is dropped, the next one compiles every change"; `ScriptDomain.buildOld`, checked
+  against `startedSources` = `SourceStamp(project, true)` when the build started; the watcher's late word about a file
+  the build already has clears `sourcesChanged`), so the scripts reload once. It is not killed: measured on a 300-file
+  scratch project, `dotnet build` killed 1.2 / 2 / 3 s in still wrote obj/Game.dll 1.0-5.8 s later, with
+  `-m:1 -nodeReuse:false` as well (the compiler server, VBCSCompiler, compiles on after its client dies);
+  `UseSharedCompilation=false` would stop that but costs 3-4 s per build. And a compile that ends after a script was
+  written leaves obj/ newer than that script, so MSBuild (dates only) skipped the next compile and the old code loaded
+  as the new one: this was already so before (an edit during a build could leave old code loaded, silently), and showed
+  as soon as builds were dropped. `StartBuild` now deletes the obj/ assemblies (`ScriptBuilder.IntermediateAssemblies`)
+  when the scripts changed since the last build and none is newer than them (`CompiledLooksNewer`; also a file put back
+  with an older date), and for Rebuild Scripts (`RequestBuild(true)`), so the compile runs.
+  Verified with scratchpad `bgimport/test2.ps1` (fresh project, 300 scripts, builds ~3 s, an automated editor only
+  watched through its stdout): a checkout of 300 scripts + the scene in the background imported nothing for 4 s, one
+  command gave one build, one domain reload and one scene reload; three writes (one broken) the same, loading the last;
+  a second write 0.3 / 0.8 / 1.5 / 2.2 s after a build started: that build dropped, one reload, the last version loaded
+  each time (before the forced compile: the 0.8 s case loaded the first version); 3.5 s (after the build ended): two
+  builds, as it should. Hooks: `touchscript=` + `replacetext=` with no command: one script reload, one scene reload.
+  Batch `-listen`: nothing in 5 s, `status` imported, the new version loaded.
 - Already worked: `ProjectSettings/Project.json` (`ReloadSettingsFile`, every field), `ProjectSettings.asset`
   (`ProjectSettings.Use`), models (`ImportChangedModels`), prefabs (`PrefabCache.ReloadChanged`, instances rebuilt),
   ScriptableObjects (`ScriptableObjectAssets.ReloadChanged`), .uss / .uxml (`UIAssets.ReloadChanged`), audio clips and

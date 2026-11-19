@@ -258,6 +258,32 @@ namespace LELEngine.Editor
 			}
 		}
 
+		/// <summary>
+		///     The compiled assemblies in the intermediate folders (Library/obj/&lt;project&gt;/&lt;configuration&gt;/, Directory.Build.props)
+		///     of the game's, the editor scripts' and the tests' projects, those that exist. Deleted, the next build compiles
+		///     (MSBuild decides by dates only).
+		/// </summary>
+		public static List<string> IntermediateAssemblies(string projectFile, string configuration)
+		{
+			var found = new List<string>();
+			string obj = Path.Combine(Path.GetDirectoryName(projectFile), "Library", "obj");
+			foreach ((string project, string assembly) in new[]
+			{
+				(projectFile, ProjectGenerator.AssemblyName),
+				(ProjectGenerator.EditorProjectFile(projectFile), ProjectGenerator.EditorAssemblyName),
+				(ProjectGenerator.TestsProjectFile(projectFile), ProjectGenerator.TestsAssemblyName)
+			})
+			{
+				string dll = Path.Combine(obj, Path.GetFileNameWithoutExtension(project), configuration, assembly + ".dll");
+				if (File.Exists(dll))
+				{
+					found.Add(dll);
+				}
+			}
+
+			return found;
+		}
+
 		/// <summary>The project's restore output (Library/obj/&lt;project&gt;/) is newer than the project and its packages.</summary>
 		private static bool IsRestored(string projectFile, string packages)
 		{

@@ -32,6 +32,11 @@ namespace LELEngine.Rendering.Passes
 			media.Update(context);
 		}
 
+		public override void ReleaseSceneReferences()
+		{
+			media.ReleaseSceneReferences();
+		}
+
 		public override void ReleaseUnusedResources()
 		{
 			if (!Lighting.GI.Enabled || Lighting.GI.VolumesInGI == VolumeGIMode.Off)

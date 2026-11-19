@@ -768,7 +768,11 @@ namespace LELEngine.Serialization
 			var names = new HashSet<string>();
 			foreach (Type t in chain)
 			{
-				foreach (FieldInfo field in t.GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly))
+				// In declaration order: reflection promises no order for GetFields (it may follow what the runtime cached
+				// before), and the fields' order is the documents' order.
+				FieldInfo[] declared = t.GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly);
+				Array.Sort(declared, (a, b) => a.MetadataToken.CompareTo(b.MetadataToken));
+				foreach (FieldInfo field in declared)
 				{
 					if (field.IsInitOnly || field.IsLiteral || field.IsDefined(typeof(NonSerializedAttribute), false))
 					{

@@ -25,7 +25,7 @@ namespace LELEngine.Editor
 	{
 		#region PrivateFields
 
-		private static readonly string[] BuiltInMenus = { "File", "Edit", "GameObject", "Window" };
+		private static readonly string[] BuiltInMenus = { "File", "Edit", "Assets", "GameObject", "Window" };
 		private const string WindowsFile = "EditorWindows.txt";
 
 		// What the file holds (the open windows are written when it changes).

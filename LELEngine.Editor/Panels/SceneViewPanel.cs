@@ -59,6 +59,14 @@ namespace LELEngine.Editor
 		/// <summary>Draw the navmesh, agents and obstacles in the view.</summary>
 		public bool ShowNavigation { get; private set; } = true;
 
+		/// <summary>
+		///     Maximize / Minimize, the button at the right end of the toolbar (a video player's full screen icons): the Scene
+		///     window fills the editor below the menu bar and the other windows are not drawn. The maximized window is
+		///     a window of its own (not docked, not saved in the layout), so restoring gives the layout back as it was. Kept
+		///     with the editor's windows (windows.json); Play restores it and brings the Game window forward.
+		/// </summary>
+		public bool Maximized { get; set; }
+
 		#endregion
 
 		#region PrivateFields
@@ -88,8 +96,10 @@ namespace LELEngine.Editor
 		private const float WheelShare = 0.2f;
 		private const float MinFocusDistance = 0.05f;
 		private readonly ViewRefresh refresh = new ViewRefresh();
+		private const string MaximizedWindowName = "Scene###SceneMaximized";
 		private bool visible;
 		private bool focusRequested;
+		private bool wasMaximized;
 		private NVector2 viewMin;
 		private NVector2 viewSize = new NVector2(640, 360);
 		private string savedState;
@@ -200,7 +210,9 @@ namespace LELEngine.Editor
 		public bool Open = true;
 
 		string IEditorPanel.PanelName => "Scene";
-		string IEditorPanel.ImGuiName => "Scene";
+
+		// The window drawn now (automation finds its elements, place and screenshots there).
+		string IEditorPanel.ImGuiName => Maximized && Open ? MaximizedWindowName : "Scene";
 		bool IEditorPanel.PanelOpen { get => Open; set => Open = value; }
 		NVector2 IEditorPanel.DefaultCaptureSize => new NVector2(1280, 760);
 		void IEditorPanel.Focus() => Focus();
@@ -224,20 +236,38 @@ namespace LELEngine.Editor
 			ReleaseCameraDragIfAbandoned();
 			if (!Open)
 			{
-				// Closed: nothing to render either (see Render).
+				// Closed: nothing to render either (see Render). Closed from the Window menu while maximized: it opens docked.
 				visible = false;
 				IsFocused = false;
+				Maximized = false;
 				return;
 			}
 
-			if (focusRequested)
+			bool maximized = Maximized;
+			if (focusRequested || (maximized && !wasMaximized))
 			{
 				ImGui.SetNextWindowFocus();
 				focusRequested = false;
 			}
 
+			wasMaximized = maximized;
 			ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, new NVector2(0, 0));
-			visible = ImGui.Begin("Scene", ref Open);
+			if (maximized)
+			{
+				// Over the dock space below the menu bar (Play stays there), undocked and unsaved: the docked "Scene" window is
+				// simply not drawn meanwhile, so the layout is untouched (as the Game window's Maximize On Play).
+				ImGuiViewportPtr viewport = ImGui.GetMainViewport();
+				ImGui.SetNextWindowPos(viewport.WorkPos);
+				ImGui.SetNextWindowSize(viewport.WorkSize);
+				ImGui.SetNextWindowViewport(viewport.ID);
+				visible = ImGui.Begin(MaximizedWindowName, ImGuiWindowFlags.NoDocking | ImGuiWindowFlags.NoMove | ImGuiWindowFlags.NoResize
+					| ImGuiWindowFlags.NoCollapse | ImGuiWindowFlags.NoSavedSettings);
+			}
+			else
+			{
+				visible = ImGui.Begin("Scene", ref Open);
+			}
+
 			ImGui.PopStyleVar();
 			IsFocused = ImGui.IsWindowFocused(ImGuiFocusedFlags.RootAndChildWindows);
 			if (visible)
@@ -262,8 +292,9 @@ namespace LELEngine.Editor
 		/// </summary>
 		private void DrawCapture()
 		{
+			// Under the name automation docks alone in the capture (ImGuiName: the maximized window's while maximized).
 			ImGui.PushStyleVar(ImGuiStyleVar.WindowPadding, new NVector2(0, 0));
-			bool shown = ImGui.Begin("Scene", ref Open);
+			bool shown = ImGui.Begin(Maximized && Open ? MaximizedWindowName : "Scene", ref Open);
 			ImGui.PopStyleVar();
 			if (shown)
 			{
@@ -535,21 +566,30 @@ namespace LELEngine.Editor
 			}
 		}
 
+		/// <summary>
+		///     The row above the view (2026-11-18, the user's ask: icons, not words, and a lower row): the tools as Unity's icons
+		///     (elements keep their names: button:Move, button:Rotate, button:Scale, button:Local / button:World), the view's
+		///     toggles, and at the right end Maximize / Minimize as a video player's full screen button (button:maximize /
+		///     button:minimize). Smaller frame padding than the editor's own makes the row lower.
+		/// </summary>
 		private void DrawToolbar()
 		{
-			ImGui.SetCursorPos(ImGui.GetCursorPos() + new NVector2(6, 4));
-			ToolButton("Move (W)", "Move", ImGuizmoOperation.Translate);
-			ImGui.SameLine();
-			ToolButton("Rotate (E)", "Rotate", ImGuizmoOperation.Rotate);
-			ImGui.SameLine();
-			ToolButton("Scale (R)", "Scale", ImGuizmoOperation.Scale);
-			ImGui.SameLine();
-			if (EditorGui.Button(mode == ImGuizmoMode.Local ? "Local" : "World"))
+			ImGui.PushStyleVar(ImGuiStyleVar.FramePadding, new NVector2(4, 1));
+			ImGui.SetCursorPos(ImGui.GetCursorPos() + new NVector2(4, 2));
+			ToolButton("Move", Icon.Move, "Move (W)", ImGuizmoOperation.Translate);
+			ImGui.SameLine(0, 2);
+			ToolButton("Rotate", Icon.Rotate, "Rotate (E)", ImGuizmoOperation.Rotate);
+			ImGui.SameLine(0, 2);
+			ToolButton("Scale", Icon.Scale, "Scale (R)", ImGuizmoOperation.Scale);
+			ImGui.SameLine(0, 10);
+			bool local = mode == ImGuizmoMode.Local;
+			if (EditorGui.IconButton(local ? "Local" : "World", local ? Icon.Local : Icon.World, false,
+				local ? "Local: the gizmo along the object's own axes (click for World)" : "World: the gizmo along the world's axes (click for Local)"))
 			{
-				mode = mode == ImGuizmoMode.Local ? ImGuizmoMode.World : ImGuizmoMode.Local;
+				mode = local ? ImGuizmoMode.World : ImGuizmoMode.Local;
 			}
 
-			ImGui.SameLine();
+			ImGui.SameLine(0, 10);
 			bool alwaysRefresh = AlwaysRefresh;
 			if (EditorGui.Checkbox("Always Refresh", ref alwaysRefresh))
 			{
@@ -577,30 +617,32 @@ namespace LELEngine.Editor
 
 			ImGui.SameLine();
 			ImGui.TextDisabled($"   speed {flySpeed:0.#} m/s");
-			ImGui.SetCursorPosY(ImGui.GetCursorPosY() + 2);
+
+			// At the right end, where the row has room (a narrow window puts it after the rest).
+			ImGui.SameLine();
+			float width = ImGui.GetFrameHeight() * 1.5f;
+			float right = ImGui.GetCursorPosX() + ImGui.GetContentRegionAvail().X - width - 4;
+			if (right > ImGui.GetCursorPosX())
+			{
+				ImGui.SetCursorPosX(right);
+			}
+
+			bool maximized = Maximized;
+			if (EditorGui.IconButton(maximized ? "minimize" : "maximize", maximized ? Icon.Minimize : Icon.Maximize, false,
+				maximized ? "Minimize: back to the layout" : "Maximize: the Scene window fills the editor"))
+			{
+				Maximized = !maximized;
+			}
+
+			ImGui.PopStyleVar();
+			ImGui.SetCursorPosY(ImGui.GetCursorPosY() + 1);
 		}
 
-		private void ToolButton(string tooltip, string label, ImGuizmoOperation target)
+		private void ToolButton(string id, Icon icon, string tooltip, ImGuizmoOperation target)
 		{
-			bool active = operation == target;
-			if (active)
-			{
-				ImGui.PushStyleColor(ImGuiCol.Button, ImGui.GetStyle().Colors[(int)ImGuiCol.ButtonActive]);
-			}
-
-			if (EditorGui.Button(label))
+			if (EditorGui.IconButton(id, icon, operation == target, tooltip))
 			{
 				operation = target;
-			}
-
-			if (active)
-			{
-				ImGui.PopStyleColor();
-			}
-
-			if (ImGui.IsItemHovered())
-			{
-				ImGui.SetTooltip(tooltip);
 			}
 		}
 

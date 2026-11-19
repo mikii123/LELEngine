@@ -79,7 +79,8 @@ namespace LELEngine.Editor.Automation
 			"  add-component <object> <Type>\n" +
 			"  scene open <path> | scene save | scene new\n" +
 			"  play | stop | pause | step | undo | redo\n" +
-			"  refresh                                read changed asset files now\n" +
+			"  refresh                                import changed files now, also those the watchers have not reported yet\n" +
+			"                                         (every command first imports what changed since the last one)\n" +
 			"  console [N] [--errors] [--clear]       the last N (30) messages\n" +
 			"  wait <frames> | wait idle [seconds]    idle: scripts built, assets refreshed, loads done\n" +
 			"  exec <Namespace.Type.Method> [args]    a static method of the scripts / engine / editor (Task allowed)\n" +
@@ -115,9 +116,18 @@ namespace LELEngine.Editor.Automation
 				}
 			}
 
+			string command = words[0].ToLowerInvariant();
 			try
 			{
-				return await Run(words[0].ToLowerInvariant(), args, options);
+				// A command is the automation coming back to the editor: what changed on disk meanwhile imports first, once (an
+				// automated editor is never in front; EditorApplication.ImportsPaused). refresh imports itself; quit and help need
+				// nothing.
+				if (command is not ("quit" or "help" or "refresh"))
+				{
+					EditorAutomation.Editor.ImportPendingChanges();
+				}
+
+				return await Run(command, args, options);
 			}
 			catch (Exception e) when (e is ArgumentException or InvalidOperationException or FormatException or IOException or NotSupportedException or UnauthorizedAccessException)
 			{

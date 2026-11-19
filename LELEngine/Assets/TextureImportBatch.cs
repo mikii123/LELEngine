@@ -29,6 +29,12 @@ namespace LELEngine
 
 		private readonly List<PendingTextureImport> imports = new List<PendingTextureImport>();
 
+		/// <summary>
+		///     A batch whose textures read their files only when their texels are first asked for (<see cref="BeginOnDemand" />):
+		///     nothing starts on the thread pool and disposing it waits for nothing.
+		/// </summary>
+		private bool onDemand;
+
 		// What Begin returns inside an open batch: its textures belong to the outer batch.
 		private sealed class Joined : IDisposable
 		{
@@ -51,6 +57,23 @@ namespace LELEngine
 			}
 
 			current = new TextureImportBatch();
+			return current;
+		}
+
+		/// <summary>
+		///     Opens a batch (or joins the open one) whose textures get their size from the file's header and their texels only
+		///     when something asks for them (the GL handle, the CPU pixels): loads that only look at objects and their references
+		///     (Force Reserialize All Assets) read no image. A later load that meets such a texture imports it with its own
+		///     batch (<see cref="TextureAssets" />).
+		/// </summary>
+		public static IDisposable BeginOnDemand()
+		{
+			if (current != null)
+			{
+				return Joined.Instance;
+			}
+
+			current = new TextureImportBatch { onDemand = true };
 			return current;
 		}
 
@@ -88,9 +111,26 @@ namespace LELEngine
 		/// </summary>
 		internal PendingTextureImport Defer(Texture2D texture, string assetPath, Func<Action<Texture2D>> work)
 		{
-			var import = new PendingTextureImport(texture, assetPath, Task.Run(work));
-			imports.Add(import);
+			var import = new PendingTextureImport(texture, assetPath, work);
+			if (!onDemand)
+			{
+				import.Start();
+				imports.Add(import);
+			}
+
 			return import;
+		}
+
+		/// <summary>
+		///     A texture an on-demand batch left unread, met again by this load: it imports on the thread pool with the
+		///     batch's others (and the batch waits for it) instead of on the thread that first draws it.
+		/// </summary>
+		internal void Adopt(PendingTextureImport import)
+		{
+			if (!onDemand && import.Start())
+			{
+				imports.Add(import);
+			}
 		}
 
 		#endregion
@@ -103,15 +143,17 @@ namespace LELEngine
 
 		private readonly Texture2D texture;
 		private readonly string assetPath;
-		private readonly Task<Action<Texture2D>> work;
+		private readonly Func<Action<Texture2D>> work;
 		private readonly object sync = new object();
+		private Task<Action<Texture2D>> running;
 		private bool completed;
 
 		#endregion
 
 		#region Constructors
 
-		public PendingTextureImport(Texture2D texture, string assetPath, Task<Action<Texture2D>> work)
+		/// <param name="work">Reads and decodes the file; returns what fills the texture. Runs once <see cref="Start" /> is called, else in <see cref="Complete" />.</param>
+		public PendingTextureImport(Texture2D texture, string assetPath, Func<Action<Texture2D>> work)
 		{
 			this.texture = texture;
 			this.assetPath = assetPath;
@@ -121,6 +163,21 @@ namespace LELEngine
 		#endregion
 
 		#region PublicMethods
+
+		/// <summary>Starts the work on the thread pool; false when it runs already or the texture was filled.</summary>
+		public bool Start()
+		{
+			lock (sync)
+			{
+				if (running != null || completed)
+				{
+					return false;
+				}
+
+				running = Task.Run(work);
+				return true;
+			}
+		}
 
 		/// <summary>
 		///     Waits for the import and fills the texture, once, on whichever thread asks first (the others wait for it). A
@@ -144,7 +201,8 @@ namespace LELEngine
 				Action<Texture2D> fill;
 				try
 				{
-					fill = work.GetAwaiter().GetResult();
+					// Never started (an on-demand batch's texture): the file is read here, on the thread asking for it.
+					fill = running != null ? running.GetAwaiter().GetResult() : work();
 				}
 				catch (Exception e)
 				{

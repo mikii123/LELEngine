@@ -187,7 +187,8 @@ namespace LELEngine.Editor
 			}
 
 			DateTime stamp = File.GetLastWriteTimeUtc(absolute);
-			if (previews.TryGetValue(prefab.AssetPath, out PrefabPreview preview) && preview.Stamp == stamp)
+			// A file changed while the editor is in the background is read when it comes back, as every other change on disk.
+			if (previews.TryGetValue(prefab.AssetPath, out PrefabPreview preview) && (preview.Stamp == stamp || EditorApplication.Instance is { ImportsPaused: true }))
 			{
 				return preview;
 			}

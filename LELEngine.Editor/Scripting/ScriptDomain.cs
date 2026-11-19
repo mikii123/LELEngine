@@ -46,6 +46,15 @@ namespace LELEngine.Editor
 
 		/// <summary>No build running or waiting (sources changed, a requested build) and no reload waiting for play mode to end.</summary>
 		public bool IsIdle => buildTask == null && !sourcesChanged && pendingReload == null;
+
+		/// <summary>A build running or a reload waiting for play mode to end (scripts only changed on disk do not count).</summary>
+		public bool HasWorkInFlight => buildTask != null || pendingReload != null;
+
+		/// <summary>
+		///     Scripts changed (or a build was asked for) and no build runs yet: it starts with the next <see cref="Update" /> that
+		///     may start builds (the editor in front, <see cref="EditorApplication.ImportsPaused" />).
+		/// </summary>
+		public bool WaitsForBuild => sourcesChanged && buildTask == null;
 		public string StatusText { get; private set; } = "";
 		public Assembly GameAssembly { get; private set; }
 
@@ -79,8 +88,18 @@ namespace LELEngine.Editor
 		private string buildTestSources;
 		private bool buildIncludesEditor;
 
+		// Every script, tests included, as the last build started (or as they were loaded at the start without one): scripts
+		// that give another stamp changed since, and that build is old (BuildIsOld).
+		private string startedSources;
+
+		// Scripts changed while the running build compiles: its result will not load.
+		private bool buildOld;
+
 		// The next build compiles the game scripts even when they are current ("Rebuild Scripts").
 		private bool fullBuildRequested;
+
+		// A build was asked for (RequestBuild): it starts even when the scripts are those of the last build.
+		private bool buildRequested;
 		private BuildResult pendingReload;
 		private GameLoadContext context;
 		private TestLoadContext testContext;
@@ -166,6 +185,7 @@ namespace LELEngine.Editor
 				return true;
 			}
 
+			startedSources = SourceStamp(project, true);
 			LoadBuiltAssemblies();
 			return false;
 		}
@@ -388,9 +408,34 @@ namespace LELEngine.Editor
 		}
 
 		/// <summary>Called every frame on the main thread: starts debounced builds, applies finished ones.</summary>
-		public void Update()
+		/// <param name="startBuilds">
+		///     False while the editor is not in front: changed scripts wait for it to come back (one build for all of them).
+		/// </param>
+		/// <remarks>
+		///     Scripts changed while a build runs make it old: nothing of it loads, in front or not, and the next build compiles
+		///     every change, so the scripts reload once (2026-11-19, the user's correction: one file changed, a build started,
+		///     more files changed during it, and that first build reloaded for nothing before the next). It is not stopped: a
+		///     killed `dotnet build` goes on in MSBuild's reused nodes and the compiler server, which wrote its old assembly into
+		///     obj/ up to 5.8 s after the kill (measured), under the next build. The next build then compiles even where MSBuild
+		///     would not (<see cref="StartBuild" />).
+		/// </remarks>
+		public void Update(bool startBuilds = true)
 		{
-			if (sourcesChanged && buildTask == null && Time.timeD - changedAt > 0.3)
+			if (buildTask != null && !buildTask.IsCompleted && sourcesChanged && !buildOld && !buildRequested && Time.timeD - changedAt > 0.3)
+			{
+				if (BuildIsOld())
+				{
+					buildOld = true;
+					StatusText = "Scripts changed while compiling: compiling again after this build";
+				}
+				else
+				{
+					// The watcher's late word about a file the build has already.
+					sourcesChanged = false;
+				}
+			}
+
+			if (startBuilds && sourcesChanged && buildTask == null && Time.timeD - changedAt > 0.3)
 			{
 				sourcesChanged = false;
 				StartBuild();
@@ -399,8 +444,25 @@ namespace LELEngine.Editor
 			if (buildTask != null && buildTask.IsCompleted)
 			{
 				BuildResult result = buildTask.IsFaulted ? Failed(buildTask.Exception) : buildTask.Result;
+				bool old = buildOld || sourcesChanged && BuildIsOld();
 				buildTask = null;
-				OnBuildFinished(result);
+				buildOld = false;
+				if (old)
+				{
+					// The scripts on disk are newer than what it compiled: the next build (at once in front) loads them.
+					sourcesChanged = true;
+					StatusText = "Scripts changed while compiling";
+					Debug.Log("[Scripts] Scripts changed while they compiled: that build is dropped, the next one compiles every change");
+				}
+				else
+				{
+					if (sourcesChanged && !buildRequested)
+					{
+						sourcesChanged = false;
+					}
+
+					OnBuildFinished(result);
+				}
 			}
 
 			// Script changes made while playing (or while tests run) apply when play mode (the test run) ends.
@@ -426,8 +488,31 @@ namespace LELEngine.Editor
 		public void RequestBuild(bool full = true)
 		{
 			fullBuildRequested |= full;
+			buildRequested = true;
 			changedAt = double.MinValue;
 			sourcesChanged = true;
+		}
+
+		/// <summary>
+		///     Starts the build changed scripts wait for now, without the moment the watcher gives them (an import asked for: the
+		///     automation, the refresh menu item).
+		/// </summary>
+		/// <param name="checkFiles">
+		///     Compares the scripts on disk with the last build's too: a file written a moment ago, before the watcher told,
+		///     builds as well.
+		/// </param>
+		public void BuildChangedNow(bool checkFiles = false)
+		{
+			if (checkFiles && buildTask == null && !sourcesChanged && startedSources != null && SourceStamp(project, true) != startedSources)
+			{
+				sourcesChanged = true;
+			}
+
+			if (WaitsForBuild)
+			{
+				sourcesChanged = false;
+				StartBuild();
+			}
 		}
 
 		/// <summary>
@@ -476,6 +561,47 @@ namespace LELEngine.Editor
 			sourcesChanged = true;
 		}
 
+		/// <summary>The scripts changed since the running (or last) build started: what it compiles is not what is on disk.</summary>
+		private bool BuildIsOld()
+		{
+			return SourceStamp(project, true) != startedSources;
+		}
+
+		/// <summary>
+		///     Scripts changed since the last build started while none is newer than an assembly compiled into obj/: written
+		///     during that build (its compile ended after them) or put back with an older date. MSBuild compares dates only and
+		///     would skip the compile, so the old code would load as the new one.
+		/// </summary>
+		private bool CompiledLooksNewer(string stamp)
+		{
+			if (startedSources == null || stamp == startedSources)
+			{
+				return false;
+			}
+
+			DateTime compiled = DateTime.MinValue;
+			foreach (string dll in ScriptBuilder.IntermediateAssemblies(projectFile, "Debug"))
+			{
+				DateTime time = File.GetLastWriteTimeUtc(dll);
+				compiled = time > compiled ? time : compiled;
+			}
+
+			if (compiled == DateTime.MinValue)
+			{
+				return false;
+			}
+
+			foreach (string script in Directory.EnumerateFiles(project.AssetsPath, "*.cs", SearchOption.AllDirectories))
+			{
+				if (File.GetLastWriteTimeUtc(script) > compiled)
+				{
+					return false;
+				}
+			}
+
+			return true;
+		}
+
 		private void StartBuild()
 		{
 			// Clear on Recompile clears the other messages: the previous build's diagnostics stay until this build
@@ -492,11 +618,32 @@ namespace LELEngine.Editor
 			HasTests = testScripts;
 			// The game's assemblies are loaded and built from the scripts as they are: only the tests changed.
 			bool testsOnly = !fullBuildRequested && !HasErrors && assemblyBytes != null && IsAssemblyCurrent(project, editorScripts);
+			bool full = fullBuildRequested;
 			fullBuildRequested = false;
+			buildRequested = false;
 			StatusText = testsOnly ? "Compiling tests..." : "Compiling scripts...";
 			// The scripts as the build starts: an edit made while it runs is newer than what it compiles.
 			buildSources = SourceStamp(project);
-			buildTestSources = testScripts ? SourceStamp(project, true) : null;
+			string stamp = SourceStamp(project, true);
+			// Rebuild Scripts compiles everything; scripts that look older than the compiled assemblies compile too (no
+			// build runs now, so nothing writes obj/ any more).
+			if (full || CompiledLooksNewer(stamp))
+			{
+				foreach (string dll in ScriptBuilder.IntermediateAssemblies(file, "Debug"))
+				{
+					try
+					{
+						File.Delete(dll);
+					}
+					catch (IOException e)
+					{
+						Debug.LogWarning("[Scripts] Cannot delete " + dll + " to compile the scripts anew: " + e.Message);
+					}
+				}
+			}
+
+			startedSources = stamp;
+			buildTestSources = testScripts ? stamp : null;
 			buildIncludesEditor = editorScripts;
 			buildTask = Task.Run(() =>
 			{

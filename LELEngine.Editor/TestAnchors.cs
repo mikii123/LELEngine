@@ -510,7 +510,10 @@ namespace LELEngine.Editor
 		/// <summary>Id of the top-level window being drawn (a docked panel's own; child windows give their root's).</summary>
 		internal static uint CurrentWindowId()
 		{
-			ImGuiWindowPtr window = ImGuiP.GetCurrentWindow();
+			// Read from the context, not ImGuiP.GetCurrentWindow(): that marks the window as written to (WriteAccessed), after
+			// which ImGui no longer takes the last item for the title bar / tab that Begin left there, so IsItemHovered and the
+			// context menus of tabs (BeginPopupContextItem after Begin) never saw the mouse once an element was recorded.
+			ImGuiWindowPtr window = ImGui.GetCurrentContext().CurrentWindow;
 			if (window.IsNull)
 			{
 				return 0;
