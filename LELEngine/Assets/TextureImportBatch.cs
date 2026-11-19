@@ -199,6 +199,8 @@ namespace LELEngine
 				}
 
 				Action<Texture2D> fill;
+				long started = FrameProfiler.Timestamp;
+				bool here = running == null;
 				try
 				{
 					// Never started (an on-demand batch's texture): the file is read here, on the thread asking for it.
@@ -212,6 +214,7 @@ namespace LELEngine
 				}
 
 				fill(texture);
+				FrameProfiler.EventSince(started, "texture import", assetPath, here ? "read and decoded on the thread that asked for it" : "waited for its worker thread, texels taken");
 			}
 		}
 

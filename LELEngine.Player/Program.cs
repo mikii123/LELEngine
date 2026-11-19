@@ -329,13 +329,18 @@ namespace LELEngine.Player
 			return (long)(runtimeStartupMs + clockMs);
 		}
 
-		/// <summary>Testing aid: screenshot=folder screenshotframe=N writes frame N, exitframe=N closes the game.</summary>
+		/// <summary>
+		///     Testing aid: screenshot=folder screenshotframe=N writes frame N, exitframe=N closes the game,
+		///     exec=Namespace.Type.Method calls a static method of the game's scripts (no parameters) once, in the game
+		///     loop's first frame: a scripted scenario of a built game (it may add a component that drives the rest).
+		/// </summary>
 		private static void InstallTestHooks(string[] args)
 		{
 			string screenshotFolder = GetValue(args, "screenshot");
 			int screenshotFrame = int.TryParse(GetValue(args, "screenshotframe"), out int s) ? s : 120;
 			int exitFrame = int.TryParse(GetValue(args, "exitframe"), out int e) ? e : 0;
-			if (screenshotFolder == null && exitFrame <= 0)
+			string exec = GetValue(args, "exec");
+			if (screenshotFolder == null && exitFrame <= 0 && exec == null)
 			{
 				return;
 			}
@@ -344,6 +349,11 @@ namespace LELEngine.Player
 			Game.Mono.UpdateFrame += _ =>
 			{
 				frame++;
+				if (exec != null && frame == 1)
+				{
+					Execute(exec);
+				}
+
 				if (screenshotFolder != null && frame == screenshotFrame)
 				{
 					Game.Renderer?.FrameDumper.Start(screenshotFolder, 1);
@@ -354,6 +364,43 @@ namespace LELEngine.Player
 					Game.Mono.Close();
 				}
 			};
+		}
+
+		// exec=Namespace.Type.Method: a static method without parameters, in any loaded assembly (the game's scripts).
+		private static void Execute(string name)
+		{
+			int dot = name.LastIndexOf('.');
+			if (dot <= 0)
+			{
+				Log("exec=" + name + ": expected Namespace.Type.Method");
+				return;
+			}
+
+			string typeName = name.Substring(0, dot);
+			string methodName = name.Substring(dot + 1);
+			foreach (System.Reflection.Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
+			{
+				Type type = assembly.GetType(typeName, false);
+				System.Reflection.MethodInfo method = type?.GetMethod(methodName, System.Reflection.BindingFlags.Static | System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic, Type.EmptyTypes);
+				if (method == null)
+				{
+					continue;
+				}
+
+				try
+				{
+					Log("exec " + name);
+					method.Invoke(null, null);
+				}
+				catch (Exception e)
+				{
+					Debug.LogException(e.InnerException ?? e);
+				}
+
+				return;
+			}
+
+			Log("exec=" + name + ": no such static method without parameters");
 		}
 
 		/// <summary>

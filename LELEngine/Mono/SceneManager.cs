@@ -552,6 +552,66 @@ namespace LELEngine
 					program.StartBuild();
 				}
 			}
+
+			// The effect graphs' programs too (generated: three and more per particle system), for as long as starting
+			// them costs nothing: a driver that only queues a compile takes them all at once and compiles them together;
+			// one that compiles inside the call (AMD: ~20 ms a program, 6 s for 25 graphs with nothing cached) leaves the
+			// rest to their own preparation steps, so a background load keeps its frames (and its progress) meanwhile.
+			long deadline = Stopwatch.GetTimestamp() + Stopwatch.Frequency * EffectStartBudgetMs / 1000;
+			bool effects = false;
+			foreach (object asset in assets)
+			{
+				if (!(asset is VFX.VfxGraph graph) || !GraphicsThread.HasContext)
+				{
+					continue;
+				}
+
+				if (!effects)
+				{
+					effects = true;
+					_ = VFX.VfxRuntime.FrameKernel;
+					_ = VFX.VfxRuntime.Sort;
+				}
+
+				if (Stopwatch.GetTimestamp() >= deadline)
+				{
+					break;
+				}
+
+				try
+				{
+					VFX.VfxRuntime.StartPrograms(graph);
+				}
+				catch (Exception e)
+				{
+					Debug.LogWarning($"[SceneManager] Cannot compile {graph.AssetPath ?? graph.name}: {e.Message}");
+				}
+			}
+		}
+
+		// Milliseconds StartShaderBuilds may spend starting effect graphs' programs before it leaves the rest to their steps.
+		private const int EffectStartBudgetMs = 40;
+
+		/// <summary>
+		///     The GPU work of the assets a load recorded (<see cref="AssetLoadScope.Assets" />), all of it now, on the thread
+		///     that holds the GL context: the shader programs' builds start together, then every asset is prepared (programs
+		///     built, textures and meshes uploaded, effect graphs compiled). For hosts that read a scene themselves (the
+		///     editor's play mode); scenes and resources this class loads are prepared by their loads.
+		///     <paramref name="gpuDriven" />: the instanced programs too (null: as the game's renderer draws).
+		/// </summary>
+		public static void PrepareAssets(IReadOnlyList<object> assets, bool? gpuDriven = null)
+		{
+			if (assets == null || !GraphicsThread.HasContext)
+			{
+				return;
+			}
+
+			bool instanced = gpuDriven ?? IsGpuDriven();
+			StartShaderBuilds(assets);
+			foreach (object asset in assets)
+			{
+				PrepareAsset(asset, instanced);
+			}
 		}
 
 		/// <summary>The GPU work of one asset of a scene or resource being prepared (main thread).</summary>
@@ -590,6 +650,10 @@ namespace LELEngine
 					case UIElements.FontAsset font:
 						// The glyphs the loading thread rasterized.
 						font.UploadPages();
+						break;
+					case VFX.VfxGraph graph:
+						// Its programs (compiled at the first simulated frame of its first effect otherwise).
+						VFX.VfxRuntime.Prepare(graph);
 						break;
 				}
 			}

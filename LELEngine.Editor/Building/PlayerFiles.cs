@@ -41,7 +41,7 @@ namespace LELEngine.Editor
 				if (!selfContainedRuntimeRead)
 				{
 					selfContainedRuntime = IsPlayer(SelfContainedFolder)
-						? ReadRuntimeIdentifier(SelfContainedFolder) ?? RuntimeInformation.RuntimeIdentifier
+						? RuntimeIdentifierOf(SelfContainedFolder) ?? RuntimeInformation.RuntimeIdentifier
 						: SourceProject != null ? RuntimeInformation.RuntimeIdentifier : null;
 					selfContainedRuntimeRead = true;
 				}
@@ -191,8 +191,8 @@ namespace LELEngine.Editor
 			}
 		}
 
-		/// <summary>The platform a published player is for: the runtime target of its deps file (".NETCoreApp,Version=v10.0/win-x64").</summary>
-		private static string ReadRuntimeIdentifier(string folder)
+		/// <summary>The platform a published player is for: the runtime target of its deps file (".NETCoreApp,Version=v10.0/win-x64"), null for a portable one.</summary>
+		public static string RuntimeIdentifierOf(string folder)
 		{
 			try
 			{

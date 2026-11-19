@@ -45,6 +45,24 @@ namespace LELEngine.Rendering.DistanceField
 	}
 
 	/// <summary>
+	///     Mesh distance fields kept between runs: an atlas asks it for a mesh's field before building it by brute force
+	///     and hands it every field it built (<see cref="DistanceFieldAtlas.Store" />). The editor keeps them in the
+	///     project's Library (the cache game builds bake their fields into), so a field is computed once, not in every
+	///     session; players get their fields baked next to the models and need none.
+	/// </summary>
+	public interface IDistanceFieldStore
+	{
+		/// <summary>
+		///     The stored field of a mesh at a shape (<see cref="DistanceFieldAtlas.ShapeKey" />) with <paramref name="size" />
+		///     texels, or null. Called on the GL thread inside a frame: a lookup and one small file at most.
+		/// </summary>
+		BakedDistanceField Load(Mesh mesh, Vector3i shapeKey, Vector3i size);
+
+		/// <summary>A field was built for the mesh (GL thread; the store writes it where it likes).</summary>
+		void Save(Mesh mesh, BakedDistanceField field);
+	}
+
+	/// <summary>
 	///     Builds and stores mesh distance fields in one R16F 3D texture (slabs stacked along Z), one field per mesh and
 	///     shape (<see cref="ShapeKey" />: uniform scales share it). Fields are built on the GPU by brute force over the
 	///     mesh triangles; the sign comes from the generalized winding number, which only needs consistently oriented
@@ -90,11 +108,33 @@ namespace LELEngine.Rendering.DistanceField
 
 		public Vector3 TexelCount => new Vector3(AtlasXY, AtlasXY, Depth);
 
+		/// <summary>Fields kept between runs (null: none; see <see cref="IDistanceFieldStore" />). Set by the host.</summary>
+		public static IDistanceFieldStore Store { get; set; }
+
+		/// <summary>
+		///     A field built here is read back and kept with its mesh, and given to the <see cref="Store" /> (the renderers'
+		///     atlases). Off for an atlas whose owner reads the fields itself (the build's baker).
+		/// </summary>
+		public bool KeepsFields { get; set; } = true;
+
 		#endregion
 
 		#region PrivateFields
 
 		private const int GrowLimit = 4096;
+
+		// A built field on its way back from the GPU: copied into a buffer when it was built, taken out of it once the
+		// GPU got there (BeginFrame looks), so no frame waits for the build to finish.
+		private struct Readback
+		{
+			public Mesh Mesh;
+			public Vector3i Key;
+			public Vector3i Size;
+			public int Buffer;
+			public IntPtr Sync;
+		}
+
+		private readonly List<Readback> readbacks = new List<Readback>();
 
 		private readonly Dictionary<(Mesh, Vector3i), MeshDistanceField> fields = new Dictionary<(Mesh, Vector3i), MeshDistanceField>();
 
@@ -171,10 +211,17 @@ namespace LELEngine.Rendering.DistanceField
 			return uniform < float.MaxValue ? uniform : 0f;
 		}
 
-		/// <summary>Starts a frame: fields requested from now on count as used on it (unused ones may be freed for room).</summary>
+		/// <summary>
+		///     Starts a frame: fields requested from now on count as used on it (unused ones may be freed for room), and the
+		///     fields built in earlier frames that the GPU has finished are taken over (kept with their meshes, stored).
+		/// </summary>
 		public void BeginFrame(int frameIndex)
 		{
 			frame = frameIndex;
+			if (readbacks.Count > 0)
+			{
+				CollectReadbacks(false);
+			}
 		}
 
 		/// <summary>Marks a field the caller keeps using as used this frame.</summary>
@@ -258,6 +305,14 @@ namespace LELEngine.Rendering.DistanceField
 
 		public void Delete()
 		{
+			// The fields still on their way are dropped (their meshes build or load them again when needed).
+			foreach (Readback readback in readbacks)
+			{
+				GL.DeleteSync(readback.Sync);
+				GL.DeleteBuffer(readback.Buffer);
+			}
+
+			readbacks.Clear();
 			if (Texture != 0)
 			{
 				GL.DeleteTexture(Texture);
@@ -329,7 +384,30 @@ namespace LELEngine.Rendering.DistanceField
 
 			// A field baked by the game build or kept by an earlier build: an upload instead of the brute-force build
 			// (seconds for big meshes).
+			long started = FrameProfiler.Timestamp;
+			string meshName = (mesh.AssetPath ?? "") + "#" + (mesh.SubAssetName ?? mesh.name);
 			ushort[] baked = FindBaked(mesh, key, size);
+			if (baked == null && KeepsFields && Store != null)
+			{
+				// Built in an earlier run (the editor's cache): kept with the mesh from now on, like a build's baked field.
+				BakedDistanceField stored = null;
+				try
+				{
+					stored = Store.Load(mesh, key, size);
+				}
+				catch (Exception e)
+				{
+					Debug.LogWarning($"[SDF] The stored distance field of {meshName} could not be read ({e.Message}); it is built.");
+				}
+
+				if (stored != null && stored.Size == size && stored.Voxels != null && stored.Voxels.Length == size.X * size.Y * size.Z)
+				{
+					stored.ShapeKey = key;
+					(mesh.BakedDistanceFields ??= new List<BakedDistanceField>()).Add(stored);
+					baked = stored.Voxels;
+				}
+			}
+
 			if (baked != null)
 			{
 				GL.BindTexture(TextureTarget.Texture3D, Texture);
@@ -337,14 +415,27 @@ namespace LELEngine.Rendering.DistanceField
 				GL.TexSubImage3D(TextureTarget.Texture3D, 0, 0, 0, field.AtlasZ, size.X, size.Y, size.Z, PixelFormat.Red, PixelType.HalfFloat, baked);
 				GL.PixelStore(PixelStoreParameter.UnpackAlignment, 4);
 				GL.BindTexture(TextureTarget.Texture3D, 0);
+				// Only with the hitch profiler on (its text is not built otherwise).
+				if (started != 0)
+				{
+					FrameProfiler.EventSince(started, "distance field", meshName, $"baked or kept field uploaded ({size.X}x{size.Y}x{size.Z})");
+				}
 				return field;
 			}
 
 			UploadTriangles(mesh, shape);
 			Dispatch(field);
-			KeepOnMesh(mesh, key, field);
+			if (KeepsFields)
+			{
+				KeepOnMesh(mesh, key, field);
+			}
 
 			Console.WriteLine($"[SDF] Built {size.X}x{size.Y}x{size.Z} field ({mesh.TriangleCount} triangles) at atlas slice {field.AtlasZ}");
+			// Only with the hitch profiler on (its text is not built otherwise).
+			if (started != 0)
+			{
+				FrameProfiler.EventSince(started, "distance field", meshName, $"BUILT on the GPU: {size.X}x{size.Y}x{size.Z} texels x {mesh.TriangleCount} triangles (the build queued, its texels read back in a later frame)");
+			}
 			return field;
 		}
 
@@ -494,7 +585,10 @@ namespace LELEngine.Rendering.DistanceField
 
 		/// <summary>
 		///     A field built here is kept with the mesh (read back, GL 4.5): the next atlas that needs it (another view's
-		///     renderer, the atlas after a scene switch, this one after freeing it) uploads it instead of building it again.
+		///     renderer, the atlas after a scene switch, this one after freeing it) uploads it instead of building it again,
+		///     and the <see cref="Store" /> keeps it for the next run. The texels are copied into a buffer on the GPU, behind
+		///     the build, and taken out of it in a later frame, once the GPU has done both (<see cref="CollectReadbacks" />):
+		///     reading them here made the frame wait for the build, 40 to 60 ms a field with the GPU busy.
 		/// </summary>
 		private void KeepOnMesh(Mesh mesh, Vector3i key, MeshDistanceField field)
 		{
@@ -503,11 +597,59 @@ namespace LELEngine.Rendering.DistanceField
 				return;
 			}
 
-			var voxels = new ushort[field.Size.X * field.Size.Y * field.Size.Z];
+			int bytes = field.Size.X * field.Size.Y * field.Size.Z * 2;
+			int buffer = GL.GenBuffer();
+			GL.BindBuffer(BufferTarget.PixelPackBuffer, buffer);
+			GL.BufferData(BufferTarget.PixelPackBuffer, bytes, IntPtr.Zero, BufferUsageHint.StreamRead);
 			GL.PixelStore(PixelStoreParameter.PackAlignment, 2);
-			GL.GetTextureSubImage(Texture, 0, 0, 0, field.AtlasZ, field.Size.X, field.Size.Y, field.Size.Z, PixelFormat.Red, PixelType.HalfFloat, voxels.Length * 2, voxels);
+			// With a pack buffer bound the "pixels" pointer is an offset into it.
+			GL.GetTextureSubImage(Texture, 0, 0, 0, field.AtlasZ, field.Size.X, field.Size.Y, field.Size.Z, PixelFormat.Red, PixelType.HalfFloat, bytes, IntPtr.Zero);
 			GL.PixelStore(PixelStoreParameter.PackAlignment, 4);
-			(mesh.BakedDistanceFields ??= new List<BakedDistanceField>()).Add(new BakedDistanceField { ShapeKey = key, Size = field.Size, Voxels = voxels });
+			GL.BindBuffer(BufferTarget.PixelPackBuffer, 0);
+			IntPtr sync = GL.FenceSync(SyncCondition.SyncGpuCommandsComplete, WaitSyncFlags.None);
+			readbacks.Add(new Readback { Mesh = mesh, Key = key, Size = field.Size, Buffer = buffer, Sync = sync });
+		}
+
+		/// <summary>
+		///     Takes over the built fields the GPU has finished (<paramref name="wait" />: all of them, waiting for it): each is
+		///     kept with its mesh and handed to the <see cref="Store" />.
+		/// </summary>
+		private void CollectReadbacks(bool wait)
+		{
+			for (int i = 0; i < readbacks.Count; i++)
+			{
+				Readback readback = readbacks[i];
+				WaitSyncStatus status = GL.ClientWaitSync(readback.Sync, wait ? ClientWaitSyncFlags.SyncFlushCommandsBit : ClientWaitSyncFlags.None, wait ? 1_000_000_000L : 0L);
+				if (status == WaitSyncStatus.TimeoutExpired)
+				{
+					// In build order: the later ones are not done either.
+					break;
+				}
+
+				GL.DeleteSync(readback.Sync);
+				if (status != WaitSyncStatus.WaitFailed)
+				{
+					var voxels = new ushort[readback.Size.X * readback.Size.Y * readback.Size.Z];
+					GL.GetNamedBufferSubData(readback.Buffer, IntPtr.Zero, voxels.Length * 2, voxels);
+					var kept = new BakedDistanceField { ShapeKey = readback.Key, Size = readback.Size, Voxels = voxels };
+					if (FindBaked(readback.Mesh, readback.Key, readback.Size) == null)
+					{
+						(readback.Mesh.BakedDistanceFields ??= new List<BakedDistanceField>()).Add(kept);
+					}
+
+					try
+					{
+						Store?.Save(readback.Mesh, kept);
+					}
+					catch (Exception e)
+					{
+						Debug.LogWarning($"[SDF] The distance field of {readback.Mesh.name} could not be stored ({e.Message}).");
+					}
+				}
+
+				GL.DeleteBuffer(readback.Buffer);
+				readbacks.RemoveAt(i--);
+			}
 		}
 
 		private static ushort[] FindBaked(Mesh mesh, Vector3i key, Vector3i size)

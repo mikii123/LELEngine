@@ -193,9 +193,13 @@ namespace LELEngine.Editor
 			string selfContainedValue = options.Get("selfcontained");
 			bool selfContained = options.Has("selfcontained") ? selfContainedValue == null || string.Equals(selfContainedValue, "true", StringComparison.OrdinalIgnoreCase) : project.BuildSelfContained;
 			bool validSelfContained = selfContainedValue == null || string.Equals(selfContainedValue, "true", StringComparison.OrdinalIgnoreCase) || string.Equals(selfContainedValue, "false", StringComparison.OrdinalIgnoreCase);
-			if (string.IsNullOrEmpty(output) || (!release && !string.Equals(configuration, "Debug", StringComparison.OrdinalIgnoreCase)) || !validSelfContained)
+			// -readyToRun alone means true; without it the project's build setting.
+			string readyToRunValue = options.Get("readytorun");
+			bool readyToRun = options.Has("readytorun") ? readyToRunValue == null || string.Equals(readyToRunValue, "true", StringComparison.OrdinalIgnoreCase) : project.BuildReadyToRun;
+			bool validReadyToRun = readyToRunValue == null || string.Equals(readyToRunValue, "true", StringComparison.OrdinalIgnoreCase) || string.Equals(readyToRunValue, "false", StringComparison.OrdinalIgnoreCase);
+			if (string.IsNullOrEmpty(output) || (!release && !string.Equals(configuration, "Debug", StringComparison.OrdinalIgnoreCase)) || !validSelfContained || !validReadyToRun)
 			{
-				Debug.LogError("[Batch] Usage: -build <folder> [-buildConfig Release|Debug] [-selfContained [true|false]]");
+				Debug.LogError("[Batch] Usage: -build <folder> [-buildConfig Release|Debug] [-selfContained [true|false]] [-readyToRun [true|false]]");
 				return false;
 			}
 
@@ -205,7 +209,7 @@ namespace LELEngine.Editor
 				EnsureGraphics();
 			}
 
-			var settings = new BuildSettings { OutputFolder = Path.GetFullPath(output), Release = release, SelfContained = selfContained, StartScene = project.StartScene, Scenes = new List<string>(project.BuildScenes) };
+			var settings = new BuildSettings { OutputFolder = Path.GetFullPath(output), Release = release, SelfContained = selfContained, ReadyToRun = readyToRun, StartScene = project.StartScene, Scenes = new List<string>(project.BuildScenes) };
 			return GameBuilder.Build(project, settings, line => Console.WriteLine((line.StartsWith("Error", StringComparison.Ordinal) ? "[Error] " : "") + "[Build] " + line));
 		}
 

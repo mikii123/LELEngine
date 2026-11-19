@@ -181,7 +181,8 @@ namespace LELEngine
 
 			long start = Stopwatch.GetTimestamp();
 			RequestState next;
-			using (AssetLoadScope scope = AssetLoadScope.Begin(true))
+			// A prefab asked for is read through (what its instances will use loads and is prepared with the request).
+			using (AssetLoadScope scope = AssetLoadScope.Begin(true, true))
 			{
 				try
 				{

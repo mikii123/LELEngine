@@ -765,6 +765,7 @@ namespace LELEngine
 			// A scene load records what it uses (AssetLoadScope).
 			AssetLoadScope scope = AssetLoadScope.Current;
 			long start = scope?.BeginLoad() ?? 0;
+			long profiled = FrameProfiler.Timestamp;
 			object result = null;
 			try
 			{
@@ -785,6 +786,12 @@ namespace LELEngine
 			finally
 			{
 				scope?.EndLoad(start, type, result);
+				// The hitch profiler: a load that took time (what it loaded in turn included), and whether a scene or
+				// resource load asked for it or the running game did (a first use in the middle of a frame).
+				if (profiled != 0 && System.Diagnostics.Stopwatch.GetTimestamp() - profiled >= System.Diagnostics.Stopwatch.Frequency / 5000)
+				{
+					FrameProfiler.EventSince(profiled, "asset", assetPath + (subAsset != null ? "#" + subAsset : ""), type.Name + (scope != null ? ", inside a load" : ", asked for by the running game"));
+				}
 			}
 		}
 

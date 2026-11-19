@@ -37,6 +37,12 @@ namespace LELEngine.Editor
 		/// <summary>Builds ship the .NET runtime (the self-contained player): they run on machines without .NET installed.</summary>
 		public bool BuildSelfContained { get; set; }
 
+		/// <summary>
+		///     Builds ship their code compiled ahead of time (ReadyToRun): the player published that way, the game's scripts
+		///     compiled for it. A build that cannot (no such player, no compiler) fails.
+		/// </summary>
+		public bool BuildReadyToRun { get; set; }
+
 		/// <summary>Where builds go: relative to the project folder, or absolute (empty: Build/&lt;project&gt;).</summary>
 		public string BuildOutputFolder { get; set; }
 
@@ -174,6 +180,7 @@ namespace LELEngine.Editor
 			BuildScenes = read.BuildScenes ?? new List<string>();
 			RunInBackground = read.RunInBackground;
 			BuildSelfContained = read.BuildSelfContained;
+			BuildReadyToRun = read.BuildReadyToRun;
 			BuildOutputFolder = read.BuildOutputFolder;
 			BuildRelease = read.BuildRelease;
 			return true;

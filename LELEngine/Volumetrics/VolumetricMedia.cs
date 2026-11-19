@@ -52,6 +52,14 @@ namespace LELEngine.Volumetrics
 		private static ComputeShader mipShader;
 		private static ComputeShader columnsShader;
 
+		/// <summary>Makes the media volume's programs (their builds start; see <see cref="VolumetricRuntime.StartPrograms" />).</summary>
+		internal static void StartPrograms()
+		{
+			shader ??= new ComputeShader("Engine/Volumetrics/VolumetricMedia.shader");
+			mipShader ??= new ComputeShader("Engine/Volumetrics/VolumetricMediaMip.shader");
+			columnsShader ??= new ComputeShader("Engine/Volumetrics/VolumetricMediaColumns.shader");
+		}
+
 		private readonly List<(VolumetricObjectBase volume, Vector3 min, Vector3 max)> clouds = new List<(VolumetricObjectBase, Vector3, Vector3)>();
 		private int texture;
 		private int sunTexture;

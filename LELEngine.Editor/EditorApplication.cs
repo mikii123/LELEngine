@@ -1076,6 +1076,9 @@ namespace LELEngine.Editor
 			// is read: its volumetric objects start reading their files as they are read.
 			LELEngine.Volumetrics.VolumeCache.Writable = true;
 			LELEngine.Volumetrics.VolumeCache.Folder = project.VolumeCachePath;
+			// The GI's mesh distance fields (Library/DistanceFieldCache, the cache builds bake into): read instead of built
+			// by brute force in every session, written when a view builds one.
+			LELEngine.Rendering.DistanceField.DistanceFieldAtlas.Store = new DistanceFieldBaker.Store(project);
 			yield return "Importing models";
 
 			ImportChangedModels(true);
@@ -1476,6 +1479,7 @@ namespace LELEngine.Editor
 			AssetThumbnails.CacheFolder = null;
 			LELEngine.Volumetrics.VolumeCache.Folder = null;
 			LELEngine.Volumetrics.VolumeCache.Clear();
+			LELEngine.Rendering.DistanceField.DistanceFieldAtlas.Store = null;
 			// Audio: the studio closes with the project, every bank and clip goes.
 			audioStudio?.Dispose();
 			audioStudio = null;
@@ -2108,15 +2112,31 @@ namespace LELEngine.Editor
 		{
 			// Nothing of the Timeline window's preview goes into the game's copy of the scene.
 			timelineWindow.EndPreview();
-			if (IsPlaying || Scene == null)
+			// In steps of their own (not inlined): this method's frame then holds nothing of the edit scene while the game's
+			// copy loads, which can take seconds, long enough for the script reload's leak check to look and find the old
+			// scene (and the old scripts with it) on this thread's stack.
+			if (!CanEnterPlayMode())
 			{
 				return;
+			}
+
+			ulong[] selected = LeaveEditScene();
+			StartPlayScene(selected);
+		}
+
+		/// <summary>Play may start now (else it waits for the scripts' build, or says why not).</summary>
+		[System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+		private bool CanEnterPlayMode()
+		{
+			if (IsPlaying || Scene == null)
+			{
+				return false;
 			}
 
 			if (reserializer != null)
 			{
 				Debug.LogWarning("[Editor] Play waits: Force Reserialize All Assets is running");
-				return;
+				return false;
 			}
 
 			// Scripts being compiled may not compile: play waits for their build and starts only from a good one
@@ -2124,23 +2144,30 @@ namespace LELEngine.Editor
 			if (Scripts != null && Scripts.IsCompiling)
 			{
 				playAfterCompile = true;
-				return;
+				return false;
 			}
 
 			playAfterCompile = false;
 			if (Scripts != null && Scripts.HasErrors)
 			{
 				Debug.LogError("[Editor] Fix the script compile errors before entering play mode.");
-				return;
+				return false;
 			}
 
 			if (Stage != null)
 			{
 				// Play mode plays the scene: prefab mode closes first.
 				LeaveAllStages(EnterPlayMode);
-				return;
+				return false;
 			}
 
+			return true;
+		}
+
+		/// <summary>The edit scene is kept as bytes and unloaded, the scripts reload; returns the selection (object ids).</summary>
+		[System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+		private ulong[] LeaveEditScene()
+		{
 			Edits.Commit();
 			if (EditorPreferences.Current.Console.ClearOnPlay)
 			{
@@ -2164,12 +2191,43 @@ namespace LELEngine.Editor
 
 			Selected = null;
 			SceneManager.UnloadAll(true);
+			// The views' caches of the scene's objects go now (the GI's, the clouds' targets per camera): the next frame
+			// would drop them, but the game's scene loads before a frame is drawn.
+			SceneView.InvalidateCaches();
+			GameView.InvalidateCaches();
 			if (reloadScriptsOnPlay && Scripts != null)
 			{
 				Scripts.ReloadNow();
 			}
 
-			Scene play = SceneSerializer.LoadFromBytes(playSnapshot);
+			return selected;
+		}
+
+		/// <summary>The game's copy of the scene is loaded, prepared and started.</summary>
+		[System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+		private void StartPlayScene(ulong[] selected)
+		{
+			// Loaded as the game loads a scene itself: the prefabs its objects reference are read through and what they will
+			// instantiate (bullets, effects, wrecks: their textures, meshes, programs) is prepared now, on worker threads
+			// where it can be, instead of in the frame of a play session's first shot or kill.
+			Scene play;
+			var playAssets = new List<object>();
+			long playLoad = System.Diagnostics.Stopwatch.GetTimestamp();
+			string playSummary;
+			using (AssetLoadScope scope = AssetLoadScope.Begin(false, true))
+			{
+				play = SceneSerializer.LoadFromBytes(playSnapshot);
+				playAssets.AddRange(scope.Assets);
+				playSummary = scope.Summary();
+			}
+
+			long playPrepare = System.Diagnostics.Stopwatch.GetTimestamp();
+			int compiledBefore = LELEngine.Shaders.ProgramBinaryCache.Saved;
+			SceneManager.PrepareAssets(playAssets, LELEngine.Rendering.GpuScene.IsSupported);
+			int compiled = LELEngine.Shaders.ProgramBinaryCache.Saved - compiledBefore;
+			Debug.Log($"[Editor] Play: the scene read in {System.Diagnostics.Stopwatch.GetElapsedTime(playLoad, playPrepare).TotalMilliseconds:F0} ms ({playSummary}), "
+				+ $"its {playAssets.Count} assets prepared in {System.Diagnostics.Stopwatch.GetElapsedTime(playPrepare).TotalMilliseconds:F0} ms"
+				+ (compiled > 0 ? $" ({compiled} shader programs compiled for the first time on this GPU driver: kept, the next play loads them)" : ""));
 			play.Path = playScenePath;
 			Time.ResetTime();
 			PlayState = PlayState.Playing;

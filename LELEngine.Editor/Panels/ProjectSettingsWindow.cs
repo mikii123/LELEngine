@@ -742,6 +742,20 @@ namespace LELEngine.Editor
 				: runtime != null ? "Includes the .NET runtime for " + runtime + "."
 				: "This editor has no self-contained player (published without a runtime identifier).");
 
+			bool readyToRun = project.BuildReadyToRun;
+			if (EditorGui.Checkbox("Compile Ahead Of Time (ReadyToRun)", ref readyToRun))
+			{
+				project.BuildReadyToRun = readyToRun;
+				changed = true;
+			}
+
+			if (ImGui.IsItemHovered())
+			{
+				ImGui.SetTooltip("The game's code is compiled when it is built, not method by method as it first runs (no stutter the first time\n" +
+					"something happens; larger assemblies). Needs a player published that way and the .NET SDK's crossgen compiler:\n" +
+					"a build that has neither fails. Off: the scripts compile as they run.");
+			}
+
 			bool runInBackground = project.RunInBackground;
 			if (EditorGui.Checkbox("Run In Background", ref runInBackground))
 			{
@@ -1078,7 +1092,7 @@ namespace LELEngine.Editor
 			editor.SaveProjectSettings();
 
 			string output = Path.GetFullPath(Path.Combine(project.RootPath, OutputFolderOf(project)));
-			var settings = new BuildSettings { OutputFolder = output, Release = project.BuildRelease, SelfContained = project.BuildSelfContained, StartScene = project.StartScene, Scenes = new List<string>(project.BuildScenes) };
+			var settings = new BuildSettings { OutputFolder = output, Release = project.BuildRelease, SelfContained = project.BuildSelfContained, ReadyToRun = project.BuildReadyToRun, StartScene = project.StartScene, Scenes = new List<string>(project.BuildScenes) };
 			lock (lines)
 			{
 				lines.Clear();

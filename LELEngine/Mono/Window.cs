@@ -169,13 +169,25 @@ namespace LELEngine
 			if (resizedSinceSwap)
 			{
 				resizedSinceSwap = false;
-				WaitForQueuedPresents();
+				// A wait for the GPU like the swap's (the hitch profiler counts both as waiting, not as the frame's work).
+				long queued = Stopwatch.GetTimestamp();
+				using (FrameProfiler.Begin("Wait for the frames queued before a resize (the GPU finishing them)"))
+				{
+					WaitForQueuedPresents();
+				}
+
+				FrameProfiler.AddWait(Stopwatch.GetTimestamp() - queued);
 			}
 
 			long before = Stopwatch.GetTimestamp();
-			SwapBuffers();
+			using (FrameProfiler.Begin("Swap (waits for the GPU and the display)"))
+			{
+				SwapBuffers();
+			}
+
 			long after = Stopwatch.GetTimestamp();
 			Time.swapMs = (after - before) * 1000.0 / Stopwatch.Frequency;
+			FrameProfiler.AddWait(after - before);
 			MarkPresented(after);
 		}
 

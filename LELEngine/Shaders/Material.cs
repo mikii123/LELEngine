@@ -237,6 +237,7 @@ namespace LELEngine.Shaders
 		{
 			string absolute = AssetDatabase.ToAbsolute(assetPath);
 			Material material = null;
+			long started = FrameProfiler.Timestamp;
 			try
 			{
 				byte[] data = File.ReadAllBytes(absolute);
@@ -261,6 +262,7 @@ namespace LELEngine.Shaders
 
 			material.AssetPath = assetPath;
 			material.name = Path.GetFileNameWithoutExtension(assetPath);
+			FrameProfiler.EventSince(started, "material load", assetPath, "file read with its shader and textures");
 			return material;
 		}
 

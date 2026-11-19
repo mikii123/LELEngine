@@ -120,6 +120,7 @@ namespace LELEngine
 				meshFileStamps.Note(assetPath);
 			}
 
+			long started = FrameProfiler.Timestamp;
 			ModelData data = LoadData(assetPath);
 			var model = new Model(assetPath, data);
 			AttachBakedDistanceFields(model, assetPath);
@@ -128,6 +129,11 @@ namespace LELEngine
 				models[assetPath] = model;
 			}
 
+			// Only with the hitch profiler on (its text is not built otherwise).
+			if (started != 0)
+			{
+				FrameProfiler.EventSince(started, "model load", assetPath, model.Meshes.Count + " meshes");
+			}
 			return model;
 		}
 

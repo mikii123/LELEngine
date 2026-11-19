@@ -33,6 +33,16 @@ namespace LELEngine.VFX
 
 		#endregion
 
+		#region InternalFields
+
+		/// <summary>
+		///     The programs whose builds were started and not looked at yet (name, program, what takes a failed one out of
+		///     the set); empty once <see cref="VfxRuntime" /> finished the set.
+		/// </summary>
+		internal readonly List<(string Name, ShaderProgram Program, Action Drop)> Started = new List<(string, ShaderProgram, Action)>();
+
+		#endregion
+
 		#region PublicMethods
 
 		public void Dispose()
@@ -49,6 +59,7 @@ namespace LELEngine.VFX
 			}
 
 			Systems.Clear();
+			Started.Clear();
 		}
 
 		#endregion
@@ -328,6 +339,18 @@ namespace LELEngine.VFX
 		/// <summary>The programs of a graph at its current version, compiling when the version changed. Null when the graph does not compile.</summary>
 		public static VfxProgramSet GetPrograms(VfxGraph graph)
 		{
+			VfxProgramSet set = StartPrograms(graph);
+			Finish(graph, set);
+			return set;
+		}
+
+		/// <summary>
+		///     Compiles a graph to GLSL when its version changed and starts the builds of its programs without waiting for
+		///     them (<see cref="GetPrograms" /> does): a load starts every graph it brought, then prepares them, and the
+		///     driver compiles all their programs together instead of one after another.
+		/// </summary>
+		public static VfxProgramSet StartPrograms(VfxGraph graph)
+		{
 			VfxProgramSet set;
 			if (programs.TryGetValue(graph, out set) && set.GraphVersion == graph.Version)
 			{
@@ -335,16 +358,45 @@ namespace LELEngine.VFX
 			}
 
 			set?.Dispose();
+			long started = FrameProfiler.Timestamp;
 			set = Build(graph);
+			// Only with the hitch profiler on (its text is not built otherwise).
+			if (started != 0)
+			{
+				FrameProfiler.EventSince(started, "vfx graph", graph.AssetPath ?? graph.name ?? "graph", $"compiled to GLSL, the builds of its {set.Started.Count} programs started");
+			}
 			programs[graph] = set;
 			return set;
+		}
+
+		/// <summary>
+		///     A graph a load brought (a scene's or a preloaded prefab's effect): its programs are compiled now, with the
+		///     runtime's own kernels, on the thread that holds the GL context, instead of in the frame its first effect
+		///     simulates (on the 780M 200 to 730 ms a graph with nothing compiled yet, 30 to 50 ms from the binary cache).
+		/// </summary>
+		public static void Prepare(VfxGraph graph)
+		{
+			if (graph == null || !GraphicsThread.HasContext)
+			{
+				return;
+			}
+
+			FrameKernel.Program.EnsureBuilt();
+			Sort.Program.EnsureBuilt();
+			GetPrograms(graph);
 		}
 
 		/// <summary>The last compiled programs of a graph without recompiling (editor status), or null.</summary>
 		public static VfxProgramSet PeekPrograms(VfxGraph graph)
 		{
 			VfxProgramSet set;
-			return programs.TryGetValue(graph, out set) ? set : null;
+			if (!programs.TryGetValue(graph, out set))
+			{
+				return null;
+			}
+
+			Finish(graph, set);
+			return set;
 		}
 
 		/// <summary>Drops the compiled programs of a graph (recompiled on next use).</summary>
@@ -1616,19 +1668,20 @@ namespace LELEngine.VFX
 				return set;
 			}
 
+			// Every program's build is started here (from the binary cache, or handed to the driver); Finish waits for them.
 			foreach (VfxSystemDescription system in set.Compiled.Systems)
 			{
 				var programsOfSystem = new VfxProgramSet.SystemPrograms();
-				programsOfSystem.Initialize = Compute(set, system.Name + ".Initialize", system.InitSource);
-				programsOfSystem.Update = Compute(set, system.Name + ".Update", system.UpdateSource);
+				programsOfSystem.Initialize = Compute(set, system.Name + ".Initialize", system.InitSource, () => programsOfSystem.Initialize = null);
+				programsOfSystem.Update = Compute(set, system.Name + ".Update", system.UpdateSource, () => programsOfSystem.Update = null);
 				foreach (VfxOutputDescription output in system.Outputs)
 				{
 					var outputPrograms = new VfxProgramSet.OutputPrograms();
 					string name = system.Name + "." + output.Name;
-					outputPrograms.Draw = Graphics(set, name, output.VertexSource, output.FragmentSource, Array.Empty<string>());
+					outputPrograms.Draw = Graphics(set, name, output.VertexSource, output.FragmentSource, Array.Empty<string>(), () => outputPrograms.Draw = null);
 					if (output.CastShadows)
 					{
-						outputPrograms.Shadow = Graphics(set, name + ".Shadow", output.VertexSource, output.FragmentSource, new[] { "VFX_SHADOW_PASS" });
+						outputPrograms.Shadow = Graphics(set, name + ".Shadow", output.VertexSource, output.FragmentSource, new[] { "VFX_SHADOW_PASS" }, () => outputPrograms.Shadow = null);
 					}
 
 					programsOfSystem.Outputs.Add(outputPrograms);
@@ -1638,6 +1691,34 @@ namespace LELEngine.VFX
 			}
 
 			return set;
+		}
+
+		// Waits for the set's started programs: one that does not link is reported and taken out of the set.
+		private static void Finish(VfxGraph graph, VfxProgramSet set)
+		{
+			if (set.Started.Count == 0 || !GraphicsThread.HasContext)
+			{
+				return;
+			}
+
+			long started = FrameProfiler.Timestamp;
+			int count = set.Started.Count;
+			foreach ((string name, ShaderProgram program, Action drop) in set.Started)
+			{
+				if (!program.IsLinked)
+				{
+					set.ShaderErrors.Add(name + ": " + program.BuildLog);
+					program.Delete();
+					drop();
+				}
+			}
+
+			set.Started.Clear();
+			// Only with the hitch profiler on (its text is not built otherwise).
+			if (started != 0)
+			{
+				FrameProfiler.EventSince(started, "vfx graph", graph.AssetPath ?? graph.name ?? "graph", $"waited for its {count} programs (first effect of this graph, or the load that brought it)");
+			}
 		}
 
 		private static void WriteSources(VfxGraph graph, VfxCompiledGraph compiled)
@@ -1675,33 +1756,21 @@ namespace LELEngine.VFX
 			}
 		}
 
-		private static ComputeShader Compute(VfxProgramSet set, string name, string source)
+		private static ComputeShader Compute(VfxProgramSet set, string name, string source, Action drop)
 		{
-			ShaderProgram program = ShaderProgram.FromSources("VFX/" + name, new[] { new KeyValuePair<ShaderType, string>(ShaderType.ComputeShader, source) });
-			if (!program.IsLinked)
-			{
-				set.ShaderErrors.Add(name + ": " + program.BuildLog);
-				program.Delete();
-				return null;
-			}
-
+			ShaderProgram program = ShaderProgram.StartFromSources("VFX/" + name, new[] { new KeyValuePair<ShaderType, string>(ShaderType.ComputeShader, source) });
+			set.Started.Add((name, program, drop));
 			return ComputeShader.FromProgram(program);
 		}
 
-		private static ShaderProgram Graphics(VfxProgramSet set, string name, string vertex, string fragment, string[] defines)
+		private static ShaderProgram Graphics(VfxProgramSet set, string name, string vertex, string fragment, string[] defines, Action drop)
 		{
-			ShaderProgram program = ShaderProgram.FromSources("VFX/" + name, new[]
+			ShaderProgram program = ShaderProgram.StartFromSources("VFX/" + name, new[]
 			{
 				new KeyValuePair<ShaderType, string>(ShaderType.VertexShader, vertex),
 				new KeyValuePair<ShaderType, string>(ShaderType.FragmentShader, fragment)
 			}, defines);
-			if (!program.IsLinked)
-			{
-				set.ShaderErrors.Add(name + ": " + program.BuildLog);
-				program.Delete();
-				return null;
-			}
-
+			set.Started.Add((name, program, drop));
 			return program;
 		}
 

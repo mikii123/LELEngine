@@ -218,14 +218,31 @@ namespace LELEngine.Serialization
 		/// </summary>
 		public static Scene LoadFromBytes(byte[] data, string fallbackName = null, Action<float> progress = null)
 		{
+			long started = FrameProfiler.Timestamp;
+			Scene scene;
+			long joined;
 			using (TextureImportBatch.Begin())
 			{
-				return Documents.IsJson(data) ? LoadFromJson(data, fallbackName, progress) : LoadFromBinary(data, fallbackName, progress);
+				scene = Documents.IsJson(data) ? LoadFromJson(data, fallbackName, progress) : LoadFromBinary(data, fallbackName, progress);
+				joined = FrameProfiler.Timestamp;
 			}
+
+			if (FrameProfiler.Enabled)
+			{
+				FrameProfiler.EventSince(joined, "scene read", scene.Name, "waited for the textures decoding on worker threads");
+				// Only with the hitch profiler on (its text is not built otherwise).
+				if (started != 0)
+				{
+					FrameProfiler.EventSince(started, "scene read", scene.Name, $"whole document: {data.Length / 1024} KB, {scene.GameObjects.Count} objects");
+				}
+			}
+
+			return scene;
 		}
 
 		private static Scene LoadFromBinary(byte[] data, string fallbackName, Action<float> progress)
 		{
+			long started = FrameProfiler.Timestamp;
 			var context = new SerializationContext();
 			var reader = new BinaryDocumentReader(data, context);
 			string name = reader.String(reader.Body.ReadInt32());
@@ -239,11 +256,13 @@ namespace LELEngine.Serialization
 			var pending = new List<PendingRead>();
 			var instancePending = new List<PendingRead>();
 			int count = reader.Body.ReadInt32();
+			int instances = 0;
 			for (int i = 0; i < count; i++)
 			{
 				byte kind = reader.Version >= 3 ? reader.Body.ReadByte() : BinaryDocument.EntryObject;
 				if (kind == BinaryDocument.EntryPrefabInstance)
 				{
+					instances++;
 					LoadInstance(ReadInstanceRecord(reader), scene, context, instancePending, false, null, null);
 				}
 				else
@@ -252,9 +271,21 @@ namespace LELEngine.Serialization
 				}
 			}
 
+			// Only with the hitch profiler on (its text is not built otherwise).
+			if (started != 0)
+			{
+				FrameProfiler.EventSince(started, "scene read", scene.Name, $"binary: header, then {count - instances} objects and {instances} prefab instances created");
+			}
+			long fieldsFrom = FrameProfiler.Timestamp;
+
 			// Pass 2 and 3: field values (references to any object of the file resolve now), then derived state.
 			pending.AddRange(instancePending);
 			ReadPendingFields(pending, progress);
+			// Only with the hitch profiler on (its text is not built otherwise).
+			if (fieldsFrom != 0)
+			{
+				FrameProfiler.EventSince(fieldsFrom, "scene read", scene.Name, $"binary: fields of {pending.Count} components read (the assets they use loaded), OnAfterDeserialize");
+			}
 			return scene;
 		}
 
@@ -484,6 +515,7 @@ namespace LELEngine.Serialization
 
 		private static Scene LoadFromJson(byte[] data, string fallbackName, Action<float> progress)
 		{
+			long started = FrameProfiler.Timestamp;
 			var context = new SerializationContext();
 			using (var reader = new JsonDocumentReader(data, context))
 			{
@@ -491,6 +523,8 @@ namespace LELEngine.Serialization
 				string name = GetString(root, "name");
 				var scene = new Scene(name ?? fallbackName ?? "Untitled");
 				context.Scene = scene;
+				FrameProfiler.EventSince(started, "scene read", scene.Name, "JSON: text parsed");
+				long objectsFrom = FrameProfiler.Timestamp;
 
 				JsonElement value;
 				if (root.TryGetProperty("settings", out value))
@@ -501,6 +535,8 @@ namespace LELEngine.Serialization
 
 				var pending = new List<PendingJsonComponent>();
 				var instancePending = new List<PendingRead>();
+				int instances = 0;
+				int plain = 0;
 				if (root.TryGetProperty("gameObjects", out value) && value.ValueKind == JsonValueKind.Array)
 				{
 					foreach (JsonElement entry in value.EnumerateArray())
@@ -512,15 +548,23 @@ namespace LELEngine.Serialization
 
 						if (IsInstanceEntry(entry))
 						{
+							instances++;
 							LoadInstance(ReadInstanceRecord(reader, entry), scene, context, instancePending, false, null, null);
 						}
 						else
 						{
+							plain++;
 							ReadObject(reader, entry, scene, pending);
 						}
 					}
 				}
 
+				// Only with the hitch profiler on (its text is not built otherwise).
+				if (objectsFrom != 0)
+				{
+					FrameProfiler.EventSince(objectsFrom, "scene read", scene.Name, $"JSON: {plain} objects and {instances} prefab instances created (their prefabs read)");
+				}
+				long fieldsFrom = FrameProfiler.Timestamp;
 				int total = pending.Count + instancePending.Count;
 				for (int i = 0; i < pending.Count; i++)
 				{
@@ -530,7 +574,19 @@ namespace LELEngine.Serialization
 					progress?.Invoke((i + 1f) / total);
 				}
 
+				// Only with the hitch profiler on (its text is not built otherwise).
+				if (fieldsFrom != 0)
+				{
+					FrameProfiler.EventSince(fieldsFrom, "scene read", scene.Name, $"JSON: fields of {pending.Count} components read (the assets they use loaded)");
+				}
+				long instanceFieldsFrom = FrameProfiler.Timestamp;
 				ReadFields(instancePending, i => progress?.Invoke((pending.Count + i + 1f) / total));
+				// Only with the hitch profiler on (its text is not built otherwise).
+				if (instanceFieldsFrom != 0)
+				{
+					FrameProfiler.EventSince(instanceFieldsFrom, "scene read", scene.Name, $"fields of the prefab instances' {instancePending.Count} components read (the assets they use loaded)");
+				}
+				long callbacksFrom = FrameProfiler.Timestamp;
 				foreach (PendingJsonComponent item in pending)
 				{
 					CallAfterDeserialize(item.Component);
@@ -541,6 +597,7 @@ namespace LELEngine.Serialization
 					CallAfterDeserialize(item.Component);
 				}
 
+				FrameProfiler.EventSince(callbacksFrom, "scene read", scene.Name, "OnAfterDeserialize callbacks");
 				return scene;
 			}
 		}

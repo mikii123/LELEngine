@@ -159,15 +159,25 @@ namespace LELEngine.Serialization
 			return result;
 		}
 
-		private static DocumentComponent ReadDocumentComponent(JsonDocumentReader reader, JsonElement component)
+		private static DocumentComponent ReadDocumentComponent(JsonDocumentReader reader, JsonElement component, bool added = false)
 		{
-			return new DocumentComponent
+			var result = new DocumentComponent
 			{
 				Id = GetUInt64(component, "$id"),
 				Enabled = GetBool(component, "$enabled", true),
 				GameObject = GetUInt64(component, "gameObject"),
 				Data = reader.ReadGenericObject(component)
 			};
+
+			if (added)
+			{
+				// "gameObject" is the record's key for the object the component was added to, not a field of the component:
+				// the generic read takes every key, and written back as a field (after the key, as a rounded double) it
+				// replaced the id, so a document rewritten as JSON lost its added components.
+				result.Data?.Properties.RemoveAll(property => property.Name == "gameObject");
+			}
+
+			return result;
 		}
 
 		internal static PrefabInstanceRecord ReadInstanceRecord(JsonDocumentReader reader, JsonElement entry)
@@ -223,7 +233,7 @@ namespace LELEngine.Serialization
 				{
 					if (component.ValueKind == JsonValueKind.Object)
 					{
-						record.AddedComponents.Add(ReadDocumentComponent(reader, component));
+						record.AddedComponents.Add(ReadDocumentComponent(reader, component, true));
 					}
 				}
 			}

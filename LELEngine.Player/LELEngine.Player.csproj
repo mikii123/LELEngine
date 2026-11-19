@@ -12,6 +12,15 @@
     <RollForward>Major</RollForward>
   </PropertyGroup>
 
+  <!-- A player published for a platform (the self-contained player; the framework-dependent one of an editor published
+       with a runtime identifier) carries its code compiled ahead of time (ReadyToRun): the engine's and the libraries'
+       methods no longer compile the first time each runs, which in a game is the frame something first happens in (a
+       scene's first frame, a first shot). Publishing needs the SDK's crossgen package for it (restored from NuGet once).
+       The player `dotnet build` copies next to a development editor is not published: its code compiles as it runs. -->
+  <PropertyGroup Condition="'$(RuntimeIdentifier)' != ''">
+    <PublishReadyToRun>true</PublishReadyToRun>
+  </PropertyGroup>
+
   <ItemGroup>
     <ProjectReference Include="..\LELEngine\LELEngine.csproj" />
   </ItemGroup>

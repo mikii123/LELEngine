@@ -92,6 +92,17 @@
     <Message Importance="high" Text="Player ($(PlayerDescription)) -> $(PlayerPublishDir)" />
     <Exec Condition="'$(PublishSelfContainedPlayer)' == 'true'" Command="&quot;$(PlayerDotnet)&quot; $(PlayerArguments) -r $(PlayerRuntimeIdentifier) --self-contained true -o &quot;$(PlayerSelfContainedPublishDir)&quot;" />
     <Message Condition="'$(PublishSelfContainedPlayer)' == 'true'" Importance="high" Text="Player (self-contained, $(PlayerRuntimeIdentifier)) -> $(PlayerSelfContainedPublishDir)" />
+    <!-- The SDK's crossgen compiler goes with the editor (Crossgen/<version>/tools): the Build settings' Compile Ahead
+         Of Time compiles a game's scripts with it (ReadyToRunCompiler). The player's publish above has just restored it
+         into the NuGet packages (PublishReadyToRun); a published editor must not depend on that folder still being
+         there (a CI image keeps it in a cache mount, not in the editor's layer). -->
+    <ItemGroup Condition="'$(PlayerRuntimeIdentifier)' != ''">
+      <CrossgenFiles Include="$(NuGetPackageRoot)microsoft.netcore.app.crossgen2.$(NETCoreSdkRuntimeIdentifier)\**\tools\**\*" />
+    </ItemGroup>
+    <RemoveDir Directories="$(PublishDir)Crossgen" />
+    <Error Condition="'$(PlayerRuntimeIdentifier)' != '' And '@(CrossgenFiles)' == ''" Text="The crossgen compiler (microsoft.netcore.app.crossgen2.$(NETCoreSdkRuntimeIdentifier)) is not in $(NuGetPackageRoot) after the player was published: the editor could not compile games ahead of time." />
+    <Copy SourceFiles="@(CrossgenFiles)" DestinationFiles="@(CrossgenFiles->'$(PublishDir)Crossgen\%(RecursiveDir)%(Filename)%(Extension)')" SkipUnchangedFiles="true" />
+    <Message Condition="'$(PlayerRuntimeIdentifier)' != ''" Importance="high" Text="Crossgen compiler ($(NETCoreSdkRuntimeIdentifier)) -> $(PublishDir)Crossgen" />
   </Target>
 
   <!-- Console twin of the launcher: the same app host (it starts LELEngine.Editor.dll) with the PE subsystem set to

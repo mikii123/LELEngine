@@ -271,13 +271,19 @@ namespace LELEngine.Rendering
 		{
 			if (!isTargetRenderer)
 			{
-				RenderTargetCameras(camera, renderers, behaviours, queue);
+				using (FrameProfiler.Begin("Cameras with a target texture"))
+				{
+					RenderTargetCameras(camera, renderers, behaviours, queue);
+				}
 			}
 
 			// A changed super sampling factor resizes the scene now.
 			ResizeScene(false);
-			Lighting.BeginFrame(Settings);
-			LightBuffer.Update();
+			using (FrameProfiler.Begin("Lighting.BeginFrame, LightBuffer"))
+			{
+				Lighting.BeginFrame(Settings);
+				LightBuffer.Update();
+			}
 			if (camera == null)
 			{
 				// Nothing to render from; present the clear color and the screen-space passes (UI).
@@ -331,8 +337,17 @@ namespace LELEngine.Rendering
 			}
 
 			// Levels of detail for this frame, seen from the lighting camera: every camera of the stack draws them.
-			bool lods = LODGroup.Select(stack[lightingIndex]);
-			Partition(renderers, lods, lightingIndex);
+			bool lods;
+			using (FrameProfiler.Begin("LODGroup.Select"))
+			{
+				lods = LODGroup.Select(stack[lightingIndex]);
+			}
+
+			using (FrameProfiler.Begin("Partition (renderer lists)"))
+			{
+				Partition(renderers, lods, lightingIndex);
+			}
+
 			RenderContext lightingContext = CreateContext(lightingIndex, lightingIndex, behaviours, queue);
 
 			Profiler.BeginFrame();
@@ -343,7 +358,10 @@ namespace LELEngine.Rendering
 			// camera of the stack culls the same tables with its own frustum and layers).
 			if (Settings.GpuDriven && GpuScene.IsSupported)
 			{
-				GpuScene.Build(stack.Count == 1 ? cameraLists[0].Opaque : stackOpaqueRenderers, Motion);
+				using (FrameProfiler.Begin("GpuScene.Build"))
+				{
+					GpuScene.Build(stack.Count == 1 ? cameraLists[0].Opaque : stackOpaqueRenderers, Motion);
+				}
 			}
 			else
 			{
@@ -384,6 +402,25 @@ namespace LELEngine.Rendering
 			RunScope(RenderPassScope.Final, lightingContext, executed);
 
 			Profiler.EndFrame();
+			if (FrameProfiler.Enabled && !isTargetRenderer)
+			{
+				// The hitch profiler's GPU columns: the passes' total and the heaviest one, as the timer queries have them now.
+				double total = 0;
+				string heaviest = null;
+				double heaviestMs = 0;
+				foreach (KeyValuePair<string, double> pass in Profiler.Results)
+				{
+					total += pass.Value;
+					if (pass.Value > heaviestMs)
+					{
+						heaviestMs = pass.Value;
+						heaviest = pass.Key;
+					}
+				}
+
+				FrameProfiler.NoteGpu(total, heaviest, heaviestMs);
+			}
+
 			if (PassStatistics && FrameIndex % 120 == 0)
 			{
 				// LEL_PASS_STATS=1: what each pass cost on the GPU (any host: the editor's views, a player), every 120th frame.
@@ -471,7 +508,11 @@ namespace LELEngine.Rendering
 		private int Execute(RenderPass pass, RenderContext context, string profileName, int executed)
 		{
 			Profiler.Begin(profileName);
-			pass.Execute(context);
+			using (FrameProfiler.Begin(profileName))
+			{
+				pass.Execute(context);
+			}
+
 			GLState.Reset();
 			Profiler.End();
 			executed++;

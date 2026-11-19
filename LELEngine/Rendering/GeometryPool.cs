@@ -94,7 +94,13 @@ namespace LELEngine.Rendering
 
 			if (mesh.PoolGeneration != generation)
 			{
+				long started = FrameProfiler.Timestamp;
 				Upload(mesh);
+				// Only with the hitch profiler on (its text is not built otherwise).
+				if (started != 0)
+				{
+					FrameProfiler.EventSince(started, "mesh upload", (mesh.AssetPath ?? "") + "#" + (mesh.SubAssetName ?? mesh.name), mesh.Vertices.Length + " vertices, " + mesh.TriangleCount + " triangles");
+				}
 			}
 
 			return mesh.PoolIndexCount > 0;

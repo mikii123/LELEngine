@@ -18,6 +18,12 @@ namespace LELEngine.Editor
 		/// <summary>With the .NET runtime (<see cref="PlayerFiles.SelfContainedFolder" />), else framework-dependent.</summary>
 		public bool SelfContained;
 
+		/// <summary>
+		///     The game ships compiled ahead of time (ReadyToRun): the player must be published that way and the scripts
+		///     are compiled for it; a build that cannot do either fails.
+		/// </summary>
+		public bool ReadyToRun;
+
 		public string StartScene;
 		public List<string> Scenes = new List<string>();
 	}
@@ -70,6 +76,18 @@ namespace LELEngine.Editor
 			if (playerSource == null)
 			{
 				return false;
+			}
+
+			// Compile Ahead Of Time: the player itself must be (it is when it was published for a platform), said before
+			// anything is built.
+			if (settings.ReadyToRun)
+			{
+				string playerError = ReadyToRunCompiler.CheckPlayer(playerSource);
+				if (playerError != null)
+				{
+					log("Error: " + playerError);
+					return false;
+				}
 			}
 
 			// 1. Scripts.
@@ -127,6 +145,20 @@ namespace LELEngine.Editor
 					}
 
 					Copy(file, Path.Combine(output, name));
+				}
+
+				// 3b. Compile Ahead Of Time (the build setting): the scripts are compiled for the player's platform, as the
+				//     player's own assemblies are (ReadyToRun); their methods would otherwise compile as they first run,
+				//     most of them in the frame a scene starts. The setting is a promise: a build that cannot keep it fails.
+				if (settings.ReadyToRun)
+				{
+					string scriptsAssembly = ProjectGenerator.AssemblyName + ".dll";
+					string error = ReadyToRunCompiler.Compile(Path.Combine(scriptsOutput, scriptsAssembly), Path.Combine(output, scriptsAssembly), output, playerSource, log);
+					if (error != null)
+					{
+						log("Error: " + error + " Nothing more was written (Compile Ahead Of Time is on in the build settings).");
+						return false;
+					}
 				}
 			}
 
@@ -279,7 +311,7 @@ namespace LELEngine.Editor
 			// 4b. The GI's mesh distance fields at the scales the scenes draw the meshes ("model.ext.sdf" next to each
 			//     model): baked here when this thread has the GL context (batch mode), by the editor before the build
 			//     otherwise; cached in Library.
-			DistanceFieldBaker.Result fields = DistanceFieldBaker.Collect(project, buildScenes, log);
+			DistanceFieldBaker.Result fields = DistanceFieldBaker.Collect(project, buildScenes, log, dependencies.Included);
 			foreach (KeyValuePair<string, List<KeyValuePair<string, BakedDistanceField>>> model in fields.Models)
 			{
 				DistanceFieldFile.Write(Path.Combine(data, model.Key) + DistanceFieldFile.Extension, null, model.Value);

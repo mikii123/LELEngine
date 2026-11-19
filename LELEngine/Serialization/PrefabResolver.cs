@@ -105,6 +105,7 @@ namespace LELEngine.Serialization
 		private readonly object sync = new object();
 		private byte[] binary;
 		private Dictionary<ulong, (int typeId, int offset)> blocks;
+		private List<AssetReference> assetReferences;
 
 		#endregion
 
@@ -113,6 +114,33 @@ namespace LELEngine.Serialization
 		public PrefabObject FindObject(ulong id)
 		{
 			return ObjectsById.TryGetValue(id, out PrefabObject result) ? result : null;
+		}
+
+		/// <summary>
+		///     Every asset the prefab's components reference (each file and sub-asset once, nested values and collections
+		///     included): what an instance loads when its fields are read. Collected on first use.
+		/// </summary>
+		public IReadOnlyList<AssetReference> GetAssetReferences()
+		{
+			lock (sync)
+			{
+				if (assetReferences == null)
+				{
+					var found = new List<AssetReference>();
+					var seen = new HashSet<(string, string, string)>();
+					foreach (PrefabObject obj in Objects)
+					{
+						foreach (PrefabComponent component in obj.Components)
+						{
+							CollectAssetReferences(component.Data, found, seen, 0);
+						}
+					}
+
+					assetReferences = found;
+				}
+
+				return assetReferences;
+			}
 		}
 
 		public PrefabComponent FindComponent(ulong id)
@@ -130,6 +158,7 @@ namespace LELEngine.Serialization
 			{
 				if (binary == null)
 				{
+					long started = FrameProfiler.Timestamp;
 					var writer = new BinaryDocumentWriter(null) { Kind = BinaryDocument.KindObject };
 					var table = new Dictionary<ulong, (int, int)>();
 					foreach (PrefabObject obj in Objects)
@@ -148,6 +177,7 @@ namespace LELEngine.Serialization
 
 					binary = writer.ToArray();
 					blocks = table;
+					FrameProfiler.EventSince(started, "prefab", AssetPath, "instantiation data built (first instantiation)");
 				}
 
 				componentBlocks = blocks;
@@ -167,6 +197,51 @@ namespace LELEngine.Serialization
 			}
 
 			return false;
+		}
+
+		#endregion
+
+		#region PrivateMethods
+
+		private static void CollectAssetReferences(object value, List<AssetReference> found, HashSet<(string, string, string)> seen, int depth)
+		{
+			if (depth > SerializationUtility.MaxDepth + 8)
+			{
+				return;
+			}
+
+			switch (value)
+			{
+				case SerializedNode node:
+					foreach (SerializedProperty property in node.Properties)
+					{
+						CollectAssetReferences(property.Value, found, seen, depth + 1);
+					}
+
+					break;
+				case SerializedArray array when array.Bytes == null:
+					foreach (object item in array.Items)
+					{
+						CollectAssetReferences(item, found, seen, depth + 1);
+					}
+
+					break;
+				case SerializedDictionary dictionary:
+					foreach (KeyValuePair<object, object> entry in dictionary.Entries)
+					{
+						CollectAssetReferences(entry.Key, found, seen, depth + 1);
+						CollectAssetReferences(entry.Value, found, seen, depth + 1);
+					}
+
+					break;
+				case AssetReference reference when !reference.IsNull:
+					if (seen.Add((reference.Guid, reference.Guid == null ? reference.Path : null, reference.Name)))
+					{
+						found.Add(reference);
+					}
+
+					break;
+			}
 		}
 
 		#endregion
@@ -620,6 +695,7 @@ namespace LELEngine.Serialization
 				version = Version;
 			}
 
+			long started = FrameProfiler.Timestamp;
 			try
 			{
 				result = PrefabResolver.Resolve(path);
@@ -627,6 +703,12 @@ namespace LELEngine.Serialization
 			finally
 			{
 				resolving.Remove(path);
+			}
+
+			// Only with the hitch profiler on (its text is not built otherwise).
+			if (started != 0)
+			{
+				FrameProfiler.EventSince(started, "prefab", path, "file read and resolved (" + result.Objects.Count + " objects)");
 			}
 
 			lock (sync)

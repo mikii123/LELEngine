@@ -22,10 +22,17 @@ namespace LELEngine.Serialization
 		{
 			var context = new SerializationContext { Scene = scene };
 			ulong id = SceneIds.Next();
+			long started = FrameProfiler.Timestamp;
+			using FrameProfiler.Scope profiled = FrameProfiler.Begin("Prefab.Instantiate");
 			scene.SuspendActivation();
 			try
 			{
-				PrefabInstance instance = BuildInstance(asset, source, scene, context, null, id, id, parent, null, null);
+				PrefabInstance instance;
+				using (FrameProfiler.Begin("build objects, read fields"))
+				{
+					instance = BuildInstance(asset, source, scene, context, null, id, id, parent, null, null);
+				}
+
 				if (instance.Root != null)
 				{
 					place?.Invoke(instance.Root);
@@ -35,7 +42,19 @@ namespace LELEngine.Serialization
 			}
 			finally
 			{
-				scene.ResumeActivation();
+				using (FrameProfiler.Begin("activate (Awake, OnEnable)"))
+				{
+					scene.ResumeActivation();
+				}
+
+				if (FrameProfiler.Enabled)
+				{
+					double ms = (System.Diagnostics.Stopwatch.GetTimestamp() - started) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+					if (ms >= 0.5)
+					{
+						FrameProfiler.Event("instantiate", source.AssetPath, ms, source.Objects.Count + " objects");
+					}
+				}
 			}
 		}
 

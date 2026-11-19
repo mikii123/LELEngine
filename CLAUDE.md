@@ -24,7 +24,11 @@
   asks for it and again when `Player/` changed (`PlayerSelfContained.stamp`). Project setting `BuildSelfContained`
   (Project.json, Build tab "Self-contained", batch `-selfContained [true|false]`) picks the player (`PlayerFiles`);
   a build deletes the other player's files from the output first. `GameBuilder` renames the player's app host
-  (`LELEngine.Player.exe`, or `LELEngine.Player` for a Linux / macOS player) to the game's name.
+  (`LELEngine.Player.exe`, or `LELEngine.Player` for a Linux / macOS player) to the game's name. A player published
+  with a runtime identifier is compiled ahead of time (ReadyToRun, 2026-11-19: the publish restores the SDK's
+  crossgen package from NuGet once, and an editor's publish copies it to `Crossgen/` next to the editor); the project's
+  build setting Compile Ahead Of Time (`BuildReadyToRun`) compiles the game's scripts with it too and fails a build
+  that cannot ("First use at load, not in play").
 - The editor starts with the project chooser in its own window (`LauncherWindow`) unless the command line names a
   project (`project=`, `newproject=`, `-projectPath`): automated runs must pass one. File > Close Project hides the
   editor's window and shows the chooser (same GL context: engine caches stay valid). The editor window's place and
@@ -564,6 +568,150 @@
   (`ReleaseUnusedAssets`, off in the editor; `GeometryPool` reuses freed ranges).
 - Every load logs `[SceneManager] <path>: read N ms (textures N: N ms, meshes ..., per asset kind), GPU N ms in N
   frames, activated in N ms` (also `SceneLoadOperation.Summary`).
+- A load for the running game reads through the prefabs it meets (2026-11-19, next section): what the game will
+  instantiate later is loaded and prepared with the scene.
+
+## First use at load, not in play: prefabs read through, effects compiled, fields kept (2026-11-19)
+
+The user's report: destroying a ship stutters badly on a cold start, the Flight scene loads long; "fix every problem you
+find". Measured with the hitch profiler (section after this one) on a built game driven by a script (fly at three
+ships, fire, a missile salvo, kill; scratchpad `coldrun.ps1` / `report.ps1` of session e607714c). Nothing a scene's
+prefabs use was loaded with the scene: a `Prefab` field is a handle, its file and everything in it were read at the
+first `Instantiate`, on the main thread, one file after another, and its programs compiled where a frame first drew them.
+- What that cost (780M; cold = a new folder and title: no driver cache, no program binaries; warm = the second start):
+  the first shot 447 ms cold / 235 ms warm (bullet and muzzle prefabs, their textures, the muzzle's effect graph: 205 ms
+  to compile cold, 49 ms from binaries, and 153 ms of JIT warm, 378 of 840 methods the VFX compiler's), the first missile
+  294 / 86, the first hit 106 + 630 / 68 (one frame loads the prefab, the next compiles its graph), the first missile
+  explosion 119 + 835, a first kill of a hull 40-95 / 25-53 (the wreck prefab, its material and a 4096 x 4096 texture
+  read on the main thread). After the scene appeared: 1.9 s (every ship's model, materials and 42 textures loaded in
+  `Start`, 27 distance fields built), 1.6 s (the GPU doing those fields), 3.6 s and 0.9 s (the clouds' programs compiled
+  where they were first used: only cold; 142 + 133 ms warm). In the editor the same loads decode source images (a 4096
+  x 4096 PNG at a kill), which is where it "stutters so much"; the editor run of the script was dropped at the user's
+  word, the editor's play mode was checked without UI (below).
+- `Prefab.Preload()` (public): loads every asset the prefab's components reference (`ResolvedPrefab.GetAssetReferences`:
+  the generic data walked once, each file as its main asset type) and builds its instantiation data.
+  `AssetLoadScope.Begin(background, preloadPrefabs)`: a scope with `PreloadsPrefabs` calls it for every prefab it
+  records (`RecordDependencies`: fields of the scene's components, of ScriptableObjects, of other prefabs, at any
+  depth; `VfxGraph`s record their textures now too). On: `SceneLoadOperation.Read` (every `LoadScene` /
+  `LoadSceneAsync`, the player's start scene), `ResourceRequest` (`Resources.LoadAsync` of a prefab), the editor's play
+  mode. Off: the editor opening a scene to edit it (it would load every effect's textures for nothing). The loads run on
+  the loading thread inside the scene's `TextureImportBatch`, so the textures decode on worker threads.
+  The price: everything reachable loads with the scene (New Frontier's Flight: 141 textures, 64 models, 59 materials,
+  60 prefabs, 25 effect graphs, where 32 textures loaded before and the rest later). The same textures were uploaded
+  in a session before (717 megapixels then, 734 now): no more GPU memory, only earlier. A project that references its
+  whole item database from every scene loads it whole; an opt-out per field does not exist yet.
+- Prepared with the load (`SceneManager.PrepareAsset`, public `PrepareAssets(assets, gpuDriven)` for hosts that read a
+  scene themselves): an effect graph's programs (`VfxRuntime.Prepare`; `StartShaderBuilds` starts graphs for 40 ms at
+  most, then leaves the rest to their own steps: AMD compiles inside the submit, ~20 ms a program, and 25 graphs held one
+  frame of a background load for 6 s). `VfxRuntime.StartPrograms(graph)` / `GetPrograms` (which finishes) and
+  `ShaderProgram.StartFromSources` (a generated program built like a file program: started, then waited for by its first
+  use; same binary cache key as `FromSources`): a graph's programs are started together, then checked
+  (`VfxProgramSet.Started`).
+- The clouds' programs: `VolumetricRuntime.StartPrograms` when a first cloud is enabled (`Register`): every compute and
+  march program is made at once, so their builds run while the cloud's voxels are read, not in the frames it first draws.
+- Distance fields. The build's baker (`DistanceFieldBaker`) follows ScriptableObject assets now (a ship's model and
+  wreck named by its data asset: `Classify`, `CollectAssetReferences` with `DocumentReferences`), takes every prefab the
+  build ships (`GameBuilder` passes `dependencies.Included`) and asks for a mesh referenced without a name under its
+  first mesh's name; New Frontier: 64 fields baked where 26 were, the player builds none (27 before, 190-245 ms and
+  the GPU's seconds). The editor keeps them between sessions: `DistanceFieldAtlas.Store` (`IDistanceFieldStore`; the
+  editor's `DistanceFieldBaker.Store` over `Library/DistanceFieldCache`, the baker's own cache, with `stamps.txt` so a
+  model is hashed again only when its file or meta changed): an atlas asks it before building and hands it what it
+  built. A build at run time no longer waits for the GPU: `KeepOnMesh` copies the texels into a pixel buffer behind the
+  build and `BeginFrame` takes them when the fence signals (`CollectReadbacks`; the read made a frame wait 40-60 ms a
+  field with the GPU busy). `KeepsFields = false` on the baker's atlas.
+- Editor play mode: `EnterPlayMode` = `CanEnterPlayMode` / `LeaveEditScene` / `StartPlayScene` (not inlined: the first
+  two hold the edit scene, and with them on the stack while the game's copy loads for seconds the script reload's leak
+  check found the old scripts "on the stack of EnterPlayMode"; the views' caches are dropped before the reload for the
+  same reason). `StartPlayScene` reads the snapshot in a preloading scope and prepares its assets; the console says
+  `[Editor] Play: the scene read in N ms (...), its N assets prepared in N ms (N shader programs compiled for the first
+  time on this GPU driver...)`. Without UI on New Frontier: the first play of a session 4.3 s (2.0 s read, 109 textures
+  decoded on worker threads, 1.7 s prepared), the second 0.65 s, no field built (the store), scripts unloaded each time.
+  With no program binaries at all (a batch editor has no binary cache, the driver's own was empty) the first play took
+  31 s, 27 of them compiling: once per GPU driver in the GUI editor, where the binaries are kept.
+- Found on the way, a build-only bug: components added to prefab instances were lost in a built game whenever the scene
+  also held an editor script component. `EditorScriptComponents.Strip` rewrites such a document as JSON; the generic JSON
+  read took the added component's `"gameObject"` key as one of its fields too, written back after the key as a double
+  (the id is past 2^63), and the last duplicate won: object id 0, "has lost its GameObject in the prefab; left out"
+  (New Frontier's training dummies had no input and dropped no loot in builds). `ReadDocumentComponent(..., added)` drops
+  that property. Checked in the built scene's bytes (the id back in all 18 records) and the player's log.
+- Results (780M, a built game, the same script; the kill frames' work, the frames before them 11-14 ms):
+  first kill of three hulls 23 / 15 / 33 ms cold and 13-34 ms warm (40-95 / 25-53 before), no load in them; first shot
+  76-125 ms (50-77 of it JIT; 235-447 before), first hit and first missile explosion under 100 ms (up to 835). Flight
+  from the menu, warm: active 1.6 s after NEW GAME with the menu drawing (read 0.89 s on the loading thread, GPU 0.65 s
+  over 19 frames, activated in 0.24 s); as the start scene: read 0.82 s + GPU 0.63 s (0.67 + 0.23 before, when the rest
+  came later on the main thread). New files (a build just copied) cost ~10 ms each to open the first time (the virus
+  scanner): 3.6-4.0 s of reading then, which no code here changes.
+- Code compiled ahead of time (ReadyToRun, the user's go-ahead the same day: "Tak, włącz R2R"). What was left after the
+  above was the JIT: code that runs for the first time compiles in that frame (first shot 50-77 ms, the frame a scene
+  starts in ~260 ms, the menu's first frame 136 ms). `LELEngine.Player.csproj` sets `PublishReadyToRun` whenever it is
+  published with a runtime identifier: the self-contained player (a development editor's own publish, `PlayerFiles`,
+  and an editor's `dotnet publish`) and the framework-dependent player of an editor published with a RID; the SDK
+  restores `microsoft.netcore.app.crossgen2.<rid>` from NuGet for it (35 MB, once). LELEngine.dll 2.4 -> 6.9 MB,
+  OpenTK.Graphics 5.1 -> 9.6 MB. The game's scripts: `Building/ReadyToRunCompiler.cs` runs that package's
+  `crossgen2` on the woven Game.dll after it is copied into the build (`GameBuilder` step 3b:
+  input from `Library/PlayerScripts`, references = the build folder's managed assemblies, a response file; 1.1 s, 401
+  KB -> 1,136 KB; `[Build] Game.dll compiled ahead of time (ReadyToRun, win-x64)...`). Not compiled
+  ahead: the packages a game's scripts use, and the editor itself (its play mode compiles as it runs).
+  A build setting that is an error when it cannot be kept (the user, the same day: "I want this r2r to be a setting in
+  the build settings, and if it fails it is to be an error"): `ProjectInfo.BuildReadyToRun` (Project.json, default
+  off; Build tab "Compile Ahead Of Time (ReadyToRun)"; batch `-readyToRun [true|false]`) -> `BuildSettings.ReadyToRun`.
+  On: `ReadyToRunCompiler.CheckPlayer` before anything is built (the player has a runtime identifier, crossgen has a
+  target for it, the player's LELEngine.dll holds native code (the CLI header's managed native header), a compiler is
+  there, a framework-dependent player has .NET's assemblies of its platform to compile against: `PlayerSelfContained/`
+  of the same platform, else the editor's own runtime when it is of that platform), then `Compile` in any configuration
+  and for either player; each returns the error's text, the build logs "Error: ..." and fails (batch: exit 1). Off:
+  nothing is compiled or checked (the player's own assemblies are what they were published as). The compiler:
+  `<editor>/Crossgen/<version>/tools/` first (the editor's publish copies the package's tools there after the players
+  are published, and fails without them: a CI image keeps the NuGet folder in a cache mount, which a cached engine
+  layer must not depend on), then the NuGet packages folder (development editors); `crossgen2.exe`, `crossgen2` or
+  `crossgen2.dll` through `dotnet`. Checked on Windows (development editor, New Frontier): self-contained builds
+  (Game.dll 396 -> 1,124 KB), `-selfContained false` fails at once ("the player in ...Player is not published for a
+  platform", exit 1, no output folder: `dotnet build`'s `Player/` is portable IL), an empty `NUGET_PACKAGES` fails
+  ("crossgen compiler is neither next to the editor ... nor in the NuGet packages").
+  Measured warm through the menu: the frame the scene activates in 623 -> 497 (engine only) -> 436-453 ms (JIT 2,549
+  methods 263 ms -> 1,411 / 153 -> 843-851 / 63-97: what is left are generic instantiations, compiled expressions and
+  stubs), no hitch at the first shot (109-125 ms before), the menu's first frame 164 -> 80-94 ms, Flight active 1.4 s
+  after NEW GAME (1.6). A framework-dependent build is as before (checked: IL assemblies, runs).
+  `RuntimeHelpers.PrepareMethod` over the assemblies was considered first and dropped: preparing can run static
+  constructors early, on another thread.
+- Left, and why. A cold driver: the Flight load compiles the 25 graphs' ~270
+  programs itself (6-8 s once per driver; the helper process compiles only material variants), the clouds' programs
+  3.6 s in the frame the scene activates, and AMD finishes a program at its first draw (~1 s after each of the first
+  two kills, in the swap, cold only). A scene activating is one frame of 0.6-0.8 s (Awake, OnEnable, Start, first
+  physics step, first render). `Scene.RebuildIfDirty` looks at every component after any spawn (0.5-4 ms on 5,300).
+- Verify recipes (all without the editor's UI): `coldrun.ps1 -Name X` copies a build to a new folder with its own
+  boot.json title (cold), `-Reuse` runs it again (warm), `-Refresh` copies a new build over it keeping the binaries;
+  the player's `exec=Namespace.Type.Method` starts the game's test script; `batchsmoke.ps1` runs the editor with
+  `-batchmode -listen`: open, play, `screenshot Game` (renders: the store, the programs), stop, play again, the log's
+  lines. TestGame `vfx=1`, `volumetrics=1` and the default room render as before (looked at, no A/B); New Frontier's
+  510 unit tests pass.
+
+## Hitch profiler (FrameProfiler, 2026-11-19)
+
+- `LELEngine/Mono/FrameProfiler.cs` (public, static): where a frame's CPU time went and what was done for the first
+  time in it. Off unless asked for: `LEL_HITCH=1` (or a threshold in ms, default 25; a frame is a hitch when it is
+  over that and over 1.7 x the median of the last 32), `LEL_HITCH_EVENTS=1` (every event as it happens, also outside
+  frames and on worker threads), `LEL_FRAME_TRACE=file.csv` (a line per frame), `LEL_HITCH_LOG=file` (reports and
+  events there: a console line costs a call stack in the hosts' logs, which would be measured), `LEL_HITCH_JIT=1` (a
+  line per method the runtime compiles, with its thread and tier, stamped with the profiler's clock: which code ran
+  for the first time in a hitch). `Configure(...)` sets the same from code.
+- Frames: the hosts call `BeginFrame` / `EndFrame` (`GameHost`, the editor's `MainWindow`); scopes
+  (`using (FrameProfiler.Begin("name"))`, the main thread's, free when off) are marked in the hosts, `Scene.UpdateScenes`
+  (phases, each lifecycle callback kind, the physics step, the lists' rebuild), `Renderer` (every pass),
+  `Prefab.Instantiate`; waits that are no work (`AddWait`: the swap, the wait for frames queued before a resize) are
+  taken out. Events (`Event` / `EventSince(Timestamp, ...)`, any thread): asset loads over 0.2 ms with who asked (a
+  load, or "the running game": a first use in a frame), shader programs (source read, binary cache hit, compile
+  submitted, waited for, binary saved), textures (header / file read, decode, import waits, uploads), meshes, models,
+  materials, prefabs (file resolved, instantiation data built), instantiations, scene reads and starts, distance
+  fields, effect graphs, the clouds' programs, callbacks over 1 ms. Texts built with formatting are behind
+  `if (started != 0)`: nothing is built when the profiler is off.
+- A hitch report: the scope tree, the frame's events with their sum, the GPU passes (timer queries, a few frames
+  old), the JIT's methods and time on this thread and on every thread, GC counts and pause, bytes allocated, and when
+  a thread that only sleeps 1 ms at a time woke much later than usual, a line saying the process was held up from
+  outside. `Write(text)` adds a line to its log (a test's marks), `ResetStatistics` / `WorstFrameMs` / `HitchCount`
+  measure a stretch.
+- The player's `exec=Namespace.Type.Method` (test hook, `Program.InstallTestHooks`): calls a static method of the
+  game's scripts in the game loop's first frame (a scripted scenario of a built game).
 
 ## Textures of a load on worker threads (TextureImportBatch, 2026-10-26)
 

@@ -274,12 +274,15 @@ namespace LELEngine
 
 		private void TryUpload()
 		{
+			// HasData finishes an import still running on a worker thread (the wait is part of this first use).
+			long started = FrameProfiler.Timestamp;
 			if (!HasData && Ktx == null)
 			{
 				failed = true;
 				return;
 			}
 
+			long waited = FrameProfiler.Timestamp;
 			try
 			{
 				handle = GL.GenTexture();
@@ -305,6 +308,12 @@ namespace LELEngine
 				}
 
 				GL.BindTexture(Target, 0);
+				if (FrameProfiler.Enabled)
+				{
+					double waitMs = (waited - started) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+					string how = (Ktx != null ? "baked levels" : mipmapEnabled ? "pixels, mipmaps generated" : "pixels") + (waitMs >= 0.5 ? ", after waiting " + waitMs.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture) + " ms for its import" : "");
+					FrameProfiler.EventSince(started, "texture upload", AssetPath ?? name ?? GetType().Name, width + "x" + height + " " + how);
+				}
 			}
 			catch (Exception e)
 			{

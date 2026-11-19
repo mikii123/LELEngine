@@ -160,7 +160,9 @@ namespace LELEngine
 			state = LoadState.Reading;
 			long start = Stopwatch.GetTimestamp();
 			LoadState next;
-			using (AssetLoadScope scope = AssetLoadScope.Begin(background))
+			// A scene of the running game: the prefabs its objects reference are read through, so what the game will
+			// instantiate (bullets, effects, wrecks) loads and is prepared here, not in the frame it first appears.
+			using (AssetLoadScope scope = AssetLoadScope.Begin(background, true))
 			{
 				try
 				{

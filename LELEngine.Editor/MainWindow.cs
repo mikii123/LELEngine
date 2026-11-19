@@ -173,16 +173,26 @@ namespace LELEngine.Editor
 
 		protected override void OnUpdateFrame(FrameEventArgs e)
 		{
+			// A frame of the editor for the hitch profiler (LEL_HITCH): this update (in play mode: the game's) and the
+			// render that follows.
+			FrameProfiler.BeginFrame();
 			base.OnUpdateFrame(e);
 			if (rememberPlacement)
 			{
 				placement.Update();
 			}
 
-			editor.Update((float)e.Time);
+			using (FrameProfiler.Begin(editor.IsPlaying ? "Editor update (the game's frame in play mode)" : "Editor update"))
+			{
+				editor.Update((float)e.Time);
+			}
+
 			// Between two frames: the last one is drawn but not presented yet (window captures read it), and no UI frame
 			// is being built (automation drives the editor from here).
-			EditorAutomation.Pump();
+			using (FrameProfiler.Begin("Automation commands"))
+			{
+				EditorAutomation.Pump();
+			}
 		}
 
 		protected override void OnRenderFrame(FrameEventArgs e)
@@ -191,33 +201,43 @@ namespace LELEngine.Editor
 			if (WindowState == WindowState.Minimized || ClientSize.X <= 0 || ClientSize.Y <= 0)
 			{
 				System.Threading.Thread.Sleep(50);
+				FrameProfiler.EndFrame();
 				return;
 			}
 
 			PresentPendingFrame();
 
-			imgui.NewFrame((float)e.Time, ClientSize.X, ClientSize.Y);
-			TestAnchors.NextFrame();
-			EditorMenu.NewFrame();
-			Automation.WindowCapture.UIFrameDepth++;
-			try
+			using (FrameProfiler.Begin("Editor UI"))
 			{
-				editor.DrawUI();
-			}
-			finally
-			{
-				Automation.WindowCapture.UIFrameDepth--;
-			}
+				imgui.NewFrame((float)e.Time, ClientSize.X, ClientSize.Y);
+				TestAnchors.NextFrame();
+				EditorMenu.NewFrame();
+				Automation.WindowCapture.UIFrameDepth++;
+				try
+				{
+					editor.DrawUI();
+				}
+				finally
+				{
+					Automation.WindowCapture.UIFrameDepth--;
+				}
 
-			imgui.EndFrame();
+				imgui.EndFrame();
+			}
 
 			// The views shown by this frame's UI render now, so the UI draws their current images.
-			editor.RenderViews();
+			using (FrameProfiler.Begin("Views rendered (Scene, Game)"))
+			{
+				editor.RenderViews();
+			}
 
-			Framebuffer.BindDefault(ClientSize.X, ClientSize.Y);
-			GL.ClearColor(0.11f, 0.11f, 0.12f, 1f);
-			GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
-			imgui.RenderDrawData(ClientSize.X, ClientSize.Y);
+			using (FrameProfiler.Begin("Editor UI drawn"))
+			{
+				Framebuffer.BindDefault(ClientSize.X, ClientSize.Y);
+				GL.ClearColor(0.11f, 0.11f, 0.12f, 1f);
+				GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
+				imgui.RenderDrawData(ClientSize.X, ClientSize.Y);
+			}
 
 			// Other windows of the editor (UI Builder) draw and present themselves now, in their own GL context.
 			editor.RenderExtraWindows((float)e.Time);
@@ -240,6 +260,7 @@ namespace LELEngine.Editor
 			}
 
 			base.OnRenderFrame(e);
+			FrameProfiler.EndFrame();
 			if (!firstFrameLogged)
 			{
 				firstFrameLogged = true;

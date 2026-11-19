@@ -182,7 +182,13 @@ namespace LELEngine
 
 		protected override void OnUpdateFrame(FrameEventArgs e)
 		{
-			base.OnUpdateFrame(e);
+			// A frame of the game for the hitch profiler: this update and the render that follows it.
+			FrameProfiler.BeginFrame();
+			using (FrameProfiler.Begin("Host update (UpdateFrame subscribers, time)"))
+			{
+				base.OnUpdateFrame(e);
+			}
+
 			if (!IsFocused && !RunInBackground)
 			{
 				return;
@@ -190,9 +196,20 @@ namespace LELEngine
 
 			Input.BeginFrame();
 			long updateStart = System.Diagnostics.Stopwatch.GetTimestamp();
-			SceneManager.Update();
-			SceneManager.UpdateScenes(Time.deltaTime);
-			Audio.AudioSystem.Update();
+			using (FrameProfiler.Begin("Update"))
+			{
+				using (FrameProfiler.Begin("SceneManager.Update (background loads)"))
+				{
+					SceneManager.Update();
+				}
+
+				SceneManager.UpdateScenes(Time.deltaTime);
+				using (FrameProfiler.Begin("Audio"))
+				{
+					Audio.AudioSystem.Update();
+				}
+			}
+
 			Time.cpuUpdateMs = (System.Diagnostics.Stopwatch.GetTimestamp() - updateStart) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
 			Input.EndFrame();
 			ApplyUICursor();
@@ -224,24 +241,33 @@ namespace LELEngine
 			{
 				// Paused in the background: keep the last image, do not spin.
 				System.Threading.Thread.Sleep(50);
+				FrameProfiler.EndFrame();
 				return;
 			}
 
 			renderStopwatch.Reset();
 			renderStopwatch.Start();
 
-			SceneManager.GetRenderLists(out var renderers, out var behaviours);
-			if (Renderer != null)
+			using (FrameProfiler.Begin("Render"))
 			{
-				// The project's super sampling (QualitySettings.superSampling changes it at run time).
-				Renderer.Settings.SuperSampling = ProjectSettings.Current?.Graphics?.SuperSampling;
-				Renderer.RenderFrame(SceneManager.MainCamera, renderers, behaviours, RenderQueue);
+				SceneManager.GetRenderLists(out var renderers, out var behaviours);
+				if (Renderer != null)
+				{
+					// The project's super sampling (QualitySettings.superSampling changes it at run time).
+					Renderer.Settings.SuperSampling = ProjectSettings.Current?.Graphics?.SuperSampling;
+					Renderer.RenderFrame(SceneManager.MainCamera, renderers, behaviours, RenderQueue);
+				}
 			}
 
 			Time.cpuRenderMs = renderStopwatch.Elapsed.TotalMilliseconds;
 			DebugDraw.Clear();
 
-			base.OnRenderFrame(e);
+			using (FrameProfiler.Begin("Host render (RenderFrame subscribers, flush)"))
+			{
+				base.OnRenderFrame(e);
+			}
+
+			FrameProfiler.EndFrame();
 		}
 
 		#endregion

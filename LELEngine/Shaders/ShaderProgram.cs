@@ -313,6 +313,14 @@ namespace LELEngine.Shaders
 			built = true;
 		}
 
+		// A generated program whose build is started and finished apart, as a file program's (StartFromSources).
+		private ShaderProgram(string name, List<KeyValuePair<ShaderType, string>> stages)
+		{
+			Name = name;
+			pendingStages = stages;
+			StartBuild();
+		}
+
 		/// <summary>
 		///     Loads a multi-stage .shader file from the game's Shaders directory.
 		/// </summary>
@@ -337,7 +345,9 @@ namespace LELEngine.Shaders
 			IsInstancedVariant = Array.IndexOf(defines, InstancedDefine) >= 0;
 			this.defines = defines;
 			keywords = defines.Where(define => define != InstancedDefine && !ShaderPasses.IsPassDefine(define)).OrderBy(define => define, StringComparer.Ordinal).ToArray();
+			long readFrom = FrameProfiler.Timestamp;
 			ReadSource();
+			FrameProfiler.EventSince(readFrom, "shader", Name, "source read and expanded (file and includes)");
 			if (start)
 			{
 				StartBuild();
@@ -440,22 +450,17 @@ namespace LELEngine.Shaders
 		/// </summary>
 		public static ShaderProgram FromSources(string name, IEnumerable<KeyValuePair<ShaderType, string>> stages, params string[] defines)
 		{
-			var sources = new List<KeyValuePair<ShaderType, string>>();
-			string virtualPath = Path.Combine(ShadersRoot, "Generated", name.Replace('/', '_') + ".glsl");
-			foreach (KeyValuePair<ShaderType, string> stage in stages)
-			{
-				var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-				string code = ExpandIncludes(stage.Value.Replace("\r\n", "\n").Split('\n'), virtualPath, visited);
-				sources.Add(new KeyValuePair<ShaderType, string>(stage.Key, InsertPreamble(code, stage.Key, defines ?? Array.Empty<string>(), ShaderFeatures.Current)));
-			}
+			List<KeyValuePair<ShaderType, string>> sources = GeneratedSources(name, stages, defines);
 
 			// The driver's binary of the same sources, when an earlier start saved one (ProgramBinaryCache).
+			long startedAt = FrameProfiler.Timestamp;
 			string cacheKey = ProgramBinaryCache.Enabled ? ProgramBinaryCache.Key(sources) : null;
 			if (cacheKey != null)
 			{
 				int cached = GL.CreateProgram();
 				if (ProgramBinaryCache.TryLoad(cached, cacheKey))
 				{
+					FrameProfiler.EventSince(startedAt, "shader", name, "generated program loaded from the binary cache");
 					return new ShaderProgram(name, cached);
 				}
 
@@ -503,7 +508,35 @@ namespace LELEngine.Shaders
 				ProgramBinaryCache.Save(program.handle, cacheKey);
 			}
 
+			FrameProfiler.EventSince(startedAt, "shader", name, "generated program compiled and linked (not in the binary cache)");
 			return program;
+		}
+
+		/// <summary>
+		///     <see cref="FromSources" /> with the build started and not waited for (on the thread holding the GL context:
+		///     loaded from the binary cache, or handed to the driver; elsewhere the first use builds it): start every
+		///     generated program a load needs, then use them, and the driver compiles them together. The first use of the
+		///     program (<see cref="IsLinked" />, a uniform, <see cref="Use" />) waits for it; its messages are in
+		///     <see cref="BuildLog" /> then.
+		/// </summary>
+		public static ShaderProgram StartFromSources(string name, IEnumerable<KeyValuePair<ShaderType, string>> stages, params string[] defines)
+		{
+			return new ShaderProgram(name, GeneratedSources(name, stages, defines));
+		}
+
+		// The stages of a generated program as they are compiled: includes expanded, the engine preamble in front.
+		private static List<KeyValuePair<ShaderType, string>> GeneratedSources(string name, IEnumerable<KeyValuePair<ShaderType, string>> stages, string[] defines)
+		{
+			var sources = new List<KeyValuePair<ShaderType, string>>();
+			string virtualPath = Path.Combine(ShadersRoot, "Generated", name.Replace('/', '_') + ".glsl");
+			foreach (KeyValuePair<ShaderType, string> stage in stages)
+			{
+				var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+				string code = ExpandIncludes(stage.Value.Replace("\r\n", "\n").Split('\n'), virtualPath, visited);
+				sources.Add(new KeyValuePair<ShaderType, string>(stage.Key, InsertPreamble(code, stage.Key, defines ?? Array.Empty<string>(), ShaderFeatures.Current)));
+			}
+
+			return sources;
 		}
 
 		/// <summary>
@@ -1240,6 +1273,7 @@ namespace LELEngine.Shaders
 			List<KeyValuePair<ShaderType, string>> stages = pendingStages;
 			pendingStages = null;
 			startedOnThisThread++;
+			long startedAt = FrameProfiler.Timestamp;
 			handle = GL.CreateProgram();
 
 			// The driver's binary of the same sources, when an earlier start saved one (ProgramBinaryCache).
@@ -1249,6 +1283,7 @@ namespace LELEngine.Shaders
 				linked = true;
 				CollectUniforms();
 				BuildLog = "";
+				FrameProfiler.EventSince(startedAt, "shader", Name, "loaded from the binary cache");
 				return;
 			}
 
@@ -1261,6 +1296,7 @@ namespace LELEngine.Shaders
 			startedStages = stages;
 			startedCacheKey = cacheKey;
 			StartLink(startedShaders);
+			FrameProfiler.EventSince(startedAt, "shader", Name, ProgramBinaryCache.Enabled ? "not in the binary cache: compile submitted to the driver" : "no binary cache: compile submitted to the driver");
 			if (!ShaderCompilation.OnCompileThread)
 			{
 				// The compile thread finishes its own at once (StartBuild): never one for another context to wait on.
@@ -1303,11 +1339,12 @@ namespace LELEngine.Shaders
 				started.Remove(this);
 			}
 
+			long waitedFrom = FrameProfiler.Timestamp;
 			var log = new System.Text.StringBuilder();
 			bool compiled = true;
 			for (int i = 0; i < shaders.Length; i++)
 			{
-				compiled &= Shader.Check(shaders[i], stages[i].Key, SourcePath, out string stageLog);
+				compiled &= Shader.Check(shaders[i], stages[i].Key, SourcePath ?? Name, out string stageLog);
 				if (!string.IsNullOrWhiteSpace(stageLog))
 				{
 					log.Append(StageName(stages[i].Key)).Append(": ").Append(stageLog.Trim()).Append('\n');
@@ -1331,9 +1368,12 @@ namespace LELEngine.Shaders
 			}
 
 			BuildLog = log.ToString();
+			FrameProfiler.EventSince(waitedFrom, "shader", Name, ShaderCompilation.OnCompileThread ? "compiled and linked on the compile thread" : "waited for the driver's compile and link");
 			if (startedCacheKey != null && linked)
 			{
+				long savedFrom = FrameProfiler.Timestamp;
 				ProgramBinaryCache.Save(handle, startedCacheKey);
+				FrameProfiler.EventSince(savedFrom, "shader", Name, "binary read back and saved to the cache");
 			}
 
 			startedCacheKey = null;

@@ -61,19 +61,33 @@ namespace LELEngine.Editor
 
 		/// <summary>
 		///     The fields of the meshes the scenes (asset paths) draw, their prefab instances included, and of the prefabs
-		///     the game may instantiate (those the scenes reference, those in Resources folders, at the scales inside them):
-		///     baked now when this thread has the GL context, else from the cache.
+		///     the game may instantiate, at the scales inside them: those the scenes reference, straight or through
+		///     ScriptableObject assets at any depth (a ship's model and wreck named by its data asset), those in Resources
+		///     folders (and what their ScriptableObjects reference), and <paramref name="shippedPrefabs" /> (every prefab a
+		///     build ships). Baked now when this thread has the GL context, else from the cache.
 		/// </summary>
-		public static Result Collect(ProjectInfo project, IEnumerable<string> scenes, Action<string> log)
+		public static Result Collect(ProjectInfo project, IEnumerable<string> scenes, Action<string> log, IEnumerable<string> shippedPrefabs = null)
 		{
 			var result = new Result();
 			var requests = new Dictionary<string, Request>(StringComparer.OrdinalIgnoreCase);
 			var prefabs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+			var assets = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+			if (shippedPrefabs != null)
+			{
+				foreach (string path in shippedPrefabs)
+				{
+					if (path != null && path.EndsWith(Prefab.Extension, StringComparison.OrdinalIgnoreCase))
+					{
+						prefabs.Add(path);
+					}
+				}
+			}
+
 			foreach (string scene in scenes)
 			{
 				try
 				{
-					CollectRequests(File.ReadAllBytes(AssetDatabase.ToAbsolute(scene)), requests, prefabs);
+					CollectRequests(File.ReadAllBytes(AssetDatabase.ToAbsolute(scene)), requests, prefabs, assets);
 				}
 				catch (Exception e)
 				{
@@ -89,8 +103,22 @@ namespace LELEngine.Editor
 				}
 			}
 
+			foreach (string path in AssetDatabase.GetAllAssetPaths(ScriptableObjectAssets.Extension))
+			{
+				if (Resources.IsInResources(path))
+				{
+					assets.Add(path);
+				}
+			}
+
+			// Prefabs reference prefabs and ScriptableObjects, ScriptableObjects reference both: until nothing new turns up.
 			var done = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 			var queue = new Queue<string>(prefabs);
+			foreach (string asset in assets)
+			{
+				queue.Enqueue(asset);
+			}
+
 			while (queue.Count > 0)
 			{
 				string path = queue.Dequeue();
@@ -101,9 +129,23 @@ namespace LELEngine.Editor
 
 				try
 				{
-					var referenced = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-					CollectPrefabRequests(path, requests, referenced);
-					foreach (string other in referenced)
+					var referencedPrefabs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+					var referencedAssets = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+					if (path.EndsWith(Prefab.Extension, StringComparison.OrdinalIgnoreCase))
+					{
+						CollectPrefabRequests(path, requests, referencedPrefabs, referencedAssets);
+					}
+					else
+					{
+						CollectAssetReferences(path, referencedPrefabs, referencedAssets);
+					}
+
+					foreach (string other in referencedPrefabs)
+					{
+						queue.Enqueue(other);
+					}
+
+					foreach (string other in referencedAssets)
 					{
 						queue.Enqueue(other);
 					}
@@ -142,7 +184,8 @@ namespace LELEngine.Editor
 							continue;
 						}
 
-						atlas ??= new DistanceFieldAtlas(DistanceFieldAtlas.AtlasXY);
+						// The baker reads each field itself and writes its own cache (no copy on the mesh, no store).
+						atlas ??= new DistanceFieldAtlas(DistanceFieldAtlas.AtlasXY) { KeepsFields = false };
 						atlas.Reset();
 						MeshDistanceField built = atlas.GetOrBuild(mesh, key);
 						if (built == null)
@@ -190,6 +233,9 @@ namespace LELEngine.Editor
 
 			/// <summary>Prefab files the components reference (prefab fields: what scripts may instantiate).</summary>
 			public HashSet<string> Prefabs;
+
+			/// <summary>ScriptableObject assets the components reference (their prefab fields are followed in turn).</summary>
+			public HashSet<string> Assets;
 
 			public void AddObject(ulong id, ulong parent)
 			{
@@ -309,14 +355,48 @@ namespace LELEngine.Editor
 
 						break;
 					case AssetReference reference when !reference.IsNull:
-						string path = PrefabCache.PathOf(reference);
-						if (path != null && path.EndsWith(Prefab.Extension, StringComparison.OrdinalIgnoreCase))
-						{
-							Prefabs.Add(path);
-						}
-
+						Classify(PrefabCache.PathOf(reference), Prefabs, Assets);
 						break;
 				}
+			}
+		}
+
+		/// <summary>A referenced file that can lead to GI meshes: a prefab, or a ScriptableObject asset (its references are followed).</summary>
+		private static void Classify(string path, HashSet<string> prefabs, HashSet<string> assets)
+		{
+			if (path == null)
+			{
+				return;
+			}
+
+			if (path.EndsWith(Prefab.Extension, StringComparison.OrdinalIgnoreCase))
+			{
+				prefabs?.Add(path);
+			}
+			else if (path.EndsWith(ScriptableObjectAssets.Extension, StringComparison.OrdinalIgnoreCase))
+			{
+				assets?.Add(path);
+			}
+		}
+
+		/// <summary>The prefabs and ScriptableObject assets a ScriptableObject asset references (as generic data: no type is loaded).</summary>
+		private static void CollectAssetReferences(string assetPath, HashSet<string> prefabs, HashSet<string> assets)
+		{
+			string file = AssetDatabase.ToAbsolute(assetPath);
+			if (!File.Exists(file))
+			{
+				return;
+			}
+
+			byte[] data = File.ReadAllBytes(file);
+			if (!Documents.IsDocument(data))
+			{
+				return;
+			}
+
+			foreach (AssetReference reference in DocumentReferences.Collect(data).Assets)
+			{
+				Classify(PrefabCache.PathOf(reference), prefabs, assets);
 			}
 		}
 
@@ -325,9 +405,9 @@ namespace LELEngine.Editor
 		///     of the local scales up the hierarchy, as <see cref="Transform.lossyScale" /> computes it), plus scale 1 for
 		///     each mesh; the prefab files the scene uses go into <paramref name="prefabs" />.
 		/// </summary>
-		private static void CollectRequests(byte[] data, Dictionary<string, Request> requests, HashSet<string> prefabs)
+		private static void CollectRequests(byte[] data, Dictionary<string, Request> requests, HashSet<string> prefabs, HashSet<string> assets)
 		{
-			var tree = new ScaleTree { Prefabs = prefabs };
+			var tree = new ScaleTree { Prefabs = prefabs, Assets = assets };
 			foreach (DocumentEntry entry in SceneSerializer.ReadDocument(data).Entries)
 			{
 				if (entry.Instance != null)
@@ -347,7 +427,7 @@ namespace LELEngine.Editor
 		}
 
 		/// <summary>The GI meshes of a prefab at the scales inside it (an instance made at runtime keeps the prefab's root scale).</summary>
-		private static void CollectPrefabRequests(string prefabPath, Dictionary<string, Request> requests, HashSet<string> prefabs)
+		private static void CollectPrefabRequests(string prefabPath, Dictionary<string, Request> requests, HashSet<string> prefabs, HashSet<string> assets)
 		{
 			ResolvedPrefab prefab = PrefabCache.Get(prefabPath);
 			if (prefab?.Root == null)
@@ -355,7 +435,7 @@ namespace LELEngine.Editor
 				return;
 			}
 
-			var tree = new ScaleTree { Prefabs = prefabs };
+			var tree = new ScaleTree { Prefabs = prefabs, Assets = assets };
 			foreach (PrefabObject obj in prefab.Objects)
 			{
 				tree.AddObject(obj.Id, obj.Parent);
@@ -377,6 +457,26 @@ namespace LELEngine.Editor
 
 		private static void Add(Dictionary<string, Request> requests, string modelPath, string meshName, Vector3 scale)
 		{
+			if (meshName == null)
+			{
+				// A reference without a mesh name means the model's first mesh: asked for under its name, the one the
+				// player's loader looks for in the model's field file (and the editor's own cache at run time).
+				try
+				{
+					Model model = ModelAssets.Load(modelPath);
+					meshName = model.Meshes.Count > 0 ? model.Meshes[0].SubAssetName : null;
+				}
+				catch (Exception)
+				{
+					// Unreadable model: no field for it.
+				}
+
+				if (meshName == null)
+				{
+					return;
+				}
+			}
+
 			// Every uniform scale is one shape: one field per mesh for all of them.
 			Vector3i key = DistanceFieldAtlas.ShapeKey(scale);
 			requests[$"{modelPath}|{meshName}|{key.X},{key.Y},{key.Z}"] = new Request { ModelPath = modelPath, MeshName = meshName, Shape = key };
@@ -384,8 +484,178 @@ namespace LELEngine.Editor
 
 		private static string CacheFile(ProjectInfo project, Request request, Vector3i key)
 		{
-			string guid = AssetDatabase.GetGuid(request.ModelPath) ?? Hash(request.ModelPath);
-			return Path.Combine(project.LibraryPath, "DistanceFieldCache", $"{guid}-{Hash(request.MeshName ?? "")}-{key.X}_{key.Y}_{key.Z}{DistanceFieldFile.Extension}");
+			return CacheFile(project, request.ModelPath, request.MeshName, key);
+		}
+
+		private static string CacheFile(ProjectInfo project, string modelPath, string meshName, Vector3i key)
+		{
+			string guid = AssetDatabase.GetGuid(modelPath) ?? Hash(modelPath);
+			return Path.Combine(project.LibraryPath, "DistanceFieldCache", $"{guid}-{Hash(meshName ?? "")}-{key.X}_{key.Y}_{key.Z}{DistanceFieldFile.Extension}");
+		}
+
+		/// <summary>
+		///     The editor's distance fields at run time (edit and play mode): the renderers' atlases take a mesh's field from
+		///     the baker's cache in the project's Library instead of building it, and what they do build goes into it, so a
+		///     field is computed once per mesh and shape, not in every editor session, and a game build finds it baked.
+		///     Meshes of model files only (a mesh built in code has no file to tell when it changed).
+		/// </summary>
+		public sealed class Store : IDistanceFieldStore
+		{
+			private readonly ProjectInfo project;
+			private readonly object sync = new object();
+
+			// Per model path: the files' sizes and times the content stamp was taken at (so it is not hashed again).
+			private readonly Dictionary<string, (long Length, long Ticks, long MetaLength, long MetaTicks, string Stamp)> stamps
+				= new Dictionary<string, (long, long, long, long, string)>(StringComparer.OrdinalIgnoreCase);
+
+			private bool indexRead;
+			private bool indexDirty;
+
+			public Store(ProjectInfo project)
+			{
+				this.project = project;
+			}
+
+			private string IndexFile => Path.Combine(project.LibraryPath, "DistanceFieldCache", "stamps.txt");
+
+			public BakedDistanceField Load(Mesh mesh, Vector3i shapeKey, Vector3i size)
+			{
+				if (!IsStored(mesh))
+				{
+					return null;
+				}
+
+				string file = CacheFile(project, mesh.AssetPath, mesh.SubAssetName, shapeKey);
+				if (!File.Exists(file))
+				{
+					return null;
+				}
+
+				BakedDistanceField field = ReadCache(file, StampOf(mesh.AssetPath));
+				return field != null && field.Size == size ? field : null;
+			}
+
+			public void Save(Mesh mesh, BakedDistanceField field)
+			{
+				if (!IsStored(mesh) || field?.Voxels == null)
+				{
+					return;
+				}
+
+				string modelPath = mesh.AssetPath;
+				string meshName = mesh.SubAssetName;
+				string file = CacheFile(project, modelPath, meshName, field.ShapeKey);
+				// Written beside the frames (a file of tens to hundreds of KB, and the model's stamp when it is not known yet).
+				System.Threading.Tasks.Task.Run(() =>
+				{
+					try
+					{
+						DistanceFieldFile.Write(file, StampOf(modelPath), new[] { new KeyValuePair<string, BakedDistanceField>(meshName, field) });
+					}
+					catch (Exception e)
+					{
+						Debug.LogWarning($"[SDF] The distance field of {modelPath}#{meshName} could not be cached ({e.Message}).");
+					}
+				});
+			}
+
+			private static bool IsStored(Mesh mesh)
+			{
+				return mesh != null && mesh.SubAssetName != null && !string.IsNullOrEmpty(mesh.AssetPath) && mesh.MirrorSource == null && ModelAssets.IsModelFile(mesh.AssetPath);
+			}
+
+			// The baker's stamp of the model (its content and import settings), hashed again only when a file changed.
+			private string StampOf(string modelPath)
+			{
+				string absolute = AssetDatabase.ToAbsolute(modelPath);
+				var model = new FileInfo(absolute);
+				var meta = new FileInfo(absolute + AssetDatabase.MetaExtension);
+				long length = model.Exists ? model.Length : -1;
+				long ticks = model.Exists ? model.LastWriteTimeUtc.Ticks : 0;
+				long metaLength = meta.Exists ? meta.Length : -1;
+				long metaTicks = meta.Exists ? meta.LastWriteTimeUtc.Ticks : 0;
+				lock (sync)
+				{
+					ReadIndex();
+					if (stamps.TryGetValue(modelPath, out (long Length, long Ticks, long MetaLength, long MetaTicks, string Stamp) known)
+						&& known.Length == length && known.Ticks == ticks && known.MetaLength == metaLength && known.MetaTicks == metaTicks)
+					{
+						return known.Stamp;
+					}
+				}
+
+				string stamp = Stamp(modelPath);
+				lock (sync)
+				{
+					stamps[modelPath] = (length, ticks, metaLength, metaTicks, stamp);
+					if (!indexDirty)
+					{
+						indexDirty = true;
+						// One write for the stamps of a burst (a scene's meshes asked for in one frame).
+						System.Threading.Tasks.Task.Delay(500).ContinueWith(_ => WriteIndex());
+					}
+				}
+
+				return stamp;
+			}
+
+			private void ReadIndex()
+			{
+				if (indexRead)
+				{
+					return;
+				}
+
+				indexRead = true;
+				try
+				{
+					if (!File.Exists(IndexFile))
+					{
+						return;
+					}
+
+					foreach (string line in File.ReadAllLines(IndexFile))
+					{
+						string[] parts = line.Split('\t');
+						if (parts.Length == 6 && long.TryParse(parts[1], out long length) && long.TryParse(parts[2], out long ticks)
+							&& long.TryParse(parts[3], out long metaLength) && long.TryParse(parts[4], out long metaTicks))
+						{
+							stamps[parts[0]] = (length, ticks, metaLength, metaTicks, parts[5]);
+						}
+					}
+				}
+				catch (Exception)
+				{
+					// An unreadable index: the stamps are taken again.
+					stamps.Clear();
+				}
+			}
+
+			private void WriteIndex()
+			{
+				try
+				{
+					var lines = new List<string>();
+					lock (sync)
+					{
+						indexDirty = false;
+						foreach (KeyValuePair<string, (long Length, long Ticks, long MetaLength, long MetaTicks, string Stamp)> entry in stamps)
+						{
+							lines.Add(string.Join("\t", entry.Key, entry.Value.Length, entry.Value.Ticks, entry.Value.MetaLength, entry.Value.MetaTicks, entry.Value.Stamp));
+						}
+					}
+
+					lines.Sort(StringComparer.Ordinal);
+					Directory.CreateDirectory(Path.GetDirectoryName(IndexFile));
+					string temporary = IndexFile + ".tmp";
+					File.WriteAllLines(temporary, lines);
+					File.Move(temporary, IndexFile, true);
+				}
+				catch (Exception)
+				{
+					// The index is only a shortcut: without it the stamps are hashed again next time.
+				}
+			}
 		}
 
 		/// <summary>

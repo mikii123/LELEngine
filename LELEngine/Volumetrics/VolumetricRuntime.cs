@@ -164,6 +164,9 @@ namespace LELEngine.Volumetrics
 		private static ShaderProgram depthDownsample;
 		private static ShaderProgram temporal;
 		private static ShaderProgram composite;
+
+		// Bit 0 / 1: the programs of the standard / high quality preset were made (StartPrograms).
+		private static int programsStarted;
 		private static int detailTexture;
 		private static long frameStamp;
 		private static int drawnThisFrame;
@@ -194,6 +197,44 @@ namespace LELEngine.Volumetrics
 			{
 				objects.Add(volume);
 			}
+
+			StartPrograms(volume.HighQuality);
+		}
+
+		/// <summary>
+		///     Makes every program the clouds use, so their builds start now (a first cloud enabled: while a scene starts)
+		///     and run in the driver while the cloud's voxels are read, which takes frames; they were made one by one where a
+		///     frame first needed each, the frames the first cloud appeared in (seconds with nothing compiled yet, on the
+		///     780M 3.4 s and 0.9 s in two frames of the game). Needs the GL context (else the first use makes them, as before).
+		/// </summary>
+		internal static void StartPrograms(bool highQuality)
+		{
+			int preset = highQuality ? 1 : 0;
+			if ((programsStarted & (1 << preset)) != 0 || !GraphicsThread.HasContext)
+			{
+				return;
+			}
+
+			long started = FrameProfiler.Timestamp;
+			bool first = programsStarted == 0;
+			programsStarted |= 1 << preset;
+			if (first)
+			{
+				_ = Generate;
+				_ = GeneratePoints;
+				_ = Light;
+				_ = LightTransport;
+				_ = LightTransportBaked;
+				_ = OccupancyShader;
+				_ = GIShader;
+				VolumetricMedia.StartPrograms();
+				// With the detail noise every cloud shares (its own program runs once, here).
+				EnsurePrograms();
+			}
+
+			// The preset's eight variants (which lights shine on the cloud right now picks one).
+			MarchProgram(highQuality, false, false, false);
+			FrameProfiler.EventSince(started, "volumetrics", highQuality ? "programs (high quality march)" : "programs", "every program of the clouds made, their builds started (a first cloud enabled)");
 		}
 
 		internal static void Unregister(VolumetricObjectBase volume)

@@ -848,6 +848,7 @@ namespace LELEngine
 				return null;
 			}
 
+			long started = FrameProfiler.Timestamp;
 			TextureImporter importer = GetImporter(assetPath);
 			try
 			{
@@ -857,6 +858,7 @@ namespace LELEngine
 				TextureImportBatch batch = TextureImportBatch.Current;
 				if (batch != null && previous == null && TryDefer(batch, assetPath, absolute, importer, entry, name))
 				{
+					FrameProfiler.EventSince(started, "texture load", assetPath, "header read, the rest on a worker thread");
 					return entry;
 				}
 
@@ -874,10 +876,20 @@ namespace LELEngine
 						BuildSprites(entry, baked2D, importer, assetPath, name);
 					}
 
+					// Only with the hitch profiler on (its text is not built otherwise).
+					if (started != 0)
+					{
+						FrameProfiler.EventSince(started, "texture load", assetPath, "baked file read on this thread (" + file.Length / 1024 + " KB)");
+					}
 					return entry;
 				}
 
 				ImportedTexture imported = Import(assetPath, importer, file);
+				// Only with the hitch profiler on (its text is not built otherwise).
+				if (started != 0)
+				{
+					FrameProfiler.EventSince(started, "texture load", assetPath, "file read and decoded on this thread (" + file.Length / 1024 + " KB)");
+				}
 				if (imported == null)
 				{
 					return null;

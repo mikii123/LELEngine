@@ -26,6 +26,13 @@ namespace LELEngine
 		/// <summary>A background load's scope: ScriptableObjects loaded in it get Awake and OnEnable later, on the main thread.</summary>
 		public bool DefersCallbacks { get; }
 
+		/// <summary>
+		///     The load reads through the prefabs it meets (<see cref="Prefab.Preload" />): what their instances will use (the
+		///     meshes, materials, textures and effects of the bullets, explosions and wrecks the scene's objects reference, at
+		///     any depth) is loaded and prepared with the scene, not in the frame the game first instantiates them.
+		/// </summary>
+		public bool PreloadsPrefabs { get; }
+
 		#endregion
 
 		#region PrivateFields
@@ -49,10 +56,11 @@ namespace LELEngine
 
 		#region Constructors
 
-		private AssetLoadScope(AssetLoadScope parent, bool defersCallbacks)
+		private AssetLoadScope(AssetLoadScope parent, bool defersCallbacks, bool preloadsPrefabs)
 		{
 			this.parent = parent;
 			DefersCallbacks = defersCallbacks;
+			PreloadsPrefabs = preloadsPrefabs;
 		}
 
 		#endregion
@@ -61,11 +69,13 @@ namespace LELEngine
 
 		/// <summary>
 		///     Opens a scope on this thread; dispose it to close it. <paramref name="background" />: a load off the main
-		///     thread (a scope nested in such a scope is one too).
+		///     thread (a scope nested in such a scope is one too). <paramref name="preloadPrefabs" />: a load for the running
+		///     game (<see cref="PreloadsPrefabs" />; a scope nested in such a scope is one too); an editor opening a scene to
+		///     edit it leaves prefabs to their first instantiation.
 		/// </summary>
-		public static AssetLoadScope Begin(bool background = false)
+		public static AssetLoadScope Begin(bool background = false, bool preloadPrefabs = false)
 		{
-			current = new AssetLoadScope(current, background || (current != null && current.DefersCallbacks));
+			current = new AssetLoadScope(current, background || (current != null && current.DefersCallbacks), preloadPrefabs || (current != null && current.PreloadsPrefabs));
 			return current;
 		}
 
@@ -235,6 +245,18 @@ namespace LELEngine
 					// Its sheets and templates, and what its elements' attributes and inline styles load.
 					tree.CollectReferencedAssets(Record);
 					break;
+				case VFX.VfxGraph graph:
+					// Its textures and meshes (a graph an earlier scene loaded comes from the cache without loading them again).
+					ScriptableObjectAssets.CollectReferencedAssets(graph, Record);
+					break;
+				case Prefab prefab:
+					if (PreloadsPrefabs)
+					{
+						// What its instances will use, loaded through this scope (other prefabs it references in turn).
+						prefab.Preload();
+					}
+
+					break;
 			}
 		}
 
@@ -263,6 +285,10 @@ namespace LELEngine
 					return "shaders";
 				case ScriptableObject _:
 					return "scriptable objects";
+				case Prefab _:
+					return "prefabs";
+				case VFX.VfxGraph _:
+					return "effect graphs";
 				case UIElements.StyleSheet _:
 				case UIElements.VisualTreeAsset _:
 				case UIElements.FontAsset _:

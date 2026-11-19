@@ -263,9 +263,17 @@ namespace LELEngine
 
 			IsPlaying = playing;
 			LifecycleStarted = true;
+			long started = FrameProfiler.Timestamp;
+			int count = components.Count;
 			foreach (Behaviour component in new List<Behaviour>(components))
 			{
 				TryActivate(component);
+			}
+
+			// Only with the hitch profiler on (its text is not built otherwise).
+			if (started != 0)
+			{
+				FrameProfiler.EventSince(started, "scene start", Name, $"Awake and OnEnable of {count} components ({(playing ? "play" : "edit")} mode; {components.Count - count} more made meanwhile)");
 			}
 		}
 
@@ -295,9 +303,12 @@ namespace LELEngine
 		public static void UpdateScenes(IReadOnlyList<Scene> scenes, float deltaTime, ref double fixedAccumulator)
 		{
 			Time.frameCount++;
-			foreach (Scene scene in scenes)
+			using (FrameProfiler.Begin("Start, UI input"))
 			{
-				scene.BeginFrame();
+				foreach (Scene scene in scenes)
+				{
+					scene.BeginFrame();
+				}
 			}
 
 			// Fixed steps (FixedUpdate, then the physics step and its collision callbacks) catch up with the frame time,
@@ -305,18 +316,21 @@ namespace LELEngine
 			double step = Math.Max(0.001, Time.fixedDeltaTimeD);
 			fixedAccumulator += Math.Min(deltaTime, Math.Max(step, Time.maximumDeltaTimeD));
 			int steps = 0;
-			while (fixedAccumulator >= step && steps < MaxFixedStepsPerFrame)
+			using (FrameProfiler.Begin("Fixed steps"))
 			{
-				fixedAccumulator -= step;
-				steps++;
-				Time.inFixedTimeStep = true;
-				foreach (Scene scene in scenes)
+				while (fixedAccumulator >= step && steps < MaxFixedStepsPerFrame)
 				{
-					scene.FixedStep((float)step);
-				}
+					fixedAccumulator -= step;
+					steps++;
+					Time.inFixedTimeStep = true;
+					foreach (Scene scene in scenes)
+					{
+						scene.FixedStep((float)step);
+					}
 
-				Time.fixedTimeD += step;
-				Time.inFixedTimeStep = false;
+					Time.fixedTimeD += step;
+					Time.inFixedTimeStep = false;
+				}
 			}
 
 			if (steps == MaxFixedStepsPerFrame)
@@ -325,36 +339,54 @@ namespace LELEngine
 			}
 
 			float interpolation = (float)(fixedAccumulator / step);
-			foreach (Scene scene in scenes)
+			using (FrameProfiler.Begin("Physics interpolation"))
 			{
-				scene.AfterFixedSteps(deltaTime, interpolation);
+				foreach (Scene scene in scenes)
+				{
+					scene.AfterFixedSteps(deltaTime, interpolation);
+				}
 			}
 
-			foreach (Scene scene in scenes)
+			using (FrameProfiler.Begin("Update callbacks"))
 			{
-				scene.UpdatePhase();
+				foreach (Scene scene in scenes)
+				{
+					scene.UpdatePhase();
+				}
 			}
 
 			// Animators advance after every Update (parameters set there are seen) and before LateUpdate, as in Unity.
-			foreach (Scene scene in scenes)
+			using (FrameProfiler.Begin("Animation"))
 			{
-				scene.AnimationPhase(deltaTime, global::LELEngine.Animation.AnimatorUpdateMode.Normal);
+				foreach (Scene scene in scenes)
+				{
+					scene.AnimationPhase(deltaTime, global::LELEngine.Animation.AnimatorUpdateMode.Normal);
+				}
 			}
 
 			// Navigation step (agents move, obstacles carve) between Update and LateUpdate, as in Unity.
-			foreach (Scene scene in scenes)
+			using (FrameProfiler.Begin("Navigation"))
 			{
-				scene.NavigationPhase(deltaTime);
+				foreach (Scene scene in scenes)
+				{
+					scene.NavigationPhase(deltaTime);
+				}
 			}
 
-			foreach (Scene scene in scenes)
+			using (FrameProfiler.Begin("LateUpdate callbacks"))
 			{
-				scene.LateUpdatePhase();
+				foreach (Scene scene in scenes)
+				{
+					scene.LateUpdatePhase();
+				}
 			}
 
-			foreach (Scene scene in scenes)
+			using (FrameProfiler.Begin("Destroy queue"))
 			{
-				scene.EndFrame();
+				foreach (Scene scene in scenes)
+				{
+					scene.EndFrame();
+				}
 			}
 		}
 
@@ -641,16 +673,26 @@ namespace LELEngine
 			}
 
 			List<Behaviour> fixedBatch = ActiveBehaviours as List<Behaviour>;
-			foreach (Behaviour component in fixedBatch)
+			using (FrameProfiler.Begin("FixedUpdate callbacks"))
 			{
-				if (!component.enableCalled || component.dead) continue;
-				try
+				bool profile = FrameProfiler.Enabled;
+				foreach (Behaviour component in fixedBatch)
 				{
-					component.FixedUpdate();
-				}
-				catch (Exception e)
-				{
-					Debug.LogException(e, component);
+					if (!component.enableCalled || component.dead) continue;
+					long started = profile ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
+					try
+					{
+						component.FixedUpdate();
+					}
+					catch (Exception e)
+					{
+						Debug.LogException(e, component);
+					}
+
+					if (profile)
+					{
+						ReportSlow(component, "FixedUpdate", started);
+					}
 				}
 			}
 
@@ -659,7 +701,10 @@ namespace LELEngine
 
 			if (IsPlaying && physics2D != null && global::LELEngine.Physics2D.simulationMode == SimulationMode2D.FixedUpdate)
 			{
-				physics2D.Step(step);
+				using (FrameProfiler.Begin("Physics2D step"))
+				{
+					physics2D.Step(step);
+				}
 			}
 		}
 
@@ -710,9 +755,11 @@ namespace LELEngine
 				return;
 			}
 
+			bool profile = FrameProfiler.Enabled;
 			foreach (Behaviour component in frameActive)
 			{
 				if (!component.enableCalled || component.dead) continue;
+				long started = profile ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
 				try
 				{
 					component.Update();
@@ -721,6 +768,21 @@ namespace LELEngine
 				{
 					Debug.LogException(e, component);
 				}
+
+				if (profile)
+				{
+					ReportSlow(component, "Update", started);
+				}
+			}
+		}
+
+		// A component's callback that took a millisecond or more: named in the hitch log (the profiler is on).
+		private static void ReportSlow(Behaviour component, string callback, long started)
+		{
+			double ms = (System.Diagnostics.Stopwatch.GetTimestamp() - started) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+			if (ms >= 1.0)
+			{
+				FrameProfiler.Event("callback", component.GetType().Name + "." + callback, ms, "on '" + component.gameObject?.Name + "'");
 			}
 		}
 
@@ -748,9 +810,11 @@ namespace LELEngine
 				return;
 			}
 
+			bool profile = FrameProfiler.Enabled;
 			foreach (Behaviour component in frameActive)
 			{
 				if (!component.enableCalled || component.dead) continue;
+				long started = profile ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
 				try
 				{
 					component.LateUpdate();
@@ -758,6 +822,11 @@ namespace LELEngine
 				catch (Exception e)
 				{
 					Debug.LogException(e, component);
+				}
+
+				if (profile)
+				{
+					ReportSlow(component, "LateUpdate", started);
 				}
 			}
 		}
@@ -846,6 +915,13 @@ namespace LELEngine
 
 		private void RunPendingStarts()
 		{
+			if (pendingStart.Count == 0)
+			{
+				return;
+			}
+
+			long started = FrameProfiler.Timestamp;
+			int ran = 0;
 			while (pendingStart.Count > 0)
 			{
 				List<Behaviour> batch = pendingStart;
@@ -859,7 +935,17 @@ namespace LELEngine
 					}
 
 					component.startCalled = true;
+					ran++;
 					Call(component, Callback.Start);
+				}
+			}
+
+			if (ran >= 50)
+			{
+				// Only with the hitch profiler on (its text is not built otherwise).
+				if (started != 0)
+				{
+					FrameProfiler.EventSince(started, "scene start", Name, $"Start of {ran} components");
 				}
 			}
 		}
@@ -1048,6 +1134,7 @@ namespace LELEngine
 				return;
 			}
 
+			using FrameProfiler.Scope profiled = FrameProfiler.Begin("Scene lists rebuilt (every component looked at)");
 			dirty = false;
 			var newRunning = new List<Behaviour>(components.Count);
 			var newRenderers = new List<MeshRenderer>();
@@ -1092,7 +1179,32 @@ namespace LELEngine
 			mainLight = newLights.Count > 0 ? newLights[0] : null;
 		}
 
+		private static readonly string[] CallbackScopes = { "Awake", "OnEnable", "Start", "OnDisable", "OnDestroy", "OnValidate" };
+
 		private static void Call(Behaviour component, Callback callback)
+		{
+			if (FrameProfiler.Enabled)
+			{
+				// One line per kind of callback in the frame's tree, and each slow one by its component's name.
+				long started = System.Diagnostics.Stopwatch.GetTimestamp();
+				using (FrameProfiler.Begin(CallbackScopes[(int)callback]))
+				{
+					CallNow(component, callback);
+				}
+
+				double ms = (System.Diagnostics.Stopwatch.GetTimestamp() - started) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+				if (ms >= 0.5)
+				{
+					FrameProfiler.Event("callback", component.GetType().Name + "." + CallbackScopes[(int)callback], ms, "on '" + component.gameObject?.Name + "'");
+				}
+
+				return;
+			}
+
+			CallNow(component, callback);
+		}
+
+		private static void CallNow(Behaviour component, Callback callback)
 		{
 			try
 			{

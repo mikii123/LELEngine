@@ -132,6 +132,51 @@ namespace LELEngine
 			return Instantiate(scene, parent, null, null);
 		}
 
+		/// <summary>
+		///     Loads what the prefab's instances will use, now instead of at the first instantiation: every asset its
+		///     components reference (meshes, materials with their shaders and textures, effect graphs, ScriptableObjects,
+		///     other prefabs), through the asset database, and the data instances are built from. Inside a load that follows
+		///     prefabs (<see cref="AssetLoadScope.PreloadsPrefabs" />: a scene loading for the game, Resources.LoadAsync) this
+		///     runs for every prefab the load meets, the prefabs those reference included, and the loaded assets are prepared
+		///     for the GPU with the load. Called by a script outside a load (a loading screen of its own) the assets are read
+		///     and decoded now and upload on first use. Any thread; assets already loaded cost a lookup.
+		/// </summary>
+		public void Preload()
+		{
+			ResolvedPrefab resolved = Resolved;
+			if (resolved?.Root == null)
+			{
+				return;
+			}
+
+			foreach (AssetReference reference in resolved.GetAssetReferences())
+			{
+				// As the instance's fields will find it: by GUID, else by path (assets without a meta file, engine resources).
+				string path = reference.Guid != null ? AssetDatabase.GetPath(reference.Guid) : null;
+				if (path == null && reference.Path != null)
+				{
+					path = AssetDatabase.Resolve(reference.Path, null);
+					if (path == null && AssetDatabase.IsEngineResource(reference.Path))
+					{
+						path = reference.Path;
+					}
+				}
+
+				// A missing file is reported when an instance asks for it; a file that is no asset (a script) has no type.
+				Type type = path != null ? AssetDatabase.GetAssetType(path) : null;
+				if (type == null || !File.Exists(AssetDatabase.ToAbsolute(path)))
+				{
+					continue;
+				}
+
+				// The file as what it is (a model with every mesh, an image as its texture): the typed reads of the
+				// instances' fields then find it in the caches.
+				AssetDatabase.Load(type, path, null);
+			}
+
+			resolved.GetBinary(out _);
+		}
+
 		public override string ToString()
 		{
 			return name;
