@@ -999,6 +999,122 @@ Added for New Frontier's port of Unity's SpaceStonesPack (Standard materials wit
   against Unity (mean 0.75-1.8 / 255); a rock's levels from 10 to 1500 units, bias 1 and 2, GI off and on, forced and
   disabled (the levels Unity's formula gives).
 
+## Impostors, a material shader's own passes (2026-11-19)
+
+The user's ask: an impostor system (a few quads in place of the whole mesh that look like the mesh), integrated with the
+lighting and the engine's other features. Octahedral impostors, baked into atlases and lit at run time:
+- `Impostor` (`Rendering/Impostors/Impostor.cs`, global namespace, a ScriptableObject, Create > Impostor): `SourcePrefab` /
+  `SourceModel`, `Settings` (`ImpostorSettings`: `Frames` 12 (2..32 views a side), `FrameSize` 128 (a power of two, 16..1024),
+  `Hemisphere`, `Supersampling` 4, `Border` 2) and what a bake made: `Mesh`, `Material`, `ShapeMap`, `BaseMap`,
+  `SpecularMap`, `EmissionMap` (hidden `m_` fields). Run time: `Impostor.Bake(gameObject, settings)` (in memory, on the GL
+  thread: objects the game builds), `AddRenderer`, `Setup(renderer)`, `Instantiate(scene, parent)`,
+  `AddToLODGroup(group, 0.01, 0.15)` (a child of the group's object draws it as the last level; a group without levels
+  gets its own renderers as the first). An impostor is baked in its object's space: its renderer has that object's
+  transform. Its renderer is out of the GI's volumes (`ContributesToGI` false; a LOD group gives the GI level 0 anyway).
+- Proxy mesh (`ImpostorMesh`): the box of the object's bounds, so culling, LOD group bounds, picking and the instance
+  table see the object's real place and size. Each corner carries a corner of a hexagon around the unit circle in its
+  texture coordinates (the two opposite corners its centre); the vertex stage lays those out as a billboard facing the
+  view, three faces cover it and the other three face away and are culled: six triangles drawn.
+- Bake (`ImpostorBaker`): `CollectRenderers` (enabled mesh renderers, of LOD groups the first level, opaque sub-meshes, no
+  impostor materials: a prefab holding its own impostor bakes the same); per view (`ImpostorMath.FrameDirection`: an
+  octahedral map of the sphere or of its upper half) an orthographic capture around the bounding sphere into four
+  RGBA16F targets and Depth32F at Supersampling x the frame, each surface drawn by its shader's `LEL_SURFACE_CAPTURE`
+  variant (render state `SurfaceCapture On`: Lit and LitTextured write diffuse, normal, specular colour + smoothness,
+  emission + occlusion per workflow) or, without one, by `Engine/ImpostorCapture.shader` (the GI captures' values);
+  `Engine/ImpostorResolve.shader` filters the covered samples into the frame; the coverage is a distance field made on
+  worker threads from the capture's depth mask (Felzenszwalb, spread max(2, frame / 16) texels, 0.5 at the outline); empty
+  texels take the nearest covered one's values. Atlases (`ImpostorBake`): Shape (rg the normal's x, y in the view's axes,
+  b depth, a coverage; linear), Base (rgb diffuse sRGB, a smoothness with a specular atlas, else occlusion), Specular
+  (rgb sRGB, a occlusion; only when 0.5 % of the texels have a specular colour; `SceneHighlights` when as many have none),
+  Emission (rgb / the brightest, sRGB; the scale goes to the material's `Emissive` alpha; only when something emits).
+- A bake repeats exactly (the user's rule for written files, see "Deterministic documents"): each view is drawn twice,
+  depth first, then EQUAL with blend MAX from a clear of -60000. Faces lying on one another (doubled faces, panels on a
+  hull) have equal depths and the GPU does not pick the same winner every time: on the 780M 10 of 29 repeated bakes of a
+  2,224 triangle ship differed in 1 to 3 texels, 2 of an axe, 5 of a car, 0 of a group of cubes and spheres; one capture
+  sample a texel showed whole 2 x 2 blocks changing colour with the same normal and depth; a pass-through blend (strict
+  order) did not help. Now 0 of 4 x 29, and 12 bakes over 3 editor sessions wrote byte-identical files. TestGame
+  `impostorrepeat=N`; scratchpad `repeat.ps1`, `determinism.ps1`, `atlasdiff.ps1` of session 733c7c4a.
+- Shader (`Engine/Impostor.shader`, `Engine/Impostor.glsl`; C# mirror `ImpostorMath`): per pixel the three views nearest
+  to the ray's direction (the grid cell cut along its shorter diagonal), each hit on its plane and shifted by the depth it
+  stored (`Parallax`, refined `ParallaxSteps` 2 times), weighted by direction and by how well its depth agrees with the
+  ray (`Agreement` 24: parts hidden from a view do not smear); the blended coverage below `Cutoff` is discarded; the
+  surface's own depth goes to `gl_FragDepth` (`layout(depth_greater)`: the billboard stands in front of the sphere), so
+  impostors intersect geometry and receive shadows where their surface is. Lighting from the rebuilt normal and world
+  position: with a specular atlas LitTextured's BRDF (`SPECULAR_MAP`; `MIXED_WORKFLOW` keeps the scene's highlight where
+  the atlas is black), else the scene's Blinn-Phong as Lit; every directional light with its shadows, local lights,
+  `GetIndirectLighting` (Lumen and VCT), emission. Material values: tint, cutoff, parallax, steps, agreement, shadow bias.
+- A material shader's own passes (new, general): render state lines `ShadowCaster Custom`, `GeometryPrepass Custom`,
+  `SurfaceCapture On` (`ShaderRenderState.CustomShadowCaster` / `CustomGeometryPrepass` / `SurfaceCapture`); the pass draws
+  the object with the same file compiled with the pass's define next to the material's keywords and the instanced define
+  (`ShaderPass`, `ShaderPasses`, `ShaderProgram.GetPassVariant`: `LEL_SHADOW_CASTER`, `LEL_GEOMETRY_PREPASS`,
+  `LEL_SURFACE_CAPTURE`) and `Material.SetUniforms`. `GpuScene` puts such buckets last (`PlainBucketCount`,
+  `FirstOwnPassBucket`; the shadow cull has a segment for the plain casters and one per own-pass bucket,
+  `DrawShadowBucket`; `OwnPassParts` for what cannot be bucketed); `GeometryPrepass`, `ShadowPass`, `GridShadowMap` (local
+  lights) and `MeshRenderer.RenderSubMeshPass` / `RenderOwnShadowCasters` draw them. `LelInverseModelMatrix()` in
+  Engine/Instancing.glsl. The impostor's prepass variant writes normal, roughness and motion ((model - previous model)
+  x the surface point); its forward variant tests `Cutoff - 0.01` and writes depth x (1 - 3e-7) so LEQUAL passes where
+  the prepass wrote; its shadow variant pushes the surface `ShadowBias` radii from the light.
+- Pass variants build with their program, not at the first draw: `ShaderProgram.BuildPassVariants()` (the passes of
+  `ShaderPasses.Drawn` the render state declares; the capture variant compiles when a bake runs) from
+  `SceneManager.PrepareAsset`, `ShaderVariantList.Compile`, both paths of `ShaderCompileOperation`, the compile helper;
+  `ShaderProgram.BinariesCached` asks for them too; `ShaderValidator` checks them (`ReadPassDefines`). A build's log:
+  "Compiled 10 shader programs for the start scene's 3 variants" (6 the impostor's: variant, instanced, two passes each).
+- Found on the way: `TextureProperty.Bind` asked for the texture's handle before activating its unit, so a texture
+  uploading on its first use bound itself on the unit of the texture bound before it, which then drew black (the first
+  view of the first bake; any material whose second texture uploads at its first draw). And a JSON document saved with
+  a UTF-8 byte order mark (a text editor, PowerShell 5.1's `Set-Content -Encoding utf8`) read as no document: `IsJson`
+  took the mark, the parser did not, so an asset showed as "Missing script" (`JsonDocumentFormat.WithoutByteOrderMark`).
+- Editor (`LELEngine.Editor/Impostors/ImpostorAssets.cs`, `EditorApplication.Impostors.cs`, `Inspector/ImpostorInspector.cs`):
+  a bake writes, next to the asset on the first bake and into the files the asset references after that (moved or renamed
+  files stay the user's, a new file never replaces another), the atlases as PNG with their import settings (mipmaps,
+  trilinear, clamp, anisotropy 1, the file's size; Shape linear and `compression` None, the colours sRGB and BC7; the
+  compression is set once, then the user's), the proxy as an .obj (written only when the box changed: the model imports
+  again and the scene is rebuilt, `ReloadScene`), the material (its tint, cutoff, parallax and bias stay) and the asset.
+  An atlas a later bake has no use for stays on disk (a log line). No bake while the game plays; a bake is no undo step.
+  Entry points: Create Impostor on a prefab or model file (Project panel context menu, Assets > Create Impostor: "Name
+  Impostor.asset" next to it, baked, selected), the asset's inspector (Bake / Bake Again, what it made, the baked files
+  as references, a look at an atlas with the texels outside the object dimmed), Assets > Bake Impostor / Bake All
+  Impostors, the LOD Group inspector's Add Impostor field (drop or pick an asset: one undo step), automation
+  (`EditorAutomation.CreateImpostor` / `BakeImpostor` / `BakeAllImpostors` / `AddImpostorLevel`; CLI `impostor create
+  <prefab or model>`, `impostor bake <asset>|all`, `impostor add-level <object> <asset>`). `Png.Encode(..., bottomUp)`.
+  ImGui reads its texts as printf formats: the LOD Group inspector's "Last frame" line printed "% x" as a stray hex
+  number (and CascadeSplitsEditor's tooltip had "% ("): "%%" now.
+- Why the Shape atlas ships uncompressed (probe project's build, the impostor at 1.6 x its frame size, whole frame
+  against the uncompressed build): BC7 mean 0.489 / 255 with 1.21 % of the pixels over 8 (ragged outlines, holes, ragged
+  shadow), BC7 High Quality 0.327 (and a 58 s build), the same build twice 0.002. 12.6 MB against 3.1 MB for 1536 x 1536.
+- Measured (780M, 1280 x 720, Debug). Mesh against impostor in the same place, 186 x 186 crops, mean of 255: gi=0 group
+  1.37, axe 0.59, ship 2.32 (a car whose model's normals face away 4.75: such normals are stored mirrored towards the
+  view); Lumen at frame 400 group 0.45, axe 0.55, ship 3.21 (turned 240 degrees 0.56, 1.21, 3.28, and the same while
+  the objects turn there); VCT 0.39, 0.53, 3.42 (the ship's smooth specular surface reflects the GI, and its rebuilt
+  normals are softer than the mesh's). Ship over six views by
+  parallax steps 1 / 2 / 3 / 4: 3.88 / 3.41 / 3.34 / 3.31; without the agreement weight 4.92. The group under Lumen
+  before `MIXED_WORKFLOW` 3.19, after 0.44 (VCT 3.13, 0.41). GPU frame: 900 ships as meshes 6.12 ms, as impostors 3.76;
+  3,600 ships 24.83 ms (prepass 11.32, opaque 10.85, shadows 2.57) against 6.56 (1.90, 2.31, 2.19); the CPU's render
+  time is the same either way (one instance each). Bake of 12 x 12 views of 128 at 4 samples: ~1.1 s in the editor (2,224
+  triangles), 8 x 8 of 64: 0.15 s. The prepass's motion vectors, turning 0.6 degrees a frame (`impostormotion=60`: moved
+  pixels and mean vector per prop, x 1000): ship mesh 6182 (-6.54, 0, -4.62), impostor 6064 (-6.81, 0, -4.76); car 2146
+  (-13.30, 0, 5.12) / 2114 (-13.32, 0, 5.10); the same GPU-driven and per object. (A Lumen A/B of the turning objects
+  did not change when the vectors were zeroed or reversed in the built shader: it proves nothing about them.)
+- Verify recipes. TestGame `impostors=1` (`ImpostorTestScene`: a ship (specular workflow, specular and emission maps), an
+  axe (scene workflow, normal map), a car, a group of renderers with a glowing and a metal part; `impostorswap=frame`
+  shows the meshes until then and the impostors in their places after; `impostorfield=N` ships with LOD groups; the other
+  `impostor...` options are listed in Program.cs): scratchpad `ab.ps1` (two runs, per prop crops, `compare.ps1`),
+  `sweep.ps1` (six views x variants), `perf.ps1`, `regress.ps1` (the engine's scenes against a build of the commit before:
+  lumen, vct, gi=0, materials, refraction, lights + night, three suns, outdoor, gpudriven=0 identical at frame 400, max 1 of
+  255; trails differ as two runs of the old build do, they move with real time). Checked there: with and without the
+  prepass, `gpudriven=0`, three shadowed suns, local lights, a non-uniform scale, any yaw and pitch, the hemisphere,
+  odd frame counts, cutting into the ground. Editor: scratchpad `ImpostorProbe` (`editor.ps1` batch `-listen` or `-Gui`,
+  `cli.ps1`, `build.ps1`, `player.ps1`; `Assets/Editor/ImpostorProbe.cs` makes the materials, prefabs and scene): create
+  from a prefab and from a model, bake again in place, settings changed on disk then baked (8 x 8 of 64, upper half),
+  errors (no source, no impostor, play mode), the three actions, the context menu and the inspector's button and picker
+  by `click`, add-level with undo / redo and inside prefab mode (the prefab saved, its instances followed), play mode,
+  a player build (atlases as KTX, the proxy as LELMODEL, 40 stage sources through glslang) and its frame.
+- Limits and not verified: no cross-fade (the engine has none: the switch is a pop; an impostor drawn larger than its
+  frame size blurs, so keep the level's height under FrameSize / the view's height); transparent sub-meshes are not
+  baked; a hemisphere impostor seen from below shows its horizon views; the shadow it casts is rebuilt from the light's
+  nearest views (soft detail, the bias). Only the 780M ran it (glslang passes for the three GPU profiles). Not checked:
+  a re-bake that changes the box while prefab mode is open (the scene behind it keeps the old proxy until it reloads).
+
 ## Input system (Rewired-like, 2026-10-22)
 
 - Runtime in `LELEngine/InputSystem`: `InputConfiguration` (a ScriptableObject asset: `Settings`, action categories,

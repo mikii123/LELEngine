@@ -81,6 +81,9 @@ namespace LELEngine.Shaders
 	///     Cull Off                                    // Back, Front, Off
 	///     Queue Transparent                           // Background, Geometry, AlphaTest, Transparent, Overlay, +/- offset, or a number
 	///     ShadowCaster Off                            // On / Off: the material's objects cast no shadow (Unity: a shader without a ShadowCaster pass)
+	///     ShadowCaster Custom                         // the shader draws its casters itself (Unity: a shader with a ShadowCaster pass of its own)
+	///     GeometryPrepass Custom                      // Custom / Default: the shader draws its depth, normal and motion itself (Unity: its own DepthNormals pass)
+	///     SurfaceCapture On                           // On / Off: the shader can write its surface instead of lighting it (what impostor bakes capture)
 	///     GrabPass On                                 // On / Off / a float property: the scene drawn so far is copied before each draw (Unity's GrabPass)
 	///     SceneDepth On                               // On / Off: the shader reads the opaque scene's depth (Unity's _CameraDepthTexture, soft particles)
 	///     </code>
@@ -95,6 +98,16 @@ namespace LELEngine.Shaders
 	///     widened by that shift is copied, and one copy serves the later objects nothing drawn since overlaps.
 	///     SceneDepth (transparent queues only): the transparent pass copies the depth buffer once the opaques are drawn and
 	///     binds the copy to the shader's draws (Engine/SceneDepth.glsl).
+	///     ShadowCaster Custom and GeometryPrepass Custom (opaque queues): the engine draws depth with programs of its own
+	///     that only place the mesh's vertices, so a shader that shapes its vertices, cuts its surface out by alpha or
+	///     writes its own depth (a billboard that stands for a mesh: Engine/Impostor.shader) draws those passes itself,
+	///     with the variant of the same file compiled for the pass (<see cref="ShaderProgram.GetPassVariant" />: the
+	///     define LEL_SHADOW_CASTER or LEL_GEOMETRY_PREPASS next to the material's keywords). The variant gets the pass's
+	///     view (viewMatrix, projectionMatrix), the object (Engine/Instancing.glsl, GPU-driven too) and the material's
+	///     values. A shadow caster writes depth only; a geometry prepass writes what Engine/GBuffer.shader writes (world
+	///     normal + roughness at location 0, world motion at location 1) and the depth its own shading then tests against.
+	///     SurfaceCapture On: the variant compiled with LEL_SURFACE_CAPTURE writes the surface the shader would light
+	///     (see <see cref="ShaderPass.SurfaceCapture" />) and reads no lighting.
 	/// </summary>
 	public sealed class ShaderRenderState
 	{
@@ -118,6 +131,21 @@ namespace LELEngine.Shaders
 
 		/// <summary>The material's objects draw into shadow maps (opaque depth, or the transmittance of transparent ones).</summary>
 		public bool CastShadows = true;
+
+		/// <summary>
+		///     ShadowCaster Custom: the shadow passes draw the material's objects with the shader's own variant
+		///     (<see cref="ShaderPass.ShadowCaster" />) instead of the engine's depth program.
+		/// </summary>
+		public bool CustomShadowCaster;
+
+		/// <summary>
+		///     GeometryPrepass Custom: the geometry prepass draws the material's objects with the shader's own variant
+		///     (<see cref="ShaderPass.GeometryPrepass" />) instead of Engine/GBuffer.shader.
+		/// </summary>
+		public bool CustomGeometryPrepass;
+
+		/// <summary>SurfaceCapture On: the shader has a variant that writes its surface (<see cref="ShaderPass.SurfaceCapture" />).</summary>
+		public bool SurfaceCapture;
 
 		/// <summary>
 		///     The transparent pass copies the scene drawn so far right before each of the material's objects draws
@@ -162,6 +190,8 @@ namespace LELEngine.Shaders
 				case "cull":
 				case "queue":
 				case "shadowcaster":
+				case "geometryprepass":
+				case "surfacecapture":
 				case "grabpass":
 				case "scenedepth":
 					return true;
@@ -188,7 +218,11 @@ namespace LELEngine.Shaders
 				case "cull":
 					return ParseCull(rest, out error);
 				case "shadowcaster":
-					return ParseSwitch(rest, out CastShadows, out error);
+					return ParseShadowCaster(rest, out error);
+				case "geometryprepass":
+					return ParseGeometryPrepass(rest, out error);
+				case "surfacecapture":
+					return ParseSwitch(rest, out SurfaceCapture, out error);
 				case "grabpass":
 					return ParseGrabPass(rest, out error);
 				case "scenedepth":
@@ -230,6 +264,9 @@ namespace LELEngine.Shaders
 			Cull = other.Cull;
 			Queue = other.Queue;
 			CastShadows = other.CastShadows;
+			CustomShadowCaster = other.CustomShadowCaster;
+			CustomGeometryPrepass = other.CustomGeometryPrepass;
+			SurfaceCapture = other.SurfaceCapture;
 			GrabPass = other.GrabPass;
 			GrabOffsetProperty = other.GrabOffsetProperty;
 			SceneDepth = other.SceneDepth;
@@ -300,6 +337,8 @@ namespace LELEngine.Shaders
 			if (ZTest.HasValue) text.Append(", ZTest ").Append(ZTest.Value);
 			if (Cull != CullMode.Back) text.Append(", Cull ").Append(Cull);
 			if (!CastShadows) text.Append(", no shadows");
+			if (CustomShadowCaster) text.Append(", own shadow caster");
+			if (CustomGeometryPrepass) text.Append(", own geometry prepass");
 			if (GrabPass) text.Append(", GrabPass").Append(GrabOffsetProperty != null ? " (" + GrabOffsetProperty + ")" : "");
 			if (SceneDepth) text.Append(", SceneDepth");
 			return text.ToString();
@@ -388,6 +427,45 @@ namespace LELEngine.Shaders
 				default:
 					value = true;
 					error = "expected On or Off";
+					return false;
+			}
+		}
+
+		// "On" / "Off", or "Custom": on, drawn by the shader's own variant.
+		private bool ParseShadowCaster(string text, out string error)
+		{
+			if (text.Trim().Equals("Custom", StringComparison.OrdinalIgnoreCase))
+			{
+				error = null;
+				CastShadows = true;
+				CustomShadowCaster = true;
+				return true;
+			}
+
+			CustomShadowCaster = false;
+			if (ParseSwitch(text, out CastShadows, out error))
+			{
+				return true;
+			}
+
+			error = "expected On, Off or Custom";
+			return false;
+		}
+
+		// "Custom" (the shader's own variant) or "Default" (Engine/GBuffer.shader).
+		private bool ParseGeometryPrepass(string text, out string error)
+		{
+			error = null;
+			switch (text.Trim().ToLowerInvariant())
+			{
+				case "custom":
+					CustomGeometryPrepass = true;
+					return true;
+				case "default":
+					CustomGeometryPrepass = false;
+					return true;
+				default:
+					error = "expected Custom or Default";
 					return false;
 			}
 		}

@@ -2,6 +2,8 @@
 Color ("Color", Color) = (1, 1, 1, 1)
 [HDR] Emissive ("Emissive (rgb color, a intensity)", Color) = (0, 0, 0, 0)
 Roughness ("Roughness", Range(0, 1)) = 0.6
+// The LEL_SURFACE_CAPTURE variant writes the surface instead of lighting it (impostor bakes).
+SurfaceCapture On
 /////Properties
 
 //Vertex
@@ -42,10 +44,13 @@ void main()
 
 #version 430
 
+// LEL_SURFACE_CAPTURE (ShaderPass.SurfaceCapture): the surface is written, not lit, so nothing of the lighting is read.
+#ifndef LEL_SURFACE_CAPTURE
 #include "Engine/Shadows.glsl"
 #include "Engine/VoxelConeTracing.glsl"
 #include "Engine/Lights.glsl"
 #include "Engine/DirectionalLights.glsl"
+#endif
 
 // Material: Color, Emissive (rgb color, a intensity, also fed into the GI), Roughness (0 = unset -> 0.6).
 #include "Engine/Instancing.glsl"
@@ -68,7 +73,15 @@ struct Specular {
 uniform Ambient LAmbient;
 uniform Specular LSpecular;
 
+#ifdef LEL_SURFACE_CAPTURE
+// The surface (ShaderPass.SurfaceCapture).
+layout(location = 0) out vec4 CaptureDiffuse;   // rgb: the colour the surface scatters
+layout(location = 1) out vec4 CaptureNormal;    // xyz: the shading normal (world)
+layout(location = 2) out vec4 CaptureSpecular;  // rgb: the specular colour (0: the highlight is the scene's), a: smoothness
+layout(location = 3) out vec4 CaptureEmission;  // rgb: the emitted radiance, a: the occlusion of the indirect light
+#else
 out vec4 FragColor;
+#endif
 
 void main()
 {
@@ -78,10 +91,16 @@ void main()
 	float materialRoughness = material.params.x;
 
 	vec3 N = normalize(fNormal);
-	vec3 V = normalize(LSpecular.viewPos - fPosition);
-
 	vec3 albedo = color.rgb;
 	float roughness = materialRoughness > 0.0 ? materialRoughness : 0.6;
+
+#ifdef LEL_SURFACE_CAPTURE
+	CaptureDiffuse = vec4(albedo, 1.0);
+	CaptureNormal = vec4(N, 1.0);
+	CaptureSpecular = vec4(0.0, 0.0, 0.0, 1.0 - roughness);
+	CaptureEmission = vec4(emissive.rgb * emissive.a, 1.0);
+#else
+	vec3 V = normalize(LSpecular.viewPos - fPosition);
 
 	// Indirect: voxel cone tracing replaces most of the flat ambient term.
 	vec3 ambient = LAmbient.ambColor.rgb * LAmbient.ambStrength * albedo;
@@ -123,6 +142,7 @@ void main()
 	}
 
 	FragColor = vec4(result, color.a);
+#endif
 }
 
 /////Fragment

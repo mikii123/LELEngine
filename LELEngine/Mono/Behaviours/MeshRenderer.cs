@@ -237,7 +237,8 @@ public sealed class MeshRenderer : Behaviour
 
 	/// <summary>
 	///     <see cref="RenderWith(ShaderProgram)" /> for shadow maps: the opaque sub-meshes whose material casts shadows
-	///     (not those of a shader with ShadowCaster Off).
+	///     (not those of a shader with ShadowCaster Off) with the engine's depth program. Those whose shader casts its
+	///     shadows itself (ShadowCaster Custom) are left to <see cref="RenderOwnShadowCasters" />.
 	/// </summary>
 	public void RenderShadowCastersWith(ShaderProgram program)
 	{
@@ -249,6 +250,98 @@ public sealed class MeshRenderer : Behaviour
 	{
 		Material m = GetMaterial(subMesh);
 		return m == null || m.RenderState.CastShadows;
+	}
+
+	/// <summary>
+	///     The program a sub-mesh's material shader draws one of the engine's passes with (<see cref="ShaderPass" />): its
+	///     variant of that pass, when the shader declares one and it links; null when the engine's own program draws the
+	///     sub-mesh in that pass.
+	/// </summary>
+	public ShaderProgram GetPassProgram(int subMesh, ShaderPass pass)
+	{
+		ShaderProgram program = GetMaterial(subMesh)?.Program;
+		if (program == null || !ShaderPasses.Declares(program.RenderState, pass))
+		{
+			return null;
+		}
+
+		ShaderProgram variant = program.GetPassVariant(pass);
+		return variant != null && variant.IsLinked ? variant : null;
+	}
+
+	/// <summary>
+	///     Draws one sub-mesh with its material shader's own variant of a pass (<see cref="GetPassProgram" />): the
+	///     pass's view, the object (and its world matrix of the previous frame, for the geometry prepass), the material's
+	///     values with the renderer's own on top, the shader's cull mode. False, and nothing drawn, when the shader has no
+	///     such variant: the engine's program draws the sub-mesh. The variant stays bound.
+	/// </summary>
+	public bool RenderSubMeshPass(int subMesh, ShaderPass pass, OpenTK.Mathematics.Matrix4 view, OpenTK.Mathematics.Matrix4 projection, OpenTK.Mathematics.Matrix4? previousModel = null)
+	{
+		if (mesh == null)
+		{
+			return false;
+		}
+
+		ShaderProgram variant = GetPassProgram(subMesh, pass);
+		if (variant == null)
+		{
+			return false;
+		}
+
+		variant.Use();
+		variant.RenderState.ApplyCull();
+		variant.SetMatrix4("viewMatrix", view);
+		variant.SetMatrix4("projectionMatrix", projection);
+		transform.SetModelMatrix(variant);
+		if (previousModel.HasValue)
+		{
+			variant.SetMatrix4("previousModelMatrix", previousModel.Value);
+		}
+
+		GetMaterial(subMesh).SetUniforms(variant, propertyBlock);
+		DrawSubMesh(subMesh);
+		return true;
+	}
+
+	/// <summary>
+	///     Draws into a shadow map the opaque sub-meshes whose shader casts its shadows itself (ShadowCaster Custom), each
+	///     with its own program; what <see cref="RenderShadowCastersWith" /> leaves out. True when something drew: the
+	///     caller's program is no longer bound and the cull mode may have changed.
+	/// </summary>
+	public bool RenderOwnShadowCasters(OpenTK.Mathematics.Matrix4 view, OpenTK.Mathematics.Matrix4 projection)
+	{
+		if (mesh == null || !HasOwnShadowCasters)
+		{
+			return false;
+		}
+
+		bool drawn = false;
+		for (int i = 0; i < mesh.SubMeshCount; i++)
+		{
+			if (!IsSubMeshTransparent(i) && IsSubMeshShadowCaster(i))
+			{
+				drawn |= RenderSubMeshPass(i, ShaderPass.ShadowCaster, view, projection);
+			}
+		}
+
+		return drawn;
+	}
+
+	/// <summary>Some sub-mesh's shader casts its shadows itself (ShadowCaster Custom).</summary>
+	internal bool HasOwnShadowCasters
+	{
+		get
+		{
+			for (int i = 0; i < PartCount; i++)
+			{
+				if (IsOwnShadowCaster(i))
+				{
+					return true;
+				}
+			}
+
+			return false;
+		}
 	}
 
 	/// <summary>One sub-mesh with an externally provided program (only the model matrix is set).</summary>
@@ -290,7 +383,7 @@ public sealed class MeshRenderer : Behaviour
 		bool every = !HasTransparentParts;
 		for (int i = 0; every && shadowCastersOnly && i < PartCount; i++)
 		{
-			every = IsSubMeshShadowCaster(i);
+			every = IsSubMeshShadowCaster(i) && !IsOwnShadowCaster(i);
 		}
 
 		if (every)
@@ -301,11 +394,18 @@ public sealed class MeshRenderer : Behaviour
 
 		for (int i = 0; i < mesh.SubMeshCount; i++)
 		{
-			if (!IsSubMeshTransparent(i) && (!shadowCastersOnly || IsSubMeshShadowCaster(i)))
+			if (!IsSubMeshTransparent(i) && (!shadowCastersOnly || (IsSubMeshShadowCaster(i) && !IsOwnShadowCaster(i))))
 			{
 				DrawSubMesh(i);
 			}
 		}
+	}
+
+	// The sub-mesh's shader casts its shadows itself, with a variant that links (otherwise the engine's program draws it).
+	private bool IsOwnShadowCaster(int subMesh)
+	{
+		Material m = GetMaterial(subMesh);
+		return m != null && m.RenderState.CustomShadowCaster && GetPassProgram(subMesh, ShaderPass.ShadowCaster) != null;
 	}
 
 	#endregion

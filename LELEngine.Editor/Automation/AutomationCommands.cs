@@ -81,6 +81,10 @@ namespace LELEngine.Editor.Automation
 			"  get <object> <Component.field>\n" +
 			"  set <object> <Component.field> <value> one undo step; values: 1.5, true, EnumName, 1,2,3, null, new:Class\n" +
 			"  add-component <object> <Type>\n" +
+			"  impostor create <prefab or model>      an impostor asset of the file next to it (\"Name Impostor.asset\"), baked\n" +
+			"  impostor bake <asset>|all              bakes it again into its files (atlases, proxy model, material)\n" +
+			"  impostor add-level <object> <asset>    the baked impostor as the last level of the object's LOD group (an\n" +
+			"                                         object without a group gets one); one undo step\n" +
 			"  scene open <path> [--save|--discard] | scene new [--save|--discard] | scene save [path]\n" +
 			"                                         unsaved changes (scene, prefab) without --save / --discard: it fails\n" +
 			"  play | stop | pause | step | undo | redo\n" +
@@ -366,6 +370,44 @@ namespace LELEngine.Editor.Automation
 					Behaviour added = EditorAutomation.AddComponent(args[0], args[1]);
 					await EditorAutomation.NextFrame(2);
 					text.Append(added != null ? "Added " + added.GetType().Name : "Not added").Append('\n');
+					break;
+				}
+
+				case "impostor":
+				{
+					const string usage = "impostor create <prefab or model> | impostor bake <asset>|all | impostor add-level <object> <asset>";
+					Need(args, 1, usage);
+					switch (args[0].ToLowerInvariant())
+					{
+						case "create":
+							Need(args, 2, "impostor create <prefab or model>");
+							text.Append("Created ").Append(EditorAutomation.CreateImpostor(string.Join(" ", args.Skip(1)))).Append('\n');
+							break;
+						case "bake":
+							Need(args, 2, "impostor bake <asset>|all");
+							if (args.Count == 2 && string.Equals(args[1], "all", StringComparison.OrdinalIgnoreCase))
+							{
+								text.Append("Baked ").Append(EditorAutomation.BakeAllImpostors()).Append(" impostor assets\n");
+							}
+							else
+							{
+								string asset = string.Join(" ", args.Skip(1));
+								text.Append("Baked ").Append(asset).Append(": ").Append(EditorAutomation.BakeImpostor(asset)).Append('\n');
+							}
+
+							break;
+						case "add-level":
+						{
+							Need(args, 3, "impostor add-level <object> <asset>");
+							GameObject child = EditorAutomation.AddImpostorLevel(args[1], string.Join(" ", args.Skip(2)));
+							text.Append(child != null ? "Added " + child.Name + " #" + child.Id : "Not added").Append('\n');
+							break;
+						}
+						default:
+							throw new ArgumentException(usage);
+					}
+
+					await EditorAutomation.NextFrame(2);
 					break;
 				}
 

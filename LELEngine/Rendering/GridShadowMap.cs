@@ -134,6 +134,21 @@ namespace LELEngine.Rendering
 						renderer.RenderShadowCastersWith(program);
 					}
 				}
+
+				// The casters whose shader draws them itself (ShadowCaster Custom), each with its own program.
+				bool own = false;
+				foreach (MeshRenderer renderer in casters)
+				{
+					if (renderer.CastShadows)
+					{
+						own |= renderer.RenderOwnShadowCasters(views[i], projections[i]);
+					}
+				}
+
+				if (own)
+				{
+					GLState.SetCull(true, TriangleFace.Back);
+				}
 			}
 
 			if (TransparentShadows.HasCasters(context))

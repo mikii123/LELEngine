@@ -113,6 +113,14 @@ namespace LELEngine.Shaders
 					{
 						variant.AssetPath = value;
 					}
+
+					foreach (ShaderProgram variant in passVariants)
+					{
+						if (variant != null)
+						{
+							variant.AssetPath = value;
+						}
+					}
 				}
 			}
 		}
@@ -125,7 +133,10 @@ namespace LELEngine.Shaders
 		/// <summary>This program is the instanced variant (compiled with <see cref="InstancedDefine" />).</summary>
 		public bool IsInstancedVariant { get; }
 
-		/// <summary>The keywords this program was compiled with (sorted; empty for the shader itself).</summary>
+		/// <summary>
+		///     The keywords this program was compiled with (sorted; empty for the shader itself). A pass variant
+		///     (<see cref="GetPassVariant" />) has the keywords of the program it was made from: its pass's define is not one.
+		/// </summary>
 		public IReadOnlyList<string> Keywords => keywords;
 
 		/// <summary>Material parameters declared in the file's Properties block (empty when it has none).</summary>
@@ -221,18 +232,41 @@ namespace LELEngine.Shaders
 			try
 			{
 				string path = InternalStorage.ShaderKey(variant.Shader);
-				if (!Cached(path, Array.Empty<string>(), out bool includesInstancing))
-				{
-					return false;
-				}
-
 				string[] keywords = variant.Keywords;
-				if (keywords.Length > 0 && !Cached(path, keywords, out _))
+				// The render state of the variant itself: which passes it draws with programs of its own.
+				var state = new ShaderRenderState();
+				if (!Cached(path, Array.Empty<string>(), out bool includesInstancing, keywords.Length == 0 ? state : null))
 				{
 					return false;
 				}
 
-				return !instanced || !includesInstancing || Cached(path, keywords.Append(InstancedDefine).ToArray(), out _);
+				if (keywords.Length > 0 && !Cached(path, keywords, out _, state))
+				{
+					return false;
+				}
+
+				bool instancedToo = instanced && includesInstancing;
+				if (instancedToo && !Cached(path, keywords.Append(InstancedDefine).ToArray(), out _))
+				{
+					return false;
+				}
+
+				foreach (ShaderPass pass in ShaderPasses.Drawn)
+				{
+					if (!ShaderPasses.Declares(state, pass))
+					{
+						continue;
+					}
+
+					string define = ShaderPasses.DefineOf(pass);
+					if (!Cached(path, keywords.Append(define).ToArray(), out _)
+					    || (instancedToo && !Cached(path, keywords.Append(InstancedDefine).Append(define).ToArray(), out _)))
+					{
+						return false;
+					}
+				}
+
+				return true;
 			}
 			catch (Exception e) when (e is IOException || e is UnauthorizedAccessException)
 			{
@@ -240,15 +274,18 @@ namespace LELEngine.Shaders
 			}
 		}
 
-		// The binary cache has the program of these sources (as the constructor reads them).
-		private static bool Cached(string path, string[] defines, out bool includesInstancing)
+		// The binary cache has the program of these sources (as the constructor reads them); state gets their render state.
+		private static bool Cached(string path, string[] defines, out bool includesInstancing, ShaderRenderState state = null)
 		{
-			List<KeyValuePair<ShaderType, string>> stages = ReadStages(path, defines, new List<ShaderProperty>(), new ShaderRenderState(), ShaderFeatures.Current, false, out includesInstancing);
+			List<KeyValuePair<ShaderType, string>> stages = ReadStages(path, defines, new List<ShaderProperty>(), state ?? new ShaderRenderState(), ShaderFeatures.Current, false, out includesInstancing);
 			return ProgramBinaryCache.Has(ProgramBinaryCache.Key(stages));
 		}
 
 		// Keyword variants by their sorted keywords joined with spaces (only on the shader itself).
 		private readonly Dictionary<string, ShaderProgram> variants = new Dictionary<string, ShaderProgram>(StringComparer.Ordinal);
+
+		// This program's variants for the engine's passes (GetPassVariant; index = the pass), made on first use.
+		private readonly ShaderProgram[] passVariants = new ShaderProgram[ShaderPasses.Count];
 
 		#endregion
 
@@ -299,7 +336,7 @@ namespace LELEngine.Shaders
 			assetPath = AssetDatabase.Resolve(path, "Shaders") ?? path.Replace('\\', '/');
 			IsInstancedVariant = Array.IndexOf(defines, InstancedDefine) >= 0;
 			this.defines = defines;
-			keywords = defines.Where(define => define != InstancedDefine).OrderBy(define => define, StringComparer.Ordinal).ToArray();
+			keywords = defines.Where(define => define != InstancedDefine && !ShaderPasses.IsPassDefine(define)).OrderBy(define => define, StringComparer.Ordinal).ToArray();
 			ReadSource();
 			if (start)
 			{
@@ -598,6 +635,111 @@ namespace LELEngine.Shaders
 			return made;
 		}
 
+		/// <summary>
+		///     This program compiled for one of the engine's passes (<see cref="ShaderPass" />): the same file with this
+		///     program's defines (a variant's keywords, the instanced define) and the pass's, made on first use (any thread;
+		///     it compiles on the thread with the GL context) and kept with this program. A material's variant gives the
+		///     per-object program of the pass, its instanced variant the GPU-driven one. Whether the shader has such a
+		///     variant is its render state's word (<see cref="ShaderPasses.Declares" />): asking for one it does not declare
+		///     compiles the file with a define it ignores. Null for a program that is not from a file.
+		/// </summary>
+		public ShaderProgram GetPassVariant(ShaderPass pass)
+		{
+			ShaderProgram made = passVariants[(int)pass];
+			if (made != null || SourcePath == null)
+			{
+				return made;
+			}
+
+			lock (variants)
+			{
+				made = passVariants[(int)pass];
+				if (made != null)
+				{
+					return made;
+				}
+
+				made = new ShaderProgram(SourcePath, defines.Append(ShaderPasses.DefineOf(pass)).ToArray(), false);
+				made.assetPath = assetPath;
+				passVariants[(int)pass] = made;
+			}
+
+			// Outside the lock, as the keyword variants: on the compile thread this builds it whole.
+			made.StartBuild();
+			return made;
+		}
+
+		/// <summary>
+		///     Builds this program's variants for the passes a frame draws its shader with (<see cref="ShaderPasses.Drawn" />,
+		///     those its render state declares: its own shadow caster and geometry prepass), so the pass's first draw
+		///     compiles nothing. On the thread with the GL context; nothing for most shaders. Returns how many programs this
+		///     call built.
+		/// </summary>
+		public int BuildPassVariants()
+		{
+			if (SourcePath == null || !IsLinked)
+			{
+				return 0;
+			}
+
+			int builtNow = 0;
+			foreach (ShaderPass pass in ShaderPasses.Drawn)
+			{
+				if (!ShaderPasses.Declares(RenderState, pass))
+				{
+					continue;
+				}
+
+				// Counted when this call made it or finished its build (a binary from the cache is built as it starts).
+				ShaderProgram known = passVariants[(int)pass];
+				bool done = known != null && known.built;
+				ShaderProgram variant = GetPassVariant(pass);
+				if (variant == null || done)
+				{
+					continue;
+				}
+
+				variant.EnsureBuilt();
+				if (variant.built)
+				{
+					builtNow++;
+				}
+			}
+
+			return builtNow;
+		}
+
+		/// <summary>
+		///     The defines of the programs the engine's passes draw a variant of a .shader file with: one per pass of
+		///     <see cref="ShaderPasses.Drawn" /> the file's render state declares for these keywords (empty for most
+		///     shaders). Each is compiled next to the keywords, and next to <see cref="InstancedDefine" /> for GPU-driven
+		///     draws. No GL calls.
+		/// </summary>
+		public static List<string> ReadPassDefines(string path, IEnumerable<string> defines)
+		{
+			var state = new ShaderRenderState();
+			ReadStages(path, defines?.ToArray() ?? Array.Empty<string>(), new List<ShaderProperty>(), state, ShaderFeatures.Current, false, out _);
+			var passes = new List<string>();
+			foreach (ShaderPass pass in ShaderPasses.Drawn)
+			{
+				if (ShaderPasses.Declares(state, pass))
+				{
+					passes.Add(ShaderPasses.DefineOf(pass));
+				}
+			}
+
+			return passes;
+		}
+
+		/// <summary>The pass variants made so far (<see cref="GetPassVariant" />), for what follows the program: reloads, deletion.</summary>
+		private ShaderProgram[] MadePassVariants()
+		{
+			lock (variants)
+			{
+				return passVariants.Where(variant => variant != null).ToArray();
+			}
+		}
+
 		/// <summary>A file the source was read from (the .shader or one of its includes) changed since, or is gone.</summary>
 		public bool SourceChanged => SourcePath != null && sourceFiles.Length > 0 && StampOf(sourceFiles) != sourceStamp;
 
@@ -669,6 +811,11 @@ namespace LELEngine.Shaders
 				}
 			}
 
+			foreach (ShaderProgram variant in MadePassVariants())
+			{
+				variant.Reload();
+			}
+
 			return true;
 		}
 
@@ -691,6 +838,11 @@ namespace LELEngine.Shaders
 				}
 
 				variants.Clear();
+				for (int i = 0; i < passVariants.Length; i++)
+				{
+					passVariants[i]?.Delete();
+					passVariants[i] = null;
+				}
 			}
 		}
 

@@ -608,6 +608,13 @@ namespace LELEngine.Editor
 					if (EditorMenu.Item("Instantiate in Scene", "", false, editor.Scene != null)) editor.InstantiatePrefab(assetPath);
 				}
 
+				// An impostor of a prefab or a model: the asset next to it, baked. After the windows are drawn (a bake
+				// may rebuild the scene they show).
+				if (EditorApplication.IsImpostorSource(assetPath) && EditorMenu.Item("Create Impostor", "", false, !editor.IsPlaying))
+				{
+					editor.Defer(() => CreateImpostor(assetPath));
+				}
+
 				if (TextureAssets.IsImageFile(assetPath) && EditorMenu.Item("Reimport"))
 				{
 					TextureAssets.Reimport(assetPath);
@@ -1382,6 +1389,19 @@ namespace LELEngine.Editor
 			}
 
 			ImGui.EndPopup();
+		}
+
+		/// <summary>Create Impostor on a prefab or model file: the baked asset next to it, selected; what stops it is logged.</summary>
+		private void CreateImpostor(string sourcePath)
+		{
+			try
+			{
+				selectedFile = editor.CreateImpostor(sourcePath) ?? selectedFile;
+			}
+			catch (Exception e)
+			{
+				Debug.LogError("[Impostor] " + e.Message);
+			}
 		}
 
 		private void Create(string kind, string name)

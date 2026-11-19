@@ -206,6 +206,11 @@ namespace LELEngine.Shaders
 				texture = null;
 			}
 
+			// The unit first: a texture used for the first time uploads when its handle is asked for, binding and
+			// unbinding itself on the active unit, which until here is the unit of the texture bound just before (that
+			// one then drew black in this draw: the first frame of every material with two textures, and for good in a
+			// bake's first view).
+			GL.ActiveTexture(TextureUnit.Texture0 + unit);
 			TextureTarget target;
 			int handle;
 			if (texture != null && texture.Handle != 0)
@@ -221,7 +226,6 @@ namespace LELEngine.Shaders
 				handle = fallback.Handle;
 			}
 
-			GL.ActiveTexture(TextureUnit.Texture0 + unit);
 			GL.BindTexture(target, handle);
 			GL.Uniform1(location, unit);
 			textureUnit++;

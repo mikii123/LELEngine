@@ -42,7 +42,8 @@ namespace LELEngine.Editor
 
 			if (group.CurrentLOD >= 0)
 			{
-				ImGui.TextDisabled($"Last frame: LOD {group.CurrentLOD} (height on screen {group.CurrentRelativeHeight * 100f:0.#} % x bias {QualitySettings.lodBias:0.##})");
+				// "%%": ImGui reads the text as a printf format (a lone "% x" printed a stray number in hex).
+				ImGui.TextDisabled($"Last frame: LOD {group.CurrentLOD} (height on screen {group.CurrentRelativeHeight * 100f:0.#} %% x bias {QualitySettings.lodBias:0.##})");
 			}
 			else if (group.isActiveAndEnabled && lods.Length > 0)
 			{
@@ -60,6 +61,33 @@ namespace LELEngine.Editor
 			if (ImGui.IsItemHovered())
 			{
 				ImGui.SetTooltip("Reference point and size from the bounds of every level's renderers.");
+			}
+
+			// An impostor asset dropped or picked here becomes the last level: a child object drawing it.
+			FieldDrawer.Label("Add Impostor", null, context);
+			if (ImGui.IsItemHovered())
+			{
+				ImGui.SetTooltip("Drop or pick a baked impostor of this object: a child drawing it becomes the group's last level,\n" +
+				                 "shown below the last level's height (one undo step). A group without levels gets its own\n" +
+				                 "renderers as the first level.");
+			}
+
+			object picked = null;
+			if (ObjectField.Draw(typeof(Impostor), ref picked, context) && picked is Impostor impostor)
+			{
+				// After the inspector is drawn: the group gets a child.
+				EditorApplication editor = context.Editor;
+				editor.Defer(() =>
+				{
+					try
+					{
+						editor.AddImpostorLevel(group.gameObject, impostor);
+					}
+					catch (InvalidOperationException e)
+					{
+						Debug.LogWarning("[Impostor] " + e.Message);
+					}
+				});
 			}
 
 			return changed;

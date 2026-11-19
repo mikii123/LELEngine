@@ -563,9 +563,11 @@ namespace LELEngine
 				{
 					case ShaderProgram program:
 						program.EnsureBuilt();
+						// With it the programs of the passes the shader draws itself (its own shadow caster, geometry prepass).
+						program.BuildPassVariants();
 						if (gpuDriven && program.SupportsInstancing && program.IsLinked)
 						{
-							program.GetInstancedVariant();
+							program.GetInstancedVariant()?.BuildPassVariants();
 						}
 
 						break;

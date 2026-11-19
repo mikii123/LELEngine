@@ -70,6 +70,15 @@ namespace LELEngine.Serialization
 		}
 
 		/// <summary>
+		///     The bytes after a UTF-8 byte order mark, when they start with one (a text editor or a script saved the file
+		///     with it): the JSON parser takes none, and such a file read as no document at all.
+		/// </summary>
+		public static ReadOnlyMemory<byte> WithoutByteOrderMark(byte[] data)
+		{
+			return data != null && data.Length >= 3 && data[0] == 0xEF && data[1] == 0xBB && data[2] == 0xBF ? data.AsMemory(3) : data;
+		}
+
+		/// <summary>
 		///     Puts short arrays of primitives on one line ("[0, 0.5, 0]"): Utf8JsonWriter indents every element on its
 		///     own line, which makes vectors unreadable.
 		/// </summary>
@@ -1086,7 +1095,7 @@ namespace LELEngine.Serialization
 		#region Constructors
 
 		public JsonDocumentReader(byte[] data, SerializationContext context)
-			: this(JsonDocument.Parse(data, new JsonDocumentOptions { AllowTrailingCommas = true, CommentHandling = JsonCommentHandling.Skip }), context)
+			: this(JsonDocument.Parse(JsonDocumentFormat.WithoutByteOrderMark(data), new JsonDocumentOptions { AllowTrailingCommas = true, CommentHandling = JsonCommentHandling.Skip }), context)
 		{ }
 
 		public JsonDocumentReader(string text, SerializationContext context)

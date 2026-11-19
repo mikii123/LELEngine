@@ -574,6 +574,45 @@ namespace LELEngine.Editor
 			return added;
 		}
 
+		// ---------------------------------------------------------------- impostors
+
+		/// <summary>
+		///     Makes an impostor asset of a prefab or model file next to it ("Name Impostor.asset"), bakes it and selects it;
+		///     returns the asset's path. Throws <see cref="InvalidOperationException" /> when the file is no source.
+		/// </summary>
+		public static string CreateImpostor(string sourceAssetPath)
+		{
+			return Editor.CreateImpostor(sourceAssetPath);
+		}
+
+		/// <summary>
+		///     Bakes an impostor asset again into its files (atlases, proxy model, material); the summary of what it made.
+		///     Throws with the reason when it cannot (no impostor, no source, nothing to draw, the game plays).
+		/// </summary>
+		public static string BakeImpostor(string assetPath)
+		{
+			Impostor impostor = EditorApplication.LoadImpostor(assetPath) ?? throw new ArgumentException(assetPath + " is no impostor asset.");
+			Rendering.Impostors.ImpostorBake bake = Editor.BakeImpostor(impostor);
+			return $"{bake.Frames} x {bake.Frames} views of {bake.FrameSize} texels, {bake.SourceTriangles} triangles, {bake.Milliseconds:0} ms";
+		}
+
+		/// <summary>Bakes every impostor asset of the project that has a source; returns how many.</summary>
+		public static int BakeAllImpostors()
+		{
+			return Editor.BakeAllImpostors();
+		}
+
+		/// <summary>
+		///     Adds a baked impostor asset to an object's LOD group as its last level (an object without a group gets one, its
+		///     own renderers the first level); one undo step. Returns the child that draws the impostor.
+		/// </summary>
+		public static GameObject AddImpostorLevel(string objectPath, string assetPath)
+		{
+			GameObject target = RequireObject(objectPath);
+			Impostor impostor = EditorApplication.LoadImpostor(assetPath) ?? throw new ArgumentException(assetPath + " is no impostor asset.");
+			return Editor.AddImpostorLevel(target, impostor);
+		}
+
 		// ---------------------------------------------------------------- play mode, undo
 
 		/// <summary>
