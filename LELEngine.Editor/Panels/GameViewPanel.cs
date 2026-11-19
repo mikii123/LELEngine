@@ -289,6 +289,15 @@ namespace LELEngine.Editor
 
 			ImGui.Image(EditorGui.Texture(ViewRenderer.Texture), viewSize, new NVector2(0, 1), new NVector2(1, 0));
 			ImageOrigin = ImGui.GetItemRectMin();
+			if (editor.IsPlaying)
+			{
+				// While the game plays its image takes the mouse as an item: an image has no id, so to ImGui a press there is
+				// one on the window's empty space, and dragging (firing while aiming) moved a floating Game window. A canvas,
+				// not an automation element: raw ImGui.
+				ImGui.SetCursorScreenPos(ImageOrigin);
+				ImGui.InvisibleButton("##game", viewSize, ImGuiButtonFlags.MouseButtonLeft | ImGuiButtonFlags.MouseButtonRight | ImGuiButtonFlags.MouseButtonMiddle);
+			}
+
 			IsMouseOverImage = ImGui.IsItemHovered();
 			if (Input.Host is GameInputHost host)
 			{

@@ -50,6 +50,10 @@ namespace LELEngine.Editor
 		/// </summary>
 		private static int RunEditor(string[] args)
 		{
+			// Console writes with their call stack from the start (the project chooser too); the editor's console log takes
+			// its place when the editor starts.
+			ConsoleLogWriter.Install();
+
 			// The driver's binaries of the programs linked before (keyed by their final sources: an edited shader compiles
 			// again), before the first window builds a shader; shadercache=0 compiles everything, as the player's switch.
 			if (Array.IndexOf(args, "shadercache=0") < 0)

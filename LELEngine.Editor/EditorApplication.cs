@@ -338,6 +338,12 @@ namespace LELEngine.Editor
 
 			gameInput = new GameInputHost(window, () => PlayState == PlayState.Playing && GameView.HasInputFocus);
 			Input.Host = gameInput;
+			if (window.Controller != null)
+			{
+				window.Controller.KeyPressFilter = UIReceivesKeyPress;
+				window.Controller.TextInputFilter = () => !GameHasKeyboard;
+			}
+
 			Navigation.NavMesh.NavMeshChanged += NotifySceneChanged;
 			TextureAssets.TextureReplaced += OnTextureReplaced;
 
@@ -3667,10 +3673,35 @@ namespace LELEngine.Editor
 			return false;
 		}
 
-		// Game input: keys reach the game only while it plays and the game view has focus.
+		/// <summary>
+		///     The keyboard is the game's: play mode (playing or paused) with the Game view focused. The editor's UI then gets
+		///     no key presses and no typed text but its play shortcuts (<see cref="IsPlayShortcut" />): Tab, Escape, Space,
+		///     the arrows (ImGui's keyboard navigation), Ctrl+Tab (its window switching), Ctrl+S / Z / D, Delete, F and every
+		///     window's own keys belong to the game. Another window clicked gives the editor its keyboard back.
+		/// </summary>
+		private bool GameHasKeyboard => IsPlaying && GameView.HasInputFocus;
+
+		/// <summary>Play / stop (Ctrl+P) and pause / resume (Ctrl+Shift+P): the editor's, also while the game has the keyboard.</summary>
+		private static bool IsPlayShortcut(KeyboardKeyEventArgs e)
+		{
+			const OpenTK.Windowing.GraphicsLibraryFramework.KeyModifiers control = OpenTK.Windowing.GraphicsLibraryFramework.KeyModifiers.Control;
+			const OpenTK.Windowing.GraphicsLibraryFramework.KeyModifiers chord = control | OpenTK.Windowing.GraphicsLibraryFramework.KeyModifiers.Alt
+				| OpenTK.Windowing.GraphicsLibraryFramework.KeyModifiers.Super;
+			return e.Key == OpenTK.Windowing.GraphicsLibraryFramework.Keys.P && (e.Modifiers & chord) == control;
+		}
+
+		// The main window's ImGui context (ImGuiController.KeyPressFilter). The play shortcuts reach it as any key and
+		// HandleShortcuts runs them in the next frame, so the decision here never depends on which handler of the window's
+		// event runs first.
+		private bool UIReceivesKeyPress(KeyboardKeyEventArgs e)
+		{
+			return !GameHasKeyboard || IsPlayShortcut(e);
+		}
+
+		// Game input: keys reach the game only while it plays and the game view has focus; the play shortcuts are the editor's.
 		private void OnWindowKeyDown(KeyboardKeyEventArgs e)
 		{
-			if (PlayState == PlayState.Playing && GameView.HasInputFocus)
+			if (PlayState == PlayState.Playing && GameView.HasInputFocus && !IsPlayShortcut(e))
 			{
 				Input.Input_KeyDown(e);
 			}

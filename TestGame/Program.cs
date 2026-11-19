@@ -55,6 +55,8 @@ namespace TestGame
 		/// </summary>
 		private static void Main(string[] args)
 		{
+			// Every message with its call stack, as the player's log has them.
+			ConsoleLogWriter.Install();
 			// focus=0: automated runs open the window without taking the keyboard focus.
 			Window.StartFocused = GetBool(args, "focus", true);
 			Game.CreateWindow(1280, 720, "LELEngine");

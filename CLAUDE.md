@@ -347,6 +347,40 @@
   windows; batch `-executeMethod AutoTest.Run` and `-listen` + `quit`. Start / stop test editors from the PowerShell
   tool (a Bash-run `Start-Process` hangs on inherited handles).
 
+## Play mode: the keyboard is the game's (2026-11-19)
+
+- The user's ask: in play mode the editor takes no input that can collide with the game ("Tab, for example"); the only
+  input it takes then is play management (the play and pause shortcuts). `EditorApplication.GameHasKeyboard` = play mode
+  (playing or paused) with the Game view focused (`GameViewPanel.HasInputFocus`). Then the main window's ImGui context
+  gets no key presses and no typed text (`ImGuiController.KeyPressFilter` = `UIReceivesKeyPress`, `TextInputFilter`)
+  but Ctrl+P and Ctrl+Shift+P (`IsPlayShortcut`: P with Control, without Alt / Super), which `HandleShortcuts` runs in
+  the next frame as before; the game does not get those two presses (`OnWindowKeyDown`). Releases always reach ImGui
+  (a key let go while held back never stays down there); the game still gets keys only while playing, as before.
+- Why at ImGui's input and not in each shortcut: everything in the editor reads keys through ImGui (no window reads
+  `IsKeyDown` itself), and ImGui does things of its own with them: `NavEnableKeyboard` makes Tab / the arrows move a
+  highlight over the Game window's own widgets and Space / Enter press them (Tab, then Space, would toggle Maximize On
+  Play), Ctrl+Tab switches windows (the Game view would lose its focus, and the game its input), Alt alone toggles the
+  menu layer (ImGui's behavior read from its rules, not reproduced before the fix);
+  and `HandleShortcuts` (Ctrl+S / Z / Y / D / N, Ctrl+Shift+B) and the windows' own keys run regardless of focus. A
+  blocked press is held back whole, its modifiers too. Deciding per event in one place also keeps it independent of the
+  order of the window's event handlers (the controller subscribes before the editor): a shortcut run inside the event
+  would stop play before the controller asks, and the controller would then pass Ctrl+P on and start play again.
+- Automation is untouched: CLI `key` / `type` in play mode go to the game (`GameKeyboard`), `--editor` / `--window`
+  and the test hooks feed ImGui directly (`io.AddKeyEvent`), past the filter. Another window clicked during play takes
+  the keyboard back for the editor (the inspector, the hierarchy's Delete, ...); the other editor windows (Audio
+  Studio, UI Builder, launcher) have contexts of their own without a filter.
+- The mouse: while the game plays, an `InvisibleButton` ("##game", left / right / middle) lies over the Game view's
+  image, so a press there belongs to an item. An `Image` has no id: to ImGui a press on it was one on the window's
+  empty space, which starts moving the window, and dragging (firing while aiming) moved a floating Game window or dock
+  node. `IsMouseOverImage` is read from that button (the image's `IsItemHovered` turns false while another item is
+  active, which would have stopped the wheel reaching the game during a held press). A grabbed cursor already sent ImGui
+  no positions (`ImGuiController.OnMouseMove`).
+- Verified with `dotnet build` only (the user's rule). To check by hand: play, click the Game view, press Tab, the
+  arrows, Space, Escape, Alt, Ctrl+Tab, Ctrl+S / Z / D: the game reacts, the editor does nothing (no highlight on Maximize
+  On Play, the focus stays, nothing saved, undone or duplicated); Ctrl+Shift+P pauses and resumes and Ctrl+P stops from
+  the Game view; click the inspector during play and typing works there; undock the Game window and drag over its image
+  while playing: it stays in place.
+
 ## Editor start: the windows first, the project over frames (2026-11-09)
 
 - The user's ask: the editor's own windows show first, as they will be but without what is not loaded yet (an empty
@@ -1226,12 +1260,26 @@ lighting and the engine's other features. Octahedral impostors, baked into atlas
 ## Console, editor preferences, theme (2026-10-22)
 
 - `Debug` records the caller's stack for every message (`Debug.SetStackTraceLogType(LogType, StackTraceLogType)`,
-  Unity's None / ScriptOnly / Full; ScriptOnly drops System/Microsoft/OpenTK/Hexa/Silk frames; nothing is captured
-  without a `MessageLogged` subscriber). Stdout still gets the text (stack only for exceptions, plus inner exceptions
-  as `--- Caused by` lines); `Debug.Output` routes it: the editor points it at the real stdout and takes the message
-  from `MessageLogged`, so `ConsoleLog` no longer parses Debug text (only other console writes, as before).
+  Unity's None / ScriptOnly / Full; ScriptOnly drops System/Microsoft/OpenTK/Hexa/Silk frames), in every host since
+  2026-11-19 (before, only with a `MessageLogged` subscriber). `Debug.Output` routes the text: the editor points it at
+  the real stdout and takes the message from `MessageLogged`, so `ConsoleLog` never parses Debug text.
 - Direct console writes (the engine's 70-odd `Console.WriteLine`s: `[ProbeGather]`, `[SDF]`, ...) get the writer's
-  call stack too (`Debug.CaptureStackTrace(mode, skipCaller)`, skipping ConsoleLog and System writer frames).
+  call stack too (`Debug.CaptureStackTrace(mode, skipCaller)`, skipping log writers' and System writer frames).
+- Text logs show the stack at once (2026-11-19, the user's rule: "the editor's console hides the stack trace, but in
+  CLI mode, in the logs in files and everywhere else logs must show the stack trace right away"). Every message is
+  written out with its stack on the lines after it, the format of exception stacks: Debug's messages (an exception's
+  own stack, else the caller's), direct console writes (`ConsoleLogWriter`, engine, `Mono/ConsoleLogWriter.cs`: a
+  `TextWriter` over `Console.Out` that writes a message at a time, the lines one write completes, then the writer's
+  stack as the first line's type records it; text bringing its own "   at" lines, such as an exception written whole,
+  and empty lines as they are; `Flush` writes an open line without a stack), build diagnostics (their
+  `   at file:line N`). `ConsoleLogWriter.Install()` in the player (after the Player.log tee, so not in the shader
+  compile helper, whose stdout is its protocol), TestGame, batch mode (after the `-logFile` tee) and the editor's
+  `RunEditor` (the project chooser too); `ConsoleLog` derives from it and takes its place (`ConsoleOutput`: the output
+  under the installed writer while it is still the console's), adding the entries in `OnMessage`. CLI `console`
+  (`ConsoleMessage.ToString`) and JUnit `system-out` print the stack under each message too; the console window's
+  export and copy did already (`ToFullText`). Not touched: `Console.Error` (the CLI client's own errors, the helper),
+  the CLI client's output, the benchmarks' report. Costs a stack capture (file and line from the PDBs) per message in
+  players too, as Unity's logs.
 - Every entry is `ConsoleSource.Game` (a frame in the project folder, a diagnostic of a project file, or logged inside
   `ConsoleLog.BeginGame/EndGame`: play mode frames, the play scene's start, Step) or `Editor`. Preferences > Console >
   Editor messages hides the editor's plain messages (not counted either); its warnings and errors always show. The

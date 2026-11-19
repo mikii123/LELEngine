@@ -1365,9 +1365,11 @@ namespace LELEngine.Editor
 
 		public int Line { get; }
 
+		/// <summary>The message, then its call stack on the lines after it (only the console window folds it away).</summary>
 		public override string ToString()
 		{
-			return $"[{Time:HH:mm:ss}] {Type}: {Text}" + (File != null ? $" ({File}:{Line})" : "");
+			string message = $"[{Time:HH:mm:ss}] {Type}: {Text}" + (File != null ? $" ({File}:{Line})" : "");
+			return StackTrace != null ? message + "\n" + StackTrace : message;
 		}
 	}
 }
