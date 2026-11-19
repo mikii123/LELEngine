@@ -247,9 +247,11 @@ namespace LELEngine.Editor
 		///     whatever covers it; a window behind another tab is brought forward first. <paramref name="window" />: the window
 		///     whose element is meant, when several windows have one of that name.
 		/// </summary>
-		public static Task Click(string element, string window = null)
+		/// <param name="ctrl">The click holds Ctrl (a hierarchy row joins the selection or leaves it).</param>
+		/// <param name="shift">The click holds Shift (the hierarchy rows from the one clicked before to this one).</param>
+		public static Task Click(string element, string window = null, bool ctrl = false, bool shift = false)
 		{
-			return Run(() => InvokeElement(element, window, UIAutomation.Action.Click));
+			return Run(() => InvokeElement(element, window, UIAutomation.Action.Click, ctrl, shift));
 		}
 
 		/// <summary>Double-clicks a UI element (rows that open on a double click: project files, console messages, object fields).</summary>
@@ -453,13 +455,57 @@ namespace LELEngine.Editor
 		/// <summary>Selects a GameObject (path as in <see cref="FindObject" />; null or "none" clears the selection).</summary>
 		public static void Select(string path)
 		{
+			Select(path, false);
+		}
+
+		/// <summary>
+		///     Selects a GameObject; with <paramref name="add" /> it joins the objects already selected (and becomes the active
+		///     one) instead of replacing them.
+		/// </summary>
+		public static void Select(string path, bool add)
+		{
 			if (string.IsNullOrEmpty(path) || string.Equals(path, "none", StringComparison.OrdinalIgnoreCase))
 			{
 				Editor.ClearSelection();
 				return;
 			}
 
-			Editor.Select(RequireObject(path));
+			GameObject go = RequireObject(path);
+			if (!add)
+			{
+				Editor.Select(go);
+				return;
+			}
+
+			var objects = new List<GameObject>(Editor.SelectedObjects);
+			objects.Remove(go);
+			objects.Add(go);
+			Editor.SelectObjects(objects, go);
+		}
+
+		/// <summary>Selects several GameObjects and no others (paths as in <see cref="FindObject" />); the last is the active one.</summary>
+		public static void SelectObjects(params string[] paths)
+		{
+			var objects = new List<GameObject>();
+			foreach (string path in paths ?? Array.Empty<string>())
+			{
+				objects.Add(RequireObject(path));
+			}
+
+			Editor.SelectObjects(objects);
+		}
+
+		/// <summary>The selected GameObjects (the active one, what the inspector shows, is the last).</summary>
+		public static IReadOnlyList<GameObject> GetSelection()
+		{
+			var objects = new List<GameObject>(Editor.SelectedObjects);
+			GameObject active = Editor.Selected;
+			if (active != null && objects.Remove(active))
+			{
+				objects.Add(active);
+			}
+
+			return objects;
 		}
 
 		/// <summary>Selects a project file (the inspector shows it): "Materials/Ground.material".</summary>
@@ -881,9 +927,9 @@ namespace LELEngine.Editor
 		///     Asks for a UI element to be invoked (<see cref="UIAutomation" />) and waits for it to react; the element's OS
 		///     window's ImGui context. Its window comes forward first when it was not drawn lately (a tab behind another).
 		/// </summary>
-		private static async Task<ImGuiController> InvokeElement(string element, string window, UIAutomation.Action action)
+		private static async Task<ImGuiController> InvokeElement(string element, string window, UIAutomation.Action action, bool ctrl = false, bool shift = false)
 		{
-			return await InvokeResolved(await ResolveElement(element, window), action);
+			return await InvokeResolved(await ResolveElement(element, window), action, ctrl, shift);
 		}
 
 		/// <summary>
@@ -938,10 +984,10 @@ namespace LELEngine.Editor
 			return match;
 		}
 
-		private static async Task<ImGuiController> InvokeResolved(TestAnchors.Match match, UIAutomation.Action action)
+		private static async Task<ImGuiController> InvokeResolved(TestAnchors.Match match, UIAutomation.Action action, bool ctrl = false, bool shift = false)
 		{
 			ImGuiController owner = OwnerOfWindow(match.Window);
-			if (!await UIAutomation.Invoke(owner, match.Window, match.Entry.Item, match.Name, action, 0))
+			if (!await UIAutomation.Invoke(owner, match.Window, match.Entry.Item, match.Name, action, 0, null, ctrl, shift))
 			{
 				string what = action == UIAutomation.Action.ContextMenu ? "has no context menu" : action == UIAutomation.Action.DoubleClick ? "does nothing on a double click" : "did not react to a click";
 				throw new InvalidOperationException($"'{match.Name}' {what} (or it was not drawn in the next frames).");

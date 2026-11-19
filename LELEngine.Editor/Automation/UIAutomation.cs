@@ -69,6 +69,10 @@ namespace LELEngine.Editor.Automation
 		/// <summary>The item a click was reported for in this frame (a following double-click check of the same item reports too).</summary>
 		private static uint clickedItem;
 
+		// The modifier keys of the click asked for (a Ctrl or Shift click of a row); they hold until the tick after its answer.
+		private static bool invokedCtrl;
+		private static bool invokedShift;
+
 		#endregion
 
 		#region PublicMethods
@@ -77,10 +81,12 @@ namespace LELEngine.Editor.Automation
 		///     Asks for the element to be invoked in the next frames (<paramref name="text" />: the value for
 		///     <see cref="Action.SetValue" />); true when it reacted (false: see <see cref="LastError" />).
 		/// </summary>
-		public static Task<bool> Invoke(ImGuiController owner, uint window, uint item, string name, Action action, int button, string text = null)
+		public static Task<bool> Invoke(ImGuiController owner, uint window, uint item, string name, Action action, int button, string text = null, bool ctrl = false, bool shift = false)
 		{
 			current?.Result.TrySetResult(false);
 			LastError = null;
+			invokedCtrl = ctrl;
+			invokedShift = shift;
 			current = new Request
 			{
 				Context = (nint)owner.Context.Handle,
@@ -102,6 +108,8 @@ namespace LELEngine.Editor.Automation
 			clickedItem = 0;
 			if (current == null)
 			{
+				invokedCtrl = false;
+				invokedShift = false;
 				return;
 			}
 
@@ -255,6 +263,12 @@ namespace LELEngine.Editor.Automation
 			deactivated.HasBeenEditedBefore = 1;
 			deactivated.IsAlive = 1;
 		}
+
+		/// <summary>The click automation asked for holds Ctrl (code that reads the keyboard for a click reads this for an invoked one).</summary>
+		public static bool InvokedCtrl => invokedCtrl;
+
+		/// <summary>The click automation asked for holds Shift.</summary>
+		public static bool InvokedShift => invokedShift;
 
 		/// <summary>A click of this item was reported in this frame (by its activation or a click check).</summary>
 		public static bool WasClicked(uint item)

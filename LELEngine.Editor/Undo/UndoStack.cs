@@ -257,6 +257,36 @@ namespace LELEngine.Editor
 		#endregion
 	}
 
+	/// <summary>Several records as one step (the transforms of a selection moved together): undone last first.</summary>
+	internal sealed class GroupRecord : UndoRecord
+	{
+		#region PublicFields
+
+		public readonly List<UndoRecord> Records = new List<UndoRecord>();
+
+		#endregion
+
+		#region PublicMethods
+
+		public override void Undo(EditorApplication editor)
+		{
+			for (int i = Records.Count - 1; i >= 0; i--)
+			{
+				Records[i].Undo(editor);
+			}
+		}
+
+		public override void Redo(EditorApplication editor)
+		{
+			foreach (UndoRecord record in Records)
+			{
+				record.Redo(editor);
+			}
+		}
+
+		#endregion
+	}
+
 	/// <summary>
 	///     Structural change (objects created, deleted, re-parented, components added or removed): the whole scene
 	///     before and after. Undo reloads the snapshot.
@@ -267,8 +297,8 @@ namespace LELEngine.Editor
 
 		public byte[] Before;
 		public byte[] After;
-		public ulong SelectionBefore;
-		public ulong SelectionAfter;
+		public ulong[] SelectionBefore;
+		public ulong[] SelectionAfter;
 
 		#endregion
 
@@ -381,8 +411,8 @@ namespace LELEngine.Editor
 		public readonly List<(string path, byte[] before, byte[] after)> Files = new List<(string, byte[], byte[])>();
 		public byte[] SceneBefore;
 		public byte[] SceneAfter;
-		public ulong SelectionBefore;
-		public ulong SelectionAfter;
+		public ulong[] SelectionBefore;
+		public ulong[] SelectionAfter;
 
 		#endregion
 

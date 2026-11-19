@@ -297,6 +297,9 @@ GPU event, ribbons and soft smoke puffs, all simulated and drawn on the GPU.*
 **Editor (`LELEngine.Editor`)**
 - Project launcher, dockable Dear ImGui interface, hierarchy, inspector, project browser, console, undo/redo and
   gizmos (2D colliders of the selected object, while expanded in the inspector, with handles that edit them).
+- Several objects can be selected at once: Ctrl click adds one or takes it out, Shift click selects a range of
+  hierarchy rows (in the scene view both add or remove the object under the mouse). Delete, Duplicate, dragging in
+  the hierarchy and the transform gizmo act on all of them; the inspector shows the one selected last.
 - The open scene follows its file when something else changes it (git, a text editor): without unsaved changes it
   reloads; with them the file's changes merge into the scene value by value (`SceneMerge`, a three-way merge of
   scene documents: properties, nested objects, objects, components, prefab overrides, the order of siblings) and
@@ -360,7 +363,8 @@ blackboard properties wired into the blocks.*
 - **Automation**: every editor serves its project on a named pipe. `LELEngine.Editor.Console -command ...` (or the C#
   API `EditorAutomation`, also from `-executeMethod`) lists windows and their UI elements, clicks buttons, types into
   fields and sets inspector values by the names the inspector shows (`input "Mover/Speed" 2.5`, one undo step), runs
-  menus, opens scenes, selects objects, enters play mode, reads the console and takes screenshots of a single
+  menus, opens scenes, selects objects (several with `select <object> --add`, or clicks with `--ctrl` / `--shift`),
+  enters play mode, reads the console and takes screenshots of a single
   window, even one covered by others or not on screen. `-batchmode -listen` serves the same without drawing any UI.
 
 ![Play mode in the game view](docs/images/play-mode.png)
@@ -612,7 +616,8 @@ or arrows between nodes (both directions side by side, a label, a travelling dot
   widget), `labelWidth`.
 - `Undo.RecordObject(component)` before changing a component by hand (one undo step per drag, the scene becomes
   dirty, `OnValidate` runs), `Undo.RecordSceneChange(name, () => ...)` for creating or deleting objects.
-- `Selection.activeGameObject`, `Selection.activeAssetPath`.
+- `Selection.activeGameObject`, `Selection.gameObjects` (every selected object), `Selection.topLevelGameObjects`
+  (those none of whose parents is selected), `Selection.activeAssetPath`.
 
 An exception in editor code is logged once and shown in the window or inspector; the ImGui scopes it left open are
 closed, so the rest of the editor keeps working.

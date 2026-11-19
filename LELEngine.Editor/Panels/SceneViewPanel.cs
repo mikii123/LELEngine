@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Text.Json;
 using Hexa.NET.ImGui;
@@ -106,6 +107,11 @@ namespace LELEngine.Editor
 		private ImGuizmoOperation operation = ImGuizmoOperation.Translate;
 		private ImGuizmoMode mode = ImGuizmoMode.Local;
 		private bool gizmoWasUsing;
+
+		// A gizmo drag with several objects selected: the transforms it moves and their states when it started (null:
+		// one object, an edit of its transform).
+		private List<Transform> gizmoGroup;
+		private List<byte[]> gizmoBefore;
 		private NVector2 pressPosition;
 
 		// Camera drags: look (right button, with WASD flight) and pan (middle button). One starts on a press over the view
@@ -181,8 +187,9 @@ namespace LELEngine.Editor
 		}
 
 		/// <summary>
-		///     Moves the selected object by a world offset the way a drag of its transform gizmo does (the world matrix
-		///     applied, the change notified; the caller opens and commits the edit). Tests of dragging.
+		///     Moves the selection by a world offset the way a drag of the transform gizmo does (the active object's world
+		///     matrix applied, the others selected with it following, the changes notified); the caller opens and ends the drag
+		///     (<see cref="BeginGizmoDrag" />, <see cref="EndGizmoDrag" />). Tests of dragging.
 		/// </summary>
 		internal void MoveSelectedAsGizmo(Vector3 offset)
 		{
@@ -192,8 +199,23 @@ namespace LELEngine.Editor
 				return;
 			}
 
-			ApplyWorldMatrix(selected.transform, ToNumerics(selected.transform.LocalToWorld * Matrix4.CreateTranslation(offset)));
-			editor.NotifyChanged(selected);
+			ApplyGizmo(selected, ToNumerics(selected.transform.LocalToWorld), ToNumerics(selected.transform.LocalToWorld * Matrix4.CreateTranslation(offset)));
+		}
+
+		/// <summary>A drag of the transform gizmo starts (tests): the edit it makes is opened as the gizmo opens it.</summary>
+		internal void BeginGizmoDrag()
+		{
+			GameObject selected = SelectedInScene();
+			if (selected != null)
+			{
+				BeginGizmoEdit(selected);
+			}
+		}
+
+		/// <summary>The drag ends (tests): one undo step, as when the gizmo is released.</summary>
+		internal void EndGizmoDrag()
+		{
+			EndGizmoEdit();
 		}
 
 		/// <summary>Moves the camera along its own axes (x screen right, y up, z forward; tests of camera motion).</summary>
@@ -561,7 +583,16 @@ namespace LELEngine.Editor
 				pressCanPick = false;
 				if (NVector2.DistanceSquared(pressPosition, ImGui.GetMousePos()) < 16f && !gizmoUsed)
 				{
-					editor.Select(PickSelection(Pick(ImGui.GetMousePos())));
+					GameObject hit = PickSelection(Pick(ImGui.GetMousePos()));
+					if (ImGui.GetIO().KeyCtrl || ImGui.GetIO().KeyShift)
+					{
+						// With Ctrl or Shift the object joins the selection or leaves it; a click on nothing keeps it.
+						editor.ToggleSelected(hit);
+					}
+					else
+					{
+						editor.Select(hit);
+					}
 				}
 			}
 		}
@@ -1010,7 +1041,44 @@ namespace LELEngine.Editor
 			if (ImGui.IsKeyPressed(ImGuiKey.W, false)) operation = ImGuizmoOperation.Translate;
 			if (ImGui.IsKeyPressed(ImGuiKey.E, false)) operation = ImGuizmoOperation.Rotate;
 			if (ImGui.IsKeyPressed(ImGuiKey.R, false)) operation = ImGuizmoOperation.Scale;
-			if (ImGui.IsKeyPressed(ImGuiKey.F, false)) FrameObject(editor.Selected);
+			if (ImGui.IsKeyPressed(ImGuiKey.F, false)) FrameSelection();
+		}
+
+		/// <summary>Moves the camera so everything selected fills the view.</summary>
+		private void FrameSelection()
+		{
+			IReadOnlyList<GameObject> objects = editor.SelectedObjects;
+			if (objects.Count <= 1)
+			{
+				FrameObject(editor.Selected);
+				return;
+			}
+
+			Vector3 min = new Vector3(float.MaxValue);
+			Vector3 max = new Vector3(float.MinValue);
+			foreach (GameObject go in objects)
+			{
+				Mesh mesh = go.GetComponent<MeshRenderer>()?.Mesh;
+				if (mesh == null)
+				{
+					min = Vector3.ComponentMin(min, go.transform.position);
+					max = Vector3.ComponentMax(max, go.transform.position);
+					continue;
+				}
+
+				Matrix4 localToWorld = go.transform.LocalToWorld;
+				for (int i = 0; i < 8; i++)
+				{
+					Vector3 corner = Vector3.TransformPosition(new Vector3((i & 1) != 0 ? mesh.BoundsMax.X : mesh.BoundsMin.X, (i & 2) != 0 ? mesh.BoundsMax.Y : mesh.BoundsMin.Y, (i & 4) != 0 ? mesh.BoundsMax.Z : mesh.BoundsMin.Z), localToWorld);
+					min = Vector3.ComponentMin(min, corner);
+					max = Vector3.ComponentMax(max, corner);
+				}
+			}
+
+			float radius = Math.Max(0.25f, (max - min).Length * 0.5f);
+			focusDistance = radius * 2.5f + 0.5f;
+			position = (min + max) * 0.5f - Forward() * focusDistance;
+			ApplyCamera();
 		}
 
 		private Vector3 Forward()
@@ -1042,27 +1110,113 @@ namespace LELEngine.Editor
 			NMatrix4 view = ToNumerics(camera.ViewMatrix);
 			NMatrix4 projection = ToNumerics(camera.ProjectionMatrix);
 			NMatrix4 model = ToNumerics(selected.transform.LocalToWorld);
+			NMatrix4 before = model;
 			bool changed = ImGuizmo.Manipulate(ref view, ref projection, operation, mode, ref model);
 			bool using_ = ImGuizmo.IsUsing();
 
 			if (using_ && !gizmoWasUsing)
 			{
-				editor.Edits.Begin(selected.transform);
+				BeginGizmoEdit(selected);
 			}
 
 			if (changed)
 			{
-				ApplyWorldMatrix(selected.transform, model);
-				editor.NotifyChanged(selected);
+				ApplyGizmo(selected, before, model);
 			}
 
 			if (!using_ && gizmoWasUsing)
 			{
-				editor.Edits.RequestCommit();
+				EndGizmoEdit();
 			}
 
 			gizmoWasUsing = using_;
 			return using_ || changed;
+		}
+
+		/// <summary>
+		///     The gizmo's result for the active object (its world matrix <paramref name="before" /> and after the drag's
+		///     step): with several objects selected the others go where it goes, by the same move, turn or scale about its
+		///     pivot.
+		/// </summary>
+		private void ApplyGizmo(GameObject selected, NMatrix4 before, NMatrix4 model)
+		{
+			if (gizmoGroup != null && NMatrix4.Invert(before, out NMatrix4 inverse) && float.IsFinite(model.GetDeterminant()))
+			{
+				NMatrix4 delta = inverse * model;
+				foreach (Transform other in gizmoGroup)
+				{
+					if (other != selected.transform && other.gameObject != null && !other.gameObject.dead)
+					{
+						ApplyWorldMatrix(other, ToNumerics(other.LocalToWorld) * delta);
+						editor.NotifyChanged(other.gameObject);
+					}
+				}
+			}
+
+			ApplyWorldMatrix(selected.transform, model);
+			editor.NotifyChanged(selected);
+		}
+
+		/// <summary>
+		///     A drag of the gizmo starts: one selected object is an edit of its transform as before; with several, the
+		///     transforms that move (the active one's, and those of the selected objects no selected parent carries along) are
+		///     noted as they are, for one undo step when the drag ends.
+		/// </summary>
+		private void BeginGizmoEdit(GameObject selected)
+		{
+			gizmoGroup = null;
+			gizmoBefore = null;
+			var moved = new List<Transform> { selected.transform };
+			foreach (GameObject root in editor.SelectedRoots())
+			{
+				if (root != selected && root.scene == editor.Scene && !TempObjects.IsReadOnly(root) && !selected.transform.IsChildOf(root.transform))
+				{
+					moved.Add(root.transform);
+				}
+			}
+
+			if (moved.Count == 1)
+			{
+				editor.Edits.Begin(selected.transform);
+				return;
+			}
+
+			editor.Edits.Commit();
+			gizmoGroup = moved;
+			gizmoBefore = moved.ConvertAll(EditorSerialization.CaptureComponent);
+		}
+
+		private void EndGizmoEdit()
+		{
+			if (gizmoGroup == null)
+			{
+				editor.Edits.RequestCommit();
+				return;
+			}
+
+			var group = new GroupRecord { Name = operation switch { ImGuizmoOperation.Rotate => "Rotate ", ImGuizmoOperation.Scale => "Scale ", _ => "Move " } + gizmoGroup.Count + " objects" };
+			for (int i = 0; i < gizmoGroup.Count; i++)
+			{
+				Transform transform = gizmoGroup[i];
+				if (transform.gameObject == null || transform.gameObject.dead)
+				{
+					continue;
+				}
+
+				byte[] after = EditorSerialization.CaptureComponent(transform);
+				if (!EditorSerialization.SameState(after, gizmoBefore[i]))
+				{
+					group.Records.Add(new ComponentStateRecord { Name = group.Name, ComponentId = transform.Id, Before = gizmoBefore[i], After = after });
+				}
+			}
+
+			if (group.Records.Count > 0)
+			{
+				editor.Undo.Push(group);
+			}
+
+			gizmoGroup = null;
+			gizmoBefore = null;
 		}
 
 		private static void ApplyWorldMatrix(Transform transform, NMatrix4 world)
@@ -1096,9 +1250,25 @@ namespace LELEngine.Editor
 			return new NMatrix4(m.M11, m.M12, m.M13, m.M14, m.M21, m.M22, m.M23, m.M24, m.M31, m.M32, m.M33, m.M34, m.M41, m.M42, m.M43, m.M44);
 		}
 
+		/// <summary>The bounds of every selected object's mesh as a box; the active object's is the brightest.</summary>
 		private void DrawSelectionBounds()
 		{
-			GameObject selected = editor.Selected;
+			GameObject active = editor.Selected;
+			System.Numerics.Vector4 dimmed = EditorStyle.Selection;
+			dimmed.W *= 0.55f;
+			foreach (GameObject go in editor.SelectedObjects)
+			{
+				if (go != active)
+				{
+					DrawBounds(go, ImGui.GetColorU32(dimmed));
+				}
+			}
+
+			DrawBounds(active, ImGui.GetColorU32(EditorStyle.Selection));
+		}
+
+		private void DrawBounds(GameObject selected, uint color)
+		{
 			MeshRenderer renderer = selected?.GetComponent<MeshRenderer>();
 			if (renderer?.Mesh == null || selected.scene != editor.Scene)
 			{
@@ -1125,7 +1295,6 @@ namespace LELEngine.Editor
 			}
 
 			ImDrawListPtr drawList = ImGui.GetWindowDrawList();
-			uint color = ImGui.GetColorU32(EditorStyle.Selection);
 			int[] edges = { 0, 1, 1, 3, 3, 2, 2, 0, 4, 5, 5, 7, 7, 6, 6, 4, 0, 4, 1, 5, 2, 6, 3, 7 };
 			for (int e = 0; e < edges.Length; e += 2)
 			{

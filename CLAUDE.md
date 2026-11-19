@@ -3008,6 +3008,48 @@ texture read back), see the port's `PORTING.md` "UI".
   meshes are fine) and adds one entry each at the centre of its bounds (sorting; grab rectangles from the local bounds
   with the world matrix); drawn with the component's transform and the block on top of the material, no shadows, no
   GI. The inspector lists the material in the component's material section (`InspectorPanel`).
+## Selection of several objects (2026-11-19)
+
+- The user's ask: "add multi-select to the editor right away" (asked together with a Mesh Baker tool working on the selection).
+- `EditorApplication.Selection.cs`: `Selected` stays the one object everything written for a single selection uses (the
+  inspector, the gizmo's pivot, component gizmos, the windows following the selection): with several selected it is the
+  active one, the object selected last. `SelectedObjects` (all of them, in the order selected), `IsSelected`,
+  `ToggleSelected` (a Ctrl click), `SelectObjects(objects, active)`, `SelectedRoots()` (those none of whose parents is
+  selected, in the hierarchy's order: what an action on the selection takes). Setting `Selected` (and `Select(go)`)
+  selects that object alone. Destroyed objects leave the list by themselves (`PruneSelection`, also for objects whose
+  scene unloaded in play mode).
+- A scene built again keeps the selection by ids: `CaptureSelection()` (the active object's id first) /
+  `RestoreSelection(scene, ids)` in `ReplaceScene`, `RestoreSnapshot(snapshot, ulong[])`, play and stop, script reloads,
+  prefab stages (`StageFrame.Selection`), the scene's reload and merge from disk; `SceneSnapshotRecord` and
+  `PrefabFilesRecord` hold `ulong[] SelectionBefore / After`, so undo brings back every selected object.
+- Hierarchy: a click selects, Ctrl click toggles, Shift click selects the rows from the anchor (the row clicked last
+  without Shift, or the active object when the selection came from elsewhere) to the clicked one over the rows as drawn
+  the frame before (`shownRows`; with Ctrl added to the selection). The click still counts on release, so a press on one
+  of several selected rows drags them all: a drop re-parents `SelectedRoots()` as one undo step. The context menu on a
+  selected row keeps the selection (Duplicate and Delete take it all), on another row it selects that row.
+- Scene view: Ctrl or Shift click toggles the object under the mouse (a click on nothing keeps the selection); every
+  selected object's bounds are drawn, the active one's brightest; F frames them all. The gizmo sits on the active object;
+  the others move with it by the same world delta (`inverse(before) * after`: a turn or a scale is about the active
+  object's pivot), only `SelectedRoots()` (a child selected with its parent moves once). One object: an edit of its
+  transform as before (`Edits`); several: the transforms' states at the drag's start and end as one `GroupRecord`
+  ("Move / Rotate / Scale N objects").
+- `DeleteSelected` / `DuplicateSelected` take `SelectedRoots()` ("Delete N objects"; the copies are selected, the active
+  one's copy active). The inspector edits the active object and says "N objects selected: the inspector shows X" under
+  its header. No editing of several objects' fields at once, no rubber band in the scene view, no Ctrl+A.
+- Editor scripts: `Selection.gameObjects` (get / set), `Selection.topLevelGameObjects`; `activeGameObject` as before.
+- Automation: `EditorAutomation.Select(path, add)`, `SelectObjects(paths)`, `GetSelection()`; CLI `select <object>
+  --add`, `status` lists the active object "and N more: ..."; `click <element> --ctrl / --shift` (`UIAutomation.Invoke`
+  carries the keys, `InvokedCtrl` / `InvokedShift`: code that reads the keyboard for a click reads these for an invoked
+  one). Test entry `exec TestHooks.DragSelection dx dy dz` and the `dragselected=` hook go through the gizmo's own path
+  (`SceneViewPanel.BeginGizmoDrag` / `MoveSelectedAsGizmo` / `EndGizmoDrag`).
+- Verified (GUI editor through the CLI, scratchpad `bake/BakeProbe` of session 40ffdb3b): Ctrl clicks adding and removing rows, a Shift range, the
+  highlighted rows and the scene view's boxes on screenshots, the inspector's line, the context menu's Duplicate on two
+  selected rows (the copies selected) and its undo (both originals selected again), a context menu on an unselected
+  row; `DragSelection 1 2 3` on four selected objects (a parent, its child and two others): each root moved once, the
+  child with its parent, one undo and one redo for all; one object still one edit. Batch: `Selection.gameObjects`,
+  `Select(path, true)`, Duplicate / Delete of two objects and their undo with the selection. Not exercised: a real mouse
+  (Ctrl / Shift read from the keyboard, the drag of several rows, a real gizmo drag with a turn or a scale).
+
 ## When things are written: the scene on its Save, the rest as it changes (2026-11-02)
 
 - The rule (the user's): the scene changes in memory and goes to its file on the user's action (Ctrl+S). Asset settings,

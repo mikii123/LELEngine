@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using Hexa.NET.ImGui;
+using LELEngine.Editor.Automation;
 using NVector2 = System.Numerics.Vector2;
 using NVector4 = System.Numerics.Vector4;
 
@@ -50,6 +51,12 @@ namespace LELEngine.Editor
 		private GameObject lastSelected;
 		private GameObject revealSelection;
 
+		// The rows as drawn (this frame, and the frame before: what a Shift click's range runs over) and the row a range
+		// starts from: the one clicked last without Shift.
+		private List<GameObject> rows = new List<GameObject>();
+		private List<GameObject> shownRows = new List<GameObject>();
+		private GameObject rangeAnchor;
+
 		// Vertical padding above and below a row's text (rows have no spacing between them).
 		private const float RowPadding = 2f;
 
@@ -95,6 +102,9 @@ namespace LELEngine.Editor
 			renaming = null;
 			lastSelected = null;
 			revealSelection = null;
+			rangeAnchor = null;
+			rows.Clear();
+			shownRows.Clear();
 		}
 
 		/// <summary>Shows the object: its parents unfold, its row scrolls into view and flashes for a moment.</summary>
@@ -204,14 +214,22 @@ namespace LELEngine.Editor
 			{
 				lastSelected = selected;
 				revealSelection = selected != null && !selected.dead && selected.scene == scene ? selected : null;
+				// Selected elsewhere (the scene view, a field, a command): the next Shift click's range starts there.
+				if (rangeAnchor == null || !editor.IsSelected(rangeAnchor))
+				{
+					rangeAnchor = selected;
+				}
 			}
 
 			GameObject deferredReparent = null;
 			Transform deferredParent = null;
+			rows.Clear();
 			foreach (GameObject root in scene.GetRootGameObjects())
 			{
 				DrawNode(root, ref deferredReparent, ref deferredParent);
 			}
+
+			(rows, shownRows) = (shownRows, rows);
 
 			// Not drawn at all (hidden from the hierarchy): nothing to reveal.
 			revealSelection = null;
@@ -356,7 +374,8 @@ namespace LELEngine.Editor
 				ImGui.SetNextItemOpen(expanded.Contains(go.Id), ImGuiCond.Always);
 			}
 
-			if (editor.Selected == go)
+			rows.Add(go);
+			if (editor.IsSelected(go))
 			{
 				flags |= ImGuiTreeNodeFlags.Selected;
 			}
@@ -427,7 +446,8 @@ namespace LELEngine.Editor
 				}
 
 				// Selected when the click ends without a drag (as in Unity): dragging an object on to a field of the
-				// selected object keeps the selection, so the inspector showing the field stays.
+				// selected object keeps the selection, so the inspector showing the field stays; and a press on one of
+				// several selected rows can drag them all.
 				if (EditorGui.IsItemClicked(ImGuiMouseButton.Left) && !ImGui.IsItemToggledOpen())
 				{
 					pressed = go;
@@ -439,7 +459,8 @@ namespace LELEngine.Editor
 				{
 					if (invoked || (ImGui.IsItemHovered() && !ImGuiP.IsMouseDragPastThreshold(ImGuiMouseButton.Left)))
 					{
-						editor.Select(go);
+						// Automation's click holds the keys it was asked with, whatever the keyboard holds.
+						ClickRow(go, invoked ? UIAutomation.InvokedCtrl : ImGui.GetIO().KeyCtrl, invoked ? UIAutomation.InvokedShift : ImGui.GetIO().KeyShift);
 					}
 
 					pressed = null;
@@ -506,7 +527,14 @@ namespace LELEngine.Editor
 
 			if (EditorGui.BeginPopupContextItem("##object_context"))
 			{
-				editor.Select(go);
+				// On one of several selected rows the menu is the selection's (Duplicate and Delete take them all);
+				// on any other row it selects that row.
+				if (!editor.IsSelected(go))
+				{
+					editor.Select(go);
+					rangeAnchor = go;
+				}
+
 				if (EditorMenu.Item("Rename", "F2", false, !readOnly))
 				{
 					StartRename(go);
@@ -710,38 +738,87 @@ namespace LELEngine.Editor
 			}
 		}
 
-		private void Reparent(GameObject child, Transform parent)
+		/// <summary>
+		///     A click on a row: alone it selects the row; with Ctrl the row joins the selection or leaves it; with Shift the
+		///     rows from the one clicked before to this one are selected (added to the selection with Ctrl too).
+		/// </summary>
+		private void ClickRow(GameObject go, bool ctrl, bool shift)
 		{
-			if (parent != null && (parent == child.transform || parent.IsChildOf(child.transform)))
+			int from = shift && rangeAnchor != null && !rangeAnchor.dead ? shownRows.IndexOf(rangeAnchor) : -1;
+			int to = from >= 0 ? shownRows.IndexOf(go) : -1;
+			if (from >= 0 && to >= 0)
 			{
-				return;
-			}
-
-			if (child.prefabInstance != null && child.prefabInstance.Root != child)
-			{
-				Debug.LogWarning($"[Editor] '{child.Name}' is part of the prefab instance '{child.prefabInstance.Root?.Name}': its objects stay where the prefab has them (move the instance's root, or unpack it).");
-				return;
-			}
-
-			if (editor.Stage != null)
-			{
-				GameObject root = editor.StageRoot;
-				if (child == root)
+				var range = new List<GameObject>();
+				if (ctrl)
 				{
-					Debug.LogWarning("[Editor] The root of the edited prefab stays the root.");
-					return;
+					range.AddRange(editor.SelectedObjects);
 				}
 
-				// A prefab has one root: what is dropped on the empty area goes under it.
-				parent ??= root?.transform;
+				for (int i = Math.Min(from, to); i <= Math.Max(from, to); i++)
+				{
+					range.Add(shownRows[i]);
+				}
+
+				// The range's start stays: the next Shift click runs from the same row.
+				editor.SelectObjects(range, go);
+				return;
 			}
 
-			if (child.transform.parent == parent)
+			if (ctrl)
+			{
+				editor.ToggleSelected(go);
+			}
+			else
+			{
+				editor.Select(go);
+			}
+
+			rangeAnchor = go;
+		}
+
+		/// <summary>The dragged row goes under <paramref name="parent" />; when it is one of several selected rows, they all do (one undo step).</summary>
+		private void Reparent(GameObject dragged, Transform parent)
+		{
+			List<GameObject> moving = editor.IsSelected(dragged) && editor.SelectedObjects.Count > 1 ? editor.SelectedRoots() : new List<GameObject> { dragged };
+			if (editor.Stage != null)
+			{
+				// A prefab has one root: what is dropped on the empty area goes under it.
+				parent ??= editor.StageRoot?.transform;
+			}
+
+			moving.RemoveAll(child =>
+			{
+				if (editor.Stage != null && child == editor.StageRoot)
+				{
+					Debug.LogWarning("[Editor] The root of the edited prefab stays the root.");
+					return true;
+				}
+
+				if (parent != null && (parent == child.transform || parent.IsChildOf(child.transform)))
+				{
+					return true;
+				}
+
+				if (child.prefabInstance != null && child.prefabInstance.Root != child)
+				{
+					Debug.LogWarning($"[Editor] '{child.Name}' is part of the prefab instance '{child.prefabInstance.Root?.Name}': its objects stay where the prefab has them (move the instance's root, or unpack it).");
+					return true;
+				}
+
+				return child.transform.parent == parent || TempObjects.IsReadOnly(child);
+			});
+			if (moving.Count == 0)
 			{
 				return;
 			}
 
-			editor.RecordStructural("Re-parent " + child.Name, () => child.transform.SetParent(parent, true));
+			editor.RecordStructural(moving.Count == 1 ? "Re-parent " + moving[0].Name : "Re-parent " + moving.Count + " objects", () =>
+			{
+				foreach (GameObject child in moving)
+				{
+					child.transform.SetParent(parent, true);
+				}
+			});
 		}
 
 		private void StartRename(GameObject go)

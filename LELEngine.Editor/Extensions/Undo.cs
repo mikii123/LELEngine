@@ -41,12 +41,46 @@ namespace LELEngine.Editor
 	{
 		#region PublicFields
 
-		/// <summary>The selected GameObject of the scene (null when a project file or nothing is selected).</summary>
+		/// <summary>
+		///     The selected GameObject of the scene (null when a project file or nothing is selected); with several
+		///     selected, the active one (what the inspector shows). Setting it selects that object alone.
+		/// </summary>
 		public static GameObject activeGameObject
 		{
 			get => EditorApplication.Instance?.Selected;
 			set => EditorExtensions.Current.Select(value);
 		}
+
+		/// <summary>
+		///     Every selected GameObject (Unity's Selection.gameObjects; empty when none is), <see cref="activeGameObject" />
+		///     among them. Setting it selects these objects and no others; the last one becomes the active one.
+		/// </summary>
+		public static GameObject[] gameObjects
+		{
+			get
+			{
+				EditorApplication editor = EditorApplication.Instance;
+				if (editor == null)
+				{
+					return System.Array.Empty<GameObject>();
+				}
+
+				var objects = new GameObject[editor.SelectedObjects.Count];
+				for (int i = 0; i < objects.Length; i++)
+				{
+					objects[i] = editor.SelectedObjects[i];
+				}
+
+				return objects;
+			}
+			set => EditorApplication.Instance?.SelectObjects(value);
+		}
+
+		/// <summary>
+		///     The selected GameObjects none of whose parents is selected, in the hierarchy's order: what a tool acting on the
+		///     selection usually wants (a child selected with its parent is already part of it).
+		/// </summary>
+		public static GameObject[] topLevelGameObjects => EditorApplication.Instance?.SelectedRoots().ToArray() ?? System.Array.Empty<GameObject>();
 
 		/// <summary>The project file shown in the inspector ("Folder/File.ext", relative to Assets), or null.</summary>
 		public static string activeAssetPath

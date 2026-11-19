@@ -51,8 +51,10 @@ namespace LELEngine.Editor.Automation
 			"                                         An element is named by its whole name, its path or the path's end:\n" +
 			"                                         \"input:Mover/Speed\", \"Mover/Speed\" or \"Speed\" (when only one is drawn)\n" +
 			"  open|close|focus <window>              (open also takes an editor script window's class name)\n" +
-			"  click <element> [--window W]           runs the element's action as a click would (no mouse: covered or not;\n" +
-			"                                         a window behind another tab comes forward); --window when names repeat\n" +
+			"  click <element> [--window W] [--ctrl] [--shift]\n" +
+			"                                         runs the element's action as a click would (no mouse: covered or not;\n" +
+			"                                         a window behind another tab comes forward); --window when names repeat;\n" +
+			"                                         --ctrl / --shift: the click holds the key (hierarchy rows: add / range)\n" +
 			"  double-click <element> [--window W]    project files, console messages, object fields, ...\n" +
 			"  context <element> [--window W]         opens its right-click menu; then: click \"menu:Duplicate\"\n" +
 			"  input <element> <value> [--window W]   sets a value field as an edit of it (undo in the inspector): text,\n" +
@@ -73,7 +75,8 @@ namespace LELEngine.Editor.Automation
 			"                                         needs an answer fails and says why\n" +
 			"  reserialize                            Force Reserialize All Assets; answers when it has ended, with its summary\n" +
 			"  hierarchy                              the open scene's objects (ids, components)\n" +
-			"  select <object>|none                   object: Parent/Child, a unique name, or #id\n" +
+			"  select <object>|none [--add]           object: Parent/Child, a unique name, or #id; --add: it joins the\n" +
+			"                                         objects already selected (status lists them)\n" +
 			"  select-asset <assetPath>\n" +
 			"  reparent <object> <parent|none>        (instead of dragging in the hierarchy)\n" +
 			"  rename <object> <name>\n" +
@@ -233,8 +236,8 @@ namespace LELEngine.Editor.Automation
 					break;
 
 				case "click":
-					Need(args, 1, "click <element> [--window W]");
-					await EditorAutomation.Click(Joined(args), options.GetValueOrDefault("window"));
+					Need(args, 1, "click <element> [--window W] [--ctrl] [--shift]");
+					await EditorAutomation.Click(Joined(args), options.GetValueOrDefault("window"), options.ContainsKey("ctrl"), options.ContainsKey("shift"));
 					text.Append("Clicked ").Append(Joined(args)).Append('\n');
 					break;
 
@@ -336,8 +339,8 @@ namespace LELEngine.Editor.Automation
 					break;
 
 				case "select":
-					Need(args, 1, "select <object>|none");
-					EditorAutomation.Select(Joined(args));
+					Need(args, 1, "select <object>|none [--add]");
+					EditorAutomation.Select(Joined(args), options.ContainsKey("add"));
 					await EditorAutomation.NextFrame(2);
 					break;
 
@@ -556,7 +559,18 @@ namespace LELEngine.Editor.Automation
 			text.Append("Mode ").Append(editor.HasUI ? "editor window" : "batch (no UI)").Append(", frame ").Append(EditorAutomation.Frame).Append('\n');
 			text.Append("Scene ").Append(editor.Scene?.Path ?? "(unsaved)").Append(editor.SceneDirty ? " (unsaved changes)" : "").Append('\n');
 			text.Append("Play ").Append(editor.PlayState).Append('\n');
-			text.Append("Selection ").Append(editor.Selected != null ? editor.Selected.Name + " #" + editor.Selected.Id : editor.SelectedAsset ?? "none").Append('\n');
+			text.Append("Selection ").Append(editor.Selected != null ? editor.Selected.Name + " #" + editor.Selected.Id : editor.SelectedAsset ?? "none");
+			if (editor.SelectedObjects.Count > 1)
+			{
+				// The active object first, then the others selected with it.
+				text.Append(" and ").Append(editor.SelectedObjects.Count - 1).Append(" more: ").Append(string.Join(", ", editor.SelectedObjects.Where(go => go != editor.Selected).Take(20).Select(go => go.Name + " #" + go.Id)));
+				if (editor.SelectedObjects.Count > 21)
+				{
+					text.Append(", ...");
+				}
+			}
+
+			text.Append('\n');
 			text.Append("Scripts ").Append(editor.Scripts == null ? "none" : editor.Scripts.IsBuilding ? "building" : editor.Scripts.HasErrors ? "errors" : "ok").Append('\n');
 			text.Append("Busy ").Append(editor.IsBusy ? "yes" : "no").Append('\n');
 			return text.ToString();

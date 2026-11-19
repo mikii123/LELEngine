@@ -165,6 +165,27 @@ namespace LELEngine.Editor
 
 		#region PublicMethods
 
+		/// <summary>
+		///     <c>exec TestHooks.DragSelection dx dy dz</c>: the selection dragged by a world offset through the transform gizmo's
+		///     code path, as one drag (one undo step): what a drag does to several selected objects, without a mouse.
+		/// </summary>
+		internal static void DragSelection(string[] args)
+		{
+			var invariant = System.Globalization.CultureInfo.InvariantCulture;
+			if (args == null || args.Length != 3
+				|| !float.TryParse(args[0], System.Globalization.NumberStyles.Float, invariant, out float dx)
+				|| !float.TryParse(args[1], System.Globalization.NumberStyles.Float, invariant, out float dy)
+				|| !float.TryParse(args[2], System.Globalization.NumberStyles.Float, invariant, out float dz))
+			{
+				throw new ArgumentException("DragSelection <dx> <dy> <dz>");
+			}
+
+			EditorApplication editor = EditorApplication.Instance;
+			editor.SceneView.BeginGizmoDrag();
+			editor.SceneView.MoveSelectedAsGizmo(new OpenTK.Mathematics.Vector3(dx, dy, dz));
+			editor.SceneView.EndGizmoDrag();
+		}
+
 		/// <summary>Window the next UI frame brings to the front (focuswindow=).</summary>
 		public string PendingFocus { get; set; }
 
@@ -424,7 +445,7 @@ namespace LELEngine.Editor
 
 					if (frame == start)
 					{
-						editor.Edits.Begin(editor.Selected.transform);
+						editor.SceneView.BeginGizmoDrag();
 					}
 
 					if (frame < start + steps)
@@ -434,7 +455,7 @@ namespace LELEngine.Editor
 					}
 					else
 					{
-						editor.Edits.RequestCommit();
+						editor.SceneView.EndGizmoDrag();
 					}
 				}
 			}

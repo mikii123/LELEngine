@@ -232,6 +232,13 @@ namespace LELEngine.Editor
 			ImGui.BeginDisabled(readOnly);
 			DrawObjectHeader(go);
 			ImGui.EndDisabled();
+			// Several objects selected: the inspector edits the active one (the others take part in what acts on a
+			// selection: delete, duplicate, move, tools).
+			if (go == editor.Selected && editor.SelectedObjects.Count > 1)
+			{
+				ImGui.TextDisabled(editor.SelectedObjects.Count + " objects selected: the inspector shows " + go.Name);
+			}
+
 			string temporary = TempObjects.Describe(go);
 			if (temporary != null)
 			{

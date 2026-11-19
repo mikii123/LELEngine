@@ -158,13 +158,9 @@ namespace LELEngine.Editor
 				return;
 			}
 
-			ulong selected = Selected?.Id ?? 0;
+			ulong[] selected = CaptureSelection();
 			OpenSceneNow(path);
-			GameObject reselected = selected != 0 ? Scene?.FindObjectById(selected) : null;
-			if (reselected != null)
-			{
-				Select(reselected);
-			}
+			RestoreSelection(Scene, selected);
 
 			Debug.Log("[Editor] Reloaded " + path + " (changed on disk)");
 		}
@@ -252,14 +248,14 @@ namespace LELEngine.Editor
 		{
 			Edits.Commit();
 			byte[] before = SceneSerializer.SaveToBytes(Scene);
-			ulong selection = Selected?.Id ?? 0;
+			ulong[] selection = CaptureSelection();
 			Scene merged = LoadMerged(merge, result);
 			LELEngine.Audio.AudioSystem.StopAll();
 			ReplaceScene(merged, false);
 			sceneFileBase = merge.TheirsBytes;
 			pendingMerge = null;
 			SceneDirty = result.MineKept > 0;
-			Undo.Push(new SceneSnapshotRecord { Name = "Merge Changes From Disk", Before = before, After = SceneSerializer.SaveToBytes(merged), SelectionBefore = selection, SelectionAfter = Selected?.Id ?? 0 });
+			Undo.Push(new SceneSnapshotRecord { Name = "Merge Changes From Disk", Before = before, After = SceneSerializer.SaveToBytes(merged), SelectionBefore = selection, SelectionAfter = CaptureSelection() });
 			Lighting.GI.InvalidateStatic();
 			string conflicts = result.Conflicts.Count > 0 ? $", {result.Conflicts.Count} conflict(s) settled" : "";
 			Debug.Log($"[Editor] Merged {merge.Path} (changed on disk): {result.TheirsTaken} change(s) from the file, {result.MineKept} unsaved change(s) kept{conflicts}");

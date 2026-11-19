@@ -26,7 +26,7 @@ namespace LELEngine.Editor
 		public string Path;
 		public string Name;
 		public bool Dirty;
-		public ulong Selection;
+		public ulong[] Selection;
 		public (List<UndoRecord> undo, List<UndoRecord> redo) Undo;
 	}
 
@@ -141,7 +141,7 @@ namespace LELEngine.Editor
 				Path = Scene.Path,
 				Name = Scene.Name,
 				Dirty = SceneDirty,
-				Selection = Selected?.Id ?? 0,
+				Selection = CaptureSelection(),
 				Undo = Undo.Take()
 			});
 
@@ -353,7 +353,7 @@ namespace LELEngine.Editor
 			}
 
 			Edits.Commit();
-			var record = new PrefabFilesRecord { Name = name, SceneBefore = SceneSerializer.SaveToBytes(Scene), SelectionBefore = Selected?.Id ?? 0 };
+			var record = new PrefabFilesRecord { Name = name, SceneBefore = SceneSerializer.SaveToBytes(Scene), SelectionBefore = CaptureSelection() };
 			var files = new List<string>();
 			foreach (string path in prefabPaths)
 			{
@@ -381,7 +381,7 @@ namespace LELEngine.Editor
 			}
 
 			record.SceneAfter = SceneSerializer.SaveToBytes(Scene);
-			record.SelectionAfter = Selected?.Id ?? 0;
+			record.SelectionAfter = CaptureSelection();
 			for (int i = 0; i < files.Count; i++)
 			{
 				record.Files.Add((files[i], before[i], ReadIfExists(files[i])));
@@ -437,7 +437,7 @@ namespace LELEngine.Editor
 			ReplaceScene(restored, false);
 			SceneDirty = frame.Dirty;
 			Undo.Restore(frame.Undo);
-			Selected = frame.Selection != 0 ? restored.FindObjectById(frame.Selection) : null;
+			RestoreSelection(restored, frame.Selection);
 			if (Selected != null)
 			{
 				hierarchy.Ping(Selected);

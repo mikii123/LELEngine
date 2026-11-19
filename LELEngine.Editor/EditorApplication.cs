@@ -36,11 +36,21 @@ namespace LELEngine.Editor
 		///     The selected GameObject; null once it is destroyed (Unity's Selection does the same). The editor is not
 		///     null-check woven: before, a selected object a game script destroyed in play mode stayed selected, and the
 		///     scene view's gizmos asked it for components (an exception that took a screenshot's capture down).
+		///     With several objects selected (<see cref="SelectedObjects" />) it is the active one: the object the inspector
+		///     shows and the gizmo sits on. Setting it selects that object alone.
 		/// </summary>
 		public GameObject Selected
 		{
-			get => selected != null && selected.dead ? null : selected;
-			private set => selected = value;
+			get
+			{
+				if (selected != null && selected.dead)
+				{
+					PruneSelection();
+				}
+
+				return selected;
+			}
+			private set => SetSelection(value);
 		}
 
 		private GameObject selected;
@@ -1527,10 +1537,8 @@ namespace LELEngine.Editor
 
 			SceneView.InvalidateCaches();
 			GameView.InvalidateCaches();
-			if (Selected != null && (Selected.dead || Selected.scene == null))
-			{
-				Selected = null;
-			}
+			// Objects the game destroyed or unloaded with their scene are not selected any more.
+			PruneSelection(true);
 
 			NotifySceneChanged();
 		}
@@ -1616,7 +1624,7 @@ namespace LELEngine.Editor
 		/// <summary>Replaces the active scene (unloading the old one) and starts its lifecycle.</summary>
 		public void ReplaceScene(Scene scene, bool playing)
 		{
-			ulong selected = Selected?.Id ?? 0;
+			ulong[] selected = CaptureSelection();
 			Edits.Cancel();
 			// Drags and open collection rows may point into the old scene.
 			DragAndDrop.Clear();
@@ -1631,17 +1639,17 @@ namespace LELEngine.Editor
 			SceneView.InvalidateCaches();
 			GameView.InvalidateCaches();
 			NotifySceneChanged();
-			Selected = selected != 0 ? scene?.FindObjectById(selected) : null;
+			RestoreSelection(scene, selected);
 		}
 
 		/// <summary>Reloads the scene from a snapshot (undo of structural changes), keeping its path.</summary>
-		public void RestoreSnapshot(byte[] snapshot, ulong selection)
+		public void RestoreSnapshot(byte[] snapshot, ulong[] selection)
 		{
 			string path = Scene?.Path;
 			Scene scene = SceneSerializer.LoadFromBytes(snapshot);
 			scene.Path = path;
 			ReplaceScene(scene, IsPlaying);
-			Selected = selection != 0 ? scene.FindObjectById(selection) : null;
+			RestoreSelection(scene, selection);
 			MarkDirty();
 		}
 
@@ -1841,62 +1849,95 @@ namespace LELEngine.Editor
 
 			Edits.Commit();
 			byte[] before = SceneSerializer.SaveToBytes(Scene);
-			ulong selectionBefore = Selected?.Id ?? 0;
+			ulong[] selectionBefore = CaptureSelection();
 			change();
 			byte[] after = SceneSerializer.SaveToBytes(Scene);
-			Undo.Push(new SceneSnapshotRecord { Name = name, Before = before, After = after, SelectionBefore = selectionBefore, SelectionAfter = Selected?.Id ?? 0 });
+			Undo.Push(new SceneSnapshotRecord { Name = name, Before = before, After = after, SelectionBefore = selectionBefore, SelectionAfter = CaptureSelection() });
 			MarkDirty();
 			Lighting.GI.InvalidateStatic();
 		}
 
+		/// <summary>Deletes the selected objects (those none of whose parents is selected: the rest goes with them) as one undo step.</summary>
 		public void DeleteSelected()
 		{
-			GameObject target = Selected;
-			if (target == null)
+			List<GameObject> targets = SelectedRoots();
+			targets.RemoveAll(target =>
+			{
+				if (Stage != null && target == StageRoot)
+				{
+					Debug.LogWarning("[Editor] The root of the edited prefab cannot be deleted.");
+					return true;
+				}
+
+				if (TempObjects.IsReadOnly(target))
+				{
+					Debug.LogWarning($"[Editor] '{target.Name}' is not editable: a script keeps it.");
+					return true;
+				}
+
+				return false;
+			});
+			if (targets.Count == 0)
 			{
 				return;
 			}
 
-			if (Stage != null && target == StageRoot)
-			{
-				Debug.LogWarning("[Editor] The root of the edited prefab cannot be deleted.");
-				return;
-			}
-
-			if (TempObjects.IsReadOnly(target))
-			{
-				Debug.LogWarning($"[Editor] '{target.Name}' is not editable: a script keeps it.");
-				return;
-			}
-
-			RecordStructural("Delete " + target.Name, () =>
+			RecordStructural(targets.Count == 1 ? "Delete " + targets[0].Name : "Delete " + targets.Count + " objects", () =>
 			{
 				Selected = null;
-				GameObject.DestroyImmediate(target);
+				foreach (GameObject target in targets)
+				{
+					GameObject.DestroyImmediate(target);
+				}
 			});
 		}
 
+		/// <summary>Duplicates the selected objects, each next to its original, as one undo step; the copies are selected.</summary>
 		public void DuplicateSelected()
 		{
-			GameObject target = Selected;
-			if (target == null || Scene == null)
+			if (Scene == null)
 			{
 				return;
 			}
 
-			if (TempObjects.IsReadOnly(target))
+			List<GameObject> targets = SelectedRoots();
+			targets.RemoveAll(target =>
 			{
-				Debug.LogWarning($"[Editor] '{target.Name}' is not editable: a script keeps it.");
+				if (TempObjects.IsReadOnly(target))
+				{
+					Debug.LogWarning($"[Editor] '{target.Name}' is not editable: a script keeps it.");
+					return true;
+				}
+
+				return false;
+			});
+			if (targets.Count == 0)
+			{
 				return;
 			}
 
-			RecordStructural("Duplicate " + target.Name, () =>
+			GameObject active = Selected;
+			RecordStructural(targets.Count == 1 ? "Duplicate " + targets[0].Name : "Duplicate " + targets.Count + " objects", () =>
 			{
-				byte[] data = SceneSerializer.SerializeObjects(Scene, new[] { target });
-				List<GameObject> copies = SceneSerializer.InstantiateObjects(data, Scene, target.transform.parent);
+				var copies = new List<GameObject>();
+				GameObject activeCopy = null;
+				foreach (GameObject target in targets)
+				{
+					byte[] data = SceneSerializer.SerializeObjects(Scene, new[] { target });
+					List<GameObject> made = SceneSerializer.InstantiateObjects(data, Scene, target.transform.parent);
+					if (made.Count > 0)
+					{
+						copies.Add(made[0]);
+						if (target == active)
+						{
+							activeCopy = made[0];
+						}
+					}
+				}
+
 				if (copies.Count > 0)
 				{
-					Selected = copies[0];
+					SelectObjects(copies, activeCopy);
 				}
 			});
 		}
@@ -1917,12 +1958,11 @@ namespace LELEngine.Editor
 			Edits.Commit();
 			byte[] snapshot = SceneSerializer.SaveToBytes(scene);
 			string path = scene.Path;
-			ulong selected = Selected?.Id ?? 0;
 			change();
 			Scene reloaded = SceneSerializer.LoadFromBytes(snapshot);
 			reloaded.Path = path;
+			// The selection comes back with it (ReplaceScene finds it again by id).
 			ReplaceScene(reloaded, IsPlaying);
-			Selected = selected != 0 ? reloaded.FindObjectById(selected) : null;
 		}
 
 		/// <summary>Builds a model file's hierarchy in the scene as one undo step and selects its root.</summary>
@@ -2102,7 +2142,7 @@ namespace LELEngine.Editor
 			playSceneDirty = SceneDirty;
 
 			// Full reload of the game scripts: the play session starts from clean statics.
-			ulong selected = Selected?.Id ?? 0;
+			ulong[] selected = CaptureSelection();
 			Scripts?.TrackComponents(Scene);
 			if (reloadScriptsOnPlay && Scripts != null)
 			{
@@ -2132,7 +2172,7 @@ namespace LELEngine.Editor
 			{
 				ConsoleLog.EndGame();
 			}
-			Selected = selected != 0 ? play.FindObjectById(selected) : null;
+			RestoreSelection(play, selected);
 			// Play shows the game (the user's ask, 2026-11-18): a maximized Scene window goes back to the layout and the Game
 			// window takes the focus once the windows are back (after the restore's dropped focus frames).
 			if (SceneView.Maximized)
@@ -2185,7 +2225,7 @@ namespace LELEngine.Editor
 			Edits.Commit();
 			byte[] snapshot = SceneSerializer.SaveToBytes(scene);
 			string path = scene.Path;
-			ulong selected = Selected?.Id ?? 0;
+			ulong[] selected = CaptureSelection();
 			bool playing = IsPlaying;
 			bool fromFile = !playing && Stage == null && pendingMerge == null && sceneFileBase != null && !string.IsNullOrEmpty(path) && File.Exists(AssetDatabase.ToAbsolute(path));
 			byte[] mineBase = null;
@@ -2214,7 +2254,7 @@ namespace LELEngine.Editor
 			reloaded ??= SceneSerializer.LoadFromBytes(snapshot);
 			reloaded.Path = path;
 			ReplaceScene(reloaded, playing);
-			Selected = selected != 0 ? reloaded.FindObjectById(selected) : null;
+			RestoreSelection(reloaded, selected);
 		}
 
 		public void ShowBuildWindow()
