@@ -3069,9 +3069,8 @@ texture read back), see the port's `PORTING.md` "UI".
   are gone; undo, or Keep / Deactivate and bake again), collision shapes are not merged (the originals' colliders go
   with them on Delete). One baked mesh gets one distance field and one set of surface cards: a large merged area is
   coarser in the GI than its parts were.
-- Seen while testing, not changed: a renderer with a mirroring scale (-1, 1, 1) draws inside out (the passes do not flip
-  the front face for a negative determinant); its baked copy is right (the triangles are turned), so baking changes how
-  such an object looks.
+- A renderer with a mirroring scale drew inside out until the same day (see "Mirroring transforms" below); now it and
+  its baked copy look the same.
 - Verified: scratchpad `bake/BakeProbe` of session 40ffdb3b (`Assets/Editor/BakeProbe.cs`, batch `-executeMethod
   BakeProbe.Run`: 68 checks: the combiner alone (sub-meshes, counts, bounds, every triangle facing its normals under a
   mirrored and a squashed transform), a hierarchy with a non-uniform and a mirrored scale, a nested child, a LOD group, a
@@ -3084,6 +3083,36 @@ texture read back), see the port's `PORTING.md` "UI".
   A player build of the probe's scene: the .mesh files shipped with their distance fields, the scene drawn. Not run:
   New Frontier's tests (the worktree held LFS pointers only). Not exercised: a bake in prefab mode, the refusals of
   play mode and of a read-only object, a mesh of millions of triangles (the parallel fill).
+
+## Mirroring transforms: the mesh drawn wound the other way (2026-11-19)
+
+- Found while testing the Mesh Baker: a renderer whose transform mirrors (a negative determinant: an odd number of
+  negative scale components along the chain, as (-1, 1, 1) or (-1, -1, -1); (1, -1, -1) is a half turn, not a mirror)
+  drew inside out: back-face culling kept the faces that pointed inwards after the mirror. Unity flips the front face for
+  such objects; the user's ask was to fix it in the engine.
+- Fix: such a renderer draws `Mesh.Mirrored` (internal, made on first use): the same vertices, every triangle with two
+  corners swapped. `MeshRenderer.IsMirrored` (public: product of `lossyScale`'s components < 0, cheap, no matrix) and
+  `MeshRenderer.DrawnMesh` (internal) pick it; `DrawGeometry` / `DrawSubMesh` (every per-object draw: opaque, prepass,
+  shadows, transparent, transparent shadows, GI captures) and `GpuScene` (`Prepare` and the instance's index range in
+  `Write`, so the GPU-driven buckets, prepass and shadow multi-draws) draw it. One winding per draw command keeps the
+  buckets whole: no `glFrontFace` switching, no separate buckets. ICustomRenderer meshes in `TransparentPass` the same
+  (by the world matrix's determinant).
+- On the GPU a twin is only an index range over its source's vertices (`GeometryPool.Upload`: `MirrorSource` prepared
+  first, `PoolBaseVertex` = the source's, `PoolVertexCount` 0); `GeometryPool.Release(source)` releases the twin first
+  (its base vertex would point into reused space). A renderer that stops mirroring leaves the twin's indices in the pool
+  until its mesh is released.
+- Normals needed nothing: the shaders' normal matrix is transpose(inverse(model)) (`GpuScene.NormalMatrix`, the
+  per-object uniform), right for a mirror. CPU users of `renderer.Mesh` (picking, navmesh, distance fields, Lumen cards,
+  the Mesh Baker) keep the original mesh: winding does not matter to them, and `MeshCombiner` turns mirrored triangles
+  itself.
+- A first version recursed for ever in `GeometryPool.Release(mesh?.MirroredIfMade)` (null -> null): a stack overflow
+  the Mesh Baker probe caught at once (exit 0xC00000FD).
+- Verified on the probe project of the Mesh Baker section (`BakeProbe.BuildMirrors` / `CheckMirrors`: rows of spheres,
+  cubes, a static row and a transparent row, columns plain, (-1,1,1), (-1,-1,-1), (1,-1,-1), under a parent scaled
+  (-1,1,1); `IsMirrored` right for all 20), GUI editor scene view screenshots: every one solid and lit with its shadow,
+  the same after the scene was thrown away and built again (twins released and uploaded again); the 68 Mesh Baker checks
+  pass. Not compared frame by frame against the old engine (unmirrored renderers take the same path: `DrawnMesh` is
+  `Mesh`), not looked at in the voxel GI mode separately (its passes draw without culling), no game view or player run.
 
 ## Selection of several objects (2026-11-19)
 

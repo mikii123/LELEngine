@@ -528,12 +528,23 @@ namespace LELEngine.Rendering.Passes
 				}
 
 				Material material = custom.Material;
-				if (!IsDrawable(material) || !custom.PrepareDraw(out Mesh mesh, out MaterialPropertyBlock block, out Vector3 min, out Vector3 max) || mesh == null || !GeometryPool.Prepare(mesh))
+				if (!IsDrawable(material) || !custom.PrepareDraw(out Mesh mesh, out MaterialPropertyBlock block, out Vector3 min, out Vector3 max) || mesh == null)
 				{
 					continue;
 				}
 
 				Matrix4 world = behaviour.transform.LocalToWorld;
+				// A mirroring transform draws the twin wound the other way (see MeshRenderer.DrawnMesh).
+				if (world.Determinant < 0f)
+				{
+					mesh = mesh.Mirrored;
+				}
+
+				if (!GeometryPool.Prepare(mesh))
+				{
+					continue;
+				}
+
 				Vector3 center = Vector3.TransformPosition((min + max) * 0.5f, world);
 				bool grab = material.RenderState.GrabPass;
 				grabs |= grab;

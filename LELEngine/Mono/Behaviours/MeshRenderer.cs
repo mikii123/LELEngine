@@ -359,14 +359,37 @@ public sealed class MeshRenderer : Behaviour
 	/// <summary>Binds the shared geometry and draws every sub-mesh in one call. No uniforms are touched.</summary>
 	public void DrawGeometry()
 	{
-		LELEngine.Rendering.GeometryPool.Draw(mesh);
+		LELEngine.Rendering.GeometryPool.Draw(DrawnMesh);
 	}
 
 	/// <summary>Binds the shared geometry and draws one sub-mesh. No uniforms are touched.</summary>
 	public void DrawSubMesh(int subMesh)
 	{
-		LELEngine.Rendering.GeometryPool.DrawSubMesh(mesh, subMesh);
+		LELEngine.Rendering.GeometryPool.DrawSubMesh(DrawnMesh, subMesh);
 	}
+
+	/// <summary>The transform mirrors (a negative determinant: an odd number of negative scale components along its parents).</summary>
+	public bool IsMirrored
+	{
+		get
+		{
+			Transform t = transform;
+			if (t == null)
+			{
+				return false;
+			}
+
+			// Rotations keep the determinant's sign: the product of the scales' components along the chain is its sign.
+			OpenTK.Mathematics.Vector3 scale = t.lossyScale;
+			return scale.X * scale.Y * scale.Z < 0f;
+		}
+	}
+
+	/// <summary>
+	///     The mesh the GPU draws: <see cref="Mesh" />, or under a mirroring transform its twin with the triangles wound the
+	///     other way (Unity flips the front face for such objects; one winding per draw keeps the GPU-driven buckets whole).
+	/// </summary>
+	internal Mesh DrawnMesh => mesh == null ? null : IsMirrored ? mesh.Mirrored : mesh;
 
 	#endregion
 

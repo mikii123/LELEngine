@@ -80,6 +80,46 @@ namespace LELEngine
 
 		private readonly SubMesh[] subMeshes;
 		private Vector3[] trianglePositions;
+		private Mesh mirrored;
+
+		/// <summary>The mesh this one is the mirrored twin of (<see cref="Mirrored" />), or null.</summary>
+		internal Mesh MirrorSource { get; private set; }
+
+		/// <summary>The twin made for mirroring transforms, when one was asked for (null otherwise).</summary>
+		internal Mesh MirroredIfMade => mirrored;
+
+		/// <summary>
+		///     The mesh as drawn by a renderer whose transform mirrors it (a negative determinant: an odd number of negative
+		///     scale components): the same vertices with every triangle wound the other way, so the faces that point outwards
+		///     after the mirror are the front faces again. Made on first use; on the GPU it is only an index range over this
+		///     mesh's vertices (Rendering.GeometryPool).
+		/// </summary>
+		internal Mesh Mirrored
+		{
+			get
+			{
+				if (mirrored == null)
+				{
+					var indices = new uint[Indices.Length];
+					for (int i = 0; i + 2 < indices.Length; i += 3)
+					{
+						indices[i] = Indices[i];
+						indices[i + 1] = Indices[i + 2];
+						indices[i + 2] = Indices[i + 1];
+					}
+
+					// A trailing partial triangle (none in practice) stays as it was.
+					for (int i = indices.Length / 3 * 3; i < indices.Length; i++)
+					{
+						indices[i] = Indices[i];
+					}
+
+					mirrored = new Mesh(name, Vertices, indices, subMeshes) { MirrorSource = this };
+				}
+
+				return mirrored;
+			}
+		}
 
 		#endregion
 

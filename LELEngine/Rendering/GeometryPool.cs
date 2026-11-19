@@ -200,7 +200,18 @@ namespace LELEngine.Rendering
 		/// </summary>
 		public static void Release(Mesh mesh)
 		{
-			if (mesh == null || mesh.PoolGeneration != generation)
+			if (mesh == null)
+			{
+				return;
+			}
+
+			// A mirrored twin draws this mesh's vertices: it goes with them.
+			if (mesh.MirroredIfMade != null)
+			{
+				Release(mesh.MirroredIfMade);
+			}
+
+			if (mesh.PoolGeneration != generation)
 			{
 				return;
 			}
@@ -234,15 +245,26 @@ namespace LELEngine.Rendering
 		private static void Upload(Mesh mesh)
 		{
 			EnsureCreated();
-			Vertex[] vertices = mesh.Vertices;
+			// A mirrored twin (Mesh.Mirrored) is only an index range over its source's vertices.
+			Mesh source = mesh.MirrorSource;
+			if (source != null && !Prepare(source))
+			{
+				source = null;
+			}
+
+			Vertex[] vertices = source != null ? Array.Empty<Vertex>() : mesh.Vertices;
 			uint[] indices = mesh.Indices;
 
 			// Ranges of released meshes first (first fit), the end of the buffers otherwise.
-			int baseVertex = indices.Length > 0 ? Allocate(freeVertices, vertices.Length) : -1;
+			int baseVertex = indices.Length > 0 && source == null ? Allocate(freeVertices, vertices.Length) : -1;
 			int firstIndex = indices.Length > 0 ? Allocate(freeIndices, indices.Length) : -1;
-			bool appendVertices = baseVertex < 0;
+			bool appendVertices = baseVertex < 0 && source == null;
 			bool appendIndices = firstIndex < 0;
-			if (appendVertices)
+			if (source != null)
+			{
+				baseVertex = source.PoolBaseVertex;
+			}
+			else if (appendVertices)
 			{
 				baseVertex = vertexCount;
 			}
@@ -285,8 +307,12 @@ namespace LELEngine.Rendering
 
 			if (indices.Length > 0)
 			{
-				GL.BindBuffer(BufferTarget.CopyWriteBuffer, vertexBuffer);
-				GL.BufferSubData(BufferTarget.CopyWriteBuffer, (IntPtr)(baseVertex * Vertex.Size), vertices.Length * Vertex.Size, vertices);
+				if (vertices.Length > 0)
+				{
+					GL.BindBuffer(BufferTarget.CopyWriteBuffer, vertexBuffer);
+					GL.BufferSubData(BufferTarget.CopyWriteBuffer, (IntPtr)(baseVertex * Vertex.Size), vertices.Length * Vertex.Size, vertices);
+				}
+
 				GL.BindBuffer(BufferTarget.CopyWriteBuffer, indexBuffer);
 				GL.BufferSubData(BufferTarget.CopyWriteBuffer, (IntPtr)(firstIndex * sizeof(uint)), indices.Length * sizeof(uint), indices);
 				GL.BindBuffer(BufferTarget.CopyWriteBuffer, 0);

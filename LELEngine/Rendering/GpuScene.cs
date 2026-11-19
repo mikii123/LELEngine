@@ -250,7 +250,7 @@ namespace LELEngine.Rendering
 			foreach (RendererPart part in parts)
 			{
 				MeshRenderer renderer = part.Renderer;
-				if (!GeometryPool.Prepare(renderer.Mesh))
+				if (!GeometryPool.Prepare(renderer.DrawnMesh))
 				{
 					continue;
 				}
@@ -542,7 +542,7 @@ namespace LELEngine.Rendering
 		private void Write(int index, RendererPart part, int bucket)
 		{
 			MeshRenderer renderer = part.Renderer;
-			Mesh mesh = renderer.Mesh;
+			Mesh mesh = renderer.DrawnMesh;
 			SubMesh range = mesh.SubMeshes[part.SubMesh];
 			Matrix4 model = renderer.transform.LocalToWorld;
 			previousModels[index] = motion != null ? motion.GetPrevious(renderer, model) : model;
