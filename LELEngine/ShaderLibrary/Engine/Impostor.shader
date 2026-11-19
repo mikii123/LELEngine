@@ -463,8 +463,9 @@ void main()
 		}
 	}
 
-	for (int i = 0; i < LelLightCount(); i++)
+	for (LelLightIterator lights = LelLightsAt(position); LelNextLight(lights);)
 	{
+		int i = lights.light;
 		vec3 Li;
 		vec3 radiance;
 		if (LelLightAt(i, position, Li, radiance))
@@ -494,8 +495,9 @@ void main()
 		}
 	}
 
-	for (int i = 0; i < LelLightCount(); i++)
+	for (LelLightIterator lights = LelLightsAt(position); LelNextLight(lights);)
 	{
+		int i = lights.light;
 		vec3 Li;
 		vec3 radiance;
 		if (LelLightAt(i, position, Li, radiance))

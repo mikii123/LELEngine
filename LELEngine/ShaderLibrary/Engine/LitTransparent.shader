@@ -171,8 +171,9 @@ void main()
 	}
 
 	// The local lights (Engine/Lights.glsl), lit as the directional ones, unshadowed.
-	for (int i = 0; i < LelLightCount(); i++)
+	for (LelLightIterator lights = LelLightsAt(fPosition); LelNextLight(lights);)
 	{
+		int i = lights.light;
 		vec3 Li;
 		vec3 radiance;
 		if (LelLightAt(i, fPosition, Li, radiance))

@@ -123,7 +123,7 @@ namespace TestGame.Scenes
 				light.SourceRadius = 0.5f;
 				// vollamplive=1: the lamps take live channels (8 a cloud: the rest are left out) instead of the baked texture;
 				// vollampdynamic=1: they are worked out in the march.
-				light.VolumeMode = options.VolumeLampsDynamic ? LightVolumeMode.Dynamic : options.VolumeLampsLive ? LightVolumeMode.Live : LightVolumeMode.Baked;
+				light.Mode = options.VolumeLampsDynamic ? LightMode.Dynamic : options.VolumeLampsLive ? LightMode.Live : LightMode.Baked;
 				if (options.VolumeLampPulse)
 				{
 					lamp.AddComponent<VolumetricLampPulse>().Phase = i * 0.9f;
@@ -206,7 +206,7 @@ namespace TestGame.Scenes
 				}
 
 				// vollightdynamic=1: worked out in the march (nothing reworked as it moves).
-				light.VolumeMode = options.VolumeMovingLightDynamic ? LightVolumeMode.Dynamic : LightVolumeMode.Live;
+				light.Mode = options.VolumeMovingLightDynamic ? LightMode.Dynamic : LightMode.Live;
 				lamp.AddComponent<VolumetricLightMover>();
 			}
 
@@ -215,7 +215,7 @@ namespace TestGame.Scenes
 			{
 				GameObject bullet = scene.CreateGameObject("Bullet " + (i + 1));
 				Light light = bullet.AddComponent<Light>();
-				light.VolumeMode = LightVolumeMode.Dynamic;
+				light.Mode = LightMode.Dynamic;
 				light.Color = i % 3 == 0 ? new Color4(0.35f, 0.75f, 1f, 1f) : new Color4(1f, 0.6f, 0.25f, 1f);
 				light.Intensity = 40f;
 				light.Range = 6f;

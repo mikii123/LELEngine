@@ -27,7 +27,7 @@ void main()
 //             near the camera, where the cloud fills the view when it is inside).
 //   VOL_LIGHTS        the live lights' transport (two fetches a step): only while one of them is lit.
 //   VOL_BAKED_LIGHTS  the baked lights' texture (one fetch a step): only while there are baked lights that shine.
-//   VOL_DYNAMIC_LIGHTS  the scene lights set to Dynamic (Light.VolumeMode) that reach the cloud this frame, worked out
+//   VOL_DYNAMIC_LIGHTS  the scene lights set to Dynamic (Light.Mode) that reach the cloud this frame, worked out
 //                     here with nothing made beforehand: the pixel's ray first takes up to 16 of them whose reach it
 //                     crosses inside the shape (the list is the nearest to the camera first), then every step adds the
 //                     light each of them scatters along a stretch of the ray: from where the last stretch ended (an empty

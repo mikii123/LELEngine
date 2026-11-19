@@ -6,18 +6,30 @@ using OpenTK.Mathematics;
 namespace LELEngine.Rendering
 {
 	/// <summary>
-	///     The shaders' light list (Engine/Lights.glsl): the <see cref="Light" />s that shine this frame, at most
-	///     <see cref="Light.MaxLights" /> (with more, the ones whose range comes nearest to the camera), in a uniform buffer
-	///     bound to <see cref="Binding" /> for every program: lit materials, the GI's injection and card lighting, the
-	///     volumetric objects. Rebuilt every frame (<see cref="Renderer.RenderFrame" />); with no lights the list is empty,
-	///     never unbound.
+	///     The shaders' light list (Engine/Lights.glsl): every <see cref="Light" /> that shines this frame, however many, in
+	///     a storage buffer bound to <see cref="ListBinding" /> for every program (lit materials, the GI's injection and card
+	///     lighting, the volumetric objects), with its header (the count, and the clusters of the view being drawn) in a
+	///     uniform buffer on <see cref="Binding" />. No light takes another's place: a lit pixel visits only the lights of its
+	///     cluster (<see cref="Passes.LightClusterPass" />, their masks on <see cref="ClusterBinding" />), a GI work group
+	///     those that reach it, so a light costs only where it reaches. Rebuilt every frame (<see cref="Renderer.RenderFrame" />)
+	///     with the header without clusters (every light is visited until a camera's clusters are made); with no lights the
+	///     list is empty, never unbound.
 	/// </summary>
 	public static class LightBuffer
 	{
 		#region PublicFields
 
-		/// <summary>The uniform buffer binding of the light list.</summary>
+		/// <summary>The uniform buffer binding of the list's header (Engine/Lights.glsl's LelLightBlock).</summary>
 		public const int Binding = 7;
+
+		/// <summary>The storage buffer binding of the list.</summary>
+		public const int ListBinding = 16;
+
+		/// <summary>The storage buffer binding of the clusters' masks of the view being drawn.</summary>
+		public const int ClusterBinding = 17;
+
+		/// <summary>Bytes of the header (std140; <see cref="WriteHeader" />).</summary>
+		public const int HeaderBytes = 128;
 
 		/// <summary>Flags of a light in the list (params.y in the shaders).</summary>
 		public const int FlagGI = 1;
@@ -29,11 +41,12 @@ namespace LELEngine.Rendering
 
 		#region PrivateFields
 
-		private const int Vec4PerLight = 6;
+		// Six vec4 a light (Engine/Lights.glsl's LelLight).
+		private const int FloatsPerLight = 24;
 
-		private static readonly float[] data = new float[4 + Light.MaxLights * Vec4PerLight * 4];
+		private static float[] data = new float[16 * FloatsPerLight];
+		private static readonly float[] header = new float[HeaderBytes / sizeof(float)];
 		private static readonly List<Light> shining = new List<Light>();
-		private static readonly List<(Light light, float score)> candidates = new List<(Light, float)>();
 		private static Dictionary<Light, GIState> giLights = new Dictionary<Light, GIState>();
 		private static Dictionary<Light, GIState> giSeen = new Dictionary<Light, GIState>();
 
@@ -42,14 +55,29 @@ namespace LELEngine.Rendering
 		private static readonly List<GIState> giGone = new List<GIState>();
 
 		private static readonly List<(Vector3 min, Vector3 max)> giChanges = new List<(Vector3, Vector3)>();
-		private static int buffer;
+
+		// The list (storage) and the lights it has room for; the lights uploaded into it (Forget takes a light out of
+		// shining at once, the buffer keeps it until the next update).
+		private static int listBuffer;
+		private static int listCapacity;
+		private static int uploaded;
+
+		// The header without clusters, a mask for programs drawn without clusters (their mask block needs a buffer), and
+		// the header and masks bound now (the plain ones, or a camera's clusters').
+		private static int plainHeader;
+		private static int emptyMasks;
+		private static int boundHeader;
+		private static int boundMasks;
 
 		#endregion
 
 		#region PublicProperties
 
-		/// <summary>The lights in the list this frame, in its order.</summary>
+		/// <summary>The lights that shine this frame, in the list's order: every one, however many.</summary>
 		public static IReadOnlyList<Light> Shining => shining;
+
+		/// <summary>Lights in the list on the GPU this frame (what the shaders and the clusters index).</summary>
+		public static int Count => uploaded;
 
 		/// <summary>
 		///     Goes up whenever what the lights give the GI changes: a light with <see cref="Light.AffectsGI" /> turns on or
@@ -66,14 +94,12 @@ namespace LELEngine.Rendering
 		#region PublicMethods
 
 		/// <summary>
-		///     Gathers the lights that shine (enabled, bright, with a range), the ones reaching nearest to the camera's
-		///     position first, lets the volumetric objects work out the clouds' transmittance around them, and uploads and
-		///     binds the list.
+		///     Gathers every light that shines (enabled, bright, with a range), lets the volumetric objects work out the
+		///     clouds' transmittance around them, uploads the list and binds it with its header without clusters.
 		/// </summary>
-		public static void Update(Camera camera)
+		public static void Update()
 		{
-			Vector3 eye = camera != null ? camera.transform.position : Vector3.Zero;
-			candidates.Clear();
+			shining.Clear();
 			foreach (Light light in Light.Active)
 			{
 				if (light == null || light.IsDestroyed || !light.isActiveAndEnabled || light.Intensity <= 0f || light.Range <= 0f
@@ -82,56 +108,108 @@ namespace LELEngine.Rendering
 					continue;
 				}
 
-				// How far the camera is outside the light's reach (0 inside it): the nearest reach first.
-				float outside = MathF.Max(0f, Vector3.Distance(light.transform.position, eye) - light.Range);
-				candidates.Add((light, outside));
+				shining.Add(light);
 			}
 
-			if (candidates.Count > Light.MaxLights)
-			{
-				candidates.Sort((a, b) => a.score.CompareTo(b.score));
-			}
-
-			shining.Clear();
-			for (int i = 0; i < candidates.Count && shining.Count < Light.MaxLights; i++)
-			{
-				shining.Add(candidates[i].light);
-			}
-
-			// A scratch list: it keeps no light until the next frame.
-			candidates.Clear();
 			Volumetrics.VolumetricRuntime.UpdateLightTransmittance(shining);
 
-			Array.Clear(data, 0, data.Length);
-			data[0] = BitConverter.Int32BitsToSingle(shining.Count);
+			int floats = shining.Count * FloatsPerLight;
+			if (data.Length < floats)
+			{
+				data = new float[Math.Max(floats, data.Length * 2)];
+			}
+
 			for (int i = 0; i < shining.Count; i++)
 			{
-				Write(shining[i], 4 + i * Vec4PerLight * 4);
+				Write(shining[i], i * FloatsPerLight);
 			}
 
 			TrackGIChanges();
 
-			if (buffer == 0)
+			EnsureBuffers();
+			GL.BindBuffer(BufferTarget.ShaderStorageBuffer, listBuffer);
+			if (shining.Count > listCapacity)
 			{
-				buffer = GL.GenBuffer();
-				GL.BindBuffer(BufferTarget.UniformBuffer, buffer);
-				GL.BufferData(BufferTarget.UniformBuffer, data.Length * sizeof(float), IntPtr.Zero, BufferUsageHint.DynamicDraw);
+				// Doubling: a list that keeps changing its size is reallocated rarely.
+				listCapacity = Math.Max(shining.Count, listCapacity * 2);
+				GL.BufferData(BufferTarget.ShaderStorageBuffer, listCapacity * FloatsPerLight * sizeof(float), IntPtr.Zero, BufferUsageHint.DynamicDraw);
 			}
 
+			if (floats > 0)
+			{
+				GL.BufferSubData(BufferTarget.ShaderStorageBuffer, IntPtr.Zero, floats * sizeof(float), data);
+			}
+
+			GL.BindBuffer(BufferTarget.ShaderStorageBuffer, 0);
+			uploaded = shining.Count;
+			WriteHeader(plainHeader, uploaded, 0, 0, 0, 0, Matrix4.Identity, Vector4.Zero, Vector4.Zero);
+			UseNoClusters();
+		}
+
+		/// <summary>
+		///     Writes a header (Engine/Lights.glsl's LelLightBlock, std140): the count, and the clusters' grid (mask words of
+		///     a cluster, 0: none; tiles; slices), the camera's view-projection, its depth row (a world point's view depth:
+		///     dot((p, 1), depth)) and the slicing (a depth's slice: floor(log(depth) x x + y); z, w: the depths covered).
+		/// </summary>
+		internal static void WriteHeader(int buffer, int count, int words, int tilesX, int tilesY, int slices, Matrix4 viewProjection, Vector4 depth, Vector4 slicing)
+		{
+			Array.Clear(header, 0, header.Length);
+			header[0] = BitConverter.Int32BitsToSingle(count);
+			header[1] = BitConverter.Int32BitsToSingle(words);
+			header[2] = BitConverter.Int32BitsToSingle(tilesX);
+			header[3] = BitConverter.Int32BitsToSingle(tilesY);
+			header[4] = BitConverter.Int32BitsToSingle(slices);
+			// The engine's rows are the shader's columns, as SetMatrix4 uploads a matrix: the shader's matrix x a point is
+			// the point x the engine's matrix.
+			WriteVector(viewProjection.Row0, 8);
+			WriteVector(viewProjection.Row1, 12);
+			WriteVector(viewProjection.Row2, 16);
+			WriteVector(viewProjection.Row3, 20);
+			WriteVector(depth, 24);
+			WriteVector(slicing, 28);
 			GL.BindBuffer(BufferTarget.UniformBuffer, buffer);
-			// Only the lights in use (and the count) are uploaded.
-			GL.BufferSubData(BufferTarget.UniformBuffer, IntPtr.Zero, (4 + shining.Count * Vec4PerLight * 4) * sizeof(float), data);
+			GL.BufferSubData(BufferTarget.UniformBuffer, IntPtr.Zero, HeaderBytes, header);
 			GL.BindBuffer(BufferTarget.UniformBuffer, 0);
+		}
+
+		/// <summary>Binds the list with its header without clusters: every light is visited, until a camera's clusters are made.</summary>
+		public static void UseNoClusters()
+		{
+			EnsureBuffers();
+			boundHeader = plainHeader;
+			boundMasks = emptyMasks;
 			Bind();
 		}
 
-		/// <summary>Binds the list to <see cref="Binding" /> (a program reads it there).</summary>
+		/// <summary>Binds the list with a camera's clusters (<see cref="Passes.LightClusterPass" />): their header and masks.</summary>
+		internal static void UseClusters(int clusterHeader, int clusterMasks)
+		{
+			EnsureBuffers();
+			boundHeader = clusterHeader;
+			boundMasks = clusterMasks;
+			Bind();
+		}
+
+		/// <summary>Clusters about to be deleted: when they are the ones bound, the list goes back to its header without them.</summary>
+		internal static void ForgetClusters(int clusterHeader, int clusterMasks)
+		{
+			if (listBuffer != 0 && (boundHeader == clusterHeader || boundMasks == clusterMasks))
+			{
+				UseNoClusters();
+			}
+		}
+
+		/// <summary>Binds the list, and the header and masks in use (a program reads them there).</summary>
 		public static void Bind()
 		{
-			if (buffer != 0)
+			if (listBuffer == 0)
 			{
-				GL.BindBufferBase(BufferRangeTarget.UniformBuffer, Binding, buffer);
+				return;
 			}
+
+			GL.BindBufferBase(BufferRangeTarget.UniformBuffer, Binding, boundHeader);
+			GL.BindBufferBase(BufferRangeTarget.ShaderStorageBuffer, ListBinding, listBuffer);
+			GL.BindBufferBase(BufferRangeTarget.ShaderStorageBuffer, ClusterBinding, boundMasks);
 		}
 
 		/// <summary>
@@ -157,20 +235,45 @@ namespace LELEngine.Rendering
 		/// </summary>
 		public static void EnsureBound()
 		{
-			if (buffer == 0)
-			{
-				buffer = GL.GenBuffer();
-				GL.BindBuffer(BufferTarget.UniformBuffer, buffer);
-				GL.BufferData(BufferTarget.UniformBuffer, data.Length * sizeof(float), new float[data.Length], BufferUsageHint.DynamicDraw);
-				GL.BindBuffer(BufferTarget.UniformBuffer, 0);
-			}
-
-			GL.BindBufferBase(BufferRangeTarget.UniformBuffer, Binding, buffer);
+			EnsureBuffers();
+			Bind();
 		}
 
 		#endregion
 
 		#region PrivateMethods
+
+		// The buffers, made empty on first use: the list (room for 16 lights), the header without clusters, the empty mask.
+		private static void EnsureBuffers()
+		{
+			if (listBuffer != 0)
+			{
+				return;
+			}
+
+			listCapacity = 16;
+			listBuffer = GL.GenBuffer();
+			GL.BindBuffer(BufferTarget.ShaderStorageBuffer, listBuffer);
+			GL.BufferData(BufferTarget.ShaderStorageBuffer, listCapacity * FloatsPerLight * sizeof(float), new float[listCapacity * FloatsPerLight], BufferUsageHint.DynamicDraw);
+			emptyMasks = GL.GenBuffer();
+			GL.BindBuffer(BufferTarget.ShaderStorageBuffer, emptyMasks);
+			GL.BufferData(BufferTarget.ShaderStorageBuffer, 4 * sizeof(uint), new uint[4], BufferUsageHint.StaticDraw);
+			GL.BindBuffer(BufferTarget.ShaderStorageBuffer, 0);
+			plainHeader = GL.GenBuffer();
+			GL.BindBuffer(BufferTarget.UniformBuffer, plainHeader);
+			GL.BufferData(BufferTarget.UniformBuffer, HeaderBytes, new float[HeaderBytes / sizeof(float)], BufferUsageHint.DynamicDraw);
+			GL.BindBuffer(BufferTarget.UniformBuffer, 0);
+			boundHeader = plainHeader;
+			boundMasks = emptyMasks;
+		}
+
+		private static void WriteVector(Vector4 value, int at)
+		{
+			header[at] = value.X;
+			header[at + 1] = value.Y;
+			header[at + 2] = value.Z;
+			header[at + 3] = value.W;
+		}
 
 		/// <summary>
 		///     Compares what each GI light gives the GI (its entry in the list) with the last frame's: a light that is new,
@@ -189,9 +292,9 @@ namespace LELEngine.Rendering
 					continue;
 				}
 
-				int at = 4 + i * Vec4PerLight * 4;
+				int at = i * FloatsPerLight;
 				var hash = new HashCode();
-				for (int k = 0; k < Vec4PerLight * 4; k++)
+				for (int k = 0; k < FloatsPerLight; k++)
 				{
 					hash.Add(data[at + k]);
 				}
@@ -296,6 +399,9 @@ namespace LELEngine.Rendering
 				// Two vec4: (+x, -x, +y, 0) and (-y, +z, -z, 0).
 				data[at + 16 + k + (k >= 3 ? 1 : 0)] = clouds ? t[k] : 1f;
 			}
+
+			data[at + 19] = 0f;
+			data[at + 23] = 0f;
 		}
 
 		#endregion

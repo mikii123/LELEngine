@@ -133,6 +133,8 @@ namespace LELEngine.Rendering
 		/// </summary>
 		public void AddDefaultPasses()
 		{
+			// First of every camera's passes: what they draw lit visits its cluster's lights.
+			AddPass(new LightClusterPass());
 			AddPass(new VfxSimulationPass());
 			AddPass(new VolumetricPass());
 			AddPass(new ShadowPass());
@@ -267,7 +269,7 @@ namespace LELEngine.Rendering
 			// A changed super sampling factor resizes the scene now.
 			ResizeScene(false);
 			Lighting.BeginFrame(Settings);
-			LightBuffer.Update(camera);
+			LightBuffer.Update();
 			if (camera == null)
 			{
 				// Nothing to render from; present the clear color and the screen-space passes (UI).
@@ -642,6 +644,7 @@ namespace LELEngine.Rendering
 		/// </summary>
 		public void AddTargetTexturePasses()
 		{
+			AddPass(new LightClusterPass());
 			AddPass(new ShadowPass());
 			AddPass(new OpaquePass());
 			AddPass(new TransparentPass());

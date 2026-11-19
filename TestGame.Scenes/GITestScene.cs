@@ -221,7 +221,7 @@ namespace TestGame.Scenes
 			/// <summary>vollamppulse=1: the lamps' brightness changes every frame (each with its own phase).</summary>
 			public bool VolumeLampPulse;
 
-			/// <summary>vollamplive=1: the lamps are live lights of the clouds (Light.VolumeMode); default baked.</summary>
+			/// <summary>vollamplive=1: the lamps are live lights of the clouds (Light.Mode); default baked.</summary>
 			public bool VolumeLampsLive;
 
 			/// <summary>vollampdynamic=1: the lamps are dynamic lights of the clouds (worked out in the march).</summary>

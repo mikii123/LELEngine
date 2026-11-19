@@ -33,7 +33,8 @@ namespace LELEngine.Editor
 				}
 			}
 
-			string state = index >= 0 ? "Shining (" + (index + 1) + " of " + LightBuffer.Shining.Count + " lights)" : light.isActiveAndEnabled && light.Intensity > 0f ? "Not shining: more than " + Light.MaxLights + " lights reach nearer the camera" : "Off";
+			// Every light that is on shines (no limit): off, dark, out of range or not rendered yet.
+			string state = index >= 0 ? "Shining (" + (index + 1) + " of " + LightBuffer.Shining.Count + " lights)" : "Off";
 			ImGui.TextDisabled(state);
 			float range = MathF.Max(light.Range, 1e-3f);
 			Vector3 radiance = light.Radiance;

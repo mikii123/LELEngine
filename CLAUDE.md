@@ -2184,9 +2184,10 @@ switches.
   light's `AffectsVolumes` / `VolumetricStrength` said (only the other directional lights and the local lights honoured
   them). `VolumetricObjectBase.SunRadiance` is the sun's light on the cloud now (zero with `AffectsVolumes` off, times
   `VolumetricStrength`); the march and the GI's media volume read it.
-- Live or baked is each light's own setting, `Light.VolumeMode` (`LightVolumeMode` Live, the default, / Baked; shown
-  with Affects Volumes), never the engine's choice (2026-11-17, the user's rule: "nie dawać silnikowi decydować"; until
-  then the longest ranges took the live channels, so a shield's short break flash near the game's storm joined the
+- Live or baked is each light's own setting, `Light.Mode` (`LightMode` Live, the default, / Baked; under Volumes, shown
+  with Affects Volumes; `VolumeMode` / `LightVolumeMode` until 2026-11-19, see "Lights without a limit"), never the
+  engine's choice (2026-11-17, the user's rule: "nie dawać silnikowi decydować"; until then the longest ranges took the
+  live channels, so a shield's short break flash near the game's storm joined the
   baked lights and reworked all 22 of them as it came and as it went: 8 and 2 ms of GPU in one frame each, a hitch in
   combat). `MaxLights` 8, `MaxBakedLights` 64; `GatherLightSlots(slots, baked)`: live = the cloud's own `Lights`, the
   scene's other directional lights, then the Live scene lights that reach the shape in `Light.Active` order (the order
@@ -2204,7 +2205,7 @@ switches.
   background. A change of the live set (a light's mode switched, a live light coming or going) is a build in the
   background. A build that only changes one kind keeps the other's textures (`KeepLive` / `KeepBaked`). The inspector's
   line (`Describe`) counts both and their textures. TestGame's lamps (`vollamps=N`) are Baked, `vollamplive=1` Live.
-- Dynamic lights (`LightVolumeMode.Dynamic`, 2026-11-17, the user's ask: lights moving every frame with each bullet):
+- Dynamic lights (`LightMode.Dynamic`, 2026-11-17, the user's ask: lights moving every frame with each bullet):
   worked out in the march (`VolumetricMarch.shader` variant `VOL_DYNAMIC_LIGHTS`), with nothing made beforehand, so they
   move, come and go every frame for nothing. `VolumetricObjectBase.GatherDynamicLights` (each draw, per cloud and camera):
   the Dynamic lights whose range reaches the shape, the nearest to the camera first, at most `MaxDynamicLights` 128
@@ -2487,22 +2488,76 @@ Clouds in the GI:
   shaders' formula): fade^2 / max(d^2, SourceRadius^2), fade = saturate(1 - d^4 / range^4) (Frostbite's window); a spot's
   cone saturate((dot(-L, forward) - cos outer) x 1 / (cos inner - cos outer))^2. The direct light has no shadow maps
   (geometry does not block it on surfaces); the GI's injection does block it.
-- `Rendering/LightBuffer` (static): every frame (`Renderer.RenderFrame`, after `Lighting.BeginFrame`) the lights that shine
-  (enabled, intensity, range, colour), at most `Light.MaxLights` = 32, those whose range comes nearest to the camera first;
-  a std140 uniform block at binding 7, 6 vec4 per light (position + range, radiance + GI strength, spot direction + cos
-  outer, spot scale / flags / source radius, the clouds' transmittance towards +x -x +y and -y +z -z);
-  `Lighting.SetUniforms` calls `EnsureBound` (programs drawn before the first frame never read an unbound block).
+- `Rendering/LightBuffer` (static): every frame (`Renderer.RenderFrame`, after `Lighting.BeginFrame`) every light that
+  shines (enabled, intensity, range, colour), however many, in `Light.Active` order: a std430 storage buffer on binding
+  16 (`ListBinding`; grown by doubling), 6 vec4 per light (position + range, radiance + GI strength, spot direction + cos
+  outer, spot scale / flags / source radius, the clouds' transmittance towards +x -x +y and -y +z -z), and its header,
+  a std140 uniform block on binding 7 (`LelLightBlock`, 128 bytes, `WriteHeader`: the count, the clusters' grid, the
+  camera's view-projection, depth row and slicing). `Update` binds the plain header (no clusters: y = 0, every light
+  is visited) with an empty mask buffer on 17; `UseClusters` / `UseNoClusters` switch the header and masks bound, and
+  `Bind` / `EnsureBound` (called by `Lighting.SetUniforms` for every draw: programs drawn before the first frame never
+  read an unbound block) bind the ones in use. `Count` is what was uploaded (`Forget` takes a light out of `Shining` at
+  once, the buffer keeps it until the next update).
   A light disabled or destroyed leaves the list and the GI tracking at once (`LightBuffer.Forget` from `Light.OnDisable` /
   `OnDestroy`; its reach waits in `giGone` for the next frame's change): static lists must never hold a light that is
   off (see "The GC's own roots": it held an unloaded scene and the old scripts).
   `Engine/Lights.glsl`: `LelLight`, `LelLightCount`, `LelLightHas`, `LelLightFalloff`, `LelLightCloudTransmittance` (the
-  six axes blended by dir^2), `LelLightShape`, `LelLightAt`.
+  six axes blended by dir^2), `LelLightShape`, `LelLightAt`; the walks over lights (`LelLightIterator`, `LelNextLight`):
+  `LelLightsAt(position)` (a cluster's), `LelAllLights()`, and with `LEL_LIGHT_GROUPS` (compute shaders)
+  `LelLightGroupCullBox` / `LelLightGroupCullPoints` + `LelGroupLights()`. A loop over the lights is
+  `for (LelLightIterator lights = LelLightsAt(p); LelNextLight(lights);) { int i = lights.light; ... }`.
+- Lights without a limit (2026-11-19). The user's report: "with many dynamic lights in the volumetric, the baked lights
+  disappear; why do they share a limit?". The clouds always had a pool per mode (8 Live, 64 Baked, 128 Dynamic), but the
+  shaders' list was one pool of 32 lights, those whose range came nearest to the camera: New Frontier's bullet lights
+  (Dynamic, range 72: the camera inside their reach, score 0) took every place, and the station's lamps (Baked) further
+  away left the list, so their light on surfaces and in the GI went out (their part of the clouds' baked texture
+  stayed). A first fix gave each mode its own 32 (and the user had `VolumeMode` renamed, as it then decided the
+  surfaces' list too: "no to zmień nazwę z volume mode"); the user rejected it ("what are separate limits for, if the
+  limit is shared anyway?": one buffer every pixel looped over whole, its parts' places wasted) and chose clustered
+  lighting with no limit at all. `Light.MaxLights` is gone. `Light.Mode` / `LightMode` kept the new name and went back
+  under the Volumes header (it concerns only the clouds again; at the top, Baked read as Unity's baked surface light).
+  The serializer has no former names: the documents' `"VolumeMode"` keys (and their `$types` lines) were renamed in
+  place to `"Mode"`; a document still holding `"VolumeMode"` loads its lights as Live.
+- Clusters (`Rendering/Passes/LightClusterPass`, `Engine/LightClusters.shader`): the first pass of every camera
+  (`EveryCamera`, also in `AddTargetTexturePasses`) cuts its view into tiles of about 64 render pixels (even steps of NDC)
+  x 32 slices of depth, logarithmic from the near to the far plane (the first reaching back to the camera, the last to
+  1.01 x far), and gives each cluster a bit per light whose range sphere reaches the cluster's view-space box (the
+  bounds of its part of the view, through the inverse projection, with 0.002 x its far depth of room). On the GPU, one
+  thread per cluster and 32 lights, into a storage buffer per camera of the frame (output on binding 18: VFX caches
+  what it bound on 0..15; a later camera never writes masks an earlier one's draws read), then `UseClusters`. A lit
+  point finds its cluster from its world position through the matrices of the camera the clusters were made for (the
+  header), not from `gl_FragCoord`: any draw (an overlay camera, a preview, another renderer's camera) gets a cluster
+  that holds every light reaching that point, and a point outside that view (or before any clusters) visits every
+  light. Memory: tiles x 32 x ceil(lights / 32) x 4 bytes (1080p, 130 lights: ~330 KB); a pixel reads ceil(lights / 32)
+  mask words and tests only its cluster's lights.
 - Lit materials: `Lit`, `LitTextured` (Scene workflow: Blinn-Phong as the sun; Metallic / Specular:
-  `LelStandardBRDFDirect` in `StandardBRDF.glsl`) and `LitTransparent` add every light after the sun (unshadowed).
-- GI: VCT's `VoxelInject.shader` adds each GI light to the voxels (`VoxelLightVisibility`: a march through the voxels'
+  `LelStandardBRDFDirect` in `StandardBRDF.glsl`), `LitTransparent` and `Impostor` add the lights of their point's
+  cluster after the sun (unshadowed).
+- GI: VCT's `VoxelInject.shader` adds the GI lights to the voxels (`VoxelLightVisibility`: a march through the voxels'
   occupancy towards it, voxel steps growing to an eighth of the distance, at most 48; none with `GIShadows` off); Lumen's
   `CardLighting.shader` to the cards (`CardLightVisibility`: `TraceSdf` through the global distance field;
   `SurfaceCachePass` sets the SDF uniforms of the lighting program). `radiance.w` = `IndirectStrength` (0: not in the GI).
+  Both cull the lights per work group (`LEL_LIGHT_GROUPS`, a mask of 256 words in shared memory, 8192 lights; more: every
+  thread visits every light): `VoxelInject` against its 8^3 block's box a voxel wider, before any thread returns;
+  `CardLighting` against the bounds of its texels' points (`atomicMin` / `atomicMax` on order-preserving float bits),
+  its start reworked to find which texels hold a card without returning (barriers need the whole group).
+- Checked (2026-11-19, the rule: no app runs) with two scratch harnesses of session eb8f85ec. `ShaderCheck`: glslang
+  through the editor's `ShaderValidator` (a `ProjectReference` to the editor, reflection on the validator, a broken probe
+  shader that must fail): Lit, LitTextured (Scene / Metallic / Specular, maps), LitTransparent (+ REFRACTION), Impostor
+  (+ SPECULAR_MAP, MIXED_WORKFLOW, EMISSION_MAP), CardLighting, VoxelInject (ISO / ANISO / SH), LightClusters: 170 stage
+  sources for three kinds of GPU, 0 errors (it caught `active`, a reserved word). glslang passed what NVIDIA's driver
+  rejected in the user's Flight scene: `gl_WorkGroupSize` used (by the work group culling) before the shader's
+  `layout(local_size_...) in;` (error C7594); GI compute shaders now declare their size before the includes.
+  `GLCheck`: the same variants (with their instanced and own-pass programs) compiled and linked by the machine's real
+  driver in a hidden 1 x 1 GLFW window, as the player's compile helper does (`ShaderCompileHelper.RunHelper`: GL 4.6
+  core, `GLCapabilities.Initialize`, no program binary cache), plus a probe with the C7594 order that must fail: all
+  linked on the RTX 5070 Ti (96 storage bindings, 16 fragment blocks); not checked on the AMD 780M. glslang checks the
+  GLSL specification only; a driver can be stricter (or more lenient): compile engine shader changes with GLCheck too.
+  NVIDIA also warned C7050 ("Li", "radiance" might be used before being initialized) in the GI loops of VoxelInject and
+  CardLighting, already before this change (HEAD's VoxelInject compiled by GLCheck: the same warning): the test
+  `giStrength <= 0.0 || !LelLightAt(..., Li, radiance)` is split in two now, and the driver compiles every variant
+  without a warning.
+  Not run in a scene by me: many bullets near the camera, the lamps keeping their light, the passes' GPU times.
 - Lumen's idle budgets: `LightBuffer.GIVersion` goes up when a GI light's list entry changes (on / off, moved, brightness,
   colour, cone, transmittance: a hash per light), `GIChanges` = the boxes of their reach before and after (kept until the
   next change, so every renderer of a frame reads the same); `LumenScene.LightsChanged` restarts the quiet count and adds

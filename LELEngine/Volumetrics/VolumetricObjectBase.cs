@@ -32,19 +32,19 @@ namespace LELEngine.Volumetrics
 
 		/// <summary>
 		///     Most live lights: lights of its own (<see cref="Lights" />), the scene's other directional lights and the
-		///     scene lights set to <see cref="LightVolumeMode.Live" /> that reach the shape, in the order they were enabled,
+		///     scene lights set to <see cref="LightMode.Live" /> that reach the shape, in the order they were enabled,
 		///     each with a channel of the light transport, so their colour and intensity can change every frame for nothing.
 		/// </summary>
 		public const int MaxLights = 8;
 
 		/// <summary>
-		///     Most baked lights: the scene lights set to <see cref="LightVolumeMode.Baked" /> that reach the shape, summed
+		///     Most baked lights: the scene lights set to <see cref="LightMode.Baked" /> that reach the shape, summed
 		///     into one texture with their colours (the nearest to the shape first).
 		/// </summary>
 		public const int MaxBakedLights = 64;
 
 		/// <summary>
-		///     Most dynamic lights: the scene lights set to <see cref="LightVolumeMode.Dynamic" /> that reach the shape, the
+		///     Most dynamic lights: the scene lights set to <see cref="LightMode.Dynamic" /> that reach the shape, the
 		///     nearest to the camera first, worked out in the march (a pixel's ray takes up to 16 of them).
 		/// </summary>
 		public const int MaxDynamicLights = 128;
@@ -218,7 +218,7 @@ namespace LELEngine.Volumetrics
 		public float GIContribution = 1f;
 
 		[Header("Lights")]
-		[Tooltip("The scene's Light components that reach the shape (with Affects Volumes) light the cloud, through it, as each light's Volume Mode says. Live: up to 8 (counting its own lights and the scene's other directional lights), in the order they were enabled; intensity and colour free, moving one works its light out again; live lights past the 8 are left out (warned once). Baked: up to 64 (the nearest) summed into one texture: they cost the same however many there are, and any change of one (place, range, colour, intensity, on or off) works its part of that texture out again, so they suit lights that stay as they are (lamps)")]
+		[Tooltip("The scene's Light components that reach the shape (with Affects Volumes) light the cloud, through it, as each light's Mode says. Live: up to 8 (counting its own lights and the scene's other directional lights), in the order they were enabled; intensity and colour free, moving one works its light out again; live lights past the 8 are left out (warned once). Baked: up to 64 (the nearest) summed into one texture: they cost the same however many there are, and any change of one (place, range, colour, intensity, on or off) works its part of that texture out again, so they suit lights that stay as they are (lamps)")]
 		public bool SceneLights = true;
 
 		[Tooltip("Lights of its own inside the cloud (flashes, lamps, fires), lighting only the cloud. Moving one works the light volume out again; intensity and colour are free")]
@@ -695,11 +695,11 @@ namespace LELEngine.Volumetrics
 		///     The lights the cloud's light transport is worked out for. Live (<paramref name="slots" />, at most
 		///     <see cref="MaxLights" />: a channel each, their colour and intensity free every frame): its own lights first,
 		///     then (with <see cref="SceneLights" />) the scene's directional lights other than the cloud's sun, then the
-		///     scene's lights set to <see cref="LightVolumeMode.Live" /> that reach the shape, whatever their intensity (a
+		///     scene's lights set to <see cref="LightMode.Live" /> that reach the shape, whatever their intensity (a
 		///     flash going dark and bright again keeps its transport), in the order they were enabled (a light that comes
 		///     later never takes another's channel: the channels stay as they are). Live lights past the channels are left
 		///     out (<see cref="LiveLeftOut" />, warned once). Baked (<paramref name="baked" />): the lights set to
-		///     <see cref="LightVolumeMode.Baked" /> that reach the shape, at most <see cref="MaxBakedLights" />, the nearest
+		///     <see cref="LightMode.Baked" /> that reach the shape, at most <see cref="MaxBakedLights" />, the nearest
 		///     first: summed into one texture with their colour, worked out again around a light that changed, came or went.
 		///     The engine never chooses which is which (it did by range until 2026-11-17: a short flash near a big cloud then
 		///     joined the baked lights and reworked them all as it came and as it went).
@@ -771,13 +771,13 @@ namespace LELEngine.Volumetrics
 					continue;
 				}
 
-				if (light.VolumeMode == LightVolumeMode.Dynamic)
+				if (light.Mode == LightMode.Dynamic)
 				{
 					// Worked out in the march (GatherDynamicLights): no part of the transport.
 					continue;
 				}
 
-				if (light.VolumeMode == LightVolumeMode.Baked)
+				if (light.Mode == LightMode.Baked)
 				{
 					bakedCandidates.Add((light, distance));
 				}
@@ -796,7 +796,7 @@ namespace LELEngine.Volumetrics
 			if (leftOut > 0 && !warnedLeftOut)
 			{
 				warnedLeftOut = true;
-				Debug.LogWarning($"[Volumetrics] {gameObject?.Name}: {leftOut} live lights reach it beyond its {MaxLights} channels (its own lights and the other directional lights count) and are left out of its light; set steady ones (lamps) to Volume Mode Baked");
+				Debug.LogWarning($"[Volumetrics] {gameObject?.Name}: {leftOut} live lights reach it beyond its {MaxLights} channels (its own lights and the other directional lights count) and are left out of its light; set steady ones (lamps) to Mode Baked");
 			}
 
 			if (bakedCandidates.Count > 0)
@@ -814,7 +814,7 @@ namespace LELEngine.Volumetrics
 		}
 
 		/// <summary>
-		///     The scene lights set to <see cref="LightVolumeMode.Dynamic" /> that reach the shape this frame, as slots in the
+		///     The scene lights set to <see cref="LightMode.Dynamic" /> that reach the shape this frame, as slots in the
 		///     cloud's local space (the march works them out at each step, VolumetricMarch.shader's VOL_DYNAMIC_LIGHTS), the
 		///     nearest to <paramref name="camera" /> first, at most <see cref="MaxDynamicLights" /> (the rest are left out,
 		///     warned once). Their colour is <see cref="VolumeLightSlot.Color" /> times the slot's factor: the radiance times
@@ -833,7 +833,7 @@ namespace LELEngine.Volumetrics
 			Vector3 half = Size * 0.5f;
 			foreach (global::Light light in global::Light.Active)
 			{
-				if (light == null || light.IsDestroyed || !light.isActiveAndEnabled || light.VolumeMode != LightVolumeMode.Dynamic || !light.AffectsVolumes
+				if (light == null || light.IsDestroyed || !light.isActiveAndEnabled || light.Mode != LightMode.Dynamic || !light.AffectsVolumes
 				    || light.VolumetricStrength <= 0f || light.Range <= 0f || light.Intensity <= 0f)
 				{
 					continue;

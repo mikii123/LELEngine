@@ -2,6 +2,12 @@
 
 #version 430
 
+// One thread per atlas texel (see below). Declared before the includes: Engine/Lights.glsl's work group culling reads
+// gl_WorkGroupSize, which GLSL allows only after this declaration (NVIDIA's compiler holds to it).
+layout(local_size_x = 8, local_size_y = 8) in;
+
+// The local lights a work group's texels may get, found by the group together (Engine/Lights.glsl).
+#define LEL_LIGHT_GROUPS
 #include "Engine/Shadows.glsl"
 #include "Engine/DistanceField.glsl"
 #include "Engine/SceneObjects.glsl"
@@ -16,7 +22,6 @@
 //   indirect = radiosity interpolated from the card's probes (CardRadiosityProbes.shader: one probe per 4x4
 //              texels, 16 rays per frame, accumulated over frames so multi-bounce lighting converges)
 //   final    = albedo * (direct + indirect) + emission
-layout(local_size_x = 8, local_size_y = 8) in;
 
 uniform usampler2D CardIndex;
 uniform sampler2D CardAlbedo;
@@ -80,19 +85,26 @@ float CardLightVisibility(vec3 position, vec3 N, vec3 lightPosition)
 
 void main()
 {
+	// Whether the texel holds a point of a card, worked out without returning: the work group finds the local lights
+	// reaching its points together (every thread takes part), and only then do the empty texels stop.
 	ivec2 texel = ivec2(gl_GlobalInvocationID.xy);
-	if (any(greaterThanEqual(texel, atlasRegion))) return;
+	bool valid = all(lessThan(texel, atlasRegion));
+	uint cardId = valid ? texelFetch(CardIndex, texel, 0).r : 0xFFFFu;
+	valid = valid && cardId != 0xFFFFu;
+	vec4 localPos = valid ? texelFetch(CardLocalPosition, texel, 0) : vec4(0.0);
+	valid = valid && localPos.w >= 0.5;
+	vec3 position = vec3(0.0);
+	if (valid)
+	{
+		position = (sceneObjects[int(cards[int(cardId)].origin.w)].localToWorld * vec4(localPos.xyz, 1.0)).xyz;
+	}
 
-	uint cardId = texelFetch(CardIndex, texel, 0).r;
-	if (cardId == 0xFFFFu) return;
-
-	vec4 localPos = texelFetch(CardLocalPosition, texel, 0);
-	if (localPos.w < 0.5) return;
+	LelLightGroupCullPoints(valid, position, true);
+	if (!valid) return;
 
 	Card card = cards[int(cardId)];
 	SceneObject o = sceneObjects[int(card.origin.w)];
 
-	vec3 position = (o.localToWorld * vec4(localPos.xyz, 1.0)).xyz;
 	vec3 localNormal = normalize(texelFetch(CardNormal, texel, 0).xyz * 2.0 - 1.0);
 	vec3 N = SceneObjectLocalToWorldDir(o, localNormal);
 	vec3 albedo = texelFetch(CardAlbedo, texel, 0).rgb;
@@ -114,13 +126,21 @@ void main()
 		}
 	}
 
-	// ---- the local lights that go into the GI (Engine/Lights.glsl), times their indirect strength
-	for (int i = 0; i < LelLightCount(); i++)
+	// ---- the local lights that go into the GI (Engine/Lights.glsl: those the work group found), times their indirect strength
+	for (LelLightIterator lights = LelGroupLights(); LelNextLight(lights);)
 	{
+		int i = lights.light;
 		float giStrength = lelLights[i].radiance.w;
+		if (giStrength <= 0.0)
+		{
+			continue;
+		}
+
+		// Apart from the test above: after "a || !LelLightAt(...)" NVIDIA's compiler warned that Li and radiance might be
+		// used unset (C7050).
 		vec3 Li;
 		vec3 radiance;
-		if (giStrength <= 0.0 || !LelLightAt(i, position, Li, radiance))
+		if (!LelLightAt(i, position, Li, radiance))
 		{
 			continue;
 		}

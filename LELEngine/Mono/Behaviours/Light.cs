@@ -12,29 +12,33 @@ public enum LightType
 	Spot
 }
 
-/// <summary>How the volumetric objects take a <see cref="Light" />: set on each light, never chosen by the engine.</summary>
-public enum LightVolumeMode
+/// <summary>
+///     How the volumetric objects take a <see cref="Light" />, by how it changes: set on each light, never chosen by the
+///     engine. Surfaces and the GI take every light the same way, whatever its mode.
+/// </summary>
+public enum LightMode
 {
 	/// <summary>
-	///     A channel of each cloud's light transport of its own: its colour and intensity are free every frame, and it may
-	///     move (its part is worked out again around it). A cloud has 8 channels, shared with its own lights and the scene's
-	///     other directional lights; live lights past them are left out (warned once a cloud).
+	///     A light whose colour and intensity change (flashes). Each cloud gives it a channel of its light transport of its
+	///     own: its colour and intensity are free every frame, and it may move (its part is worked out again around it). A
+	///     cloud has 8 channels, shared with its own lights and the scene's other directional lights; live lights past them
+	///     are left out (warned once a cloud).
 	/// </summary>
 	Live,
 
 	/// <summary>
-	///     Summed into one texture of each cloud with its other baked lights (up to 64 a cloud, the nearest): they cost the
-	///     same however many there are, and any change of one (place, range, colour, intensity, on or off) works its part
-	///     of the texture out again. For lights that stay as they are (lamps).
+	///     A light that stays as it is (lamps). Summed into one texture of each cloud with its other baked lights (up to 64 a
+	///     cloud, the nearest): they cost the same however many there are, and any change of one (place, range, colour,
+	///     intensity, on or off) works its part of the texture out again.
 	/// </summary>
 	Baked,
 
 	/// <summary>
-	///     Worked out where the cloud is drawn, at each step of its march, with nothing made beforehand: it may move,
-	///     come and go every frame for nothing (bullets, explosions, engines). It takes no channel (up to 128 a cloud, the
-	///     nearest to the camera; a pixel's ray takes the first 16 whose reach it crosses) and costs the pixels whose rays
-	///     pass through its reach. The cloud between it and a point is a rough estimate (two samples), and its light is not
-	///     in the cloud's light in the GI.
+	///     A light that moves, comes and goes every frame (bullets, explosions, engines). Worked out where the cloud is drawn,
+	///     at each step of its march, with nothing made beforehand, so all that costs nothing. It takes no channel (up to 128
+	///     a cloud, the nearest to the camera; a pixel's ray takes the first 16 whose reach it crosses) and costs the pixels
+	///     whose rays pass through its reach. The cloud between it and a point is a rough estimate (two samples), and its
+	///     light is not in the cloud's light in the GI.
 	/// </summary>
 	Dynamic
 }
@@ -46,17 +50,15 @@ public enum LightVolumeMode
 ///     <see cref="AffectsGI" />) and the volumetric objects within its range (through their cloud;
 ///     <see cref="AffectsVolumes" />, as strong as <see cref="VolumetricStrength" />); clouds between it and what it lights
 ///     dim it (<see cref="VolumetricShadows" />).
-///     Geometry does not block its direct light (no shadow maps); in the GI it does (<see cref="GIShadows" />). At most
-///     <see cref="MaxLights" /> lights shine at once: the ones nearest to the camera (Rendering.LightBuffer).
+///     Geometry does not block its direct light (no shadow maps); in the GI it does (<see cref="GIShadows" />). Every light
+///     that shines is lit, however many there are: a pixel visits only the lights that may reach it (Rendering.LightBuffer,
+///     Rendering.Passes.LightClusterPass), so a light costs only where it reaches.
 /// </summary>
 [ExecuteAlways]
 [InspectorColor(InspectorColorKind.Lighting)]
 public sealed class Light : Behaviour
 {
 	#region PublicFields
-
-	/// <summary>Lights that shine at once (the shaders' light list, Engine/Lights.glsl).</summary>
-	public const int MaxLights = 32;
 
 	public LightType Type = LightType.Point;
 
@@ -96,9 +98,9 @@ public sealed class Light : Behaviour
 	[Tooltip("The light lights the volumetric objects within its range, through their cloud")]
 	public bool AffectsVolumes = true;
 
-	[Tooltip("How the volumetric objects take it. Live: a channel of the cloud's light transport of its own (8 a cloud, shared with the cloud's own lights and the other directional lights; live lights past them are left out, with a warning): colour and intensity free every frame; moving works its part out again. Baked: summed into one texture with the cloud's other baked lights (up to 64): any change of it (place, range, colour, intensity, on or off) works its part out again, so it suits lights that stay as they are. Dynamic: worked out at each step of the cloud's march, nothing made beforehand: it may move, come and go every frame for nothing (bullets, explosions), costs the pixels whose rays cross its reach; the cloud between it and a point is a rough estimate. A script that makes a light sets this right after AddComponent, before the frame renders")]
+	[Tooltip("How the volumetric objects take it, by how it changes. Live: its colour and intensity change (flashes); each cloud gives it a channel of its light transport of its own (8 a cloud, shared with the cloud's own lights and the other directional lights; live lights past them are left out, with a warning), moving works its part out again. Baked: it stays as it is (lamps); summed into one texture with the cloud's other baked lights (up to 64), any change of it (place, range, colour, intensity, on or off) works its part out again. Dynamic: it moves, comes and goes every frame (bullets, explosions); worked out at each step of the cloud's march with nothing made beforehand, it costs the pixels whose rays cross its reach, and the cloud between it and a point is a rough estimate. Surfaces and the GI take every light the same way. A script that makes a light sets this right after AddComponent, before the frame renders")]
 	[ShowIf(nameof(AffectsVolumes))]
-	public LightVolumeMode VolumeMode = LightVolumeMode.Live;
+	public LightMode Mode = LightMode.Live;
 
 	[Tooltip("How strongly it lights the volumetric objects, relative to surfaces (HDRP's Volumetric Multiplier): a flash inside a cloud can light the ships around brightly and the cloud less")]
 	[Range(0f, 10f)]

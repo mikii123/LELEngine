@@ -2,6 +2,12 @@
 
 #version 430
 
+// One work group per occupied 8^3 block (see below). Declared before the includes: Engine/Lights.glsl's work group
+// culling reads gl_WorkGroupSize, which GLSL allows only after this declaration (NVIDIA's compiler holds to it).
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
+
+// The local lights a block may get, found by its work group together (Engine/Lights.glsl).
+#define LEL_LIGHT_GROUPS
 #include "Engine/Shadows.glsl"
 #include "Engine/VoxelConeTracingCore.glsl"
 #include "Engine/Lights.glsl"
@@ -18,7 +24,6 @@
 // Dispatched indirectly over the occupied 8^3 blocks listed by Engine/VoxelCompactBlocks.shader:
 // one work group per block, so empty space is never visited. Blocks that became empty are
 // zeroed separately by VoxelGIPass (Engine/VoxelClearRadiance.shader).
-layout(local_size_x = 8, local_size_y = 8, local_size_z = 8) in;
 
 layout(std430, binding = 0) readonly buffer BlockList
 {
@@ -108,6 +113,12 @@ void main()
 	ivec3 block = ivec3(int(packedBlock & 0x3FFu), int((packedBlock >> 10) & 0x3FFu), int((packedBlock >> 20) & 0x3FFu));
 	ivec3 coord = block * 8 + ivec3(gl_LocalInvocationID);
 
+	// The local lights reaching the block, found by the whole work group before any of its threads stops: the block's
+	// box, a voxel wider on every side (the lights are taken at the voxels' surface, half a voxel off their centres).
+	float blockVoxel = VoxelSize();
+	vec3 blockMin = voxelGridMin + vec3(block * 8) * blockVoxel;
+	LelLightGroupCullBox(true, blockMin - vec3(blockVoxel), blockMin + vec3(9.0 * blockVoxel), true);
+
 	vec4 dynamicAlbedo = imageLoad(DynamicAlbedo, coord);
 	vec4 staticAlbedo = imageLoad(StaticAlbedo, coord);
 	float occupancy = min(1.0, dynamicAlbedo.a + staticAlbedo.a);
@@ -143,13 +154,22 @@ void main()
 		}
 	}
 
-	// The local lights that go into the GI (Engine/Lights.glsl), times their indirect strength, at the voxel's surface.
-	for (int i = 0; i < LelLightCount(); i++)
+	// The local lights that go into the GI (Engine/Lights.glsl: those the work group found), times their indirect
+	// strength, at the voxel's surface.
+	for (LelLightIterator lights = LelGroupLights(); LelNextLight(lights);)
 	{
+		int i = lights.light;
 		float giStrength = lelLights[i].radiance.w;
+		if (giStrength <= 0.0)
+		{
+			continue;
+		}
+
+		// Apart from the test above: after "a || !LelLightAt(...)" NVIDIA's compiler warned that Li and radiance might be
+		// used unset (C7050).
 		vec3 Li;
 		vec3 radiance;
-		if (giStrength <= 0.0 || !LelLightAt(i, surface, Li, radiance))
+		if (!LelLightAt(i, surface, Li, radiance))
 		{
 			continue;
 		}
