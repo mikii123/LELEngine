@@ -152,7 +152,15 @@ namespace LELEngine.UIElements
 		Rotate,
 		Scale,
 		TransformOrigin,
-		TextShadow
+		TextShadow,
+
+		/// <summary>
+		///     A keyword that cannot blend (display, visibility): CSS's allow-discrete transitions. While it runs the shown
+		///     value wins (flex over none, visible over hidden): an element going away stays until the transition's end, one
+		///     coming appears at its start (after the delay). Transitioned only when transition-property names it, never by
+		///     "all", so existing transitions behave as before.
+		/// </summary>
+		Discrete
 	}
 
 	/// <summary>Static facts about every property: USS name, inheritance, invalidation, interpolation.</summary>
@@ -184,7 +192,7 @@ namespace LELEngine.UIElements
 			Add(StylePropertyId.AlignItems, "align-items", L);
 			Add(StylePropertyId.AlignSelf, "align-self", L);
 			Add(StylePropertyId.Bottom, "bottom", L, StyleAnimationKind.Length);
-			Add(StylePropertyId.Display, "display", L);
+			Add(StylePropertyId.Display, "display", L, StyleAnimationKind.Discrete);
 			Add(StylePropertyId.FlexBasis, "flex-basis", L, StyleAnimationKind.Length);
 			Add(StylePropertyId.FlexDirection, "flex-direction", L);
 			Add(StylePropertyId.FlexGrow, "flex-grow", L, StyleAnimationKind.Float);
@@ -256,7 +264,7 @@ namespace LELEngine.UIElements
 			Add(StylePropertyId.UnityTextOutlineColor, "-unity-text-outline-color", R | I, StyleAnimationKind.Color, true);
 			Add(StylePropertyId.UnityTextOutlineWidth, "-unity-text-outline-width", R | I, StyleAnimationKind.Float, true);
 			Add(StylePropertyId.UnityTextOverflowPosition, "-unity-text-overflow-position", R | I | StyleEffect.Text, StyleAnimationKind.None, true);
-			Add(StylePropertyId.Visibility, "visibility", T | I, StyleAnimationKind.None, true);
+			Add(StylePropertyId.Visibility, "visibility", T | I, StyleAnimationKind.Discrete, true);
 
 			Add(StylePropertyId.Translate, "translate", T, StyleAnimationKind.Translate);
 			Add(StylePropertyId.Rotate, "rotate", T, StyleAnimationKind.Rotate);

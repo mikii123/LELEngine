@@ -35,6 +35,9 @@ namespace LELEngine.UIElements
 		public Scale scale;
 		public TransformOrigin origin;
 		public TextShadow shadow;
+
+		/// <summary>A discrete keyword's enum value (display, visibility).</summary>
+		public int e;
 	}
 
 	/// <summary>
@@ -175,8 +178,7 @@ namespace LELEngine.UIElements
 			for (int i = 0; i < state.running.Count; i++)
 			{
 				RunningTransition run = state.running[i];
-				float t = Progress(run, now);
-				StyleAnimation.Set(state.animated, run.id, StyleAnimation.Lerp(run.from, run.to, Ease(run.easing, t), run.id));
+				StyleAnimation.Set(state.animated, run.id, Interpolate(run, Progress(run, now)));
 			}
 
 			if (anyStarted && !animating.Contains(element))
@@ -221,7 +223,7 @@ namespace LELEngine.UIElements
 						}
 					}
 
-					AnimValue value = t >= 1f ? run.to : StyleAnimation.Lerp(run.from, run.to, Ease(run.easing, t), run.id);
+					AnimValue value = t >= 1f ? run.to : Interpolate(run, t);
 					StyleAnimation.Set(state.animated, run.id, value);
 					effect |= StylePropertyRegistry.GetEffect(run.id);
 					if (t >= 1f)
@@ -282,6 +284,14 @@ namespace LELEngine.UIElements
 
 		#region PrivateMethods
 
+		// The value at progress t (0..1 of the duration, 0 during the delay): eased, but a discrete keyword switches on the
+		// raw progress (an easing that overshoots below 0 would hide an element that is coming).
+		private static AnimValue Interpolate(in RunningTransition run, float t)
+		{
+			bool discrete = StylePropertyRegistry.GetAnimationKind(run.id) == StyleAnimationKind.Discrete;
+			return StyleAnimation.Lerp(run.from, run.to, discrete ? t : Ease(run.easing, t), run.id);
+		}
+
 		private static float Progress(in RunningTransition run, long now)
 		{
 			float elapsed = now - run.startMs - run.delayMs;
@@ -327,7 +337,10 @@ namespace LELEngine.UIElements
 			}
 		}
 
-		/// <summary>Finds the transition definition that applies to the property (its name, a shorthand of it, or "all").</summary>
+		/// <summary>
+		///     Finds the transition definition that applies to the property (its name, a shorthand of it, or "all"; a discrete
+		///     keyword only by its own name).
+		/// </summary>
 		private static bool FindDefinition(ComputedStyle style, StylePropertyId id, out float duration, out float delay, out EasingMode easing)
 		{
 			duration = 0f;
@@ -336,6 +349,12 @@ namespace LELEngine.UIElements
 			List<StylePropertyName> properties = style.transitionProperty;
 			List<TimeValue> durations = style.transitionDuration;
 			if (durations == null || durations.Count == 0)
+			{
+				return false;
+			}
+
+			bool discrete = StylePropertyRegistry.GetAnimationKind(id) == StyleAnimationKind.Discrete;
+			if (discrete && (properties == null || properties.Count == 0))
 			{
 				return false;
 			}
@@ -356,7 +375,7 @@ namespace LELEngine.UIElements
 					continue;
 				}
 
-				if (property == "all" || string.Equals(property, name, StringComparison.Ordinal) || IsShorthandOf(property, id))
+				if (discrete ? string.Equals(property, name, StringComparison.Ordinal) : property == "all" || string.Equals(property, name, StringComparison.Ordinal) || IsShorthandOf(property, id))
 				{
 					found = i;
 					break;
@@ -567,6 +586,8 @@ namespace LELEngine.UIElements
 				case StylePropertyId.Rotate: v.rotate = s.rotate; break;
 				case StylePropertyId.Scale: v.scale = s.scale; break;
 				case StylePropertyId.TransformOrigin: v.origin = s.transformOrigin; break;
+				case StylePropertyId.Display: v.e = (int)s.display; break;
+				case StylePropertyId.Visibility: v.e = (int)i.visibility; break;
 			}
 
 			return v;
@@ -626,6 +647,8 @@ namespace LELEngine.UIElements
 				case StylePropertyId.Rotate: s.rotate = v.rotate; break;
 				case StylePropertyId.Scale: s.scale = v.scale; break;
 				case StylePropertyId.TransformOrigin: s.transformOrigin = v.origin; break;
+				case StylePropertyId.Display: s.display = (DisplayStyle)v.e; break;
+				case StylePropertyId.Visibility: i.visibility = (Visibility)v.e; break;
 			}
 		}
 
@@ -641,6 +664,7 @@ namespace LELEngine.UIElements
 				case StyleAnimationKind.Scale: return a.scale.Equals(b.scale);
 				case StyleAnimationKind.TransformOrigin: return a.origin.Equals(b.origin);
 				case StyleAnimationKind.TextShadow: return a.shadow.Equals(b.shadow);
+				case StyleAnimationKind.Discrete: return a.e == b.e;
 				default: return true;
 			}
 		}
@@ -664,6 +688,11 @@ namespace LELEngine.UIElements
 						blurRadius = a.shadow.blurRadius + (b.shadow.blurRadius - a.shadow.blurRadius) * t,
 						color = LerpColor(a.shadow.color, b.shadow.color, t)
 					};
+					break;
+				case StyleAnimationKind.Discrete:
+					// The ends as they are; between them the shown keyword (0: flex, visible) wins, as CSS's display and
+					// visibility do, else the switch is halfway.
+					r.e = t <= 0f ? a.e : t >= 1f ? b.e : a.e == 0 || b.e == 0 ? 0 : t < 0.5f ? a.e : b.e;
 					break;
 			}
 

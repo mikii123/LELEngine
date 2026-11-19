@@ -3007,6 +3007,19 @@ texture read back), see the port's `PORTING.md` "UI".
   the panel. Verified in NF's main menu (play mode, clicks through `BaseVisualElementPanel.ProcessPointerDown / Up` from
   a CLI `exec` probe): both settings fields open without choosing; a 30-entry test field at the panel's bottom opened
   above it, its opening press released over an item chose nothing, a click on an item chose it and closed the list.
+- USS transitions of `display` and `visibility` (2026-11-19, the user's ask: menu views fading through each other, "if the
+  UI system has a sensible animation system use it, else extend it"; it had CSS transitions for every interpolable
+  property, with delays, easings and the Run / Start / End / Cancel events, but no keyword could take part).
+  `StyleAnimationKind.Discrete` (`AnimValue.e`, the enum value), CSS's `transition-behavior: allow-discrete`: while the
+  transition runs the shown keyword wins (flex over none, visible over hidden), so an element going to `display: none`
+  stays in the layout until the end and one coming appears at the start, after its delay; on the raw progress, not
+  eased. Only when transition-property names them (never through `all`, so existing `all` transitions are unchanged).
+  The usual fade through: `transition-property: opacity, display` with the duration as the delay on the shown state and
+  no delay on the hidden one (`opacity: 0; display: none`): toggling one class fades the old view out, swaps them in the
+  layout and fades the new one in. New Frontier's main menu / settings do this (`Screens/MainMenu/MainMenu.uss`,
+  `MainMenuScreen.SetSettings`; focus on `TransitionEndEvent` of opacity). Verified in the GUI editor (a probe sampling
+  `resolvedStyle` each frame): out 0-150 ms in, both `none` at 150, in 150-300 ms, focus moved at the end, both ways.
+  Batch editors update a runtime panel only when its view renders (a screenshot): per-frame UI checks need the GUI editor.
 
 ## PlayerPrefs and Application.persistentDataPath (2026-11-19)
 
