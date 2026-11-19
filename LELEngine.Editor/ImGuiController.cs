@@ -117,6 +117,15 @@ namespace LELEngine.Editor
 		public Action ApplyStyle = EditorStyle.Apply;
 
 		/// <summary>
+		///     Whether a key press of the window reaches this context (null: every press does). Releases always reach it, so a
+		///     key let go while presses were held back never stays down in the UI.
+		/// </summary>
+		public Func<KeyboardKeyEventArgs, bool> KeyPressFilter;
+
+		/// <summary>Whether text typed in the window reaches this context now (null: always).</summary>
+		public Func<bool> TextInputFilter;
+
+		/// <summary>
 		///     Writes the docking layout now, with every dock's front tab (ImGui writes it on its own only when a window moves
 		///     or resizes; a tab brought to the front was lost at the next start). Not for read-only layouts.
 		/// </summary>
@@ -279,6 +288,12 @@ namespace LELEngine.Editor
 
 		private void OnKeyDown(KeyboardKeyEventArgs e)
 		{
+			if (KeyPressFilter != null && !KeyPressFilter(e))
+			{
+				// Held back whole, modifiers too (Alt alone toggles ImGui's menu layer).
+				return;
+			}
+
 			ImGui.SetCurrentContext(Context);
 			UpdateModifiers(e.Modifiers);
 			ImGuiKey key = MapKey(e.Key);
@@ -310,6 +325,11 @@ namespace LELEngine.Editor
 
 		private void OnTextInput(TextInputEventArgs e)
 		{
+			if (TextInputFilter != null && !TextInputFilter())
+			{
+				return;
+			}
+
 			ImGui.SetCurrentContext(Context);
 			ImGui.GetIO().AddInputCharacter((uint)e.Unicode);
 		}

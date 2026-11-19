@@ -347,6 +347,40 @@
   windows; batch `-executeMethod AutoTest.Run` and `-listen` + `quit`. Start / stop test editors from the PowerShell
   tool (a Bash-run `Start-Process` hangs on inherited handles).
 
+## Play mode: the keyboard is the game's (2026-11-19)
+
+- The user's ask: in play mode the editor takes no input that can collide with the game ("Tab, for example"); the only
+  input it takes then is play management (the play and pause shortcuts). `EditorApplication.GameHasKeyboard` = play mode
+  (playing or paused) with the Game view focused (`GameViewPanel.HasInputFocus`). Then the main window's ImGui context
+  gets no key presses and no typed text (`ImGuiController.KeyPressFilter` = `UIReceivesKeyPress`, `TextInputFilter`)
+  but Ctrl+P and Ctrl+Shift+P (`IsPlayShortcut`: P with Control, without Alt / Super), which `HandleShortcuts` runs in
+  the next frame as before; the game does not get those two presses (`OnWindowKeyDown`). Releases always reach ImGui
+  (a key let go while held back never stays down there); the game still gets keys only while playing, as before.
+- Why at ImGui's input and not in each shortcut: everything in the editor reads keys through ImGui (no window reads
+  `IsKeyDown` itself), and ImGui does things of its own with them: `NavEnableKeyboard` makes Tab / the arrows move a
+  highlight over the Game window's own widgets and Space / Enter press them (Tab, then Space, would toggle Maximize On
+  Play), Ctrl+Tab switches windows (the Game view would lose its focus, and the game its input), Alt alone toggles the
+  menu layer (ImGui's behavior read from its rules, not reproduced before the fix);
+  and `HandleShortcuts` (Ctrl+S / Z / Y / D / N, Ctrl+Shift+B) and the windows' own keys run regardless of focus. A
+  blocked press is held back whole, its modifiers too. Deciding per event in one place also keeps it independent of the
+  order of the window's event handlers (the controller subscribes before the editor): a shortcut run inside the event
+  would stop play before the controller asks, and the controller would then pass Ctrl+P on and start play again.
+- Automation is untouched: CLI `key` / `type` in play mode go to the game (`GameKeyboard`), `--editor` / `--window`
+  and the test hooks feed ImGui directly (`io.AddKeyEvent`), past the filter. Another window clicked during play takes
+  the keyboard back for the editor (the inspector, the hierarchy's Delete, ...); the other editor windows (Audio
+  Studio, UI Builder, launcher) have contexts of their own without a filter.
+- The mouse: while the game plays, an `InvisibleButton` ("##game", left / right / middle) lies over the Game view's
+  image, so a press there belongs to an item. An `Image` has no id: to ImGui a press on it was one on the window's
+  empty space, which starts moving the window, and dragging (firing while aiming) moved a floating Game window or dock
+  node. `IsMouseOverImage` is read from that button (the image's `IsItemHovered` turns false while another item is
+  active, which would have stopped the wheel reaching the game during a held press). A grabbed cursor already sent ImGui
+  no positions (`ImGuiController.OnMouseMove`).
+- Verified with `dotnet build` only (the user's rule). To check by hand: play, click the Game view, press Tab, the
+  arrows, Space, Escape, Alt, Ctrl+Tab, Ctrl+S / Z / D: the game reacts, the editor does nothing (no highlight on Maximize
+  On Play, the focus stays, nothing saved, undone or duplicated); Ctrl+Shift+P pauses and resumes and Ctrl+P stops from
+  the Game view; click the inspector during play and typing works there; undock the Game window and drag over its image
+  while playing: it stays in place.
+
 ## Editor start: the windows first, the project over frames (2026-11-09)
 
 - The user's ask: the editor's own windows show first, as they will be but without what is not loaded yet (an empty
