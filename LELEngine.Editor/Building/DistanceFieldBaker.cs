@@ -184,8 +184,9 @@ namespace LELEngine.Editor
 							continue;
 						}
 
-						// The baker reads each field itself and writes its own cache (no copy on the mesh, no store).
-						atlas ??= new DistanceFieldAtlas(DistanceFieldAtlas.AtlasXY) { KeepsFields = false };
+						// The baker reads each field itself and writes its own cache (no copy on the mesh, no store), so a
+						// field is built whole when asked for (still in short dispatches: no TDR with a huge mesh).
+						atlas ??= new DistanceFieldAtlas(DistanceFieldAtlas.AtlasXY) { KeepsFields = false, BuildsOverFrames = false };
 						atlas.Reset();
 						MeshDistanceField built = atlas.GetOrBuild(mesh, key);
 						if (built == null)

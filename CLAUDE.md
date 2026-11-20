@@ -1072,6 +1072,31 @@ first `Instantiate`, on the main thread, one file after another, and its program
   30 shapes grow the atlas to 2048, 30 other shapes a second later reuse the room of the first (no growth), 120 more
   grow it to 4096 and warn once (99 fields, 64 objects without), a box whose shape changes every frame builds no field
   for 3.5 s and one 0.25 s after it holds. New Frontier's Flight scene firing for ~500 frames: 4 fields, no warning.
+- Builds in chunks, over frames (2026-11-20, the user's report: the editor crashed right after a Mesh Baker bake of a
+  few hundred models, twice). The bake wrote its .mesh (~5 M triangles, a flat 44 x 6 x 44 field), then the field's build
+  was one dispatch of every texel against every triangle, one thread per texel: 11,616 threads looping 5 M triangles
+  ran for seconds, Windows reset the driver (System log `nvlddmkm` 153, WER `LiveKernelEvent` 141 = TDR) and NVIDIA's
+  GL driver ended the process (0xc0000409 in nvoglv64.dll). Now (`Engine/SdfBuild.shader`): a work group of 64 threads
+  per texel, each taking every 64th triangle, folded in shared memory (unrolled: no barrier in a loop), so a flat field
+  fills the GPU; a dispatch takes one chunk of the triangles (`PairsPerDispatch` 2^27 texel x triangle pairs; chunks of
+  whole 64s of triangles, 3,072-byte aligned ranges, every bound range under GL's 128 MB storage block minimum), every
+  texel's nearest squared distance and winding kept between chunks in a per-build buffer, the last chunk writes the
+  atlas; each dispatch flushed on its own. A frame spends at most `PairsPerFrame` (2^27; its first chunk always runs),
+  the smallest build first (`BeginFrame` continues them); `GetOrBuild` / `Find` give a field only once `IsBuilt` (the
+  renderer keeps its previous field or has none meanwhile, as for a settling shape); a build nobody asked for in
+  `EvictAfterFrames` frames is dropped (its slices free); eviction skips builds going on; a build whose field another
+  atlas kept on the mesh meanwhile takes that copy. `BuildsOverFrames = false` (the build's `DistanceFieldBaker`) runs a
+  build whole, still in short dispatches. Triangles are uploaded per build a block at a time from the mesh's vertices and
+  indices (`GetTrianglePositions` keeps its copy on the mesh for good). Chunk boundaries depend only on the field and the
+  mesh, so a field is the same bit for bit however the frames cut it. Fields differ from the old single-thread sums only
+  in the winding's rounding (the sign is read at 0.5 of a whole turn): the editor's cache stays valid.
+- Verified with scratchpad `SdfCheck` of session f827bec7 (real driver, hidden context; RTX 5070 Ti): icosphere, box,
+  box at shape (1, 0.25, 0.5), torus, open quad, a 4-chunk icosphere all equal to a CPU reference in doubles (0 signs
+  differ, distances within half-float precision, < 1e-3); over frames == at once, a second build bit-identical; 5.12 M
+  triangles over an 800-wide disc (44 x 6 x 44, 59.5 G pairs): 445 dispatches over 445 frames, a frame median 1.46 ms,
+  max 11 ms, the first frame 115 ms (the 245 MB upload), 64 sampled texels equal to the reference; a 327,680-triangle
+  build dropped after 30 frames unasked (slices 44 -> 0). glslang (`ShaderValidator`, scratchpad `GlslangCheck`): 0
+  errors, 0 warnings. Not run: the editor itself (the bake again), the 780M (expect several times the frame times).
 
 ## TrailRenderer, Gradient, ParticlesUnlit tiling and soft particles (2026-10-24)
 
@@ -3362,7 +3387,9 @@ texture read back), see the port's `PORTING.md` "UI".
   selected objects, scene screenshots before and after (the same picture, but for the mirrored sphere), undo and redo.
   A player build of the probe's scene: the .mesh files shipped with their distance fields, the scene drawn. Not run:
   New Frontier's tests (the worktree held LFS pointers only). Not exercised: a bake in prefab mode, the refusals of
-  play mode and of a read-only object, a mesh of millions of triangles (the parallel fill).
+  play mode and of a read-only object. A mesh of millions of triangles (2026-11-20): the bake itself worked, its
+  distance field's single dispatch crashed the editor through a driver reset; fixed in the atlas ("Builds in chunks,
+  over frames" in the distance field section).
 
 ## Mirroring transforms: the mesh drawn wound the other way (2026-11-19)
 

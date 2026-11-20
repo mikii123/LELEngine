@@ -41,6 +41,12 @@ namespace LELEngine.Rendering.DistanceField
 		/// <summary>False once the atlas freed the field to make room: its slices may hold another field.</summary>
 		public bool IsValid = true;
 
+		/// <summary>
+		///     False while its texels are still being computed (a big mesh's build goes on over frames,
+		///     <see cref="DistanceFieldAtlas.PairsPerFrame" />): the atlas hands a field out only once it is built.
+		/// </summary>
+		public bool IsBuilt;
+
 		#endregion
 	}
 
@@ -66,10 +72,13 @@ namespace LELEngine.Rendering.DistanceField
 	///     Builds and stores mesh distance fields in one R16F 3D texture (slabs stacked along Z), one field per mesh and
 	///     shape (<see cref="ShapeKey" />: uniform scales share it). Fields are built on the GPU by brute force over the
 	///     mesh triangles; the sign comes from the generalized winding number, which only needs consistently oriented
-	///     closed meshes. Slices are handed out first fit from a free list. When no free range fits, the fields nobody
-	///     used for <see cref="EvictAfterFrames" /> frames are freed (a field freed and needed again is uploaded from the
-	///     copy kept on its mesh), then the texture doubles in depth up to <see cref="MaxDepth" />; only then does a
-	///     request fail, reported once.
+	///     closed meshes. A build tests every texel against every triangle, in dispatches of at most
+	///     <see cref="PairsPerDispatch" /> pairs and at most <see cref="PairsPerFrame" /> a frame: a field of a few
+	///     thousand triangles is built when asked for, one of millions over frames (the renderer has none meanwhile).
+	///     Slices are handed out first fit from a free list. When no free range fits, the fields nobody used for
+	///     <see cref="EvictAfterFrames" /> frames are freed (a field freed and needed again is uploaded from the copy kept
+	///     on its mesh), then the texture doubles in depth up to <see cref="MaxDepth" />; only then does a request fail,
+	///     reported once.
 	/// </summary>
 	public sealed class DistanceFieldAtlas
 	{
@@ -91,6 +100,21 @@ namespace LELEngine.Rendering.DistanceField
 
 		/// <summary>Shape keys are the shape's components in thousandths.</summary>
 		public const float KeyScale = 1000f;
+
+		/// <summary>
+		///     Texel x triangle pairs one build dispatch tests at most: a build takes its mesh's triangles in chunks of this
+		///     many over the field's texels. One dispatch over all of them ran for seconds with a mesh of millions of
+		///     triangles (hundreds of models merged by the Mesh Baker), and Windows reset the GPU's driver (TDR, after
+		///     2 s), which ended the process.
+		/// </summary>
+		public const long PairsPerDispatch = 1L << 27;
+
+		/// <summary>
+		///     Texel x triangle pairs the builds of one frame test at most (a frame's first chunk runs whatever its size: at
+		///     most <see cref="PairsPerDispatch" />), the smallest build first; what is left goes on in the next frames
+		///     (<see cref="BeginFrame" />).
+		/// </summary>
+		public const long PairsPerFrame = 1L << 27;
 
 		public int Texture { get; private set; }
 
@@ -117,6 +141,16 @@ namespace LELEngine.Rendering.DistanceField
 		/// </summary>
 		public bool KeepsFields { get; set; } = true;
 
+		/// <summary>
+		///     A build goes on over frames once it has spent the frame's <see cref="PairsPerFrame" /> (on by default). Off: a
+		///     build runs whole when asked for, still in dispatches of <see cref="PairsPerDispatch" /> (the build's baker,
+		///     which reads each field at once).
+		/// </summary>
+		public bool BuildsOverFrames { get; set; } = true;
+
+		/// <summary>Builds still going on (their fields not handed out yet).</summary>
+		public int PendingBuildCount => pending.Count;
+
 		#endregion
 
 		#region PrivateFields
@@ -136,13 +170,42 @@ namespace LELEngine.Rendering.DistanceField
 
 		private readonly List<Readback> readbacks = new List<Readback>();
 
+		// A field being built: its triangles on the GPU, every texel's nearest distance and winding so far, and how far the
+		// chunks got.
+		private sealed class PendingBuild
+		{
+			public MeshDistanceField Field;
+			public Vector3i Key;
+			public int Triangles;
+			public int Partial;
+			public int TriangleCount;
+			public int ChunkTriangles;
+			public int NextTriangle;
+			public long Texels;
+			public int Dispatches;
+			public int FirstFrame;
+
+			public long RemainingPairs => (long)(TriangleCount - NextTriangle) * Texels;
+
+			// The next chunk (a mesh without triangles still has one, which writes the field).
+			public long NextChunkPairs => Math.Max(Math.Min(ChunkTriangles, TriangleCount - NextTriangle), 1) * Texels;
+		}
+
+		// Triangles uploaded a block at a time (no copy of the whole mesh's positions).
+		private const int UploadBlockVertices = 3 * 65536;
+
+		// Bytes of one triangle in the build's buffer (three vec4).
+		private const int TriangleBytes = 48;
+
+		private readonly List<PendingBuild> pending = new List<PendingBuild>();
+		private long spentThisFrame;
+
 		private readonly Dictionary<(Mesh, Vector3i), MeshDistanceField> fields = new Dictionary<(Mesh, Vector3i), MeshDistanceField>();
 
 		// Free slice ranges, sorted by start, neighbours merged.
 		private readonly List<(int Start, int Count)> free = new List<(int Start, int Count)>();
 		private readonly List<(Mesh, Vector3i)> evicted = new List<(Mesh, Vector3i)>();
 		private readonly ComputeShader build;
-		private readonly int triangleBuffer;
 		private int frame;
 
 		// A request found no room this frame: later ones fail at once until the next frame.
@@ -161,7 +224,6 @@ namespace LELEngine.Rendering.DistanceField
 			free.Add((0, depth));
 
 			build = new ComputeShader("Engine/SdfBuild.shader");
-			triangleBuffer = GL.GenBuffer();
 		}
 
 		#endregion
@@ -212,15 +274,23 @@ namespace LELEngine.Rendering.DistanceField
 		}
 
 		/// <summary>
-		///     Starts a frame: fields requested from now on count as used on it (unused ones may be freed for room), and the
-		///     fields built in earlier frames that the GPU has finished are taken over (kept with their meshes, stored).
+		///     Starts a frame: fields requested from now on count as used on it (unused ones may be freed for room), the
+		///     fields built in earlier frames that the GPU has finished are taken over (kept with their meshes, stored), and
+		///     the builds still going on take the frame's <see cref="PairsPerFrame" />, the smallest first. A build nobody
+		///     asked for in <see cref="EvictAfterFrames" /> frames (its renderer went) is dropped.
 		/// </summary>
 		public void BeginFrame(int frameIndex)
 		{
 			frame = frameIndex;
+			spentThisFrame = 0;
 			if (readbacks.Count > 0)
 			{
 				CollectReadbacks(false);
+			}
+
+			if (pending.Count > 0)
+			{
+				ContinueBuilds();
 			}
 		}
 
@@ -233,13 +303,16 @@ namespace LELEngine.Rendering.DistanceField
 			}
 		}
 
-		/// <summary>The field of a mesh at a shape when the atlas holds it (marked as used), else null. Builds nothing.</summary>
+		/// <summary>
+		///     The field of a mesh at a shape when the atlas holds it built (marked as used), else null. Builds nothing; a
+		///     build going on counts as asked for (it is not dropped).
+		/// </summary>
 		public MeshDistanceField Find(Mesh mesh, Vector3i shapeKey)
 		{
 			if (fields.TryGetValue((mesh, shapeKey), out MeshDistanceField field))
 			{
 				field.LastUsedFrame = frame;
-				return field;
+				return field.IsBuilt ? field : null;
 			}
 
 			return null;
@@ -247,24 +320,30 @@ namespace LELEngine.Rendering.DistanceField
 
 		/// <summary>
 		///     The field of a mesh at a shape (<see cref="ShapeKey" />), built on first use (or uploaded from the one a game
-		///     build baked or an earlier build kept, <see cref="Mesh.BakedDistanceFields" />). Null when there is no room
-		///     even after freeing unused fields and growing.
+		///     build baked or an earlier build kept, <see cref="Mesh.BakedDistanceFields" />). Null while its build goes on
+		///     over frames (<see cref="PairsPerFrame" />), and when there is no room even after freeing unused fields and
+		///     growing.
 		/// </summary>
 		public MeshDistanceField GetOrBuild(Mesh mesh, Vector3i shapeKey)
 		{
-			MeshDistanceField field = Find(mesh, shapeKey);
-			if (field != null || fullFrame == frame)
+			if (fields.ContainsKey((mesh, shapeKey)))
 			{
-				return field;
+				return Find(mesh, shapeKey);
 			}
 
-			field = Build(mesh, shapeKey);
-			if (field != null)
+			if (fullFrame == frame)
 			{
-				fields[(mesh, shapeKey)] = field;
+				return null;
 			}
 
-			return field;
+			MeshDistanceField field = Build(mesh, shapeKey);
+			if (field == null)
+			{
+				return null;
+			}
+
+			fields[(mesh, shapeKey)] = field;
+			return field.IsBuilt ? field : null;
 		}
 
 		/// <summary>The texels of a field as half floats, x fastest (build-time baking; waits for the GPU).</summary>
@@ -290,6 +369,7 @@ namespace LELEngine.Rendering.DistanceField
 		/// <summary>Forgets every field (the slabs are reused); for build-time baking one field after another.</summary>
 		public void Reset()
 		{
+			DropBuilds();
 			foreach (MeshDistanceField field in fields.Values)
 			{
 				field.IsValid = false;
@@ -313,12 +393,12 @@ namespace LELEngine.Rendering.DistanceField
 			}
 
 			readbacks.Clear();
+			DropBuilds();
 			if (Texture != 0)
 			{
 				GL.DeleteTexture(Texture);
 				Texture = 0;
 			}
-			GL.DeleteBuffer(triangleBuffer);
 			build.Delete();
 			foreach (MeshDistanceField field in fields.Values)
 			{
@@ -410,11 +490,7 @@ namespace LELEngine.Rendering.DistanceField
 
 			if (baked != null)
 			{
-				GL.BindTexture(TextureTarget.Texture3D, Texture);
-				GL.PixelStore(PixelStoreParameter.UnpackAlignment, 2);
-				GL.TexSubImage3D(TextureTarget.Texture3D, 0, 0, 0, field.AtlasZ, size.X, size.Y, size.Z, PixelFormat.Red, PixelType.HalfFloat, baked);
-				GL.PixelStore(PixelStoreParameter.UnpackAlignment, 4);
-				GL.BindTexture(TextureTarget.Texture3D, 0);
+				UploadVoxels(field, baked);
 				// Only with the hitch profiler on (its text is not built otherwise).
 				if (started != 0)
 				{
@@ -423,20 +499,200 @@ namespace LELEngine.Rendering.DistanceField
 				return field;
 			}
 
-			UploadTriangles(mesh, shape);
-			Dispatch(field);
-			if (KeepsFields)
+			long texels = (long)size.X * size.Y * size.Z;
+			var job = new PendingBuild
 			{
-				KeepOnMesh(mesh, key, field);
-			}
+				Field = field,
+				Key = key,
+				TriangleCount = mesh.TriangleCount,
+				// Whole multiples of 64 triangles: every chunk's range of the buffer starts 3,072 bytes apart, aligned for
+				// any GPU's storage buffer offsets.
+				ChunkTriangles = (int)Math.Max(64L, PairsPerDispatch / texels / 64 * 64),
+				Texels = texels,
+				FirstFrame = frame,
+				Triangles = UploadTriangles(mesh, shape),
+				Partial = GL.GenBuffer()
+			};
+			GL.BindBuffer(BufferTarget.ShaderStorageBuffer, job.Partial);
+			GL.BufferData(BufferTarget.ShaderStorageBuffer, (IntPtr)(texels * 8), IntPtr.Zero, BufferUsageHint.StreamCopy);
+			GL.BindBuffer(BufferTarget.ShaderStorageBuffer, 0);
+			pending.Add(job);
 
-			Console.WriteLine($"[SDF] Built {size.X}x{size.Y}x{size.Z} field ({mesh.TriangleCount} triangles) at atlas slice {field.AtlasZ}");
+			long pairs = job.RemainingPairs;
+			Run(job);
 			// Only with the hitch profiler on (its text is not built otherwise).
 			if (started != 0)
 			{
-				FrameProfiler.EventSince(started, "distance field", meshName, $"BUILT on the GPU: {size.X}x{size.Y}x{size.Z} texels x {mesh.TriangleCount} triangles (the build queued, its texels read back in a later frame)");
+				FrameProfiler.EventSince(started, "distance field", meshName, field.IsBuilt
+					? $"BUILT on the GPU: {size.X}x{size.Y}x{size.Z} texels x {mesh.TriangleCount} triangles in {job.Dispatches} dispatches (the build queued, its texels read back in a later frame)"
+					: $"BUILD STARTED on the GPU: {size.X}x{size.Y}x{size.Z} texels x {mesh.TriangleCount} triangles, {pairs:N0} pairs, {job.Dispatches} dispatches this frame, the rest over the next frames");
 			}
+
+			if (!field.IsBuilt)
+			{
+				Console.WriteLine($"[SDF] Building a {size.X}x{size.Y}x{size.Z} field ({mesh.TriangleCount:N0} triangles, {pairs:N0} texel x triangle pairs) over frames, {PairsPerFrame:N0} pairs a frame");
+			}
+
 			return field;
+		}
+
+		/// <summary>
+		///     The builds going on take what the frame has left of <see cref="PairsPerFrame" />, the one with the least left to
+		///     do first (a field asked for meanwhile is not held up by a huge one); builds nobody asked for in
+		///     <see cref="EvictAfterFrames" /> frames are dropped.
+		/// </summary>
+		private void ContinueBuilds()
+		{
+			for (int i = pending.Count - 1; i >= 0; i--)
+			{
+				PendingBuild job = pending[i];
+				if (frame - job.Field.LastUsedFrame >= EvictAfterFrames)
+				{
+					DropBuild(job);
+				}
+			}
+
+			pending.Sort((a, b) => a.RemainingPairs.CompareTo(b.RemainingPairs));
+			// Copied: a build that ends leaves the list.
+			foreach (PendingBuild job in pending.ToArray())
+			{
+				if (spentThisFrame >= PairsPerFrame)
+				{
+					break;
+				}
+
+				Run(job);
+			}
+		}
+
+		/// <summary>
+		///     Runs chunks of a build until it is done or the next chunk does not fit in what the frame has left of
+		///     <see cref="PairsPerFrame" /> (the frame's first chunk always runs; with <see cref="BuildsOverFrames" /> off
+		///     the build runs whole). A build whose field another atlas finished meanwhile (kept on the mesh) takes that one.
+		/// </summary>
+		private void Run(PendingBuild job)
+		{
+			MeshDistanceField field = job.Field;
+			ushort[] kept = job.Dispatches > 0 ? FindBaked(field.Mesh, job.Key, field.Size) : null;
+			if (kept != null)
+			{
+				UploadVoxels(field, kept);
+				EndBuild(job, false, "the copy another atlas built and kept on the mesh");
+				return;
+			}
+
+			while (!field.IsBuilt)
+			{
+				if (BuildsOverFrames && spentThisFrame > 0 && spentThisFrame + job.NextChunkPairs > PairsPerFrame)
+				{
+					break;
+				}
+
+				spentThisFrame += DispatchChunk(job);
+			}
+		}
+
+		/// <summary>One chunk of a build's triangles over all its texels; the last one writes the field. The pairs it tested.</summary>
+		private long DispatchChunk(PendingBuild job)
+		{
+			MeshDistanceField field = job.Field;
+			int count = Math.Min(job.ChunkTriangles, job.TriangleCount - job.NextTriangle);
+			bool first = job.NextTriangle == 0;
+			bool last = job.NextTriangle + count >= job.TriangleCount;
+
+			build.Use();
+			// Only this chunk's triangles are bound: a range stays under the smallest storage block GL allows (128 MB)
+			// whatever the mesh (the chunk is at most PairsPerDispatch / the field's 125 texels or more, 51 MB).
+			GL.BindBufferRange(BufferRangeTarget.ShaderStorageBuffer, 0, job.Triangles, (IntPtr)((long)job.NextTriangle * TriangleBytes), Math.Max(count, 1) * TriangleBytes);
+			GL.BindBufferBase(BufferRangeTarget.ShaderStorageBuffer, 1, job.Partial);
+			GL.BindImageTexture(0, Texture, 0, true, 0, TextureAccess.WriteOnly, SizedInternalFormat.R16f);
+
+			build.Program.SetInt3("atlasOffset", 0, 0, field.AtlasZ);
+			build.Program.SetInt3("sdfSize", field.Size.X, field.Size.Y, field.Size.Z);
+			build.Program.SetVector3("boundsMin", field.BoundsMin);
+			build.Program.SetVector3("sdfTexelSize", field.TexelSize);
+			build.Program.SetInt("chunkTriangles", count);
+			build.Program.SetInt("firstChunk", first ? 1 : 0);
+			build.Program.SetInt("lastChunk", last ? 1 : 0);
+
+			// A work group per texel.
+			build.Dispatch(field.Size.X, field.Size.Y, field.Size.Z);
+			ComputeShader.Barrier(last
+				? MemoryBarrierFlags.ShaderImageAccessBarrierBit | MemoryBarrierFlags.TextureFetchBarrierBit | MemoryBarrierFlags.TextureUpdateBarrierBit
+				: MemoryBarrierFlags.ShaderStorageBarrierBit);
+			// Each chunk goes to the GPU on its own: the driver can schedule other work (the desktop) between them.
+			GL.Flush();
+
+			job.NextTriangle += count;
+			job.Dispatches++;
+			if (last)
+			{
+				EndBuild(job, KeepsFields);
+			}
+
+			return Math.Max(count, 1) * job.Texels;
+		}
+
+		// The build is done: its field is handed out from now on (and read back to be kept, when asked). Source: where the
+		// texels came from when the build did not finish them itself.
+		private void EndBuild(PendingBuild job, bool keep, string source = null)
+		{
+			MeshDistanceField field = job.Field;
+			field.IsBuilt = true;
+			pending.Remove(job);
+			GL.DeleteBuffer(job.Triangles);
+			GL.DeleteBuffer(job.Partial);
+			if (keep)
+			{
+				KeepOnMesh(field.Mesh, job.Key, field);
+			}
+
+			string how = source != null
+				? $", taken from {source} after {job.Dispatches} dispatches"
+				: frame != job.FirstFrame
+					? $" in {job.Dispatches} dispatches over {frame - job.FirstFrame + 1} frames"
+					: job.Dispatches > 1
+						? $" in {job.Dispatches} dispatches"
+						: "";
+			Console.WriteLine($"[SDF] Built {field.Size.X}x{field.Size.Y}x{field.Size.Z} field ({job.TriangleCount} triangles) at atlas slice {field.AtlasZ}{how}");
+		}
+
+		// A build nobody wants any more: its buffers and slices go.
+		private void DropBuild(PendingBuild job)
+		{
+			MeshDistanceField field = job.Field;
+			pending.Remove(job);
+			GL.DeleteBuffer(job.Triangles);
+			GL.DeleteBuffer(job.Partial);
+			fields.Remove((field.Mesh, job.Key));
+			field.IsValid = false;
+			Release(field.AtlasZ, field.Size.Z);
+			UsedSlices -= field.Size.Z;
+			FieldCount--;
+			Console.WriteLine($"[SDF] Dropped the build of a {field.Size.X}x{field.Size.Y}x{field.Size.Z} field ({job.TriangleCount} triangles): not asked for in {EvictAfterFrames} frames");
+		}
+
+		// Every build going on stops (Reset, Delete): only their buffers go, the caller forgets the fields.
+		private void DropBuilds()
+		{
+			foreach (PendingBuild job in pending)
+			{
+				GL.DeleteBuffer(job.Triangles);
+				GL.DeleteBuffer(job.Partial);
+				job.Field.IsValid = false;
+			}
+
+			pending.Clear();
+		}
+
+		private void UploadVoxels(MeshDistanceField field, ushort[] voxels)
+		{
+			GL.BindTexture(TextureTarget.Texture3D, Texture);
+			GL.PixelStore(PixelStoreParameter.UnpackAlignment, 2);
+			GL.TexSubImage3D(TextureTarget.Texture3D, 0, 0, 0, field.AtlasZ, field.Size.X, field.Size.Y, field.Size.Z, PixelFormat.Red, PixelType.HalfFloat, voxels);
+			GL.PixelStore(PixelStoreParameter.UnpackAlignment, 4);
+			GL.BindTexture(TextureTarget.Texture3D, 0);
+			field.IsBuilt = true;
 		}
 
 		// The first free range that fits; else the room of fields unused for a while; else a deeper texture. -1: none.
@@ -524,7 +780,8 @@ namespace LELEngine.Rendering.DistanceField
 			evicted.Clear();
 			foreach (KeyValuePair<(Mesh, Vector3i), MeshDistanceField> entry in fields)
 			{
-				if (frame - entry.Value.LastUsedFrame >= EvictAfterFrames)
+				// A build going on writes its slices (an unwanted one is dropped by BeginFrame).
+				if (entry.Value.IsBuilt && frame - entry.Value.LastUsedFrame >= EvictAfterFrames)
 				{
 					evicted.Add(entry.Key);
 				}
@@ -671,36 +928,34 @@ namespace LELEngine.Rendering.DistanceField
 			return null;
 		}
 
-		private void UploadTriangles(Mesh mesh, Vector3 shape)
+		/// <summary>
+		///     A buffer of the mesh's triangles at the shape, three vec4 each, filled a block at a time straight from the
+		///     mesh's vertices and indices (not through <see cref="Mesh.GetTrianglePositions" />, which keeps its copy on the
+		///     mesh for good: hundreds of megabytes for a mesh of millions of triangles).
+		/// </summary>
+		private static int UploadTriangles(Mesh mesh, Vector3 shape)
 		{
-			Vector3[] triangles = mesh.GetTrianglePositions();
-			int vertexCount = triangles.Length;
-			var data = new Vector4[vertexCount];
-			for (int i = 0; i < vertexCount; i++)
+			Vertex[] vertices = mesh.Vertices;
+			uint[] indices = mesh.Indices;
+			int count = mesh.TriangleCount * 3;
+			int buffer = GL.GenBuffer();
+			GL.BindBuffer(BufferTarget.ShaderStorageBuffer, buffer);
+			// At least one triangle's room: a chunk binds that much even of a mesh without triangles.
+			GL.BufferData(BufferTarget.ShaderStorageBuffer, (IntPtr)Math.Max((long)count * 16, TriangleBytes), IntPtr.Zero, BufferUsageHint.StaticDraw);
+			var block = new Vector4[Math.Max(1, Math.Min(count, UploadBlockVertices))];
+			for (int start = 0; start < count; start += block.Length)
 			{
-				Vector3 p = triangles[i] * shape;
-				data[i] = new Vector4(p, 0f);
+				int n = Math.Min(block.Length, count - start);
+				for (int i = 0; i < n; i++)
+				{
+					block[i] = new Vector4(vertices[indices[start + i]].position * shape, 0f);
+				}
+
+				GL.BufferSubData(BufferTarget.ShaderStorageBuffer, (IntPtr)((long)start * 16), n * 16, block);
 			}
 
-			GL.BindBuffer(BufferTarget.ShaderStorageBuffer, triangleBuffer);
-			GL.BufferData(BufferTarget.ShaderStorageBuffer, vertexCount * 16, data, BufferUsageHint.StreamDraw);
 			GL.BindBuffer(BufferTarget.ShaderStorageBuffer, 0);
-		}
-
-		private void Dispatch(MeshDistanceField field)
-		{
-			build.Use();
-			GL.BindBufferBase(BufferRangeTarget.ShaderStorageBuffer, 0, triangleBuffer);
-			GL.BindImageTexture(0, Texture, 0, true, 0, TextureAccess.WriteOnly, SizedInternalFormat.R16f);
-
-			build.Program.SetInt3("atlasOffset", 0, 0, field.AtlasZ);
-			build.Program.SetInt3("sdfSize", field.Size.X, field.Size.Y, field.Size.Z);
-			build.Program.SetVector3("boundsMin", field.BoundsMin);
-			build.Program.SetVector3("sdfTexelSize", field.TexelSize);
-			build.Program.SetInt("triangleCount", field.Mesh.TriangleCount);
-
-			build.DispatchThreads(field.Size.X, field.Size.Y, field.Size.Z, 4, 4, 4);
-			ComputeShader.Barrier(MemoryBarrierFlags.ShaderImageAccessBarrierBit | MemoryBarrierFlags.TextureFetchBarrierBit);
+			return buffer;
 		}
 
 		#endregion
