@@ -42,6 +42,10 @@ namespace LELEngine.Serialization
 		public ulong Parent;
 		public int HideFlags;
 		public int Layer;
+
+		/// <summary><see cref="GameObject.isStatic" />.</summary>
+		public bool Static;
+
 		public readonly List<PrefabComponent> Components = new List<PrefabComponent>();
 
 		/// <summary>The nested instance of this prefab file the object comes from (null: written in the file itself).</summary>
@@ -330,7 +334,7 @@ namespace LELEngine.Serialization
 				return;
 			}
 
-			var obj = new PrefabObject { Id = source.Id, Name = source.Name ?? "GameObject", Active = source.Active, Parent = source.Parent, HideFlags = source.HideFlags, Layer = source.Layer };
+			var obj = new PrefabObject { Id = source.Id, Name = source.Name ?? "GameObject", Active = source.Active, Parent = source.Parent, HideFlags = source.HideFlags, Layer = source.Layer, Static = source.Static };
 			foreach (DocumentComponent component in source.Components)
 			{
 				AddComponent(result, obj, new PrefabComponent { Id = component.Id, Enabled = component.Enabled, Data = component.Data });
@@ -396,6 +400,7 @@ namespace LELEngine.Serialization
 			var removedObjects = new HashSet<ulong>(record.RemovedObjects);
 			var removedComponents = new HashSet<ulong>(record.RemovedComponents);
 			var modifications = GroupByTarget(record.Modifications);
+			LegacyStatic.MoveModifications(inner, modifications);
 			var skipped = new HashSet<ulong>();
 			Func<ulong, ulong> map = id => instance ^ id;
 			foreach (PrefabObject source in inner.Objects)
@@ -414,6 +419,7 @@ namespace LELEngine.Serialization
 					Parent = source.Parent != 0 ? instance ^ source.Parent : record.Parent,
 					HideFlags = source.HideFlags,
 					Layer = source.Layer,
+					Static = source.Static,
 					Origin = nested,
 					OriginId = source.Id
 				};
@@ -482,7 +488,7 @@ namespace LELEngine.Serialization
 			return result;
 		}
 
-		/// <summary>The GameObject properties an instance overrides: name, active flag, layer.</summary>
+		/// <summary>The GameObject properties an instance overrides: name, active flag, layer, static flag.</summary>
 		private static void ApplyHeader(PrefabObject obj, List<PropertyModification> modifications)
 		{
 			foreach (PropertyModification modification in modifications)
@@ -497,6 +503,9 @@ namespace LELEngine.Serialization
 						break;
 					case PropertyModification.LayerProperty:
 						obj.Layer = modification.Value is int layer ? layer : obj.Layer;
+						break;
+					case PropertyModification.StaticProperty:
+						obj.Static = modification.Value is bool isStatic && isStatic;
 						break;
 				}
 			}

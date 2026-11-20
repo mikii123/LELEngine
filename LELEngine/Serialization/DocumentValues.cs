@@ -103,7 +103,8 @@ namespace LELEngine.Serialization
 			}
 
 			string guid = AssetDatabase.GetGuid(path);
-			if (guid == null && !AssetDatabase.IsEngineResource(path))
+			// Engine resources and the static batches' meshes are named by path by design.
+			if (guid == null && !AssetDatabase.IsEngineResource(path) && !path.StartsWith(AssetDatabase.StaticBatchPrefix, StringComparison.OrdinalIgnoreCase))
 			{
 				Debug.LogWarning($"[Serialization] {context?.Location}: '{path}' has no meta file; saved by path only");
 			}

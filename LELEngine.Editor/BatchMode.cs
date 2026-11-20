@@ -152,6 +152,7 @@ namespace LELEngine.Editor
 			project.LoadProjectSettings();
 			AssetDatabase.Initialize(project.AssetsPath, true);
 			ModelAssets.CacheFolder = project.ModelCachePath;
+			AssetDatabase.StaticBatchFolder = StaticBatchCache.FolderOf(project);
 			// Models new or changed since the last import import completely (materials too), as in the editor.
 			foreach (string model in ModelAssets.ImportOutdated(true))
 			{
@@ -197,9 +198,13 @@ namespace LELEngine.Editor
 			string readyToRunValue = options.Get("readytorun");
 			bool readyToRun = options.Has("readytorun") ? readyToRunValue == null || string.Equals(readyToRunValue, "true", StringComparison.OrdinalIgnoreCase) : project.BuildReadyToRun;
 			bool validReadyToRun = readyToRunValue == null || string.Equals(readyToRunValue, "true", StringComparison.OrdinalIgnoreCase) || string.Equals(readyToRunValue, "false", StringComparison.OrdinalIgnoreCase);
-			if (string.IsNullOrEmpty(output) || (!release && !string.Equals(configuration, "Debug", StringComparison.OrdinalIgnoreCase)) || !validSelfContained || !validReadyToRun)
+			// -staticBatching alone means true; without it the project's setting (Project Settings > Graphics).
+			string staticBatchingValue = options.Get("staticbatching");
+			bool staticBatching = options.Has("staticbatching") ? staticBatchingValue == null || string.Equals(staticBatchingValue, "true", StringComparison.OrdinalIgnoreCase) : ProjectSettings.Current.Graphics?.StaticBatching ?? true;
+			bool validStaticBatching = staticBatchingValue == null || string.Equals(staticBatchingValue, "true", StringComparison.OrdinalIgnoreCase) || string.Equals(staticBatchingValue, "false", StringComparison.OrdinalIgnoreCase);
+			if (string.IsNullOrEmpty(output) || (!release && !string.Equals(configuration, "Debug", StringComparison.OrdinalIgnoreCase)) || !validSelfContained || !validReadyToRun || !validStaticBatching)
 			{
-				Debug.LogError("[Batch] Usage: -build <folder> [-buildConfig Release|Debug] [-selfContained [true|false]] [-readyToRun [true|false]]");
+				Debug.LogError("[Batch] Usage: -build <folder> [-buildConfig Release|Debug] [-selfContained [true|false]] [-readyToRun [true|false]] [-staticBatching [true|false]]");
 				return false;
 			}
 
@@ -209,7 +214,7 @@ namespace LELEngine.Editor
 				EnsureGraphics();
 			}
 
-			var settings = new BuildSettings { OutputFolder = Path.GetFullPath(output), Release = release, SelfContained = selfContained, ReadyToRun = readyToRun, StartScene = project.StartScene, Scenes = new List<string>(project.BuildScenes) };
+			var settings = new BuildSettings { OutputFolder = Path.GetFullPath(output), Release = release, SelfContained = selfContained, ReadyToRun = readyToRun, StaticBatching = staticBatching, StartScene = project.StartScene, Scenes = new List<string>(project.BuildScenes) };
 			return GameBuilder.Build(project, settings, line => Console.WriteLine((line.StartsWith("Error", StringComparison.Ordinal) ? "[Error] " : "") + "[Build] " + line));
 		}
 

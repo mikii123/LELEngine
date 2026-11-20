@@ -141,7 +141,8 @@ namespace LELEngine.Serialization
 				Active = GetBool(entry, "active", true),
 				Parent = GetUInt64(entry, "parent"),
 				HideFlags = GetInt32(entry, "hideFlags"),
-				Layer = GetInt32(entry, "layer")
+				Layer = GetInt32(entry, "layer"),
+				Static = GetBool(entry, "static", false)
 			};
 
 			JsonElement components;
@@ -151,7 +152,10 @@ namespace LELEngine.Serialization
 				{
 					if (component.ValueKind == JsonValueKind.Object)
 					{
-						result.Components.Add(ReadDocumentComponent(reader, component));
+						DocumentComponent read = ReadDocumentComponent(reader, component);
+						// A file written while the flag was the renderer's own: the object takes it.
+						result.Static |= LegacyStatic.Take(read.Data);
+						result.Components.Add(read);
 					}
 				}
 			}
@@ -238,6 +242,7 @@ namespace LELEngine.Serialization
 				}
 			}
 
+			LegacyStatic.Normalize(record);
 			return record;
 		}
 
@@ -273,6 +278,7 @@ namespace LELEngine.Serialization
 			if (entry.Parent != 0) json.WriteNumber("parent", entry.Parent);
 			if (entry.HideFlags != 0) json.WriteNumber("hideFlags", entry.HideFlags);
 			if (entry.Layer != 0) json.WriteNumber("layer", entry.Layer);
+			if (entry.Static) json.WriteBoolean("static", true);
 			json.WriteStartArray("components");
 			foreach (DocumentComponent component in entry.Components)
 			{
@@ -391,13 +397,17 @@ namespace LELEngine.Serialization
 				Layer = reader.Version >= 2 ? body.ReadInt32() : 0
 			};
 
+			result.Static = reader.Version >= 4 && body.ReadBool();
 			int componentCount = body.ReadInt32();
 			for (int c = 0; c < componentCount; c++)
 			{
 				int typeId = body.ReadInt32();
 				ulong id = body.ReadUInt64();
 				bool enabled = body.ReadBool();
-				result.Components.Add(new DocumentComponent { Id = id, Enabled = enabled, Data = reader.ReadGenericBlock(typeId) });
+				SerializedNode data = reader.ReadGenericBlock(typeId);
+				// A document written while the flag was the renderer's own: the object takes it.
+				result.Static |= LegacyStatic.Take(data);
+				result.Components.Add(new DocumentComponent { Id = id, Enabled = enabled, Data = data });
 			}
 
 			return result;
@@ -442,6 +452,7 @@ namespace LELEngine.Serialization
 				record.AddedComponents.Add(new DocumentComponent { GameObject = gameObject, Id = id, Enabled = enabled, Data = reader.ReadGenericBlock(typeId) });
 			}
 
+			LegacyStatic.Normalize(record);
 			return record;
 		}
 
@@ -464,6 +475,7 @@ namespace LELEngine.Serialization
 			body.WriteUInt64(entry.Parent);
 			body.WriteInt32(entry.HideFlags);
 			body.WriteInt32(entry.Layer);
+			body.WriteBool(entry.Static);
 			body.WriteInt32(entry.Components.Count);
 			foreach (DocumentComponent component in entry.Components)
 			{

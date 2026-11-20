@@ -461,11 +461,7 @@ namespace LELEngine.Editor
 			all.Add(new EditorAction("GameObject/Physics 2D/Static Ground (BoxCollider2D)", () => CreateModelObject("Ground 2D", DefaultScene.CubeModel, go =>
 			{
 				go.transform.localScale = Planar(5f, 0.25f, 0.25f);
-				if (go.GetComponent<MeshRenderer>() is MeshRenderer renderer)
-				{
-					renderer.IsStatic = true;
-				}
-
+				go.isStatic = true;
 				go.AddComponent<BoxCollider2D>().FitToRenderer();
 			}, createParent)));
 			all.Add(new EditorAction("GameObject/Physics 2D/Dynamic Capsule (Rigidbody2D + CapsuleCollider2D)", () => CreateModelObject("Capsule 2D", DefaultScene.CubeModel, go =>

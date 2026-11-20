@@ -3421,6 +3421,124 @@ texture read back), see the port's `PORTING.md` "UI".
   pass. Not compared frame by frame against the old engine (unmirrored renderers take the same path: `DrawnMesh` is
   `Mesh`), not looked at in the voxel GI mode separately (its passes draw without culling), no game view or player run.
 
+## Static objects, static batching (2026-11-20)
+
+The user's ask: a Static setting on objects, which a build's static batching uses; the renderer takes it from its object
+and has none of its own; Static and Layer set on a parent ask in a popup whether the children change too. Added while it
+was made: "static batching has to work in the editor at run time too" and "you could use the Library cache".
+- `GameObject.isStatic` (per object, not inherited; setting it in a scene calls `Lighting.GI.InvalidateStatic()`).
+  `MeshRenderer.IsStatic` is read-only and gives the object's flag. Files: `"static": true` on a JSON object entry
+  (left out when false), a bool after the layer in binary documents (`BinaryDocument.Version` 4),
+  `DocumentObject.Static` / `PrefabObject.Static` for the typeless paths, a prefab instance's override as the header
+  property `m_IsStatic` (`PropertyModification.StaticProperty`, next to `m_Layer`: overrides, apply / revert, the
+  inspector's override mark, `SceneMerge`).
+- Files of before (`Serialization/LegacyStatic.cs`): a MeshRenderer's `"IsStatic": true` makes its object static, read
+  typed (JSON, binary below version 4), typeless (documents converted for builds) and as an instance's modification or
+  added component (path "IsStatic" becomes `m_IsStatic` of the renderer's object). Nothing writes the old field: a file
+  loses the line when it is saved (Force Reserialize All Assets for all at once).
+- Editor: `checkbox:Static` in the inspector's header after `combo:layer`. `EditorApplication.ObjectFlags.cs`:
+  `RequestStatic` / `RequestLayer` ask when the object has children (popups "Change Static Flag" / "Change Layer":
+  `button:Yes, change children`, `button:No, this object only`, `button:Cancel`), `SetStatic` / `SetLayer` are one undo
+  step whatever the count (read-only children skipped). Automation: `EditorAutomation.SetStatic(path, value, children)`
+  / `SetLayer`, CLI `static <object> on|off [--children|--self]`, `layer <object> <name|0..31> [--children|--self]`
+  (an object with children and no answer: the command fails, as every action that would ask); `hierarchy` prints
+  "(static)", `inspect` ", static".
+- Static batching (`GraphicsSettings.StaticBatching`, Project Settings > Graphics > Batching, default on; batch
+  `-staticBatching [true|false]`): `Building/StaticBatcher.cs` reads a scene document as generic data (prefab instances
+  through their resolved prefabs and modifications) and merges the static renderers that draw one by one: transparent
+  materials (any blending; not GrabPass) and opaque ones whose shader has no GPU-driven variant. Left as they are, each
+  counted in the log line: opaque materials the GPU-driven path draws, renderers of LOD groups, shaders with the new
+  render state line `Batching Off` (Unity's DisableBatching; `Engine/Impostor.shader` has it) or with their own depth
+  passes, renderers mixing opaque and transparent materials, disabled renderers and inactive objects, meshes over
+  `MaxVertices` (65,536). Groups: layer, Cast / Receive Shadows, Receive GI, kind (opaque together; transparent per list
+  of materials); a group is ordered along a Morton curve through the parts' centres and cut at `MaxVertices`, so a batch
+  is a cluster of neighbours; a part alone is no batch.
+- A batch is an object "Static Batch N" at the middle of its parts: a `MeshRenderer` of the merged mesh
+  (`MeshCombiner`, one sub-mesh per material, `ContributesToGI` false) and a `StaticBatch` (`Mono/Behaviours`: the
+  parts' renderers, each part's index ranges in the mesh, its bounds' centre in the batch's space, whether it is flat).
+  The parts stay on their objects (`MeshRenderer.Batch`): `Renderer.Partition` leaves them out of the cameras' and the
+  shadow maps' lists while the batch draws and still gives them to the GI, so the lighting does not change. A part
+  disabled, deactivated or destroyed is hidden in the batch (`GeometryPool.SetIndexRangeVisible` collapses its index
+  ranges, `Mesh.HiddenIndexRanges`; applied by `StaticBatch.ApplyChanges` before a frame renders) and shown again when
+  it comes back. A part given another mesh, other materials or a property block (`SetMesh`, `SetMaterials`,
+  `SetMaterial`, `SetPropertyBlock`, or any edit of the renderer in the inspector: `OnValidate`) leaves its batch for
+  good and draws itself (`StaticBatch.Leave`). A part that moves does not move in the batch (static objects do not move).
+- Transparent batches keep the picture exactly: `TransparentPass.CollectBatchParts` makes an entry per visible part,
+  sorted where the part's own renderer sorted (its centre, its id among equals), and `DrawBatchRun` draws the parts
+  that follow each other in the order with one `glMultiDrawElementsBaseVertex` (`GeometryPool.DrawRanges`); something
+  else sorting in between cuts the run. Two-sided materials: one call when the order of draws cannot show
+  (`ShaderRenderState.OrderIndependent`: additive, multiply, screen without depth writes; or no blending with depth
+  writes), else flat parts (all triangles facing one way) go together with culling off and the others back faces then
+  front faces, one by one. A first version sorted a batch as one object: 230 sampled pixels differed by more than 8 of
+  255 where alpha blended quads overlapped an additive batch, and alpha blended materials were left out; hence parts.
+- Where the batches are made. A build: `GameBuilder` step 4a, per scene it ships; the batches' objects are appended to
+  the built scene (`StaticBatcher.Append`), the meshes go to `Data/Library/StaticBatches/`; the log says per scene what
+  was merged and why the rest was not. The editor's play mode (`EditorApplication.StaticBatching.cs`): the game's copy of
+  the open scene gets them from its snapshot before it starts (`StaticBatcher.Apply`), and every scene the game then
+  loads through the hook `SceneManager.SceneRead` (set only while playing); stopping unloads the batches' meshes
+  (`ModelAssets.UnloadUnder`). The scenes in the project never hold batches.
+- Library cache (`Building/StaticBatchCache.cs`, `Library/StaticBatches`): an entry per scene path and document kind
+  (the file, the play snapshot) with the hash of the document it was made for (the batcher's version and the engine's and
+  the editor's builds in it), the asset files the result depends on (prefabs, models, materials, shaders) with their
+  stamps, and the batches' descriptions (`StaticBatchData`); good while all of that is the same, else made again in its
+  place, so entries do not pile up as a scene is edited. Mesh files are named by the hash of their bytes
+  (`ModelAssets.WriteMesh`): the same batch of another version of the scene is the same file, and a file never changes
+  under something that loaded it. Meshes no entry names go an hour after their last use, entries unused for 30 days too.
+  The meshes are referenced by path only (`AssetDatabase.StaticBatchPrefix` "Library/StaticBatches/", mapped to the
+  project's Library by `AssetDatabase.StaticBatchFolder` in the editor and to the build's Data in a player).
+- GPU-driven opaque renderers are not merged, measured (780M, 4,096 static cubes of Engine/Lit, a built game, medians
+  of 150-180 frames): CPU work 11.5 ms a frame as they are and 10.4 / 13.5 ms (two runs) merged into 2 batches, GPU
+  17.2 and 16.7 ms: nothing to gain. (A first measurement gave 136 and 157 ms: both were the surface cache's full
+  atlas writing a console line per object and frame, next section.)
+- Verified on a scratch project (scratchpad `static/` of session 0fc0dee3: `Probe`, editor script `StaticProbe`, game
+  script `PartProbe`; 90 static renderers: additive and alpha blended quads, two-sided alpha cubes among them, one-sided
+  quads with mirrored scales, a mesh of two materials, opaque unlit cubes, lit cubes, a LOD group, a Batching Off
+  shader, prefab instances with an override of the flag). The flag: 33 checks (JSON, binary, JSON to binary to JSON,
+  old files typed / typeless / converted, an old instance override, the commands with and without children, one undo
+  each, prefab revert). Play mode in a batch editor: 75 renderers in 5 batches; Game view shots with batching on and
+  off, as loaded, with parts hidden / destroyed / changed, and with them back: equal within the noise of two runs (max
+  1 of 255). A built game with and without `-staticBatching`: the three frames bit-identical, 84.3 against 178.3 draw
+  calls a frame. The cache: the second play and a new editor session from the Library (1-4 ms against 16-39), made again
+  after a material's file, an object or a static part changed, old meshes deleted. Scenes the game loads (sync and
+  async) batched. GUI editor through the CLI: both popups with their three answers, one undo, an object without
+  children asked nothing, the setting written at once and undone, a renderer edited in the inspector while playing
+  left its batch. Scripts unloaded after a play session with batches. New Frontier: 510 tests pass, Flight plays in a
+  batch editor without errors (nothing is static there, so nothing is batched).
+- Not done or not checked: the same scene loaded twice at once shares its batches' meshes (a part hidden in one copy is
+  hidden in the other for opaque batches); a static part moved at run time stays where it was in its batch; only the
+  780M ran it; no Linux player.
+
+## Surface cache atlas full: asked once a frame for nothing, no line per object (2026-11-20)
+
+- Found with the measurement above: a Lumen scene of 4,096 GI objects had 136 ms of CPU work a frame in a built game
+  (330 ms in a batch editor), all in `LumenScene.Update` (the frame trace named `Render > GlobalSDF`, the pass that
+  calls it first). The 1024 x 1024 surface cache atlas holds the cards of 2,485 of its objects; for each of the other
+  1,600 `SurfaceCacheAtlas.GetOrAllocate` ran again every frame: made its cards, took the room of those that still
+  fitted for nothing, and wrote "[SurfaceCache] Atlas full, object without cards" with `Console.WriteLine` (881,914
+  lines, 43 MB, in one run of about 550 frames; 85 to 200 microseconds per such object and frame). The distance field
+  itself did nothing in those frames (static field built, nothing dynamic).
+- Now: the six card sizes are worked out first (`CardSize`) and tried on a copy of the shelf state: all six fit or
+  nothing is taken or made (an object without cards costs a few sums a frame, and nothing is kept per such object:
+  spawned and destroyed ones leave nothing behind). One warning per atlas says how many objects fitted and what to
+  change (Surface Cache Atlas Size, Texels Per Meter, Contributes To GI). An object without cards gives the GI no
+  bounced light, as before. Mixed sizes fare better than before: a large object that does not fit no longer takes
+  the room smaller ones after it could use.
+- `LumenScene` allocates nothing per object in a frame: its `SceneObject`s are pooled (slot i of every frame is the
+  same instance; unused ones let go of their renderer) and the object table's rows are one array that only grows
+  (it was a `List.ToArray()` of 1 MB a frame); the buffer is sized to the array, so it is re-specified as rarely.
+- Measured after (780M, the same scene, a built game): CPU work 11.4-11.5 ms a frame (136), GPU 16.7-17.2 ms (39.5),
+  2 KB allocated a frame (1,825), 58 frames a second (7); `LumenScene.Update` 3.8-4.1 ms for the 4,098 objects in a
+  batch editor (330). The frame at number 60 against the old engine's: mean 0.073-0.076 of 255, as two runs of the
+  same build differ (0.067-0.069; this scene's frames are not repeatable to the bit). The static batching probe as
+  before (15 of 15, pictures with and without batches within 1 of 255 after the first play), New Frontier's 510
+  tests pass and Flight plays in a batch editor without errors or warnings (its log never had the line: its scene
+  has no surface cache).
+- Not done: cards are still never given back while a scene lives (a destroyed renderer's six cards stay taken until
+  `Renderer.InvalidateSceneCaches`), so a long session that makes and destroys many GI objects ends with a full
+  atlas and new objects without cards; it no longer costs frame time. What is left per object and frame in
+  `LumenScene.Update` (about a microsecond: transforms, the inverse matrix, the material's colours looked up by
+  name) is paid for static objects too.
+
 ## Selection of several objects (2026-11-19)
 
 - The user's ask, with the Mesh Baker: "add multi-select to the editor right away".

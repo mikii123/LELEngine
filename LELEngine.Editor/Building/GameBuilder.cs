@@ -24,6 +24,12 @@ namespace LELEngine.Editor
 		/// </summary>
 		public bool ReadyToRun;
 
+		/// <summary>
+		///     The shipped scenes' static renderers that draw one by one are merged into batches (Project Settings > Graphics >
+		///     Static Batching; <see cref="StaticBatcher" />).
+		/// </summary>
+		public bool StaticBatching = true;
+
 		public string StartScene;
 		public List<string> Scenes = new List<string>();
 	}
@@ -226,6 +232,7 @@ namespace LELEngine.Editor
 			int copied = 0;
 			int converted = 0;
 			int models = 0;
+			var batching = new BatchingStats();
 			var textures = new TextureBakeStats();
 			var assets = new List<string>(dependencies.Included);
 			assets.Sort(StringComparer.OrdinalIgnoreCase);
@@ -282,7 +289,17 @@ namespace LELEngine.Editor
 				}
 				else if (Documents.IsDocumentFile(file))
 				{
-					if (ConvertDocument(file, target, relative, log))
+					// 4a. Static batching: a scene's static renderers that draw one by one are merged into batches (their
+					//     objects added to the built scene, their meshes shipped under Library/StaticBatches); the batches
+					//     come from the project's Library when the scene and what it uses did not change.
+					Func<byte[], byte[]> batch = null;
+					if (settings.StaticBatching && assetPath.EndsWith(SceneSerializer.Extension, StringComparison.OrdinalIgnoreCase))
+					{
+						string scenePath = assetPath;
+						batch = bytes => BatchScene(project, bytes, scenePath, data, batching, log);
+					}
+
+					if (ConvertDocument(file, target, relative, log, batch))
 					{
 						converted++;
 					}
@@ -296,6 +313,11 @@ namespace LELEngine.Editor
 			}
 
 			log($"Converted {converted} documents to binary, imported {models} models.");
+			if (settings.StaticBatching)
+			{
+				log(batching.ToString());
+			}
+
 			if (textures.Count > 0)
 			{
 				log(textures.ToString());
@@ -434,8 +456,57 @@ namespace LELEngine.Editor
 			return names;
 		}
 
-		/// <summary>A document converted to binary into the build (copied as is when it cannot be); false when it was copied.</summary>
-		private static bool ConvertDocument(string source, string target, string relative, Action<string> log)
+		/// <summary>
+		///     The static batches of a scene the build ships (from the project's Library, or worked out and kept there): the
+		///     scene with their objects added, their meshes copied into the build's Data.
+		/// </summary>
+		private static byte[] BatchScene(ProjectInfo project, byte[] scene, string sceneAssetPath, string data, BatchingStats stats, Action<string> log)
+		{
+			try
+			{
+				StaticBatchCache.Result result = StaticBatchCache.Get(project, scene, sceneAssetPath);
+				stats.Scenes++;
+				stats.Batches += result.Batches.Count;
+				stats.FromCache += result.FromCache && result.Batches.Count > 0 ? 1 : 0;
+				if (result.StaticRenderers > 0)
+				{
+					// A scene without static renderers has nothing to say.
+					log($"Static batching, {sceneAssetPath}: {result.Summary}" + (result.FromCache ? " (from the Library)" : ""));
+				}
+
+				foreach (KeyValuePair<string, string> mesh in result.MeshFiles)
+				{
+					Copy(mesh.Value, Path.Combine(data, mesh.Key.Replace('/', Path.DirectorySeparatorChar)));
+				}
+
+				return StaticBatcher.Append(scene, result.Batches);
+			}
+			catch (Exception e)
+			{
+				// The scene ships as it is: its objects draw on their own.
+				log($"Warning: {sceneAssetPath} could not be batched ({e.Message}).");
+				return scene;
+			}
+		}
+
+		/// <summary>Counts of the batched scenes, for the build log.</summary>
+		private sealed class BatchingStats
+		{
+			public int Scenes;
+			public int Batches;
+			public int FromCache;
+
+			public override string ToString()
+			{
+				return $"Static batching: {Batches} batch{(Batches == 1 ? "" : "es")} in {Scenes} scene{(Scenes == 1 ? "" : "s")}" + (FromCache > 0 ? $" ({FromCache} from the Library)" : "") + ".";
+			}
+		}
+
+		/// <summary>
+		///     A document converted to binary into the build (copied as is when it cannot be); false when it was copied.
+		///     <paramref name="process" /> reworks the document first (a scene's static batching).
+		/// </summary>
+		private static bool ConvertDocument(string source, string target, string relative, Action<string> log, Func<byte[], byte[]> process = null)
 		{
 			try
 			{
@@ -444,6 +515,11 @@ namespace LELEngine.Editor
 				if (editorComponents > 0)
 				{
 					log($"{relative}: {editorComponents} editor script component{(editorComponents == 1 ? "" : "s")} left out");
+				}
+
+				if (process != null)
+				{
+					bytes = process(bytes);
 				}
 
 				string directory = Path.GetDirectoryName(target);

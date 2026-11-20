@@ -320,6 +320,9 @@ namespace LELEngine.Rendering
 
 		private void RenderStack(Camera camera, IReadOnlyList<MeshRenderer> renderers, IReadOnlyList<Behaviour> behaviours, RenderQueue queue)
 		{
+			// Static batches' parts enabled or disabled since the last frame: their triangles are hidden or shown before
+			// anything draws.
+			StaticBatch.ApplyChanges();
 			if (!isTargetRenderer)
 			{
 				using (FrameProfiler.Begin("Cameras with a target texture"))
@@ -663,6 +666,9 @@ namespace LELEngine.Rendering
 			Func<GameObject, bool> hidden = HiddenObjects;
 			stackOpaqueRenderers.Clear();
 			bool several = stack.Count > 1;
+
+			// The GI's own list: with LOD groups, and from the first renderer a static batch draws (see below).
+			bool ownGI = lods;
 			foreach (MeshRenderer renderer in renderers)
 			{
 				int bit = 1 << (renderer.gameObject.layer & 31);
@@ -673,14 +679,28 @@ namespace LELEngine.Rendering
 
 				bool opaque = renderer.HasOpaqueParts;
 				bool transparent = renderer.HasTransparentParts;
-				if (lods)
+
+				// A part of a static batch (a game build's static batching): the batch's renderer draws its mesh for the
+				// cameras and the shadow maps, the GI keeps the part itself (the batch's renderer is not in the GI), so the
+				// lighting is the same with batches and without.
+				bool batched = renderer.batch != null && renderer.Batch != null;
+				if (batched && !ownGI)
 				{
+					// Until now the GI's renderers were the lighting camera's opaque ones: from here on its list is its own.
+					ownGI = true;
+					lighting.HasGI = true;
+					lighting.GI.AddRange(lighting.Opaque);
+				}
+
+				if (ownGI)
+				{
+					// Without LOD groups nothing is hidden or out of the GI by a level (LODGroup.Select moved the stamps on).
 					if (opaque && (lighting.Mask & bit) != 0 && !LODGroup.IsOutOfGI(renderer))
 					{
 						lighting.GI.Add(renderer);
 					}
 
-					if (LODGroup.IsHidden(renderer))
+					if (batched || LODGroup.IsHidden(renderer))
 					{
 						continue;
 					}

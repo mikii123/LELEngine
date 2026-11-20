@@ -31,10 +31,19 @@ public sealed class MeshRenderer : Behaviour
 	public bool ReceiveGI = true;
 
 	/// <summary>
-	///     Transform, mesh and material do not change at runtime. Static renderers are voxelized once into a
-	///     cached volume instead of every frame. Call Lighting.GI.InvalidateStatic() after changing one.
+	///     The renderer's object is static (<see cref="GameObject.isStatic" />: the renderer has no flag of its own; until
+	///     2026-11-20 it had, and files of that time are read into the object's): transform, mesh and material do not
+	///     change at runtime. Static renderers are voxelized once into a cached volume instead of every frame; call
+	///     Lighting.GI.InvalidateStatic() after moving or re-materialing one.
 	/// </summary>
-	public bool IsStatic;
+	public bool IsStatic => gameObject != null && gameObject.isStatic;
+
+	/// <summary>
+	///     The static batch that draws this renderer's mesh as a part of its own (static batching, in a built game and
+	///     in the editor's play mode: <see cref="StaticBatch" />): the cameras and the shadow maps leave the renderer out
+	///     while the batch shows its part, the GI still takes the renderer itself. Null for a renderer that draws itself.
+	/// </summary>
+	public StaticBatch Batch => batch != null && batch.Draws(this) ? batch : null;
 
 	/// <summary>The renderer has shader values of its own (<see cref="SetPropertyBlock" />).</summary>
 	public bool HasPropertyBlock => propertyBlock != null && !propertyBlock.isEmpty;
@@ -88,12 +97,36 @@ public sealed class MeshRenderer : Behaviour
 	// The renderer's own shader values (a copy of the block given to SetPropertyBlock); not saved, as in Unity.
 	[System.NonSerialized] private MaterialPropertyBlock propertyBlock;
 
+	// The static batch holding this renderer as a part (set by the batch when it is read; see Batch).
+	[System.NonSerialized] internal StaticBatch batch;
+
+	// The static batch whose mesh this renderer draws (the batch's own renderer): the transparent pass sorts it by parts.
+	[System.NonSerialized] internal StaticBatch ownBatch;
+
 	/// <summary>Sub-meshes to consider (a renderer without a mesh still reports its material).</summary>
 	private int PartCount => mesh != null ? mesh.SubMeshCount : 1;
 
 	#endregion
 
 	#region PublicMethods
+
+	// A static batch's part: the batch shows or hides its triangles as the renderer comes and goes.
+	public override void OnEnable()
+	{
+		batch?.PartChanged();
+	}
+
+	public override void OnDisable()
+	{
+		batch?.PartChanged();
+	}
+
+	// Edited in the inspector while a static batch draws it (play mode): the batch's mesh holds what the renderer had,
+	// so it draws itself from now on, with what it has now.
+	public override void OnValidate()
+	{
+		batch?.Leave(this);
+	}
 
 	/// <summary>Material of sub-mesh <paramref name="subMesh" />: its slot, else the last material, else null.</summary>
 	public Material GetMaterial(int subMesh)
@@ -112,7 +145,7 @@ public sealed class MeshRenderer : Behaviour
 		return m != null && m.IsTransparent;
 	}
 
-	/// <summary>Replaces every material slot.</summary>
+	/// <summary>Replaces every material slot. A renderer a static batch draws leaves its batch (it draws itself again).</summary>
 	public void SetMaterials(IEnumerable<Material> slots)
 	{
 		materials.Clear();
@@ -120,6 +153,8 @@ public sealed class MeshRenderer : Behaviour
 		{
 			materials.AddRange(slots);
 		}
+
+		batch?.Leave(this);
 	}
 
 	/// <summary>Replaces every material slot.</summary>
@@ -137,11 +172,13 @@ public sealed class MeshRenderer : Behaviour
 		}
 
 		materials[slot] = material;
+		batch?.Leave(this);
 	}
 
 	public void SetMesh(Mesh value)
 	{
 		mesh = value;
+		batch?.Leave(this);
 	}
 
 	/// <summary>
@@ -160,6 +197,9 @@ public sealed class MeshRenderer : Behaviour
 
 		propertyBlock ??= new MaterialPropertyBlock();
 		propertyBlock.CopyFrom(block);
+
+		// Values of its own are drawn with its own draw: out of the static batch that drew it.
+		batch?.Leave(this);
 	}
 
 	/// <summary>Copies the renderer's own shader values into <paramref name="destination" /> (cleared when there are none).</summary>

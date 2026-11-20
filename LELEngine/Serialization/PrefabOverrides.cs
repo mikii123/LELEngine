@@ -75,6 +75,11 @@ namespace LELEngine.Serialization
 					record.Modifications.Add(Value(obj.Id, PropertyModification.LayerProperty, ValueTag.Int32, go.layer));
 				}
 
+				if (go.isStatic != obj.Static)
+				{
+					record.Modifications.Add(Value(obj.Id, PropertyModification.StaticProperty, ValueTag.Bool, go.isStatic));
+				}
+
 				foreach (PrefabComponent component in obj.Components)
 				{
 					if (!components.TryGetValue(component.Id, out Behaviour live))

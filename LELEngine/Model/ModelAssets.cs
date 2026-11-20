@@ -114,7 +114,9 @@ namespace LELEngine
 				}
 			}
 
-			if (IsMeshFile(assetPath))
+			// Not the static batches' meshes: they are the engine's own files, named by what they hold, never changed in place
+			// (their times move when a cache uses them).
+			if (IsMeshFile(assetPath) && !assetPath.StartsWith(AssetDatabase.StaticBatchPrefix, StringComparison.OrdinalIgnoreCase))
 			{
 				// Before it is read: a write in between counts as a change.
 				meshFileStamps.Note(assetPath);
@@ -246,26 +248,82 @@ namespace LELEngine
 			}
 
 			string file = AssetDatabase.ToRootAbsolute(assetPath);
-			string name = Path.GetFileNameWithoutExtension(assetPath);
-			var subMeshes = new SubMesh[mesh.SubMeshCount];
-			var materials = new int[subMeshes.Length];
-			for (int i = 0; i < subMeshes.Length; i++)
+			// References name the mesh inside its file: the one a file already there has stays.
+			WriteMeshFile(file, mesh, FirstMeshName(file) ?? Path.GetFileNameWithoutExtension(assetPath));
+			AssetDatabase.EnsureMeta(assetPath);
+
+			Model previous;
+			lock (sync)
 			{
-				subMeshes[i] = mesh.SubMeshes[i];
-				materials[i] = -1;
+				models.Remove(assetPath, out previous);
 			}
 
-			var data = new ModelData();
-			data.Nodes.Add(new ModelNode { Name = name, Mesh = 0 });
-			data.Meshes.Add(new ModelMeshData
+			if (previous != null)
 			{
-				// References name the mesh inside its file: the one a file already there has stays.
-				Name = FirstMeshName(file) ?? name,
-				Vertices = mesh.Vertices,
-				Indices = mesh.Indices,
-				SubMeshes = subMeshes,
-				Materials = materials
-			});
+				foreach (Mesh old in previous.Meshes)
+				{
+					Rendering.GeometryPool.Release(old);
+				}
+			}
+
+			Model model = Load(assetPath);
+			return model.Meshes[0];
+		}
+
+		/// <summary>
+		///     Forgets the loaded models whose paths start with <paramref name="prefix" /> and gives their geometry back to
+		///     the pool (the GL thread): the next load reads their files again. What still holds one of their meshes draws
+		///     it until it lets go. The editor does this to the static batches' meshes when play mode ends.
+		/// </summary>
+		public static void UnloadUnder(string prefix)
+		{
+			var removed = new List<Model>();
+			lock (sync)
+			{
+				var paths = new List<string>();
+				foreach (string path in models.Keys)
+				{
+					if (path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+					{
+						paths.Add(path);
+					}
+				}
+
+				foreach (string path in paths)
+				{
+					if (models.Remove(path, out Model model))
+					{
+						removed.Add(model);
+					}
+
+					meshFileStamps.Forget(path);
+				}
+			}
+
+			foreach (Model model in removed)
+			{
+				foreach (Mesh mesh in model.Meshes)
+				{
+					Rendering.GeometryPool.Release(mesh);
+				}
+			}
+		}
+
+		/// <summary>
+		///     Writes a mesh as a mesh file's data (the <see cref="MeshExtension" /> format: one node and one mesh, both
+		///     named <paramref name="name" />, no materials) into a stream: the same mesh and name give the same bytes. No
+		///     asset is registered or loaded (<see cref="SaveMesh" /> does that for a project's mesh asset); the static
+		///     batcher keeps its batches' meshes with this. Any thread.
+		/// </summary>
+		public static void WriteMesh(Stream stream, Mesh mesh, string name)
+		{
+			Write(stream, MeshData(mesh, name, name), null);
+		}
+
+		// A mesh file (one node named as the file, one mesh named meshName, no materials) at a path, whole or not at all.
+		private static void WriteMeshFile(string file, Mesh mesh, string meshName)
+		{
+			ModelData data = MeshData(mesh, Path.GetFileNameWithoutExtension(file), meshName);
 
 			// Whole or not at all: written beside it (a dot file is no asset) and put in its place.
 			string folder = Path.GetDirectoryName(file);
@@ -287,25 +345,35 @@ namespace LELEngine
 					File.Delete(temporary);
 				}
 			}
+		}
 
-			AssetDatabase.EnsureMeta(assetPath);
-
-			Model previous;
-			lock (sync)
+		// A mesh as the data of a mesh file: one node, one mesh (named meshName, else as the node), no materials.
+		private static ModelData MeshData(Mesh mesh, string nodeName, string meshName)
+		{
+			if (mesh == null)
 			{
-				models.Remove(assetPath, out previous);
+				throw new ArgumentNullException(nameof(mesh));
 			}
 
-			if (previous != null)
+			var subMeshes = new SubMesh[mesh.SubMeshCount];
+			var materials = new int[subMeshes.Length];
+			for (int i = 0; i < subMeshes.Length; i++)
 			{
-				foreach (Mesh old in previous.Meshes)
-				{
-					Rendering.GeometryPool.Release(old);
-				}
+				subMeshes[i] = mesh.SubMeshes[i];
+				materials[i] = -1;
 			}
 
-			Model model = Load(assetPath);
-			return model.Meshes[0];
+			var data = new ModelData();
+			data.Nodes.Add(new ModelNode { Name = nodeName, Mesh = 0 });
+			data.Meshes.Add(new ModelMeshData
+			{
+				Name = string.IsNullOrEmpty(meshName) ? nodeName : meshName,
+				Vertices = mesh.Vertices,
+				Indices = mesh.Indices,
+				SubMeshes = subMeshes,
+				Materials = materials
+			});
+			return data;
 		}
 
 		/// <summary>

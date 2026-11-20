@@ -79,6 +79,15 @@ namespace LELEngine
 		public static float BackgroundLoadingBudget { get; set; } = 4f;
 
 		/// <summary>
+		///     Called for a scene the running game loads (<see cref="LoadScene" />, <see cref="LoadSceneAsync" />) once it is
+		///     read, before it is prepared and starts: with the scene, the bytes of its file and its asset path, on the
+		///     thread that read it (the assets it loads there count as the scene's). The editor's play mode sets it to
+		///     batch the scene's static renderers as a build does (a build's scenes are batched when it is made); null
+		///     otherwise.
+		/// </summary>
+		public static Action<Scene, byte[], string> SceneRead { get; set; }
+
+		/// <summary>
 		///     Unloading a scene frees the GPU memory of its textures and meshes when no other loaded or loading scene
 		///     uses them, and drops them and its materials from the asset caches (the editor turns it off: its views and
 		///     inspectors keep using the assets).

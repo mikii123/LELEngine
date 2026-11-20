@@ -86,6 +86,7 @@ namespace LELEngine.Shaders
 	///     SurfaceCapture On                           // On / Off: the shader can write its surface instead of lighting it (what impostor bakes capture)
 	///     GrabPass On                                 // On / Off / a float property: the scene drawn so far is copied before each draw (Unity's GrabPass)
 	///     SceneDepth On                               // On / Off: the shader reads the opaque scene's depth (Unity's _CameraDepthTexture, soft particles)
+	///     Batching Off                                // On / Off: the material's objects are never merged into a static batch (Unity's DisableBatching tag)
 	///     </code>
 	///     A shader that blends or grabs without naming a queue goes to the Transparent queue. Blending, depth writes and
 	///     the depth test apply in the transparent pass (the opaque passes draw with their own depth state and no
@@ -108,6 +109,9 @@ namespace LELEngine.Shaders
 	///     normal + roughness at location 0, world motion at location 1) and the depth its own shading then tests against.
 	///     SurfaceCapture On: the variant compiled with LEL_SURFACE_CAPTURE writes the surface the shader would light
 	///     (see <see cref="ShaderPass.SurfaceCapture" />) and reads no lighting.
+	///     Batching Off: a game build's static batching (<see cref="StaticBatch" />) moves the meshes it merges into one
+	///     space, so a shader that works from its object's own space (a billboard built around the object's origin, an
+	///     effect measured from its pivot or along its axes) would draw wrong in a batch: its objects stay as they are.
 	/// </summary>
 	public sealed class ShaderRenderState
 	{
@@ -169,6 +173,12 @@ namespace LELEngine.Shaders
 		/// <summary>The shader named its queue (otherwise it follows the blend state).</summary>
 		public bool QueueDeclared;
 
+		/// <summary>
+		///     Batching Off clears it: the material's objects are not merged into static batches (the shader works from its
+		///     object's own space, which a merged mesh no longer has).
+		/// </summary>
+		public bool Batching = true;
+
 		#endregion
 
 		#region PublicMethods
@@ -194,6 +204,7 @@ namespace LELEngine.Shaders
 				case "surfacecapture":
 				case "grabpass":
 				case "scenedepth":
+				case "batching":
 					return true;
 				default:
 					return false;
@@ -227,6 +238,8 @@ namespace LELEngine.Shaders
 					return ParseGrabPass(rest, out error);
 				case "scenedepth":
 					return ParseSwitch(rest, out SceneDepth, out error);
+				case "batching":
+					return ParseSwitch(rest, out Batching, out error);
 				case "queue":
 				{
 					int? queue = MaterialQueue.Parse(rest);
@@ -251,6 +264,53 @@ namespace LELEngine.Shaders
 		///     the depth copy exist only in the transparent pass, so such a shader that names an opaque queue draws right
 		///     after the opaques.
 		/// </summary>
+		/// <summary>
+		///     Draws of this state give the same picture in any order: they do not blend and write depth, or their blend
+		///     only adds to the target (additive), only multiplies it, or is the screen blend, without writing depth. Alpha
+		///     blending (the target scaled by one minus the source's alpha) does not: such draws go back to front. What a
+		///     static batch may draw in one go (<see cref="StaticBatch" />).
+		/// </summary>
+		public bool OrderIndependent
+		{
+			get
+			{
+				if (!BlendEnabled)
+				{
+					return ZWrite;
+				}
+
+				if (ZWrite)
+				{
+					return false;
+				}
+
+				BlendingFactor source = SrcColor;
+				BlendingFactor target = DstColor;
+				bool sourceReadsTarget = source == BlendingFactor.DstColor || source == BlendingFactor.OneMinusDstColor || source == BlendingFactor.DstAlpha
+					|| source == BlendingFactor.OneMinusDstAlpha || source == BlendingFactor.SrcAlphaSaturate;
+
+				// target + source x something of the source's own.
+				if (target == BlendingFactor.One && !sourceReadsTarget)
+				{
+					return true;
+				}
+
+				// target x source (also twice), and nothing else.
+				if (source == BlendingFactor.DstColor && (target == BlendingFactor.Zero || target == BlendingFactor.SrcColor))
+				{
+					return true;
+				}
+
+				if (source == BlendingFactor.Zero && target == BlendingFactor.SrcColor)
+				{
+					return true;
+				}
+
+				// Screen: 1 - (1 - source) x (1 - target).
+				return source == BlendingFactor.One && target == BlendingFactor.OneMinusSrcColor;
+			}
+		}
+
 		/// <summary>Takes every value of <paramref name="other" /> (a shader read again keeps its state object).</summary>
 		public void CopyFrom(ShaderRenderState other)
 		{
@@ -271,6 +331,7 @@ namespace LELEngine.Shaders
 			GrabOffsetProperty = other.GrabOffsetProperty;
 			SceneDepth = other.SceneDepth;
 			QueueDeclared = other.QueueDeclared;
+			Batching = other.Batching;
 		}
 
 		public void Finish()

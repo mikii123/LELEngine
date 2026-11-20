@@ -95,6 +95,7 @@ namespace LELEngine.Rendering.Lumen
 		private int shelfX;
 		private int shelfY;
 		private int shelfHeight;
+		private bool fullReported;
 
 		#endregion
 
@@ -174,6 +175,23 @@ namespace LELEngine.Rendering.Lumen
 			Vector3 center = (bmin + bmax) * 0.5f;
 			Vector3 size = bmax - bmin;
 
+			// All six cards or none, and looked at before anything is made: an object the atlas has no room for is asked
+			// about again every frame (nothing is kept per object without cards), so the answer costs a few sums. Before,
+			// each such object made its cards, took the room of the first ones that fitted for nothing and wrote a line to
+			// the console, every frame: with a full atlas and a thousand objects left over that was the frame's time.
+			int roomX = shelfX;
+			int roomY = shelfY;
+			int roomHeight = shelfHeight;
+			for (int i = 0; i < CardsPerObject; i++)
+			{
+				CardSize(size, i / 2, texelsPerMeter, maxCardSize, out int width, out int height);
+				if (!Allocate(width, height, ref roomX, ref roomY, ref roomHeight, out _, out _))
+				{
+					ReportFull();
+					return null;
+				}
+			}
+
 			var cards = new SurfaceCard[CardsPerObject];
 			for (int i = 0; i < CardsPerObject; i++)
 			{
@@ -189,18 +207,10 @@ namespace LELEngine.Rendering.Lumen
 				float extentU = Math.Max(Vector3.Dot(size, Abs(axisX)), 0.01f);
 				float extentV = Math.Max(Vector3.Dot(size, Abs(axisY)), 0.01f);
 				float extentDepth = Math.Max(Vector3.Dot(size, Abs(axisZ)), 0.01f) + 0.1f;
+				CardSize(size, axis, texelsPerMeter, maxCardSize, out int width, out int height);
 
-				int width = Math.Clamp((int)Math.Ceiling(extentU * texelsPerMeter), 4, maxCardSize);
-				int height = Math.Clamp((int)Math.Ceiling(extentV * texelsPerMeter), 4, maxCardSize);
-				width = (width + RadiosityBlock - 1) / RadiosityBlock * RadiosityBlock;
-				height = (height + RadiosityBlock - 1) / RadiosityBlock * RadiosityBlock;
-
-				int x, y;
-				if (!Allocate(width, height, out x, out y))
-				{
-					Console.WriteLine("[SurfaceCache] Atlas full, object without cards");
-					return null;
-				}
+				// There is room: looked at above.
+				Allocate(width, height, ref shelfX, ref shelfY, ref shelfHeight, out int x, out int y);
 
 				// Slightly larger ortho window than the mesh so edge texels are fully covered.
 				float marginU = extentU / width;
@@ -292,29 +302,55 @@ namespace LELEngine.Rendering.Lumen
 
 		#region PrivateMethods
 
-		private bool Allocate(int width, int height, out int x, out int y)
+		// A card's size in texels on the faces of one axis (X faces use (Z, Y), Y faces (X, Z), Z faces (X, Y)), for an
+		// object of that size: texelsPerMeter along each side, at least 4 and at most maxCardSize, in whole probe blocks.
+		private static void CardSize(Vector3 size, int axis, int texelsPerMeter, int maxCardSize, out int width, out int height)
+		{
+			float extentU = Math.Max(axis == 0 ? size.Z : size.X, 0.01f);
+			float extentV = Math.Max(axis == 1 ? size.Z : size.Y, 0.01f);
+			width = Math.Clamp((int)Math.Ceiling(extentU * texelsPerMeter), 4, maxCardSize);
+			height = Math.Clamp((int)Math.Ceiling(extentV * texelsPerMeter), 4, maxCardSize);
+			width = (width + RadiosityBlock - 1) / RadiosityBlock * RadiosityBlock;
+			height = (height + RadiosityBlock - 1) / RadiosityBlock * RadiosityBlock;
+		}
+
+		// Shelf packing on the given state (the atlas's own, or a copy to see whether a set fits).
+		private bool Allocate(int width, int height, ref int nextX, ref int nextY, ref int rowHeight, out int x, out int y)
 		{
 			// Cards are aligned to the 4x4 texel blocks of the radiosity probes so no probe block spans two cards.
 			width = (width + RadiosityBlock - 1) / RadiosityBlock * RadiosityBlock;
 			height = (height + RadiosityBlock - 1) / RadiosityBlock * RadiosityBlock;
 
-			if (shelfX + width > Size)
+			if (nextX + width > Size)
 			{
-				shelfY += shelfHeight;
-				shelfX = 0;
-				shelfHeight = 0;
+				nextY += rowHeight;
+				nextX = 0;
+				rowHeight = 0;
 			}
-			if (shelfY + height > Size)
+			if (nextY + height > Size)
 			{
 				x = y = 0;
 				return false;
 			}
 
-			x = shelfX;
-			y = shelfY;
-			shelfX += width;
-			shelfHeight = Math.Max(shelfHeight, height);
+			x = nextX;
+			y = nextY;
+			nextX += width;
+			rowHeight = Math.Max(rowHeight, height);
 			return true;
+		}
+
+		// Once per atlas: what it means and what to change.
+		private void ReportFull()
+		{
+			if (fullReported)
+			{
+				return;
+			}
+
+			fullReported = true;
+			Debug.LogWarning($"[SurfaceCache] The atlas ({Size}x{Size}) is full after {sets.Count} objects: the objects that do not fit have no cards and give the GI no bounced light. "
+				+ "Raise Surface Cache Atlas Size or lower Surface Cache Texels Per Meter (Project Settings > Lighting), or take objects out of the GI (Contributes To GI).");
 		}
 
 		private int CreateTexture(PixelInternalFormat internalFormat, PixelFormat format, PixelType type)

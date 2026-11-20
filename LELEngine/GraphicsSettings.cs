@@ -69,6 +69,13 @@ namespace LELEngine
 		public Rendering.SuperSamplingSettings SuperSampling = new Rendering.SuperSamplingSettings();
 
 		/// <summary>
+		///     Static batching: the renderers of static objects (<see cref="GameObject.isStatic" />) that would be drawn one by
+		///     one are merged into batches (<see cref="StaticBatch" />). A build batches the scenes it ships, the editor the
+		///     scenes its play mode starts and loads; the scenes in the project stay as they are.
+		/// </summary>
+		public bool StaticBatching = true;
+
+		/// <summary>
 		///     Shaders every build ships, with their #include files, although no material of the build uses them: the
 		///     shaders scripts load by path (<c>new ShaderProgram("Shaders/Fog.shader")</c>). The build also checks that
 		///     they compile, and the built game compiles them while it loads.

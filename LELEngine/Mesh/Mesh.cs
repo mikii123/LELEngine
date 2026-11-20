@@ -74,6 +74,13 @@ namespace LELEngine
 		internal int PoolBaseVertex;
 		internal int PoolVertexCount;
 
+		/// <summary>
+		///     Ranges of <see cref="Indices" /> (first index, count) the GPU does not draw
+		///     (<see cref="Rendering.GeometryPool.SetIndexRangeVisible" />: a static batch's parts whose objects are gone);
+		///     null when every triangle draws. The indices here stay whole.
+		/// </summary>
+		internal List<(int First, int Count)> HiddenIndexRanges;
+
 		#endregion
 
 		#region PrivateFields

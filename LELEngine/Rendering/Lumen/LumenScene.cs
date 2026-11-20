@@ -77,7 +77,11 @@ namespace LELEngine.Rendering.Lumen
 		#region PrivateFields
 
 		private readonly List<SceneObject> objects = new List<SceneObject>();
-		private readonly List<SceneObjectData> objectData = new List<SceneObjectData>();
+
+		// The objects of every frame are the same instances filled again (slot i of the list is objectPool[i]) and the
+		// table's rows one array that only grows: a frame allocates nothing per object.
+		private readonly List<SceneObject> objectPool = new List<SceneObject>();
+		private SceneObjectData[] objectRows = new SceneObjectData[1];
 		private readonly Dictionary<MeshRenderer, TransformState> lastTransforms = new Dictionary<MeshRenderer, TransformState>();
 		private readonly Dictionary<MeshRenderer, MaterialState> lastMaterials = new Dictionary<MeshRenderer, MaterialState>();
 
@@ -145,6 +149,7 @@ namespace LELEngine.Rendering.Lumen
 			CollectObjects(renderers, true, gi);
 			StaticObjectCount = objects.Count;
 			CollectObjects(renderers, false, gi);
+			ReleaseUnusedObjects();
 			PruneFieldStates();
 			DynamicChanged = DetectDynamicChanges();
 
@@ -262,16 +267,33 @@ namespace LELEngine.Rendering.Lumen
 				// Cards only with Lumen's surface cache (see Update).
 				SurfaceCardSet cards = SurfaceCache?.GetOrAllocate(renderer, giScale, gi.SurfaceCacheTexelsPerMeter, gi.SurfaceCacheMaxCardSize);
 
-				objects.Add(new SceneObject
+				int index = objects.Count;
+				if (index == objectPool.Count)
 				{
-					Index = objects.Count,
-					Renderer = renderer,
-					Field = field,
-					Uniform = uniform,
-					Scale = giScale,
-					Cards = cards,
-					IsStatic = wantStatic
-				});
+					objectPool.Add(new SceneObject());
+				}
+
+				SceneObject o = objectPool[index];
+				o.Index = index;
+				o.Renderer = renderer;
+				o.Field = field;
+				o.Uniform = uniform;
+				o.Scale = giScale;
+				o.Cards = cards;
+				o.IsStatic = wantStatic;
+				objects.Add(o);
+			}
+		}
+
+		// The pooled objects past this frame's count let go of what they named (a destroyed renderer, its field and cards).
+		private void ReleaseUnusedObjects()
+		{
+			for (int i = objects.Count; i < objectPool.Count && !ReferenceEquals(objectPool[i].Renderer, null); i++)
+			{
+				SceneObject o = objectPool[i];
+				o.Renderer = null;
+				o.Field = null;
+				o.Cards = null;
 			}
 		}
 
@@ -462,7 +484,18 @@ namespace LELEngine.Rendering.Lumen
 
 		private void UploadTables()
 		{
-			objectData.Clear();
+			// Never empty: the binding always has storage (a scene without objects uploads one row of zeros).
+			int rowCount = Math.Max(objects.Count, 1);
+			if (objectRows.Length < rowCount)
+			{
+				objectRows = new SceneObjectData[Math.Max(rowCount, objectRows.Length * 2)];
+			}
+
+			if (objects.Count == 0)
+			{
+				objectRows[0] = default;
+			}
+
 			int cardCount = SurfaceCache?.CardCount ?? 0;
 			if (cardData.Length < cardCount)
 			{
@@ -507,7 +540,7 @@ namespace LELEngine.Rendering.Lumen
 
 				// Emission intensity travels in the table so pulsing emitters never recapture their cards.
 
-				objectData.Add(new SceneObjectData
+				objectRows[o.Index] = new SceneObjectData
 				{
 					WorldToLocal = Matrix4.Invert(localToWorld),
 					LocalToWorld = localToWorld,
@@ -520,7 +553,7 @@ namespace LELEngine.Rendering.Lumen
 					MeshBoundsMin = new Vector4(o.Renderer.Mesh.BoundsMin * scale, 0f),
 					MeshBoundsMax = new Vector4(o.Renderer.Mesh.BoundsMax * scale, 0f),
 					CardInfo = new Vector4i(o.Cards?.FirstCardIndex ?? 0, o.Cards?.Cards.Length ?? 0, o.IsStatic ? 0 : 1, MovedRecently(o) ? 1 : 0)
-				});
+				};
 
 				if (o.Cards == null)
 				{
@@ -549,18 +582,18 @@ namespace LELEngine.Rendering.Lumen
 			MaterialChanged = materialChanged;
 
 			// The tables are re-specified only when they grow; otherwise the existing storage is updated in place
-			// (glBufferData every frame makes the driver allocate and orphan two buffers per frame).
-			SceneObjectData[] objectArray = objectData.Count > 0 ? objectData.ToArray() : new SceneObjectData[1];
-			int objectBytes = objectArray.Length * SceneObjectData.Size;
+			// (glBufferData every frame makes the driver allocate and orphan two buffers per frame). The rows array has
+			// room to spare: the buffer gets all of it, so it grows as rarely as the array.
+			int objectBytes = rowCount * SceneObjectData.Size;
 			GL.BindBuffer(BufferTarget.ShaderStorageBuffer, ObjectBuffer);
 			if (objectBytes > objectBufferBytes)
 			{
-				GL.BufferData(BufferTarget.ShaderStorageBuffer, objectBytes, objectArray, BufferUsageHint.DynamicDraw);
-				objectBufferBytes = objectBytes;
+				objectBufferBytes = objectRows.Length * SceneObjectData.Size;
+				GL.BufferData(BufferTarget.ShaderStorageBuffer, objectBufferBytes, objectRows, BufferUsageHint.DynamicDraw);
 			}
 			else
 			{
-				GL.BufferSubData(BufferTarget.ShaderStorageBuffer, IntPtr.Zero, objectBytes, objectArray);
+				GL.BufferSubData(BufferTarget.ShaderStorageBuffer, IntPtr.Zero, objectBytes, objectRows);
 			}
 
 			int cardBytes = cardData.Length * CardData.Size;

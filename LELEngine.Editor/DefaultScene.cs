@@ -57,10 +57,10 @@ namespace LELEngine.Editor
 			GameObject ground = Instantiate(scene, CubeModel, "Ground");
 			ground.transform.position = new Vector3(0f, -0.1f, 0f);
 			ground.transform.localScale = new Vector3(10f, 0.1f, 10f);
+			ground.isStatic = true;
 			MeshRenderer groundRenderer = ground.GetComponent<MeshRenderer>();
 			if (groundRenderer != null)
 			{
-				groundRenderer.IsStatic = true;
 				// A darker ground than the default material: objects stand out against it.
 				if (File.Exists(AssetDatabase.ToAbsolute(GroundMaterial)))
 				{

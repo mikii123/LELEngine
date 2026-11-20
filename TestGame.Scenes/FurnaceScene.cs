@@ -83,7 +83,7 @@ namespace TestGame.Scenes
 			go.transform.scale = halfSize;
 			MeshRenderer renderer = go.GetComponent<MeshRenderer>();
 			renderer.SetMaterials(material);
-			renderer.IsStatic = true;
+			go.isStatic = true;
 		}
 
 		private static void PrintExpected(float albedo, float emission)

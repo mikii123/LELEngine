@@ -533,7 +533,7 @@ namespace LELEngine.Editor
 		{
 			GameObject go = RequireObject(path);
 			var text = new StringBuilder();
-			text.Append(go.Name).Append(" #").Append(go.Id).Append(go.activeSelf ? "" : " (inactive)").Append(", layer ").Append(go.layer).Append('\n');
+			text.Append(go.Name).Append(" #").Append(go.Id).Append(go.activeSelf ? "" : " (inactive)").Append(", layer ").Append(go.layer).Append(go.isStatic ? ", static" : "").Append('\n');
 			foreach (Behaviour component in go.Components)
 			{
 				if (component.IsDestroyed)
@@ -576,6 +576,51 @@ namespace LELEngine.Editor
 			WriteMember(component, path, 1, value);
 			Editor.Edits.RequestCommit();
 			Editor.NotifyChanged(component.gameObject);
+		}
+
+		/// <summary>
+		///     Sets an object's static flag (<see cref="GameObject.isStatic" />) as one undo step; returns how many objects
+		///     changed. <paramref name="children" />: true changes everything under it too, false the object alone. An object
+		///     with children needs the answer (the inspector asks it): null throws there.
+		/// </summary>
+		public static int SetStatic(string objectPath, bool value, bool? children = null)
+		{
+			GameObject go = RequireObject(objectPath);
+			TempObjects.RequireEditable(go);
+			return Editor.SetStatic(go, value, ChildrenAnswer(go, children, "static"));
+		}
+
+		/// <summary>
+		///     Sets an object's layer (a name or an index 0..31) as one undo step; returns how many objects changed.
+		///     <paramref name="children" /> as in <see cref="SetStatic" />.
+		/// </summary>
+		public static int SetLayer(string objectPath, string layer, bool? children = null)
+		{
+			GameObject go = RequireObject(objectPath);
+			TempObjects.RequireEditable(go);
+			if (!int.TryParse(layer, NumberStyles.Integer, CultureInfo.InvariantCulture, out int index))
+			{
+				index = LayerMask.NameToLayer(layer);
+			}
+
+			if (index < 0 || index > 31)
+			{
+				throw new ArgumentException($"No layer '{layer}' (a layer's name, or its index 0..31).");
+			}
+
+			return Editor.SetLayer(go, index, ChildrenAnswer(go, children, "layer"));
+		}
+
+		// Whether a flag set on an object goes to its children: the caller's answer, which an object with children needs.
+		private static bool ChildrenAnswer(GameObject go, bool? children, string what)
+		{
+			int count = go.transform.childCount;
+			if (count > 0 && !children.HasValue)
+			{
+				throw new InvalidOperationException($"'{go.Name}' has children: say whether they change too (--children) or only this object (--self).");
+			}
+
+			return children ?? false;
 		}
 
 		/// <summary>Moves an object under another (null or "none": to the scene's root), keeping its place in the world; one undo step.</summary>
@@ -1240,6 +1285,11 @@ namespace LELEngine.Editor
 			if (go.prefabInstance != null)
 			{
 				text.Append(" (prefab)");
+			}
+
+			if (go.isStatic)
+			{
+				text.Append(" (static)");
 			}
 
 			string components = string.Join(", ", go.Components.Where(c => !c.IsDestroyed && c is not Transform).Select(c => c.GetType().Name));

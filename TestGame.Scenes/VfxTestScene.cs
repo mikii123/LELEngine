@@ -78,14 +78,14 @@ namespace TestGame.Scenes
 			ground.transform.localScale = new Vector3(12f, 0.25f, 12f);
 			MeshRenderer renderer = ground.GetComponent<MeshRenderer>();
 			renderer.SetMaterials(SceneModels.Material("Floor.material"));
-			renderer.IsStatic = true;
+			ground.isStatic = true;
 
 			GameObject wall = SceneModels.Instantiate(scene, SceneModels.Cube, "Wall");
 			wall.transform.position = new Vector3(0f, 2f, 11f);
 			wall.transform.localScale = new Vector3(12f, 2f, 0.25f);
 			MeshRenderer wallRenderer = wall.GetComponent<MeshRenderer>();
 			wallRenderer.SetMaterials(SceneModels.Material("LitGray.material"));
-			wallRenderer.IsStatic = true;
+			wall.isStatic = true;
 		}
 
 		private static void BuildLight(Scene scene)

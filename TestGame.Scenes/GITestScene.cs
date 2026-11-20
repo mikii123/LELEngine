@@ -767,7 +767,7 @@ namespace TestGame.Scenes
 			sphere.transform.scale = Vector3.One * 1.25f;
 			MeshRenderer sphereRenderer = sphere.GetComponent<MeshRenderer>();
 			sphereRenderer.SetMaterials(SceneModels.Material("LitYellow.material"));
-			sphereRenderer.IsStatic = markStatic;
+			sphere.isStatic = markStatic;
 
 			// Pillars under the ceiling edge; long thin shadows are a good test for bias settings.
 			for (int i = -1; i <= 1; i++)
@@ -1076,7 +1076,7 @@ namespace TestGame.Scenes
 			MeshRenderer renderer = sphere.AddComponent<MeshRenderer>();
 			renderer.SetMesh(UVSphere());
 			renderer.SetMaterials(material);
-			renderer.IsStatic = markStatic;
+			renderer.gameObject.isStatic = markStatic;
 		}
 
 		private static Mesh uvSphere;
@@ -1478,7 +1478,7 @@ namespace TestGame.Scenes
 
 			MeshRenderer renderer = go.GetComponent<MeshRenderer>();
 			renderer.SetMaterials(SceneModels.Material(material));
-			renderer.IsStatic = markStatic;
+			go.isStatic = markStatic;
 			return go;
 		}
 

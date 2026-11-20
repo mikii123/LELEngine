@@ -15,7 +15,8 @@ namespace LELEngine.Serialization
 	///     name:string-id
 	///     settings: Object value (SceneSettings; null in prefabs)
 	///     entryCount:int32, then per entry (version 3+): kind:byte (0 GameObject, 1 prefab instance), then
-	///       GameObject: id:uint64, name:string-id, active:bool, parent:uint64 (0 = root), hideFlags:int32, layer:int32 (version 2+), componentCount:int32,
+	///       GameObject: id:uint64, name:string-id, active:bool, parent:uint64 (0 = root), hideFlags:int32, layer:int32 (version 2+),
+	///                   static:bool (version 4+), componentCount:int32,
 	///                   per component: typeId:int32, id:uint64, enabled:bool, length:int32, fields
 	///       instance:   id:uint64, prefab: Asset value, parent:uint64, modificationCount:int32,
 	///                   per modification: target:uint64, path:string-id, flags:byte (1 key, 2 removed), [keyTag:byte, key], [tag:byte, elementTag:byte, value],
@@ -26,11 +27,11 @@ namespace LELEngine.Serialization
 	///     <code>
 	///     "name": "Main",
 	///     "settings": { "$type": "LELEngine.SceneSettings, LELEngine", ... },
-	///     "gameObjects": [ { "id": 1, "name": "Cube", "active": false, "parent": 0, "hideFlags": 0, "layer": 0,
+	///     "gameObjects": [ { "id": 1, "name": "Cube", "active": false, "parent": 0, "hideFlags": 0, "layer": 0, "static": true,
 	///                        "components": [ { "$type": "Transform, LELEngine", "$id": 2, "$enabled": true, "m_LocalPosition": [0, 0, 0], ... } ] },
 	///                      { "prefabInstance": 77, "prefab": { "guid": "...", "path": "Enemy.prefab" }, "modifications": [ ... ] } ]
 	///     </code>
-	///     (defaults are left out: active true, parent 0, hideFlags 0, layer 0, $enabled true). Loading creates every
+	///     (defaults are left out: active true, parent 0, hideFlags 0, layer 0, static false, $enabled true). Loading creates every
 	///     object and component first (prefab instances from their prefabs, <see cref="PrefabCache" />), then reads all
 	///     fields (so references in any direction resolve), then calls
 	///     <see cref="ISerializationCallbackReceiver.OnAfterDeserialize" />. The component lifecycle does not start:
@@ -457,6 +458,7 @@ namespace LELEngine.Serialization
 			if (parent != 0) json.WriteNumber("parent", parent);
 			if (go.hideFlags != HideFlags.None) json.WriteNumber("hideFlags", (int)go.hideFlags);
 			if (go.layer != 0) json.WriteNumber("layer", go.layer);
+			if (go.isStatic) json.WriteBoolean("static", true);
 
 			json.WriteStartArray("components");
 			foreach (Behaviour component in go.Components)
@@ -611,6 +613,7 @@ namespace LELEngine.Serialization
 			context.Objects[go.Id] = go;
 			go.hideFlags = (HideFlags)GetInt32(entry, "hideFlags");
 			go.layer = GetInt32(entry, "layer");
+			go.isStatic = GetBool(entry, "static", false);
 			SetParent(go, GetUInt64(entry, "parent"), context);
 
 			if (!GetBool(entry, "active", true))
@@ -632,6 +635,12 @@ namespace LELEngine.Serialization
 				}
 
 				string typeName = JsonDocumentReader.TypeNameOf(element);
+				// A file written while the flag was the renderer's own: the object takes it.
+				if (LegacyStatic.Read(element, typeName))
+				{
+					go.isStatic = true;
+				}
+
 				ulong componentId = GetUInt64(element, "$id");
 				Behaviour component = CreateComponentOf(go, TypeRegistry.Resolve(typeName), typeName, componentId, out bool missing);
 				context.Objects[component.Id] = component;
@@ -829,6 +838,7 @@ namespace LELEngine.Serialization
 			body.WriteUInt64(state.ParentOf(go));
 			body.WriteInt32((int)go.hideFlags);
 			body.WriteInt32(go.layer);
+			body.WriteBool(go.isStatic);
 
 			int countPosition = body.ReserveInt32();
 			int count = 0;
@@ -898,6 +908,7 @@ namespace LELEngine.Serialization
 			ulong parentId = body.ReadUInt64();
 			var hideFlags = (HideFlags)body.ReadInt32();
 			int layer = reader.Version >= 2 ? body.ReadInt32() : 0;
+			bool isStatic = reader.Version >= 4 && body.ReadBool();
 			int componentCount = body.ReadInt32();
 
 			var go = new GameObject(name, scene, remap ? 0 : id);
@@ -909,6 +920,7 @@ namespace LELEngine.Serialization
 
 			go.hideFlags = hideFlags;
 			go.layer = layer;
+			go.isStatic = isStatic;
 			if (parentId == 0 || (remap && !copied.Contains(parentId)))
 			{
 				if (rootParent != null)
@@ -936,6 +948,16 @@ namespace LELEngine.Serialization
 				int end = fieldsPosition + length;
 
 				string typeName = reader.Schema(typeId)?.Name;
+				if (reader.Version < 4 && LegacyStatic.IsRenderer(typeName))
+				{
+					// A document written while the flag was the renderer's own: the object takes it.
+					body.Position = fieldsPosition - 4;
+					if (LegacyStatic.Take(reader.ReadGenericBlock(typeId)))
+					{
+						go.isStatic = true;
+					}
+				}
+
 				Behaviour component = CreateComponentOf(go, reader.ResolveType(typeId), typeName, remap ? 0 : fileComponentId, out bool missing);
 				context.Objects[fileComponentId != 0 ? fileComponentId : component.Id] = component;
 				if (!enabled)

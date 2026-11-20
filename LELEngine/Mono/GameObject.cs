@@ -49,6 +49,37 @@ namespace LELEngine
 		private int layerIndex;
 
 		/// <summary>
+		///     The object does not move or change while the game runs (Unity's Static; the inspector's checkbox, saved with
+		///     the object, an override on prefab instances). Its own flag: children have theirs. What reads it:
+		///     <list type="bullet">
+		///         <item>the GI: a static object's <see cref="MeshRenderer" /> is voxelized once into the cached volume and is a
+		///         static object of the Lumen scene, instead of being worked out again every frame;</item>
+		///         <item>a game build: static renderers that would be drawn one by one are merged into batches (static
+		///         batching, <see cref="StaticBatch" />).</item>
+		///     </list>
+		///     Changing it at runtime restarts the GI's static caches (as <see cref="GlobalIlluminationSettings.InvalidateStatic" />).
+		/// </summary>
+		public bool isStatic
+		{
+			get => staticFlag;
+			set
+			{
+				if (staticFlag == value)
+				{
+					return;
+				}
+
+				staticFlag = value;
+				if (scene != null)
+				{
+					Lighting.GI.InvalidateStatic();
+				}
+			}
+		}
+
+		private bool staticFlag;
+
+		/// <summary>
 		///     The parent id the file gave this object when no object of the file had it (an object added under the
 		///     objects of a prefab instance whose prefab is missing): written back while the object stays where it was put.
 		/// </summary>

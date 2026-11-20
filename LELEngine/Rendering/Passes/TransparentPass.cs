@@ -19,6 +19,8 @@ namespace LELEngine.Rendering.Passes
 	///     like meshes: each material of a trail is an entry at the centre of the trail's bounds (opaque materials too,
 	///     before the transparent queues). Custom renderers (<see cref="ICustomRenderer" />) are one entry each: the mesh they
 	///     build with their own shader values. Mesh renderers with a property block get its values after their material's.
+	///     A static batch (<see cref="StaticBatch" />) is an entry per part, sorted where the part's own renderer would be;
+	///     the parts that follow each other in the order draw with one call (<see cref="GeometryPool.DrawRanges" />).
 	///     Materials whose variant declares GrabPass read the scene drawn before them (<see cref="SceneGrab" />, Unity's
 	///     GrabPass, e.g. refraction): the copy they read is taken after the last earlier draw that touched the part of the
 	///     screen they read, and one copy serves a run of such objects whose parts nothing drawn in between overlaps.
@@ -91,6 +93,16 @@ namespace LELEngine.Rendering.Passes
 
 			/// <summary>Grab entries: the pixels their lookups read (kept inside by the shader).</summary>
 			public PixelRect Readable;
+
+			/// <summary>
+			///     A part of a static batch (<see cref="Renderer" /> is the batch's own renderer, <see cref="SubMesh" /> the slot of
+			///     the part's material in the batch's mesh): the batch, the part, and the part's triangles in the mesh's indices.
+			/// </summary>
+			public StaticBatch Batch;
+
+			public int Part;
+			public int RangeFirst;
+			public int RangeCount;
 		}
 
 		// One scene copy: rectangles Start .. Start + Count - 1 of copyRects.
@@ -114,6 +126,9 @@ namespace LELEngine.Rendering.Passes
 
 		// The layer of the particle outputs drawn at half resolution.
 		private readonly LowResolutionTransparency lowResolution = new LowResolutionTransparency();
+
+		// The (first index, index count) pairs of the batch parts drawn with one call.
+		private int[] runRanges = new int[128];
 
 		#endregion
 
@@ -333,6 +348,14 @@ namespace LELEngine.Rendering.Passes
 				}
 
 				state.ApplyTransparent();
+				if (entry.Batch != null)
+				{
+					// A static batch's part, and the parts of the batch that follow it in the order: one run, drawn together.
+					index = DrawBatchRun(index, state);
+					DrawnCount++;
+					continue;
+				}
+
 				if (state.Cull == CullMode.Off)
 				{
 					// Back faces first, then front faces: the inside of a convex object ends up behind its outside.
@@ -444,6 +467,14 @@ namespace LELEngine.Rendering.Passes
 				}
 
 				Matrix4 world = renderer.transform.LocalToWorld;
+				StaticBatch batch = renderer.ownBatch;
+				if (batch != null && !batch.IsDestroyed && batch.HasPartData)
+				{
+					// A static batch sorts part by part, each where its own renderer would: the picture is the unbatched one.
+					CollectBatchParts(renderer, batch, mesh, world, cameraPosition);
+					continue;
+				}
+
 				Vector3 center = Vector3.TransformPosition((mesh.BoundsMin + mesh.BoundsMax) * 0.5f, world);
 				float distanceSquared = (center - cameraPosition).LengthSquared;
 				for (int i = 0; i < mesh.SubMeshCount; i++)
@@ -462,6 +493,114 @@ namespace LELEngine.Rendering.Passes
 			}
 
 			return grabs;
+		}
+
+		/// <summary>
+		///     The visible parts of a static batch as entries of their own: each at the centre of its own mesh's bounds (kept by
+		///     the batch in its object's space) and with its own renderer's place among equals, as it sorted before it was
+		///     batched; its triangles are a range of the batch's mesh.
+		/// </summary>
+		private void CollectBatchParts(MeshRenderer renderer, StaticBatch batch, Mesh mesh, Matrix4 world, Vector3 cameraPosition)
+		{
+			int parts = batch.PartCount;
+			for (int part = 0; part < parts; part++)
+			{
+				if (!batch.IsPartVisible(part))
+				{
+					continue;
+				}
+
+				float distanceSquared = (Vector3.TransformPosition(batch.PartCentre(part), world) - cameraPosition).LengthSquared;
+				MeshRenderer own = batch.Part(part);
+				ulong order = (own != null ? own.Id : renderer.Id) * 64;
+				batch.GetPartRanges(part, out int first, out int end);
+				for (int range = first; range < end; range++)
+				{
+					int subMesh = batch.RangeSubMesh(range, mesh);
+					Material material = subMesh >= 0 ? renderer.GetMaterial(subMesh) : null;
+					int count = batch.RangeCount(range);
+					if (count == 0 || material?.Program == null || !material.IsTransparent || !material.Program.IsLinked)
+					{
+						continue;
+					}
+
+					entries.Add(new Entry
+					{
+						Renderer = renderer, SubMesh = subMesh, Material = material, Queue = material.renderQueue, DistanceSquared = distanceSquared,
+						Order = order + (ulong)(range - first), World = world, GrabCopy = -1, Batch = batch, Part = part, RangeFirst = batch.RangeFirst(range), RangeCount = count
+					});
+				}
+			}
+		}
+
+		/// <summary>
+		///     Draws the run of static batch parts that starts at <paramref name="start" />: the entries after it that are
+		///     parts of the same batch with the same material (nothing else sorted between them), with the state the first set.
+		///     Returns the run's last entry. One call for the run where the picture cannot tell: with a cull mode, or two-sided
+		///     when the order of the draws does not matter. Two-sided and order dependent (alpha blending), an object's back
+		///     faces go before its front faces, so the parts draw one by one; but a flat part (a sheet: all its triangles face
+		///     one way) has only one of the two, and flat parts that follow each other go in one call.
+		/// </summary>
+		private int DrawBatchRun(int start, ShaderRenderState state)
+		{
+			Entry first = entries[start];
+			int end = start + 1;
+			while (end < entries.Count && ReferenceEquals(entries[end].Batch, first.Batch) && ReferenceEquals(entries[end].Renderer, first.Renderer) && entries[end].SubMesh == first.SubMesh)
+			{
+				end++;
+			}
+
+			Mesh mesh = first.Renderer.Mesh;
+			if (runRanges.Length < (end - start) * 2)
+			{
+				runRanges = new int[System.Math.Max((end - start) * 2, runRanges.Length * 2)];
+			}
+
+			bool twoSided = state.Cull == CullMode.Off;
+			if (!twoSided || state.OrderIndependent)
+			{
+				for (int i = start; i < end; i++)
+				{
+					runRanges[(i - start) * 2] = entries[i].RangeFirst;
+					runRanges[(i - start) * 2 + 1] = entries[i].RangeCount;
+				}
+
+				GeometryPool.DrawRanges(mesh, runRanges, end - start);
+				return end - 1;
+			}
+
+			int at = start;
+			while (at < end)
+			{
+				int count = 0;
+				while (at < end && first.Batch.IsPartFlat(entries[at].Part))
+				{
+					runRanges[count * 2] = entries[at].RangeFirst;
+					runRanges[count * 2 + 1] = entries[at].RangeCount;
+					count++;
+					at++;
+				}
+
+				if (count > 0)
+				{
+					GLState.SetCull(false);
+					GeometryPool.DrawRanges(mesh, runRanges, count);
+				}
+
+				if (at < end)
+				{
+					// Back faces first, then front faces: the inside of a convex object ends up behind its outside.
+					runRanges[0] = entries[at].RangeFirst;
+					runRanges[1] = entries[at].RangeCount;
+					GLState.SetCull(true, TriangleFace.Front);
+					GeometryPool.DrawRanges(mesh, runRanges, 1);
+					GLState.SetCull(true, TriangleFace.Back);
+					GeometryPool.DrawRanges(mesh, runRanges, 1);
+					at++;
+				}
+			}
+
+			return end - 1;
 		}
 
 		// The trails among the frame's behaviours on the camera's layers: each built for this camera into the trail stream

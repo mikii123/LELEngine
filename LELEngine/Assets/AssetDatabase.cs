@@ -63,6 +63,20 @@ namespace LELEngine
 		/// <summary>Folder of engine paths ("Engine/Lit.shader", "Engine/Meshes/Cube.obj").</summary>
 		public const string EnginePrefix = "Engine/";
 
+		/// <summary>
+		///     Folder of the static batches' meshes (<see cref="StaticBatch" />), which the engine makes and scenes read
+		///     through the batcher name by path: "Library/StaticBatches/&lt;key&gt;-0.mesh". A built game has them under its
+		///     asset root like any asset; the editor keeps them in the project's Library (<see cref="StaticBatchFolder" />),
+		///     not among the project's assets.
+		/// </summary>
+		public const string StaticBatchPrefix = "Library/StaticBatches/";
+
+		/// <summary>
+		///     Where the paths under <see cref="StaticBatchPrefix" /> are files (the editor: the project's
+		///     Library/StaticBatches); null: under the asset root (a built game).
+		/// </summary>
+		public static string StaticBatchFolder { get; set; }
+
 		/// <summary>Raised after the index was rebuilt (files added, moved or deleted).</summary>
 		public static event Action Refreshed;
 
@@ -284,6 +298,13 @@ namespace LELEngine
 		/// <summary>The path under the asset root, also for engine paths (files a game build writes next to them, such as baked distance fields).</summary>
 		public static string ToRootAbsolute(string assetPath)
 		{
+			// The static batches' meshes are the editor's own files (see StaticBatchPrefix).
+			string batches = StaticBatchFolder;
+			if (batches != null && assetPath.Length > StaticBatchPrefix.Length && assetPath.Replace('\\', '/').StartsWith(StaticBatchPrefix, StringComparison.OrdinalIgnoreCase))
+			{
+				return Path.Combine(batches, assetPath.Substring(StaticBatchPrefix.Length).Replace('/', Path.DirectorySeparatorChar));
+			}
+
 			return Path.Combine(Root, assetPath.Replace('/', Path.DirectorySeparatorChar));
 		}
 

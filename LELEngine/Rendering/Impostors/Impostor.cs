@@ -205,7 +205,6 @@ public sealed class Impostor : ScriptableObject
 		renderer.SetMesh(m_Mesh);
 		renderer.SetMaterials(m_Material);
 		renderer.ContributesToGI = false;
-		renderer.IsStatic = false;
 	}
 
 	/// <summary>

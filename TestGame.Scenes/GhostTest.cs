@@ -84,7 +84,7 @@ namespace TestGame.Scenes
 				{
 					renderer.SetMaterials(SceneModels.Material("LitGray.material"));
 				}
-				renderer.IsStatic = false;
+				box.isStatic = false;
 				mover = box.transform;
 			}
 

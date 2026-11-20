@@ -91,7 +91,7 @@ namespace TestGame.Scenes
 			sphere.transform.scale = Vector3.One * 1.25f;
 			MeshRenderer sphereRenderer = sphere.GetComponent<MeshRenderer>();
 			sphereRenderer.SetMaterials(SceneModels.Material("LitYellow.material"));
-			sphereRenderer.IsStatic = isStatic;
+			sphere.isStatic = isStatic;
 
 			// A thin canopy on two posts near the start: the ground under it sees less of the sky.
 			Box(scene, "Canopy", "LitWhite.material", new Vector3(0f, 2.6f, -3f), new Vector3(2f, 0.08f, 1.5f));
@@ -136,7 +136,7 @@ namespace TestGame.Scenes
 
 			MeshRenderer renderer = go.GetComponent<MeshRenderer>();
 			renderer.SetMaterials(SceneModels.Material(material));
-			renderer.IsStatic = isStatic;
+			go.isStatic = isStatic;
 			return go;
 		}
 

@@ -80,6 +80,11 @@ namespace LELEngine.Rendering
 		private static readonly List<(int Start, int Count)> freeVertices = new List<(int Start, int Count)>();
 		private static readonly List<(int Start, int Count)> freeIndices = new List<(int Start, int Count)>();
 
+		// DrawRanges' arguments (GL thread).
+		private static int[] drawCounts = new int[64];
+		private static IntPtr[] drawOffsets = new IntPtr[64];
+		private static int[] drawBaseVertices = new int[64];
+
 		#endregion
 
 		#region PublicMethods
@@ -145,6 +150,40 @@ namespace LELEngine.Rendering
 			DrawStatistics.Draw(range.IndexCount / 3);
 		}
 
+		/// <summary>
+		///     Draws <paramref name="count" /> ranges of a mesh's triangles in their order with one call (a multi-draw):
+		///     ranges[2 i] is the first index of range i in <see cref="Mesh.Indices" />, ranges[2 i + 1] its index count.
+		///     How the transparent pass draws the parts of a static batch that follow each other back to front.
+		/// </summary>
+		public static void DrawRanges(Mesh mesh, int[] ranges, int count)
+		{
+			if (count <= 0 || !Prepare(mesh))
+			{
+				return;
+			}
+
+			if (drawCounts.Length < count)
+			{
+				int size = Math.Max(count, drawCounts.Length * 2);
+				drawCounts = new int[size];
+				drawOffsets = new IntPtr[size];
+				drawBaseVertices = new int[size];
+			}
+
+			int triangles = 0;
+			for (int i = 0; i < count; i++)
+			{
+				drawCounts[i] = ranges[i * 2 + 1];
+				drawOffsets[i] = (IntPtr)((long)(mesh.PoolFirstIndex + ranges[i * 2]) * sizeof(uint));
+				drawBaseVertices[i] = mesh.PoolBaseVertex;
+				triangles += ranges[i * 2 + 1] / 3;
+			}
+
+			GL.BindVertexArray(vertexArray);
+			GL.MultiDrawElementsBaseVertex(PrimitiveType.Triangles, drawCounts, DrawElementsType.UnsignedInt, drawOffsets, count, drawBaseVertices);
+			DrawStatistics.Draw(triangles);
+		}
+
 		/// <summary>Draws one mesh as instance <paramref name="instance" /> of the GPU scene (instanced variants).</summary>
 		public static void DrawInstance(Mesh mesh, int instance)
 		{
@@ -156,6 +195,48 @@ namespace LELEngine.Rendering
 			GL.BindVertexArray(vertexArray);
 			GL.DrawElementsInstancedBaseVertexBaseInstance(PrimitiveType.Triangles, mesh.PoolIndexCount, DrawElementsType.UnsignedInt, (IntPtr)(mesh.PoolFirstIndex * sizeof(uint)), 1, mesh.PoolBaseVertex, instance);
 			DrawStatistics.Draw(mesh.PoolIndexCount / 3);
+		}
+
+		/// <summary>
+		///     Shows or hides a range of a mesh's triangles on the GPU (<paramref name="firstIndex" />,
+		///     <paramref name="indexCount" /> of <see cref="Mesh.Indices" />, whole triangles): a hidden range's indices all
+		///     name one vertex, so its triangles have no area and nothing of them is drawn, in any pass, whatever draws the
+		///     mesh (its own draw, a sub-mesh's, a multi-draw). The mesh keeps its indices; the hidden ranges are the mesh's
+		///     (<see cref="Mesh.HiddenIndexRanges" />) and hold when it uploads again. A static batch hides the parts whose
+		///     objects were disabled or destroyed this way (<see cref="StaticBatch" />). GL thread.
+		/// </summary>
+		public static void SetIndexRangeVisible(Mesh mesh, int firstIndex, int indexCount, bool visible)
+		{
+			if (mesh == null || indexCount <= 0 || firstIndex < 0 || firstIndex + indexCount > mesh.Indices.Length)
+			{
+				return;
+			}
+
+			List<(int First, int Count)> hidden = mesh.HiddenIndexRanges;
+			int at = hidden != null ? hidden.IndexOf((firstIndex, indexCount)) : -1;
+			if (visible == at < 0)
+			{
+				return;
+			}
+
+			if (visible)
+			{
+				hidden.RemoveAt(at);
+				if (hidden.Count == 0)
+				{
+					mesh.HiddenIndexRanges = null;
+				}
+			}
+			else
+			{
+				(mesh.HiddenIndexRanges ??= new List<(int, int)>()).Add((firstIndex, indexCount));
+			}
+
+			// Not in the pool now (or no context: the process is ending): its next upload writes the ranges as they are then.
+			if (mesh.PoolGeneration == generation && mesh.PoolIndexCount > 0 && GraphicsThread.HasContext)
+			{
+				WriteIndexRange(mesh, firstIndex, indexCount, !visible);
+			}
 		}
 
 		/// <summary>The identity instance index buffer covers instances [0, count).</summary>
@@ -335,6 +416,35 @@ namespace LELEngine.Rendering
 			vertexCount = vertexEnd;
 			indexCount = indexEnd;
 			MeshCount++;
+
+			// The ranges hidden while the mesh was not in the pool (or before it was first drawn).
+			if (mesh.HiddenIndexRanges != null && indices.Length > 0)
+			{
+				foreach ((int first, int count) in mesh.HiddenIndexRanges)
+				{
+					WriteIndexRange(mesh, first, count, true);
+				}
+			}
+		}
+
+		// A range of an uploaded mesh's indices: its own, or (hidden) every index the range's first, which leaves
+		// triangles without area.
+		private static void WriteIndexRange(Mesh mesh, int first, int count, bool hidden)
+		{
+			uint[] indices = mesh.Indices;
+			GL.BindBuffer(BufferTarget.CopyWriteBuffer, indexBuffer);
+			if (hidden)
+			{
+				var collapsed = new uint[count];
+				Array.Fill(collapsed, indices[first]);
+				GL.BufferSubData(BufferTarget.CopyWriteBuffer, (IntPtr)((mesh.PoolFirstIndex + first) * sizeof(uint)), count * sizeof(uint), collapsed);
+			}
+			else
+			{
+				GL.BufferSubData(BufferTarget.CopyWriteBuffer, (IntPtr)((mesh.PoolFirstIndex + first) * sizeof(uint)), count * sizeof(uint), ref indices[first]);
+			}
+
+			GL.BindBuffer(BufferTarget.CopyWriteBuffer, 0);
 		}
 
 		/// <summary>The start of a free range of <paramref name="count" /> elements (taken from the list), or -1.</summary>

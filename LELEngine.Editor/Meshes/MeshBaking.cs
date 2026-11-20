@@ -84,7 +84,7 @@ namespace LELEngine.Editor
 				output.ReceiveShadows = first.ReceiveShadows;
 				output.ContributesToGI = first.ContributesToGI;
 				output.ReceiveGI = first.ReceiveGI;
-				output.IsStatic = first.IsStatic;
+				baked.isStatic = first.gameObject.isStatic;
 			}
 			catch (Exception e)
 			{

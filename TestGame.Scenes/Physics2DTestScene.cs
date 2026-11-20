@@ -132,7 +132,7 @@ namespace TestGame.Scenes
 			go.transform.localScale = new Vector3(size.X * 0.5f, size.Y * 0.5f, 0.5f);
 			MeshRenderer renderer = go.GetComponent<MeshRenderer>();
 			renderer.SetMaterials(SceneModels.Material(material));
-			renderer.IsStatic = true;
+			go.isStatic = true;
 			go.AddComponent<BoxCollider2D>().FitToRenderer();
 			return go;
 		}

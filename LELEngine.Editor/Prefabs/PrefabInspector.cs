@@ -607,6 +607,7 @@ namespace LELEngine.Editor
 				PropertyModification.NameProperty => "Name",
 				PropertyModification.ActiveProperty => "Active",
 				PropertyModification.LayerProperty => "Layer",
+				PropertyModification.StaticProperty => "Static",
 				PropertyModification.EnabledProperty => "Enabled",
 				_ => NicePath(path)
 			};

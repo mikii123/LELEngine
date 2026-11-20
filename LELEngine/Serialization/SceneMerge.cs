@@ -243,7 +243,7 @@ namespace LELEngine.Serialization
 			{
 				DocumentObject x = a.Object, y = b.Object;
 				return x.Id == y.Id && x.Name == y.Name && x.Active == y.Active && x.Parent == y.Parent && x.HideFlags == y.HideFlags && x.Layer == y.Layer
-					&& ComponentsEqual(x.Components, y.Components);
+					&& x.Static == y.Static && ComponentsEqual(x.Components, y.Components);
 			}
 
 			if (a.Instance != null && b.Instance != null)
@@ -890,7 +890,8 @@ namespace LELEngine.Serialization
 					Active = Pick(where, "active", "active", inMine, mineBase?.Active ?? true, mine.Active, inTheirs, theirsBase?.Active ?? true, theirs.Active, (a, b) => a == b, a => a ? "active" : "inactive"),
 					Parent = Pick(where, "parent", "parent", inMine, mineBase?.Parent ?? 0, mine.Parent, inTheirs, theirsBase?.Parent ?? 0, theirs.Parent, (a, b) => a == b, DescribeParent),
 					HideFlags = Pick(where, "hide flags", "hideFlags", inMine, mineBase?.HideFlags ?? 0, mine.HideFlags, inTheirs, theirsBase?.HideFlags ?? 0, theirs.HideFlags, (a, b) => a == b, a => a.ToString(CultureInfo.InvariantCulture)),
-					Layer = Pick(where, "layer", "layer", inMine, mineBase?.Layer ?? 0, mine.Layer, inTheirs, theirsBase?.Layer ?? 0, theirs.Layer, (a, b) => a == b, a => a.ToString(CultureInfo.InvariantCulture))
+					Layer = Pick(where, "layer", "layer", inMine, mineBase?.Layer ?? 0, mine.Layer, inTheirs, theirsBase?.Layer ?? 0, theirs.Layer, (a, b) => a == b, a => a.ToString(CultureInfo.InvariantCulture)),
+					Static = Pick(where, "static", "static", inMine, mineBase?.Static ?? false, mine.Static, inTheirs, theirsBase?.Static ?? false, theirs.Static, (a, b) => a == b, a => a ? "static" : "not static")
 				};
 
 				MergeComponents(where, mineBase?.Components, mine.Components, theirsBase?.Components, theirs.Components, merged.Components);

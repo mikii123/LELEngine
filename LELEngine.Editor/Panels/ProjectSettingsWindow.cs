@@ -944,6 +944,23 @@ namespace LELEngine.Editor
 			changed |= DrawSuperSampling(content.SuperSampling ??= new SuperSamplingSettings());
 
 			ImGui.Spacing();
+			ImGui.SeparatorText("Batching");
+			bool staticBatching = content.StaticBatching;
+			FieldDrawer.Label("Static Batching", null, context);
+			bool batchingEdited = EditorGui.Checkbox("##staticbatching", ref staticBatching);
+			Tooltip("The meshes of objects marked Static that are drawn one by one (transparent materials, opaque ones whose shader\n" +
+				"has no GPU-driven variant) are merged into batches: objects that draw one after another go in one draw call.\n" +
+				"The picture stays the same (a transparent batch is still sorted object by object). Built games get the batches\n" +
+				"with their scenes, the editor makes them when play mode starts (kept in the project's Library); the scenes in\n" +
+				"the project stay as they are. The console (a build's log) says what was merged.");
+			context.Track(batchingEdited);
+			if (batchingEdited)
+			{
+				content.StaticBatching = staticBatching;
+				changed = true;
+			}
+
+			ImGui.Spacing();
 			ImGui.SeparatorText("Always Included Shaders");
 			ImGui.PushTextWrapPos(0f);
 			ImGui.TextDisabled("A build ships the shaders its materials use. A shader that only a script loads by its path (new ShaderProgram(\"Shaders/Fog.shader\")) is used by nothing the build can see, and the built game would not find it: put it on this list.");
@@ -1092,7 +1109,7 @@ namespace LELEngine.Editor
 			editor.SaveProjectSettings();
 
 			string output = Path.GetFullPath(Path.Combine(project.RootPath, OutputFolderOf(project)));
-			var settings = new BuildSettings { OutputFolder = output, Release = project.BuildRelease, SelfContained = project.BuildSelfContained, ReadyToRun = project.BuildReadyToRun, StartScene = project.StartScene, Scenes = new List<string>(project.BuildScenes) };
+			var settings = new BuildSettings { OutputFolder = output, Release = project.BuildRelease, SelfContained = project.BuildSelfContained, ReadyToRun = project.BuildReadyToRun, StaticBatching = ProjectSettings.Current.Graphics?.StaticBatching ?? true, StartScene = project.StartScene, Scenes = new List<string>(project.BuildScenes) };
 			lock (lines)
 			{
 				lines.Clear();

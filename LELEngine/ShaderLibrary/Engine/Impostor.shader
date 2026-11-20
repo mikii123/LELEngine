@@ -30,6 +30,8 @@ ShadowBias ("Shadow Bias", Range(0, 0.25)) = 0.04
 Queue AlphaTest
 ShadowCaster Custom
 GeometryPrepass Custom
+// The billboard is laid out around its object's box: merged into a static batch it would have no object to stand in.
+Batching Off
 /////Properties
 
 //Vertex

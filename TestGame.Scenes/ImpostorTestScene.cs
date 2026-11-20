@@ -217,7 +217,7 @@ namespace TestGame.Scenes
 			ground.transform.scale = new Vector3(120f, 0.25f, 120f);
 			MeshRenderer renderer = ground.GetComponent<MeshRenderer>();
 			renderer.SetMaterials(SceneModels.Material("LitGray.material"));
-			renderer.IsStatic = true;
+			ground.isStatic = true;
 		}
 
 		private static void BuildLight(Scene scene)

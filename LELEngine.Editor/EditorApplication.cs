@@ -1081,6 +1081,8 @@ namespace LELEngine.Editor
 			WaitForAssetIndex(true);
 			AssetsReady = true;
 			ModelAssets.CacheFolder = project.ModelCachePath;
+			// The static batches' meshes (play mode's, a build's) are files of the Library, read by their asset paths.
+			AssetDatabase.StaticBatchFolder = StaticBatchCache.FolderOf(project);
 			AssetThumbnails.CacheFolder = project.ThumbnailCachePath;
 			// Made clouds (Library/VolumeCache): read instead of made again, written after the editor made one. Before the scene
 			// is read: its volumetric objects start reading their files as they are read.
@@ -1486,6 +1488,7 @@ namespace LELEngine.Editor
 			ScriptableObjectAssets.UnloadAll();
 			InternalStorage.Clear();
 			ModelAssets.CacheFolder = null;
+			AssetDatabase.StaticBatchFolder = null;
 			AssetThumbnails.CacheFolder = null;
 			LELEngine.Volumetrics.VolumeCache.Folder = null;
 			LELEngine.Volumetrics.VolumeCache.Clear();
@@ -2227,6 +2230,9 @@ namespace LELEngine.Editor
 			using (AssetLoadScope scope = AssetLoadScope.Begin(false, true))
 			{
 				play = SceneSerializer.LoadFromBytes(playSnapshot);
+				// Static batching as a build of the scene has it (Project Settings > Graphics): the batches' objects join
+				// the game's copy before it starts, their meshes are prepared with the scene's assets.
+				BatchPlayScene(play, playSnapshot, playScenePath);
 				playAssets.AddRange(scope.Assets);
 				playSummary = scope.Summary();
 			}
@@ -2284,6 +2290,8 @@ namespace LELEngine.Editor
 			Scene edit = SceneSerializer.LoadFromBytes(playSnapshot);
 			edit.Path = playScenePath;
 			ReplaceScene(edit, false);
+			// The game's scenes are gone: so are their static batches' meshes.
+			EndPlayBatching();
 			SceneDirty = playSceneDirty;
 			playSnapshot = null;
 			Undo.Clear();
@@ -2903,6 +2911,7 @@ namespace LELEngine.Editor
 			DrawPrefabModals();
 			DrawUnsavedToolsModal();
 			DrawReserializeModal();
+			DrawObjectFlagModal();
 			if (openUnsavedPopup)
 			{
 				ImGui.OpenPopup("Unsaved changes");

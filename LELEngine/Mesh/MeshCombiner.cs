@@ -42,15 +42,24 @@ namespace LELEngine
 		/// <summary>The instances that had triangles (the others added nothing).</summary>
 		public int InstanceCount { get; }
 
+		/// <summary>
+		///     Where each instance's triangles are in <see cref="Mesh" />'s indices, by the instance's place in the list that
+		///     was combined: (first index, index count) per sub-mesh of the instance's own mesh that has triangles (an
+		///     instance's sub-meshes of one material follow each other); null for an instance that added nothing. What a
+		///     static batch hides when a part of it goes away.
+		/// </summary>
+		public IReadOnlyList<(int First, int Count)[]> InstanceRanges { get; }
+
 		#endregion
 
 		#region Constructors
 
-		internal CombinedMesh(Mesh mesh, List<Material> materials, int instanceCount)
+		internal CombinedMesh(Mesh mesh, List<Material> materials, int instanceCount, (int First, int Count)[][] instanceRanges)
 		{
 			Mesh = mesh;
 			Materials = materials;
 			InstanceCount = instanceCount;
+			InstanceRanges = instanceRanges;
 		}
 
 		#endregion
@@ -161,6 +170,8 @@ namespace LELEngine
 			}
 
 			var destinations = new int[instances.Count][];
+			var ranges = new (int First, int Count)[instances.Count][];
+			var instanceRanges = new List<(int First, int Count)>();
 			for (int i = 0; i < instances.Count; i++)
 			{
 				if (baseVertices[i] < 0)
@@ -170,13 +181,20 @@ namespace LELEngine
 
 				Mesh mesh = instances[i].Mesh;
 				var own = new int[slots[i].Length];
+				instanceRanges.Clear();
 				for (int s = 0; s < own.Length; s++)
 				{
+					int count = mesh.SubMeshes[s].IndexCount / 3 * 3;
 					own[s] = cursors[slots[i][s]];
-					cursors[slots[i][s]] += mesh.SubMeshes[s].IndexCount / 3 * 3;
+					cursors[slots[i][s]] += count;
+					if (count > 0)
+					{
+						instanceRanges.Add((own[s], count));
+					}
 				}
 
 				destinations[i] = own;
+				ranges[i] = instanceRanges.ToArray();
 			}
 
 			// 3. The data: every instance writes its own ranges, so they fill side by side.
@@ -202,7 +220,7 @@ namespace LELEngine
 				}
 			}
 
-			return new CombinedMesh(new Mesh(name, vertices, indices, subMeshes), materials, used);
+			return new CombinedMesh(new Mesh(name, vertices, indices, subMeshes), materials, used, ranges);
 		}
 
 		#endregion

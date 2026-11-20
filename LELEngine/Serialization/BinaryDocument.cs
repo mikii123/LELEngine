@@ -197,9 +197,9 @@ namespace LELEngine.Serialization
 		/// <summary>
 		///     Version 2: document kind in the header, sub-asset names in asset values, GameObject layers. Version 3: the
 		///     entries of scene and prefab bodies start with a kind byte (<see cref="EntryObject" /> or
-		///     <see cref="EntryPrefabInstance" />).
+		///     <see cref="EntryPrefabInstance" />). Version 4: GameObjects' static flags (<see cref="GameObject.isStatic" />).
 		/// </summary>
-		public const int Version = 3;
+		public const int Version = 4;
 
 		public const byte EntryObject = 0;
 		public const byte EntryPrefabInstance = 1;

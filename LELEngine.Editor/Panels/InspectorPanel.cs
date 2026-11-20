@@ -377,9 +377,8 @@ namespace LELEngine.Editor
 
 					if (EditorGui.Selectable(LayerMask.DisplayName(layer), layer == go.layer) && layer != go.layer)
 					{
-						int previous = go.layer;
-						editor.RecordStructural("Change layer of " + go.Name, () => go.layer = layer);
-						editor.NotifyChanged(go);
+						// An object with children asks whether they change too (EditorApplication.RequestLayer).
+						editor.RequestLayer(go, layer);
 					}
 				}
 
@@ -393,6 +392,24 @@ namespace LELEngine.Editor
 			}
 
 			PrefabInspector.MarkHeaderProperty(context, go, LELEngine.Serialization.PropertyModification.LayerProperty);
+
+			// Static (GameObject.isStatic): the GI caches the object, static batching (a built game, play mode) may merge its
+			// mesh into a batch. An object with children asks whether they change too (EditorApplication.RequestStatic).
+			ImGui.SameLine(0, 16);
+			bool isStatic = go.isStatic;
+			if (EditorGui.Checkbox("Static", ref isStatic))
+			{
+				editor.RequestStatic(go, isStatic);
+			}
+
+			if (ImGui.IsItemHovered())
+			{
+				ImGui.SetTooltip("The object does not move or change while the game runs: the GI works its renderer out once\n" +
+					"instead of every frame, and static batching (Project Settings > Graphics; in built games and in\n" +
+					"play mode) may merge its mesh with other static ones into one draw.");
+			}
+
+			PrefabInspector.MarkHeaderProperty(context, go, LELEngine.Serialization.PropertyModification.StaticProperty);
 		}
 
 		private void DrawComponent(GameObject go, Behaviour component)
@@ -817,8 +834,9 @@ namespace LELEngine.Editor
 
 				foreach (Type type in types)
 				{
+					// Not the components nothing adds by hand: a static batch is the batcher's (a build, play mode).
 					if (type.IsPublic && !type.IsAbstract && typeof(Behaviour).IsAssignableFrom(type) && type != typeof(Transform)
-						&& type != typeof(MissingComponent) && type.GetConstructor(Type.EmptyTypes) != null)
+						&& type != typeof(MissingComponent) && type != typeof(StaticBatch) && type.GetConstructor(Type.EmptyTypes) != null)
 					{
 						componentTypes.Add(type);
 					}

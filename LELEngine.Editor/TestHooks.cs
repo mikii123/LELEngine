@@ -510,7 +510,7 @@ namespace LELEngine.Editor
 				string[] parts = build.Split(';');
 				if (parts.Length == 2 && int.TryParse(parts[0], out int at) && at == frame && editor.Project != null)
 				{
-					var settings = new BuildSettings { OutputFolder = parts[1], Release = true, SelfContained = editor.Project.BuildSelfContained, ReadyToRun = editor.Project.BuildReadyToRun, StartScene = editor.Project.StartScene, Scenes = new List<string>(editor.Project.BuildScenes) };
+					var settings = new BuildSettings { OutputFolder = parts[1], Release = true, SelfContained = editor.Project.BuildSelfContained, ReadyToRun = editor.Project.BuildReadyToRun, StaticBatching = ProjectSettings.Current.Graphics?.StaticBatching ?? true, StartScene = editor.Project.StartScene, Scenes = new List<string>(editor.Project.BuildScenes) };
 					// As the Build button: compile errors in the editor's scripts (editor scripts too) fail the build.
 					bool ok = false;
 					if (editor.Scripts != null && editor.Scripts.HasErrors)

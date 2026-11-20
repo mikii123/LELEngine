@@ -66,7 +66,7 @@ namespace TestGame.Scenes
 				case 5:
 					animated = SceneModels.Instantiate(gameObject.scene, SceneModels.Cube, "AnimatedShape");
 					animated.transform.position = new Vector3(0f, 1.5f, -5f);
-					animated.GetComponent<MeshRenderer>().IsStatic = false;
+					animated.isStatic = false;
 					break;
 				case 6:
 					Log("D: one box changing shape every frame for a second");
@@ -92,7 +92,7 @@ namespace TestGame.Scenes
 				float y = 0.02f + 0.004f * shapeSeed++;
 				box.transform.position = new Vector3(-6f + i % 12, 0.2f + 0.3f * (i / 12), -2f);
 				box.transform.scale = new Vector3(0.2f, 0.2f * y, 0.2f);
-				box.GetComponent<MeshRenderer>().IsStatic = false;
+				box.isStatic = false;
 				boxes.Add(box);
 			}
 		}

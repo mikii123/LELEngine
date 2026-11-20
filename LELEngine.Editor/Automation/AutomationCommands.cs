@@ -83,6 +83,11 @@ namespace LELEngine.Editor.Automation
 			"  inspect <object>                       components and their fields\n" +
 			"  get <object> <Component.field>\n" +
 			"  set <object> <Component.field> <value> one undo step; values: 1.5, true, EnumName, 1,2,3, null, new:Class\n" +
+			"  static <object> on|off [--children|--self]\n" +
+			"                                         the object's Static flag; one with children needs --children (they change\n" +
+			"                                         too) or --self (this object only): the question the inspector asks\n" +
+			"  layer <object> <name|0..31> [--children|--self]\n" +
+			"                                         the object's layer, with its children as for static; one undo step each\n" +
 			"  add-component <object> <Type>\n" +
 			"  impostor create <prefab or model>      an impostor asset of the file next to it (\"Name Impostor.asset\"), baked\n" +
 			"  impostor bake <asset>|all              bakes it again into its files (atlases, proxy model, material)\n" +
@@ -367,6 +372,30 @@ namespace LELEngine.Editor.Automation
 					text.Append(args[0]).Append(' ').Append(args[1]).Append(" = ").Append(EditorAutomation.GetField(args[0], args[1])).Append('\n');
 					break;
 
+				case "static":
+				{
+					Need(args, 2, "static <object> on|off [--children|--self]");
+					bool value = args[1].ToLowerInvariant() switch
+					{
+						"on" or "true" or "1" => true,
+						"off" or "false" or "0" => false,
+						_ => throw new ArgumentException("static <object> on|off [--children|--self]")
+					};
+					int changed = EditorAutomation.SetStatic(args[0], value, ChildrenOption(options));
+					await EditorAutomation.NextFrame(2);
+					text.Append(changed == 0 ? "Nothing to change" : $"{changed} object{(changed == 1 ? "" : "s")} {(value ? "static" : "not static")} now").Append('\n');
+					break;
+				}
+
+				case "layer":
+				{
+					Need(args, 2, "layer <object> <layer name|0..31> [--children|--self]");
+					int changed = EditorAutomation.SetLayer(args[0], string.Join(" ", args.Skip(1)), ChildrenOption(options));
+					await EditorAutomation.NextFrame(2);
+					text.Append(changed == 0 ? "Nothing to change" : $"{changed} object{(changed == 1 ? "" : "s")} on layer {string.Join(" ", args.Skip(1))} now").Append('\n');
+					break;
+				}
+
 				case "add-component":
 				{
 					Need(args, 2, "add-component <object> <Type>");
@@ -549,6 +578,18 @@ namespace LELEngine.Editor.Automation
 			}
 
 			return options.ContainsKey("save") ? UnsavedChanges.Save : options.ContainsKey("discard") ? UnsavedChanges.Discard : UnsavedChanges.Refuse;
+		}
+
+		// --children: the object's children change too; --self: the object alone; neither: no answer (an object with
+		// children then refuses, as the inspector would ask).
+		private static bool? ChildrenOption(Dictionary<string, string> options)
+		{
+			if (options.ContainsKey("children") && options.ContainsKey("self"))
+			{
+				throw new ArgumentException("--children or --self, not both");
+			}
+
+			return options.ContainsKey("children") ? true : options.ContainsKey("self") ? false : (bool?)null;
 		}
 
 		private static string Status()

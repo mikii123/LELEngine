@@ -40,6 +40,10 @@ namespace LELEngine.Serialization
 		public ulong Parent;
 		public int HideFlags;
 		public int Layer;
+
+		/// <summary><see cref="GameObject.isStatic" />.</summary>
+		public bool Static;
+
 		public readonly List<DocumentComponent> Components = new List<DocumentComponent>();
 	}
 

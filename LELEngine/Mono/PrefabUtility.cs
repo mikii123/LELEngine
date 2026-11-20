@@ -556,6 +556,7 @@ namespace LELEngine
 
 				var go = new GameObject(obj.Name, scene, instance.Id ^ obj.Id) { hideFlags = (HideFlags)obj.HideFlags };
 				go.layer = obj.Layer;
+				go.isStatic = obj.Static;
 				go.prefabInstance = instance;
 				go.prefabSourceId = obj.Id;
 				go.transform.SetParent(under, false);
@@ -865,6 +866,9 @@ namespace LELEngine
 						case PropertyModification.LayerProperty:
 							staged.layer = live.layer;
 							break;
+						case PropertyModification.StaticProperty:
+							staged.isStatic = live.isStatic;
+							break;
 					}
 				}
 
@@ -1067,6 +1071,9 @@ namespace LELEngine
 					break;
 				case PropertyModification.LayerProperty:
 					go.layer = obj.Layer;
+					break;
+				case PropertyModification.StaticProperty:
+					go.isStatic = obj.Static;
 					break;
 			}
 		}

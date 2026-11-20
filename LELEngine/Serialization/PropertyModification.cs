@@ -15,7 +15,7 @@ namespace LELEngine.Serialization
 	///     "weapon"                   the whole value (another class, null, a reference): written with its type
 	///     "drops[2]", "drops.#size"  a list element, the list's length
 	///     "table" + key              a dictionary entry
-	///     "m_Name", "m_IsActive", "m_Layer"   GameObject header; "m_Enabled" a component's enabled flag
+	///     "m_Name", "m_IsActive", "m_Layer", "m_IsStatic"   GameObject header; "m_Enabled" a component's enabled flag
 	///     </code>
 	/// </summary>
 	public sealed class PropertyModification
@@ -25,6 +25,10 @@ namespace LELEngine.Serialization
 		public const string NameProperty = "m_Name";
 		public const string ActiveProperty = "m_IsActive";
 		public const string LayerProperty = "m_Layer";
+
+		/// <summary>The object's static flag (<see cref="GameObject.isStatic" />), a Bool.</summary>
+		public const string StaticProperty = "m_IsStatic";
+
 		public const string EnabledProperty = "m_Enabled";
 
 		/// <summary>Id of the modified GameObject or component in the prefab's space.</summary>

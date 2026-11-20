@@ -166,7 +166,20 @@ namespace LELEngine
 			{
 				try
 				{
-					Scene = Serialization.SceneSerializer.Load(AbsolutePath, progress => readProgress = progress);
+					Action<Scene, byte[], string> read = SceneManager.SceneRead;
+					if (read != null)
+					{
+						// The host adds to the scene as read (the editor's play mode: its static batches, as a build's scene has them).
+						byte[] data = System.IO.File.ReadAllBytes(AbsolutePath);
+						Scene = Serialization.SceneSerializer.LoadFromBytes(data, System.IO.Path.GetFileNameWithoutExtension(AbsolutePath), progress => readProgress = progress);
+						Scene.Path = AssetDatabase.ToAssetPath(AbsolutePath) ?? AbsolutePath;
+						read(Scene, data, Path);
+					}
+					else
+					{
+						Scene = Serialization.SceneSerializer.Load(AbsolutePath, progress => readProgress = progress);
+					}
+
 					var recorded = new List<object>(scope.Assets);
 					int fonts = background ? UIElements.UIAssets.WarmUp(recorded) : 0;
 					assets = recorded;

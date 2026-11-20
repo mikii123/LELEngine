@@ -71,6 +71,7 @@ namespace LELEngine.Serialization
 			var removedObjects = record != null ? new HashSet<ulong>(record.RemovedObjects) : null;
 			var removedComponents = record != null ? new HashSet<ulong>(record.RemovedComponents) : null;
 			Dictionary<ulong, List<PropertyModification>> modifications = record != null ? PrefabResolver.GroupByTarget(record.Modifications) : null;
+			LegacyStatic.MoveModifications(source, modifications);
 			var used = new HashSet<ulong>();
 			var skipped = new HashSet<ulong>();
 
@@ -94,6 +95,7 @@ namespace LELEngine.Serialization
 				string name = obj.Name;
 				bool active = obj.Active;
 				int layer = obj.Layer;
+				bool isStatic = obj.Static;
 				if (modifications != null && modifications.TryGetValue(obj.Id, out List<PropertyModification> header))
 				{
 					foreach (PropertyModification modification in header)
@@ -109,6 +111,9 @@ namespace LELEngine.Serialization
 							case PropertyModification.LayerProperty:
 								layer = modification.Value is int value ? value : layer;
 								break;
+							case PropertyModification.StaticProperty:
+								isStatic = modification.Value is bool staticFlag && staticFlag;
+								break;
 							default:
 								instance.UnusedModifications.Add(modification);
 								break;
@@ -118,6 +123,7 @@ namespace LELEngine.Serialization
 
 				var go = new GameObject(name, scene, id ^ obj.Id) { hideFlags = (HideFlags)obj.HideFlags };
 				go.layer = layer;
+				go.isStatic = isStatic;
 				go.prefabInstance = instance;
 				go.prefabSourceId = obj.Id;
 				context.Objects[fileId ^ obj.Id] = go;

@@ -258,7 +258,7 @@ namespace TestGame.Scenes
 			plate.transform.localScale = new Vector3(11f, 0.03f, 11f);
 			MeshRenderer renderer = plate.GetComponent<MeshRenderer>();
 			renderer.SetMaterials(SceneModels.Material("LitGray.material"));
-			renderer.IsStatic = true;
+			plate.isStatic = true;
 
 			if (options.VolumeTest == 4)
 			{
