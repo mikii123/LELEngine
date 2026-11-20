@@ -298,6 +298,7 @@ void main()
 
 			GL.BufferSubData(BufferTarget.ArrayBuffer, IntPtr.Zero, bytes, array);
 			GL.DrawArrays(type, 0, data.Count / 7);
+			DrawStatistics.Draw(type == PrimitiveType.Triangles ? data.Count / 21 : 0);
 		}
 
 		#endregion

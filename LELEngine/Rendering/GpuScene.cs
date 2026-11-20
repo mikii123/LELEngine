@@ -679,6 +679,7 @@ namespace LELEngine.Rendering
 				GL.MultiDrawElementsIndirect(PrimitiveType.Triangles, DrawElementsType.UnsignedInt, (IntPtr)(range.CommandOffset * CommandSize), (int)range.InstanceCount, CommandSize);
 			}
 
+			DrawStatistics.DrawIndirect();
 			GL.BindBuffer(BufferTarget.DrawIndirectBuffer, 0);
 		}
 

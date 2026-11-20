@@ -1627,6 +1627,7 @@ namespace LELEngine.VFX
 					break;
 			}
 
+			DrawStatistics.DrawIndirect();
 			GL.BindBuffer(BufferTarget.DrawIndirectBuffer, 0);
 			GL.BindVertexArray(0);
 		}

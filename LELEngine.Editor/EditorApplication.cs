@@ -514,6 +514,8 @@ namespace LELEngine.Editor
 				return;
 			}
 
+			// The game's frame on the CPU and what it allocated, for the Game view's debug overlay.
+			GameView.Stats.BeginUpdate();
 			if (PlayState == PlayState.Playing)
 			{
 				// Background scene loads advance, then every loaded scene runs (scripts may load more). What the frame
@@ -538,6 +540,8 @@ namespace LELEngine.Editor
 				// Edit mode: only [ExecuteAlways] components run.
 				scene.Update(deltaTime);
 			}
+
+			GameView.Stats.EndUpdate();
 		}
 
 		public void DrawUI()
@@ -833,6 +837,11 @@ namespace LELEngine.Editor
 			Extensions.EndFrame();
 			Edits.Flush();
 			RunDeferred();
+			// The Game view's debug overlay samples every frame without UI too (captures of the window show it).
+			if (projectLoad == null)
+			{
+				GameView.Stats.EndFrame(GameView.ViewRenderer?.Renderer);
+			}
 		}
 
 		/// <summary>
@@ -898,6 +907,7 @@ namespace LELEngine.Editor
 			SceneView.Render(continuous);
 			GameView.Render(continuous);
 			DebugDraw.Clear();
+			GameView.Stats.EndFrame(GameView.ViewRenderer?.Renderer);
 		}
 
 		/// <summary>A view must render on its next frame(s) whatever changed.</summary>

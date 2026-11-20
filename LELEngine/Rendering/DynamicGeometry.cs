@@ -57,6 +57,7 @@ namespace LELEngine.Rendering
 
 			GL.BindVertexArray(vertexArray);
 			GL.DrawElements(PrimitiveType.Triangles, indexCount, DrawElementsType.UnsignedInt, (IntPtr)(firstIndex * sizeof(uint)));
+			DrawStatistics.Draw(indexCount / 3);
 		}
 
 		public void Delete()

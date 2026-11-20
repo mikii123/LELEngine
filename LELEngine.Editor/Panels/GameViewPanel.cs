@@ -37,19 +37,38 @@ namespace LELEngine.Editor
 		/// <summary>The Game window fills the editor now (see <see cref="MaximizeOnPlay" />).</summary>
 		public bool Maximized => Open && MaximizeOnPlay && editor.IsPlaying;
 
+		/// <summary>
+		///     The debug overlay over the game's image (the toolbar's Debug Overlay, kept in the editor's preferences): the game's
+		///     statistics and graphs of its last seconds (<see cref="GameViewOverlay" />).
+		/// </summary>
+		public static bool ShowOverlay
+		{
+			get => EditorPreferences.GetToggle(OverlayToggle, false);
+			set => EditorPreferences.SetToggle(OverlayToggle, value);
+		}
+
+		/// <summary>The frames' measurements the overlay shows (sampled every editor frame: <see cref="GameViewStats.EndFrame" />).</summary>
+		public GameViewStats Stats { get; } = new GameViewStats();
+
 		#endregion
 
 		#region PrivateFields
 
 		private const string MaximizeOnPlayToggle = "Game/Maximize On Play";
+		private const string OverlayToggle = "Game/Debug Overlay";
 
 		#endregion
 
 		#region PrivateFields
 
 		private readonly EditorApplication editor;
+		private readonly GameViewOverlay overlay;
 		private readonly ViewRefresh refresh = new ViewRefresh();
 		private readonly List<Camera> stack = new List<Camera>();
+
+		// The renderer of the last image rendered for a capture (its frame statistics are the overlay's in the capture). Weak:
+		// captures' renderers are released at a script reload, and one kept here would keep its scene's last materials.
+		private readonly WeakReference<ViewRenderer> captureRenderer = new WeakReference<ViewRenderer>(null);
 		private bool visible;
 		private bool focusRequested;
 		private bool wasMaximized;
@@ -63,6 +82,7 @@ namespace LELEngine.Editor
 		public GameViewPanel(EditorApplication editor)
 		{
 			this.editor = editor;
+			overlay = new GameViewOverlay(Stats);
 		}
 
 		#endregion
@@ -192,12 +212,26 @@ namespace LELEngine.Editor
 				}
 				else
 				{
+					// The image the window shows when it is current at the capture's size, else one rendered for the capture
+					// (RenderCapture keeps its renderer: its frame statistics are the overlay's).
 					int texture = Automation.WindowCapture.ViewTexture(this, ViewRenderer, visible, (int)size.X, (int)size.Y, RenderCapture);
+					ViewRenderer drawn = ViewRenderer;
+					if (ViewRenderer == null || texture != ViewRenderer.Texture)
+					{
+						captureRenderer.TryGetTarget(out drawn);
+					}
+
 					ImGui.Image(EditorGui.Texture(texture), size, new NVector2(0, 1), new NVector2(1, 0));
+					NVector2 imageMin = ImGui.GetItemRectMin();
 					if (!editor.IsPlaying)
 					{
-						ImGui.SetCursorPos(ImGui.GetItemRectMin() - ImGui.GetWindowPos() + new NVector2(10, 8));
+						ImGui.SetCursorPos(imageMin - ImGui.GetWindowPos() + new NVector2(10, 8));
 						ImGui.TextDisabled("Edit mode - press Play (Ctrl+P) to run the game");
+					}
+
+					if (ShowOverlay)
+					{
+						overlay.Draw(imageMin, size, drawn?.Renderer);
 					}
 				}
 			}
@@ -208,6 +242,7 @@ namespace LELEngine.Editor
 		/// <summary>One frame of every loaded scene through the main camera's stack into a capture's renderer.</summary>
 		private void RenderCapture(ViewRenderer target)
 		{
+			captureRenderer.SetTarget(target);
 			Camera camera = SceneManager.MainCamera;
 			if (camera == null)
 			{
@@ -277,6 +312,8 @@ namespace LELEngine.Editor
 			Scene scene = editor.Scene;
 			if (ViewRenderer == null || scene == null)
 			{
+				// The view's place is an item: the toolbar moved the cursor, and ImGui asserts on a window grown by the cursor alone.
+				ImGui.Dummy(viewSize);
 				return;
 			}
 
@@ -314,12 +351,21 @@ namespace LELEngine.Editor
 				ImGui.SetCursorPos(ImageOrigin - ImGui.GetWindowPos() + new NVector2(10, 8));
 				ImGui.TextDisabled("Edit mode - press Play (Ctrl+P) to run the game");
 			}
+
+			if (ShowOverlay)
+			{
+				overlay.Draw(ImageOrigin, viewSize, ViewRenderer.Renderer);
+			}
 		}
 
-		/// <summary>The row above the game's image (its height is not the game's).</summary>
+		/// <summary>
+		///     The row above the game's image (its height is not the game's), as low as the Scene view's (2026-11-20, the user's
+		///     ask: its frame padding and margins): Maximize On Play and Debug Overlay (<see cref="ShowOverlay" />).
+		/// </summary>
 		private void DrawToolbar()
 		{
-			ImGui.SetCursorPos(ImGui.GetCursorPos() + new NVector2(6, 3));
+			ImGui.PushStyleVar(ImGuiStyleVar.FramePadding, new NVector2(4, 1));
+			ImGui.SetCursorPos(ImGui.GetCursorPos() + new NVector2(4, 2));
 			bool maximize = MaximizeOnPlay;
 			if (EditorGui.Checkbox("Maximize On Play", ref maximize))
 			{
@@ -331,8 +377,23 @@ namespace LELEngine.Editor
 				ImGui.SetTooltip("While the game plays, the Game window fills the editor; stopping brings the windows back.");
 			}
 
-			// A gap as an item (moving the cursor alone, with nothing drawn after it while the scene loads, is ImGui's assert).
-			ImGui.Dummy(new NVector2(0, 1));
+			ImGui.SameLine(0, 10);
+			bool showOverlay = ShowOverlay;
+			if (EditorGui.Checkbox("Debug Overlay", ref showOverlay))
+			{
+				ShowOverlay = showOverlay;
+			}
+
+			if (ImGui.IsItemHovered())
+			{
+				ImGui.SetTooltip("The game's statistics over its image: frames a second, CPU and GPU times, draw calls, objects,\n" +
+					"memory, with graphs of the last five seconds.");
+			}
+
+			ImGui.PopStyleVar();
+			// What follows the row is an item in every case (the view, its place, or a message): moving the cursor alone would
+			// be ImGui's assert.
+			ImGui.SetCursorPosY(ImGui.GetCursorPosY() + 1);
 		}
 
 		#endregion

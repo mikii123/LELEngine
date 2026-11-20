@@ -1041,6 +1041,7 @@ namespace LELEngine.UIElements.Rendering
 				}
 
 				GL.DrawElements(PrimitiveType.Triangles, batch.indexCount, DrawElementsType.UnsignedInt, batch.indexStart * sizeof(uint));
+				LELEngine.Rendering.DrawStatistics.Draw(batch.indexCount / 3);
 			}
 
 			GL.BindVertexArray(0);

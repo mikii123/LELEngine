@@ -39,6 +39,12 @@ namespace LELEngine.Rendering
 		public int FrameIndex { get; private set; }
 
 		/// <summary>
+		///     What the last <see cref="RenderFrame" /> cost on the CPU and drew (draw calls, triangles, renderers, lights, sizes);
+		///     its GPU time is <see cref="Profiler" />'s.
+		/// </summary>
+		public RenderFrameStatistics LastFrame { get; private set; }
+
+		/// <summary>
 		///     LEL_PASS_STATS=1: every renderer logs what each of its passes cost on the GPU, every 120th frame of its own
 		///     (`[PassStats] ...`): the costs of a project's own scene, in the editor's views or a player.
 		/// </summary>
@@ -106,6 +112,14 @@ namespace LELEngine.Rendering
 
 		private readonly Dictionary<(string, int), string> profileNames = new Dictionary<(string, int), string>();
 		private Framebuffer dumpTarget;
+
+		// The frame being rendered, for LastFrame: its cameras, the renderers in their lists, the GPU-driven instances; and the
+		// frames rendered (RenderFrame calls: FrameIndex leaves out the frames without a camera).
+		private int renderedFrames;
+		private int frameCameras;
+		private int frameOpaque;
+		private int frameTransparent;
+		private int frameGpuInstances;
 
 		#endregion
 
@@ -265,9 +279,46 @@ namespace LELEngine.Rendering
 		///     maps, GI volumes, its layers are the world), then for each camera in order the passes of its scope with its
 		///     view and the renderers on its layers (an overlay camera clears the depth first when it asks to), then the
 		///     final passes (post-processing, UI). The GPU-driven tables are built once from every camera's renderers;
-		///     each camera culls them on the GPU with its frustum and layers.
+		///     each camera culls them on the GPU with its frustum and layers. What the frame cost and drew:
+		///     <see cref="LastFrame" />.
 		/// </summary>
 		public void RenderFrame(Camera camera, IReadOnlyList<MeshRenderer> renderers, IReadOnlyList<Behaviour> behaviours, RenderQueue queue)
+		{
+			long started = System.Diagnostics.Stopwatch.GetTimestamp();
+			long drawCalls = DrawStatistics.DrawCalls;
+			long triangles = DrawStatistics.Triangles;
+			long indirect = DrawStatistics.IndirectDrawCalls;
+			frameCameras = 0;
+			frameOpaque = 0;
+			frameTransparent = 0;
+			frameGpuInstances = 0;
+			try
+			{
+				RenderStack(camera, renderers, behaviours, queue);
+			}
+			finally
+			{
+				LastFrame = new RenderFrameStatistics
+				{
+					Frame = ++renderedFrames,
+					CpuMilliseconds = (System.Diagnostics.Stopwatch.GetTimestamp() - started) * 1000.0 / System.Diagnostics.Stopwatch.Frequency,
+					DrawCalls = DrawStatistics.DrawCalls - drawCalls,
+					Triangles = DrawStatistics.Triangles - triangles,
+					IndirectDrawCalls = DrawStatistics.IndirectDrawCalls - indirect,
+					Cameras = frameCameras,
+					OpaqueRenderers = frameOpaque,
+					TransparentRenderers = frameTransparent,
+					GpuInstances = frameGpuInstances,
+					Lights = LightBuffer.Count,
+					Width = Width,
+					Height = Height,
+					RenderWidth = RenderWidth,
+					RenderHeight = RenderHeight
+				};
+			}
+		}
+
+		private void RenderStack(Camera camera, IReadOnlyList<MeshRenderer> renderers, IReadOnlyList<Behaviour> behaviours, RenderQueue queue)
 		{
 			if (!isTargetRenderer)
 			{
@@ -362,6 +413,8 @@ namespace LELEngine.Rendering
 				{
 					GpuScene.Build(stack.Count == 1 ? cameraLists[0].Opaque : stackOpaqueRenderers, Motion);
 				}
+
+				frameGpuInstances = GpuScene.Active ? GpuScene.InstanceCount : 0;
 			}
 			else
 			{
@@ -656,6 +709,14 @@ namespace LELEngine.Rendering
 				{
 					stackOpaqueRenderers.Add(renderer);
 				}
+			}
+
+			// What the frame's statistics count (LastFrame): the cameras and the renderers in their lists.
+			frameCameras = stack.Count;
+			for (int i = 0; i < stack.Count; i++)
+			{
+				frameOpaque += cameraLists[i].Opaque.Count;
+				frameTransparent += cameraLists[i].Transparent.Count;
 			}
 		}
 

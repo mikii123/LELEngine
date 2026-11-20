@@ -123,6 +123,7 @@ namespace LELEngine.Rendering
 
 			GL.BindVertexArray(vertexArray);
 			GL.DrawElementsBaseVertex(PrimitiveType.Triangles, mesh.PoolIndexCount, DrawElementsType.UnsignedInt, (IntPtr)(mesh.PoolFirstIndex * sizeof(uint)), mesh.PoolBaseVertex);
+			DrawStatistics.Draw(mesh.PoolIndexCount / 3);
 		}
 
 		/// <summary>Draws one sub-mesh with the bound program (per-object path).</summary>
@@ -141,6 +142,7 @@ namespace LELEngine.Rendering
 
 			GL.BindVertexArray(vertexArray);
 			GL.DrawElementsBaseVertex(PrimitiveType.Triangles, range.IndexCount, DrawElementsType.UnsignedInt, (IntPtr)((mesh.PoolFirstIndex + range.FirstIndex) * sizeof(uint)), mesh.PoolBaseVertex);
+			DrawStatistics.Draw(range.IndexCount / 3);
 		}
 
 		/// <summary>Draws one mesh as instance <paramref name="instance" /> of the GPU scene (instanced variants).</summary>
@@ -153,6 +155,7 @@ namespace LELEngine.Rendering
 
 			GL.BindVertexArray(vertexArray);
 			GL.DrawElementsInstancedBaseVertexBaseInstance(PrimitiveType.Triangles, mesh.PoolIndexCount, DrawElementsType.UnsignedInt, (IntPtr)(mesh.PoolFirstIndex * sizeof(uint)), 1, mesh.PoolBaseVertex, instance);
+			DrawStatistics.Draw(mesh.PoolIndexCount / 3);
 		}
 
 		/// <summary>The identity instance index buffer covers instances [0, count).</summary>

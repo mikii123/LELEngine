@@ -93,6 +93,7 @@ namespace LELEngine
 		{
 			// draw buffered vertices as triangles
 			GL.DrawArrays(PrimitiveType.Triangles, 0, count);
+			Rendering.DrawStatistics.Draw(count / 3);
 		}
 
 		public void Delete()

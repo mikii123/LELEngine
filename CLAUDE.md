@@ -713,6 +713,41 @@ first `Instantiate`, on the main thread, one file after another, and its program
 - The player's `exec=Namespace.Type.Method` (test hook, `Program.InstallTestHooks`): calls a static method of the
   game's scripts in the game loop's first frame (a scripted scenario of a built game).
 
+## Game view: toolbar, debug overlay, draw statistics (2026-11-20)
+
+- The user's ask: the Game view's toolbar as low as the Scene view's, and a toggle there for a debug overlay showing the
+  game's statistics with simple performance graphs. The row (`GameViewPanel.DrawToolbar`) has the Scene view's frame
+  padding (4, 1) and margins: `checkbox:Maximize On Play`, `checkbox:Debug Overlay` (`GameViewPanel.ShowOverlay`, the
+  editor preferences' toggle "Game/Debug Overlay"). The row is 16 px high (23 before); the image starts at y 42 of the
+  window (58). What follows the row is an item on every path (`ImGui.Dummy(viewSize)` without a renderer or scene): the
+  cursor moved alone is ImGui's assert.
+- `GameViewOverlay` (`LELEngine.Editor/Panels`) draws a panel in the image's top right corner with the window's draw list
+  (no UI elements, no input taken; window captures show it): FPS and the frame time (average, shortest, longest of the
+  last second), CPU (the game's update, the view's render), GPU (the view's timer queries, the three heaviest passes),
+  graphs of the last 300 frames (frame time with 16.7 / 33.3 guides; game, render and GPU; what the game's update
+  allocated each frame with the garbage collections marked by generation), the view's and the scene's sizes, draw
+  calls and triangles, renderers in the cameras' lists, GPU-driven instances, lights, the loaded scenes' objects,
+  updating components (`ActiveBehaviours`), 2D physics bodies, particles alive / capacity, the managed heap, the
+  process's working set, KB allocated a frame and the collections so far. Graph scales are fixed steps (4 .. 100 ms,
+  16 KB .. 16 MB); what is above the last is clipped and marked red, so one long frame (entering play mode) does not
+  flatten the rest.
+- `GameViewStats` samples every editor frame whether the overlay shows or not: `EditorApplication.Update` wraps the
+  game's update (`BeginUpdate` / `EndUpdate`: Stopwatch and `GC.GetAllocatedBytesForCurrentThread`), `RenderViews` and
+  `FrameWithoutUI` end the frame (`EndFrame` with the Game view's renderer: its render is counted when
+  `Renderer.LastFrame.Frame` changed).
+- Engine: `DrawStatistics` (`Rendering/`, static, GL thread) counts every draw call the engine makes (`GeometryPool`,
+  `GpuScene`'s multi-draws, `DynamicGeometry`, `FullscreenQuad`, `DebugDraw`, `VertexBuffer`, `UIRenderer`, VFX outputs):
+  draw calls, triangles of the draws whose counts the CPU gives, and indirect draws (their triangles are the GPU's and
+  not counted). `Renderer.LastFrame` (`RenderFrameStatistics`): per `RenderFrame` (target cameras included) its CPU
+  time, the counters' differences, cameras, renderers in the lists (`Partition`), GPU-driven instances, lights, output
+  and scene sizes; `Frame` counts every `RenderFrame` call (FrameIndex leaves out frames without a camera). Players
+  have it too (no overlay there yet).
+- Verified (780M, New Frontier's Flight): batch editor with `preferencesfile=` (a scratch file with the toggle on: the
+  user's preferences untouched), `screenshot Game` in edit and play mode; the GUI editor (`focus=0`) in play mode:
+  12 FPS, 81 ms frames, game 5.3 ms, render 12.0 ms CPU, GPU 68 ms (GlobalSDF.dynamic 33, VoxelGI.dynamic 18), 1,158
+  draw calls (54 indirect), 20.8 M triangles, 513 opaque renderers, 522 GPU-driven instances, 30-40 KB allocated a frame;
+  `click "checkbox:Debug Overlay"` turned it off and on.
+
 ## Textures of a load on worker threads (TextureImportBatch, 2026-10-26)
 
 - `SceneSerializer.LoadFromBytes` (every scene and prefab load: the editor's `OpenSceneNow`, `SceneLoadOperation.Read`

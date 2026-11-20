@@ -29,6 +29,7 @@ namespace LELEngine.Rendering
 		{
 			GL.BindVertexArray(vao);
 			GL.DrawArrays(PrimitiveType.Triangles, 0, 3);
+			DrawStatistics.Draw(1);
 			GL.BindVertexArray(0);
 		}
 
