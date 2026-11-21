@@ -61,9 +61,10 @@ namespace LELEngine.Rendering
 
 		/// <summary>
 		///     <see cref="Draw" /> for a frame known to have casters (<see cref="HasCasters" />, asked once by a pass that
-		///     draws several tiles: the question walks every transparent renderer).
+		///     draws several tiles: the question walks every transparent renderer). <paramref name="culling" />: the
+		///     light's view, begun by the caller (null: every caster draws); casters outside it are left out.
 		/// </summary>
-		public static RenderTexture DrawCasters(RenderContext context, Framebuffer target, Matrix4 lightView, Matrix4 lightProjection, bool clear = true)
+		public static RenderTexture DrawCasters(RenderContext context, Framebuffer target, Matrix4 lightView, Matrix4 lightProjection, bool clear = true, ViewCulling culling = null)
 		{
 			ShaderProgram program = context.TransparentShadowProgram;
 			if (program == null || !program.IsLinked)
@@ -109,12 +110,23 @@ namespace LELEngine.Rendering
 					continue;
 				}
 
+				// Asked once it is known to cast: most transparent renderers (effects) do not.
+				bool asked = false;
 				for (int i = 0; i < renderer.SubMeshCount; i++)
 				{
 					Material material = renderer.GetMaterial(i);
 					if (material == null || !material.IsTransparent || !material.RenderState.CastShadows)
 					{
 						continue;
+					}
+
+					if (!asked)
+					{
+						asked = true;
+						if (culling != null && !culling.IsVisible(renderer))
+						{
+							break;
+						}
 					}
 
 					material.GetStandardParameters(out Vector4 color, out Vector4 unusedEmissive, out float unusedRoughness);

@@ -36,6 +36,9 @@ namespace LELEngine.Rendering
 		private readonly Matrix4[] projections = new Matrix4[DirectionalLight.MaxLights];
 		private Framebuffer target;
 
+		// The light's map being drawn: casters outside its view (off the grid, as the light sees it) are left out.
+		private readonly ViewCulling culling = new ViewCulling();
+
 		#endregion
 
 		#region Constructors
@@ -121,15 +124,17 @@ namespace LELEngine.Rendering
 			GL.Clear(ClearBufferMask.DepthBufferBit);
 
 			ShaderProgram program = context.DepthOnlyProgram;
+			bool frustumCulling = context.Settings == null || context.Settings.FrustumCulling;
 			for (int i = 0; i < count; i++)
 			{
 				GL.Viewport(i * Size, 0, Size, Size);
 				program.Use();
 				program.SetMatrix4("viewMatrix", views[i]);
 				program.SetMatrix4("projectionMatrix", projections[i]);
+				culling.Begin(views[i] * projections[i], frustumCulling);
 				foreach (MeshRenderer renderer in casters)
 				{
-					if (renderer.CastShadows)
+					if (renderer.CastShadows && culling.IsVisible(renderer))
 					{
 						renderer.RenderShadowCastersWith(program);
 					}
@@ -139,7 +144,7 @@ namespace LELEngine.Rendering
 				bool own = false;
 				foreach (MeshRenderer renderer in casters)
 				{
-					if (renderer.CastShadows)
+					if (renderer.CastShadows && culling.IsVisible(renderer))
 					{
 						own |= renderer.RenderOwnShadowCasters(views[i], projections[i]);
 					}
@@ -156,7 +161,8 @@ namespace LELEngine.Rendering
 				for (int i = 0; i < count; i++)
 				{
 					GL.Viewport(i * Size, 0, Size, Size);
-					Transmittance = TransparentShadows.DrawCasters(context, target, views[i], projections[i], i == 0) ?? Transmittance;
+					culling.Begin(views[i] * projections[i], frustumCulling);
+					Transmittance = TransparentShadows.DrawCasters(context, target, views[i], projections[i], i == 0, culling) ?? Transmittance;
 				}
 			}
 

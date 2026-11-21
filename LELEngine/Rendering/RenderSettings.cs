@@ -22,6 +22,13 @@ namespace LELEngine.Rendering
 		public bool GpuDriven = true;
 
 		/// <summary>
+		///     Frustum culling of what draws one by one (see <see cref="ViewCulling" />): each camera and each shadow map
+		///     leaves out what its view cannot see. Off (LEL_FRUSTUM_CULLING=0 for every renderer of a run: to compare
+		///     pictures and costs) everything on a camera's layers draws. The GPU-driven instances are culled either way.
+		/// </summary>
+		public bool FrustumCulling = System.Environment.GetEnvironmentVariable("LEL_FRUSTUM_CULLING") != "0";
+
+		/// <summary>
 		///     Apply ACES tonemapping when resolving the HDR scene to the backbuffer.
 		///     When false, HDR color is simply clamped (gamma is still applied).
 		/// </summary>

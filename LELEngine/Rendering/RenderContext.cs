@@ -35,6 +35,13 @@ namespace LELEngine.Rendering
 		public Vector3 CameraForward;
 
 		/// <summary>
+		///     The camera's frustum culling: what a pass draws one by one it asks here first (<see cref="ViewCulling" />).
+		///     Not for what the frame makes from the lighting camera's lists for other views: shadow maps cull with their
+		///     own, the GI takes everything.
+		/// </summary>
+		public readonly ViewCulling Culling = new ViewCulling();
+
+		/// <summary>
 		///     The scene's size (<see cref="SceneTarget" />): the window's times <see cref="SuperSampling" /> along each axis.
 		///     What every scene pass renders at.
 		/// </summary>

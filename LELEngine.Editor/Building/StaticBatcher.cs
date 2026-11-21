@@ -153,6 +153,9 @@ namespace LELEngine.Editor
 			public List<AssetReference> MaterialReferences;
 			public Matrix4 World;
 			public Vector3 Centre;
+
+			// Half the size of the world-space box around the mesh's bounds, about Centre.
+			public Vector3 Extent;
 			public ulong Curve;
 		}
 
@@ -317,7 +320,7 @@ namespace LELEngine.Editor
 				batchRenderer.ReceiveShadows = data.ReceiveShadows;
 				batchRenderer.ContributesToGI = false;
 				batchRenderer.ReceiveGI = data.ReceiveGI;
-				batchObject.AddComponent<StaticBatch>().SetParts(parts, data.PartRanges, data.Ranges, data.Centres, data.Flat);
+				batchObject.AddComponent<StaticBatch>().SetParts(parts, data.PartRanges, data.Ranges, data.Centres, data.Flat, data.Extents);
 				added++;
 			}
 
@@ -623,7 +626,8 @@ namespace LELEngine.Editor
 			}
 
 			Vector3 centre = Vector3.TransformPosition((mesh.BoundsMin + mesh.BoundsMax) * 0.5f, owner.World);
-			group.Parts.Add(new Part { Renderer = renderer, Mesh = mesh, Materials = materials, MaterialReferences = references, World = owner.World, Centre = centre });
+			LELEngine.Rendering.Frustum.WorldBox(owner.World, mesh.BoundsMin, mesh.BoundsMax, out _, out Vector3 extent);
+			group.Parts.Add(new Part { Renderer = renderer, Mesh = mesh, Materials = materials, MaterialReferences = references, World = owner.World, Centre = centre, Extent = extent });
 		}
 
 		private static bool Flag(SerializedNode data, string name)
@@ -868,16 +872,20 @@ namespace LELEngine.Editor
 			summary.Files.Add(meshReference.Path);
 
 			// The parts' places in the mesh's indices (for the batch to hide those that go away, and for the transparent pass
-			// to draw them in their order), their centres in the batch's space (where each sorts) and which are flat.
+			// to draw them in their order), their centres in the batch's space (where each sorts), the boxes around them
+			// there (the batch's object only stands at the pivot: the world's axes are its own; what a camera's frustum is
+			// asked about part by part) and which are flat.
 			var renderers = new ulong[parts.Count];
 			var partRanges = new int[parts.Count + 1];
 			var ranges = new List<int>();
 			var centres = new Vector3[parts.Count];
+			var extents = new Vector3[parts.Count];
 			var flat = new bool[parts.Count];
 			for (int i = 0; i < parts.Count; i++)
 			{
 				renderers[i] = parts[i].Renderer.Id;
 				centres[i] = parts[i].Centre - pivot;
+				extents[i] = parts[i].Extent;
 				flat[i] = IsFlat(parts[i].Mesh);
 				partRanges[i] = ranges.Count / 2;
 				foreach ((int first, int count) in combined.InstanceRanges[i] ?? Array.Empty<(int, int)>())
@@ -920,6 +928,7 @@ namespace LELEngine.Editor
 				PartRanges = partRanges,
 				Ranges = ranges.ToArray(),
 				Centres = centres,
+				Extents = extents,
 				Flat = flat
 			};
 		}
@@ -972,8 +981,15 @@ namespace LELEngine.Editor
 				flat.Items.Add(value);
 			}
 
+			var extents = new SerializedArray { ElementTag = ValueTag.Vector3 };
+			foreach (Vector3 extent in data.Extents ?? Array.Empty<Vector3>())
+			{
+				extents.Items.Add(extent);
+			}
+
 			Set(component, "m_Centres", centres);
 			Set(component, "m_Flat", flat);
+			Set(component, "m_Extents", extents);
 			batch.Components.Add(new DocumentComponent { Id = data.BatchId, Data = component });
 			return batch;
 		}

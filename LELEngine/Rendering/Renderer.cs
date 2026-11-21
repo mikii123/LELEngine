@@ -120,6 +120,7 @@ namespace LELEngine.Rendering
 		private int frameOpaque;
 		private int frameTransparent;
 		private int frameGpuInstances;
+		private int frameCulled;
 
 		#endregion
 
@@ -292,6 +293,7 @@ namespace LELEngine.Rendering
 			frameOpaque = 0;
 			frameTransparent = 0;
 			frameGpuInstances = 0;
+			frameCulled = 0;
 			try
 			{
 				RenderStack(camera, renderers, behaviours, queue);
@@ -308,6 +310,7 @@ namespace LELEngine.Rendering
 					Cameras = frameCameras,
 					OpaqueRenderers = frameOpaque,
 					TransparentRenderers = frameTransparent,
+					CulledRenderers = frameCulled,
 					GpuInstances = frameGpuInstances,
 					Lights = LightBuffer.Count,
 					Width = Width,
@@ -323,6 +326,8 @@ namespace LELEngine.Rendering
 			// Static batches' parts enabled or disabled since the last frame: their triangles are hidden or shown before
 			// anything draws.
 			StaticBatch.ApplyChanges();
+			// Objects may have moved since the last frame: the views' culling works the world bounds out again.
+			ViewCulling.NewFrame();
 			if (!isTargetRenderer)
 			{
 				using (FrameProfiler.Begin("Cameras with a target texture"))
@@ -451,6 +456,7 @@ namespace LELEngine.Rendering
 				// The lighting camera's view has the screen-space GI; the other cameras light from the GI volume.
 				Lighting.ScreenGIView = i == lightingIndex;
 				executed = RunCamera(context, i, executed);
+				frameCulled += context.Culling.Culled;
 			}
 
 			Camera.current = stack[lightingIndex];
@@ -605,7 +611,7 @@ namespace LELEngine.Rendering
 		{
 			Camera camera = stack[index];
 			CameraLists lists = cameraLists[index];
-			return new RenderContext
+			var context = new RenderContext
 			{
 				Renderer = this,
 				Settings = Settings,
@@ -635,6 +641,8 @@ namespace LELEngine.Rendering
 				TransparentShadowProgram = TransparentShadowProgram,
 				Fullscreen = Fullscreen
 			};
+			context.Culling.Begin(context.ViewProjection, Settings.FrustumCulling);
+			return context;
 		}
 
 		/// <summary>
@@ -846,6 +854,7 @@ namespace LELEngine.Rendering
 					settings.Tonemap = Settings.Tonemap;
 					settings.Exposure = Settings.Exposure;
 					settings.GpuDriven = Settings.GpuDriven;
+					settings.FrustumCulling = Settings.FrustumCulling;
 					settings.RenderUI = false;
 					settings.DebugPrimitives = false;
 					target.Renderer.RenderFrame(camera, renderers, Array.Empty<Behaviour>(), queue);

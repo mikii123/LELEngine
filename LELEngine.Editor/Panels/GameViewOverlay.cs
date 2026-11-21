@@ -223,6 +223,14 @@ namespace LELEngine.Editor
 			Text(ref x, Label, " opaque  ");
 			Text(ref x, Value, Count(frame.TransparentRenderers));
 			Text(ref x, Label, " transparent");
+			if (frame.CulledRenderers > 0)
+			{
+				// Left out by the cameras' frustums on the CPU (the GPU culls its instances itself).
+				Text(ref x, Label, "  ");
+				Text(ref x, Value, Count(frame.CulledRenderers));
+				Text(ref x, Label, " culled");
+			}
+
 			NextLine();
 
 			x = left;

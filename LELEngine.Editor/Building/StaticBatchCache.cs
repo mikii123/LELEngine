@@ -47,6 +47,9 @@ namespace LELEngine.Editor
 
 		public bool[] Flat;
 
+		/// <summary>Per part: half the size of the box around it in the batch object's space (about its centre).</summary>
+		public Vector3[] Extents;
+
 		public void Write(BinaryWriter writer)
 		{
 			writer.Write(Name ?? "");
@@ -83,6 +86,10 @@ namespace LELEngine.Editor
 				writer.Write(Centres[i].Y);
 				writer.Write(Centres[i].Z);
 				writer.Write(i < Flat.Length && Flat[i]);
+				Vector3 extent = Extents != null && i < Extents.Length ? Extents[i] : Vector3.Zero;
+				writer.Write(extent.X);
+				writer.Write(extent.Y);
+				writer.Write(extent.Z);
 			}
 		}
 
@@ -120,10 +127,12 @@ namespace LELEngine.Editor
 			int parts = reader.ReadInt32();
 			data.Centres = new Vector3[parts];
 			data.Flat = new bool[parts];
+			data.Extents = new Vector3[parts];
 			for (int i = 0; i < parts; i++)
 			{
 				data.Centres[i] = new Vector3(reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle());
 				data.Flat[i] = reader.ReadBoolean();
+				data.Extents[i] = new Vector3(reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle());
 			}
 
 			return data;
@@ -222,11 +231,11 @@ namespace LELEngine.Editor
 
 		// Bumped when the batcher gives another result for the same input (the engine's and the editor's builds are in
 		// the document's hash besides).
-		private const int Version = 3;
+		private const int Version = 4;
 		private const string EntryExtension = ".batches";
 		private const string WritingExtension = ".writing";
 		private const int HashBytes = 32;
-		private static readonly byte[] Magic = Encoding.ASCII.GetBytes("LELSB003");
+		private static readonly byte[] Magic = Encoding.ASCII.GetBytes("LELSB004");
 		private static readonly object sync = new object();
 		private static string prunedFolder;
 

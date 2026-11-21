@@ -201,7 +201,14 @@ namespace LELEngine.Rendering.Passes
 				ShaderProgram current = null;
 				foreach (MeshRenderer renderer in context.Renderers)
 				{
-					Matrix4 previousModel = objectMotion.GetPrevious(renderer, renderer.transform.LocalToWorld);
+					Matrix4 model = renderer.transform.LocalToWorld;
+					// Its motion is recorded while the camera does not see it too: it comes back into view with the motion it has.
+					Matrix4 previousModel = objectMotion.GetPrevious(renderer, model);
+					if (!context.Culling.IsVisible(renderer, model))
+					{
+						continue;
+					}
+
 					for (int i = 0; i < renderer.SubMeshCount; i++)
 					{
 						Material material = renderer.GetMaterial(i);
@@ -274,8 +281,8 @@ namespace LELEngine.Rendering.Passes
 			target.SetMatrix4("projectionMatrix", context.Projection);
 		}
 
-		// The sub-meshes on this camera's layers whose shader draws the prepass itself and that are in no table, each with
-		// its own program; those of them whose shader only casts its own shadows, with the G-buffer program.
+		// The sub-meshes on this camera's layers and in its view whose shader draws the prepass itself and that are in no
+		// table, each with its own program; those of them whose shader only casts its own shadows, with the G-buffer program.
 		private void DrawOwnPassParts(IReadOnlyList<RendererPart> ownParts, RenderContext context)
 		{
 			ObjectMotion objectMotion = context.Renderer.Motion;
@@ -287,7 +294,14 @@ namespace LELEngine.Rendering.Passes
 					continue;
 				}
 
-				Matrix4 previousModel = objectMotion.GetPrevious(renderer, renderer.transform.LocalToWorld);
+				Matrix4 model = renderer.transform.LocalToWorld;
+				// Its motion is recorded while the camera does not see it too: it comes back into view with the motion it has.
+				Matrix4 previousModel = objectMotion.GetPrevious(renderer, model);
+				if (!context.Culling.IsVisible(renderer, model))
+				{
+					continue;
+				}
+
 				if (renderer.RenderSubMeshPass(part.SubMesh, ShaderPass.GeometryPrepass, context.View, context.Projection, previousModel))
 				{
 					continue;

@@ -46,6 +46,9 @@ namespace LELEngine.Rendering.Passes
 		private Framebuffer shadowTarget;
 		private ShaderProgram instancedDepth;
 
+		// The tile being drawn: what it draws one by one is culled by its view.
+		private readonly ViewCulling tileCulling = new ViewCulling();
+
 		#endregion
 
 		#region PublicMethods
@@ -120,14 +123,19 @@ namespace LELEngine.Rendering.Passes
 			GLState.SetColorWrite(false);
 			GL.Clear(ClearBufferMask.DepthBufferBit);
 
+			bool culled = context.Settings.FrustumCulling;
 			for (int i = 0; i < tiles; i++)
 			{
 				SetTileViewport(i);
+				// What a tile draws one by one is culled by the tile's own view, as the GPU culls the tables' casters: a
+				// caster the camera does not see still throws its shadow into the picture.
+				Matrix4 tileViewProjection = views[i] * projections[i];
+				tileCulling.Begin(tileViewProjection, culled);
 				if (gpuDriven)
 				{
 					// The culling dispatch binds its own program: the depth program is bound after it. The casters are
 					// the lighting camera's layers (the tables hold every camera's renderers).
-					gpu.CullShadows(views[i] * projections[i], context.CullingMask);
+					gpu.CullShadows(tileViewProjection, context.CullingMask);
 				}
 
 				program.Use();
@@ -143,7 +151,7 @@ namespace LELEngine.Rendering.Passes
 				{
 					foreach (MeshRenderer renderer in context.Renderers)
 					{
-						if (renderer.CastShadows)
+						if (renderer.CastShadows && tileCulling.IsVisible(renderer))
 						{
 							renderer.RenderShadowCastersWith(context.DepthOnlyProgram);
 						}
@@ -153,7 +161,7 @@ namespace LELEngine.Rendering.Passes
 					bool own = false;
 					foreach (MeshRenderer renderer in context.Renderers)
 					{
-						if (renderer.CastShadows)
+						if (renderer.CastShadows && tileCulling.IsVisible(renderer))
 						{
 							own |= renderer.RenderOwnShadowCasters(views[i], projections[i]);
 						}
@@ -174,7 +182,8 @@ namespace LELEngine.Rendering.Passes
 				for (int i = 0; i < tiles; i++)
 				{
 					SetTileViewport(i);
-					transmittance = TransparentShadows.DrawCasters(context, shadowTarget, views[i], projections[i], i == 0) ?? transmittance;
+					tileCulling.Begin(views[i] * projections[i], culled);
+					transmittance = TransparentShadows.DrawCasters(context, shadowTarget, views[i], projections[i], i == 0, tileCulling) ?? transmittance;
 				}
 			}
 
@@ -213,7 +222,7 @@ namespace LELEngine.Rendering.Passes
 		// The casters of the buckets whose shader draws a depth pass itself (the last of the tables: billboards standing
 		// for a mesh, surfaces cut out by alpha), each bucket with its shader's shadow caster variant, or the engine's
 		// depth program when the shader only draws the geometry prepass itself; then such sub-meshes outside the tables,
-		// one by one. Leaves the engine's depth program unbound.
+		// one by one (those in the tile's view). Leaves the engine's depth program unbound.
 		private void DrawOwnPassCasters(GpuScene gpu, RenderContext context, Matrix4 view, Matrix4 projection)
 		{
 			IReadOnlyList<OpaqueBucket> buckets = gpu.Buckets;
@@ -257,7 +266,7 @@ namespace LELEngine.Rendering.Passes
 			foreach (RendererPart part in gpu.OwnPassParts)
 			{
 				MeshRenderer renderer = part.Renderer;
-				if (!renderer.CastShadows || !renderer.IsSubMeshShadowCaster(part.SubMesh) || (context.CullingMask & (1 << (renderer.gameObject.layer & 31))) == 0)
+				if (!renderer.CastShadows || !renderer.IsSubMeshShadowCaster(part.SubMesh) || (context.CullingMask & (1 << (renderer.gameObject.layer & 31))) == 0 || !tileCulling.IsVisible(renderer))
 				{
 					continue;
 				}

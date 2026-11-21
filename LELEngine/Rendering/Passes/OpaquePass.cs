@@ -7,8 +7,9 @@ namespace LELEngine.Rendering.Passes
 	/// <summary>
 	///     Forward shading of the opaque mesh renderers into the HDR scene target using their own material shaders.
 	///     GPU-driven: one indirect call per opaque bucket (instanced shader variant + shared uniform state) with the
-	///     camera culling of the GPU scene; renderers whose shader has no instanced variant draw one by one. Of the
-	///     shader's render state only the cull mode applies here (transparent materials have their own pass).
+	///     camera culling of the GPU scene; renderers whose shader has no instanced variant draw one by one, those the
+	///     camera's frustum sees (<see cref="RenderContext.Culling" />). Of the shader's render state only the cull mode
+	///     applies here (transparent materials have their own pass).
 	/// </summary>
 	public sealed class OpaquePass : RenderPass
 	{
@@ -48,18 +49,18 @@ namespace LELEngine.Rendering.Passes
 			GpuScene gpu = context.Renderer.GpuScene;
 			if (context.RenderQueue == RenderQueue.PerObject)
 			{
-				PerObject(context.Renderers);
+				PerObject(context.Renderers, context.Culling);
 			}
 			else if (gpu.Active)
 			{
 				GpuDriven(gpu, context);
 				// The tables hold every camera's renderers: this camera draws those on its layers.
-				PerShader(gpu.PerObjectParts, context.Camera, context.CullingMask);
+				PerShader(gpu.PerObjectParts, context, context.CullingMask);
 			}
 			else
 			{
 				RendererPart.CollectOpaque(context.Renderers, parts);
-				PerShader(parts, context.Camera, -1);
+				PerShader(parts, context, -1);
 				parts.Clear();
 			}
 
@@ -98,10 +99,15 @@ namespace LELEngine.Rendering.Passes
 			}
 		}
 
-		private static void PerObject(IReadOnlyList<MeshRenderer> renderers)
+		private static void PerObject(IReadOnlyList<MeshRenderer> renderers, ViewCulling culling)
 		{
 			foreach (MeshRenderer renderer in renderers)
 			{
+				if (!culling.IsVisible(renderer))
+				{
+					continue;
+				}
+
 				// Activates the material shader of every opaque sub-mesh itself.
 				renderer.Render();
 			}
@@ -112,14 +118,18 @@ namespace LELEngine.Rendering.Passes
 		// ReceiveShadows / ReceiveGI flags differ from the previous object's or the previous object's material
 		// overrode one of them (Material.OverridesSharedUniforms); each draw (one sub-mesh) then only sends its
 		// model matrix and material uniforms. The programs are the materials' variants (Material.Program, looked up once
-		// per part), in the order the parts first use them.
-		private static void PerShader(IReadOnlyList<RendererPart> parts, Camera camera, int layerMask)
+		// per part), in the order the parts first use them. Parts off the camera's layers or outside its view have none:
+		// they draw nothing and bind nothing.
+		private static void PerShader(IReadOnlyList<RendererPart> parts, RenderContext context, int layerMask)
 		{
+			Camera camera = context.Camera;
+			ViewCulling culling = context.Culling;
 			programs.Clear();
 			partPrograms.Clear();
 			foreach (RendererPart part in parts)
 			{
-				ShaderProgram candidate = part.Material?.Program;
+				MeshRenderer owner = part.Renderer;
+				ShaderProgram candidate = (layerMask & (1 << (owner.gameObject.layer & 31))) != 0 && culling.IsVisible(owner) ? part.Material?.Program : null;
 				partPrograms.Add(candidate);
 				if (candidate != null && !programs.Contains(candidate))
 				{
@@ -143,11 +153,6 @@ namespace LELEngine.Rendering.Passes
 					RendererPart part = parts[i];
 					Material material = part.Material;
 					MeshRenderer renderer = part.Renderer;
-					if ((layerMask & (1 << (renderer.gameObject.layer & 31))) == 0)
-					{
-						continue;
-					}
-
 					if (!used)
 					{
 						program.Use();

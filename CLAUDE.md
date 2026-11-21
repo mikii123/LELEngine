@@ -3558,6 +3558,57 @@ was made: "static batching has to work in the editor at run time too" and "you c
   hidden in the other for opaque batches); a static part moved at run time stays where it was in its batch; only the
   780M ran it; no Linux player.
 
+## Frustum culling of what draws one by one (ViewCulling, 2026-11-21)
+
+- The user's ask: every renderer culled by the camera's frustum by itself (nothing draws that the camera does not see),
+  optimized, working with the other features. Before, only the GPU-driven instances (`InstanceCull.shader`), particle
+  systems (`VfxInstance.CollectDraws`) and volumetric objects (their screen rectangle) were; whatever the CPU draws one
+  by one drew on every camera of its layers.
+- `Rendering/Frustum.cs`: a struct of six world planes from a view-projection matrix; its box test is the shader's (the
+  box's reach along each plane's normal), so the CPU and the GPU leave out the same things. Conservative (a box by a
+  corner may pass), a NaN passes. `Rendering/ViewCulling.cs`: one per view. `RenderContext.Culling` is a camera's
+  (`Renderer.CreateContext` begins it; every camera of a stack and every target-texture camera has its own);
+  `ShadowPass` has one for the tile it draws, `GridShadowMap` one for its light. `IsVisible(MeshRenderer[, world])`
+  stamps its answer on the renderer (`cullStamp` / `cullVisible`: one test per view whatever the sub-meshes and the
+  passes that ask) and works the world bounds out once per rendered frame whatever the views (`boundsEpoch`,
+  `worldCenter` / `worldExtent`; `ViewCulling.NewFrame` at the start of `RenderStack`: `Transform.LocalToWorld` is not
+  cached). Boxes for the rest: `IsVisible(world, localMin, localMax)`, `IsVisible(worldMin, worldMax)`.
+- Who asks. `OpaquePass`: `PerShader` (a part off the layers or outside the view has no program: nothing bound for it),
+  `PerObject`. `GeometryPrepass`: the path without tables and `DrawOwnPassParts` (the motion is still recorded for a
+  culled renderer: it comes back with the motion it has). `TransparentPass`: `Collect` (no entry: nothing sorted, bound
+  or drawn); a static batch first whole, then part by part (`StaticBatch.PartCentre` +- `PartExtent`: `m_Extents`, the
+  box around each part in the batch's space, from `StaticBatcher`; cache `Version` 4, magic "LELSB004"; a batch of an
+  older build has none and is culled only whole); trails (`TrailRenderer.BuildGeometry(builder, culling, ...)`: the
+  points with half their widths bound the strip whatever it faces, tested before colours and triangles are made);
+  custom renderers after `PrepareDraw`, by the bounds it gives, before the mesh is uploaded. Shadow maps cull with
+  their own views, never the camera's (a caster outside the picture still shadows it): `ShadowPass` per tile (the path
+  without tables, `OwnPassParts`, `TransparentShadows.DrawCasters(..., culling)`), `GridShadowMap` per light (the GI's
+  maps draw every caster from the CPU each frame: those outside the grid as the light sees it are left out). The GI's
+  lists are not culled by anything.
+- `RenderSettings.FrustumCulling` (default on; `LEL_FRUSTUM_CULLING=0` turns it off for every renderer of a run, to
+  compare pictures and costs; a target-texture camera takes its screen renderer's). `RenderFrameStatistics.
+  CulledRenderers`: what the cameras' culling left out (not the shadow maps', not the GPU's); the Game view's overlay
+  shows "N culled" on the Renderers line when it is not 0.
+- Bounds are the contract. A mesh renderer is culled by its mesh's bounds, as the GPU-driven ones always were: a shader
+  that moves vertices out of them is culled wrongly (there is no bounds override per renderer or shader yet). A custom
+  renderer by what `PrepareDraw` returns, which has to hold what the shader draws: one whose shader widens a ribbon in
+  screen pixels pads its bounds for `Camera.current`.
+- Verified (780M, a batch editor, a temporary editor script switching the Game view's setting and writing
+  `LastFrame`, `screenshot Game` 1280x720, on against off in one session). A game's flight scene (513 opaque
+  renderers, nearly all GPU-driven): edit mode 549 -> 266 draw calls, 10.5 M -> 2.6 M triangles; play mode, paused, 798
+  -> 428 and 10.7 M -> 2.4 M: by the counts the GI's shadow maps (the camera's own culling left out 1 there, the
+  shadow tiles draw from the tables; not measured apart); pictures equal within the GI's noise (on / off pairs differ
+  as two on captures do). A probe scene (961 static
+  transparent quads, 441 cubes with a property block, 77 trails, 45 custom renderers, a camera seeing a tenth): 3,946
+  -> 933 draw calls, 5.6 -> 1.9 ms of the frame's CPU work, 1,310 left out (the total measured; by kind, from where
+  they stand: 826 quads, 370 cubes, 71 trails, 43 custom, 5 cubes beside the view kept by the box test), pictures
+  bit-identical with objects crossing every edge; its play mode (the quads one static batch): 869 left out (826 of the
+  961 parts, 43 custom), 1,463 -> 582 draw calls, bit-identical; GPU-driven off, the scene's own camera on a floor in
+  shadow: 7,931 -> 1,004 draw calls, 7.1 -> 2.0 ms, bit-identical.
+- Not done or not checked: transparent shadow casters and `OwnPassParts` casters under a tile's culling (no test
+  scene had such casters: those lines never ran); a camera stack and a target-texture camera (each has its own
+  culling by construction, not run); a built game; the game's tests; only the 780M.
+
 ## Surface cache atlas full: asked once a frame for nothing, no line per object (2026-11-20)
 
 - Found with the measurement above: a Lumen scene of 4,096 GI objects had 136 ms of CPU work a frame in a built game

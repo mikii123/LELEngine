@@ -60,6 +60,10 @@ public sealed class StaticBatch : Behaviour, ISerializationCallbackReceiver
 	[SerializeField] private Vector3[] m_Centres = Array.Empty<Vector3>();
 	[SerializeField] private bool[] m_Flat = Array.Empty<bool>();
 
+	// Per part: half the size of the box around it in the batch object's space, about its centre (what a camera's
+	// frustum is asked about, part by part). Empty in batches made before parts had it: those are not culled by part.
+	[SerializeField] private Vector3[] m_Extents = Array.Empty<Vector3>();
+
 	[NonSerialized] private MeshRenderer own;
 
 	// Per part: its triangles are hidden in the batch's mesh now.
@@ -79,9 +83,10 @@ public sealed class StaticBatch : Behaviour, ISerializationCallbackReceiver
 
 	/// <summary>
 	///     Sets what the batch is made of (the batcher; see the fields for the layout): the parts' renderers, their index
-	///     ranges in the batch's mesh, their bounds' centres in the batch object's space, and which are flat.
+	///     ranges in the batch's mesh, their bounds' centres in the batch object's space, which are flat, and half the
+	///     size of the box around each (null: unknown, the parts are not culled one by one).
 	/// </summary>
-	public void SetParts(IReadOnlyList<MeshRenderer> renderers, int[] partRanges, int[] ranges, Vector3[] centres, bool[] flat)
+	public void SetParts(IReadOnlyList<MeshRenderer> renderers, int[] partRanges, int[] ranges, Vector3[] centres, bool[] flat, Vector3[] extents = null)
 	{
 		Release();
 		m_Renderers = new List<MeshRenderer>(renderers ?? Array.Empty<MeshRenderer>());
@@ -89,6 +94,7 @@ public sealed class StaticBatch : Behaviour, ISerializationCallbackReceiver
 		m_Ranges = ranges ?? Array.Empty<int>();
 		m_Centres = centres ?? Array.Empty<Vector3>();
 		m_Flat = flat ?? Array.Empty<bool>();
+		m_Extents = extents ?? Array.Empty<Vector3>();
 		rangeSubMeshes = null;
 		Claim();
 	}
@@ -155,6 +161,14 @@ public sealed class StaticBatch : Behaviour, ISerializationCallbackReceiver
 	internal Vector3 PartCentre(int part)
 	{
 		return m_Centres[part];
+	}
+
+	/// <summary>Every part has its box (<see cref="PartCentre" /> +- <see cref="PartExtent" />, the batch object's space): a view can cull part by part.</summary>
+	internal bool HasPartBounds => m_Extents != null && m_Extents.Length == m_Renderers.Count && m_Centres.Length == m_Renderers.Count;
+
+	internal Vector3 PartExtent(int part)
+	{
+		return m_Extents[part];
 	}
 
 	internal bool IsPartFlat(int part)

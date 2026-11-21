@@ -416,9 +416,11 @@ public sealed class TrailRenderer : Behaviour
 
 	/// <summary>
 	///     Appends the trail as seen from a camera to <paramref name="builder" /> (world space triangles facing the
-	///     camera, or the points' Z axes). False when there is nothing to draw (fewer than two distinct points).
+	///     camera, or the points' Z axes). False when there is nothing to draw: fewer than two distinct points, or the
+	///     whole trail outside the camera's view (<paramref name="culling" />, null: not asked), which is known from the
+	///     points and their widths before anything is built.
 	/// </summary>
-	internal bool BuildGeometry(LineGeometryBuilder builder, Vector3 cameraPosition, Vector3 cameraForward, bool orthographic, out int firstIndex, out int indexCount, out Vector3 boundsMin, out Vector3 boundsMax)
+	internal bool BuildGeometry(LineGeometryBuilder builder, ViewCulling culling, Vector3 cameraPosition, Vector3 cameraForward, bool orthographic, out int firstIndex, out int indexCount, out Vector3 boundsMin, out Vector3 boundsMax)
 	{
 		firstIndex = indexCount = 0;
 		boundsMin = boundsMax = Vector3.Zero;
@@ -448,7 +450,26 @@ public sealed class TrailRenderer : Behaviour
 			return false;
 		}
 
+		// The widths first: every vertex of the strip (sides, rounded corners and ends) lies within half the width of its
+		// point, so the points and widths bound the trail whatever way it faces.
 		float length = lineDistances[count - 1];
+		var reachMin = new Vector3(float.MaxValue);
+		var reachMax = new Vector3(float.MinValue);
+		for (int i = 0; i < count; i++)
+		{
+			ref LinePoint point = ref linePoints[i];
+			float t = length > 1e-6f ? lineDistances[i] / length : i / (float)(count - 1);
+			point.Width = m_WidthMultiplier * EvaluateWidthCurve(t);
+			var half = new Vector3(Math.Abs(point.Width) * 0.5f);
+			reachMin = Vector3.ComponentMin(reachMin, point.Position - half);
+			reachMax = Vector3.ComponentMax(reachMax, point.Position + half);
+		}
+
+		if (culling != null && !culling.IsVisible(reachMin, reachMax))
+		{
+			return false;
+		}
+
 		Gradient gradient = m_ColorGradient;
 		Vector3 viewFacing = -cameraForward;
 		for (int i = 0; i < count; i++)
@@ -456,7 +477,6 @@ public sealed class TrailRenderer : Behaviour
 			ref LinePoint point = ref linePoints[i];
 			float distance = lineDistances[i];
 			float t = length > 1e-6f ? distance / length : i / (float)(count - 1);
-			point.Width = m_WidthMultiplier * EvaluateWidthCurve(t);
 			point.Color = gradient != null ? gradient.Evaluate(t) : Color4.White;
 			point.U = m_TextureMode switch
 			{

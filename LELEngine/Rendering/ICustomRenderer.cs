@@ -16,7 +16,10 @@ namespace LELEngine.Rendering
 
 		/// <summary>
 		///     This draw: the mesh, the shader values on top of the material's (null: none), and the mesh's bounds in the
-		///     transform's space as the shader shapes it (sorting, grab rectangles). False draws nothing this time.
+		///     transform's space as the shader shapes it (sorting, grab rectangles, and the camera's frustum culling:
+		///     nothing draws, and the mesh is not uploaded, while they are outside the view, so they must hold everything
+		///     the shader draws; <see cref="Camera.current" /> is the camera asking, for a shape that depends on the view).
+		///     False draws nothing this time.
 		/// </summary>
 		bool PrepareDraw(out Mesh mesh, out MaterialPropertyBlock block, out Vector3 boundsMin, out Vector3 boundsMax);
 	}

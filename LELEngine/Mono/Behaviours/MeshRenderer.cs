@@ -116,6 +116,14 @@ public sealed class MeshRenderer : Behaviour
 	[System.NonSerialized] internal int lodHidden;
 	[System.NonSerialized] internal int lodOutOfGI;
 
+	// Frustum culling (Rendering.ViewCulling): the mesh's world bounds (centre, half size) as of the rendered frame
+	// boundsEpoch, and whether the view cullStamp sees them.
+	[System.NonSerialized] internal int boundsEpoch;
+	[System.NonSerialized] internal OpenTK.Mathematics.Vector3 worldCenter;
+	[System.NonSerialized] internal OpenTK.Mathematics.Vector3 worldExtent;
+	[System.NonSerialized] internal int cullStamp;
+	[System.NonSerialized] internal bool cullVisible;
+
 	// forceRenderingOff's value; never saved.
 	[System.NonSerialized] private bool renderingOff;
 

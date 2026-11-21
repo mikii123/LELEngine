@@ -14,6 +14,9 @@ namespace LELEngine.Rendering.Passes
 	///     the depth buffer, so the GI comes from the volume (Lighting.SetVolumeGIUniforms, Engine/VolumeLighting.glsl)
 	///     rather than the screen-space resolve. These renderers never go through the GPU-driven tables; their shadows
 	///     are drawn by <see cref="TransparentShadows" />.
+	///     Only what the camera's frustum sees becomes an entry (<see cref="RenderContext.Culling" />): mesh renderers by
+	///     their mesh's bounds, a static batch's parts by their own, trails by their points and widths (before their
+	///     triangles are built), custom renderers by the bounds they give, particle systems and volumetric objects by theirs.
 	///     Trails (<see cref="TrailRenderer" />, found among the frame's behaviours on the camera's layers) are built for
 	///     this camera into one stream of world space triangles (<see cref="DynamicGeometry" />), uploaded once, and sort
 	///     like meshes: each material of a trail is an entry at the centre of the trail's bounds (opaque materials too,
@@ -144,7 +147,7 @@ namespace LELEngine.Rendering.Passes
 			IReadOnlyList<MeshRenderer> renderers = context.TransparentRenderers;
 			DrawnCount = 0;
 			Grab.BeginFrame();
-			bool grabs = Collect(renderers, context.CameraPosition);
+			bool grabs = Collect(renderers, context);
 			grabs |= CollectTrails(context);
 			grabs |= CollectCustomRenderers(context);
 			vfxEntries.Clear();
@@ -447,9 +450,9 @@ namespace LELEngine.Rendering.Passes
 			return !state.BlendEnabled && state.ZWrite && !state.SceneDepth;
 		}
 
-		// Drawable renderers with their sort keys: queue first, then far to near (the centre of the mesh bounds in
-		// the world, like Unity's default transparent sorting). True when one of them grabs the scene.
-		private bool Collect(IReadOnlyList<MeshRenderer> renderers, Vector3 cameraPosition)
+		// Drawable renderers in the camera's view with their sort keys: queue first, then far to near (the centre of the
+		// mesh bounds in the world, like Unity's default transparent sorting). True when one of them grabs the scene.
+		private bool Collect(IReadOnlyList<MeshRenderer> renderers, RenderContext context)
 		{
 			entries.Clear();
 			if (renderers == null)
@@ -458,6 +461,8 @@ namespace LELEngine.Rendering.Passes
 			}
 
 			bool grabs = false;
+			Vector3 cameraPosition = context.CameraPosition;
+			ViewCulling culling = context.Culling;
 			foreach (MeshRenderer renderer in renderers)
 			{
 				Mesh mesh = renderer.Mesh;
@@ -466,12 +471,19 @@ namespace LELEngine.Rendering.Passes
 					continue;
 				}
 
+				// Outside the camera's view: no entry, so nothing of it is sorted, bound or drawn (a static batch: its
+				// whole mesh; its parts are asked one by one below).
 				Matrix4 world = renderer.transform.LocalToWorld;
+				if (!culling.IsVisible(renderer, world))
+				{
+					continue;
+				}
+
 				StaticBatch batch = renderer.ownBatch;
 				if (batch != null && !batch.IsDestroyed && batch.HasPartData)
 				{
 					// A static batch sorts part by part, each where its own renderer would: the picture is the unbatched one.
-					CollectBatchParts(renderer, batch, mesh, world, cameraPosition);
+					CollectBatchParts(renderer, batch, mesh, world, cameraPosition, culling);
 					continue;
 				}
 
@@ -498,16 +510,28 @@ namespace LELEngine.Rendering.Passes
 		/// <summary>
 		///     The visible parts of a static batch as entries of their own: each at the centre of its own mesh's bounds (kept by
 		///     the batch in its object's space) and with its own renderer's place among equals, as it sorted before it was
-		///     batched; its triangles are a range of the batch's mesh.
+		///     batched; its triangles are a range of the batch's mesh. Parts outside the camera's view get no entry (the
+		///     batch's mesh is a cluster of neighbours, the camera often sees a few of them).
 		/// </summary>
-		private void CollectBatchParts(MeshRenderer renderer, StaticBatch batch, Mesh mesh, Matrix4 world, Vector3 cameraPosition)
+		private void CollectBatchParts(MeshRenderer renderer, StaticBatch batch, Mesh mesh, Matrix4 world, Vector3 cameraPosition, ViewCulling culling)
 		{
 			int parts = batch.PartCount;
+			bool bounded = batch.HasPartBounds;
 			for (int part = 0; part < parts; part++)
 			{
 				if (!batch.IsPartVisible(part))
 				{
 					continue;
+				}
+
+				if (bounded)
+				{
+					Vector3 centre = batch.PartCentre(part);
+					Vector3 extent = batch.PartExtent(part);
+					if (!culling.IsVisible(world, centre - extent, centre + extent))
+					{
+						continue;
+					}
 				}
 
 				float distanceSquared = (Vector3.TransformPosition(batch.PartCentre(part), world) - cameraPosition).LengthSquared;
@@ -624,7 +648,8 @@ namespace LELEngine.Rendering.Passes
 					continue;
 				}
 
-				if (!trail.BuildGeometry(trailBuilder, context.CameraPosition, context.CameraForward, orthographic, out int firstIndex, out int indexCount, out Vector3 min, out Vector3 max))
+				// A trail outside the camera's view is not built at all.
+				if (!trail.BuildGeometry(trailBuilder, context.Culling, context.CameraPosition, context.CameraForward, orthographic, out int firstIndex, out int indexCount, out Vector3 min, out Vector3 max))
 				{
 					continue;
 				}
@@ -672,7 +697,13 @@ namespace LELEngine.Rendering.Passes
 					continue;
 				}
 
+				// Outside the camera's view by the bounds it gave: its mesh is not uploaded and nothing draws.
 				Matrix4 world = behaviour.transform.LocalToWorld;
+				if (!context.Culling.IsVisible(world, min, max))
+				{
+					continue;
+				}
+
 				// A mirroring transform draws the twin wound the other way (see MeshRenderer.DrawnMesh).
 				if (world.Determinant < 0f)
 				{

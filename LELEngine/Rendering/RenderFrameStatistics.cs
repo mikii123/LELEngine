@@ -36,6 +36,13 @@ namespace LELEngine.Rendering
 
 		public int TransparentRenderers;
 
+		/// <summary>
+		///     What the cameras' frustums left out on the CPU (<see cref="ViewCulling" />), summed over the stack: mesh
+		///     renderers drawn one by one (transparent, or opaque outside the GPU-driven tables), parts of static batches,
+		///     trails, custom renderers. The GPU-driven instances the GPU culls are not in it (their number stays on the GPU).
+		/// </summary>
+		public int CulledRenderers;
+
 		/// <summary>Instances of the GPU-driven geometry (culled on the GPU; 0 when the frame did not draw GPU-driven).</summary>
 		public int GpuInstances;
 
