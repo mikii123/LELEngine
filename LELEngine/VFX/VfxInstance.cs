@@ -251,7 +251,10 @@ namespace LELEngine.VFX
 
 		public bool ResetSeedOnPlay = true;
 
-		/// <summary>Enabled and playing (or still showing particles): the editor keeps rendering.</summary>
+		/// <summary>
+		///     Enabled and playing (or still showing particles). The editor's views show it running with Always Refresh, or
+		///     while its inspector or its graph's window is open (they ask for the frames).
+		/// </summary>
 		public bool IsActive => enabled && (Playing && !Paused || AliveCount > 0);
 
 		/// <summary>Alive particles after the last readback (a few frames behind).</summary>

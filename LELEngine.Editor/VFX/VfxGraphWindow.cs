@@ -348,8 +348,18 @@ namespace LELEngine.Editor.VFX
 			ImGui.Dummy(new NVector2(16, 0));
 			ImGui.SameLine();
 
-			// Playback of the scene's components playing this graph.
+			// Playback of the scene's components playing this graph. While the window shows they play in the views, also
+			// without Always Refresh: the graph being edited is seen running.
 			List<VisualEffect> players = Players();
+			foreach (VisualEffect player in players)
+			{
+				if (player.isActiveAndEnabled && player.Instance != null && player.Instance.IsActive)
+				{
+					Application.RequestRepaint();
+					break;
+				}
+			}
+
 			ImGui.BeginDisabled(players.Count == 0);
 			if (EditorGui.Button("Play"))
 			{

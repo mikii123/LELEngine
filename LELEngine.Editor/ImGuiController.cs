@@ -286,6 +286,12 @@ namespace LELEngine.Editor
 
 		// Window events arrive for one window at a time; each handler feeds its own context.
 
+		// What the user does in the editor may change what the views show through code that tells nobody (an editor
+		// script's button calling into a component): a key, a click or the wheel draws the views for this many frames (and
+		// they settle after, ViewRefresh), a drag for as long as it goes. Moving the mouse alone draws nothing: an editor
+		// nobody touches stays idle.
+		private const int ActedFrames = 30;
+
 		private void OnKeyDown(KeyboardKeyEventArgs e)
 		{
 			if (KeyPressFilter != null && !KeyPressFilter(e))
@@ -294,6 +300,7 @@ namespace LELEngine.Editor
 				return;
 			}
 
+			Application.RequestRepaint(ActedFrames);
 			ImGui.SetCurrentContext(Context);
 			UpdateModifiers(e.Modifiers);
 			ImGuiKey key = MapKey(e.Key);
@@ -330,12 +337,14 @@ namespace LELEngine.Editor
 				return;
 			}
 
+			Application.RequestRepaint(ActedFrames);
 			ImGui.SetCurrentContext(Context);
 			ImGui.GetIO().AddInputCharacter((uint)e.Unicode);
 		}
 
 		private void OnMouseDown(MouseButtonEventArgs e)
 		{
+			Application.RequestRepaint(ActedFrames);
 			ImGui.SetCurrentContext(Context);
 			int button = MapMouseButton(e.Button);
 			if (button >= 0)
@@ -346,6 +355,7 @@ namespace LELEngine.Editor
 
 		private void OnMouseUp(MouseButtonEventArgs e)
 		{
+			Application.RequestRepaint(ActedFrames);
 			ImGui.SetCurrentContext(Context);
 			int button = MapMouseButton(e.Button);
 			if (button >= 0)
@@ -356,6 +366,12 @@ namespace LELEngine.Editor
 
 		private void OnMouseMove(MouseMoveEventArgs e)
 		{
+			// A drag (a button held while the mouse moves): a slider or a handle of a script's own changes values as it goes.
+			if (window.MouseState.IsAnyButtonDown)
+			{
+				Application.RequestRepaint(2);
+			}
+
 			ImGui.SetCurrentContext(Context);
 			// A grabbed cursor (game view mouse look) has no meaningful position for the UI.
 			if (window.CursorState != CursorState.Grabbed)
@@ -366,6 +382,7 @@ namespace LELEngine.Editor
 
 		private void OnMouseWheel(MouseWheelEventArgs e)
 		{
+			Application.RequestRepaint(ActedFrames);
 			ImGui.SetCurrentContext(Context);
 			ImGui.GetIO().AddMouseWheelEvent(e.OffsetX, e.OffsetY);
 		}

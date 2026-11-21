@@ -32,7 +32,7 @@ namespace LELEngine.UIElements
 		/// <summary>Enabled documents (any scene).</summary>
 		public static IReadOnlyList<UIDocument> Documents => documents;
 
-		/// <summary>A document's panel runs transitions or scheduled callbacks (editor views rendering on demand keep rendering).</summary>
+		/// <summary>A document's panel runs transitions or scheduled callbacks.</summary>
 		public static bool AnyPanelAnimating
 		{
 			get

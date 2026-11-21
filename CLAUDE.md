@@ -482,6 +482,46 @@
   processes on the machine?); a second run had none. A probe for that: a thread sleeping 1 ms and recording its
   oversleep, which tells a machine-wide stall from the game's.
 
+## Views render on demand: Always Refresh, Application.RequestRepaint (2026-11-21)
+
+- The user's report: with Always Refresh off, the editor on a game's scene still took 30 % of the GPU all the time.
+  Cause: `EditorApplication.RenderViews` rendered both views every frame whenever the scene held an enabled
+  [ExecuteAlways] component of the game's scripts (`EditModeScriptsRunning`), an effect that simulated
+  (`VfxRuntime.AnyActive`) or a UI panel with transitions or scheduled callbacks (`UIRuntime.AnyPanelAnimating`): guesses
+  that such things move on screen. One edit-mode component standing still kept the scene and the game view rendering for
+  ever, against what the toggle's own tooltip said.
+- Now the views render every frame only in play mode, with Always Refresh, while a cloud is being made or settling
+  (`VolumetricRuntime.NeedsRefresh`), and in frames that were asked for; otherwise on changes (`ViewRefresh`: camera,
+  size, `SceneVersion`, then the settle frames) and they keep their last image. The three guesses are gone
+  (`AnyActive` / `AnyPanelAnimating` stay as plain facts for whoever wants them).
+- Asking: `Application.RequestRepaint(frames = 1)` (engine, so a game's scripts can call it; needs no check around it:
+  where every frame is drawn anyway it changes nothing). A request counts as a continuous frame, so the views settle for
+  `CameraSettleFrames` after the last one. The editor takes one request per frame (`TakeRepaintRequest`, internal).
+  Who asks:
+  - a script that plays something in edit mode (an [ExecuteAlways] component's preview): in every frame it moves, and
+    no longer when it stands still. What only moves by itself (effects, animated materials, UI transitions, a script
+    that never asks) moves on screen with Always Refresh, as in Unity;
+  - the effect whose inspector shows (`VisualEffectInspector`) and the effects of the graph open in the VFX Graph
+    window, while they simulate: the one being worked on is seen running without Always Refresh;
+  - the user's input (`ImGuiController`: a key, text, a mouse button down or up, the wheel: 30 frames; a button held
+    while the mouse moves: as long as it goes). What the user does may change what the views show through code that
+    tells nobody (an editor script's button calling into a component); moving the mouse alone draws nothing;
+  - automation: every command but the reading ones (help, status, windows, screenshot, elements, actions, hierarchy,
+    inspect, get, console, wait, refresh, quit) ends with `NotifySceneChanged` (`AutomationCommands`): what `exec` or
+    an action did shows, and a polling `status` leaves an idle editor idle.
+- Measured on a game's scene with a volumetric cloud, voxel GI and an edit-mode weather component (780M, the editor's
+  default layout, GPU share of the editor's process from `\GPU Engine(pid_N_*engtype_3D)\Utilization Percentage`,
+  1 s samples; scratchpad `refresh/measure*.ps1` of session 0ec30c68): Always Refresh off 77 % before, 7-8 % now (the
+  UI itself, drawn every frame; CPU 45 -> 23 % of a core); on: 64 %. Off, by the samples: a click (WM_LBUTTONDOWN / UP
+  posted to the editor's own window) 3 s of rendering, an object added by `exec` 6 s, an edit-mode preview of pieces
+  flying apart for as long as they moved (14 s), a preview's reset 6 s, each back to 7 % after.
+- Gotchas: the frame trace's `gpu_ms_lagging` / `gpu_heaviest_pass` keep their last values while no view renders (timer
+  queries of the last rendered frame): they do not show an idle editor, the GPU counter does. `cli` is PowerShell's
+  alias of Clear-Item: a helper function of that name never runs.
+- Not checked: other games' edit-mode scripts (any that animate in edit mode without asking now stand still unless
+  Always Refresh is on); effects and UI transitions were not looked at on screen after the change, only the rule; a real
+  key press (the click went through the window's message queue, keys only by reading the handlers).
+
 ## Super sampling anti-aliasing (2026-11-17)
 
 - The user's ask: SSAA, optimal, with settings, designed around NVIDIA's DSR / DLDSR factors (my reading of "their

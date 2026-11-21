@@ -632,8 +632,10 @@ namespace LELEngine.Editor
 
 			if (ImGui.IsItemHovered())
 			{
-				ImGui.SetTooltip("Render the views every frame. Off: they render when the camera or the scene changes,\n" +
-					"then for a few seconds while the lighting settles, and keep the last image.");
+				ImGui.SetTooltip("Render the views every frame: effects, animated materials and edit-mode scripts keep moving.\n" +
+					"Off: the views render when the camera or the scene changes, then for a few seconds while the\n" +
+					"lighting settles, and keep the last image. A preview that is played, and the selected effect,\n" +
+					"still show while they run.");
 			}
 
 			ImGui.SameLine();

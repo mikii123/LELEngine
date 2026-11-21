@@ -146,7 +146,16 @@ namespace LELEngine.Editor.Automation
 					EditorAutomation.Editor.ImportPendingChanges();
 				}
 
-				return await Run(command, args, options);
+				CommandResult result = await Run(command, args, options);
+				// A command that does something may have changed what the views show through code that tells nobody (exec, an
+				// action, a script's button): they draw again, as after the user's own click. Commands that only read leave an
+				// idle editor idle.
+				if (command is not ("help" or "status" or "windows" or "screenshot" or "elements" or "anchors" or "actions" or "menus" or "hierarchy" or "inspect" or "get" or "console" or "wait" or "refresh" or "quit"))
+				{
+					EditorAutomation.Editor.NotifySceneChanged();
+				}
+
+				return result;
 			}
 			catch (Exception e) when (e is ArgumentException or InvalidOperationException or FormatException or IOException or NotSupportedException or UnauthorizedAccessException)
 			{

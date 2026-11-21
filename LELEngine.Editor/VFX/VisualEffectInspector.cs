@@ -56,6 +56,13 @@ namespace LELEngine.Editor.VFX
 				return false;
 			}
 
+			// The effect whose inspector shows plays in the views while it simulates, also without Always Refresh (the
+			// other effects of the scene then stand still): it is the one being looked at.
+			if (effect.isActiveAndEnabled && effect.Instance != null && effect.Instance.IsActive)
+			{
+				Application.RequestRepaint();
+			}
+
 			// Exposed properties with overrides.
 			var exposed = new List<VfxProperty>();
 			foreach (VfxProperty property in graph.Properties)

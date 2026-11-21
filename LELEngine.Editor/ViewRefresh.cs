@@ -6,8 +6,9 @@ namespace LELEngine.Editor
 	/// <summary>
 	///     When an editor view renders. A view renders while something it shows changes (camera, view size, the
 	///     scene: <see cref="EditorApplication.SceneVersion" />) and for a settle period afterwards, because the GI
-	///     keeps accumulating over frames; then it stops and the last image stays on screen. Play mode, "Always
-	///     Refresh" and edit-mode scripts ([ExecuteAlways] game components) render every frame.
+	///     keeps accumulating over frames; then it stops and the last image stays on screen. Play mode and "Always
+	///     Refresh" render every frame, and so does a frame a script asked for (<see cref="Application.RequestRepaint" />:
+	///     an edit-mode preview playing); a scene that only holds things able to move by themselves does not.
 	///     Settle periods measured on the default scene (lossless dumps against the converged image): from a cold start
 	///     no pixel is off by more than 1/255 after 120 frames (max 2/255), after a camera turn after 60 frames.
 	/// </summary>
@@ -78,7 +79,7 @@ namespace LELEngine.Editor
 
 			if (continuous)
 			{
-				// Settles like after a camera move once the continuous rendering ends.
+				// Settles like after a camera move once the continuous rendering (or a script's asked-for frames) ends.
 				framesLeft = Math.Max(framesLeft, CameraSettleFrames);
 				return true;
 			}

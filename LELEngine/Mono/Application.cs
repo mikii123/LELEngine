@@ -8,6 +8,9 @@ namespace LELEngine
 	{
 		private static string persistentPath;
 
+		// Frames owed to RequestRepaint (the main thread's: scripts ask, the host takes).
+		private static int repaintFrames;
+
 		/// <summary>True while a game host runs the scenes (also in the editor's play mode).</summary>
 		public static bool isPlaying => Game.Mono != null || SceneManager.ActiveScene != null;
 
@@ -47,6 +50,39 @@ namespace LELEngine
 			}
 
 			return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "LELEngine", name);
+		}
+
+		/// <summary>
+		///     Asks for the scene to be drawn in the next frame although nothing that is watched for changed. The editor's
+		///     views draw on demand in edit mode: when their camera, their size or the scene's data change, for a while after
+		///     (the lighting settles), and every frame only with Always Refresh. A script that moves or animates something
+		///     there on its own (an [ExecuteAlways] component playing a preview) calls this in every frame it wants shown,
+		///     and stops calling when what it shows stands still; the views then settle and keep their last image. Where
+		///     every frame is drawn anyway (a game, the editor's play mode, Always Refresh) it changes nothing, so the call
+		///     needs no check around it. <paramref name="frames" />: how many frames to draw (a request never shortens one
+		///     already made).
+		/// </summary>
+		public static void RequestRepaint(int frames = 1)
+		{
+			if (frames > repaintFrames)
+			{
+				repaintFrames = frames;
+			}
+		}
+
+		/// <summary>
+		///     For a host that draws on demand, once per frame: true while a frame asked for with <see cref="RequestRepaint" />
+		///     is owed (this call takes one off).
+		/// </summary>
+		internal static bool TakeRepaintRequest()
+		{
+			if (repaintFrames <= 0)
+			{
+				return false;
+			}
+
+			repaintFrames--;
+			return true;
 		}
 
 		/// <summary>

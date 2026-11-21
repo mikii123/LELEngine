@@ -892,18 +892,22 @@ namespace LELEngine.Editor
 		public bool HasUI { get; }
 
 		/// <summary>
-		///     Renders the visible views that need it (after the UI was built, before it is drawn): every frame while
-		///     the game plays, with "Always Refresh" or while game scripts run in edit mode; otherwise on changes.
+		///     Renders the visible views that need it (after the UI was built, before it is drawn): every frame while the
+		///     game plays and with "Always Refresh"; otherwise on changes (<see cref="ViewRefresh" />), while a cloud is
+		///     still being made or settling, and in the frames a script asked for (<see cref="Application.RequestRepaint" />).
+		///     Nothing else keeps an idle editor rendering: what only moves by itself (effects, animated materials, UI
+		///     transitions, [ExecuteAlways] scripts) moves on screen with Always Refresh, or asks.
 		/// </summary>
 		public void RenderViews()
 		{
+			// Taken every frame, also while nothing can render: a request is for the frames after it, not for later.
+			bool asked = Application.TakeRepaintRequest();
 			if (Project == null || projectLoad != null)
 			{
 				return;
 			}
 
-			bool continuous = PlayState == PlayState.Playing || SceneView.AlwaysRefresh || EditModeScriptsRunning() || UIElements.UIRuntime.AnyPanelAnimating || LELEngine.VFX.VfxRuntime.AnyActive
-				|| LELEngine.Volumetrics.VolumetricRuntime.NeedsRefresh;
+			bool continuous = PlayState == PlayState.Playing || SceneView.AlwaysRefresh || asked || LELEngine.Volumetrics.VolumetricRuntime.NeedsRefresh;
 			SceneView.Render(continuous);
 			GameView.Render(continuous);
 			DebugDraw.Clear();
@@ -3492,28 +3496,6 @@ namespace LELEngine.Editor
 			OpenAudioProjectForEditor();
 			NotifySceneChanged();
 			Debug.Log("[Editor] Reloaded the project settings (changed on disk)");
-		}
-
-		/// <summary>Edit mode with an enabled [ExecuteAlways] game component: it may change the scene every frame.</summary>
-		private bool EditModeScriptsRunning()
-		{
-			Scene scene = Scene;
-			if (scene == null || IsPlaying)
-			{
-				return false;
-			}
-
-			System.Reflection.Assembly engine = typeof(Behaviour).Assembly;
-			foreach (Behaviour behaviour in scene.ActiveBehaviours)
-			{
-				Type type = behaviour.GetType();
-				if (type.Assembly != engine && type.IsDefined(typeof(ExecuteAlways), true))
-				{
-					return true;
-				}
-			}
-
-			return false;
 		}
 
 		private void SaveEditorState()

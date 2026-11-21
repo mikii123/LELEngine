@@ -120,7 +120,7 @@ namespace LELEngine.VFX
 		/// <summary>Playing instances (components that are enabled).</summary>
 		public static IReadOnlyList<VfxInstance> Instances => instances;
 
-		/// <summary>True while any enabled effect simulates (the editor keeps its views refreshing).</summary>
+		/// <summary>True while any enabled effect simulates.</summary>
 		public static bool AnyActive
 		{
 			get
