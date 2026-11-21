@@ -454,9 +454,9 @@ namespace LELEngine.Editor
 					DrawTempTag();
 				}
 
-				if (ImGui.IsItemHovered() && (instance != null || temporary != null) && !DragAndDrop.IsDragging)
+				if (ImGui.IsItemHovered() && temporary != null && !DragAndDrop.IsDragging)
 				{
-					ImGui.SetTooltip(instance != null ? RowTooltip(go, instance) : temporary);
+					ImGui.SetTooltip(temporary);
 				}
 
 				// Selected when the click ends without a drag (as in Unity): dragging an object on to a field of the
@@ -743,25 +743,6 @@ namespace LELEngine.Editor
 			{
 				openPrefab = prefab.AssetPath;
 			}
-		}
-
-		private static string RowTooltip(GameObject go, PrefabInstance instance)
-		{
-			if (instance.IsMissing)
-			{
-				return "Missing prefab: " + instance.PrefabPath;
-			}
-
-			if (PrefabUtility.IsPrefabInstanceRoot(go))
-			{
-				Prefab prefab = instance.Prefab;
-				return "Instance of the prefab '" + prefab?.name + "'" + (prefab?.BasePrefab != null ? " (variant of '" + prefab.BasePrefab.name + "')" : "");
-			}
-
-			Prefab nested = PrefabUtility.GetNestedPrefab(go);
-			return nested != null
-				? "Nested prefab '" + nested.name + "' in the instance of '" + instance.Prefab?.name + "'"
-				: "Part of the instance of '" + instance.Prefab?.name + "'";
 		}
 
 		/// <summary>The pinged row (the last item): scrolled into view once, outlined while the ping lasts.</summary>
