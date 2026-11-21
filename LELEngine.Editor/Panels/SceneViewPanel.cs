@@ -927,7 +927,7 @@ namespace LELEngine.Editor
 			foreach (MeshRenderer renderer in scene.Renderers)
 			{
 				Mesh mesh = renderer.Mesh;
-				if (mesh != null && renderer.isActiveAndEnabled && renderer.gameObject.hideFlags == HideFlags.None && !editor.Visibility.IsHidden(renderer.gameObject))
+				if (mesh != null && renderer.isActiveAndEnabled && !renderer.forceRenderingOff && renderer.gameObject.hideFlags == HideFlags.None && !editor.Visibility.IsHidden(renderer.gameObject))
 				{
 					NearestBox(mesh.BoundsMin, mesh.BoundsMax, renderer.transform.LocalToWorld, ref distance);
 				}
@@ -1357,7 +1357,7 @@ namespace LELEngine.Editor
 			foreach (MeshRenderer renderer in scene.Renderers)
 			{
 				Mesh mesh = renderer.Mesh;
-				if (mesh == null || renderer.gameObject.hideFlags != HideFlags.None || editor.Visibility.IsHidden(renderer.gameObject))
+				if (mesh == null || renderer.forceRenderingOff || renderer.gameObject.hideFlags != HideFlags.None || editor.Visibility.IsHidden(renderer.gameObject))
 				{
 					continue;
 				}

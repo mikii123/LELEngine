@@ -3308,6 +3308,16 @@ texture read back), see the port's `PORTING.md` "UI".
   by the transparent pass and the per-object opaque draws (`Render`, `RenderSubMesh`); a renderer with a block leaves
   the GPU-driven buckets (`GpuScene.BuildTables`: per object, like shaders without an instanced variant). Depth, shadow
   and GI passes draw geometry only and ignore it.
+- `MeshRenderer.forceRenderingOff` (2026-11-21, Unity's): while set the renderer draws nothing, as if disabled, in
+  every list the frame builds (`Renderer`'s partition: cameras, shadow maps, GI; a static batch hides its part,
+  `StaticBatch.Refresh`), and the scene view's clicks pick through it. A property over a `[NonSerialized]` field: never
+  saved, the component stays enabled and the object active. For what a script hides for a while without changing the
+  object's own state: an edit-mode preview that puts something else in a mesh's place used to have only `enabled` /
+  `SetActive`, which a scene or prefab saved meanwhile (or the edit scene kept across play mode) took with it. Nothing
+  puts it back but the script (a scene reloaded from its file, or after a script reload, has it off). Verified with a
+  game's edit-mode preview in a batch editor (scene view captures: the hidden meshes gone while set, drawn again when
+  cleared, the scene never marked changed) and its tests (the renderer stays `enabled`); not exercised: a static
+  batch's part hidden this way.
 - `Rendering/ICustomRenderer.cs`: a component (a game's script too) that draws a mesh it builds itself, shaped by its
   shader from per-draw values: `Material` and `PrepareDraw(out mesh, out block, out boundsMin, out boundsMax)`
   (false: nothing this frame). `TransparentPass.CollectCustomRenderers` takes them from the frame's behaviours on the

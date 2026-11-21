@@ -330,7 +330,7 @@ public sealed class StaticBatch : Behaviour, ISerializationCallbackReceiver
 		for (int i = 0; i < m_Renderers.Count && i < hidden.Length; i++)
 		{
 			MeshRenderer part = m_Renderers[i];
-			bool hide = ReferenceEquals(part, null) || part.batch != this || !part.isActiveAndEnabled;
+			bool hide = ReferenceEquals(part, null) || part.batch != this || !part.isActiveAndEnabled || part.forceRenderingOff;
 			if (hide != hidden[i])
 			{
 				SetVisible(mesh, i, !hide);

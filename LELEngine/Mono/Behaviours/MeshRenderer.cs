@@ -31,6 +31,28 @@ public sealed class MeshRenderer : Behaviour
 	public bool ReceiveGI = true;
 
 	/// <summary>
+	///     Draws nothing while set: no camera, shadow map or GI pass takes the renderer, as if it were disabled (Unity's
+	///     forceRenderingOff). Not saved, and the component stays enabled: for what a script hides for a while without
+	///     changing the object's own state (an edit-mode preview that puts something else in its place: a scene or a
+	///     prefab saved meanwhile keeps the renderer as it was, and nothing has to be put back after a reload).
+	/// </summary>
+	public bool forceRenderingOff
+	{
+		get => renderingOff;
+		set
+		{
+			if (renderingOff == value)
+			{
+				return;
+			}
+
+			renderingOff = value;
+			// A static batch's part: the batch shows or hides its triangles.
+			batch?.PartChanged();
+		}
+	}
+
+	/// <summary>
 	///     The renderer's object is static (<see cref="GameObject.isStatic" />: the renderer has no flag of its own; until
 	///     2026-11-20 it had, and files of that time are read into the object's): transform, mesh and material do not
 	///     change at runtime. Static renderers are voxelized once into a cached volume instead of every frame; call
@@ -93,6 +115,9 @@ public sealed class MeshRenderer : Behaviour
 	// drawing / out of the GI (LODGroup.IsHidden / IsOutOfGI).
 	[System.NonSerialized] internal int lodHidden;
 	[System.NonSerialized] internal int lodOutOfGI;
+
+	// forceRenderingOff's value; never saved.
+	[System.NonSerialized] private bool renderingOff;
 
 	// The renderer's own shader values (a copy of the block given to SetPropertyBlock); not saved, as in Unity.
 	[System.NonSerialized] private MaterialPropertyBlock propertyBlock;

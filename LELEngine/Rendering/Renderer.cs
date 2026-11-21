@@ -672,7 +672,9 @@ namespace LELEngine.Rendering
 			foreach (MeshRenderer renderer in renderers)
 			{
 				int bit = 1 << (renderer.gameObject.layer & 31);
-				if ((union & bit) == 0 || hidden != null && hidden(renderer.gameObject))
+				// Out of every list (cameras, shadows, GI): no camera sees its layer, the host hides its object (the
+				// editor's scene visibility), or a script switched its drawing off (MeshRenderer.forceRenderingOff).
+				if ((union & bit) == 0 || renderer.forceRenderingOff || hidden != null && hidden(renderer.gameObject))
 				{
 					continue;
 				}
