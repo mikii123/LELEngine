@@ -222,8 +222,11 @@ namespace LELEngine.Editor
 
 		// ---------------------------------------------------------------- prefab operations (undoable)
 
-		/// <summary>Creates an instance of a prefab file as one undo step (at the scene view's spawn point or under <paramref name="parent" />) and selects it.</summary>
-		public GameObject InstantiatePrefab(string assetPath, Transform parent = null, Vector3? position = null)
+		/// <summary>
+		///     Creates an instance of a prefab file as one undo step (at the scene view's spawn point or under
+		///     <paramref name="parent" />, in front of its child <paramref name="before" />, null: after the last) and selects it.
+		/// </summary>
+		public GameObject InstantiatePrefab(string assetPath, Transform parent = null, Vector3? position = null, Transform before = null)
 		{
 			Prefab prefab = Prefab.Load(assetPath);
 			if (prefab == null || Scene == null)
@@ -238,6 +241,7 @@ namespace LELEngine.Editor
 			}
 
 			parent ??= StageRoot?.transform;
+			Transform place = before != null ? ResolvePlace(parent, before, new List<GameObject>(), reason => Debug.LogWarning("[Editor] " + reason)) : null;
 			GameObject root = null;
 			RecordStructural("Instantiate " + prefab.name, () =>
 			{
@@ -249,6 +253,11 @@ namespace LELEngine.Editor
 				else if (root != null && position.HasValue)
 				{
 					root.transform.position = position.Value;
+				}
+
+				if (root != null && place != null)
+				{
+					PlaceBefore(root.transform, place);
 				}
 
 				Selected = root;

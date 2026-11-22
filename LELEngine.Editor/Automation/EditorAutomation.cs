@@ -514,6 +514,20 @@ namespace LELEngine.Editor
 			Editor.SelectAsset(assetPath);
 		}
 
+		/// <summary>
+		///     Deletes a project file (with its meta file) or folder, as the project panel's Delete does without its question:
+		///     to the Recycle Bin on Windows. Throws with the reason when it is not deleted (play mode, the open scene, a prefab
+		///     open for editing, a missing path).
+		/// </summary>
+		public static void DeleteAsset(string assetPath)
+		{
+			List<string> errors = Editor.DeleteAssets(new[] { assetPath });
+			if (errors.Count > 0)
+			{
+				throw new InvalidOperationException(string.Join("\n", errors));
+			}
+		}
+
 		/// <summary>The open scene's objects as an indented tree: name, components, inactive marks, ids.</summary>
 		public static string DescribeHierarchy()
 		{
@@ -623,8 +637,12 @@ namespace LELEngine.Editor
 			return children ?? false;
 		}
 
-		/// <summary>Moves an object under another (null or "none": to the scene's root), keeping its place in the world; one undo step.</summary>
-		public static void Reparent(string objectPath, string parentPath)
+		/// <summary>
+		///     Moves an object under another (null or "none": to the scene's roots; in prefab mode under the prefab's root),
+		///     keeping its place in the world, to <paramref name="index" /> among its new siblings (null: after the last); one
+		///     undo step.
+		/// </summary>
+		public static void Reparent(string objectPath, string parentPath, int? index = null)
 		{
 			GameObject go = RequireObject(objectPath);
 			GameObject parent = string.IsNullOrEmpty(parentPath) || string.Equals(parentPath, "none", StringComparison.OrdinalIgnoreCase) ? null : RequireObject(parentPath);
@@ -639,7 +657,26 @@ namespace LELEngine.Editor
 				TempObjects.RequireEditable(parent);
 			}
 
-			Editor.RecordStructural("Re-parent " + go.Name, () => go.transform.SetParent(parent?.transform, true));
+			Transform target = parent?.transform ?? (Editor.Stage != null ? Editor.StageRoot?.transform : null);
+			Place(go, target, index ?? int.MaxValue, go.transform.parent != target || index.HasValue);
+		}
+
+		/// <summary>Moves an object to <paramref name="index" /> (clamped) among its siblings, the scene's roots for a root; one undo step.</summary>
+		public static void Reorder(string objectPath, int index)
+		{
+			GameObject go = RequireObject(objectPath);
+			TempObjects.RequireEditable(go);
+			Place(go, go.transform.parent, index, true);
+		}
+
+		/// <summary>The object under <paramref name="parent" /> at <paramref name="index" /> of its siblings without it; what the hierarchy's rules refuse throws.</summary>
+		private static void Place(GameObject go, Transform parent, int index, bool reorder)
+		{
+			List<Transform> siblings = Editor.Siblings(parent);
+			siblings.Remove(go.transform);
+			int at = Math.Clamp(index, 0, siblings.Count);
+			Transform before = at < siblings.Count ? siblings[at] : null;
+			Editor.MoveObjects(new[] { go }, parent, before, reorder, reason => throw new InvalidOperationException(reason));
 		}
 
 		/// <summary>Renames an object; one undo step.</summary>

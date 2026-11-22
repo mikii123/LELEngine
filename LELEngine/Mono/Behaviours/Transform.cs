@@ -135,22 +135,44 @@ public sealed class Transform : Behaviour
 		return children[index];
 	}
 
+	/// <summary>The place among the parent's children, or among the scene's root objects for a root (-1 outside a scene).</summary>
 	public int GetSiblingIndex()
 	{
-		return parentTransform != null ? parentTransform.children.IndexOf(this) : -1;
+		if (parentTransform != null)
+		{
+			return parentTransform.children.IndexOf(this);
+		}
+
+		return gameObject?.scene?.GetRootIndex(gameObject) ?? -1;
 	}
 
-	/// <summary>Moves this transform within its parent's children (root order is the scene's object order).</summary>
+	/// <summary>
+	///     Moves this transform to <paramref name="index" /> (clamped) among its parent's children, or among the scene's
+	///     root objects for a root, as Unity's: the hierarchy's order, kept when the scene is saved.
+	/// </summary>
 	public void SetSiblingIndex(int index)
 	{
 		if (parentTransform == null)
 		{
+			gameObject?.scene?.SetRootIndex(gameObject, index);
 			return;
 		}
 
 		List<Transform> siblings = parentTransform.children;
 		siblings.Remove(this);
 		siblings.Insert(Math.Clamp(index, 0, siblings.Count), this);
+	}
+
+	/// <summary>Moves this transform before its siblings.</summary>
+	public void SetAsFirstSibling()
+	{
+		SetSiblingIndex(0);
+	}
+
+	/// <summary>Moves this transform after its siblings.</summary>
+	public void SetAsLastSibling()
+	{
+		SetSiblingIndex(int.MaxValue);
 	}
 
 	public Vector3 TransformPoint(Vector3 point)

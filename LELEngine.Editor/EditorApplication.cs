@@ -1710,6 +1710,94 @@ namespace LELEngine.Editor
 		}
 
 		/// <summary>
+		///     Deletes asset files and folders (<see cref="AssetDatabase.DeleteAsset" />: with their meta files, to the Recycle
+		///     Bin on Windows). Not in play mode, not the open scene or a prefab open for editing (nor a folder holding them).
+		///     The selection and the project's settings that named them (start scene, build scenes, audio project, input
+		///     configuration) let go of them. Returns the errors, one per asset not deleted (empty when all were).
+		/// </summary>
+		public List<string> DeleteAssets(IEnumerable<string> assetPaths)
+		{
+			var errors = new List<string>();
+			if (IsPlaying)
+			{
+				errors.Add("Stop play mode to delete assets.");
+				return errors;
+			}
+
+			Edits.Commit();
+			// Inside: the path itself, or anything in it when it is a folder.
+			static bool Inside(string path, string deleted) => path != null && AssetDatabase.MovedPath(path, deleted, deleted) != null;
+			var deletedPaths = new List<string>();
+			foreach (string assetPath in assetPaths)
+			{
+				if (Scene?.Path != null && Inside(Scene.Path, assetPath))
+				{
+					errors.Add(assetPath + ": the open scene " + Scene.Path + " cannot be deleted; open another scene first.");
+					continue;
+				}
+
+				StageFrame open = stageFrames.Find(frame => Inside(frame.Stage?.AssetPath, assetPath) || Inside(frame.Path, assetPath));
+				if (open != null)
+				{
+					errors.Add(assetPath + ": the prefab " + (open.Stage?.AssetPath ?? open.Path) + " is open for editing; close it first.");
+					continue;
+				}
+
+				string error = AssetDatabase.DeleteAsset(assetPath);
+				if (error != null)
+				{
+					errors.Add(assetPath + ": " + error);
+					continue;
+				}
+
+				deletedPaths.Add(assetPath);
+				AssetThumbnails.Invalidate(assetPath);
+			}
+
+			if (deletedPaths.Count == 0)
+			{
+				return errors;
+			}
+
+			bool Deleted(string path) => deletedPaths.Exists(deleted => Inside(path, deleted));
+			if (Deleted(SelectedAsset))
+			{
+				ClearSelection();
+			}
+
+			if (Deleted(lastScene))
+			{
+				lastScene = null;
+			}
+
+			// The project's scene lists name scenes by path.
+			List<string> buildScenes = Project.BuildScenes.FindAll(scene => !Deleted(scene));
+			string startScene = Deleted(Project.StartScene) ? buildScenes.Count > 0 ? buildScenes[0] : null : Project.StartScene;
+			if (startScene != Project.StartScene || buildScenes.Count != Project.BuildScenes.Count)
+			{
+				Project.StartScene = startScene;
+				Project.BuildScenes = buildScenes;
+				Project.Save();
+			}
+
+			// Project settings that name assets by path: the audio project, the input configuration.
+			ProjectSettings settings = ProjectSettings.Current;
+			string audioProject = Deleted(settings.Audio.Project) ? "" : settings.Audio.Project;
+			string inputConfiguration = Deleted(settings.Input.Configuration) ? "" : settings.Input.Configuration;
+			if (audioProject != settings.Audio.Project || inputConfiguration != settings.Input.Configuration)
+			{
+				settings.Audio.Project = audioProject;
+				settings.Input.Configuration = inputConfiguration;
+				settings.Save(Project.ProjectSettingsFile);
+				projectSettingsStamp = FileStamp.Of(Project.ProjectSettingsFile);
+			}
+
+			NotifyAssetsChanged();
+			Debug.Log("[Editor] Deleted " + string.Join(", ", deletedPaths) + (AssetDatabase.DeletesToRecycleBin ? " (to the Recycle Bin)" : ""));
+			return errors;
+		}
+
+		/// <summary>
 		///     Renames or moves an asset file or folder (<see cref="AssetDatabase.MoveAsset" />): loaded assets keep their
 		///     identity, and the open scene, prefab stages, the selection and the project's scene lists follow. Not in play
 		///     mode. Returns an error message, or null when it moved.
@@ -1956,10 +2044,19 @@ namespace LELEngine.Editor
 				GameObject activeCopy = null;
 				foreach (GameObject target in targets)
 				{
+					// Right after the original, as in Unity (after the copies made before it of its siblings).
+					Transform parent = target.transform.parent;
+					Transform next = NextSibling(target.transform);
+					Transform place = next != null ? ResolvePlace(parent, next, new List<GameObject>(), reason => Debug.LogWarning("[Editor] " + reason)) : null;
 					byte[] data = SceneSerializer.SerializeObjects(Scene, new[] { target });
-					List<GameObject> made = SceneSerializer.InstantiateObjects(data, Scene, target.transform.parent);
+					List<GameObject> made = SceneSerializer.InstantiateObjects(data, Scene, parent);
 					if (made.Count > 0)
 					{
+						if (place != null)
+						{
+							PlaceBefore(made[0].transform, place);
+						}
+
 						copies.Add(made[0]);
 						if (target == active)
 						{
@@ -1999,7 +2096,7 @@ namespace LELEngine.Editor
 		}
 
 		/// <summary>Builds a model file's hierarchy in the scene as one undo step and selects its root.</summary>
-		public GameObject InstantiateModel(string assetPath, Transform parent = null)
+		public GameObject InstantiateModel(string assetPath, Transform parent = null, Transform before = null)
 		{
 			Model model;
 			try
@@ -2014,12 +2111,18 @@ namespace LELEngine.Editor
 
 			GameObject root = null;
 			parent ??= StageRoot?.transform;
+			Transform place = before != null ? ResolvePlace(parent, before, new List<GameObject>(), reason => Debug.LogWarning("[Editor] " + reason)) : null;
 			RecordStructural("Instantiate " + model.name, () =>
 			{
 				root = model.Instantiate(Scene, parent);
 				if (root != null && parent == null)
 				{
 					root.transform.position = SceneView.DefaultSpawnPoint();
+				}
+
+				if (root != null && place != null)
+				{
+					PlaceBefore(root.transform, place);
 				}
 
 				Selected = root;

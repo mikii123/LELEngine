@@ -8,7 +8,9 @@ using NVector4 = System.Numerics.Vector4;
 namespace LELEngine.Editor
 {
 	/// <summary>
-	///     Scene object tree: selection, drag and drop re-parenting, create / rename / duplicate / delete. Prefab
+	///     Scene object tree: selection, drag and drop re-parenting and reordering (as in Unity: dropped on the upper or
+	///     lower edge of a row the object goes in front of it or after it, on its middle under it), create / rename /
+	///     duplicate / delete. Prefab
 	///     instances show as in Unity: their objects' names in blue (red when the prefab is missing), a prefab icon on
 	///     instance roots and the roots of nested prefabs (variants marked), a "+" on objects added to an instance, and
 	///     an arrow at the end of a root's row that opens its prefab. In prefab mode a breadcrumb leads back.
@@ -34,9 +36,36 @@ namespace LELEngine.Editor
 		private bool focusRename;
 		private int renameAge;
 
-		// A model or prefab file dropped from the project panel this frame, and the object it goes under.
+		// A model or prefab file dropped from the project panel this frame, the object it goes under and the child it goes
+		// in front of (null: after the last).
 		private string droppedAsset;
 		private Transform droppedAssetParent;
+		private Transform droppedAssetBefore;
+
+		// A hierarchy object dropped this frame, moved after the tree is drawn.
+		private ObjectDrop? objectDrop;
+
+		// Where a dragged object would go, drawn after the rows (a row drawn later would cover it): a line between rows,
+		// or a frame around the row it would go under.
+		private bool showDropMark;
+		private bool dropMarkFrame;
+		private NVector2 dropMarkMin;
+		private NVector2 dropMarkMax;
+
+		// The part of a row's height at its upper and lower edge where a dropped object goes in front of it or after it.
+		private const float ReorderEdge = 0.3f;
+
+		/// <summary>
+		///     A dropped hierarchy object: it goes under <see cref="Parent" /> (null: the scene's roots), in front of
+		///     <see cref="Before" /> (null: after the last child), or only under the parent when not <see cref="Reorder" />.
+		/// </summary>
+		private struct ObjectDrop
+		{
+			public GameObject Dragged;
+			public Transform Parent;
+			public Transform Before;
+			public bool Reorder;
+		}
 
 		// The row the left button went down on (it is selected when the button comes up without a drag).
 		private GameObject pressed;
@@ -225,15 +254,16 @@ namespace LELEngine.Editor
 				}
 			}
 
-			GameObject deferredReparent = null;
-			Transform deferredParent = null;
+			objectDrop = null;
+			showDropMark = false;
 			rows.Clear();
 			gutterX = ImGui.GetCursorScreenPos().X;
 			gutterWidth = ImGui.GetTextLineHeight() + 2f * RowPadding + 2f;
 			ImGui.Indent(gutterWidth);
+			float rootX = ImGui.GetCursorScreenPos().X;
 			foreach (GameObject root in scene.GetRootGameObjects())
 			{
-				DrawNode(root, ref deferredReparent, ref deferredParent);
+				DrawNode(root);
 			}
 
 			(rows, shownRows) = (shownRows, rows);
@@ -242,7 +272,8 @@ namespace LELEngine.Editor
 			// Not drawn at all (hidden from the hierarchy): nothing to reveal.
 			revealSelection = null;
 
-			// Empty area: drop to un-parent, right click to create, click to deselect.
+			// Empty area: drop to make a root (the last; in prefab mode the prefab root's last child), right click to
+			// create, click to deselect.
 			NVector2 rest = ImGui.GetContentRegionAvail();
 			EditorGui.InvisibleButton("##hierarchy_empty", new NVector2(Math.Max(1, rest.X), Math.Max(30, rest.Y)));
 			if (EditorGui.IsItemClicked(ImGuiMouseButton.Left))
@@ -252,40 +283,60 @@ namespace LELEngine.Editor
 
 			if (ImGui.BeginDragDropTarget())
 			{
-				if (AcceptObject() && Dragged != null)
+				const ImGuiDragDropFlags flags = ImGuiDragDropFlags.AcceptBeforeDelivery | ImGuiDragDropFlags.AcceptNoDrawDefaultRect;
+				float x = rootX + (editor.Stage != null ? ImGui.GetStyle().IndentSpacing : 0f);
+				ImGuiPayloadPtr payload = ImGui.AcceptDragDropPayload(DragType, flags);
+				if (!payload.IsNull && Dragged != null)
 				{
-					deferredReparent = Dragged;
-					deferredParent = null;
+					SetDropLine(x, ImGui.GetItemRectMin().Y, ImGui.GetItemRectMax().X);
+					if (payload.IsDelivery())
+					{
+						objectDrop = new ObjectDrop { Dragged = Dragged, Reorder = true };
+					}
 				}
 
-				AcceptAsset(null);
+				payload = ImGui.AcceptDragDropPayload(ProjectPanel.DragType, flags);
+				if (!payload.IsNull && IsInstantiable(ProjectPanel.DraggedAsset))
+				{
+					SetDropLine(x, ImGui.GetItemRectMin().Y, ImGui.GetItemRectMax().X);
+					if (payload.IsDelivery())
+					{
+						droppedAsset = ProjectPanel.DraggedAsset;
+						droppedAssetParent = null;
+						droppedAssetBefore = null;
+					}
+				}
+
 				ImGui.EndDragDropTarget();
 			}
 
+			DrawDropMark();
 			if (EditorGui.BeginPopupContextItem("##hierarchy_context"))
 			{
 				editor.DrawCreateMenu(null);
 				ImGui.EndPopup();
 			}
 
-			if (deferredReparent != null)
+			if (objectDrop.HasValue)
 			{
-				Reparent(deferredReparent, deferredParent);
+				Move(objectDrop.Value);
+				objectDrop = null;
 			}
 
 			if (droppedAsset != null)
 			{
 				if (droppedAsset.EndsWith(Prefab.Extension, StringComparison.OrdinalIgnoreCase))
 				{
-					editor.InstantiatePrefab(droppedAsset, droppedAssetParent);
+					editor.InstantiatePrefab(droppedAsset, droppedAssetParent, null, droppedAssetBefore);
 				}
 				else
 				{
-					editor.InstantiateModel(droppedAsset, droppedAssetParent);
+					editor.InstantiateModel(droppedAsset, droppedAssetParent, droppedAssetBefore);
 				}
 
 				droppedAsset = null;
 				droppedAssetParent = null;
+				droppedAssetBefore = null;
 			}
 
 			if (openPrefab != null)
@@ -361,7 +412,7 @@ namespace LELEngine.Editor
 			}
 		}
 
-		private void DrawNode(GameObject go, ref GameObject deferredReparent, ref Transform deferredParent)
+		private void DrawNode(GameObject go)
 		{
 			if ((go.hideFlags & HideFlags.HideInHierarchy) != 0)
 			{
@@ -530,13 +581,7 @@ namespace LELEngine.Editor
 
 			if (!readOnly && ImGui.BeginDragDropTarget())
 			{
-				if (AcceptObject() && Dragged != null && Dragged != go)
-				{
-					deferredReparent = Dragged;
-					deferredParent = go.transform;
-				}
-
-				AcceptAsset(go.transform);
+				AcceptOnRow(go, rowX, rowMin, rowMax, open && !leaf);
 				ImGui.EndDragDropTarget();
 			}
 
@@ -600,7 +645,7 @@ namespace LELEngine.Editor
 			{
 				foreach (Transform child in new System.Collections.Generic.List<Transform>(go.transform.Children))
 				{
-					DrawNode(child.gameObject, ref deferredReparent, ref deferredParent);
+					DrawNode(child.gameObject);
 				}
 
 				ImGui.TreePop();
@@ -767,22 +812,137 @@ namespace LELEngine.Editor
 			ImGui.GetWindowDrawList().AddRect(ImGui.GetItemRectMin() - new NVector2(2f, 1f), ImGui.GetItemRectMax() + new NVector2(2f, 1f), ImGui.GetColorU32(color), 3f, ImDrawFlags.None, 2f);
 		}
 
-		private static unsafe bool AcceptObject()
+		/// <summary>
+		///     What is dragged over a row (the last item is the row's drop target): a hierarchy object (moved), a prefab or a
+		///     model file from the project panel (instantiated there). Both go where <see cref="PlaceOnRow" /> says; the drop
+		///     is done after the tree is drawn.
+		/// </summary>
+		private void AcceptOnRow(GameObject row, float rowX, NVector2 rowMin, NVector2 rowMax, bool unfolded)
 		{
-			ImGuiPayloadPtr payload = ImGui.AcceptDragDropPayload(DragType);
-			return !payload.IsNull;
+			const ImGuiDragDropFlags flags = ImGuiDragDropFlags.AcceptBeforeDelivery | ImGuiDragDropFlags.AcceptNoDrawDefaultRect;
+			ImGuiPayloadPtr payload = ImGui.AcceptDragDropPayload(DragType, flags);
+			GameObject dragged = Dragged;
+			// Over itself or its own subtree: it cannot go there.
+			if (!payload.IsNull && dragged != null && dragged != row && !row.transform.IsChildOf(dragged.transform))
+			{
+				ObjectDrop drop = PlaceOnRow(row, rowX, rowMin, rowMax, unfolded);
+				drop.Dragged = dragged;
+				if (payload.IsDelivery())
+				{
+					objectDrop = drop;
+				}
+			}
+
+			payload = ImGui.AcceptDragDropPayload(ProjectPanel.DragType, flags);
+			string path = ProjectPanel.DraggedAsset;
+			if (!payload.IsNull && IsInstantiable(path))
+			{
+				ObjectDrop drop = PlaceOnRow(row, rowX, rowMin, rowMax, unfolded);
+				if (payload.IsDelivery())
+				{
+					droppedAsset = path;
+					droppedAssetParent = drop.Parent;
+					droppedAssetBefore = drop.Reorder ? drop.Before : null;
+				}
+			}
 		}
 
-		/// <summary>A model or prefab file from the project panel: instantiated under <paramref name="parent" /> after the tree is drawn.</summary>
-		private void AcceptAsset(Transform parent)
+		/// <summary>
+		///     Where something dropped on a row goes, as in Unity: on the row's upper edge in front of the row, on its lower
+		///     edge after it (an unfolded row's: in front of its first child), on its middle under it (after its last child).
+		///     Sets the mark that shows it.
+		/// </summary>
+		private ObjectDrop PlaceOnRow(GameObject row, float rowX, NVector2 rowMin, NVector2 rowMax, bool unfolded)
 		{
-			string path = ProjectPanel.DraggedAsset;
-			if (!ImGui.AcceptDragDropPayload(ProjectPanel.DragType).IsNull && path != null
-				&& (ModelAssets.IsModelFile(path) || path.EndsWith(Prefab.Extension, StringComparison.OrdinalIgnoreCase)))
+			float mouse = ImGui.GetMousePos().Y;
+			float edge = (rowMax.Y - rowMin.Y) * ReorderEdge;
+			float indent = ImGui.GetStyle().IndentSpacing;
+			var drop = new ObjectDrop { Reorder = true };
+			float lineX = rowX;
+			float lineY;
+			if (mouse < rowMin.Y + edge)
 			{
-				droppedAsset = path;
-				droppedAssetParent = parent;
+				drop.Parent = row.transform.parent;
+				drop.Before = row.transform;
+				lineY = rowMin.Y;
 			}
+			else if (mouse > rowMax.Y - edge && unfolded)
+			{
+				drop.Parent = row.transform;
+				drop.Before = row.transform.childCount > 0 ? row.transform.GetChild(0) : null;
+				lineX += indent;
+				lineY = rowMax.Y;
+			}
+			else if (mouse > rowMax.Y - edge)
+			{
+				drop.Parent = row.transform.parent;
+				drop.Before = editor.NextSibling(row.transform);
+				lineY = rowMax.Y;
+			}
+			else
+			{
+				drop.Parent = row.transform;
+				drop.Reorder = false;
+				lineY = 0f;
+			}
+
+			// In prefab mode nothing stands beside the prefab's root: in front of it is its first child, after it its last.
+			if (drop.Reorder && editor.Stage != null && row == editor.StageRoot && drop.Parent != row.transform)
+			{
+				drop.Parent = row.transform;
+				drop.Before = drop.Before == row.transform && row.transform.childCount > 0 ? row.transform.GetChild(0) : null;
+				lineX = rowX + indent;
+			}
+
+			if (drop.Reorder)
+			{
+				SetDropLine(lineX, lineY, rowMax.X);
+			}
+			else
+			{
+				showDropMark = true;
+				dropMarkFrame = true;
+				dropMarkMin = rowMin;
+				dropMarkMax = rowMax;
+			}
+
+			return drop;
+		}
+
+		private void SetDropLine(float x, float y, float right)
+		{
+			showDropMark = true;
+			dropMarkFrame = false;
+			dropMarkMin = new NVector2(x, y);
+			dropMarkMax = new NVector2(right, y);
+		}
+
+		/// <summary>The line where the dragged object would go (a small circle at its start, as in Unity), or the frame of its new parent's row.</summary>
+		private void DrawDropMark()
+		{
+			if (!showDropMark)
+			{
+				return;
+			}
+
+			ImDrawListPtr draw = ImGui.GetWindowDrawList();
+			uint color = ImGui.GetColorU32(EditorIcons.Accept);
+			if (dropMarkFrame)
+			{
+				draw.AddRect(dropMarkMin, dropMarkMax, color, 2f, ImDrawFlags.None, 2f);
+				return;
+			}
+
+			const float radius = 3f;
+			var centre = new NVector2(dropMarkMin.X + radius + 1f, dropMarkMin.Y);
+			draw.AddCircle(centre, radius, color, 0, 1.5f);
+			draw.AddLine(new NVector2(centre.X + radius, dropMarkMin.Y), dropMarkMax, color, 2f);
+		}
+
+		/// <summary>A file the hierarchy instantiates when it is dropped there: a model or a prefab.</summary>
+		private static bool IsInstantiable(string path)
+		{
+			return path != null && (ModelAssets.IsModelFile(path) || path.EndsWith(Prefab.Extension, StringComparison.OrdinalIgnoreCase));
 		}
 
 		/// <summary>
@@ -823,49 +983,11 @@ namespace LELEngine.Editor
 			rangeAnchor = go;
 		}
 
-		/// <summary>The dragged row goes under <paramref name="parent" />; when it is one of several selected rows, they all do (one undo step).</summary>
-		private void Reparent(GameObject dragged, Transform parent)
+		/// <summary>The dropped row goes where it was dropped; when it is one of several selected rows, they all do, in the hierarchy's order (one undo step).</summary>
+		private void Move(ObjectDrop drop)
 		{
-			List<GameObject> moving = editor.IsSelected(dragged) && editor.SelectedObjects.Count > 1 ? editor.SelectedRoots() : new List<GameObject> { dragged };
-			if (editor.Stage != null)
-			{
-				// A prefab has one root: what is dropped on the empty area goes under it.
-				parent ??= editor.StageRoot?.transform;
-			}
-
-			moving.RemoveAll(child =>
-			{
-				if (editor.Stage != null && child == editor.StageRoot)
-				{
-					Debug.LogWarning("[Editor] The root of the edited prefab stays the root.");
-					return true;
-				}
-
-				if (parent != null && (parent == child.transform || parent.IsChildOf(child.transform)))
-				{
-					return true;
-				}
-
-				if (child.prefabInstance != null && child.prefabInstance.Root != child)
-				{
-					Debug.LogWarning($"[Editor] '{child.Name}' is part of the prefab instance '{child.prefabInstance.Root?.Name}': its objects stay where the prefab has them (move the instance's root, or unpack it).");
-					return true;
-				}
-
-				return child.transform.parent == parent || TempObjects.IsReadOnly(child);
-			});
-			if (moving.Count == 0)
-			{
-				return;
-			}
-
-			editor.RecordStructural(moving.Count == 1 ? "Re-parent " + moving[0].Name : "Re-parent " + moving.Count + " objects", () =>
-			{
-				foreach (GameObject child in moving)
-				{
-					child.transform.SetParent(parent, true);
-				}
-			});
+			List<GameObject> moving = editor.IsSelected(drop.Dragged) && editor.SelectedObjects.Count > 1 ? editor.SelectedRoots() : new List<GameObject> { drop.Dragged };
+			editor.MoveObjects(moving, drop.Parent, drop.Before, drop.Reorder);
 		}
 
 		private void StartRename(GameObject go)

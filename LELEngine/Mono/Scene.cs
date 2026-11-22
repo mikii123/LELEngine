@@ -179,19 +179,75 @@ namespace LELEngine
 			return result;
 		}
 
-		/// <summary>GameObjects without a parent, in creation order.</summary>
+		/// <summary>GameObjects without a parent, in the hierarchy's order (creation order unless moved: Transform.SetSiblingIndex).</summary>
 		public List<GameObject> GetRootGameObjects()
 		{
 			var roots = new List<GameObject>();
 			foreach (GameObject go in objects)
 			{
-				if (go.transform == null || go.transform.parent == null)
+				if (IsRoot(go))
 				{
 					roots.Add(go);
 				}
 			}
 
 			return roots;
+		}
+
+		/// <summary>The place of a root object among the scene's roots (-1 when it is not one of them).</summary>
+		public int GetRootIndex(GameObject root)
+		{
+			int index = 0;
+			foreach (GameObject go in objects)
+			{
+				if (go == root)
+				{
+					return IsRoot(go) ? index : -1;
+				}
+
+				if (IsRoot(go))
+				{
+					index++;
+				}
+			}
+
+			return -1;
+		}
+
+		/// <summary>
+		///     Moves a root object to <paramref name="index" /> (clamped) among the scene's roots. The roots' order is their
+		///     order in the scene's object list (children stand anywhere in it): the object goes in front of the root now at
+		///     that place.
+		/// </summary>
+		public void SetRootIndex(GameObject root, int index)
+		{
+			int from = objects.IndexOf(root);
+			if (from < 0 || !IsRoot(root))
+			{
+				return;
+			}
+
+			objects.RemoveAt(from);
+			int at = objects.Count;
+			int count = 0;
+			index = Math.Max(0, index);
+			for (int i = 0; i < objects.Count; i++)
+			{
+				if (!IsRoot(objects[i]))
+				{
+					continue;
+				}
+
+				if (count == index)
+				{
+					at = i;
+					break;
+				}
+
+				count++;
+			}
+
+			objects.Insert(at, root);
 		}
 
 		public T FindObjectOfType<T>()
@@ -639,6 +695,11 @@ namespace LELEngine
 		#endregion
 
 		#region PrivateMethods
+
+		private static bool IsRoot(GameObject go)
+		{
+			return go.transform == null || go.transform.parent == null;
+		}
 
 		// ---------------------------------------------------------------- frame phases (UpdateScenes)
 

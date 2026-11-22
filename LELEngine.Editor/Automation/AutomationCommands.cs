@@ -78,7 +78,10 @@ namespace LELEngine.Editor.Automation
 			"  select <object>|none [--add]           object: Parent/Child, a unique name, or #id; --add: it joins the\n" +
 			"                                         objects already selected (status lists them)\n" +
 			"  select-asset <assetPath>\n" +
-			"  reparent <object> <parent|none>        (instead of dragging in the hierarchy)\n" +
+			"  delete-asset <assetPath>               a file (with its meta) or a folder, to the Recycle Bin on Windows\n" +
+			"  reparent <object> <parent|none> [index] (instead of dragging in the hierarchy); index: its place among the\n" +
+			"                                         new siblings, else after the last\n" +
+			"  reorder <object> <index|first|last>    its place among its siblings (the scene's roots for a root)\n" +
 			"  rename <object> <name>\n" +
 			"  inspect <object>                       components and their fields\n" +
 			"  get <object> <Component.field>\n" +
@@ -283,10 +286,20 @@ namespace LELEngine.Editor.Automation
 				}
 
 				case "reparent":
-					Need(args, 2, "reparent <object> <parent|none>");
-					EditorAutomation.Reparent(args[0], args[1]);
+					Need(args, 2, "reparent <object> <parent|none> [index]");
+					EditorAutomation.Reparent(args[0], args[1], args.Count > 2 ? (int?)int.Parse(args[2], CultureInfo.InvariantCulture) : null);
 					await EditorAutomation.NextFrame(2);
 					break;
+
+				case "reorder":
+				{
+					Need(args, 2, "reorder <object> <index|first|last>");
+					string place = args[1].ToLowerInvariant();
+					int index = place == "first" ? 0 : place == "last" ? int.MaxValue : int.Parse(place, CultureInfo.InvariantCulture);
+					EditorAutomation.Reorder(args[0], index);
+					await EditorAutomation.NextFrame(2);
+					break;
+				}
 
 				case "rename":
 					Need(args, 2, "rename <object> <name>");
@@ -361,6 +374,12 @@ namespace LELEngine.Editor.Automation
 				case "select-asset":
 					Need(args, 1, "select-asset <assetPath>");
 					EditorAutomation.SelectAsset(Joined(args));
+					await EditorAutomation.NextFrame(2);
+					break;
+
+				case "delete-asset":
+					Need(args, 1, "delete-asset <assetPath>");
+					EditorAutomation.DeleteAsset(Joined(args));
 					await EditorAutomation.NextFrame(2);
 					break;
 

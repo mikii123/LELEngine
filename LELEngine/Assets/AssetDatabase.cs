@@ -704,6 +704,58 @@ namespace LELEngine
 		}
 
 		/// <summary>
+		///     Deletes an asset file (its meta file with it) or a folder with everything in it: to the Recycle Bin on Windows
+		///     (<see cref="DeletesToRecycleBin" />), for good elsewhere. Loaded copies stay loaded, as after a delete outside the
+		///     editor; references to the asset go missing. Returns an error message, or null when it was deleted.
+		/// </summary>
+		public static string DeleteAsset(string assetPath)
+		{
+			assetPath = Normalize(assetPath ?? "");
+			if (assetPath.Length == 0)
+			{
+				return "The Assets folder itself cannot be deleted.";
+			}
+
+			if (IsEngineResource(assetPath))
+			{
+				return assetPath + " is an engine resource.";
+			}
+
+			string path = ToAbsolute(assetPath);
+			if (!Directory.Exists(path) && !File.Exists(path))
+			{
+				return assetPath + " does not exist.";
+			}
+
+			var paths = new List<string> { path };
+			if (File.Exists(path + MetaExtension))
+			{
+				paths.Add(path + MetaExtension);
+			}
+
+			try
+			{
+				RecycleBin.Send(paths);
+			}
+			catch (Exception e) when (e is IOException || e is UnauthorizedAccessException)
+			{
+				return e.Message;
+			}
+
+			lock (sync)
+			{
+				EnsureInitialized();
+				Rebuild(false);
+			}
+
+			Refreshed?.Invoke();
+			return null;
+		}
+
+		/// <summary>True when <see cref="DeleteAsset" /> keeps what it deletes in the Recycle Bin (Windows).</summary>
+		public static bool DeletesToRecycleBin => RecycleBin.Available;
+
+		/// <summary>
 		///     Where <paramref name="path" /> is after <paramref name="fromPath" /> moved to <paramref name="toPath" />: the new
 		///     path for the moved asset or anything inside a moved folder, null for paths the move did not touch.
 		/// </summary>

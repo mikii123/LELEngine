@@ -256,7 +256,7 @@
   elements (`GetElements`, `Click`, `DoubleClick`, `OpenContextMenu`, `Input`, `Scroll`, `Key`, `TypeText`), actions
   (`GetActions`, `RunAction`, `ReserializeAllAssets`), scene and objects (`OpenScene` / `NewScene` with `UnsavedChanges`,
   `SaveScene(path)`, `FindObject` "A/B" / name / "#id",
-  `Select`, `SelectAsset`, `DescribeHierarchy`, `DescribeObject`, `GetField`, `SetField`, `Reparent`, `Rename`,
+  `Select`, `SelectAsset`, `DeleteAsset` (CLI `delete-asset`), `DescribeHierarchy`, `DescribeObject`, `GetField`, `SetField`, `Reparent`, `Rename`,
   `AddComponent`), `Play` / `Stop` / `Pause` / `Step` / `Undo` / `Redo` / `RefreshAssets`, console, waits
   (`NextFrame`, `WaitUntil`, `WaitForIdle`). Everything runs on the main thread between frames (`AutomationContext`,
   pumped by `EditorAutomation.Pump` from `MainWindow.OnUpdateFrame`); async code continues there.
@@ -1474,6 +1474,18 @@ lighting and the engine's other features. Octahedral impostors, baked into atlas
   `AssetPath` (setters made internal): loaded assets keep their identity and save to the new path. `MovedPath` maps a
   path. `EditorApplication.MoveAsset` also moves the scene path, prefab stages, the selection, the inspector lock,
   Project.json scene lists and the project settings' audio project / input configuration paths; not in play mode.
+- Delete (2026-11-21; before, assets could only be deleted outside the editor): `AssetDatabase.DeleteAsset(path)` sends
+  a file with its meta, or a folder, to the Recycle Bin (`RecycleBin`: shell `SHFileOperationW` with FOF_ALLOWUNDO;
+  deleted for good off Windows, `DeletesToRecycleBin`) and rebuilds the index; loaded copies stay loaded, as after a
+  delete outside the editor. `EditorApplication.DeleteAssets(paths)` refuses play mode, the open scene and prefabs open
+  in a stage (or a folder holding them), clears the selection and drops the deleted paths from Project.json's start /
+  build scenes and the project settings' audio project / input configuration. `ProjectPanel`: Delete in the context
+  menus (file rows, "Delete N Files" on a multi-selection; folder rows; tree) and the Del key (tree: the shown folder;
+  list: the picked folder or the selected files), then the "Delete assets" dialog (Enter / Delete confirms, Escape /
+  Cancel). The panel's row clicks honour automation's `--ctrl` / `--shift` (`UIAutomation.InvokedCtrl`), as the
+  hierarchy's do. Verified on a probe project through the CLI (`context`, `click "menu:Delete"`, `click
+  "button:Delete"`, `key Delete` + `key Enter`, `delete-asset`): files, metas and folders in the Recycle Bin, the open
+  scene's folder refused.
 - `ProjectPanel`: folder tree with folder icons (open / closed), the shown folder's parents opened, a breadcrumb above the list (it never scrolls); the
   file list shows folders first as rows (click selects, double click opens, context menu Open / Rename / Show in Explorer),
   files with icons per kind (`EditorIcons.KindOfFile` / `ColorOf`: folder, scene, script, shader, material, texture (its
@@ -1629,6 +1641,36 @@ lighting and the engine's other features. Octahedral impostors, baked into atlas
   sized screenshots): the cube and its shadow gone from Scene, still in Game, in play mode too; a parent hid its child,
   shown again; the dim eye; kept over a restart (`hierarchyfile=`); the scene not dirtied. Not checked by a run: Alt + click
   and the hover eye (no CLI modifier or hover), effects, clouds and trails hidden (same check as the meshes).
+- Reordering in the hierarchy (2026-11-22, the user's ask: only re-parenting was possible, the order is wanted for
+  readability). As in Unity: an object dragged on to the upper 30 % of a row goes in front of it, the lower 30 % after it
+  (an unfolded row's: in front of its first child), the middle under it (as before), the empty area below the rows makes
+  it the last root (it only un-parented before; in prefab mode the prefab root's last child, and in front of / after the
+  prefab root's own row means its first / last child). A green line with a small circle at the level it goes to shows
+  where (drawn after the rows, `DrawDropMark`), a frame the row it goes under. A selection moves together in the
+  hierarchy's order. One undo step ("Move X" within its parent, "Re-parent X" otherwise), nothing when it stands there
+  already. Logic in `EditorApplication.MoveObjects(objects, parent, before, reorder, refuse)` (`EditorApplication.Hierarchy.cs`,
+  also automation's): the rules the drop had (the prefab stage's root, an instance's own objects, read-only objects,
+  into its own subtree), and under an object of a prefab instance the added objects stand after the prefab's own: a saved
+  scene makes the instance's objects first and puts the added ones under them after, so an added object between the
+  prefab's would not stay there (the drop goes after the last own child with a warning; the CLI fails instead). Engine:
+  `Transform.GetSiblingIndex` / `SetSiblingIndex` work for root objects too (the place among the scene's roots: the
+  roots' order is the scene's object list, `Scene.GetRootIndex` / `SetRootIndex`; -1 and a no-op before), plus
+  `SetAsFirstSibling` / `SetAsLastSibling`. Saved as it is (documents are written in hierarchy order). CLI: `reparent
+  <object> <parent|none> [index]`, `reorder <object> <index|first|last>`. Verified on a scratch project in a batch
+  editor (scratchpad `order/` of session 47efe346): roots and children by CLI, undo / redo, save and reopen, a no-op that
+  does not dirty the scene, a probe through `MoveObjects` (two objects into a parent before a third, two siblings moved
+  together, a selection with one inside the target, a drop on its own place and on its own parent, a prefab instance:
+  an added object kept after the prefab's own over a save and reopen, an instance's own object refused). Not run: the
+  drag itself in the GUI editor (no CLI drag), the line's look.
+- The same places for a prefab or model file dragged from the Project panel (2026-11-22, the user's go-ahead): the rows'
+  zones and the line as for objects (`HierarchyPanel.PlaceOnRow`; only files the hierarchy instantiates show a mark),
+  `InstantiatePrefab(path, parent, position, before)` / `InstantiateModel(path, parent, before)` put the new instance in
+  front of `before` (an instance's own children first, as above). And Duplicate (Ctrl+D) puts each copy right after its
+  original, as in Unity (it went after the last sibling; a copy of an instance's own object goes after the prefab's own,
+  with the warning). Verified in the batch editor: Duplicate of one and of two objects (the copies, by id, after their
+  originals; undo / redo), a probe: a prefab in front of a root and of a child, a model in front of a first child, a
+  prefab under an instance in front of its own object (after them, warned), an instance's own object duplicated; the
+  scene saved and reopened the same.
 - A double click on a hierarchy row frames the object in the scene view, with or without children, and never folds
   it: only the arrow folds (2026-11-19, the user's ask; no `OpenOnDoubleClick`, and a double click on the arrow, which
   toggles twice, frames nothing).

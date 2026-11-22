@@ -65,6 +65,10 @@ namespace LELEngine.Editor
 		private bool openCreatePopup;
 		private string error;
 
+		// The files and folders the Delete dialog asks about (null when it is not asked).
+		private List<string> pendingDelete;
+		private bool openDeletePopup;
+
 		// A folder row picked in the file list (highlighted; F2 renames it). Files and folders are not selected together.
 		private string selectedFolder;
 
@@ -229,6 +233,7 @@ namespace LELEngine.Editor
 			}
 
 			DrawCreatePopup();
+			DrawDeletePopup();
 		}
 
 		private void DrawFolderTree(string relative, string label)
@@ -308,6 +313,11 @@ namespace LELEngine.Editor
 				StartRename(relative, true);
 			}
 
+			if (current && relative.Length > 0 && ImGui.IsWindowFocused() && ImGui.IsKeyPressed(ImGuiKey.Delete, false) && renaming == null)
+			{
+				StartDelete(new[] { relative });
+			}
+
 			AcceptSceneObject(relative);
 			// The path keeps the popups apart: a closed tree node pushes no ID, so its siblings and parent share the stack.
 			if (EditorGui.BeginPopupContextItem("##tree_context" + relative))
@@ -321,6 +331,11 @@ namespace LELEngine.Editor
 				if (relative.Length > 0 && EditorMenu.Item("Rename", "F2"))
 				{
 					StartRename(relative, true);
+				}
+
+				if (relative.Length > 0 && EditorMenu.Item("Delete", "Del"))
+				{
+					StartDelete(new[] { relative });
 				}
 
 				if (EditorMenu.Item("Show in Explorer")) ShowInExplorer(Absolute(relative));
@@ -435,6 +450,7 @@ namespace LELEngine.Editor
 					SelectFolderRow(folderPath);
 					if (EditorMenu.Item("Open")) ShowFolder(folderPath);
 					if (EditorMenu.Item("Rename", "F2")) StartRename(folderPath);
+					if (EditorMenu.Item("Delete", "Del")) StartDelete(new[] { folderPath });
 					if (EditorMenu.Item("Show in Explorer")) ShowInExplorer(Absolute(folderPath));
 					ImGui.EndPopup();
 				}
@@ -458,6 +474,19 @@ namespace LELEngine.Editor
 				if (target != null)
 				{
 					StartRename(target);
+				}
+			}
+
+			// Delete: the picked folder, or the selected files.
+			if (renaming == null && ImGui.IsWindowFocused() && ImGui.IsKeyPressed(ImGuiKey.Delete, false))
+			{
+				if (selectedFolder != null)
+				{
+					StartDelete(new[] { selectedFolder });
+				}
+				else if (selection.Count > 0)
+				{
+					StartDelete(SelectedFiles());
 				}
 			}
 
@@ -623,6 +652,12 @@ namespace LELEngine.Editor
 				}
 
 				if (EditorMenu.Item("Rename", "F2")) StartRename(assetPath);
+				// The selected files when the row is one of them, else the row's file.
+				if (EditorMenu.Item(selection.Count > 1 && selection.Contains(assetPath) ? "Delete " + selection.Count + " Files" : "Delete", "Del"))
+				{
+					StartDelete(selection.Contains(assetPath) ? SelectedFiles() : new List<string> { assetPath });
+				}
+
 				if (EditorMenu.Item("Show in Explorer")) ShowInExplorer(Absolute(assetPath));
 				ImGui.EndPopup();
 			}
@@ -775,8 +810,11 @@ namespace LELEngine.Editor
 		{
 			selectedSubAsset = null;
 			int index = shownRows.FindIndex(row => string.Equals(row, assetPath, StringComparison.OrdinalIgnoreCase));
+			// Automation's click holds the keys it was asked with (as in the hierarchy).
 			ImGuiIOPtr io = ImGui.GetIO();
-			if (io.KeyCtrl)
+			bool ctrl = io.KeyCtrl || Automation.UIAutomation.InvokedCtrl;
+			bool shift = io.KeyShift || Automation.UIAutomation.InvokedShift;
+			if (ctrl)
 			{
 				if (!selection.Remove(assetPath))
 				{
@@ -788,7 +826,7 @@ namespace LELEngine.Editor
 					selection.Add(selectedFile);
 				}
 			}
-			else if (io.KeyShift && selectionAnchor != null && index >= 0)
+			else if (shift && selectionAnchor != null && index >= 0)
 			{
 				int anchor = shownRows.FindIndex(row => string.Equals(row, selectionAnchor, StringComparison.OrdinalIgnoreCase));
 				selection.Clear();
@@ -809,7 +847,7 @@ namespace LELEngine.Editor
 				selectionAnchor = assetPath;
 			}
 
-			if (!io.KeyShift)
+			if (!shift)
 			{
 				selectionAnchor = assetPath;
 			}
@@ -1389,6 +1427,132 @@ namespace LELEngine.Editor
 			}
 
 			ImGui.EndPopup();
+		}
+
+		// ---------------------------------------------------------------- delete
+
+		/// <summary>The selected files in the order they are shown.</summary>
+		private List<string> SelectedFiles()
+		{
+			var files = shownRows.FindAll(selection.Contains);
+			foreach (string selected in selection)
+			{
+				if (!files.Exists(file => string.Equals(file, selected, StringComparison.OrdinalIgnoreCase)))
+				{
+					files.Add(selected);
+				}
+			}
+
+			return files;
+		}
+
+		/// <summary>Asks whether to delete the files and folders (the dialog after the rows; nothing is deleted until it is confirmed).</summary>
+		private void StartDelete(IEnumerable<string> assetPaths)
+		{
+			if (editor.IsPlaying)
+			{
+				Debug.LogWarning("[Editor] Stop play mode to delete assets.");
+				return;
+			}
+
+			// What is inside a folder also deleted goes with it.
+			var paths = new List<string>(assetPaths);
+			paths.RemoveAll(path => path.Length == 0 || paths.Exists(other => other != path && AssetDatabase.MovedPath(path, other, other) != null));
+			if (paths.Count > 0)
+			{
+				pendingDelete = paths;
+				openDeletePopup = true;
+			}
+		}
+
+		private void DrawDeletePopup()
+		{
+			if (openDeletePopup)
+			{
+				ImGui.OpenPopup("Delete assets");
+				openDeletePopup = false;
+			}
+
+			if (!ImGui.BeginPopupModal("Delete assets", ImGuiWindowFlags.AlwaysAutoResize))
+			{
+				return;
+			}
+
+			List<string> paths = pendingDelete ?? new List<string>();
+			ImGui.Text(paths.Count == 1 ? "Delete this asset?" : "Delete these " + paths.Count + " assets?");
+			const int Shown = 12;
+			for (int i = 0; i < Math.Min(paths.Count, Shown); i++)
+			{
+				bool isFolder = Directory.Exists(Absolute(paths[i]));
+				ImGui.BulletText("Assets/" + paths[i] + (isFolder ? "/  (the folder with everything in it)" : ""));
+			}
+
+			if (paths.Count > Shown)
+			{
+				ImGui.BulletText("and " + (paths.Count - Shown) + " more");
+			}
+
+			ImGui.TextDisabled(AssetDatabase.DeletesToRecycleBin
+				? "With their meta files, to the Recycle Bin (restored from there, they come back with their references)."
+				: "With their meta files. This cannot be undone.");
+			if (ImGui.IsWindowAppearing())
+			{
+				ImGui.SetKeyboardFocusHere();
+			}
+
+			bool confirm = EditorGui.Button("Delete", new NVector2(100, 0)) || ImGui.IsWindowFocused() && ImGui.IsKeyPressed(ImGuiKey.Enter, false);
+			TestAnchors.RecordItem("delete:confirm");
+			ImGui.SameLine();
+			bool cancel = EditorGui.Button("Cancel", new NVector2(100, 0)) || ImGui.IsKeyPressed(ImGuiKey.Escape, false);
+			if (confirm)
+			{
+				ImGui.CloseCurrentPopup();
+				pendingDelete = null;
+				Delete(paths);
+			}
+			else if (cancel)
+			{
+				ImGui.CloseCurrentPopup();
+				pendingDelete = null;
+			}
+
+			ImGui.EndPopup();
+		}
+
+		/// <summary>Deletes the files and folders; the panel lets go of them (the selection, the shown folder). What stops one is logged.</summary>
+		private void Delete(List<string> paths)
+		{
+			foreach (string failure in editor.DeleteAssets(paths))
+			{
+				Debug.LogWarning("[Editor] Cannot delete " + failure);
+			}
+
+			bool Gone(string path) => path != null && !File.Exists(Absolute(path)) && !Directory.Exists(Absolute(path));
+			selection.RemoveWhere(Gone);
+			expanded.RemoveWhere(Gone);
+			if (Gone(selectedFile))
+			{
+				selectedFile = null;
+			}
+
+			if (Gone(selectedFolder))
+			{
+				selectedFolder = null;
+			}
+
+			if (Gone(selectionAnchor))
+			{
+				selectionAnchor = null;
+			}
+
+			// The shown folder deleted: its closest parent left.
+			while (folder.Length > 0 && Gone(folder))
+			{
+				int slash = folder.LastIndexOf('/');
+				folder = slash >= 0 ? folder.Substring(0, slash) : "";
+			}
+
+			listedVersion = -1;
 		}
 
 		/// <summary>Create Impostor on a prefab or model file: the baked asset next to it, selected; what stops it is logged.</summary>
