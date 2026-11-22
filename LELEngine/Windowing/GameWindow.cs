@@ -2,7 +2,6 @@ using System;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Threading;
-using Brutal.GlfwApi;
 
 namespace LELEngine.Windowing
 {
@@ -106,7 +105,7 @@ namespace LELEngine.Windowing
 					IsRunningSlowly = slowUpdates > SlowUpdatesThreshold;
 					if (Context != null && VSync == VSyncMode.Adaptive)
 					{
-						Glfw.SwapInterval(IsRunningSlowly ? 0 : 1);
+						Context.SwapInterval = IsRunningSlowly ? 0 : 1;
 					}
 				}
 

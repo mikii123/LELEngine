@@ -161,6 +161,7 @@ namespace LELEngine.Player
 			// The window opens hidden and at its final size and state; it appears with the splash screen drawn, so its
 			// first image is never blank. The engine's shaders compile later, on the loader thread.
 			Window.StartFocused = GetValue(args, "focus") != "0";
+			Window.StartHidden = GetValue(args, "hidden") == "1";
 			Game.CreateWindow(new GameWindowOptions
 			{
 				Width = width,

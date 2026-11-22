@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using Brutal.GlfwApi;
+using LELEngine.Graphics;
 using LELEngine.Mathematics;
 
 namespace LELEngine.Windowing
@@ -52,8 +53,8 @@ namespace LELEngine.Windowing
 		/// <summary>Seconds since GLFW started.</summary>
 		public static double Time => Glfw.Time;
 
-		/// <summary>A context is current on the calling thread (any thread may ask).</summary>
-		public static bool HasCurrentContext => Glfw.GetCurrentContext() != IntPtr.Zero;
+		/// <summary>A graphics context is current on the calling thread (any thread may ask).</summary>
+		public static bool HasCurrentContext => GraphicsContext.HasCurrent;
 
 		/// <summary>Wakes the thread waiting in <see cref="NativeWindow.ProcessEvents(double)" />; any thread may call.</summary>
 		public static void PostEmptyEvent()
@@ -68,49 +69,63 @@ namespace LELEngine.Windowing
 		}
 	}
 
-	/// <summary>A window's OpenGL context.</summary>
-	public sealed class GraphicsContext
+	/// <summary>
+	///     A window's graphics context: what the engine's graphics commands (<see cref="GL" />) draw into when the
+	///     window is the target. With the OpenGL backend it is the window's OpenGL context; with the Vulkan backend
+	///     the window's swap chain and the command state of the thread that made it current.
+	/// </summary>
+	public abstract class GraphicsContext
 	{
-		private int swapInterval;
-
-		internal GraphicsContext(GlfwWindow window)
+		protected GraphicsContext(GlfwWindow window)
 		{
 			Window = window;
 		}
 
-		/// <summary>The BRUTAL framework's window the context belongs to.</summary>
+		/// <summary>The BRUTAL framework's window the context belongs to (null for a context without a window).</summary>
 		public GlfwWindow Window { get; }
 
-		public IntPtr WindowPtr => Window.NativeHandle;
+		public IntPtr WindowPtr => Window != null ? Window.NativeHandle : IntPtr.Zero;
 
 		/// <summary>The context is current on the calling thread.</summary>
-		public bool IsCurrent => Glfw.GetCurrentContext() == Window.NativeHandle;
+		public abstract bool IsCurrent { get; }
 
 		/// <summary>Frames the swap waits for: 0 presents at once, 1 waits for the display's refresh.</summary>
-		public int SwapInterval
-		{
-			get => swapInterval;
-			set
-			{
-				Glfw.SwapInterval(value);
-				swapInterval = value;
-			}
-		}
+		public abstract int SwapInterval { get; set; }
 
-		public void MakeCurrent()
-		{
-			Window.MakeContextCurrent();
-		}
+		public abstract void MakeCurrent();
 
 		/// <summary>Releases the calling thread's context, so that another thread can take it.</summary>
-		public void MakeNoneCurrent()
-		{
-			Glfw.PInvoke.MakeContextCurrent(null);
-		}
+		public abstract void MakeNoneCurrent();
 
-		public void SwapBuffers()
+		/// <summary>Presents what was drawn into the window's default framebuffer.</summary>
+		public abstract void SwapBuffers();
+
+		/// <summary>
+		///     The window's back buffer: what <see cref="SwapBuffers" /> shows. Ask for it every frame (a resized
+		///     window has another).
+		/// </summary>
+		public abstract GpuTexture Backbuffer { get; }
+
+		/// <summary>Frees what the context holds of the graphics API (the window itself is the caller's).</summary>
+		public virtual void Dispose()
+		{ }
+
+		[ThreadStatic]
+		private static GraphicsContext current;
+
+		/// <summary>The context current on the calling thread (null: none).</summary>
+		public static GraphicsContext Current => current;
+
+		/// <summary>A graphics context is current on the calling thread.</summary>
+		public static bool HasCurrent => current != null;
+
+		/// <summary>The native window whose context is current on the calling thread (zero: none).</summary>
+		public static IntPtr CurrentWindowPtr => current != null ? current.WindowPtr : IntPtr.Zero;
+
+		/// <summary>For the contexts themselves: what <see cref="MakeCurrent" /> and <see cref="MakeNoneCurrent" /> made of the calling thread.</summary>
+		protected static void SetCurrent(GraphicsContext context)
 		{
-			Window.SwapBuffers();
+			current = context;
 		}
 	}
 

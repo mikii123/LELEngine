@@ -46,6 +46,18 @@ namespace LELEngine
 		/// <summary>New windows take the keyboard focus. Automated runs turn it off so they do not interrupt the user.</summary>
 		public static bool StartFocused { get; set; } = true;
 
+		/// <summary>
+		///     Automated runs that only read frames back (hidden=1): the window is never shown. What it would show is
+		///     rendered all the same; reads of the window's own pixels are undefined, reads of render targets are not.
+		/// </summary>
+		public static bool StartHidden { get; set; }
+
+		/// <summary>
+		///     Automated runs (fixeddt=seconds): every frame advances the game by this much, however long it took, so a
+		///     frame number means the same moment in every run. 0: time as it passes.
+		/// </summary>
+		public static double FixedDeltaTime { get; set; }
+
 		public Window(int width, int height, string title)
 			: this(width, height, title, PreferredApiVersion)
 		{ }
@@ -192,6 +204,11 @@ namespace LELEngine
 		{
 			bool measured = presentedSinceUpdate && previousPresent != 0;
 			presentedSinceUpdate = false;
+			if (FixedDeltaTime > 0)
+			{
+				return FixedDeltaTime;
+			}
+
 			if (!PaceFrames)
 			{
 				return sinceLastUpdate;
@@ -279,6 +296,13 @@ namespace LELEngine
 		/// </summary>
 		public void Show(Action drawFirstImage)
 		{
+			if (StartHidden)
+			{
+				drawFirstImage();
+				Present();
+				return;
+			}
+
 			IntPtr handle = !IsVisible ? Win32Window : IntPtr.Zero;
 			int on = 1;
 			bool cloaked = handle != IntPtr.Zero && DwmSetWindowAttribute(handle, DwmCloak, ref on, sizeof(int)) == 0;
@@ -322,8 +346,8 @@ namespace LELEngine
 				APIVersion = apiVersion,
 				Profile = ContextProfile.Core,
 				Flags = ContextFlags.ForwardCompatible,
-				StartVisible = visible,
-				StartFocused = StartFocused && visible,
+				StartVisible = visible && !StartHidden,
+				StartFocused = StartFocused && visible && !StartHidden,
 				WindowState = fullscreen ? WindowState.Fullscreen : WindowState.Normal
 			};
 		}

@@ -13,13 +13,25 @@ namespace LELEngine.Graphics
 	/// </summary>
 	public static unsafe class GL
 	{
-		private static GraphicsBackend backend;
+		private static GraphicsBackend loaded;
 
-		/// <summary>The graphics API executing the commands.</summary>
-		public static GraphicsApi Api => backend != null ? backend.Api : GraphicsApi.OpenGL;
+		/// <summary>
+		///     Every command goes through here. While rendering code moves from these OpenGL commands to the graphics
+		///     device (<see cref="GraphicsDevice" />), both run on the same context: the device is told before an
+		///     OpenGL command is given past it, so it can hand the context over as its own commands left it.
+		/// </summary>
+		private static GraphicsBackend backend
+		{
+			[MethodImpl(MethodImplOptions.AggressiveInlining)]
+			get
+			{
+				OpenGL.GLDevice.BeforeLegacyCommand();
+				return loaded;
+			}
+		}
 
 		/// <summary>The commands can be called: a backend was started.</summary>
-		public static bool IsLoaded => backend != null;
+		public static bool IsLoaded => loaded != null;
 
 		/// <summary>
 		///     Starts the OpenGL backend for the context current on the calling thread (its functions are loaded once
@@ -27,15 +39,12 @@ namespace LELEngine.Graphics
 		/// </summary>
 		public static void LoadBindings()
 		{
-			if (backend == null || backend.Api != GraphicsApi.OpenGL)
-			{
-				backend = new OpenGLBackend();
-			}
+			loaded ??= new OpenGLBackend();
 		}
 
 		internal static void SetBackend(GraphicsBackend value)
 		{
-			backend = value;
+			loaded = value;
 		}
 
 		#region Pinning
@@ -238,8 +247,17 @@ namespace LELEngine.Graphics
 
 		public static int GenTexture() => backend.GenTexture();
 		public static void DeleteTexture(int textures) => backend.DeleteTexture(textures);
-		public static void ActiveTexture(TextureUnit texture) => backend.ActiveTexture(texture);
-		public static void BindTexture(TextureTarget target, int texture) => backend.BindTexture(target, texture);
+		public static void ActiveTexture(TextureUnit texture)
+		{
+			backend.ActiveTexture(texture);
+			OpenGL.GLDevice.LegacyActiveTexture(texture - TextureUnit.Texture0);
+		}
+
+		public static void BindTexture(TextureTarget target, int texture)
+		{
+			backend.BindTexture(target, texture);
+			OpenGL.GLDevice.LegacyTextureBound(texture);
+		}
 
 		public static void BindImageTexture(int unit, int texture, int level, bool layered, int layer, TextureAccess access, SizedInternalFormat format)
 		{
@@ -402,7 +420,14 @@ namespace LELEngine.Graphics
 
 		public static int GenFramebuffer() => backend.GenFramebuffer();
 		public static void DeleteFramebuffer(int framebuffers) => backend.DeleteFramebuffer(framebuffers);
-		public static void BindFramebuffer(FramebufferTarget target, int framebuffer) => backend.BindFramebuffer(target, framebuffer);
+		public static void BindFramebuffer(FramebufferTarget target, int framebuffer)
+		{
+			backend.BindFramebuffer(target, framebuffer);
+			if (target != FramebufferTarget.ReadFramebuffer)
+			{
+				OpenGL.GLDevice.LegacyFramebufferBound();
+			}
+		}
 		public static FramebufferErrorCode CheckFramebufferStatus(FramebufferTarget target) => backend.CheckFramebufferStatus(target);
 
 		public static void FramebufferTexture2D(FramebufferTarget target, FramebufferAttachment attachment, TextureTarget textarget, int texture, int level)

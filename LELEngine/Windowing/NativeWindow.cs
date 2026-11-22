@@ -30,12 +30,12 @@ namespace LELEngine.Windowing
 		// The living windows by their native handle (any thread may ask whose context is current on it).
 		private static readonly ConcurrentDictionary<IntPtr, NativeWindow> windows = new ConcurrentDictionary<IntPtr, NativeWindow>();
 
-		/// <summary>The window whose OpenGL context is current on the calling thread; null when none of these windows' is.</summary>
+		/// <summary>The window whose graphics context is current on the calling thread; null when none of these windows' is.</summary>
 		public static NativeWindow Current
 		{
 			get
 			{
-				IntPtr context = Glfw.GetCurrentContext();
+				IntPtr context = GraphicsContext.CurrentWindowPtr;
 				return context != IntPtr.Zero && windows.TryGetValue(context, out NativeWindow window) ? window : null;
 			}
 		}
@@ -113,18 +113,21 @@ namespace LELEngine.Windowing
 			}
 
 			API = settings.API;
-			bool isOpenGl = settings.API != ContextAPI.NoAPI;
-			switch (settings.API)
+			// A window that draws gets the context of the process's graphics device: an OpenGL context of its own,
+			// or (Vulkan) no client API at all: the device makes it a surface and a swap chain.
+			bool drawn = settings.API != ContextAPI.NoAPI;
+			bool vulkan = drawn && Graphics.GraphicsDevice.CurrentApi == Graphics.GraphicsApi.Vulkan;
+			if (!drawn || vulkan)
 			{
-				case ContextAPI.NoAPI:
-					Glfw.WindowHint(GlfwWindowHint.ClientApi, Glfw.Constants.GLFW_NO_API);
-					break;
-				case ContextAPI.OpenGLES:
-					Glfw.WindowHint(GlfwWindowHint.ClientApi, Glfw.Constants.GLFW_OPENGL_ES_API);
-					break;
-				default:
-					Glfw.WindowHint(GlfwWindowHint.ClientApi, Glfw.Constants.GLFW_OPENGL_API);
-					break;
+				Glfw.WindowHint(GlfwWindowHint.ClientApi, Glfw.Constants.GLFW_NO_API);
+			}
+			else if (settings.API == ContextAPI.OpenGLES)
+			{
+				Glfw.WindowHint(GlfwWindowHint.ClientApi, Glfw.Constants.GLFW_OPENGL_ES_API);
+			}
+			else
+			{
+				Glfw.WindowHint(GlfwWindowHint.ClientApi, Glfw.Constants.GLFW_OPENGL_API);
 			}
 
 			Glfw.WindowHint(GlfwWindowHint.ContextVersionMajor, settings.APIVersion.Major);
@@ -173,7 +176,8 @@ namespace LELEngine.Windowing
 			cachedLocation = settings.Location ?? new Vector2i(32, 32);
 			cachedClientSize = settings.ClientSize;
 
-			GlfwWindow share = settings.SharedContext?.Window;
+			// Vulkan shares nothing at the window's level: every window of the process draws with the one device.
+			GlfwWindow share = vulkan ? null : settings.SharedContext?.Window;
 			if (settings.WindowState == WindowState.Fullscreen && isVisible)
 			{
 				windowState = WindowState.Fullscreen;
@@ -184,18 +188,14 @@ namespace LELEngine.Windowing
 				Handle = Glfw.CreateWindow(new GlfwWindow.CreateInfo { Title = title, Size = new int2(settings.ClientSize.X, settings.ClientSize.Y), Share = share });
 			}
 
-			if (isOpenGl)
-			{
-				Context = new GraphicsContext(Handle);
-			}
-
 			Exists = true;
 			windows[Handle.NativeHandle] = this;
-			if (Context != null)
+			if (drawn)
 			{
-				// The window's context is current, and the graphics commands are loaded for it (once for the process).
+				// The graphics device starts with the process's first window that draws; the window's context is
+				// current on this thread from here on.
+				Context = Graphics.GraphicsDevice.CreateContext(this, settings);
 				Context.MakeCurrent();
-				Graphics.GL.LoadBindings();
 			}
 
 			if (settings.WindowState != WindowState.Fullscreen && isVisible)
@@ -659,6 +659,7 @@ namespace LELEngine.Windowing
 			if (Handle != null)
 			{
 				windows.TryRemove(Handle.NativeHandle, out _);
+				Context?.Dispose();
 				Handle.Dispose();
 				Exists = false;
 			}

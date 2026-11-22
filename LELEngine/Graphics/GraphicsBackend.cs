@@ -2,13 +2,6 @@ using System;
 
 namespace LELEngine.Graphics
 {
-	/// <summary>Which graphics API executes the engine's graphics commands (<see cref="GL" />).</summary>
-	public enum GraphicsApi
-	{
-		OpenGL = 0,
-		Vulkan = 1
-	}
-
 	/// <summary>
 	///     What executes the engine's graphics commands: every command of <see cref="GL" /> in its plainest form
 	///     (pointers and sizes), implemented once per graphics API over the BRUTAL framework's bindings.

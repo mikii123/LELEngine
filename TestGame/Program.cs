@@ -59,6 +59,10 @@ namespace TestGame
 			ConsoleLogWriter.Install();
 			// focus=0: automated runs open the window without taking the keyboard focus.
 			Window.StartFocused = GetBool(args, "focus", true);
+			// hidden=1: automated runs that only dump frames never show the window.
+			Window.StartHidden = GetBool(args, "hidden", false);
+			// fixeddt=0.0166667: every frame advances the game by the same time (frame dumps that repeat).
+			Window.FixedDeltaTime = GetFloat(args, "fixeddt", 0f);
 			Game.CreateWindow(1280, 720, "LELEngine");
 
 			// outdoor=1: the open-sky yard, with the procedural skybox unless sky=0.
