@@ -365,7 +365,9 @@ namespace LELEngine.Graphics.OpenGL
 			}
 
 			OpenGLBackend gl = GLDevice.Gl;
-			GLDevice.Current.CommandsOfThread.FlushBarriers();
+			GLCommandList commands = GLDevice.Current.CommandsOfThread;
+			commands.EndRenderPass();
+			commands.FlushBarriers();
 			gl.BindBuffer(BufferTarget.CopyReadBuffer, Handle);
 			gl.GetBufferSubData(BufferTarget.CopyReadBuffer, (IntPtr)offset, (IntPtr)size, destination);
 		}

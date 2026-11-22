@@ -952,6 +952,7 @@ namespace LELEngine.Graphics.OpenGL
 		internal void ReadTexture(GLTexture texture, int mip, int x, int y, int z, int width, int height, int depth, void* destination, int size, GLBuffer packBuffer, long packOffset)
 		{
 			EnterDevice();
+			EndRenderPass();
 			FlushBarriers();
 			if (packBuffer != null)
 			{
