@@ -213,6 +213,13 @@ namespace LELEngine.Graphics
 		/// <summary>Writes a part of the buffer, ordered with the commands: draws given before see the old bytes.</summary>
 		public abstract void SetSubData(long offset, void* data, long size);
 
+		/// <summary>
+		///     New storage of <paramref name="size" /> bytes whose first <paramref name="keep" /> bytes are the old
+		///     contents (the rest is undefined). Ordered with the commands like an upload, and like one it may be given
+		///     inside a render pass.
+		/// </summary>
+		public abstract void Resize(long size, long keep);
+
 		/// <summary>Reads bytes back; waits until the GPU has executed the commands that write the buffer.</summary>
 		public abstract void GetData(long offset, void* destination, long size);
 

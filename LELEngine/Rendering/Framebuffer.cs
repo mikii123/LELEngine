@@ -5,18 +5,30 @@ using LELEngine.Graphics;
 namespace LELEngine.Rendering
 {
 	/// <summary>
-	///     Framebuffer object with any number of color attachments and an optional depth attachment.
-	///     All attachments share the framebuffer's size and are resized together.
+	///     What a render pass draws into: any number of colour attachments and an optional depth attachment, all of
+	///     one size and resized together. <see cref="Begin" /> starts a pass into them.
 	/// </summary>
 	public sealed class Framebuffer
 	{
 		#region PublicFields
 
-		public int Handle { get; private set; }
 		public int Width { get; private set; }
 		public int Height { get; private set; }
 		public IReadOnlyList<RenderTexture> ColorAttachments => colorAttachments;
 		public RenderTexture DepthAttachment { get; private set; }
+
+		/// <summary>
+		///     The OpenGL framebuffer object of the attachments: only for the code that still gives OpenGL commands
+		///     itself.
+		/// </summary>
+		public int Handle
+		{
+			get
+			{
+				RenderPassDescriptor descriptor = Describe(LoadOperation.Load, default, LoadOperation.Load, 1f);
+				return Graphics.OpenGL.GLDevice.Current.CommandsOfThread.LegacyFramebuffer(descriptor);
+			}
+		}
 
 		#endregion
 
@@ -24,6 +36,7 @@ namespace LELEngine.Rendering
 
 		private readonly List<RenderTexture> colorAttachments = new List<RenderTexture>();
 		private readonly HashSet<RenderTexture> borrowed = new HashSet<RenderTexture>();
+		private ColorAttachment[] passColors = Array.Empty<ColorAttachment>();
 		private bool ownsDepth = true;
 
 		#endregion
@@ -34,29 +47,22 @@ namespace LELEngine.Rendering
 		{
 			Width = Math.Max(1, width);
 			Height = Math.Max(1, height);
-			Handle = GL.GenFramebuffer();
 		}
 
 		#endregion
 
 		#region PublicMethods
 
-		public RenderTexture AddColorAttachment(RenderTextureFormat format, bool linearFilter = true)
+		/// <param name="storage">Shaders also read or write the attachment as an image.</param>
+		public RenderTexture AddColorAttachment(RenderTextureFormat format, bool linearFilter = true, bool storage = false)
 		{
 			if (format == RenderTextureFormat.Depth24 || format == RenderTextureFormat.Depth32F)
 			{
 				throw new ArgumentException("Use AddDepthAttachment for depth formats.", nameof(format));
 			}
 
-			RenderTexture texture = new RenderTexture(Width, Height, format, linearFilter);
-			int index = colorAttachments.Count;
+			RenderTexture texture = new RenderTexture(Width, Height, format, linearFilter, SamplerAddress.ClampToEdge, storage);
 			colorAttachments.Add(texture);
-
-			GL.BindFramebuffer(FramebufferTarget.Framebuffer, Handle);
-			GL.FramebufferTexture2D(FramebufferTarget.Framebuffer, FramebufferAttachment.ColorAttachment0 + index, TextureTarget.Texture2D, texture.Handle, 0);
-			UpdateDrawBuffers();
-			GL.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
-
 			return texture;
 		}
 
@@ -71,30 +77,24 @@ namespace LELEngine.Rendering
 				throw new ArgumentException("A color render texture is needed.", nameof(texture));
 			}
 
-			int index = colorAttachments.Count;
 			colorAttachments.Add(texture);
 			borrowed.Add(texture);
-
-			GL.BindFramebuffer(FramebufferTarget.Framebuffer, Handle);
-			GL.FramebufferTexture2D(FramebufferTarget.Framebuffer, FramebufferAttachment.ColorAttachment0 + index, TextureTarget.Texture2D, texture.Handle, 0);
-			UpdateDrawBuffers();
-			GL.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
 		}
 
-		public RenderTexture AddDepthAttachment(RenderTextureFormat format = RenderTextureFormat.Depth24, bool linearFilter = false, TextureWrapMode wrap = TextureWrapMode.ClampToEdge)
+		public RenderTexture AddDepthAttachment(RenderTextureFormat format = RenderTextureFormat.Depth24, bool linearFilter = false, SamplerAddress wrap = SamplerAddress.ClampToEdge)
 		{
 			if (format != RenderTextureFormat.Depth24 && format != RenderTextureFormat.Depth32F)
 			{
 				throw new ArgumentException("Depth attachment requires a depth format.", nameof(format));
 			}
 
+			if (ownsDepth)
+			{
+				DepthAttachment?.Delete();
+			}
+
 			DepthAttachment = new RenderTexture(Width, Height, format, linearFilter, wrap);
-
-			GL.BindFramebuffer(FramebufferTarget.Framebuffer, Handle);
-			GL.FramebufferTexture2D(FramebufferTarget.Framebuffer, FramebufferAttachment.DepthAttachment, TextureTarget.Texture2D, DepthAttachment.Handle, 0);
-			UpdateDrawBuffers();
-			GL.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
-
+			ownsDepth = true;
 			return DepthAttachment;
 		}
 
@@ -111,25 +111,24 @@ namespace LELEngine.Rendering
 
 			DepthAttachment = depth;
 			ownsDepth = false;
-
-			GL.BindFramebuffer(FramebufferTarget.Framebuffer, Handle);
-			GL.FramebufferTexture2D(FramebufferTarget.Framebuffer, FramebufferAttachment.DepthAttachment, TextureTarget.Texture2D, depth.Handle, 0);
-			UpdateDrawBuffers();
-			GL.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
 		}
 
 		/// <summary>
-		///     Throws if the framebuffer is not complete. Call after adding attachments.
+		///     Throws if the attachments cannot be drawn into together. Call after adding attachments.
 		/// </summary>
 		public void Validate()
 		{
-			GL.BindFramebuffer(FramebufferTarget.Framebuffer, Handle);
-			FramebufferErrorCode status = GL.CheckFramebufferStatus(FramebufferTarget.Framebuffer);
-			GL.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
-
-			if (status != FramebufferErrorCode.FramebufferComplete)
+			foreach (RenderTexture texture in colorAttachments)
 			{
-				throw new InvalidOperationException("Framebuffer incomplete: " + status);
+				if (texture.Width != Width || texture.Height != Height)
+				{
+					throw new InvalidOperationException($"Framebuffer incomplete: a {texture.Width} x {texture.Height} colour attachment in a {Width} x {Height} framebuffer.");
+				}
+			}
+
+			if (DepthAttachment != null && (DepthAttachment.Width != Width || DepthAttachment.Height != Height))
+			{
+				throw new InvalidOperationException($"Framebuffer incomplete: a {DepthAttachment.Width} x {DepthAttachment.Height} depth attachment in a {Width} x {Height} framebuffer.");
 			}
 		}
 
@@ -159,32 +158,44 @@ namespace LELEngine.Rendering
 		}
 
 		/// <summary>
-		///     Binds for drawing and sets the viewport to cover the whole target.
+		///     Begins a render pass into the attachments (the viewport covers the whole target). Every colour
+		///     attachment is loaded, or cleared to one value; the depth likewise.
+		/// </summary>
+		public void Begin(LoadOperation color = LoadOperation.Load, ClearValue clearColor = default, LoadOperation depth = LoadOperation.Load, float clearDepth = 1f)
+		{
+			RenderPassDescriptor descriptor = Describe(color, clearColor, depth, clearDepth);
+			GraphicsDevice.Current.Commands.BeginRenderPass(descriptor);
+		}
+
+		/// <summary>Begins a pass that clears every attachment: the colours to one value, the depth to 1.</summary>
+		public void BeginCleared(ClearValue clearColor = default, float clearDepth = 1f)
+		{
+			Begin(LoadOperation.Clear, clearColor, LoadOperation.Clear, clearDepth);
+		}
+
+		/// <summary>
+		///     The OpenGL way (code that still gives OpenGL commands itself): binds the attachments for drawing, keeping
+		///     their contents, until something else is bound.
 		/// </summary>
 		public void Bind()
 		{
-			GL.BindFramebuffer(FramebufferTarget.Framebuffer, Handle);
-			GL.Viewport(0, 0, Width, Height);
+			Begin();
+			Graphics.OpenGL.GLDevice.Current.CommandsOfThread.KeepPassForLegacy();
 		}
 
 		/// <summary>
-		///     Binds the window's default framebuffer.
+		///     Begins a pass into the window's back buffer, with a viewport of the given size.
 		/// </summary>
 		public static void BindDefault(int width, int height)
 		{
-			GL.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
-			GL.Viewport(0, 0, width, height);
-		}
-
-		/// <summary>
-		///     Copies this framebuffer's depth into another framebuffer (0 = default) of the same size.
-		/// </summary>
-		public void BlitDepthTo(int targetHandle, int targetWidth, int targetHeight)
-		{
-			GL.BindFramebuffer(FramebufferTarget.ReadFramebuffer, Handle);
-			GL.BindFramebuffer(FramebufferTarget.DrawFramebuffer, targetHandle);
-			GL.BlitFramebuffer(0, 0, Width, Height, 0, 0, targetWidth, targetHeight, ClearBufferMask.DepthBufferBit, BlitFramebufferFilter.Nearest);
-			GL.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
+			GraphicsDevice device = GraphicsDevice.Current;
+			CommandList commands = device.Commands;
+			commands.BeginRenderPass(device.Backbuffer);
+			commands.SetViewport(0, 0, width, height);
+			if (commands is Graphics.OpenGL.GLCommandList legacy)
+			{
+				legacy.KeepPassForLegacy();
+			}
 		}
 
 		public void Delete()
@@ -203,31 +214,32 @@ namespace LELEngine.Rendering
 				DepthAttachment?.Delete();
 			}
 			DepthAttachment = null;
-
-			GL.DeleteFramebuffer(Handle);
-			Handle = 0;
 		}
 
 		#endregion
 
 		#region PrivateMethods
 
-		private void UpdateDrawBuffers()
+		private RenderPassDescriptor Describe(LoadOperation color, ClearValue clearColor, LoadOperation depth, float clearDepth)
 		{
-			if (colorAttachments.Count == 0)
+			if (passColors.Length != colorAttachments.Count)
 			{
-				// depth-only target (shadow maps)
-				GL.DrawBuffer(DrawBufferMode.None);
-				GL.ReadBuffer(ReadBufferMode.None);
-				return;
+				passColors = new ColorAttachment[colorAttachments.Count];
 			}
 
-			var buffers = new DrawBuffersEnum[colorAttachments.Count];
-			for (int i = 0; i < buffers.Length; i++)
+			for (int i = 0; i < passColors.Length; i++)
 			{
-				buffers[i] = DrawBuffersEnum.ColorAttachment0 + i;
+				passColors[i] = new ColorAttachment(colorAttachments[i].Gpu, color, clearColor);
 			}
-			GL.DrawBuffers(buffers.Length, buffers);
+
+			RenderPassDescriptor descriptor = default;
+			descriptor.Colors = passColors;
+			if (DepthAttachment != null)
+			{
+				descriptor.Depth = new DepthAttachment(DepthAttachment.Gpu, depth, clearDepth);
+			}
+
+			return descriptor;
 		}
 
 		#endregion

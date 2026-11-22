@@ -161,7 +161,7 @@ namespace LELEngine
 
 		#region InternalMethods
 
-		internal override TextureTarget Target => TextureTarget.TextureCubeMap;
+		internal override TextureKind Kind => TextureKind.Cube;
 		protected override bool HasData => faces != null || floatFaces != null;
 
 		internal void SetFaces(int faceSize, byte[][] rgbaFaces, float[][] hdrFaces, bool srgb, bool mipmaps)
@@ -184,29 +184,23 @@ namespace LELEngine
 			SetKtx(ktx, mipmaps);
 		}
 
-		protected override void BeforeUpload()
+		protected override GpuTexture UploadData()
 		{
-			if (!seamlessEnabled)
-			{
-				GL.Enable(EnableCap.TextureCubeMapSeamless);
-				seamlessEnabled = true;
-			}
-		}
-
-		protected override void UploadData()
-		{
+			TextureFormat format = floatFaces != null ? TextureFormat.RGBA16F : sRGB ? TextureFormat.SRGBA8 : TextureFormat.RGBA8;
+			GpuTexture texture = GraphicsDevice.Current.CreateTexture(TextureDescriptor.Cube(format, size, UploadMipLevels, TextureUsage.Sampled, AssetPath ?? name));
 			for (int face = 0; face < 6; face++)
 			{
-				TextureTarget target = TextureTarget.TextureCubeMapPositiveX + face;
 				if (floatFaces != null)
 				{
-					GL.TexImage2D(target, 0, PixelInternalFormat.Rgba16f, size, size, 0, PixelFormat.Rgba, PixelType.Float, floatFaces[face]);
+					texture.SetLayerData<ushort>(0, face, TexelConversion.ToHalf(floatFaces[face]));
 				}
 				else
 				{
-					GL.TexImage2D(target, 0, sRGB ? PixelInternalFormat.Srgb8Alpha8 : PixelInternalFormat.Rgba8, size, size, 0, PixelFormat.Rgba, PixelType.UnsignedByte, faces[face]);
+					texture.SetLayerData<byte>(0, face, faces[face]);
 				}
 			}
+
+			return texture;
 		}
 
 		#endregion

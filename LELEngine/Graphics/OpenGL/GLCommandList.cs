@@ -76,6 +76,8 @@ namespace LELEngine.Graphics.OpenGL
 		private bool legacyActive = true;
 		private int legacyUnit;
 		private bool legacyPass;
+		private bool legacyVertexInput;
+		private int legacyTextureVersion;
 		private int deletedEpochSeen;
 
 		public GLCommandList(GLDevice device, GLContext context)
@@ -303,6 +305,7 @@ namespace LELEngine.Graphics.OpenGL
 		public override void SetVertexInput(VertexInputLayout value)
 		{
 			layout = value ?? VertexInputLayout.Empty;
+			legacyVertexInput = false;
 		}
 
 		public override void SetVertexBuffer(int index, GpuBuffer buffer, long offset = 0)
@@ -685,19 +688,38 @@ namespace LELEngine.Graphics.OpenGL
 		{
 			if (legacyActive)
 			{
+				// Textures given to the program in use since the hand-over (a material's, between two draws the
+				// legacy code gives itself) are bound for the draw that follows.
+				if (program != null && program.TextureVersion != legacyTextureVersion && !program.IsDisposed && program.IsLinked)
+				{
+					legacyTextureVersion = program.TextureVersion;
+					activeUnit = -1;
+					Array.Fill(unitTextures, -1, device.UnitBase, Math.Min(program.UnitCount, unitTextures.Length - device.UnitBase));
+					Array.Fill(unitSamplers, -1, device.UnitBase, Math.Min(program.UnitCount, unitSamplers.Length - device.UnitBase));
+					ApplyProgramTextures(program);
+					gl.ActiveTexture(TextureUnit.Texture0 + legacyUnit);
+					activeUnit = legacyUnit;
+				}
+
 				return;
 			}
 
 			legacyActive = true;
 			FlushBarriers();
 			ApplyRenderState();
-			if (program != null && !program.IsDisposed && program.IsLinked && boundProgram != program.Handle)
+			if (program != null && !program.IsDisposed && program.IsLinked)
 			{
-				gl.UseProgram(program.Handle);
-				boundProgram = program.Handle;
+				// In use, with the textures given to its samplers through the device bound.
+				ApplyProgram();
+				legacyTextureVersion = program.TextureVersion;
 			}
 
-			if (boundVertexArray != 0)
+			if (legacyVertexInput && layout.Buffers.Length > 0 && vertexBuffers[0] != null)
+			{
+				// The code that follows draws the device's vertex input with OpenGL commands of its own.
+				ApplyVertexInput(indexBuffer != null);
+			}
+			else if (boundVertexArray != 0)
 			{
 				gl.BindVertexArray(0);
 				boundVertexArray = 0;
@@ -705,6 +727,16 @@ namespace LELEngine.Graphics.OpenGL
 
 			gl.ActiveTexture(TextureUnit.Texture0 + legacyUnit);
 			activeUnit = legacyUnit;
+		}
+
+		/// <summary>
+		///     The vertex input just set is for draws the legacy code gives with OpenGL commands of its own: its vertex
+		///     array is bound when the context is handed over.
+		/// </summary>
+		internal void KeepVertexInputForLegacy()
+		{
+			EnterDevice();
+			legacyVertexInput = true;
 		}
 
 		internal void LegacyActiveTexture(int unit)
@@ -731,6 +763,46 @@ namespace LELEngine.Graphics.OpenGL
 				unitSamplers[legacyUnit] = sampler;
 				unitTextures[legacyUnit] = -1;
 			}
+		}
+
+		/// <summary>
+		///     The open pass was begun for code that still gives OpenGL commands itself: it lasts until another pass
+		///     begins or that code binds a framebuffer (OpenGL's binding outlives dispatches and copies).
+		/// </summary>
+		internal void KeepPassForLegacy()
+		{
+			legacyPass = true;
+		}
+
+		/// <summary>The OpenGL framebuffer object the device draws a pass's attachments through (made when there is none yet).</summary>
+		internal int LegacyFramebuffer(in RenderPassDescriptor descriptor)
+		{
+			EnterDevice();
+			ForgetDeletedTextures();
+			FramebufferKey key = default;
+			key.Count = descriptor.Colors.Length;
+			for (int i = 0; i < descriptor.Colors.Length; i++)
+			{
+				key.Set(i, ((GLTexture)descriptor.Colors[i].Texture).Handle, descriptor.Colors[i].Mip, descriptor.Colors[i].Layer);
+			}
+
+			if (descriptor.Depth.Texture != null)
+			{
+				key.Set(8, ((GLTexture)descriptor.Depth.Texture).Handle, descriptor.Depth.Mip, descriptor.Depth.Layer);
+			}
+
+			if (!framebuffers.TryGetValue(key, out int framebuffer))
+			{
+				int previous = boundFramebuffer;
+				framebuffer = CreateFramebuffer(descriptor, key);
+				framebuffers.Add(key, framebuffer);
+				if (previous >= 0)
+				{
+					BindFramebuffer(previous);
+				}
+			}
+
+			return framebuffer;
 		}
 
 		/// <summary>The legacy code bound a framebuffer to draw into: draws given through the device go there.</summary>
@@ -1239,6 +1311,11 @@ namespace LELEngine.Graphics.OpenGL
 				boundProgram = current.Handle;
 			}
 
+			ApplyProgramTextures(current);
+		}
+
+		private void ApplyProgramTextures(GLProgram current)
+		{
 			int units = current.UnitCount;
 			int unitBase = device.UnitBase;
 			for (int index = 0; index < units; index++)

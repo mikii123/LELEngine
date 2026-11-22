@@ -45,6 +45,9 @@ namespace LELEngine.Graphics.OpenGL
 
 		private int[] unitLocations = Array.Empty<int>();
 
+		/// <summary>Counts the textures given to the samplers (beside the legacy OpenGL commands: what a draw given past the device has to see bound).</summary>
+		public int TextureVersion;
+
 		/// <summary>A stage writes images or storage blocks: what it wrote has to be made visible to what follows.</summary>
 		public bool WritesStorage { get; private set; }
 
@@ -302,6 +305,7 @@ namespace LELEngine.Graphics.OpenGL
 			{
 				Textures[unit] = (GLTexture)texture;
 				Samplers[unit] = (GLSampler)sampler;
+				TextureVersion++;
 				if (UnitLegacy[unit])
 				{
 					int value = device.UnitBase + unit;

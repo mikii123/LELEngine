@@ -314,7 +314,7 @@ namespace LELEngine.Rendering.Passes
 
 			shadowTarget?.Delete();
 			shadowTarget = new Framebuffer(width, height);
-			RenderTexture depth = shadowTarget.AddDepthAttachment(RenderTextureFormat.Depth32F, true, TextureWrapMode.ClampToBorder);
+			RenderTexture depth = shadowTarget.AddDepthAttachment(RenderTextureFormat.Depth32F, true, SamplerAddress.ClampToBorder);
 			depth.SetBorderColor(1f, 1f, 1f, 1f);
 			depth.SetShadowCompare(true);
 			shadowTarget.Validate();

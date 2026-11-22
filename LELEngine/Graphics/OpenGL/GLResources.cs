@@ -286,7 +286,27 @@ namespace LELEngine.Graphics.OpenGL
 
 	internal sealed unsafe class GLBuffer : GpuBuffer
 	{
-		public readonly int Handle;
+		/// <summary>The OpenGL buffer object (another one after <see cref="Resize" />).</summary>
+		public int Handle { get; private set; }
+
+		public override void Resize(long size, long keep)
+		{
+			OpenGLBackend gl = GLDevice.Gl;
+			int fresh = gl.GenBuffer();
+			gl.BindBuffer(BufferTarget.CopyWriteBuffer, fresh);
+			gl.BufferData(BufferTarget.CopyWriteBuffer, (IntPtr)size, null, Hint);
+			long copied = Math.Min(Math.Min(keep, Size), size);
+			if (copied > 0)
+			{
+				GLDevice.Current.CommandsOfThread.FlushBarriers();
+				gl.BindBuffer(BufferTarget.CopyReadBuffer, Handle);
+				gl.CopyBufferSubData(BufferTarget.CopyReadBuffer, BufferTarget.CopyWriteBuffer, IntPtr.Zero, IntPtr.Zero, (IntPtr)copied);
+			}
+
+			GLDevice.Current.ReleaseBuffer(Handle);
+			Handle = fresh;
+			Size = size;
+		}
 
 		public GLBuffer(in BufferDescriptor descriptor)
 			: base(descriptor)

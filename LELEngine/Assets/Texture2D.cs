@@ -183,7 +183,7 @@ namespace LELEngine
 
 		#region InternalMethods
 
-		internal override TextureTarget Target => TextureTarget.Texture2D;
+		internal override TextureKind Kind => TextureKind.Texture2D;
 
 		protected override bool HasData
 		{
@@ -283,25 +283,28 @@ namespace LELEngine
 		// Measured on an RTX 5070 Ti with a planets scene of 112 textures (1.6 GB): 274 ms against 779-868 ms for
 		// glTexImage2D, whose GenerateMipmap had to allocate the chain (518-530 ms of it). The handle is never respecified:
 		// new pixels release it and the next use makes a new one.
-		protected override void UploadData()
+		protected override GpuTexture UploadData()
 		{
+			GraphicsDevice device = GraphicsDevice.Current;
+			string label = AssetPath ?? name;
 			if (width <= 0 || height <= 0)
 			{
-				// Immutable storage takes no empty texture; glTexImage2D does.
-				GL.TexImage2D(TextureTarget.Texture2D, 0, PixelInternalFormat.Rgba8, Math.Max(0, width), Math.Max(0, height), 0, PixelFormat.Rgba, PixelType.UnsignedByte, IntPtr.Zero);
-				return;
+				// No texels: one that reads as a texture without any did (opaque black).
+				GpuTexture empty = device.CreateTexture(TextureDescriptor.Texture2D(TextureFormat.RGBA8, 1, 1, 1, TextureUsage.Sampled, label));
+				empty.SetData<byte>(0, new byte[] { 0, 0, 0, 255 });
+				return empty;
 			}
 
-			int levels = mipmapEnabled ? 1 + (int)Math.Floor(Math.Log2(Math.Max(width, height))) : 1;
 			if (floatPixels != null)
 			{
-				GL.TexStorage2D(TextureTarget2d.Texture2D, levels, SizedInternalFormat.Rgba16f, width, height);
-				GL.TexSubImage2D(TextureTarget.Texture2D, 0, 0, 0, width, height, PixelFormat.Rgba, PixelType.Float, floatPixels);
-				return;
+				GpuTexture hdr = device.CreateTexture(TextureDescriptor.Texture2D(TextureFormat.RGBA16F, width, height, UploadMipLevels, TextureUsage.Sampled, label));
+				hdr.SetData<ushort>(0, TexelConversion.ToHalf(floatPixels));
+				return hdr;
 			}
 
-			GL.TexStorage2D(TextureTarget2d.Texture2D, levels, sRGB ? SizedInternalFormat.Srgb8Alpha8 : SizedInternalFormat.Rgba8, width, height);
-			GL.TexSubImage2D(TextureTarget.Texture2D, 0, 0, 0, width, height, PixelFormat.Rgba, PixelType.UnsignedByte, pixels);
+			GpuTexture texture = device.CreateTexture(TextureDescriptor.Texture2D(sRGB ? TextureFormat.SRGBA8 : TextureFormat.RGBA8, width, height, UploadMipLevels, TextureUsage.Sampled, label));
+			texture.SetData<byte>(0, pixels);
+			return texture;
 		}
 
 		#endregion

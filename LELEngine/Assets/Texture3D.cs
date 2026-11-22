@@ -88,7 +88,7 @@ namespace LELEngine
 
 		#region InternalMethods
 
-		internal override TextureTarget Target => TextureTarget.Texture3D;
+		internal override TextureKind Kind => TextureKind.Texture3D;
 		protected override bool HasData => pixels != null;
 
 		internal void SetVolume(int newWidth, int newHeight, int newDepth, byte[] rgba, bool srgb, bool mipmaps)
@@ -111,9 +111,12 @@ namespace LELEngine
 			SetKtx(ktx, mipmaps);
 		}
 
-		protected override void UploadData()
+		protected override GpuTexture UploadData()
 		{
-			GL.TexImage3D(TextureTarget.Texture3D, 0, sRGB ? PixelInternalFormat.Srgb8Alpha8 : PixelInternalFormat.Rgba8, width, height, depth, 0, PixelFormat.Rgba, PixelType.UnsignedByte, pixels);
+			GpuTexture texture = GraphicsDevice.Current.CreateTexture(TextureDescriptor.Texture3D(sRGB ? TextureFormat.SRGBA8 : TextureFormat.RGBA8, width, height, depth, UploadMipLevels,
+				TextureUsage.Sampled, AssetPath ?? name));
+			texture.SetData<byte>(0, pixels);
+			return texture;
 		}
 
 		#endregion

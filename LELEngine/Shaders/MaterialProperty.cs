@@ -54,20 +54,20 @@ namespace LELEngine.Shaders
 		/// <summary>Uploads a number to a float uniform, or truncated to an int / bool one.</summary>
 		internal static void UploadFloat(ShaderProgram program, string name, float value)
 		{
-			int location = program.GetUniformLocation(name);
-			if (location < 0)
+			int slot = program.GetSlot(name);
+			if (slot < 0)
 			{
 				return;
 			}
 
-			ActiveUniformType type = program.GetUniformType(name);
-			if (type == ActiveUniformType.Int || type == ActiveUniformType.Bool)
+			UniformType type = program.GetUniformType(name);
+			if (type == UniformType.Int || type == UniformType.Bool)
 			{
-				GL.Uniform1(location, (int)value);
+				program.Gpu.SetInt(slot, (int)value);
 			}
 			else
 			{
-				GL.Uniform1(location, value);
+				program.Gpu.SetFloat(slot, value);
 			}
 		}
 	}
@@ -86,20 +86,20 @@ namespace LELEngine.Shaders
 
 		internal override void Apply(ShaderProgram program, ref int textureUnit)
 		{
-			int location = program.GetUniformLocation(name);
-			if (location < 0)
+			int slot = program.GetSlot(name);
+			if (slot < 0)
 			{
 				return;
 			}
 
-			ActiveUniformType type = program.GetUniformType(name);
-			if (type == ActiveUniformType.Float)
+			UniformType type = program.GetUniformType(name);
+			if (type == UniformType.Float)
 			{
-				GL.Uniform1(location, (float)value);
+				program.Gpu.SetFloat(slot, value);
 			}
 			else
 			{
-				GL.Uniform1(location, value);
+				program.Gpu.SetInt(slot, value);
 			}
 		}
 	}
@@ -124,22 +124,23 @@ namespace LELEngine.Shaders
 		/// <summary>Uploads as many components as the uniform has (vec2 / vec3 / vec4, float, ivec).</summary>
 		internal static void UploadVector(ShaderProgram program, string name, Vector4 value)
 		{
-			int location = program.GetUniformLocation(name);
-			if (location < 0)
+			int slot = program.GetSlot(name);
+			if (slot < 0)
 			{
 				return;
 			}
 
+			GpuProgram gpu = program.Gpu;
 			switch (program.GetUniformType(name))
 			{
-				case ActiveUniformType.Float: GL.Uniform1(location, value.X); break;
-				case ActiveUniformType.FloatVec2: GL.Uniform2(location, value.X, value.Y); break;
-				case ActiveUniformType.FloatVec3: GL.Uniform3(location, value.X, value.Y, value.Z); break;
-				case ActiveUniformType.Int: GL.Uniform1(location, (int)value.X); break;
-				case ActiveUniformType.IntVec2: GL.Uniform2(location, (int)value.X, (int)value.Y); break;
-				case ActiveUniformType.IntVec3: GL.Uniform3(location, (int)value.X, (int)value.Y, (int)value.Z); break;
-				case ActiveUniformType.IntVec4: GL.Uniform4(location, (int)value.X, (int)value.Y, (int)value.Z, (int)value.W); break;
-				default: GL.Uniform4(location, value); break;
+				case UniformType.Float: gpu.SetFloat(slot, value.X); break;
+				case UniformType.Vector2: gpu.SetVector2(slot, new Vector2(value.X, value.Y)); break;
+				case UniformType.Vector3: gpu.SetVector3(slot, new Vector3(value.X, value.Y, value.Z)); break;
+				case UniformType.Int: gpu.SetInt(slot, (int)value.X); break;
+				case UniformType.IntVector2: gpu.SetInt2(slot, (int)value.X, (int)value.Y); break;
+				case UniformType.IntVector3: gpu.SetInt3(slot, (int)value.X, (int)value.Y, (int)value.Z); break;
+				case UniformType.IntVector4: gpu.SetInt4(slot, (int)value.X, (int)value.Y, (int)value.Z, (int)value.W); break;
+				default: gpu.SetVector4(slot, value); break;
 			}
 		}
 	}
@@ -180,69 +181,53 @@ namespace LELEngine.Shaders
 		}
 
 		/// <summary>
-		///     Binds a texture (or the sampler kind's neutral default when it is null or of the wrong kind) on the next
-		///     material texture unit and points the sampler uniform at it.
+		///     Gives a sampler its texture (or the sampler kind's neutral default when it is null or of the wrong kind);
+		///     <paramref name="textureUnit" /> counts the material's textures.
 		/// </summary>
 		internal static void Bind(ShaderProgram program, string name, Texture value, ref int textureUnit)
 		{
-			int location = program.GetUniformLocation(name);
-			if (location < 0)
+			int slot = program.GetSlot(name);
+			if (slot < 0)
 			{
 				return;
 			}
 
-			// textureUnit counts the material's textures; past the first 8 they go above the engine's units.
-			int unit = Material.TextureUnitAt(textureUnit);
-			if (unit < 0)
+			if (textureUnit >= Material.MaxTextures)
 			{
 				Debug.LogWarning($"[Material] More than {Material.MaxTextures} textures; '{name}' is not bound");
 				return;
 			}
 
-			ActiveUniformType samplerType = program.GetUniformType(name);
+			UniformType samplerType = program.GetUniformType(name);
 			Texture texture = value;
 			if (texture != null && !Matches(texture, samplerType))
 			{
 				texture = null;
 			}
 
-			// The unit first: a texture used for the first time uploads when its handle is asked for, binding and
-			// unbinding itself on the active unit, which until here is the unit of the texture bound just before (that
-			// one then drew black in this draw: the first frame of every material with two textures, and for good in a
-			// bake's first view).
-			GL.ActiveTexture(TextureUnit.Texture0 + unit);
-			TextureTarget target;
-			int handle;
-			if (texture != null && texture.Handle != 0)
-			{
-				target = texture.Target;
-				handle = texture.Handle;
-			}
-			else
+			GpuTexture gpu = texture?.Gpu;
+			if (gpu == null)
 			{
 				// Nothing (or the wrong kind) assigned: a neutral default of the sampler's kind.
-				Texture fallback = DefaultFor(samplerType, name);
-				target = fallback.Target;
-				handle = fallback.Handle;
+				gpu = DefaultFor(samplerType, name).Gpu;
 			}
 
-			GL.BindTexture(target, handle);
-			GL.Uniform1(location, unit);
+			program.Gpu.SetTexture(slot, gpu);
 			textureUnit++;
 		}
 
 		/// <summary>The texture kind a sampler uniform accepts.</summary>
-		internal static bool Matches(Texture texture, ActiveUniformType samplerType)
+		internal static bool Matches(Texture texture, UniformType samplerType)
 		{
 			switch (samplerType)
 			{
-				case ActiveUniformType.SamplerCube:
-				case ActiveUniformType.SamplerCubeShadow:
+				case UniformType.SamplerCube:
+				case UniformType.SamplerCubeShadow:
 					return texture is Cubemap;
-				case ActiveUniformType.Sampler3D:
+				case UniformType.Sampler3D:
 					return texture is Texture3D;
-				case ActiveUniformType.Sampler2D:
-				case ActiveUniformType.Sampler2DShadow:
+				case UniformType.Sampler2D:
+				case UniformType.Sampler2DShadow:
 					return texture is Texture2D;
 				default:
 					return true;
@@ -252,14 +237,14 @@ namespace LELEngine.Shaders
 		private static Cubemap blackCube;
 		private static Texture3D whiteVolume;
 
-		private static Texture DefaultFor(ActiveUniformType samplerType, string uniformName)
+		private static Texture DefaultFor(UniformType samplerType, string uniformName)
 		{
 			switch (samplerType)
 			{
-				case ActiveUniformType.SamplerCube:
-				case ActiveUniformType.SamplerCubeShadow:
+				case UniformType.SamplerCube:
+				case UniformType.SamplerCubeShadow:
 					return blackCube ??= new Cubemap(1, "black", false);
-				case ActiveUniformType.Sampler3D:
+				case UniformType.Sampler3D:
 					return whiteVolume ??= new Texture3D(1, 1, 1, new byte[] { 255, 255, 255, 255 }, "white");
 				default:
 					return Material.IsNormalMapName(uniformName) ? Texture2D.normalTexture : Texture2D.whiteTexture;

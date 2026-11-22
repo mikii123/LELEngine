@@ -90,21 +90,24 @@ namespace LELEngine
 		/// <summary>Mip chain generated on upload.</summary>
 		public bool mipmapEnabled { get; protected set; }
 
-		/// <summary>The GL texture handle; uploads the pixels on first access.</summary>
-		public int Handle
+		/// <summary>The texture on the GPU; made from the pixels on first access (null when there are none, or the upload failed).</summary>
+		public GpuTexture Gpu
 		{
 			get
 			{
-				if (handle == 0 && !failed)
+				if (gpu == null && !failed)
 				{
 					TryUpload();
 				}
 
-				return handle;
+				return gpu;
 			}
 		}
 
-		public bool IsValid => !failed && (HasData || handle != 0);
+		/// <summary>The OpenGL texture object: only for the code that still gives OpenGL commands itself.</summary>
+		public int Handle => Gpu is Graphics.OpenGL.GLTexture texture ? texture.Handle : 0;
+
+		public bool IsValid => !failed && (HasData || gpu != null);
 
 		/// <summary>Linear filtering (bilinear) when scaled; off for pixel art (UI compatibility).</summary>
 		public bool filterLinear
@@ -130,22 +133,18 @@ namespace LELEngine
 		private FilterMode filter = FilterMode.Bilinear;
 		private TextureWrap wrap = TextureWrap.Repeat;
 		private int anisotropy = 1;
-		protected int handle;
+		protected GpuTexture gpu;
 		protected bool failed;
 
 		#endregion
 
 		#region PublicMethods
 
-		/// <summary>Deletes the GL texture; it is created again on the next use of <see cref="Handle" />.</summary>
+		/// <summary>Frees the texture on the GPU; it is made again on the next use of <see cref="Gpu" />.</summary>
 		public void Release()
 		{
-			if (handle != 0)
-			{
-				GL.DeleteTexture(handle);
-				handle = 0;
-			}
-
+			gpu?.Dispose();
+			gpu = null;
 			failed = false;
 		}
 
@@ -164,8 +163,11 @@ namespace LELEngine
 
 		#region InternalMethods
 
-		/// <summary>GL binding target of this texture type.</summary>
-		internal abstract TextureTarget Target { get; }
+		/// <summary>The OpenGL binding target of this texture type: only for the code that still gives OpenGL commands itself.</summary>
+		internal TextureTarget Target => Kind == TextureKind.Cube ? TextureTarget.TextureCubeMap : Kind == TextureKind.Texture3D ? TextureTarget.Texture3D : TextureTarget.Texture2D;
+
+		/// <summary>What kind of texture the GPU gets.</summary>
+		internal abstract TextureKind Kind { get; }
 
 		/// <summary>Texels baked by a game build (every level as the driver takes it): uploaded instead of the pixels.</summary>
 		internal KtxFile Ktx { get; private set; }
@@ -188,12 +190,14 @@ namespace LELEngine
 		/// <summary>Pixels are available for an upload.</summary>
 		protected abstract bool HasData { get; }
 
-		/// <summary>Creates the GL texture from the pixels (the target is already bound by <see cref="TryUpload" />).</summary>
-		protected abstract void UploadData();
+		/// <summary>
+		///     Makes the texture on the GPU from the pixels: its first mip level filled, with a whole mip chain when
+		///     <see cref="mipmapEnabled" /> (the levels below are generated after).
+		/// </summary>
+		protected abstract GpuTexture UploadData();
 
-		/// <summary>GL state the texture type needs before its data uploads (pixels or baked levels).</summary>
-		protected virtual void BeforeUpload()
-		{ }
+		/// <summary>Mip levels a texture of this one's pixels is made with: all of them, or one.</summary>
+		protected int UploadMipLevels => mipmapEnabled ? 0 : 1;
 
 		/// <summary>Called when the pixel data changed shape (width / height); subclasses set the fields.</summary>
 		protected void SetSize(int newWidth, int newHeight)
@@ -207,57 +211,47 @@ namespace LELEngine
 			mipmapEnabled = enabled;
 		}
 
-		/// <summary>Sampler state (filter, wrap, anisotropy) of the bound texture.</summary>
-		protected void ApplyParameters()
+		/// <summary>How the texture is sampled: its filter, wrap and anisotropy as a sampler of the device.</summary>
+		protected GpuSampler CreateSampler()
 		{
-			TextureTarget target = Target;
-			TextureMinFilter min;
-			TextureMagFilter mag;
+			TextureKind kind = Kind;
+			SamplerDescriptor descriptor = default;
+			descriptor.CompareFunction = CompareFunction.LessEqual;
 			switch (filter)
 			{
 				case FilterMode.Point:
-					min = mipmapEnabled ? TextureMinFilter.NearestMipmapNearest : TextureMinFilter.Nearest;
-					mag = TextureMagFilter.Nearest;
+					descriptor.Min = descriptor.Mag = SamplerFilter.Nearest;
+					descriptor.Mip = mipmapEnabled ? SamplerMipFilter.Nearest : SamplerMipFilter.None;
 					break;
 				case FilterMode.Bilinear:
-					min = mipmapEnabled ? TextureMinFilter.LinearMipmapNearest : TextureMinFilter.Linear;
-					mag = TextureMagFilter.Linear;
+					descriptor.Min = descriptor.Mag = SamplerFilter.Linear;
+					descriptor.Mip = mipmapEnabled ? SamplerMipFilter.Nearest : SamplerMipFilter.None;
 					break;
 				default:
-					min = mipmapEnabled ? TextureMinFilter.LinearMipmapLinear : TextureMinFilter.Linear;
-					mag = TextureMagFilter.Linear;
+					descriptor.Min = descriptor.Mag = SamplerFilter.Linear;
+					descriptor.Mip = mipmapEnabled ? SamplerMipFilter.Linear : SamplerMipFilter.None;
 					break;
 			}
 
-			GL.TexParameter(target, TextureParameterName.TextureMinFilter, (int)min);
-			GL.TexParameter(target, TextureParameterName.TextureMagFilter, (int)mag);
-
-			int wrapValue;
+			SamplerAddress address;
 			switch (wrap)
 			{
-				case TextureWrap.Clamp: wrapValue = (int)TextureWrapMode.ClampToEdge; break;
-				case TextureWrap.Mirror: wrapValue = (int)TextureWrapMode.MirroredRepeat; break;
-				default: wrapValue = (int)TextureWrapMode.Repeat; break;
+				case TextureWrap.Clamp: address = SamplerAddress.ClampToEdge; break;
+				case TextureWrap.Mirror: address = SamplerAddress.MirroredRepeat; break;
+				default: address = SamplerAddress.Repeat; break;
 			}
 
-			if (target == TextureTarget.TextureCubeMap)
+			if (kind == TextureKind.Cube)
 			{
-				// Faces always clamp; seams are handled by seamless cube map sampling.
-				wrapValue = (int)TextureWrapMode.ClampToEdge;
+				// Faces always clamp; seams are handled by sampling across faces.
+				address = SamplerAddress.ClampToEdge;
 			}
 
-			GL.TexParameter(target, TextureParameterName.TextureWrapS, wrapValue);
-			GL.TexParameter(target, TextureParameterName.TextureWrapT, wrapValue);
-			if (target == TextureTarget.Texture3D || target == TextureTarget.TextureCubeMap)
-			{
-				GL.TexParameter(target, TextureParameterName.TextureWrapR, wrapValue);
-			}
-
-			if (Rendering.GLCapabilities.AnisotropicFiltering && target != TextureTarget.Texture3D)
-			{
-				// GL_TEXTURE_MAX_ANISOTROPY (core in 4.6, same value as the EXT extension).
-				GL.TexParameter(target, (TextureParameterName)0x84FE, Math.Min(anisotropy, Rendering.GLCapabilities.MaxAnisotropy));
-			}
+			descriptor.AddressU = descriptor.AddressV = address;
+			// A 2D texture has no third coordinate: the device's default for it, whatever the texture's wrap.
+			descriptor.AddressW = kind == TextureKind.Texture2D ? SamplerAddress.Repeat : address;
+			descriptor.MaxAnisotropy = kind != TextureKind.Texture3D ? Math.Max(1, anisotropy) : 1f;
+			return GraphicsDevice.Current.GetSampler(descriptor);
 		}
 
 		/// <summary>Sampler state fields set without GL side effects (importers configure textures before upload).</summary>
@@ -285,29 +279,15 @@ namespace LELEngine
 			long waited = FrameProfiler.Timestamp;
 			try
 			{
-				handle = GL.GenTexture();
-				GL.BindTexture(Target, handle);
-				GL.PixelStore(PixelStoreParameter.UnpackAlignment, 1);
-				BeforeUpload();
-				if (Ktx != null)
-				{
-					Ktx.Upload(Target);
-				}
-				else
-				{
-					UploadData();
-				}
-
-				GL.PixelStore(PixelStoreParameter.UnpackAlignment, 4);
-				ApplyParameters();
-
 				// A baked texture brings its mip levels (compressed data cannot generate them); one level only gets them generated.
-				if (mipmapEnabled && (Ktx == null || (Ktx.Levels == 1 && !Ktx.IsCompressed)))
+				bool generate = mipmapEnabled && (Ktx == null || (Ktx.Levels == 1 && !Ktx.IsCompressed));
+				gpu = Ktx != null ? Ktx.Upload(Kind, generate, AssetPath ?? name) : UploadData();
+				gpu.Sampler = CreateSampler();
+				if (generate)
 				{
-					GL.GenerateMipmap((GenerateMipmapTarget)Target);
+					GraphicsDevice.Current.Commands.GenerateMipmaps(gpu);
 				}
 
-				GL.BindTexture(Target, 0);
 				if (FrameProfiler.Enabled)
 				{
 					double waitMs = (waited - started) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
@@ -318,32 +298,17 @@ namespace LELEngine
 			catch (Exception e)
 			{
 				Debug.LogWarning("[Texture] Cannot upload " + (AssetPath ?? name) + ": " + e.Message);
-				if (handle != 0)
-				{
-					GL.DeleteTexture(handle);
-				}
-
+				gpu?.Dispose();
 				failed = true;
-				handle = 0;
+				gpu = null;
 			}
 		}
 
 		private void ParametersChanged()
 		{
-			if (handle == 0)
+			if (gpu != null && GraphicsDevice.Current != null)
 			{
-				return;
-			}
-
-			try
-			{
-				GL.BindTexture(Target, handle);
-				ApplyParameters();
-				GL.BindTexture(Target, 0);
-			}
-			catch (Exception)
-			{
-				// No context on this thread: the parameters apply on the next upload.
+				gpu.Sampler = CreateSampler();
 			}
 		}
 

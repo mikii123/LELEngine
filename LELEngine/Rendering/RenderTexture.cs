@@ -4,13 +4,18 @@ using LELEngine.Graphics;
 namespace LELEngine.Rendering
 {
 	/// <summary>
-	///     GPU texture intended to be rendered into (color, depth, or storage image for compute).
+	///     A texture that is rendered into (a colour or depth attachment of a <see cref="Framebuffer" />) and sampled.
 	/// </summary>
 	public sealed class RenderTexture
 	{
 		#region PublicFields
 
-		public int Handle { get; private set; }
+		/// <summary>The texture on the GPU (another one after <see cref="Resize" />).</summary>
+		public GpuTexture Gpu { get; private set; }
+
+		/// <summary>The OpenGL texture object: only for the code that still gives OpenGL commands itself.</summary>
+		public int Handle => Gpu is Graphics.OpenGL.GLTexture texture ? texture.Handle : 0;
+
 		public int Width { get; private set; }
 		public int Height { get; private set; }
 		public RenderTextureFormat Format { get; }
@@ -20,22 +25,23 @@ namespace LELEngine.Rendering
 
 		#region PrivateFields
 
-		private readonly TextureMinFilter minFilter;
-		private readonly TextureMagFilter magFilter;
-		private readonly TextureWrapMode wrap;
+		private readonly bool linearFilter;
+		private readonly SamplerAddress wrap;
+		private readonly bool storage;
+		private bool shadowCompare;
+		private SamplerBorder border = SamplerBorder.TransparentBlack;
 
 		#endregion
 
 		#region Constructors
 
-		public RenderTexture(int width, int height, RenderTextureFormat format, bool linearFilter = true, TextureWrapMode wrap = TextureWrapMode.ClampToEdge)
+		/// <param name="storage">Shaders also read or write it as an image (<see cref="CommandList.SetImage" />).</param>
+		public RenderTexture(int width, int height, RenderTextureFormat format, bool linearFilter = true, SamplerAddress wrap = SamplerAddress.ClampToEdge, bool storage = false)
 		{
 			Format = format;
-			minFilter = linearFilter ? TextureMinFilter.Linear : TextureMinFilter.Nearest;
-			magFilter = linearFilter ? TextureMagFilter.Linear : TextureMagFilter.Nearest;
+			this.linearFilter = linearFilter;
 			this.wrap = wrap;
-
-			Handle = GL.GenTexture();
+			this.storage = storage;
 			Resize(width, height);
 		}
 
@@ -50,126 +56,81 @@ namespace LELEngine.Rendering
 		{
 			Width = Math.Max(1, width);
 			Height = Math.Max(1, height);
-
-			PixelInternalFormat internalFormat;
-			PixelFormat pixelFormat;
-			PixelType pixelType;
-			GetFormat(Format, out internalFormat, out pixelFormat, out pixelType);
-
-			GL.BindTexture(TextureTarget.Texture2D, Handle);
-			GL.TexImage2D(TextureTarget.Texture2D, 0, internalFormat, Width, Height, 0, pixelFormat, pixelType, IntPtr.Zero);
-			GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)minFilter);
-			GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)magFilter);
-			GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)wrap);
-			GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)wrap);
-			GL.BindTexture(TextureTarget.Texture2D, 0);
+			Gpu?.Dispose();
+			TextureUsage usage = TextureUsage.Sampled | TextureUsage.Attachment | (storage ? TextureUsage.Storage : 0);
+			Gpu = GraphicsDevice.Current.CreateTexture(TextureDescriptor.Texture2D(TextureFormatOf(Format), Width, Height, 1, usage));
+			Gpu.Sampler = CreateSampler();
 		}
 
 		/// <summary>
-		///     Enables hardware depth comparison (sampler2DShadow) for depth textures.
+		///     Sampling compares the stored depth with a reference (sampler2DShadow), for depth textures.
 		/// </summary>
 		public void SetShadowCompare(bool enabled)
 		{
-			GL.BindTexture(TextureTarget.Texture2D, Handle);
-			if (enabled)
+			shadowCompare = enabled;
+			Gpu.Sampler = CreateSampler();
+		}
+
+		/// <summary>What sampling outside 0..1 reads with a border wrap: transparent black, opaque black or opaque white.</summary>
+		public void SetBorderColor(float r, float g, float b, float a)
+		{
+			if (r == 1f && g == 1f && b == 1f && a == 1f)
 			{
-				GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureCompareMode, (int)TextureCompareMode.CompareRefToTexture);
-				GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureCompareFunc, (int)All.Lequal);
+				border = SamplerBorder.OpaqueWhite;
+			}
+			else if (r == 0f && g == 0f && b == 0f)
+			{
+				border = a == 0f ? SamplerBorder.TransparentBlack : SamplerBorder.OpaqueBlack;
 			}
 			else
 			{
-				GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureCompareMode, (int)TextureCompareMode.None);
+				throw new ArgumentException("A border is transparent black, opaque black or opaque white.");
 			}
-			GL.BindTexture(TextureTarget.Texture2D, 0);
+
+			Gpu.Sampler = CreateSampler();
 		}
 
-		public void SetBorderColor(float r, float g, float b, float a)
-		{
-			GL.BindTexture(TextureTarget.Texture2D, Handle);
-			GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureBorderColor, new[] { r, g, b, a });
-			GL.BindTexture(TextureTarget.Texture2D, 0);
-		}
-
+		/// <summary>The OpenGL way: binds the texture object to a texture unit (code that still gives OpenGL commands itself).</summary>
 		public void Bind(int unit)
 		{
 			GL.ActiveTexture(TextureUnit.Texture0 + unit);
 			GL.BindTexture(TextureTarget.Texture2D, Handle);
 		}
 
-		/// <summary>
-		///     Binds the texture as a compute shader storage image.
-		/// </summary>
-		public void BindImage(int unit, TextureAccess access)
-		{
-			GL.BindImageTexture(unit, Handle, 0, false, 0, access, GetSizedFormat(Format));
-		}
-
 		public void Delete()
 		{
-			GL.DeleteTexture(Handle);
-			Handle = 0;
+			Gpu?.Dispose();
+			Gpu = null;
+		}
+
+		/// <summary>The device's texel format of a render texture format.</summary>
+		public static TextureFormat TextureFormatOf(RenderTextureFormat format)
+		{
+			switch (format)
+			{
+				case RenderTextureFormat.RGBA8: return TextureFormat.RGBA8;
+				case RenderTextureFormat.RGBA16F: return TextureFormat.RGBA16F;
+				case RenderTextureFormat.RGBA32F: return TextureFormat.RGBA32F;
+				case RenderTextureFormat.R32F: return TextureFormat.R32F;
+				case RenderTextureFormat.RG16F: return TextureFormat.RG16F;
+				case RenderTextureFormat.Depth24: return TextureFormat.Depth24;
+				case RenderTextureFormat.Depth32F: return TextureFormat.Depth32F;
+				default: throw new ArgumentOutOfRangeException(nameof(format), format, null);
+			}
 		}
 
 		#endregion
 
 		#region PrivateMethods
 
-		private static void GetFormat(RenderTextureFormat format, out PixelInternalFormat internalFormat, out PixelFormat pixelFormat, out PixelType pixelType)
+		private GpuSampler CreateSampler()
 		{
-			switch (format)
-			{
-				case RenderTextureFormat.RGBA8:
-					internalFormat = PixelInternalFormat.Rgba8;
-					pixelFormat = PixelFormat.Rgba;
-					pixelType = PixelType.UnsignedByte;
-					break;
-				case RenderTextureFormat.RGBA16F:
-					internalFormat = PixelInternalFormat.Rgba16f;
-					pixelFormat = PixelFormat.Rgba;
-					pixelType = PixelType.Float;
-					break;
-				case RenderTextureFormat.RGBA32F:
-					internalFormat = PixelInternalFormat.Rgba32f;
-					pixelFormat = PixelFormat.Rgba;
-					pixelType = PixelType.Float;
-					break;
-				case RenderTextureFormat.R32F:
-					internalFormat = PixelInternalFormat.R32f;
-					pixelFormat = PixelFormat.Red;
-					pixelType = PixelType.Float;
-					break;
-				case RenderTextureFormat.RG16F:
-					internalFormat = PixelInternalFormat.Rg16f;
-					pixelFormat = PixelFormat.Rg;
-					pixelType = PixelType.Float;
-					break;
-				case RenderTextureFormat.Depth24:
-					internalFormat = PixelInternalFormat.DepthComponent24;
-					pixelFormat = PixelFormat.DepthComponent;
-					pixelType = PixelType.Float;
-					break;
-				case RenderTextureFormat.Depth32F:
-					internalFormat = PixelInternalFormat.DepthComponent32f;
-					pixelFormat = PixelFormat.DepthComponent;
-					pixelType = PixelType.Float;
-					break;
-				default:
-					throw new ArgumentOutOfRangeException(nameof(format), format, null);
-			}
-		}
-
-		private static SizedInternalFormat GetSizedFormat(RenderTextureFormat format)
-		{
-			switch (format)
-			{
-				case RenderTextureFormat.RGBA8: return SizedInternalFormat.Rgba8;
-				case RenderTextureFormat.RGBA16F: return SizedInternalFormat.Rgba16f;
-				case RenderTextureFormat.RGBA32F: return SizedInternalFormat.Rgba32f;
-				case RenderTextureFormat.R32F: return SizedInternalFormat.R32f;
-				case RenderTextureFormat.RG16F: return SizedInternalFormat.Rg16f;
-				default:
-					throw new InvalidOperationException("Format " + format + " cannot be bound as a storage image.");
-			}
+			SamplerDescriptor descriptor = new SamplerDescriptor(linearFilter ? SamplerFilter.Linear : SamplerFilter.Nearest, SamplerMipFilter.None, wrap);
+			// A 2D texture has no third coordinate.
+			descriptor.AddressW = SamplerAddress.Repeat;
+			descriptor.Border = border;
+			descriptor.Compare = shadowCompare;
+			return GraphicsDevice.Current.GetSampler(descriptor);
 		}
 
 		#endregion

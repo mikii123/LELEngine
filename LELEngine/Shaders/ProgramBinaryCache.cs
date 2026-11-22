@@ -95,12 +95,12 @@ namespace LELEngine.Shaders
 		///     Loads the binary saved under <paramref name="key" /> into <paramref name="program" /> (a new program object);
 		///     true when it linked. False when there is none or the driver refused it (the file is deleted).
 		/// </summary>
-		public static bool TryLoad(int program, string key)
+		public static GpuProgram TryLoad(ProgramDescriptor descriptor, string key)
 		{
 			string file = FileOf(key);
 			if (file == null || !File.Exists(file))
 			{
-				return false;
+				return null;
 			}
 
 			try
@@ -109,37 +109,37 @@ namespace LELEngine.Shaders
 				if (data.Length < Magic.Length + 8 || !data.AsSpan(0, Magic.Length).SequenceEqual(Magic))
 				{
 					File.Delete(file);
-					return false;
+					return null;
 				}
 
-				var format = (BinaryFormat)BitConverter.ToInt32(data, Magic.Length);
 				int length = BitConverter.ToInt32(data, Magic.Length + 4);
 				if (length <= 0 || length > data.Length - Magic.Length - 8)
 				{
 					File.Delete(file);
-					return false;
+					return null;
 				}
 
-				byte[] binary = new byte[length];
-				Array.Copy(data, Magic.Length + 8, binary, 0, length);
-				GL.ProgramBinary(program, format, binary, length);
-				GL.GetProgram(program, GetProgramParameterName.LinkStatus, out int linked);
-				if (linked == 0)
+				// The device's binary: the four bytes of its format, then the bytes (the file keeps the length between).
+				byte[] binary = new byte[length + 4];
+				Array.Copy(data, Magic.Length, binary, 0, 4);
+				Array.Copy(data, Magic.Length + 8, binary, 4, length);
+				GpuProgram program = GraphicsDevice.Current.CreateProgramFromBinary(descriptor, binary);
+				if (program == null)
 				{
 					System.Threading.Interlocked.Increment(ref refused);
 					File.Delete(file);
-					return false;
+					return null;
 				}
 
 				// Used now: kept by the clean-up of old binaries.
 				File.SetLastWriteTimeUtc(file, DateTime.UtcNow);
 				System.Threading.Interlocked.Increment(ref loaded);
-				return true;
+				return program;
 			}
 			catch (Exception e) when (e is IOException || e is UnauthorizedAccessException)
 			{
 				Warn("cannot read " + file + ": " + e.Message);
-				return false;
+				return null;
 			}
 		}
 
@@ -150,45 +150,31 @@ namespace LELEngine.Shaders
 			return file != null && File.Exists(file);
 		}
 
-		/// <summary>Before a program links: asks the driver to keep its binary retrievable (when the cache works).</summary>
-		public static void PrepareLink(int program)
-		{
-			if (Enabled)
-			{
-				GL.ProgramParameter(program, ProgramParameterName.ProgramBinaryRetrievableHint, 1);
-			}
-		}
-
 		/// <summary>Saves a linked program's binary under <paramref name="key" />.</summary>
-		public static void Save(int program, string key)
+		public static void Save(GpuProgram program, string key)
 		{
 			string file = FileOf(key);
-			if (file == null)
+			if (file == null || program == null)
 			{
 				return;
 			}
 
 			try
 			{
-				GL.GetProgram(program, GetProgramParameterName.ProgramBinaryLength, out int length);
-				if (length <= 0)
+				// The device's binary: the four bytes of its format, then the bytes.
+				byte[] binary = program.GetBinary();
+				if (binary == null || binary.Length <= 4)
 				{
 					return;
 				}
 
-				byte[] binary = new byte[length];
-				GL.GetProgramBinary(program, length, out int written, out BinaryFormat format, binary);
-				if (written <= 0)
-				{
-					return;
-				}
-
+				int written = binary.Length - 4;
 				using (var stream = new MemoryStream(Magic.Length + 8 + written))
 				{
 					stream.Write(Magic, 0, Magic.Length);
-					stream.Write(BitConverter.GetBytes((int)format), 0, 4);
+					stream.Write(binary, 0, 4);
 					stream.Write(BitConverter.GetBytes(written), 0, 4);
-					stream.Write(binary, 0, written);
+					stream.Write(binary, 4, written);
 
 					// Written aside and moved in: another instance of the game never reads half a file.
 					string temporary = file + "." + Guid.NewGuid().ToString("N").Substring(0, 8) + ".tmp";
@@ -235,14 +221,14 @@ namespace LELEngine.Shaders
 		{
 			try
 			{
-				GL.GetInteger(GetPName.NumProgramBinaryFormats, out int formats);
-				if (formats <= 0)
+				DeviceCapabilities capabilities = GraphicsDevice.Current.Capabilities;
+				if (!capabilities.ProgramBinaries)
 				{
 					Console.WriteLine("[ShaderCache] The driver offers no program binary format: shaders compile at every start");
 					return;
 				}
 
-				string driver = GL.GetString(StringName.Vendor) + "\n" + GL.GetString(StringName.Renderer) + "\n" + GL.GetString(StringName.Version) + "\n" + GL.GetString(StringName.ShadingLanguageVersion);
+				string driver = capabilities.DriverIdentity;
 				string folder = Path.Combine(Folder, Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(driver))).Substring(0, 16));
 				Directory.CreateDirectory(folder);
 				File.WriteAllText(Path.Combine(folder, "driver.txt"), driver + "\n");

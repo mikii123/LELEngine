@@ -99,7 +99,7 @@ namespace LELEngine.Rendering
 			{
 				DeleteTarget();
 				target = new Framebuffer(Size * count, Size);
-				RenderTexture depth = target.AddDepthAttachment(RenderTextureFormat.Depth32F, true, TextureWrapMode.ClampToBorder);
+				RenderTexture depth = target.AddDepthAttachment(RenderTextureFormat.Depth32F, true, SamplerAddress.ClampToBorder);
 				depth.SetBorderColor(1f, 1f, 1f, 1f);
 				depth.SetShadowCompare(true);
 				target.Validate();

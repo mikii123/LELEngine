@@ -265,9 +265,14 @@ namespace LELEngine.Graphics.OpenGL
 
 		internal void Release(GLBuffer buffer)
 		{
+			ReleaseBuffer(buffer.Handle);
+		}
+
+		internal void ReleaseBuffer(int handle)
+		{
 			lock (sync)
 			{
-				deadBuffers.Add(buffer.Handle);
+				deadBuffers.Add(handle);
 			}
 
 			if (currentContext != null)

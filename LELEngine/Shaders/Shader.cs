@@ -5,55 +5,50 @@ using LELEngine.Graphics;
 namespace LELEngine.Shaders
 {
 	/// <summary>
-	///     Single compiled shader stage.
+	///     The source of one stage of a program (complete: version line, defines, includes resolved). Stages are
+	///     compiled when a <see cref="ShaderProgram" /> is made of them.
 	/// </summary>
 	public sealed class Shader
 	{
 		#region PublicFields
 
-		public int Handle { get; }
 		public ShaderType Type { get; }
+		public string Source { get; }
 
-		/// <summary>The driver's compile log of the last compiled stage (empty when clean).</summary>
-		public static string LastLog { get; private set; } = "";
-
-		/// <summary>The last compiled stage compiled without errors.</summary>
-		public static bool LastCompiled { get; private set; } = true;
+		/// <summary>What messages about the stage call it.</summary>
+		public string DebugName { get; }
 
 		#endregion
 
 		#region Constructors
 
+		/// <summary>A stage file: its first line is the stage tag (/////Vertex ...), the rest the code.</summary>
 		public Shader(string path)
 		{
 			using (StreamReader sr = new StreamReader(Directory.GetCurrentDirectory() + path))
 			{
 				string tag = sr.ReadLine();
 				Type = ParseTag(tag);
-				string code = sr.ReadToEnd();
-
-				Handle = Compile(code, Type, path);
+				Source = sr.ReadToEnd();
+				DebugName = path;
 			}
 		}
 
 		public Shader(string code, ShaderType type, string debugName = null)
 		{
 			Type = type;
-			Handle = Compile(code, type, debugName ?? type.ToString());
+			Source = code;
+			DebugName = debugName ?? type.ToString();
 		}
 
 		#endregion
 
 		#region PublicMethods
 
+		/// <summary>Nothing to free: a stage is its source (kept for the code that paired every stage with a delete).</summary>
 		public void Delete()
-		{
-			GL.DeleteShader(Handle);
-		}
+		{ }
 
-		/// <summary>
-		///     Parses the "/////Vertex" style section tag used by .shader files.
-		/// </summary>
 		public static bool TryParseTag(string line, out ShaderType type)
 		{
 			switch (line)
@@ -82,6 +77,33 @@ namespace LELEngine.Shaders
 			}
 		}
 
+		/// <summary>The device's name of a stage.</summary>
+		public static ShaderStage StageOf(ShaderType type)
+		{
+			switch (type)
+			{
+				case ShaderType.FragmentShader: return ShaderStage.Fragment;
+				case ShaderType.GeometryShader: return ShaderStage.Geometry;
+				case ShaderType.ComputeShader: return ShaderStage.Compute;
+				case ShaderType.TessControlShader: return ShaderStage.TessControl;
+				case ShaderType.TessEvaluationShader: return ShaderStage.TessEvaluation;
+				default: return ShaderStage.Vertex;
+			}
+		}
+
+		public static ShaderType TypeOf(ShaderStage stage)
+		{
+			switch (stage)
+			{
+				case ShaderStage.Fragment: return ShaderType.FragmentShader;
+				case ShaderStage.Geometry: return ShaderType.GeometryShader;
+				case ShaderStage.Compute: return ShaderType.ComputeShader;
+				case ShaderStage.TessControl: return ShaderType.TessControlShader;
+				case ShaderStage.TessEvaluation: return ShaderType.TessEvaluationShader;
+				default: return ShaderType.VertexShader;
+			}
+		}
+
 		#endregion
 
 		#region PrivateMethods
@@ -91,47 +113,6 @@ namespace LELEngine.Shaders
 			ShaderType type;
 			TryParseTag(tag, out type);
 			return type;
-		}
-
-		private static int Compile(string code, ShaderType type, string debugName)
-		{
-			int handle = Submit(code, type);
-			LastCompiled = Check(handle, type, debugName, out string log);
-			LastLog = log;
-			return handle;
-		}
-
-		#endregion
-
-		#region InternalMethods
-
-		/// <summary>
-		///     A stage object with its source handed to the compiler, without waiting for the result (with parallel shader
-		///     compile the driver's threads work on it until <see cref="Check" />).
-		/// </summary>
-		internal static int Submit(string code, ShaderType type)
-		{
-			int handle = GL.CreateShader(type);
-			GL.ShaderSource(handle, code);
-			GL.CompileShader(handle);
-			return handle;
-		}
-
-		/// <summary>Waits for a submitted stage: true when it compiled; its log (empty when clean) is printed as Compile prints it.</summary>
-		internal static bool Check(int handle, ShaderType type, string debugName, out string log)
-		{
-			GL.GetShader(handle, ShaderParameter.CompileStatus, out int status);
-			log = GL.GetShaderInfoLog(handle) ?? "";
-			if (status == 0)
-			{
-				Console.WriteLine($"[Shader] Compile error in {debugName} ({type}):\n{log}");
-			}
-			else if (!string.IsNullOrWhiteSpace(log))
-			{
-				Console.WriteLine($"[Shader] {debugName} ({type}):\n{log}");
-			}
-
-			return status != 0;
 		}
 
 		#endregion

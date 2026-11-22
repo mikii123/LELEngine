@@ -95,7 +95,7 @@ namespace LELEngine.Editor
 			else
 			{
 				ImGui.TextDisabled("The shader declares no Properties block; its material uniforms:");
-				List<KeyValuePair<string, ActiveUniformType>> uniforms = shader.GetMaterialUniforms();
+				List<KeyValuePair<string, UniformType>> uniforms = shader.GetMaterialUniforms();
 				// The engine's conventional parameters first (Color, Emissive, Roughness, Metallic), then the rest by name.
 				uniforms.Sort((a, b) =>
 				{
@@ -103,7 +103,7 @@ namespace LELEngine.Editor
 					int rb = StandardRank(b.Key);
 					return ra != rb ? ra.CompareTo(rb) : string.Compare(a.Key, b.Key, StringComparison.OrdinalIgnoreCase);
 				});
-				foreach (KeyValuePair<string, ActiveUniformType> uniform in uniforms)
+				foreach (KeyValuePair<string, UniformType> uniform in uniforms)
 				{
 					shown.Add(uniform.Key);
 					ImGui.PushID(uniform.Key);
@@ -324,29 +324,29 @@ namespace LELEngine.Editor
 			}
 		}
 
-		private static bool DrawUniform(Material material, string name, ActiveUniformType type, InspectorContext context)
+		private static bool DrawUniform(Material material, string name, UniformType type, InspectorContext context)
 		{
 			string label = Serialization.SerializationUtility.NicifyName(name);
 			switch (type)
 			{
-				case ActiveUniformType.FloatVec4:
+				case UniformType.Vector4:
 					return IsColorName(name) ? DrawColor(material, name, label, IsHdrName(name), context) : DrawVector(material, name, label, 4, context);
-				case ActiveUniformType.FloatVec3:
+				case UniformType.Vector3:
 					return IsColorName(name) ? DrawColor(material, name, label, IsHdrName(name), context) : DrawVector(material, name, label, 3, context);
-				case ActiveUniformType.FloatVec2:
+				case UniformType.Vector2:
 					return DrawVector(material, name, label, 2, context);
-				case ActiveUniformType.Float:
+				case UniformType.Float:
 					return DrawFloat(material, name, label, context);
-				case ActiveUniformType.Int:
-				case ActiveUniformType.UnsignedInt:
+				case UniformType.Int:
+				case UniformType.UInt:
 					return DrawInt(material, name, label, context);
-				case ActiveUniformType.Bool:
+				case UniformType.Bool:
 					return DrawBool(material, name, label, context);
-				case ActiveUniformType.Sampler2D:
+				case UniformType.Sampler2D:
 					return DrawTexture(material, name, label, typeof(Texture2D), context);
-				case ActiveUniformType.SamplerCube:
+				case UniformType.SamplerCube:
 					return DrawTexture(material, name, label, typeof(Cubemap), context);
-				case ActiveUniformType.Sampler3D:
+				case UniformType.Sampler3D:
 					return DrawTexture(material, name, label, typeof(Texture3D), context);
 				default:
 					FieldDrawer.Label(label, null, context);

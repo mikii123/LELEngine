@@ -40,12 +40,23 @@ namespace LELEngine.Shaders
 		/// <summary>Closing tag of the Properties block of a .shader file (material parameters, see <see cref="ShaderProperty" />).</summary>
 		public const string PropertiesTag = "/////Properties";
 
+		/// <summary>The device's program (null while not built on a thread with the graphics context, or released).</summary>
+		public GpuProgram Gpu
+		{
+			get
+			{
+				EnsureBuilt();
+				return gpu;
+			}
+		}
+
+		/// <summary>The OpenGL program object: only for the code that still gives OpenGL commands itself.</summary>
 		public int Handle
 		{
 			get
 			{
 				EnsureBuilt();
-				return handle;
+				return gpu is Graphics.OpenGL.GLProgram program ? program.Handle : 0;
 			}
 		}
 
@@ -86,14 +97,13 @@ namespace LELEngine.Shaders
 					return false;
 				}
 
-				int[] shaders = startedShaders;
-				if (shaders == null || !GLCapabilities.ParallelShaderCompile || !GraphicsThread.HasContext)
+				GpuProgram building = gpu;
+				if (!buildStarted || building == null || !GLCapabilities.ParallelShaderCompile || !GraphicsThread.HasContext)
 				{
 					return true;
 				}
 
-				GL.GetProgram(handle, CompletionStatus, out int complete);
-				return complete != 0;
+				return building.IsReady;
 			}
 		}
 
@@ -165,14 +175,16 @@ namespace LELEngine.Shaders
 
 		private const string InstancingInclude = "Engine/Instancing.glsl";
 
-		// GL_COMPLETION_STATUS_KHR (KHR_parallel_shader_compile; ARB's has the same value).
-		private const GetProgramParameterName CompletionStatus = (GetProgramParameterName)0x91B1;
-
-		private int handle;
+		private GpuProgram gpu;
 		private bool linked;
 		private List<KeyValuePair<ShaderType, string>> pendingStages;
+
+		// Slots of the uniforms asked for by name (-1: the program has none of that name).
 		private readonly Dictionary<string, int> uniformCache = new Dictionary<string, int>();
-		private readonly Dictionary<string, ActiveUniformType> uniformTypes = new Dictionary<string, ActiveUniformType>(StringComparer.Ordinal);
+
+		// OpenGL locations by name, for the code that still gives OpenGL commands itself.
+		private readonly Dictionary<string, int> locationCache = new Dictionary<string, int>();
+		private readonly Dictionary<string, UniformType> uniformTypes = new Dictionary<string, UniformType>(StringComparer.Ordinal);
 		private readonly List<ShaderProperty> properties = new List<ShaderProperty>();
 		private readonly List<ShaderProperty> keywordProperties = new List<ShaderProperty>();
 		private readonly ShaderRenderState renderState = new ShaderRenderState();
@@ -198,10 +210,9 @@ namespace LELEngine.Shaders
 		private string[] sourceFiles = Array.Empty<string>();
 		private long sourceStamp;
 
-		// Started builds (StartBuild): the stage objects the driver compiles, the stages (their types name the log lines)
-		// and the binary cache's key, until EnsureBuilt reads the results.
-		private int[] startedShaders;
-		private List<KeyValuePair<ShaderType, string>> startedStages;
+		// A started build (StartBuild): the device compiles the program, until EnsureBuilt reads the results; and the
+		// binary cache's key to save it under.
+		private bool buildStarted;
 		private string startedCacheKey;
 
 		// Programs whose build was started and not finished (context thread only).
@@ -215,7 +226,7 @@ namespace LELEngine.Shaders
 		internal static int StartedOnThisThread => startedOnThisThread;
 
 		/// <summary>Its build was started on a thread and not finished (the compile thread leaves those to that thread's context).</summary>
-		internal bool BuildStartedElsewhere => !built && startedShaders != null;
+		internal bool BuildStartedElsewhere => !built && buildStarted;
 
 		/// <summary>
 		///     The binary cache holds every program the variant needs: its shader's own program, the variant's, and its
@@ -298,16 +309,23 @@ namespace LELEngine.Shaders
 		public ShaderProgram(string name, params Shader[] shaders)
 		{
 			Name = name;
-			handle = GL.CreateProgram();
-			Link(shaders);
+			var stages = new List<KeyValuePair<ShaderType, string>>();
+			foreach (Shader shader in shaders)
+			{
+				stages.Add(new KeyValuePair<ShaderType, string>(shader.Type, shader.Source));
+			}
+
+			gpu = GraphicsDevice.Current.CreateProgram(Describe(name, stages, false));
+			buildStarted = true;
+			FinishBuild();
 			built = true;
 		}
 
-		// A program the binary cache linked (FromSources).
-		private ShaderProgram(string name, int linkedProgram)
+		// A program the binary cache gave (FromSources).
+		private ShaderProgram(string name, GpuProgram linkedProgram)
 		{
 			Name = name;
-			handle = linkedProgram;
+			gpu = linkedProgram;
 			linked = true;
 			CollectUniforms();
 			built = true;
@@ -408,7 +426,7 @@ namespace LELEngine.Shaders
 				}
 
 				Start();
-				if (startedShaders == null || ShaderCompilation.OnCompileThread)
+				if (!buildStarted || ShaderCompilation.OnCompileThread)
 				{
 					// Loaded from the binary cache, or the compile thread: done here.
 					FinishBuild();
@@ -437,10 +455,11 @@ namespace LELEngine.Shaders
 			}
 		}
 
+		/// <summary>Makes this the program of the next draws or dispatches.</summary>
 		public void Use()
 		{
 			EnsureBuilt();
-			GL.UseProgram(handle);
+			GraphicsDevice.Current.Commands.SetProgram(gpu);
 		}
 
 		/// <summary>
@@ -457,55 +476,24 @@ namespace LELEngine.Shaders
 			string cacheKey = ProgramBinaryCache.Enabled ? ProgramBinaryCache.Key(sources) : null;
 			if (cacheKey != null)
 			{
-				int cached = GL.CreateProgram();
-				if (ProgramBinaryCache.TryLoad(cached, cacheKey))
+				GpuProgram cached = ProgramBinaryCache.TryLoad(Describe(name, sources, false), cacheKey);
+				if (cached != null)
 				{
 					FrameProfiler.EventSince(startedAt, "shader", name, "generated program loaded from the binary cache");
 					return new ShaderProgram(name, cached);
 				}
-
-				GL.DeleteProgram(cached);
 			}
 
-			var shaders = new List<Shader>();
-			var log = new System.Text.StringBuilder();
-			bool compiled = true;
-			foreach (KeyValuePair<ShaderType, string> source in sources)
+			var shaders = new Shader[sources.Count];
+			for (int i = 0; i < sources.Count; i++)
 			{
-				var shader = new Shader(source.Value, source.Key, name);
-				if (!Shader.LastCompiled)
-				{
-					compiled = false;
-				}
-
-				if (!string.IsNullOrWhiteSpace(Shader.LastLog))
-				{
-					log.Append(StageName(source.Key)).Append(": ").Append(Shader.LastLog.Trim()).Append('\n');
-				}
-
-				shaders.Add(shader);
+				shaders[i] = new Shader(sources[i].Value, sources[i].Key, name);
 			}
 
-			var program = new ShaderProgram(name, shaders.ToArray());
-			foreach (Shader shader in shaders)
-			{
-				shader.Delete();
-			}
-
-			if (!compiled)
-			{
-				program.IsLinked = false;
-			}
-
-			if (!string.IsNullOrWhiteSpace(program.linkLog))
-			{
-				log.Append("link: ").Append(program.linkLog.Trim()).Append('\n');
-			}
-
-			program.BuildLog = log.ToString();
+			var program = new ShaderProgram(name, shaders);
 			if (cacheKey != null && program.linked)
 			{
-				ProgramBinaryCache.Save(program.handle, cacheKey);
+				ProgramBinaryCache.Save(program.gpu, cacheKey);
 			}
 
 			FrameProfiler.EventSince(startedAt, "shader", name, "generated program compiled and linked (not in the binary cache)");
@@ -816,6 +804,7 @@ namespace LELEngine.Shaders
 				sourceFiles = files.ToArray();
 				sourceStamp = StampOf(sourceFiles);
 				uniformCache.Clear();
+				locationCache.Clear();
 				uniformTypes.Clear();
 				linked = false;
 				linkLog = "";
@@ -882,17 +871,36 @@ namespace LELEngine.Shaders
 		public int GetAttributeLocation(string name)
 		{
 			EnsureBuilt();
-			return GL.GetAttribLocation(handle, name);
+			return gpu != null ? gpu.GetAttributeLocation(name) : -1;
 		}
 
+		/// <summary>
+		///     The slot of a uniform by name ("name", "array[3]", "struct.member"), -1 when the program has none of that
+		///     name: what the device's program takes values and textures by (<see cref="Gpu" />).
+		/// </summary>
+		public int GetSlot(string name)
+		{
+			EnsureBuilt();
+			int slot;
+			if (!uniformCache.TryGetValue(name, out slot))
+			{
+				slot = gpu != null ? gpu.GetUniformSlot(name) : -1;
+				uniformCache[name] = slot;
+			}
+
+			return slot;
+		}
+
+		/// <summary>The OpenGL location of a uniform: only for the code that still gives OpenGL commands itself.</summary>
 		public int GetUniformLocation(string name)
 		{
 			EnsureBuilt();
 			int location;
-			if (!uniformCache.TryGetValue(name, out location))
+			if (!locationCache.TryGetValue(name, out location))
 			{
-				location = GL.GetUniformLocation(handle, name);
-				uniformCache[name] = location;
+				int program = Handle;
+				location = program != 0 ? GL.GetUniformLocation(program, name) : -1;
+				locationCache[name] = location;
 			}
 
 			return location;
@@ -900,26 +908,26 @@ namespace LELEngine.Shaders
 
 		public bool HasUniform(string name)
 		{
-			return GetUniformLocation(name) >= 0;
+			return GetSlot(name) >= 0;
 		}
 
-		/// <summary>GLSL type of an active uniform (<see cref="ActiveUniformType.Float" /> when unknown).</summary>
-		public ActiveUniformType GetUniformType(string name)
+		/// <summary>Type of a uniform (<see cref="UniformType.Float" /> when unknown).</summary>
+		public UniformType GetUniformType(string name)
 		{
 			EnsureBuilt();
-			ActiveUniformType type;
-			return uniformTypes.TryGetValue(name, out type) ? type : ActiveUniformType.Float;
+			UniformType type;
+			return uniformTypes.TryGetValue(name, out type) ? type : UniformType.Float;
 		}
 
 		/// <summary>
 		///     Active uniforms that are material parameters: not the camera / lighting / engine uniforms
 		///     (<see cref="Material.IsSharedUniform" />). Materials of shaders without a Properties block edit these.
 		/// </summary>
-		public List<KeyValuePair<string, ActiveUniformType>> GetMaterialUniforms()
+		public List<KeyValuePair<string, UniformType>> GetMaterialUniforms()
 		{
 			EnsureBuilt();
-			var result = new List<KeyValuePair<string, ActiveUniformType>>();
-			foreach (KeyValuePair<string, ActiveUniformType> uniform in uniformTypes)
+			var result = new List<KeyValuePair<string, UniformType>>();
+			foreach (KeyValuePair<string, UniformType> uniform in uniformTypes)
 			{
 				if (!Material.IsSharedUniform(uniform.Key) && !uniform.Key.Contains("."))
 				{
@@ -996,176 +1004,163 @@ namespace LELEngine.Shaders
 
 		public void SetInt(string name, int value)
 		{
-			int loc = GetUniformLocation(name);
-			if (loc >= 0) GL.Uniform1(loc, value);
+			int slot = GetSlot(name);
+			if (slot >= 0) gpu.SetInt(slot, value);
 		}
 
 		public void SetFloat(string name, float value)
 		{
-			int loc = GetUniformLocation(name);
-			if (loc >= 0) GL.Uniform1(loc, value);
+			int slot = GetSlot(name);
+			if (slot >= 0) gpu.SetFloat(slot, value);
 		}
 
-		/// <summary>Sets a uint uniform (an int upload into a uint uniform is a GL error and leaves it unset).</summary>
+		/// <summary>Sets a uint uniform (an int given to a uint uniform leaves it unset).</summary>
 		public void SetUint(string name, uint value)
 		{
-			int loc = GetUniformLocation(name);
-			if (loc >= 0) GL.Uniform1(loc, value);
+			int slot = GetSlot(name);
+			if (slot >= 0) gpu.SetUInt(slot, value);
 		}
 
 		public void SetInt2(string name, int x, int y)
 		{
-			int loc = GetUniformLocation(name);
-			if (loc >= 0) GL.Uniform2(loc, x, y);
+			int slot = GetSlot(name);
+			if (slot >= 0) gpu.SetInt2(slot, x, y);
 		}
 
 		public void SetInt3(string name, int x, int y, int z)
 		{
-			int loc = GetUniformLocation(name);
-			if (loc >= 0) GL.Uniform3(loc, x, y, z);
+			int slot = GetSlot(name);
+			if (slot >= 0) gpu.SetInt3(slot, x, y, z);
+		}
+
+		public void SetInt4(string name, int x, int y, int z, int w)
+		{
+			int slot = GetSlot(name);
+			if (slot >= 0) gpu.SetInt4(slot, x, y, z, w);
+		}
+
+		public void SetUint4(string name, uint x, uint y, uint z, uint w)
+		{
+			int slot = GetSlot(name);
+			if (slot >= 0) gpu.SetUInt4(slot, x, y, z, w);
 		}
 
 		public void SetVector2(string name, Vector2 value)
 		{
-			int loc = GetUniformLocation(name);
-			if (loc >= 0) GL.Uniform2(loc, value);
+			int slot = GetSlot(name);
+			if (slot >= 0) gpu.SetVector2(slot, value);
 		}
 
 		public void SetVector3(string name, Vector3 value)
 		{
-			int loc = GetUniformLocation(name);
-			if (loc >= 0) GL.Uniform3(loc, value);
+			int slot = GetSlot(name);
+			if (slot >= 0) gpu.SetVector3(slot, value);
 		}
 
 		public void SetVector4(string name, Vector4 value)
 		{
-			int loc = GetUniformLocation(name);
-			if (loc >= 0) GL.Uniform4(loc, value);
+			int slot = GetSlot(name);
+			if (slot >= 0) gpu.SetVector4(slot, value);
 		}
 
 		public void SetColor(string name, Color4 value)
 		{
-			int loc = GetUniformLocation(name);
-			if (loc >= 0) GL.Uniform4(loc, value);
+			int slot = GetSlot(name);
+			if (slot >= 0) gpu.SetColor(slot, value);
 		}
 
 		public void SetMatrix4(string name, Matrix4 value)
 		{
-			int loc = GetUniformLocation(name);
-			if (loc >= 0) GL.UniformMatrix4(loc, false, ref value);
+			int slot = GetSlot(name);
+			if (slot >= 0) gpu.SetMatrix4(slot, value);
 		}
 
 		/// <summary>Sets a vec4 array uniform ("name" addresses its first element).</summary>
 		public void SetVector4Array(string name, Vector4[] values)
 		{
-			int loc = GetUniformLocation(name);
-			if (loc < 0 || values.Length == 0)
-			{
-				return;
-			}
+			int slot = GetSlot(name);
+			if (slot >= 0) gpu.SetVector4Array(slot, values);
+		}
 
-			var data = new float[values.Length * 4];
-			for (int i = 0; i < values.Length; i++)
-			{
-				data[i * 4] = values[i].X;
-				data[i * 4 + 1] = values[i].Y;
-				data[i * 4 + 2] = values[i].Z;
-				data[i * 4 + 3] = values[i].W;
-			}
+		/// <summary>Sets a float array uniform ("name" addresses its first element).</summary>
+		public void SetFloatArray(string name, ReadOnlySpan<float> values)
+		{
+			int slot = GetSlot(name);
+			if (slot >= 0) gpu.SetFloatArray(slot, values);
+		}
 
-			GL.Uniform4(loc, values.Length, data);
+		/// <summary>Sets an int array uniform ("name" addresses its first element).</summary>
+		public void SetIntArray(string name, ReadOnlySpan<int> values)
+		{
+			int slot = GetSlot(name);
+			if (slot >= 0) gpu.SetIntArray(slot, values);
 		}
 
 		/// <summary>
-		///     Binds a texture to the given unit and points the sampler uniform at it.
+		///     The texture a sampler reads from now on (null: none), and how: a null sampler takes the texture's own
+		///     (<see cref="GpuTexture.Sampler" />).
+		/// </summary>
+		public void SetTexture(string name, GpuTexture texture, GpuSampler sampler = null)
+		{
+			int slot = GetSlot(name);
+			if (slot >= 0) gpu.SetTexture(slot, texture, sampler);
+		}
+
+		public void SetTexture(string name, RenderTexture texture, GpuSampler sampler = null)
+		{
+			SetTexture(name, texture?.Gpu, sampler);
+		}
+
+		public void SetTexture(string name, Texture texture, GpuSampler sampler = null)
+		{
+			SetTexture(name, texture?.Gpu, sampler);
+		}
+
+		/// <summary>
+		///     The OpenGL way, for the code that still gives OpenGL commands itself: binds a texture object to a texture
+		///     unit and points the sampler at that unit.
 		/// </summary>
 		public void SetTexture(string name, TextureTarget target, int textureHandle, int unit)
 		{
-			int loc = GetUniformLocation(name);
-			if (loc < 0) return;
+			int slot = GetSlot(name);
+			if (slot < 0) return;
 
 			GL.ActiveTexture(TextureUnit.Texture0 + unit);
 			GL.BindTexture(target, textureHandle);
-			GL.Uniform1(loc, unit);
+			gpu.SetInt(slot, unit);
 		}
 
 		#endregion
 
 		#region PrivateMethods
 
-		private void Link(Shader[] shaders)
+		/// <summary>What the device builds a program from: the stages' sources and the fixed attribute locations.</summary>
+		private static ProgramDescriptor Describe(string name, List<KeyValuePair<ShaderType, string>> stages, bool asynchronous)
 		{
-			int[] handles = shaders.Select(shader => shader.Handle).ToArray();
-			StartLink(handles);
-			FinishLink(handles);
+			var descriptor = new ProgramDescriptor { Name = name, Asynchronous = asynchronous };
+			foreach (KeyValuePair<ShaderType, string> stage in stages)
+			{
+				descriptor.Stages.Add(new KeyValuePair<ShaderStage, string>(Shader.StageOf(stage.Key), stage.Value));
+			}
+
+			// Fixed attribute slots: a mesh's buffers are laid out once for every shader.
+			VertexLayout.AddStandardLocations(descriptor);
+			return descriptor;
 		}
 
-		// Attaches the stages and links without waiting for the driver.
-		private void StartLink(int[] shaders)
-		{
-			foreach (int shader in shaders)
-			{
-				GL.AttachShader(handle, shader);
-			}
-
-			// Fixed attribute slots - must happen before linking.
-			VertexLayout.BindStandardLocations(handle);
-
-			// The binary stays retrievable for the program binary cache (when it is on).
-			ProgramBinaryCache.PrepareLink(handle);
-			GL.LinkProgram(handle);
-		}
-
-		// Waits for the link: its status and log (printed), the stages detached, a linked program's uniforms.
-		private void FinishLink(int[] shaders)
-		{
-			int status;
-			GL.GetProgram(handle, GetProgramParameterName.LinkStatus, out status);
-			linked = status != 0;
-			string log = GL.GetProgramInfoLog(handle);
-			linkLog = log ?? "";
-			if (!linked)
-			{
-				Console.WriteLine($"[Shader] Link error in {Name}:\n{log}");
-			}
-			else if (!string.IsNullOrWhiteSpace(log))
-			{
-				Console.WriteLine($"[Shader] {Name}:\n{log}");
-			}
-
-			foreach (int shader in shaders)
-			{
-				GL.DetachShader(handle, shader);
-			}
-
-			if (linked)
-			{
-				CollectUniforms();
-			}
-		}
-
-		/// <summary>Names and types of the active uniforms (array uniforms by their base name).</summary>
+		/// <summary>Names and types of the uniforms (array uniforms by their base name).</summary>
 		private void CollectUniforms()
 		{
-			int count;
-			GL.GetProgram(handle, GetProgramParameterName.ActiveUniforms, out count);
-			for (int i = 0; i < count; i++)
+			foreach (UniformInfo uniform in gpu.Uniforms)
 			{
-				int size;
-				ActiveUniformType type;
-				string name = GL.GetActiveUniform(handle, i, out size, out type);
-				if (string.IsNullOrEmpty(name))
-				{
-					continue;
-				}
-
+				string name = uniform.Name;
 				int bracket = name.IndexOf('[');
 				if (bracket > 0)
 				{
 					name = name.Substring(0, bracket);
 				}
 
-				uniformTypes[name] = type;
+				uniformTypes[name] = uniform.Type;
 			}
 		}
 
@@ -1248,26 +1243,17 @@ namespace LELEngine.Shaders
 		private void ReleaseProgram()
 		{
 			pendingStages = null;
-			if (startedShaders != null)
+			if (buildStarted)
 			{
-				foreach (int shader in startedShaders)
-				{
-					GL.DeleteShader(shader);
-				}
-
-				startedShaders = null;
-				startedStages = null;
+				buildStarted = false;
 				lock (started)
 				{
 					started.Remove(this);
 				}
 			}
 
-			if (handle != 0)
-			{
-				GL.DeleteProgram(handle);
-				handle = 0;
-			}
+			gpu?.Dispose();
+			gpu = null;
 		}
 
 		/// <summary>
@@ -1280,12 +1266,14 @@ namespace LELEngine.Shaders
 			pendingStages = null;
 			startedOnThisThread++;
 			long startedAt = FrameProfiler.Timestamp;
-			handle = GL.CreateProgram();
+			ProgramDescriptor descriptor = Describe(Name, stages, true);
 
-			// The driver's binary of the same sources, when an earlier start saved one (ProgramBinaryCache).
+			// The device's binary of the same sources, when an earlier start saved one (ProgramBinaryCache).
 			string cacheKey = ProgramBinaryCache.Enabled ? ProgramBinaryCache.Key(stages) : null;
-			if (cacheKey != null && ProgramBinaryCache.TryLoad(handle, cacheKey))
+			GpuProgram cached = cacheKey != null ? ProgramBinaryCache.TryLoad(descriptor, cacheKey) : null;
+			if (cached != null)
 			{
+				gpu = cached;
 				linked = true;
 				CollectUniforms();
 				BuildLog = "";
@@ -1293,15 +1281,9 @@ namespace LELEngine.Shaders
 				return;
 			}
 
-			startedShaders = new int[stages.Count];
-			for (int i = 0; i < stages.Count; i++)
-			{
-				startedShaders[i] = Shader.Submit(stages[i].Value, stages[i].Key);
-			}
-
-			startedStages = stages;
+			gpu = GraphicsDevice.Current.CreateProgram(descriptor);
+			buildStarted = true;
 			startedCacheKey = cacheKey;
-			StartLink(startedShaders);
 			FrameProfiler.EventSince(startedAt, "shader", Name, ProgramBinaryCache.Enabled ? "not in the binary cache: compile submitted to the driver" : "no binary cache: compile submitted to the driver");
 			if (!ShaderCompilation.OnCompileThread)
 			{
@@ -1319,7 +1301,7 @@ namespace LELEngine.Shaders
 		{
 			if (ShaderCompilation.OnCompileThread)
 			{
-				GL.Finish();
+				GraphicsDevice.Current.Finish();
 			}
 
 			built = true;
@@ -1331,15 +1313,12 @@ namespace LELEngine.Shaders
 		/// </summary>
 		private void FinishBuild()
 		{
-			int[] shaders = startedShaders;
-			if (shaders == null)
+			if (!buildStarted)
 			{
 				return;
 			}
 
-			List<KeyValuePair<ShaderType, string>> stages = startedStages;
-			startedShaders = null;
-			startedStages = null;
+			buildStarted = false;
 			lock (started)
 			{
 				started.Remove(this);
@@ -1347,25 +1326,28 @@ namespace LELEngine.Shaders
 
 			long waitedFrom = FrameProfiler.Timestamp;
 			var log = new System.Text.StringBuilder();
-			bool compiled = true;
-			for (int i = 0; i < shaders.Length; i++)
+			gpu.Finish();
+			string debugName = SourcePath ?? Name;
+			foreach (KeyValuePair<ShaderStage, string> error in gpu.StageErrors)
 			{
-				compiled &= Shader.Check(shaders[i], stages[i].Key, SourcePath ?? Name, out string stageLog);
-				if (!string.IsNullOrWhiteSpace(stageLog))
-				{
-					log.Append(StageName(stages[i].Key)).Append(": ").Append(stageLog.Trim()).Append('\n');
-				}
+				Console.WriteLine($"[Shader] Compile error in {debugName} ({error.Key}):\n{error.Value}");
+				log.Append(StageName(Shader.TypeOf(error.Key))).Append(": ").Append((error.Value ?? "").Trim()).Append('\n');
 			}
 
-			FinishLink(shaders);
-			foreach (int shader in shaders)
+			linked = gpu.IsLinked && gpu.StageErrors.Count == 0;
+			linkLog = gpu.Log ?? "";
+			if (!gpu.IsLinked)
 			{
-				GL.DeleteShader(shader);
+				Console.WriteLine($"[Shader] Link error in {Name}:\n{linkLog}");
+			}
+			else if (!string.IsNullOrWhiteSpace(linkLog))
+			{
+				Console.WriteLine($"[Shader] {Name}:\n{linkLog}");
 			}
 
-			if (!compiled)
+			if (linked)
 			{
-				linked = false;
+				CollectUniforms();
 			}
 
 			if (!string.IsNullOrWhiteSpace(linkLog))
@@ -1378,7 +1360,7 @@ namespace LELEngine.Shaders
 			if (startedCacheKey != null && linked)
 			{
 				long savedFrom = FrameProfiler.Timestamp;
-				ProgramBinaryCache.Save(handle, startedCacheKey);
+				ProgramBinaryCache.Save(gpu, startedCacheKey);
 				FrameProfiler.EventSince(savedFrom, "shader", Name, "binary read back and saved to the cache");
 			}
 

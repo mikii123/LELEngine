@@ -23,8 +23,8 @@ namespace LELEngine.Rendering
 		public static int VertexCount => vertexCount;
 		public static int IndexCount => indexCount;
 
-		/// <summary>GL handle of the shared vertex buffer (readable as a storage buffer: <see cref="Vertex" /> layout, 18 floats per vertex).</summary>
-		public static int VertexBufferHandle
+		/// <summary>The shared vertex buffer (readable as a storage buffer: <see cref="Vertex" /> layout, 20 floats per vertex).</summary>
+		public static GpuBuffer VertexBuffer
 		{
 			get
 			{
@@ -33,8 +33,8 @@ namespace LELEngine.Rendering
 			}
 		}
 
-		/// <summary>GL handle of the shared index buffer.</summary>
-		public static int IndexBufferHandle
+		/// <summary>The shared index buffer (32 bit indices).</summary>
+		public static GpuBuffer IndexBuffer
 		{
 			get
 			{
@@ -42,6 +42,12 @@ namespace LELEngine.Rendering
 				return indexBuffer;
 			}
 		}
+
+		/// <summary>The OpenGL buffer object of <see cref="VertexBuffer" />: only for the code that still gives OpenGL commands itself.</summary>
+		public static int VertexBufferHandle => ((Graphics.OpenGL.GLBuffer)VertexBuffer).Handle;
+
+		/// <summary>The OpenGL buffer object of <see cref="IndexBuffer" />: only for the code that still gives OpenGL commands itself.</summary>
+		public static int IndexBufferHandle => ((Graphics.OpenGL.GLBuffer)IndexBuffer).Handle;
 
 		/// <summary>The mesh's range in the pool (after <see cref="Prepare" />): base vertex, vertex count, first index, index count.</summary>
 		public static void GetRange(Mesh mesh, out int baseVertex, out int vertexCount, out int firstIndex, out int indexCount)
@@ -65,10 +71,9 @@ namespace LELEngine.Rendering
 
 		#region PrivateFields
 
-		private static int vertexArray;
-		private static int vertexBuffer;
-		private static int indexBuffer;
-		private static int instanceIndexBuffer;
+		private static GpuBuffer vertexBuffer;
+		private static GpuBuffer indexBuffer;
+		private static GpuBuffer instanceIndexBuffer;
 		private static int vertexCapacity;
 		private static int indexCapacity;
 		private static int instanceIndexCapacity;
@@ -82,7 +87,7 @@ namespace LELEngine.Rendering
 
 		// DrawRanges' arguments (GL thread).
 		private static int[] drawCounts = new int[64];
-		private static IntPtr[] drawOffsets = new IntPtr[64];
+		private static int[] drawFirstIndices = new int[64];
 		private static int[] drawBaseVertices = new int[64];
 
 		#endregion
@@ -111,14 +116,26 @@ namespace LELEngine.Rendering
 			return mesh.PoolIndexCount > 0;
 		}
 
-		/// <summary>Binds the pool's vertex array (all meshes, the standard attribute layout).</summary>
+		/// <summary>
+		///     Makes the pool's buffers the vertex input of the next draws (all meshes, the standard attribute layout,
+		///     32 bit indices); the pool's own draws do it themselves.
+		/// </summary>
 		public static void Bind()
 		{
 			EnsureCreated();
-			GL.BindVertexArray(vertexArray);
+			CommandList commands = GraphicsDevice.Current.Commands;
+			commands.SetVertexInput(VertexLayout.StandardWithInstanceIndex);
+			commands.SetVertexBuffer(0, vertexBuffer);
+			commands.SetVertexBuffer(1, instanceIndexBuffer);
+			commands.SetIndexBuffer(indexBuffer);
+			// For the code that still draws with OpenGL commands of its own after this.
+			if (commands is Graphics.OpenGL.GLCommandList legacy)
+			{
+				legacy.KeepVertexInputForLegacy();
+			}
 		}
 
-		/// <summary>Draws one mesh with the bound program (per-object path; the pool must be bound).</summary>
+		/// <summary>Draws one mesh with the program in use (per-object path).</summary>
 		public static void Draw(Mesh mesh)
 		{
 			if (!Prepare(mesh))
@@ -126,8 +143,8 @@ namespace LELEngine.Rendering
 				return;
 			}
 
-			GL.BindVertexArray(vertexArray);
-			GL.DrawElementsBaseVertex(PrimitiveType.Triangles, mesh.PoolIndexCount, DrawElementsType.UnsignedInt, (IntPtr)(mesh.PoolFirstIndex * sizeof(uint)), mesh.PoolBaseVertex);
+			Bind();
+			GraphicsDevice.Current.Commands.DrawIndexed(mesh.PoolIndexCount, mesh.PoolFirstIndex, mesh.PoolBaseVertex);
 			DrawStatistics.Draw(mesh.PoolIndexCount / 3);
 		}
 
@@ -145,8 +162,8 @@ namespace LELEngine.Rendering
 				return;
 			}
 
-			GL.BindVertexArray(vertexArray);
-			GL.DrawElementsBaseVertex(PrimitiveType.Triangles, range.IndexCount, DrawElementsType.UnsignedInt, (IntPtr)((mesh.PoolFirstIndex + range.FirstIndex) * sizeof(uint)), mesh.PoolBaseVertex);
+			Bind();
+			GraphicsDevice.Current.Commands.DrawIndexed(range.IndexCount, mesh.PoolFirstIndex + range.FirstIndex, mesh.PoolBaseVertex);
 			DrawStatistics.Draw(range.IndexCount / 3);
 		}
 
@@ -166,7 +183,7 @@ namespace LELEngine.Rendering
 			{
 				int size = Math.Max(count, drawCounts.Length * 2);
 				drawCounts = new int[size];
-				drawOffsets = new IntPtr[size];
+				drawFirstIndices = new int[size];
 				drawBaseVertices = new int[size];
 			}
 
@@ -174,13 +191,14 @@ namespace LELEngine.Rendering
 			for (int i = 0; i < count; i++)
 			{
 				drawCounts[i] = ranges[i * 2 + 1];
-				drawOffsets[i] = (IntPtr)((long)(mesh.PoolFirstIndex + ranges[i * 2]) * sizeof(uint));
+				drawFirstIndices[i] = mesh.PoolFirstIndex + ranges[i * 2];
 				drawBaseVertices[i] = mesh.PoolBaseVertex;
 				triangles += ranges[i * 2 + 1] / 3;
 			}
 
-			GL.BindVertexArray(vertexArray);
-			GL.MultiDrawElementsBaseVertex(PrimitiveType.Triangles, drawCounts, DrawElementsType.UnsignedInt, drawOffsets, count, drawBaseVertices);
+			Bind();
+			GraphicsDevice.Current.Commands.DrawIndexedRanges(new ReadOnlySpan<int>(drawCounts, 0, count), new ReadOnlySpan<int>(drawFirstIndices, 0, count),
+				new ReadOnlySpan<int>(drawBaseVertices, 0, count));
 			DrawStatistics.Draw(triangles);
 		}
 
@@ -192,8 +210,8 @@ namespace LELEngine.Rendering
 				return;
 			}
 
-			GL.BindVertexArray(vertexArray);
-			GL.DrawElementsInstancedBaseVertexBaseInstance(PrimitiveType.Triangles, mesh.PoolIndexCount, DrawElementsType.UnsignedInt, (IntPtr)(mesh.PoolFirstIndex * sizeof(uint)), 1, mesh.PoolBaseVertex, instance);
+			Bind();
+			GraphicsDevice.Current.Commands.DrawIndexed(mesh.PoolIndexCount, mesh.PoolFirstIndex, mesh.PoolBaseVertex, 1, instance);
 			DrawStatistics.Draw(mesh.PoolIndexCount / 3);
 		}
 
@@ -260,17 +278,9 @@ namespace LELEngine.Rendering
 				indices[i] = (uint)i;
 			}
 
-			if (instanceIndexBuffer != 0)
-			{
-				GL.DeleteBuffer(instanceIndexBuffer);
-			}
-
-			instanceIndexBuffer = GL.GenBuffer();
-			GL.BindBuffer(BufferTarget.CopyWriteBuffer, instanceIndexBuffer);
-			GL.BufferData(BufferTarget.CopyWriteBuffer, capacity * sizeof(uint), indices, BufferUsageHint.StaticDraw);
-			GL.BindBuffer(BufferTarget.CopyWriteBuffer, 0);
+			instanceIndexBuffer ??= GraphicsDevice.Current.CreateBuffer(new BufferDescriptor(BufferUsage.Vertex, 0, false, "Instance indices"));
+			instanceIndexBuffer.SetData(indices);
 			instanceIndexCapacity = capacity;
-			SetupVertexArray();
 		}
 
 		/// <summary>Forgets every mesh (the assets were cleared); the buffers are kept for reuse.</summary>
@@ -318,18 +328,18 @@ namespace LELEngine.Rendering
 
 		private static void EnsureCreated()
 		{
-			if (vertexArray != 0)
+			if (vertexBuffer != null)
 			{
 				return;
 			}
 
-			vertexArray = GL.GenVertexArray();
-			vertexBuffer = Grow(0, 0, 64 * 1024 * Vertex.Size);
+			GraphicsDevice device = GraphicsDevice.Current;
+			// Effects read meshes' vertices as a storage block too.
+			vertexBuffer = device.CreateBuffer(new BufferDescriptor(BufferUsage.Vertex | BufferUsage.Storage, 64 * 1024 * Vertex.Size, false, "Geometry pool vertices"));
 			vertexCapacity = 64 * 1024;
-			indexBuffer = Grow(0, 0, 256 * 1024 * sizeof(uint));
+			indexBuffer = device.CreateBuffer(new BufferDescriptor(BufferUsage.Index | BufferUsage.Storage, 256 * 1024 * sizeof(uint), false, "Geometry pool indices"));
 			indexCapacity = 256 * 1024;
 			EnsureInstanceIndices(1024);
-			SetupVertexArray();
 		}
 
 		private static void Upload(Mesh mesh)
@@ -382,30 +392,25 @@ namespace LELEngine.Rendering
 
 				if (newVertexCapacity != vertexCapacity)
 				{
-					vertexBuffer = Grow(vertexBuffer, vertexCount * Vertex.Size, newVertexCapacity * Vertex.Size);
+					vertexBuffer.Resize((long)newVertexCapacity * Vertex.Size, (long)vertexCount * Vertex.Size);
 					vertexCapacity = newVertexCapacity;
 				}
 
 				if (newIndexCapacity != indexCapacity)
 				{
-					indexBuffer = Grow(indexBuffer, indexCount * sizeof(uint), newIndexCapacity * sizeof(uint));
+					indexBuffer.Resize((long)newIndexCapacity * sizeof(uint), (long)indexCount * sizeof(uint));
 					indexCapacity = newIndexCapacity;
 				}
-
-				SetupVertexArray();
 			}
 
 			if (indices.Length > 0)
 			{
 				if (vertices.Length > 0)
 				{
-					GL.BindBuffer(BufferTarget.CopyWriteBuffer, vertexBuffer);
-					GL.BufferSubData(BufferTarget.CopyWriteBuffer, (IntPtr)(baseVertex * Vertex.Size), vertices.Length * Vertex.Size, vertices);
+					vertexBuffer.SetSubData<Vertex>((long)baseVertex * Vertex.Size, vertices);
 				}
 
-				GL.BindBuffer(BufferTarget.CopyWriteBuffer, indexBuffer);
-				GL.BufferSubData(BufferTarget.CopyWriteBuffer, (IntPtr)(firstIndex * sizeof(uint)), indices.Length * sizeof(uint), indices);
-				GL.BindBuffer(BufferTarget.CopyWriteBuffer, 0);
+				indexBuffer.SetSubData<uint>((long)firstIndex * sizeof(uint), indices);
 			}
 
 			mesh.PoolGeneration = generation;
@@ -432,19 +437,17 @@ namespace LELEngine.Rendering
 		private static void WriteIndexRange(Mesh mesh, int first, int count, bool hidden)
 		{
 			uint[] indices = mesh.Indices;
-			GL.BindBuffer(BufferTarget.CopyWriteBuffer, indexBuffer);
+			long offset = (long)(mesh.PoolFirstIndex + first) * sizeof(uint);
 			if (hidden)
 			{
 				var collapsed = new uint[count];
 				Array.Fill(collapsed, indices[first]);
-				GL.BufferSubData(BufferTarget.CopyWriteBuffer, (IntPtr)((mesh.PoolFirstIndex + first) * sizeof(uint)), count * sizeof(uint), collapsed);
+				indexBuffer.SetSubData<uint>(offset, collapsed);
 			}
 			else
 			{
-				GL.BufferSubData(BufferTarget.CopyWriteBuffer, (IntPtr)((mesh.PoolFirstIndex + first) * sizeof(uint)), count * sizeof(uint), ref indices[first]);
+				indexBuffer.SetSubData(offset, new ReadOnlySpan<uint>(indices, first, count));
 			}
-
-			GL.BindBuffer(BufferTarget.CopyWriteBuffer, 0);
 		}
 
 		/// <summary>The start of a free range of <paramref name="count" /> elements (taken from the list), or -1.</summary>
@@ -506,56 +509,6 @@ namespace LELEngine.Rendering
 				end = lastStart;
 				free.RemoveAt(free.Count - 1);
 			}
-		}
-
-		/// <summary>New buffer of the given size holding the first <paramref name="usedBytes" /> of the old one.</summary>
-		private static int Grow(int buffer, int usedBytes, int capacityBytes)
-		{
-			int fresh = GL.GenBuffer();
-			GL.BindBuffer(BufferTarget.CopyWriteBuffer, fresh);
-			GL.BufferData(BufferTarget.CopyWriteBuffer, capacityBytes, IntPtr.Zero, BufferUsageHint.StaticDraw);
-			if (buffer != 0)
-			{
-				if (usedBytes > 0)
-				{
-					GL.BindBuffer(BufferTarget.CopyReadBuffer, buffer);
-					GL.CopyBufferSubData(BufferTarget.CopyReadBuffer, BufferTarget.CopyWriteBuffer, IntPtr.Zero, IntPtr.Zero, usedBytes);
-					GL.BindBuffer(BufferTarget.CopyReadBuffer, 0);
-				}
-
-				GL.DeleteBuffer(buffer);
-			}
-
-			GL.BindBuffer(BufferTarget.CopyWriteBuffer, 0);
-			return fresh;
-		}
-
-		private static void SetupVertexArray()
-		{
-			if (vertexArray == 0 || vertexBuffer == 0 || indexBuffer == 0)
-			{
-				return;
-			}
-
-			GL.BindVertexArray(vertexArray);
-			GL.BindBuffer(BufferTarget.ArrayBuffer, vertexBuffer);
-			foreach (VertexAttribute attribute in VertexLayout.CreateStandardAttributes())
-			{
-				attribute.Set();
-			}
-
-			if (instanceIndexBuffer != 0)
-			{
-				GL.BindBuffer(BufferTarget.ArrayBuffer, instanceIndexBuffer);
-				GL.EnableVertexAttribArray(VertexLayout.InstanceIndexLocation);
-				GL.VertexAttribIPointer(VertexLayout.InstanceIndexLocation, 1, VertexAttribIntegerType.UnsignedInt, sizeof(uint), IntPtr.Zero);
-				GL.VertexAttribDivisor(VertexLayout.InstanceIndexLocation, 1);
-			}
-
-			// The element buffer binding is vertex array state.
-			GL.BindBuffer(BufferTarget.ElementArrayBuffer, indexBuffer);
-			GL.BindVertexArray(0);
-			GL.BindBuffer(BufferTarget.ArrayBuffer, 0);
 		}
 
 		#endregion

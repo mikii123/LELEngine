@@ -205,33 +205,47 @@ namespace LELEngine
 		///     Uploads every level to the bound texture of <paramref name="target" /> (Texture2D, TextureCubeMap or
 		///     Texture3D) and limits sampling to them.
 		/// </summary>
-		public void Upload(TextureTarget target)
+		public unsafe GpuTexture Upload(TextureKind kind, bool wholeMipChain, string name)
 		{
-			for (int level = 0; level < Levels; level++)
+			TextureFormat format;
+			switch (GlInternalFormat)
+			{
+				case CompressedRgbaBptc: format = TextureFormat.BC7; break;
+				case CompressedSrgbAlphaBptc: format = TextureFormat.BC7SRGB; break;
+				case Rgba8: format = TextureFormat.RGBA8; break;
+				case Srgb8Alpha8: format = TextureFormat.SRGBA8; break;
+				case Rgba16F: format = TextureFormat.RGBA16F; break;
+				default: throw new NotSupportedException("KTX texel format 0x" + GlInternalFormat.ToString("X") + " is not one the engine bakes.");
+			}
+
+			// The file's levels are the texture's; a whole chain is made when the levels below the first are generated.
+			TextureDescriptor descriptor = new TextureDescriptor
+			{
+				Kind = kind,
+				Format = format,
+				Width = Width,
+				Height = Height,
+				Depth = Depth > 0 ? Depth : 1,
+				MipLevels = wholeMipChain ? 0 : Levels,
+				Usage = TextureUsage.Sampled,
+				Name = name
+			};
+			GpuTexture texture = GraphicsDevice.Current.CreateTexture(descriptor);
+			for (int level = 0; level < Levels && level < texture.MipLevels; level++)
 			{
 				int w = Math.Max(1, Width >> level);
 				int h = Math.Max(1, Height >> level);
+				int d = Depth > 0 ? Math.Max(1, Depth >> level) : 1;
 				for (int face = 0; face < Faces; face++)
 				{
-					TextureTarget faceTarget = Faces == 6 ? TextureTarget.TextureCubeMapPositiveX + face : target;
-					int offset = offsets[level][face];
-					if (Depth > 0)
+					fixed (byte* texels = &data[offsets[level][face]])
 					{
-						int d = Math.Max(1, Depth >> level);
-						GL.TexImage3D(faceTarget, level, (PixelInternalFormat)GlInternalFormat, w, h, d, 0, (PixelFormat)GlFormat, (PixelType)GlType, ref data[offset]);
-					}
-					else if (IsCompressed)
-					{
-						GL.CompressedTexImage2D(faceTarget, level, (InternalFormat)GlInternalFormat, w, h, 0, sizes[level], ref data[offset]);
-					}
-					else
-					{
-						GL.TexImage2D(faceTarget, level, (PixelInternalFormat)GlInternalFormat, w, h, 0, (PixelFormat)GlFormat, (PixelType)GlType, ref data[offset]);
+						texture.SetData(level, 0, 0, Faces == 6 ? face : 0, w, h, d, texels, sizes[level]);
 					}
 				}
 			}
 
-			GL.TexParameter(target, TextureParameterName.TextureMaxLevel, Levels - 1);
+			return texture;
 		}
 
 		/// <summary>The texels of one level and face (uncompressed data: CPU reads such as a sky panorama's conversion).</summary>

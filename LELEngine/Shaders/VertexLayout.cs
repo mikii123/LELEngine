@@ -44,17 +44,45 @@ namespace LELEngine.Shaders
 		/// <summary>
 		///     Binds the standard attribute names to their fixed locations. Must be called before linking.
 		/// </summary>
-		public static void BindStandardLocations(int programHandle)
+		public static void AddStandardLocations(ProgramDescriptor program)
 		{
-			GL.BindAttribLocation(programHandle, PositionLocation, PositionName);
-			GL.BindAttribLocation(programHandle, ColorLocation, ColorName);
-			GL.BindAttribLocation(programHandle, TexCoordLocation, TexCoordName);
-			GL.BindAttribLocation(programHandle, NormalLocation, NormalName);
-			GL.BindAttribLocation(programHandle, TangentLocation, TangentName);
-			GL.BindAttribLocation(programHandle, BitangentLocation, BitangentName);
-			GL.BindAttribLocation(programHandle, InstanceIndexLocation, InstanceIndexName);
-			GL.BindAttribLocation(programHandle, TexCoord2Location, TexCoord2Name);
+			program.AttributeLocations.Add(new System.Collections.Generic.KeyValuePair<string, int>(PositionName, PositionLocation));
+			program.AttributeLocations.Add(new System.Collections.Generic.KeyValuePair<string, int>(ColorName, ColorLocation));
+			program.AttributeLocations.Add(new System.Collections.Generic.KeyValuePair<string, int>(TexCoordName, TexCoordLocation));
+			program.AttributeLocations.Add(new System.Collections.Generic.KeyValuePair<string, int>(NormalName, NormalLocation));
+			program.AttributeLocations.Add(new System.Collections.Generic.KeyValuePair<string, int>(TangentName, TangentLocation));
+			program.AttributeLocations.Add(new System.Collections.Generic.KeyValuePair<string, int>(BitangentName, BitangentLocation));
+			program.AttributeLocations.Add(new System.Collections.Generic.KeyValuePair<string, int>(InstanceIndexName, InstanceIndexLocation));
+			program.AttributeLocations.Add(new System.Collections.Generic.KeyValuePair<string, int>(TexCoord2Name, TexCoord2Location));
 		}
+
+		/// <summary>The device's layout of a vertex buffer of <see cref="Vertex" />.</summary>
+		public static readonly VertexInputLayout Standard = new VertexInputLayout(Vertex.Size,
+			new VertexAttributeDescriptor(PositionLocation, VertexFormat.Float3, 0),
+			new VertexAttributeDescriptor(ColorLocation, VertexFormat.Float4, 3 * sizeof(float)),
+			new VertexAttributeDescriptor(TexCoordLocation, VertexFormat.Float2, (3 + 4) * sizeof(float)),
+			new VertexAttributeDescriptor(NormalLocation, VertexFormat.Float3, (3 + 4 + 2) * sizeof(float)),
+			new VertexAttributeDescriptor(TangentLocation, VertexFormat.Float3, (3 + 4 + 2 + 3) * sizeof(float)),
+			new VertexAttributeDescriptor(BitangentLocation, VertexFormat.Float3, (3 + 4 + 2 + 3 + 3) * sizeof(float)),
+			new VertexAttributeDescriptor(TexCoord2Location, VertexFormat.Float2, (3 + 4 + 2 + 3 + 3 + 3) * sizeof(float)));
+
+		/// <summary>
+		///     <see cref="Standard" /> plus a second buffer of one uint per instance at <see cref="InstanceIndexLocation" />:
+		///     GPU-driven draws on a device without draw parameters.
+		/// </summary>
+		public static readonly VertexInputLayout StandardWithInstanceIndex = new VertexInputLayout(
+			new[] { new VertexBufferDescriptor(Vertex.Size), new VertexBufferDescriptor(sizeof(uint), true) },
+			new[]
+			{
+				new VertexAttributeDescriptor(PositionLocation, VertexFormat.Float3, 0),
+				new VertexAttributeDescriptor(ColorLocation, VertexFormat.Float4, 3 * sizeof(float)),
+				new VertexAttributeDescriptor(TexCoordLocation, VertexFormat.Float2, (3 + 4) * sizeof(float)),
+				new VertexAttributeDescriptor(NormalLocation, VertexFormat.Float3, (3 + 4 + 2) * sizeof(float)),
+				new VertexAttributeDescriptor(TangentLocation, VertexFormat.Float3, (3 + 4 + 2 + 3) * sizeof(float)),
+				new VertexAttributeDescriptor(BitangentLocation, VertexFormat.Float3, (3 + 4 + 2 + 3 + 3) * sizeof(float)),
+				new VertexAttributeDescriptor(TexCoord2Location, VertexFormat.Float2, (3 + 4 + 2 + 3 + 3 + 3) * sizeof(float)),
+				new VertexAttributeDescriptor(InstanceIndexLocation, VertexFormat.UInt1, 0, 1)
+			});
 
 		/// <summary>
 		///     Standard attribute layout matching <see cref="Vertex" />.
