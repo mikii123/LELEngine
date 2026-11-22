@@ -3,41 +3,23 @@ using LELEngine.Graphics;
 namespace LELEngine.Rendering
 {
 	/// <summary>
-	///     Draws a single screen-covering triangle. The vertex shader generates positions from gl_VertexID,
-	///     so an empty VAO is enough (core profile requires a bound VAO to draw).
+	///     A triangle that covers the whole target: three vertices without any buffer, positioned by the vertex stage
+	///     from their index. Full-screen passes draw it with the program in use.
 	/// </summary>
 	public sealed class FullscreenQuad
 	{
-		#region PrivateFields
-
-		private int vao;
-
-		#endregion
-
-		#region Constructors
-
-		public FullscreenQuad()
-		{
-			vao = GL.GenVertexArray();
-		}
-
-		#endregion
-
 		#region PublicMethods
 
 		public void Draw()
 		{
-			GL.BindVertexArray(vao);
-			GL.DrawArrays(PrimitiveType.Triangles, 0, 3);
+			CommandList commands = GraphicsDevice.Current.Commands;
+			commands.SetVertexInput(VertexInputLayout.Empty);
+			commands.Draw(3);
 			DrawStatistics.Draw(1);
-			GL.BindVertexArray(0);
 		}
 
 		public void Delete()
-		{
-			GL.DeleteVertexArray(vao);
-			vao = 0;
-		}
+		{ }
 
 		#endregion
 	}

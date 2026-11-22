@@ -84,24 +84,6 @@ namespace LELEngine.Shaders
 				new VertexAttributeDescriptor(InstanceIndexLocation, VertexFormat.UInt1, 0, 1)
 			});
 
-		/// <summary>
-		///     Standard attribute layout matching <see cref="Vertex" />.
-		/// </summary>
-		internal static VertexAttribute[] CreateStandardAttributes()
-		{
-			const int f = sizeof(float);
-			return new[]
-			{
-				new VertexAttribute(PositionLocation, 3, VertexAttribPointerType.Float, Vertex.Size, 0),
-				new VertexAttribute(ColorLocation, 4, VertexAttribPointerType.Float, Vertex.Size, 3 * f),
-				new VertexAttribute(TexCoordLocation, 2, VertexAttribPointerType.Float, Vertex.Size, (3 + 4) * f),
-				new VertexAttribute(NormalLocation, 3, VertexAttribPointerType.Float, Vertex.Size, (3 + 4 + 2) * f),
-				new VertexAttribute(TangentLocation, 3, VertexAttribPointerType.Float, Vertex.Size, (3 + 4 + 2 + 3) * f),
-				new VertexAttribute(BitangentLocation, 3, VertexAttribPointerType.Float, Vertex.Size, (3 + 4 + 2 + 3 + 3) * f),
-				new VertexAttribute(TexCoord2Location, 2, VertexAttribPointerType.Float, Vertex.Size, (3 + 4 + 2 + 3 + 3 + 3) * f)
-			};
-		}
-
 		#endregion
 	}
 }
