@@ -2343,6 +2343,25 @@ lighting and the engine's other features. Octahedral impostors, baked into atlas
   Profiler section `Transparent.LowResolution`. Order against other transparent objects is the layer's, not each
   particle's (HDRP's low-resolution transparency has the same limit). Why: SmokeOn's dense particle smoke (5-7k lit
   quads up to 10 m) cost 2-3 ms of fill at full resolution on the 780M, 0.5-0.6 ms in the layer.
+- Materials in the same layer (2026-11-22): render state line `LowResolution On` (`ShaderRenderState.LowResolution`,
+  per variant, so a `[Toggle(KEYWORD)]` and `#if KEYWORD` around it make it a material's switch; it sends a shader
+  without a queue to Transparent). `TransparentPass` draws meshes, trails, custom renderers and static batch parts of
+  such materials into the layer with the particle outputs, all in their sorted order (`DrawsLowResolution`, the layer
+  laid over the scene where the last of them sorts); the per-entry drawing is one method for both
+  (`DrawMaterialEntry(..., lowResolutionLayer)`), so the full-resolution path is the old one (frames of a large
+  transparent scene before / after: max 2 of 255, as two runs of the new build). Only blends the layer can hold go
+  there (`ShaderRenderState.DrawsLowResolution` / `LowResolutionProblem`): colour factors as the shader's with the
+  target's factor One or OneMinusSrcAlpha and a source factor that does not read the target, no ZWrite, no GrabPass;
+  `ApplyLowResolution` replaces the shader's alpha factors by Zero, (One for additive, OneMinusSrcAlpha otherwise), as
+  the particles' states 4-6. Anything else draws at full resolution and the shader's load says why (`[Shader]
+  LowResolution On in X draws at full resolution: ...`); so do the material's objects when there is no depth copy to
+  build the layer from. `Engine/SceneDepth.glsl` reads the depth copy at `gl_FragCoord x lelSceneDepthPixelScale`
+  (clamped to the copy; `SceneDepthTexture.SetUniforms(..., pixelScale)`: 2 in the layer), so `SceneDepth On` shaders
+  need no change. Profiler sections `Transparent.LowResolution` (the layer's depth and its draws) and
+  `Transparent.LowResolutionComposite` (the lay-over). Measured (RTX 3080 Ti, 3440 x 1318 with super sampling 2.25,
+  300 large additive soft sheets over a field of rocks, the camera inside them): their cost against none 2.6-4.1 ms at
+  full resolution, 1.3-1.7 ms in the layer (its depth and clear ~0.4 ms, the lay-over 0.2 ms); pictures against full
+  resolution: mean 0.03-0.11 of 255, 0.2-0.3 % of the pixels over 2 (in the gaps between objects in front).
 - A block's locals carry its salt (`triggerAmount_<salt>`, `randomForce_<salt>`): two blocks of one kind in a context
   compiled to a GLSL redefinition before; a CustomCode block opens its scope before its input declarations for the
   same reason (two CustomCode blocks declaring `Length` in one Update).

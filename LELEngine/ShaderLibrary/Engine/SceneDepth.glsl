@@ -9,6 +9,7 @@
 uniform sampler2D lelSceneDepth;
 uniform vec4 lelSceneDepthParams;     // linear eye depth = (z * x + y) / (z * z + w), z the NDC depth (2 * window depth - 1)
 uniform float lelSceneDepthAvailable; // 1 when the copy is bound; 0 when there is none (nothing fades)
+uniform float lelSceneDepthPixelScale; // scene pixels per pixel drawn: 2 in the half-resolution layer (LowResolution On), else 1
 
 // Linear eye depth (world units in front of the camera) of a window depth: gl_FragCoord.z or a depth buffer value.
 float LelEyeDepth(float windowDepth)
@@ -17,10 +18,12 @@ float LelEyeDepth(float windowDepth)
 	return (z * lelSceneDepthParams.x + lelSceneDepthParams.y) / (z * lelSceneDepthParams.z + lelSceneDepthParams.w);
 }
 
-// Linear eye depth of the opaque surface behind the fragment.
+// Linear eye depth of the opaque surface behind the fragment (drawn into the half-resolution layer: one of the four scene
+// pixels under it).
 float LelSceneEyeDepth()
 {
-	return LelEyeDepth(texelFetch(lelSceneDepth, ivec2(gl_FragCoord.xy), 0).r);
+	ivec2 texel = ivec2(gl_FragCoord.xy * max(lelSceneDepthPixelScale, 1.0));
+	return LelEyeDepth(texelFetch(lelSceneDepth, min(texel, textureSize(lelSceneDepth, 0) - 1), 0).r);
 }
 
 // Unity's soft particle fade: 0 where the opaque surface behind the fragment is nearer than near, 1 from far on, linear

@@ -31,6 +31,10 @@ namespace LELEngine.Rendering.Passes
 	///     particle effects read too (<see cref="SceneDepthTexture" />), taken once: after the opaque surfaces this pass
 	///     draws first (queues up to GeometryLast + 1 without blending, depth written: alpha clip, vertex functions) and
 	///     before every other draw.
+	///     Materials whose variant declares LowResolution (and blends in a way the layer holds:
+	///     <see cref="ShaderRenderState.DrawsLowResolution" />) draw with the particle outputs that have LowResolution into
+	///     the half-resolution layer (<see cref="LowResolutionTransparency" />), all of them in their sorted order, and the
+	///     layer is laid over the scene where the last of them sorts.
 	/// </summary>
 	public sealed class TransparentPass : RenderPass
 	{
@@ -133,6 +137,13 @@ namespace LELEngine.Rendering.Passes
 		// The (first index, index count) pairs of the batch parts drawn with one call.
 		private int[] runRanges = new int[128];
 
+		// Material draws of this frame: the program in use, and the lighting flags its camera and lighting uniforms were set
+		// for (sent again after another program, particles, a volume or the layer, or a material that overrides them).
+		private ShaderProgram activeProgram;
+		private bool receiveShadows;
+		private bool receiveGI;
+		private bool resend;
+
 		#endregion
 
 		#region PublicMethods
@@ -196,12 +207,13 @@ namespace LELEngine.Rendering.Passes
 
 			context.SceneTarget.Bind();
 
-			// Particle outputs drawn at half resolution are drawn together into their layer, which is laid over the scene
-			// where the last of them sorts (LowResolutionTransparency); the layer needs the scene's depth.
+			// Particle outputs and materials drawn at half resolution (LowResolution) are drawn together into their layer,
+			// which is laid over the scene where the last of them sorts (LowResolutionTransparency); the layer needs the
+			// scene's depth.
 			int lastLowResolution = -1;
 			for (int i = 0; i < entries.Count; i++)
 			{
-				if (entries[i].Vfx != null && entries[i].Vfx.LowResolution)
+				if (DrawsLowResolution(entries[i]))
 				{
 					lastLowResolution = i;
 				}
@@ -212,10 +224,10 @@ namespace LELEngine.Rendering.Passes
 			bool needsDepth = (vfxEntries.Count > 0 && VFX.VfxRuntime.NeedsDepth) || readsDepth || lastLowResolution >= 0;
 			VFX.VfxDepthCapture depth = null;
 
-			ShaderProgram active = null;
-			bool receiveShadows = false;
-			bool receiveGI = false;
-			bool resend = true;
+			activeProgram = null;
+			receiveShadows = false;
+			receiveGI = false;
+			resend = true;
 			bool afterParticles = false;
 			bool afterMesh = false;
 			for (int index = 0; index < entries.Count; index++)
@@ -227,12 +239,13 @@ namespace LELEngine.Rendering.Passes
 					context.SceneTarget.Bind();
 				}
 
-				if (entry.Vfx != null && entry.Vfx.LowResolution)
+				// Into the layer (a material's objects draw at full resolution when there is no layer: no depth copy).
+				if (DrawsLowResolution(entry) && (entry.Vfx != null || LayerReady(depth)))
 				{
 					if (index == lastLowResolution)
 					{
 						DrawLowResolution(context, depth);
-						active = null;
+						activeProgram = null;
 						resend = true;
 						afterMesh = true;
 						afterParticles = false;
@@ -247,7 +260,7 @@ namespace LELEngine.Rendering.Passes
 					context.Renderer.Profiler.Split("Transparent.Volumetrics");
 					Volumetrics.VolumetricRuntime.Draw(context, entry.Volume, depth);
 					context.Renderer.Profiler.Split("Transparent.Draw");
-					active = null;
+					activeProgram = null;
 					resend = true;
 					afterMesh = true;
 					afterParticles = false;
@@ -266,7 +279,7 @@ namespace LELEngine.Rendering.Passes
 
 					entry.Vfx.Instance.Draw(context, entry.Vfx.System, entry.Vfx.Output, false, depth);
 					afterParticles = true;
-					active = null;
+					activeProgram = null;
 					resend = true;
 					DrawnCount++;
 					continue;
@@ -279,96 +292,7 @@ namespace LELEngine.Rendering.Passes
 				}
 
 				afterMesh = true;
-				MeshRenderer renderer = entry.Renderer;
-				TrailRenderer trail = entry.Trail;
-				Behaviour custom = entry.Custom;
-				Material material = entry.Material;
-				ShaderProgram program = material.Program;
-				bool entryShadows = trail != null ? trail.receiveShadows : custom == null && renderer.ReceiveShadows;
-				bool entryGI = trail != null ? trail.receiveGI : custom == null && renderer.ReceiveGI;
-				bool copied = false;
-				if (entry.GrabCopy >= 0)
-				{
-					// The scene as drawn so far, for this entry and the later ones that share the copy.
-					GrabCopy copy = grabCopies[entry.GrabCopy];
-					Grab.Copy(context, copyRects, copy.Start, copy.Count);
-					copied = true;
-				}
-
-				if (program != active)
-				{
-					program.Use();
-					active = program;
-					resend = true;
-				}
-				else if (copied)
-				{
-					// The copy bound its own program; this one keeps its uniforms.
-					program.Use();
-				}
-
-				// Camera and lighting uniforms once per program and flag combination, as the opaque pass does.
-				if (resend || entryShadows != receiveShadows || entryGI != receiveGI)
-				{
-					context.Camera.SetUniforms(program);
-					Lighting.SetUniforms(program, entryShadows, false);
-					Lighting.SetVolumeGIUniforms(program, entryGI);
-					receiveShadows = entryShadows;
-					receiveGI = entryGI;
-					resend = false;
-				}
-
-				if (trail != null)
-				{
-					// Trail vertices are in world space.
-					program.SetMatrix4("modelMatrix", Matrix4.Identity);
-				}
-				else if (custom != null)
-				{
-					custom.transform.SetModelMatrix(program);
-				}
-				else
-				{
-					renderer.transform.SetModelMatrix(program);
-				}
-
-				// The renderer's own values (property block) go on top of the material's.
-				material.SetUniforms(program, custom != null ? entry.Block : renderer?.PropertyBlock);
-				if (material.OverridesSharedUniforms())
-				{
-					resend = true;
-				}
-
-				if (entry.Grab)
-				{
-					Grab.SetUniforms(program, context, entry.Readable);
-				}
-
-				ShaderRenderState state = material.RenderState;
-				if (state.SceneDepth)
-				{
-					SceneDepthTexture.SetUniforms(program, context, depth);
-				}
-
-				state.ApplyTransparent();
-				if (entry.Batch != null)
-				{
-					// A static batch's part, and the parts of the batch that follow it in the order: one run, drawn together.
-					index = DrawBatchRun(index, state);
-					DrawnCount++;
-					continue;
-				}
-
-				if (state.Cull == CullMode.Off)
-				{
-					// Back faces first, then front faces: the inside of a convex object ends up behind its outside.
-					GLState.SetCull(true, TriangleFace.Front);
-					DrawGeometry(entry);
-					GLState.SetCull(true, TriangleFace.Back);
-				}
-
-				DrawGeometry(entry);
-				DrawnCount++;
+				index = DrawMaterialEntry(index, context, depth, false);
 			}
 
 			entries.Clear();
@@ -409,11 +333,11 @@ namespace LELEngine.Rendering.Passes
 
 		#region PrivateMethods
 
-		// Every particle output drawn at half resolution, in their sorted order, into their layer, then the layer over the
-		// scene; the scene target is bound again afterwards.
+		// Every particle output and material entry drawn at half resolution, in their sorted order, into their layer, then
+		// the layer over the scene; the scene target is bound again afterwards.
 		private void DrawLowResolution(RenderContext context, VFX.VfxDepthCapture depth)
 		{
-			if (depth == null || !depth.Valid || depth.Depth == null)
+			if (!LayerReady(depth))
 			{
 				return;
 			}
@@ -421,18 +345,168 @@ namespace LELEngine.Rendering.Passes
 			context.Renderer.Profiler.Split("Transparent.LowResolution");
 			lowResolution.Begin(context, depth.Depth);
 			VFX.VfxRuntime.InvalidateDrawState();
-			foreach (Entry entry in entries)
+			activeProgram = null;
+			resend = true;
+			bool afterMesh = false;
+			for (int index = 0; index < entries.Count; index++)
 			{
-				if (entry.Vfx != null && entry.Vfx.LowResolution)
+				Entry entry = entries[index];
+				if (!DrawsLowResolution(entry))
 				{
-					entry.Vfx.Instance.Draw(context, entry.Vfx.System, entry.Vfx.Output, false, depth);
-					DrawnCount++;
+					continue;
 				}
+
+				if (entry.Vfx != null)
+				{
+					if (afterMesh)
+					{
+						VFX.VfxRuntime.InvalidateDrawState();
+						afterMesh = false;
+					}
+
+					entry.Vfx.Instance.Draw(context, entry.Vfx.System, entry.Vfx.Output, false, depth);
+					activeProgram = null;
+					resend = true;
+					DrawnCount++;
+					continue;
+				}
+
+				afterMesh = true;
+				index = DrawMaterialEntry(index, context, depth, true);
 			}
 
+			context.Renderer.Profiler.Split("Transparent.LowResolutionComposite");
 			lowResolution.End(context, depth.Depth);
 			VFX.VfxRuntime.InvalidateDrawState();
 			context.Renderer.Profiler.Split("Transparent.Draw");
+		}
+
+		// The half-resolution layer can be drawn: it is made from the opaque scene's depth copy.
+		private static bool LayerReady(VFX.VfxDepthCapture depth)
+		{
+			return depth != null && depth.Valid && depth.Depth != null;
+		}
+
+		// An entry that draws into the half-resolution layer: a particle output with LowResolution, or a mesh, trail, custom
+		// renderer or batch part in a transparent queue whose material's state is LowResolution On and can be held there.
+		private static bool DrawsLowResolution(Entry entry)
+		{
+			if (entry.Vfx != null)
+			{
+				return entry.Vfx.LowResolution;
+			}
+
+			return entry.Volume == null && entry.Material != null && MaterialQueue.IsTransparent(entry.Queue) && entry.Material.RenderState.DrawsLowResolution;
+		}
+
+		/// <summary>
+		///     Draws a material's entry (a mesh's sub-mesh, a trail's slot, a custom renderer, or a run of a static batch's
+		///     parts) with its program, uniforms and state, at full resolution or into the half-resolution layer; returns the
+		///     last entry it drew (a batch run covers the parts that follow).
+		/// </summary>
+		private int DrawMaterialEntry(int index, RenderContext context, VFX.VfxDepthCapture depth, bool lowResolutionLayer)
+		{
+			Entry entry = entries[index];
+			MeshRenderer renderer = entry.Renderer;
+			TrailRenderer trail = entry.Trail;
+			Behaviour custom = entry.Custom;
+			Material material = entry.Material;
+			ShaderProgram program = material.Program;
+			bool entryShadows = trail != null ? trail.receiveShadows : custom == null && renderer.ReceiveShadows;
+			bool entryGI = trail != null ? trail.receiveGI : custom == null && renderer.ReceiveGI;
+			bool copied = false;
+			if (entry.GrabCopy >= 0)
+			{
+				// The scene as drawn so far, for this entry and the later ones that share the copy.
+				GrabCopy copy = grabCopies[entry.GrabCopy];
+				Grab.Copy(context, copyRects, copy.Start, copy.Count);
+				copied = true;
+			}
+
+			if (program != activeProgram)
+			{
+				program.Use();
+				activeProgram = program;
+				resend = true;
+			}
+			else if (copied)
+			{
+				// The copy bound its own program; this one keeps its uniforms.
+				program.Use();
+			}
+
+			// Camera and lighting uniforms once per program and flag combination, as the opaque pass does.
+			if (resend || entryShadows != receiveShadows || entryGI != receiveGI)
+			{
+				context.Camera.SetUniforms(program);
+				Lighting.SetUniforms(program, entryShadows, false);
+				Lighting.SetVolumeGIUniforms(program, entryGI);
+				receiveShadows = entryShadows;
+				receiveGI = entryGI;
+				resend = false;
+			}
+
+			if (trail != null)
+			{
+				// Trail vertices are in world space.
+				program.SetMatrix4("modelMatrix", Matrix4.Identity);
+			}
+			else if (custom != null)
+			{
+				custom.transform.SetModelMatrix(program);
+			}
+			else
+			{
+				renderer.transform.SetModelMatrix(program);
+			}
+
+			// The renderer's own values (property block) go on top of the material's.
+			material.SetUniforms(program, custom != null ? entry.Block : renderer?.PropertyBlock);
+			if (material.OverridesSharedUniforms())
+			{
+				resend = true;
+			}
+
+			if (entry.Grab)
+			{
+				Grab.SetUniforms(program, context, entry.Readable);
+			}
+
+			ShaderRenderState state = material.RenderState;
+			if (state.SceneDepth)
+			{
+				// In the layer a pixel stands for two of the scene's on each axis.
+				SceneDepthTexture.SetUniforms(program, context, depth, lowResolutionLayer ? 2f : 1f);
+			}
+
+			if (lowResolutionLayer)
+			{
+				state.ApplyLowResolution();
+			}
+			else
+			{
+				state.ApplyTransparent();
+			}
+
+			if (entry.Batch != null)
+			{
+				// A static batch's part, and the parts of the batch that follow it in the order: one run, drawn together.
+				index = DrawBatchRun(index, state);
+				DrawnCount++;
+				return index;
+			}
+
+			if (state.Cull == CullMode.Off)
+			{
+				// Back faces first, then front faces: the inside of a convex object ends up behind its outside.
+				GLState.SetCull(true, TriangleFace.Front);
+				DrawGeometry(entry);
+				GLState.SetCull(true, TriangleFace.Back);
+			}
+
+			DrawGeometry(entry);
+			DrawnCount++;
+			return index;
 		}
 
 		// An opaque surface this pass draws: no blending and depth written, in the queues up to GeometryLast + 1, where the

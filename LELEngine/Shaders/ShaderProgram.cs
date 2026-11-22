@@ -1212,6 +1212,12 @@ namespace LELEngine.Shaders
 			}
 
 			state.Finish();
+			string lowResolution = state.LowResolutionProblem();
+			if (lowResolution != null)
+			{
+				Console.WriteLine("[Shader] LowResolution On in " + source + " draws at full resolution: " + lowResolution);
+			}
+
 			properties.AddRange(ShaderProperty.Parse(propertyLines, source));
 		}
 

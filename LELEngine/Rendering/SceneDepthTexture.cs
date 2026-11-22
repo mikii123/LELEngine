@@ -24,12 +24,16 @@ namespace LELEngine.Rendering
 
 		#region PublicMethods
 
-		/// <summary>Binds the depth copy (or tells the shader there is none) to a program that reads the scene's depth.</summary>
-		public static void SetUniforms(ShaderProgram program, RenderContext context, VFX.VfxDepthCapture capture)
+		/// <summary>
+		///     Binds the depth copy (or tells the shader there is none) to a program that reads the scene's depth.
+		///     <paramref name="pixelScale" />: scene pixels per pixel of the target drawn into (2 in the half-resolution layer).
+		/// </summary>
+		public static void SetUniforms(ShaderProgram program, RenderContext context, VFX.VfxDepthCapture capture, float pixelScale = 1f)
 		{
 			bool available = capture != null && capture.Valid && capture.Depth != null;
 			program.SetVector4("lelSceneDepthParams", SceneGrab.DepthParams(context.Projection));
 			program.SetFloat("lelSceneDepthAvailable", available ? 1f : 0f);
+			program.SetFloat("lelSceneDepthPixelScale", pixelScale);
 			if (available)
 			{
 				program.SetTexture("lelSceneDepth", TextureTarget.Texture2D, capture.Depth.Handle, TextureUnit);

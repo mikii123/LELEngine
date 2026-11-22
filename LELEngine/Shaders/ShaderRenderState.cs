@@ -86,6 +86,7 @@ namespace LELEngine.Shaders
 	///     SurfaceCapture On                           // On / Off: the shader can write its surface instead of lighting it (what impostor bakes capture)
 	///     GrabPass On                                 // On / Off / a float property: the scene drawn so far is copied before each draw (Unity's GrabPass)
 	///     SceneDepth On                               // On / Off: the shader reads the opaque scene's depth (Unity's _CameraDepthTexture, soft particles)
+	///     LowResolution On                            // On / Off: the material's objects draw at half the view's resolution (large soft blended surfaces)
 	///     Batching Off                                // On / Off: the material's objects are never merged into a static batch (Unity's DisableBatching tag)
 	///     </code>
 	///     A shader that blends or grabs without naming a queue goes to the Transparent queue. Blending, depth writes and
@@ -99,6 +100,15 @@ namespace LELEngine.Shaders
 	///     widened by that shift is copied, and one copy serves the later objects nothing drawn since overlaps.
 	///     SceneDepth (transparent queues only): the transparent pass copies the depth buffer once the opaques are drawn and
 	///     binds the copy to the shader's draws (Engine/SceneDepth.glsl).
+	///     LowResolution (transparent queues only): the transparent pass draws the material's objects into the layer at half
+	///     the view's resolution that particle outputs with LowResolution use (<see cref="Rendering.LowResolutionTransparency" />):
+	///     a quarter of the pixels, for surfaces whose cost is the area they cover many times over (sheets of fog, large
+	///     glows). They draw there in their sorted order and the layer is laid over the scene where the last of them sorts,
+	///     with the outline of what stands in front kept sharp. The layer keeps colour and what the scene shows through, so
+	///     only blends it can hold go there: the target scaled by one minus the source's alpha (alpha, premultiplied) or kept
+	///     (additive), with a source factor that does not read the target, no depth writes and no GrabPass; the shader's
+	///     alpha factors are replaced by the layer's. Other blends draw at full resolution (the load says why). A shader with
+	///     SceneDepth reads the opaque depth under its pixel the same way there (Engine/SceneDepth.glsl).
 	///     ShadowCaster Custom and GeometryPrepass Custom (opaque queues): the engine draws depth with programs of its own
 	///     that only place the mesh's vertices, so a shader that shapes its vertices, cuts its surface out by alpha or
 	///     writes its own depth (a billboard that stands for a mesh: Engine/Impostor.shader) draws those passes itself,
@@ -170,6 +180,12 @@ namespace LELEngine.Shaders
 		/// </summary>
 		public bool SceneDepth;
 
+		/// <summary>
+		///     LowResolution On: the transparent pass draws the material's objects into its half-resolution layer
+		///     (<see cref="Rendering.LowResolutionTransparency" />) when the blend allows (<see cref="DrawsLowResolution" />).
+		/// </summary>
+		public bool LowResolution;
+
 		/// <summary>The shader named its queue (otherwise it follows the blend state).</summary>
 		public bool QueueDeclared;
 
@@ -204,6 +220,7 @@ namespace LELEngine.Shaders
 				case "surfacecapture":
 				case "grabpass":
 				case "scenedepth":
+				case "lowresolution":
 				case "batching":
 					return true;
 				default:
@@ -238,6 +255,8 @@ namespace LELEngine.Shaders
 					return ParseGrabPass(rest, out error);
 				case "scenedepth":
 					return ParseSwitch(rest, out SceneDepth, out error);
+				case "lowresolution":
+					return ParseSwitch(rest, out LowResolution, out error);
 				case "batching":
 					return ParseSwitch(rest, out Batching, out error);
 				case "queue":
@@ -330,13 +349,58 @@ namespace LELEngine.Shaders
 			GrabPass = other.GrabPass;
 			GrabOffsetProperty = other.GrabOffsetProperty;
 			SceneDepth = other.SceneDepth;
+			LowResolution = other.LowResolution;
 			QueueDeclared = other.QueueDeclared;
 			Batching = other.Batching;
 		}
 
+		/// <summary>
+		///     LowResolution On and the half-resolution layer can hold this state (<see cref="LowResolutionProblem" /> is null):
+		///     the transparent pass draws the material's objects there.
+		/// </summary>
+		public bool DrawsLowResolution => LowResolution && LowResolutionProblem() == null;
+
+		/// <summary>
+		///     Why LowResolution On cannot be kept for this state (it then draws at full resolution), or null. The layer holds
+		///     the light its draws send and what the scene shows through them, laid over the scene as scene x alpha + colour:
+		///     a draw may scale what is under it by one minus its alpha (alpha, premultiplied) or keep it (additive), with a
+		///     source factor that does not read the target, and write no depth; a grab reads the full-resolution scene.
+		/// </summary>
+		public string LowResolutionProblem()
+		{
+			if (!LowResolution)
+			{
+				return null;
+			}
+
+			if (!BlendEnabled)
+			{
+				return "it does not blend";
+			}
+
+			if (ZWrite)
+			{
+				return "it writes depth (ZWrite On)";
+			}
+
+			if (GrabPass)
+			{
+				return "it grabs the scene (GrabPass)";
+			}
+
+			if (DstColor != BlendingFactor.One && DstColor != BlendingFactor.OneMinusSrcAlpha)
+			{
+				return "its blend's target factor is " + DstColor + " (One or OneMinusSrcAlpha can be laid over the scene)";
+			}
+
+			bool sourceReadsTarget = SrcColor == BlendingFactor.DstColor || SrcColor == BlendingFactor.OneMinusDstColor || SrcColor == BlendingFactor.DstAlpha
+				|| SrcColor == BlendingFactor.OneMinusDstAlpha || SrcColor == BlendingFactor.SrcAlphaSaturate;
+			return sourceReadsTarget ? "its blend's source factor " + SrcColor + " reads the target" : null;
+		}
+
 		public void Finish()
 		{
-			if ((BlendEnabled || GrabPass || SceneDepth) && !QueueDeclared)
+			if ((BlendEnabled || GrabPass || SceneDepth || LowResolution) && !QueueDeclared)
 			{
 				Queue = MaterialQueue.Transparent;
 			}
@@ -362,6 +426,22 @@ namespace LELEngine.Shaders
 
 			GL.Enable(EnableCap.DepthTest);
 			GL.DepthMask(ZWrite);
+			GL.DepthFunc(ZTest ?? DepthFunction.Lequal);
+			ApplyCull();
+		}
+
+		/// <summary>
+		///     <see cref="ApplyTransparent" /> for a draw into the half-resolution layer (<see cref="DrawsLowResolution" />):
+		///     the shader's colour factors, and the layer's alpha (what the scene shows through) scaled as the target's colour
+		///     is: by one minus the source's alpha, or kept for an additive blend. No depth writes.
+		/// </summary>
+		public void ApplyLowResolution()
+		{
+			GL.Enable(EnableCap.Blend);
+			GL.BlendFuncSeparate((BlendingFactorSrc)SrcColor, (BlendingFactorDest)DstColor, BlendingFactorSrc.Zero,
+				DstColor == BlendingFactor.One ? BlendingFactorDest.One : BlendingFactorDest.OneMinusSrcAlpha);
+			GL.Enable(EnableCap.DepthTest);
+			GL.DepthMask(false);
 			GL.DepthFunc(ZTest ?? DepthFunction.Lequal);
 			ApplyCull();
 		}
@@ -402,6 +482,7 @@ namespace LELEngine.Shaders
 			if (CustomGeometryPrepass) text.Append(", own geometry prepass");
 			if (GrabPass) text.Append(", GrabPass").Append(GrabOffsetProperty != null ? " (" + GrabOffsetProperty + ")" : "");
 			if (SceneDepth) text.Append(", SceneDepth");
+			if (LowResolution) text.Append(DrawsLowResolution ? ", half resolution" : ", LowResolution ignored: " + LowResolutionProblem());
 			return text.ToString();
 		}
 

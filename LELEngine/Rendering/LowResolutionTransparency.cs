@@ -5,8 +5,9 @@ using OpenTK.Mathematics;
 namespace LELEngine.Rendering
 {
 	/// <summary>
-	///     A layer of transparent draws at half the view's resolution (particle outputs with LowResolution): a quarter of
-	///     the pixels for large soft particles, whose cost is the area they cover many times over. <see cref="Begin" />
+	///     A layer of transparent draws at half the view's resolution (particle outputs with LowResolution, materials whose
+	///     shader declares LowResolution On): a quarter of the pixels for large soft particles and surfaces, whose cost is
+	///     the area they cover many times over. <see cref="Begin" />
 	///     binds the layer: its colour is cleared to nothing in front of the scene (alpha, what the scene shows through,
 	///     1) and its depth is the farthest of each 2 x 2 of the opaque scene's, so particles hide behind what is in front of
 	///     them and still reach the edges of it. The draws blend into it with their alpha taking its share of what shows
