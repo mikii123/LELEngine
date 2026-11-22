@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using LELEngine;
 using LELEngine.Shaders;
-using OpenTK.Mathematics;
+using LELEngine.Mathematics;
 using Matrix4 = LELEngine.Shaders.Uniforms.Matrix4;
 
 /// <summary>
@@ -22,13 +22,13 @@ public sealed class Transform : Behaviour
 	public Vector3 right => (rotation * Vector3.UnitX).Normalized();
 
 	/// <summary>Local-to-parent matrix.</summary>
-	public OpenTK.Mathematics.Matrix4 LocalMatrix =>
-		OpenTK.Mathematics.Matrix4.CreateScale(m_LocalScale) * OpenTK.Mathematics.Matrix4.CreateFromQuaternion(m_LocalRotation) * OpenTK.Mathematics.Matrix4.CreateTranslation(m_LocalPosition);
+	public LELEngine.Mathematics.Matrix4 LocalMatrix =>
+		LELEngine.Mathematics.Matrix4.CreateScale(m_LocalScale) * LELEngine.Mathematics.Matrix4.CreateFromQuaternion(m_LocalRotation) * LELEngine.Mathematics.Matrix4.CreateTranslation(m_LocalPosition);
 
 	/// <summary>Local-to-world matrix.</summary>
-	public OpenTK.Mathematics.Matrix4 LocalToWorld => parentTransform == null ? LocalMatrix : LocalMatrix * parentTransform.LocalToWorld;
+	public LELEngine.Mathematics.Matrix4 LocalToWorld => parentTransform == null ? LocalMatrix : LocalMatrix * parentTransform.LocalToWorld;
 
-	public OpenTK.Mathematics.Matrix4 WorldToLocal => LocalToWorld.Inverted();
+	public LELEngine.Mathematics.Matrix4 WorldToLocal => LocalToWorld.Inverted();
 
 	public Transform parent
 	{

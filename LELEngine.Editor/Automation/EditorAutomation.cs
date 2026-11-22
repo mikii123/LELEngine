@@ -1274,28 +1274,28 @@ namespace LELEngine.Editor
 				return text.Split(',').Select(n => float.Parse(n.Trim(), culture)).ToArray();
 			}
 
-			if (type == typeof(OpenTK.Mathematics.Vector2))
+			if (type == typeof(LELEngine.Mathematics.Vector2))
 			{
 				float[] v = Numbers();
-				return new OpenTK.Mathematics.Vector2(v[0], v[1]);
+				return new LELEngine.Mathematics.Vector2(v[0], v[1]);
 			}
 
-			if (type == typeof(OpenTK.Mathematics.Vector4))
+			if (type == typeof(LELEngine.Mathematics.Vector4))
 			{
 				float[] v = Numbers();
-				return new OpenTK.Mathematics.Vector4(v[0], v[1], v[2], v[3]);
+				return new LELEngine.Mathematics.Vector4(v[0], v[1], v[2], v[3]);
 			}
 
-			if (type == typeof(OpenTK.Mathematics.Color4))
+			if (type == typeof(LELEngine.Mathematics.Color4))
 			{
 				float[] v = Numbers();
-				return new OpenTK.Mathematics.Color4(v[0], v[1], v[2], v.Length > 3 ? v[3] : 1f);
+				return new LELEngine.Mathematics.Color4(v[0], v[1], v[2], v.Length > 3 ? v[3] : 1f);
 			}
 
-			if (type == typeof(OpenTK.Mathematics.Quaternion))
+			if (type == typeof(LELEngine.Mathematics.Quaternion))
 			{
 				float[] v = Numbers();
-				return OpenTK.Mathematics.Quaternion.FromEulerAngles(OpenTK.Mathematics.MathHelper.DegreesToRadians(v[0]), OpenTK.Mathematics.MathHelper.DegreesToRadians(v[1]), OpenTK.Mathematics.MathHelper.DegreesToRadians(v[2]));
+				return LELEngine.Mathematics.Quaternion.FromEulerAngles(LELEngine.Mathematics.MathHelper.DegreesToRadians(v[0]), LELEngine.Mathematics.MathHelper.DegreesToRadians(v[1]), LELEngine.Mathematics.MathHelper.DegreesToRadians(v[2]));
 			}
 
 			if (type == typeof(bool))

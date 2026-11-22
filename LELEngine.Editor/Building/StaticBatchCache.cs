@@ -5,7 +5,7 @@ using System.IO;
 using System.Security.Cryptography;
 using System.Text;
 using LELEngine.Serialization;
-using OpenTK.Mathematics;
+using LELEngine.Mathematics;
 
 namespace LELEngine.Editor
 {

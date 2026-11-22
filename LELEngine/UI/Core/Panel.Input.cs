@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
-using OpenTK.Mathematics;
-using OpenTK.Windowing.GraphicsLibraryFramework;
+using LELEngine.Mathematics;
+using LELEngine.Windowing;
 
 namespace LELEngine.UIElements
 {
@@ -184,7 +184,7 @@ namespace LELEngine.UIElements
 			using (WheelEvent evt = WheelEvent.GetPooled())
 			{
 				Fill(evt, position, -1, lastPressedButtons, modifiers, 0, Vector2.Zero);
-				// Unity: positive y scrolls down; OpenTK gives positive y for wheel up.
+				// Unity: positive y scrolls down; the window gives positive y for wheel up.
 				evt.delta = new Vector3(-delta.X, -delta.Y, 0f);
 				evt.target = target;
 				target.SendEvent(evt);

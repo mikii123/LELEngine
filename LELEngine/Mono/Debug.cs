@@ -53,7 +53,7 @@ namespace LELEngine
 		private static readonly StackTraceLogType[] stackTraceTypes = { StackTraceLogType.ScriptOnly, StackTraceLogType.ScriptOnly, StackTraceLogType.ScriptOnly, StackTraceLogType.ScriptOnly };
 
 		/// <summary>Namespaces of the frames <see cref="StackTraceLogType.ScriptOnly" /> leaves out.</summary>
-		private static readonly string[] libraryNamespaces = { "System", "Microsoft", "Internal", "OpenTK", "Hexa", "Silk", "Mono.Cecil" };
+		private static readonly string[] libraryNamespaces = { "System", "Microsoft", "Internal", "Brutal", "Hexa", "Silk", "Mono.Cecil" };
 
 		#endregion
 

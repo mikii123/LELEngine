@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using Hexa.NET.ImGui;
 using LELEngine.VFX;
-using OpenTK.Mathematics;
+using LELEngine.Mathematics;
 using NVector2 = System.Numerics.Vector2;
 using NVector4 = System.Numerics.Vector4;
 

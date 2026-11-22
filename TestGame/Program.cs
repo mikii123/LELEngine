@@ -332,7 +332,7 @@ namespace TestGame
 					SpinPerFrame = GetFloat(args, "impostorspinframe", 0f),
 					MotionFrame = GetInt(args, "impostormotion", 0),
 					Repeat = GetInt(args, "impostorrepeat", 0),
-					Scale = GetVector3(args, "impostorscale") ?? OpenTK.Mathematics.Vector3.One,
+					Scale = GetVector3(args, "impostorscale") ?? LELEngine.Mathematics.Vector3.One,
 					Show = GetValue(args, "impostorshow") ?? "both",
 					SwapFrame = GetInt(args, "impostorswap", 0),
 					Field = GetInt(args, "impostorfield", 0),
@@ -399,7 +399,7 @@ namespace TestGame
 			// vsync=1: frames paced by the display, as the editor's (motion tests at a game's frame rate).
 			if (GetBool(args, "vsync", false))
 			{
-				Game.Mono.VSync = OpenTK.Windowing.Common.VSyncMode.On;
+				Game.Mono.VSync = LELEngine.Windowing.VSyncMode.On;
 			}
 
 			Game.Mono.Run();
@@ -444,7 +444,7 @@ namespace TestGame
 		}
 
 		/// <summary>"x,y,z" (invariant culture), or null.</summary>
-		private static OpenTK.Mathematics.Vector3? GetVector3(string[] args, string name)
+		private static LELEngine.Mathematics.Vector3? GetVector3(string[] args, string name)
 		{
 			string[] parts = GetValue(args, name)?.Split(',');
 			if (parts == null || parts.Length != 3)
@@ -455,7 +455,7 @@ namespace TestGame
 			var style = System.Globalization.NumberStyles.Float;
 			var culture = System.Globalization.CultureInfo.InvariantCulture;
 			return float.TryParse(parts[0], style, culture, out float x) && float.TryParse(parts[1], style, culture, out float y) && float.TryParse(parts[2], style, culture, out float z)
-				? new OpenTK.Mathematics.Vector3(x, y, z)
+				? new LELEngine.Mathematics.Vector3(x, y, z)
 				: null;
 		}
 

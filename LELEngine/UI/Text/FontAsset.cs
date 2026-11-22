@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
-using OpenTK.Graphics.OpenGL4;
+using LELEngine.Graphics;
 
 namespace LELEngine.UIElements
 {

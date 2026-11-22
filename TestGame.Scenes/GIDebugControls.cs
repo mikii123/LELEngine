@@ -5,7 +5,7 @@ using System.Text;
 using LELEngine;
 using LELEngine.Rendering;
 using LELEngine.Rendering.Passes;
-using OpenTK.Windowing.GraphicsLibraryFramework;
+using LELEngine.Windowing;
 
 namespace TestGame.Scenes
 {

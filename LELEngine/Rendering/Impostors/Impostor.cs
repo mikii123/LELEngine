@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using LELEngine;
 using LELEngine.Rendering.Impostors;
 using LELEngine.Shaders;
-using OpenTK.Mathematics;
+using LELEngine.Mathematics;
 
 /// <summary>
 ///     An impostor: a billboard that stands for an object far away. The object's surface is baked from a grid of

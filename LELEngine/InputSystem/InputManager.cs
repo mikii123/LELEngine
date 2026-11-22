@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using LELEngine.Serialization;
-using OpenTK.Windowing.GraphicsLibraryFramework;
+using LELEngine.Windowing;
 
 namespace LELEngine.InputSystem
 {
@@ -334,19 +334,19 @@ namespace LELEngine.InputSystem
 				bool present;
 				try
 				{
-					present = GLFW.JoystickPresent(slot) && GLFW.JoystickIsGamepad(slot);
+					// Never present without GLFW (a host without a window).
+					present = Joysticks.IsPresent(slot) && Joysticks.IsGamepad(slot);
 				}
 				catch (Exception)
 				{
-					// GLFW not initialized (a host without a window).
 					return;
 				}
 
 				GamepadController known = gamepads.Find(g => g.JoystickSlot == slot);
 				if (present && known == null)
 				{
-					string name = GLFW.GetGamepadName(slot) ?? GLFW.GetJoystickName(slot) ?? "Gamepad";
-					string hardwareId = (GLFW.GetJoystickGUID(slot) ?? "") + ":" + name;
+					string name = Joysticks.GetGamepadName(slot) ?? Joysticks.GetName(slot) ?? "Gamepad";
+					string hardwareId = (Joysticks.GetGuid(slot) ?? "") + ":" + name;
 					var gamepad = new GamepadController(nextGamepadId++, slot, name, hardwareId);
 					gamepads.Add(gamepad);
 					OnConnected(gamepad);

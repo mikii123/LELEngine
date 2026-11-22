@@ -1,5 +1,5 @@
 using System;
-using OpenTK.Mathematics;
+using LELEngine.Mathematics;
 
 namespace LELEngine.Rendering
 {

@@ -1,6 +1,6 @@
 using System;
 using LELEngine.Rendering;
-using OpenTK.Mathematics;
+using LELEngine.Mathematics;
 
 namespace LELEngine
 {

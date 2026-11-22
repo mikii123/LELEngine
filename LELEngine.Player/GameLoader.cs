@@ -5,8 +5,8 @@ using System.IO;
 using System.Reflection;
 using System.Threading;
 using LELEngine.Rendering;
-using OpenTK.Graphics.OpenGL4;
-using GLFW = OpenTK.Windowing.GraphicsLibraryFramework.GLFW;
+using LELEngine.Graphics;
+using LELEngine.Windowing;
 
 namespace LELEngine.Player
 {
@@ -222,7 +222,7 @@ namespace LELEngine.Player
 				if (host != null)
 				{
 					// Wakes the main thread's event wait (GLFW is initialized: the window handed its context over).
-					GLFW.PostEmptyEvent();
+					WindowSystem.PostEmptyEvent();
 				}
 			}
 		}

@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
-using OpenTK.Mathematics;
+using LELEngine.Mathematics;
 using Silk.NET.Assimp;
 using AiMaterial = Silk.NET.Assimp.Material;
 using AiMesh = Silk.NET.Assimp.Mesh;

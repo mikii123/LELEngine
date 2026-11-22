@@ -4,7 +4,7 @@ using System.IO;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
-using OpenTK.Mathematics;
+using LELEngine.Mathematics;
 
 namespace LELEngine
 {

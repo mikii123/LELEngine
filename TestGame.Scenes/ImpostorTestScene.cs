@@ -4,7 +4,7 @@ using System.IO;
 using LELEngine;
 using LELEngine.Rendering.Impostors;
 using LELEngine.Shaders;
-using OpenTK.Mathematics;
+using LELEngine.Mathematics;
 
 namespace TestGame.Scenes
 {
@@ -640,9 +640,9 @@ namespace TestGame.Scenes
 			int width = Game.Mono.Renderer.RenderWidth;
 			int height = Game.Mono.Renderer.RenderHeight;
 			var texels = new float[width * height * 4];
-			OpenTK.Graphics.OpenGL4.GL.BindTexture(OpenTK.Graphics.OpenGL4.TextureTarget.Texture2D, motion.Handle);
-			OpenTK.Graphics.OpenGL4.GL.GetTexImage(OpenTK.Graphics.OpenGL4.TextureTarget.Texture2D, 0, OpenTK.Graphics.OpenGL4.PixelFormat.Rgba, OpenTK.Graphics.OpenGL4.PixelType.Float, texels);
-			OpenTK.Graphics.OpenGL4.GL.BindTexture(OpenTK.Graphics.OpenGL4.TextureTarget.Texture2D, 0);
+			LELEngine.Graphics.GL.BindTexture(LELEngine.Graphics.TextureTarget.Texture2D, motion.Handle);
+			LELEngine.Graphics.GL.GetTexImage(LELEngine.Graphics.TextureTarget.Texture2D, 0, LELEngine.Graphics.PixelFormat.Rgba, LELEngine.Graphics.PixelType.Float, texels);
+			LELEngine.Graphics.GL.BindTexture(LELEngine.Graphics.TextureTarget.Texture2D, 0);
 			for (int quarter = 0; quarter < 4; quarter++)
 			{
 				int moved = 0;

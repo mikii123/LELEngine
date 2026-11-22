@@ -17,7 +17,7 @@ namespace LELEngine.Editor
 		/// <summary>The engine and the editor (LELEngine.*).</summary>
 		Engine,
 
-		/// <summary>.NET and third-party libraries (System.*, OpenTK.*, ...).</summary>
+		/// <summary>.NET and third-party libraries (System.*, Brutal.*, ...).</summary>
 		Library
 	}
 
@@ -47,7 +47,7 @@ namespace LELEngine.Editor
 
 		private static readonly Regex FrameLine = new Regex(@"^\s*at (?<method>.+?)(?: in (?<file>.+):line (?<line>\d+))?\s*$", RegexOptions.Compiled);
 
-		private static readonly string[] LibraryNamespaces = { "System.", "Microsoft.", "Internal.", "OpenTK.", "Hexa.", "Silk.", "Mono.Cecil." };
+		private static readonly string[] LibraryNamespaces = { "System.", "Microsoft.", "Internal.", "Brutal.", "Hexa.", "Silk.", "Mono.Cecil." };
 
 		/// <summary>The type, then a closure class (&lt;&gt;c, &lt;&gt;c__DisplayClass3_0) or not, then &lt;Method&gt;kind__..., what follows.</summary>
 		private static readonly Regex GeneratedName = new Regex(@"^(?<type>.+?)(?:\.<>c(?:__DisplayClass[\d_]+)?)?\.<(?<method>[^>]+)>(?<kind>[a-z])__(?:(?<local>[^|.]+)\|)?[^.]*(?:\..*)?$", RegexOptions.Compiled);

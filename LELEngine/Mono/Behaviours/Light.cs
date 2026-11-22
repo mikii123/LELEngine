@@ -1,6 +1,6 @@
 using System.Collections.Generic;
 using LELEngine;
-using OpenTK.Mathematics;
+using LELEngine.Mathematics;
 
 /// <summary>What a <see cref="Light" /> is.</summary>
 public enum LightType

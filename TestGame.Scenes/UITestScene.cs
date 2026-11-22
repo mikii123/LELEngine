@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using LELEngine;
 using LELEngine.UIElements;
-using OpenTK.Mathematics;
+using LELEngine.Mathematics;
 
 namespace TestGame.Scenes
 {
@@ -244,10 +244,10 @@ namespace TestGame.Scenes
 				case 6: MoveTo(root.Q<TextField>("name-field")?.Q<VisualElement>("unity-text-input")); break;
 				case 8: Press(); break;
 				case 10: Release(); break;
-				case 12: Input.Input_TextInput(new OpenTK.Windowing.Common.TextInputEventArgs('!')); break;
-				case 13: Input.Input_TextInput(new OpenTK.Windowing.Common.TextInputEventArgs('?')); break;
+				case 12: Input.Input_TextInput(new LELEngine.Windowing.TextInputEventArgs('!')); break;
+				case 13: Input.Input_TextInput(new LELEngine.Windowing.TextInputEventArgs('?')); break;
 				case 15: MoveTo(root.Q<ScrollView>()?.contentViewport); break;
-				case 17: Input.Input_MouseWheel(new OpenTK.Windowing.Common.MouseWheelEventArgs(0f, -3f)); break;
+				case 17: Input.Input_MouseWheel(new LELEngine.Windowing.MouseWheelEventArgs(0f, -3f)); break;
 				case 20: MoveTo(root.Q<DropdownField>()?.Q<VisualElement>(className: "unity-base-popup-field__input")); break;
 				case 22: Press(); break;
 				case 24: Release(); break;
@@ -277,17 +277,17 @@ namespace TestGame.Scenes
 			Rect bound = element.worldBound;
 			float scale = (element.panel as RuntimePanel)?.scale ?? 1f;
 			Vector2 center = bound.center * scale;
-			Input.Input_MouseMove(new OpenTK.Windowing.Common.MouseMoveEventArgs(center.X, center.Y, 0f, 0f));
+			Input.Input_MouseMove(new LELEngine.Windowing.MouseMoveEventArgs(center.X, center.Y, 0f, 0f));
 		}
 
 		private static void Press()
 		{
-			Input.Input_MouseDown(new OpenTK.Windowing.Common.MouseButtonEventArgs(OpenTK.Windowing.GraphicsLibraryFramework.MouseButton.Left, OpenTK.Windowing.GraphicsLibraryFramework.InputAction.Press, 0));
+			Input.Input_MouseDown(new LELEngine.Windowing.MouseButtonEventArgs(LELEngine.Windowing.MouseButton.Left, LELEngine.Windowing.InputAction.Press, 0));
 		}
 
 		private static void Release()
 		{
-			Input.Input_MouseUp(new OpenTK.Windowing.Common.MouseButtonEventArgs(OpenTK.Windowing.GraphicsLibraryFramework.MouseButton.Left, OpenTK.Windowing.GraphicsLibraryFramework.InputAction.Release, 0));
+			Input.Input_MouseUp(new LELEngine.Windowing.MouseButtonEventArgs(LELEngine.Windowing.MouseButton.Left, LELEngine.Windowing.InputAction.Release, 0));
 		}
 
 		private void Build(VisualElement root)

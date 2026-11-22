@@ -182,7 +182,7 @@ namespace LELEngine.Editor
 
 			EditorApplication editor = EditorApplication.Instance;
 			editor.SceneView.BeginGizmoDrag();
-			editor.SceneView.MoveSelectedAsGizmo(new OpenTK.Mathematics.Vector3(dx, dy, dz));
+			editor.SceneView.MoveSelectedAsGizmo(new LELEngine.Mathematics.Vector3(dx, dy, dz));
 			editor.SceneView.EndGizmoDrag();
 		}
 
@@ -197,9 +197,9 @@ namespace LELEngine.Editor
 			frame++;
 			// maximize=N / restore=N / grow=N (10 px larger): window size changes; slowframes=ms: logs every frame
 			// slower than that (also on the project launcher).
-			if (Is("maximize")) editor.Window.WindowState = OpenTK.Windowing.Common.WindowState.Maximized;
-			if (Is("restore")) editor.Window.WindowState = OpenTK.Windowing.Common.WindowState.Normal;
-			if (Is("grow")) editor.Window.ClientSize += new OpenTK.Mathematics.Vector2i(10, 10);
+			if (Is("maximize")) editor.Window.WindowState = LELEngine.Windowing.WindowState.Maximized;
+			if (Is("restore")) editor.Window.WindowState = LELEngine.Windowing.WindowState.Normal;
+			if (Is("grow")) editor.Window.ClientSize += new LELEngine.Mathematics.Vector2i(10, 10);
 			if (values.TryGetValue("slowframes", out string slow) && double.TryParse(slow, out double slowMs))
 			{
 				double now = frameClock.Elapsed.TotalMilliseconds;
@@ -450,7 +450,7 @@ namespace LELEngine.Editor
 
 					if (frame < start + steps)
 					{
-						editor.SceneView.MoveSelectedAsGizmo(new OpenTK.Mathematics.Vector3(dx, dy, dz) / steps);
+						editor.SceneView.MoveSelectedAsGizmo(new LELEngine.Mathematics.Vector3(dx, dy, dz) / steps);
 						Debug.Log($"[Test] Drag frame {frame}: dt {ImGui.GetIO().DeltaTime * 1000f:0.0} ms, {editor.Selected.Name} at {editor.Selected.transform.position}");
 					}
 					else
@@ -473,7 +473,7 @@ namespace LELEngine.Editor
 					&& float.TryParse(delta[1], System.Globalization.NumberStyles.Float, invariant, out float dy)
 					&& float.TryParse(delta[2], System.Globalization.NumberStyles.Float, invariant, out float dz))
 				{
-					editor.SceneView.MoveView(new OpenTK.Mathematics.Vector3(dx, dy, dz) / steps);
+					editor.SceneView.MoveView(new LELEngine.Mathematics.Vector3(dx, dy, dz) / steps);
 				}
 			}
 
@@ -635,7 +635,7 @@ namespace LELEngine.Editor
 			{
 				cameraWriter ??= new System.IO.StreamWriter(cameraLog, false) { AutoFlush = true };
 				(System.Numerics.Vector2 min, System.Numerics.Vector2 size) = editor.SceneView.ViewRect;
-				OpenTK.Mathematics.Vector2i client = editor.Window.ClientLocation;
+				LELEngine.Mathematics.Vector2i client = editor.Window.ClientLocation;
 				cameraWriter.WriteLine($"{frame} {frameClock.Elapsed.TotalMilliseconds:0.0} screen {client.X + min.X:0} {client.Y + min.Y:0} size {size.X:0} {size.Y:0} focused {editor.Window.IsFocused} {editor.SceneView.DescribeDrag()}");
 			}
 
@@ -1179,10 +1179,10 @@ namespace LELEngine.Editor
 				return Prefab.Load(text);
 			}
 
-			if (type == typeof(OpenTK.Mathematics.Vector3))
+			if (type == typeof(LELEngine.Mathematics.Vector3))
 			{
 				string[] c = text.Split(',');
-				return new OpenTK.Mathematics.Vector3(float.Parse(c[0], culture), float.Parse(c[1], culture), float.Parse(c[2], culture));
+				return new LELEngine.Mathematics.Vector3(float.Parse(c[0], culture), float.Parse(c[1], culture), float.Parse(c[2], culture));
 			}
 
 			return Convert.ChangeType(text, type, culture);

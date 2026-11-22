@@ -5,7 +5,7 @@ using System.Globalization;
 using System.IO;
 using LELEngine.Serialization;
 using LELEngine.Shaders;
-using OpenTK.Mathematics;
+using LELEngine.Mathematics;
 
 namespace LELEngine.Editor
 {

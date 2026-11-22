@@ -5,10 +5,10 @@ using System.Globalization;
 using System.IO;
 using System.Text;
 using System.Threading;
+using Brutal.GlfwApi;
+using Brutal.Numerics;
+using LELEngine.Graphics;
 using LELEngine.Rendering;
-using OpenTK.Graphics.OpenGL4;
-using OpenTK.Windowing.GraphicsLibraryFramework;
-using GlfwWindow = OpenTK.Windowing.GraphicsLibraryFramework.Window;
 
 namespace LELEngine.Shaders
 {
@@ -48,7 +48,7 @@ namespace LELEngine.Shaders
 		///     own): makes a hidden GL context like the game's, compiles the request's variants into the binary cache and
 		///     writes "done &lt;index&gt;" for each on the standard output. Returns the exit code.
 		/// </summary>
-		public static unsafe int RunHelper(string requestFile)
+		public static int RunHelper(string requestFile)
 		{
 			Request request;
 			try
@@ -62,21 +62,25 @@ namespace LELEngine.Shaders
 			}
 
 			Window.InitializeGlfw();
-			GLFW.WindowHint(WindowHintBool.Visible, false);
-			GLFW.WindowHint(WindowHintClientApi.ClientApi, ClientApi.OpenGlApi);
-			GLFW.WindowHint(WindowHintInt.ContextVersionMajor, request.GLMajor);
-			GLFW.WindowHint(WindowHintInt.ContextVersionMinor, request.GLMinor);
-			GLFW.WindowHint(WindowHintOpenGlProfile.OpenGlProfile, OpenGlProfile.Core);
-			GLFW.WindowHint(WindowHintBool.OpenGLForwardCompat, true);
-			GlfwWindow* window = GLFW.CreateWindow(1, 1, "LELEngine shader compile helper", null, null);
-			if (window == null)
+			Glfw.WindowHint(GlfwWindowHint.Visible, 0);
+			Glfw.WindowHint(GlfwWindowHint.ClientApi, Glfw.Constants.GLFW_OPENGL_API);
+			Glfw.WindowHint(GlfwWindowHint.ContextVersionMajor, request.GLMajor);
+			Glfw.WindowHint(GlfwWindowHint.ContextVersionMinor, request.GLMinor);
+			Glfw.WindowHint(GlfwWindowHint.OpenGlProfile, Glfw.Constants.GLFW_OPENGL_CORE_PROFILE);
+			Glfw.WindowHint(GlfwWindowHint.OpenGlForwardCompat, 1);
+			GlfwWindow window;
+			try
+			{
+				window = Glfw.CreateWindow(new GlfwWindow.CreateInfo { Title = "LELEngine shader compile helper", Size = new int2(1, 1) });
+			}
+			catch (InvalidOperationException)
 			{
 				Console.Error.WriteLine($"No GL {request.GLMajor}.{request.GLMinor} context");
 				return 3;
 			}
 
-			GLFW.MakeContextCurrent(window);
-			GL.LoadBindings(new GLFWBindingsContext());
+			window.MakeContextCurrent();
+			GL.LoadBindings();
 			GLCapabilities.Initialize();
 			AssetDatabase.Initialize(request.DataFolder);
 			ProgramBinaryCache.Folder = request.CacheFolder;
@@ -124,7 +128,7 @@ namespace LELEngine.Shaders
 				}
 			}
 
-			GLFW.DestroyWindow(window);
+			window.Dispose();
 			return 0;
 		}
 

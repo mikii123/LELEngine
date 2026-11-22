@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
-using OpenTK.Mathematics;
+using LELEngine.Mathematics;
 
 namespace LELEngine.VFX
 {

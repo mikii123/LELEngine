@@ -2,8 +2,8 @@ using System;
 using System.Collections.Generic;
 using LELEngine.Rendering.Lumen;
 using LELEngine.Shaders;
-using OpenTK.Graphics.OpenGL4;
-using OpenTK.Mathematics;
+using LELEngine.Graphics;
+using LELEngine.Mathematics;
 
 namespace LELEngine.Rendering.Passes
 {

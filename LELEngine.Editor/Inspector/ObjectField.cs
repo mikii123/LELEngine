@@ -188,7 +188,7 @@ namespace LELEngine.Editor
 			}
 			else if (value is Sprite sprite && AssetThumbnails.TryGet(sprite.texture, out handle, out uv0, out uv1))
 			{
-				OpenTK.Mathematics.Vector4 uv = sprite.uv;
+				LELEngine.Mathematics.Vector4 uv = sprite.uv;
 				draw.AddImage(EditorGui.Texture(handle), start + new NVector2(2f, 2f), start + new NVector2(height - 2f, height - 2f), new NVector2(uv.X, uv.W), new NVector2(uv.Z, uv.Y));
 				textX = start.X + height + 2f;
 			}

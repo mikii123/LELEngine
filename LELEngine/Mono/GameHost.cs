@@ -1,5 +1,5 @@
 using LELEngine.Rendering;
-using OpenTK.Windowing.Common;
+using LELEngine.Windowing;
 
 namespace LELEngine
 {
@@ -223,7 +223,7 @@ namespace LELEngine
 				return;
 			}
 
-			OpenTK.Windowing.Common.Input.MouseCursor wanted = UIElements.UIRuntime.ToWindowCursor(UIElements.UIRuntime.DesiredCursor);
+			LELEngine.Windowing.MouseCursor wanted = UIElements.UIRuntime.ToWindowCursor(UIElements.UIRuntime.DesiredCursor);
 			if (wanted != appliedCursor)
 			{
 				appliedCursor = wanted;
@@ -231,7 +231,7 @@ namespace LELEngine
 			}
 		}
 
-		private OpenTK.Windowing.Common.Input.MouseCursor appliedCursor = OpenTK.Windowing.Common.Input.MouseCursor.Default;
+		private LELEngine.Windowing.MouseCursor appliedCursor = LELEngine.Windowing.MouseCursor.Default;
 
 		protected override void OnRenderFrame(FrameEventArgs e)
 		{

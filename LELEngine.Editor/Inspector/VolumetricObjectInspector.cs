@@ -2,7 +2,7 @@ using System;
 using Hexa.NET.ImGui;
 using LELEngine.Rendering;
 using LELEngine.Volumetrics;
-using OpenTK.Mathematics;
+using LELEngine.Mathematics;
 using NVector2 = System.Numerics.Vector2;
 
 namespace LELEngine.Editor

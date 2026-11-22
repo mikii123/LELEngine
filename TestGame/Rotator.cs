@@ -1,6 +1,6 @@
 using LELEngine;
-using OpenTK.Mathematics;
-using OpenTK.Windowing.GraphicsLibraryFramework;
+using LELEngine.Mathematics;
+using LELEngine.Windowing;
 
 // Do NOT call "base" in any overridden functions
 class Rotator : Behaviour

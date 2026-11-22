@@ -1,7 +1,7 @@
 using System;
 using LELEngine;
 using LELEngine.Shaders;
-using OpenTK.Mathematics;
+using LELEngine.Mathematics;
 
 namespace TestGame.Scenes
 {
@@ -540,7 +540,7 @@ namespace TestGame.Scenes
 
 			if (options.Fullscreen)
 			{
-				Game.Mono.WindowState = OpenTK.Windowing.Common.WindowState.Fullscreen;
+				Game.Mono.WindowState = LELEngine.Windowing.WindowState.Fullscreen;
 			}
 
 			FpsController controller = scene.FindObjectOfType<FpsController>();

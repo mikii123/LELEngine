@@ -1,6 +1,6 @@
 using System;
 using System.Collections.Generic;
-using OpenTK.Mathematics;
+using LELEngine.Mathematics;
 
 namespace LELEngine.Animation
 {
@@ -1071,7 +1071,7 @@ namespace LELEngine.Animation
 		private static void FillMissing(AnimationBinding binding, PoseSlot slot, float[] under, float[] result)
 		{
 			int offset = slot.Offset;
-			OpenTK.Mathematics.Vector3 euler = default;
+			LELEngine.Mathematics.Vector3 euler = default;
 			if (binding.kind == AnimationValueKind.Euler)
 			{
 				euler = QuaternionHelper.ToEulerDegrees(new Quaternion(under[offset], under[offset + 1], under[offset + 2], under[offset + 3]));

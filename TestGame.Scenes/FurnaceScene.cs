@@ -2,7 +2,7 @@ using System;
 using System.Globalization;
 using LELEngine;
 using LELEngine.Shaders;
-using OpenTK.Mathematics;
+using LELEngine.Mathematics;
 
 namespace TestGame.Scenes
 {

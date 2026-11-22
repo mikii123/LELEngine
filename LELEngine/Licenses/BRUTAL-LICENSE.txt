@@ -1,0 +1,56 @@
+BRUTAL License v1.0
+
+BRUTAL game development framework is Copyright (c) 2024 Ahwoo Limited.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of
+this software and associated documentation files (the "Software"), to deal in
+the Software without restriction, including without limitation the rights to
+use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies
+of the Software, and to permit persons to whom the Software is furnished to do
+so, subject to the following conditions:
+
+1.0. The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+2.0. Any game, application, or other software product that is distributed to
+end users and that incorporates, links to, or is built using the Software or
+substantial portion of it (a “Product”) is subject to the following
+conditions:
+
+2.1. The above copyright notice shall be included in the Credits screen or
+equivalent for all copies of the Product.
+
+2.2. The Brutal logo available from ahwoo.com/brutal-branding shall be
+displayed in all copies of the Product prior to commencement of gameplay or the
+Software’s primary function, unless permission has been granted in writing by
+Ahwoo Limited or the Product is not capable of displaying graphics. The logo
+shall be shown unaltered except for scaling, for long enough to be legible, and
+shall be no less prominent than logos for other parties.
+
+2.3. The NOTICE.txt file shall be distributed alongside all copies of the
+Product.
+
+3.0. THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+4.0. Where this package redistributes third-party components, they are listed,
+together with the licences that govern them, in the LICENSES/ directory at the
+root of this package. Those licences continue to apply to those components, and
+nothing stated here limits any right they grant you.
+
+5.0. Any person submitting any contribution to the Software, hereby grants
+Ahwoo Limited and all recipients of this Software a perpetual, worldwide,
+non-exclusive, no-charge, royalty-free, irrevocable license to include the
+contribution in the Software and use it under the terms of this license. Any
+person submitting any contribution represents that they are legally entitled to
+grant this license and that their contribution does not infringe upon any
+third-party rights.
+
+6.0. This Agreement is governed by and shall be construed in accordance with
+the laws of New Zealand, and the parties submit to the exclusive jurisdiction
+of the courts of New Zealand.

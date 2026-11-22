@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using LELEngine;
 using LELEngine.Rendering.DistanceField;
 using LELEngine.Rendering.Lumen;
-using OpenTK.Mathematics;
+using LELEngine.Mathematics;
 
 namespace TestGame.Scenes
 {

@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using LELEngine.Audio;
 using LELEngine.Serialization;
-using OpenTK.Mathematics;
+using LELEngine.Mathematics;
 
 namespace LELEngine.Animation
 {

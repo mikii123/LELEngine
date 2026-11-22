@@ -5,8 +5,8 @@ using System.Linq;
 using Hexa.NET.ImGui;
 using LELEngine.Rendering;
 using LELEngine.Serialization;
-using OpenTK.Mathematics;
-using OpenTK.Windowing.Common;
+using LELEngine.Mathematics;
+using LELEngine.Windowing;
 using NVector2 = System.Numerics.Vector2;
 
 namespace LELEngine.Editor
@@ -3909,10 +3909,10 @@ namespace LELEngine.Editor
 		/// <summary>Play / stop (Ctrl+P) and pause / resume (Ctrl+Shift+P): the editor's, also while the game has the keyboard.</summary>
 		private static bool IsPlayShortcut(KeyboardKeyEventArgs e)
 		{
-			const OpenTK.Windowing.GraphicsLibraryFramework.KeyModifiers control = OpenTK.Windowing.GraphicsLibraryFramework.KeyModifiers.Control;
-			const OpenTK.Windowing.GraphicsLibraryFramework.KeyModifiers chord = control | OpenTK.Windowing.GraphicsLibraryFramework.KeyModifiers.Alt
-				| OpenTK.Windowing.GraphicsLibraryFramework.KeyModifiers.Super;
-			return e.Key == OpenTK.Windowing.GraphicsLibraryFramework.Keys.P && (e.Modifiers & chord) == control;
+			const LELEngine.Windowing.KeyModifiers control = LELEngine.Windowing.KeyModifiers.Control;
+			const LELEngine.Windowing.KeyModifiers chord = control | LELEngine.Windowing.KeyModifiers.Alt
+				| LELEngine.Windowing.KeyModifiers.Super;
+			return e.Key == LELEngine.Windowing.Keys.P && (e.Modifiers & chord) == control;
 		}
 
 		// The main window's ImGui context (ImGuiController.KeyPressFilter). The play shortcuts reach it as any key and

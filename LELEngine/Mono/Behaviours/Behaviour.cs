@@ -256,7 +256,7 @@ namespace LELEngine
 			return GameObject.Instantiate(prefab, parent);
 		}
 
-		protected static GameObject Instantiate(Prefab prefab, OpenTK.Mathematics.Vector3 position, OpenTK.Mathematics.Quaternion rotation, Transform parent = null)
+		protected static GameObject Instantiate(Prefab prefab, LELEngine.Mathematics.Vector3 position, LELEngine.Mathematics.Quaternion rotation, Transform parent = null)
 		{
 			return GameObject.Instantiate(prefab, position, rotation, parent);
 		}
@@ -267,7 +267,7 @@ namespace LELEngine
 			return GameObject.Instantiate(original, parent);
 		}
 
-		protected static GameObject Instantiate(GameObject original, OpenTK.Mathematics.Vector3 position, OpenTK.Mathematics.Quaternion rotation, Transform parent = null)
+		protected static GameObject Instantiate(GameObject original, LELEngine.Mathematics.Vector3 position, LELEngine.Mathematics.Quaternion rotation, Transform parent = null)
 		{
 			return GameObject.Instantiate(original, position, rotation, parent);
 		}

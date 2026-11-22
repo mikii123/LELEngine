@@ -2,7 +2,7 @@ using System;
 using System.Globalization;
 using System.Linq;
 using System.Text;
-using OpenTK.Graphics.OpenGL4;
+using LELEngine.Graphics;
 
 namespace LELEngine.Shaders
 {

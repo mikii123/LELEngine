@@ -6,7 +6,7 @@ using System.Text;
 using LELEngine.Rendering;
 using LELEngine.Rendering.DistanceField;
 using LELEngine.Serialization;
-using OpenTK.Mathematics;
+using LELEngine.Mathematics;
 
 namespace LELEngine.Editor
 {

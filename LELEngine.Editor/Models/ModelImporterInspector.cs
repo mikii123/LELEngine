@@ -117,7 +117,7 @@ namespace LELEngine.Editor
 			{
 				ImGui.Spacing();
 				ImGui.TextUnformatted($"{mesh.Vertices.Length:N0} vertices, {mesh.TriangleCount:N0} triangles, {mesh.SubMeshCount} sub-mesh(es)");
-				OpenTK.Mathematics.Vector3 size = mesh.BoundsMax - mesh.BoundsMin;
+				LELEngine.Mathematics.Vector3 size = mesh.BoundsMax - mesh.BoundsMin;
 				ImGui.TextDisabled(string.Format(System.Globalization.CultureInfo.InvariantCulture, "Size {0:0.###} x {1:0.###} x {2:0.###} m", size.X, size.Y, size.Z));
 				for (int i = 0; i < mesh.SubMeshCount; i++)
 				{
@@ -167,9 +167,9 @@ namespace LELEngine.Editor
 
 			ImGui.Spacing();
 			ImGui.TextDisabled($"{model.Nodes.Count} nodes, {model.Meshes.Count} meshes, {vertices} vertices, {triangles} triangles");
-			if (model.GetBounds(out OpenTK.Mathematics.Vector3 min, out OpenTK.Mathematics.Vector3 max))
+			if (model.GetBounds(out LELEngine.Mathematics.Vector3 min, out LELEngine.Mathematics.Vector3 max))
 			{
-				OpenTK.Mathematics.Vector3 size = max - min;
+				LELEngine.Mathematics.Vector3 size = max - min;
 				ImGui.TextDisabled(string.Format(System.Globalization.CultureInfo.InvariantCulture, "Size {0:0.###} x {1:0.###} x {2:0.###} m", size.X, size.Y, size.Z));
 			}
 

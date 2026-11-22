@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 using LELEngine;
-using OpenTK.Mathematics;
+using LELEngine.Mathematics;
 
 /// <summary>How a <see cref="LODGroup" /> passes from one level to the next (Unity's LODFadeMode; only None is drawn so far).</summary>
 public enum LODFadeMode

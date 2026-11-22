@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 using LELEngine.Navigation.Builder;
-using OpenTK.Mathematics;
+using LELEngine.Mathematics;
 
 namespace LELEngine.Navigation
 {

@@ -1,10 +1,9 @@
 using System;
 using System.IO;
 using LELEngine.Rendering;
-using OpenTK.Graphics.OpenGL4;
-using OpenTK.Mathematics;
-using OpenTK.Windowing.Common;
-using OpenTK.Windowing.Desktop;
+using LELEngine.Graphics;
+using LELEngine.Mathematics;
+using LELEngine.Windowing;
 
 namespace LELEngine.Editor
 {

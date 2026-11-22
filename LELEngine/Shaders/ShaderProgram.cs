@@ -3,8 +3,8 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using LELEngine.Rendering;
-using OpenTK.Graphics.OpenGL4;
-using OpenTK.Mathematics;
+using LELEngine.Graphics;
+using LELEngine.Mathematics;
 
 namespace LELEngine.Shaders
 {

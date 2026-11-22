@@ -1,0 +1,37 @@
+THIRD-PARTY NOTICES
+LELEngine
+
+The engine and every game built with it carry the components named below. The files of this folder and NOTICE.txt
+(next to the binaries) are copied into the editor's output, into the players and into every game build.
+
+==============================================================================
+BRUTAL framework
+==============================================================================
+
+  Name        BRUTAL game development framework (Ahwoo Limited)
+  Used for    windows and input (GLFW), the OpenGL and Vulkan bindings, numeric and interop types
+  Packages    Ahwoo.BRUTAL.* (NuGet)
+  License     BRUTAL License v1.0: BRUTAL-LICENSE.txt
+
+  What the license asks of a product distributed to end users (see the license for the exact terms):
+    - NOTICE.txt (BRUTAL's own notice, next to the binaries) is distributed alongside every copy;
+    - the copyright notice "BRUTAL game development framework is Copyright (c) 2024 Ahwoo Limited." is in the
+      credits screen or its equivalent;
+    - the Brutal logo (ahwoo.com/brutal-branding) is shown before gameplay starts, unaltered except for scaling,
+      unless Ahwoo Limited gave permission in writing.
+
+  The framework's packages redistribute native libraries with licenses of their own:
+    - GLFW 3.5 (zlib license), RocketWerkz fork: BRUTAL-GLFW-THIRD-PARTY-NOTICES.txt
+    - glad 0.1.36 and the Khronos OpenGL registry it is generated from: BRUTAL-OPENGL-THIRD-PARTY-NOTICES.txt
+
+==============================================================================
+Open Toolkit (OpenTK)
+==============================================================================
+
+  Name        The Open Toolkit library, version 4.9.4
+  Used for    the engine's math types (LELEngine.Mathematics: vectors, matrices, quaternion, colors, MathHelper,
+              Box2i) and the key, mouse button and modifier enumerations of LELEngine.Windowing are OpenTK's source
+              files in the engine's namespaces (members that depended on types the engine does not carry were
+              removed); the names of the graphics enumerations (LELEngine.Graphics) follow OpenTK's OpenGL bindings.
+  Upstream    https://github.com/opentk/opentk
+  License     MIT: OpenTK-LICENSE.md

@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using Hexa.NET.ImGui;
 using LELEngine.Rendering;
 using LELEngine.VFX;
-using OpenTK.Mathematics;
+using LELEngine.Mathematics;
 using NVector2 = System.Numerics.Vector2;
 
 namespace LELEngine.Editor.VFX

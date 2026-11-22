@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using Hexa.NET.ImGui;
 using LELEngine.InputSystem;
-using OpenTK.Windowing.GraphicsLibraryFramework;
+using LELEngine.Windowing;
 using InputAction = LELEngine.InputSystem.InputAction;
 using NVector2 = System.Numerics.Vector2;
 using NVector4 = System.Numerics.Vector4;
@@ -1297,7 +1297,7 @@ namespace LELEngine.Editor
 			axisValue = 1f;
 			for (int slot = 0; slot < 16; slot++)
 			{
-				if (!GLFW.JoystickPresent(slot) || !GLFW.JoystickIsGamepad(slot) || !GLFW.GetGamepadState(slot, out GamepadState state))
+				if (!Joysticks.IsPresent(slot) || !Joysticks.IsGamepad(slot) || !Joysticks.GetGamepadState(slot, out GamepadState state))
 				{
 					continue;
 				}
@@ -1333,15 +1333,15 @@ namespace LELEngine.Editor
 			bool any = false;
 			for (int slot = 0; slot < 16; slot++)
 			{
-				if (!GLFW.JoystickPresent(slot))
+				if (!Joysticks.IsPresent(slot))
 				{
 					continue;
 				}
 
 				any = true;
-				bool gamepad = GLFW.JoystickIsGamepad(slot);
-				ImGui.TextUnformatted((GLFW.GetGamepadName(slot) ?? GLFW.GetJoystickName(slot) ?? "Joystick") + (gamepad ? "" : "  (no gamepad mapping: not read)"));
-				if (!gamepad || !GLFW.GetGamepadState(slot, out GamepadState state))
+				bool gamepad = Joysticks.IsGamepad(slot);
+				ImGui.TextUnformatted((Joysticks.GetGamepadName(slot) ?? Joysticks.GetName(slot) ?? "Joystick") + (gamepad ? "" : "  (no gamepad mapping: not read)"));
+				if (!gamepad || !Joysticks.GetGamepadState(slot, out GamepadState state))
 				{
 					continue;
 				}

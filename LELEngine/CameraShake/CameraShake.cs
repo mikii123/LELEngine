@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 using LELEngine;
-using OpenTK.Mathematics;
+using LELEngine.Mathematics;
 
 /// <summary>One profile that plays all the time on a <see cref="CameraShake" /> (<see cref="CameraShake.Profiles" />), and how much of it.</summary>
 [Serializable]

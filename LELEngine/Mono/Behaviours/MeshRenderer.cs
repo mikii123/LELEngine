@@ -119,8 +119,8 @@ public sealed class MeshRenderer : Behaviour
 	// Frustum culling (Rendering.ViewCulling): the mesh's world bounds (centre, half size) as of the rendered frame
 	// boundsEpoch, and whether the view cullStamp sees them.
 	[System.NonSerialized] internal int boundsEpoch;
-	[System.NonSerialized] internal OpenTK.Mathematics.Vector3 worldCenter;
-	[System.NonSerialized] internal OpenTK.Mathematics.Vector3 worldExtent;
+	[System.NonSerialized] internal LELEngine.Mathematics.Vector3 worldCenter;
+	[System.NonSerialized] internal LELEngine.Mathematics.Vector3 worldExtent;
 	[System.NonSerialized] internal int cullStamp;
 	[System.NonSerialized] internal bool cullVisible;
 
@@ -348,7 +348,7 @@ public sealed class MeshRenderer : Behaviour
 	///     values with the renderer's own on top, the shader's cull mode. False, and nothing drawn, when the shader has no
 	///     such variant: the engine's program draws the sub-mesh. The variant stays bound.
 	/// </summary>
-	public bool RenderSubMeshPass(int subMesh, ShaderPass pass, OpenTK.Mathematics.Matrix4 view, OpenTK.Mathematics.Matrix4 projection, OpenTK.Mathematics.Matrix4? previousModel = null)
+	public bool RenderSubMeshPass(int subMesh, ShaderPass pass, LELEngine.Mathematics.Matrix4 view, LELEngine.Mathematics.Matrix4 projection, LELEngine.Mathematics.Matrix4? previousModel = null)
 	{
 		if (mesh == null)
 		{
@@ -381,7 +381,7 @@ public sealed class MeshRenderer : Behaviour
 	///     with its own program; what <see cref="RenderShadowCastersWith" /> leaves out. True when something drew: the
 	///     caller's program is no longer bound and the cull mode may have changed.
 	/// </summary>
-	public bool RenderOwnShadowCasters(OpenTK.Mathematics.Matrix4 view, OpenTK.Mathematics.Matrix4 projection)
+	public bool RenderOwnShadowCasters(LELEngine.Mathematics.Matrix4 view, LELEngine.Mathematics.Matrix4 projection)
 	{
 		if (mesh == null || !HasOwnShadowCasters)
 		{
@@ -453,7 +453,7 @@ public sealed class MeshRenderer : Behaviour
 			}
 
 			// Rotations keep the determinant's sign: the product of the scales' components along the chain is its sign.
-			OpenTK.Mathematics.Vector3 scale = t.lossyScale;
+			LELEngine.Mathematics.Vector3 scale = t.lossyScale;
 			return scale.X * scale.Y * scale.Z < 0f;
 		}
 	}

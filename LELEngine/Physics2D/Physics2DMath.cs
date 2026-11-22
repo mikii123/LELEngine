@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 using Box2D.NET;
-using OpenTK.Mathematics;
+using LELEngine.Mathematics;
 using static Box2D.NET.B2MathFunction;
 using B2Vector2 = Box2D.NET.B2Vec2;
 
@@ -137,7 +137,7 @@ namespace LELEngine
 		#endregion
 	}
 
-	/// <summary>Conversions between OpenTK vectors and Box2D's, plus polygon helpers.</summary>
+	/// <summary>Conversions between the engine's vectors and Box2D's, plus polygon helpers.</summary>
 	internal static class Physics2DMath
 	{
 		#region PublicFields

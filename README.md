@@ -6,7 +6,8 @@ illumination, a VFX Graph-style GPU particle system with a node editor, an FMOD 
 Rewired-style input system, a UI Toolkit-style UI system and Recast/Detour-style navigation. The editor can be driven
 from code and the command line (automation, window screenshots) and builds games headless on Windows and Linux.
 
-Built on .NET 10, OpenTK 4.9 (GLFW) and OpenGL 4.6 (4.3 minimum), developed and tuned on an Intel integrated GPU.
+Built on .NET 10, the BRUTAL framework (GLFW, OpenGL and Vulkan bindings) and OpenGL 4.6 (4.3 minimum), developed and
+tuned on an Intel integrated GPU.
 
 ![The editor with the GI test room in the scene view](docs/images/editor.png)
 *The editor: hierarchy, scene view with the move gizmo on the selected object, inspector and project browser.*
@@ -446,7 +447,7 @@ A 2D physics script looks like its Unity counterpart:
 
 ```csharp
 using LELEngine;
-using OpenTK.Mathematics;
+using LELEngine.Mathematics;
 
 public sealed class Jumper : Behaviour
 {

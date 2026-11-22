@@ -1,6 +1,6 @@
 using System;
 using System.Runtime.CompilerServices;
-using OpenTK.Mathematics;
+using LELEngine.Mathematics;
 
 namespace LELEngine.UIElements
 {

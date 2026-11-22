@@ -1,6 +1,6 @@
 using System;
 using System.Collections.Generic;
-using OpenTK.Windowing.GraphicsLibraryFramework;
+using LELEngine.Windowing;
 
 namespace LELEngine.InputSystem
 {

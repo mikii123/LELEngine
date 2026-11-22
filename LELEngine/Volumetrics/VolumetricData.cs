@@ -2,8 +2,8 @@ using System;
 using System.Diagnostics;
 using LELEngine.Rendering;
 using LELEngine.Shaders;
-using OpenTK.Graphics.OpenGL4;
-using OpenTK.Mathematics;
+using LELEngine.Graphics;
+using LELEngine.Mathematics;
 
 namespace LELEngine.Volumetrics
 {

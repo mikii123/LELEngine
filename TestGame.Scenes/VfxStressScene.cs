@@ -4,7 +4,7 @@ using System.Globalization;
 using LELEngine;
 using LELEngine.Rendering;
 using LELEngine.VFX;
-using OpenTK.Mathematics;
+using LELEngine.Mathematics;
 
 namespace TestGame.Scenes
 {

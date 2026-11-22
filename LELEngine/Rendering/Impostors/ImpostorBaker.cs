@@ -3,8 +3,8 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Threading.Tasks;
 using LELEngine.Shaders;
-using OpenTK.Graphics.OpenGL4;
-using OpenTK.Mathematics;
+using LELEngine.Graphics;
+using LELEngine.Mathematics;
 
 namespace LELEngine.Rendering.Impostors
 {

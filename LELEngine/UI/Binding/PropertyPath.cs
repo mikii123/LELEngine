@@ -486,9 +486,9 @@ namespace LELEngine.UIElements
 					return true;
 				}
 
-				if (targetType == typeof(OpenTK.Mathematics.Color4) && value is string colorText)
+				if (targetType == typeof(LELEngine.Mathematics.Color4) && value is string colorText)
 				{
-					OpenTK.Mathematics.Color4 color;
+					LELEngine.Mathematics.Color4 color;
 					if (StyleColorUtility.TryParse(colorText, out color))
 					{
 						result = color;
@@ -588,7 +588,7 @@ namespace LELEngine.UIElements
 
 					if (targetType == typeof(StyleColor))
 					{
-						OpenTK.Mathematics.Color4 color;
+						LELEngine.Mathematics.Color4 color;
 						if (StyleColorUtility.TryParse(wrapperText, out color))
 						{
 							result = new StyleColor(color);

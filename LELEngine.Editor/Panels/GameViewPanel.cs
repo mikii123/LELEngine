@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using Hexa.NET.ImGui;
 using LELEngine.Rendering;
-using OpenTK.Mathematics;
+using LELEngine.Mathematics;
 using NVector2 = System.Numerics.Vector2;
 
 namespace LELEngine.Editor
@@ -338,7 +338,7 @@ namespace LELEngine.Editor
 			IsMouseOverImage = ImGui.IsItemHovered();
 			if (Input.Host is GameInputHost host)
 			{
-				host.ViewSize = new OpenTK.Mathematics.Vector2i((int)viewSize.X, (int)viewSize.Y);
+				host.ViewSize = new LELEngine.Mathematics.Vector2i((int)viewSize.X, (int)viewSize.Y);
 			}
 
 			if (editor.IsPlaying && ImGui.IsItemHovered() && ImGui.IsMouseClicked(ImGuiMouseButton.Left))

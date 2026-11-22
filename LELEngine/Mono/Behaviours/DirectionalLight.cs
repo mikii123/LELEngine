@@ -1,5 +1,5 @@
 using LELEngine;
-using OpenTK.Mathematics;
+using LELEngine.Mathematics;
 
 /// <summary>
 ///     A light from infinitely far away, shining along its transform's forward axis: a sun, a moon, the light of a planet

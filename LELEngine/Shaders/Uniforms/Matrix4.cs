@@ -1,4 +1,4 @@
-﻿using OpenTK.Graphics.OpenGL4;
+﻿using LELEngine.Graphics;
 
 namespace LELEngine.Shaders.Uniforms
 {
@@ -6,7 +6,7 @@ namespace LELEngine.Shaders.Uniforms
 	{
 		#region PublicFields
 
-		public OpenTK.Mathematics.Matrix4 Matrix;
+		public LELEngine.Mathematics.Matrix4 Matrix;
 
 		#endregion
 

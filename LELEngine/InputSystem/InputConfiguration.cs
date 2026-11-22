@@ -338,7 +338,7 @@ namespace LELEngine.InputSystem
 	{
 		public int ActionId;
 
-		/// <summary>The element: a <see cref="OpenTK.Windowing.GraphicsLibraryFramework.Keys" /> code, a <see cref="MouseElement" /> or a <see cref="GamepadElement" />.</summary>
+		/// <summary>The element: a <see cref="LELEngine.Windowing.Keys" /> code, a <see cref="MouseElement" /> or a <see cref="GamepadElement" />.</summary>
 		public int Element;
 
 		/// <summary>For keys and buttons bound to an axis: the direction they push it.</summary>

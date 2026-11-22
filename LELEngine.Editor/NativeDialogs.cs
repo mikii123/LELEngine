@@ -1,7 +1,7 @@
 using System;
 using System.IO;
 using System.Runtime.InteropServices;
-using OpenTK.Windowing.GraphicsLibraryFramework;
+using LELEngine.Windowing;
 
 namespace LELEngine.Editor
 {
@@ -29,14 +29,14 @@ namespace LELEngine.Editor
 		///     window), starting in <paramref name="initialFolder" /> (or its closest existing parent). Returns the chosen
 		///     folder, or null when cancelled.
 		/// </summary>
-		public static unsafe string PickFolder(OpenTK.Windowing.Desktop.NativeWindow owner, string title, string initialFolder)
+		public static unsafe string PickFolder(LELEngine.Windowing.NativeWindow owner, string title, string initialFolder)
 		{
 			if (!CanPickFolder)
 			{
 				return null;
 			}
 
-			IntPtr hwnd = owner != null ? GLFW.GetWin32Window(owner.WindowPtr) : IntPtr.Zero;
+			IntPtr hwnd = owner != null ? owner.Win32Window : IntPtr.Zero;
 			var dialog = (IFileDialog)new FileOpenDialog();
 			try
 			{

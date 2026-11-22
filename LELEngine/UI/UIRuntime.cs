@@ -1,9 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
-using OpenTK.Mathematics;
-using OpenTK.Windowing.Common.Input;
-using OpenTK.Windowing.GraphicsLibraryFramework;
+using LELEngine.Mathematics;
+using LELEngine.Windowing;
 
 namespace LELEngine.UIElements
 {
@@ -311,13 +310,13 @@ namespace LELEngine.UIElements
 			return frameDocuments.Count > 0 ? frameDocuments[0].runtimePanel : null;
 		}
 
-		private static int MapButton(OpenTK.Windowing.GraphicsLibraryFramework.MouseButton button)
+		private static int MapButton(LELEngine.Windowing.MouseButton button)
 		{
 			switch (button)
 			{
-				case OpenTK.Windowing.GraphicsLibraryFramework.MouseButton.Right: return 1;
-				case OpenTK.Windowing.GraphicsLibraryFramework.MouseButton.Middle: return 2;
-				case OpenTK.Windowing.GraphicsLibraryFramework.MouseButton.Left: return 0;
+				case LELEngine.Windowing.MouseButton.Right: return 1;
+				case LELEngine.Windowing.MouseButton.Middle: return 2;
+				case LELEngine.Windowing.MouseButton.Left: return 0;
 				default: return 0;
 			}
 		}
@@ -325,9 +324,9 @@ namespace LELEngine.UIElements
 		private static int PressedButtons()
 		{
 			int buttons = 0;
-			if (Input.GetMouseButton(OpenTK.Windowing.GraphicsLibraryFramework.MouseButton.Left)) buttons |= 1;
-			if (Input.GetMouseButton(OpenTK.Windowing.GraphicsLibraryFramework.MouseButton.Right)) buttons |= 2;
-			if (Input.GetMouseButton(OpenTK.Windowing.GraphicsLibraryFramework.MouseButton.Middle)) buttons |= 4;
+			if (Input.GetMouseButton(LELEngine.Windowing.MouseButton.Left)) buttons |= 1;
+			if (Input.GetMouseButton(LELEngine.Windowing.MouseButton.Right)) buttons |= 2;
+			if (Input.GetMouseButton(LELEngine.Windowing.MouseButton.Middle)) buttons |= 4;
 			return buttons;
 		}
 

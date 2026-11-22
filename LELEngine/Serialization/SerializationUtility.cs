@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq.Expressions;
 using System.Reflection;
-using OpenTK.Mathematics;
+using LELEngine.Mathematics;
 
 namespace LELEngine.Serialization
 {
@@ -69,7 +69,7 @@ namespace LELEngine.Serialization
 	/// <summary>
 	///     Which fields are serialized (Unity rules): instance fields that are public or marked
 	///     <see cref="SerializeField" />, not <see cref="NonSerializedAttribute" />, not readonly, of a supported type.
-	///     Supported: primitives, string, enums, OpenTK vectors / quaternion / Color4, one-dimensional arrays and
+	///     Supported: primitives, string, enums, the engine's vectors / quaternion / Color4, one-dimensional arrays and
 	///     List&lt;T&gt; of supported element types (collections of collections too), Dictionary&lt;K, V&gt; with keys of
 	///     a primitive, string, enum, vector, reference or asset type and any supported value type, [Serializable]
 	///     classes and structs (nested), references to GameObjects and components of the same scene, and assets
@@ -237,7 +237,7 @@ namespace LELEngine.Serialization
 			return IsMathType(type) || IsReferenceType(type) || IsAssetType(type);
 		}
 
-		/// <summary>OpenTK vectors, quaternion and Color4 (stored as fixed-size values).</summary>
+		/// <summary>The engine's vectors, quaternion and Color4 (stored as fixed-size values).</summary>
 		public static bool IsMathType(Type type)
 		{
 			return type == typeof(Vector2) || type == typeof(Vector3) || type == typeof(Vector4) || type == typeof(Quaternion)

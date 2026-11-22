@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
-using OpenTK.Mathematics;
+using LELEngine.Mathematics;
 using StbImageSharp;
 
 namespace LELEngine

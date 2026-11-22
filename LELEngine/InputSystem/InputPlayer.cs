@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
-using OpenTK.Mathematics;
-using OpenTK.Windowing.GraphicsLibraryFramework;
+using LELEngine.Mathematics;
+using LELEngine.Windowing;
 
 namespace LELEngine.InputSystem
 {

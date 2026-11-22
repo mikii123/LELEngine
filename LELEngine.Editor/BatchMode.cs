@@ -5,9 +5,8 @@ using System.Reflection;
 using System.Text;
 using LELEngine.Rendering;
 using LELEngine.Serialization;
-using OpenTK.Graphics.OpenGL4;
-using OpenTK.Windowing.Common;
-using OpenTK.Windowing.Desktop;
+using LELEngine.Graphics;
+using LELEngine.Windowing;
 
 namespace LELEngine.Editor
 {
@@ -298,8 +297,8 @@ namespace LELEngine.Editor
 				return;
 			}
 
-			// A refused version has to come back as an exception this loop catches: OpenTK's own GLFW error callback
-			// throws inside GLFW and aborts the process (Mesa grants 4.5, so 4.6 is refused there).
+			// A refused version comes back as an exception this loop catches: GLFW's error callback only logs
+			// (Mesa grants 4.5, so 4.6 is refused there).
 			Window.InitializeGlfw();
 			Version version = Window.PreferredApiVersion;
 			while (true)
@@ -308,7 +307,7 @@ namespace LELEngine.Editor
 				{
 					graphics = new NativeWindow(new NativeWindowSettings
 					{
-						ClientSize = new OpenTK.Mathematics.Vector2i(64, 64),
+						ClientSize = new LELEngine.Mathematics.Vector2i(64, 64),
 						Title = "LELEngine batch",
 						StartVisible = false,
 						APIVersion = version,

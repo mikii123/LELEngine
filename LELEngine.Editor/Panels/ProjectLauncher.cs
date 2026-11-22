@@ -14,7 +14,7 @@ namespace LELEngine.Editor
 	{
 		#region PrivateFields
 
-		private readonly OpenTK.Windowing.Desktop.NativeWindow owner;
+		private readonly LELEngine.Windowing.NativeWindow owner;
 		private readonly Action<string> open;
 		private List<string> recent;
 		private string newName = "MyGame";
@@ -38,7 +38,7 @@ namespace LELEngine.Editor
 		/// <param name="owner">The window the system dialogs belong to.</param>
 		/// <param name="open">Called with the folder of the project to open (chosen or just created).</param>
 		/// <param name="error">Shown from the start (why the last project could not be opened), or null.</param>
-		public ProjectLauncher(OpenTK.Windowing.Desktop.NativeWindow owner, Action<string> open, string error)
+		public ProjectLauncher(LELEngine.Windowing.NativeWindow owner, Action<string> open, string error)
 		{
 			this.owner = owner;
 			this.open = open;

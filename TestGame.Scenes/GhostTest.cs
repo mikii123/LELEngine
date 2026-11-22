@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using LELEngine;
 using LELEngine.Rendering;
-using OpenTK.Mathematics;
+using LELEngine.Mathematics;
 
 namespace TestGame.Scenes
 {

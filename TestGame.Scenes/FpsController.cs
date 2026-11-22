@@ -1,7 +1,7 @@
 using System;
 using LELEngine;
-using OpenTK.Mathematics;
-using OpenTK.Windowing.GraphicsLibraryFramework;
+using LELEngine.Mathematics;
+using LELEngine.Windowing;
 
 namespace TestGame.Scenes
 {

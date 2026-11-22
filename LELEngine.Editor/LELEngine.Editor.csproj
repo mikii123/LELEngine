@@ -14,7 +14,6 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="OpenTK" Version="4.9.4" />
     <PackageReference Include="Hexa.NET.ImGui" Version="2.2.9" />
     <PackageReference Include="Hexa.NET.ImGuizmo" Version="2.2.9" />
     <!-- Model import (FBX, glTF, Collada, ...): the editor only; builds ship the imported data. -->

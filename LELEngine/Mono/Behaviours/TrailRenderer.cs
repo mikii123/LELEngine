@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using LELEngine;
 using LELEngine.Rendering;
 using LELEngine.Shaders;
-using OpenTK.Mathematics;
+using LELEngine.Mathematics;
 
 /// <summary>Which way the strip of a <see cref="TrailRenderer" /> faces (Unity's LineAlignment).</summary>
 public enum LineAlignment

@@ -1,0 +1,13 @@
+<Project>
+
+  <!-- The BRUTAL framework's packages bring Roslyn analyzers for BRUTAL's own API conventions (UTF-8 string literals,
+       its colour constants, ...). They reach every project through the package graph and flag the engine's and the
+       editor's ordinary code (1,400 warnings on the editor's ImGui calls): left out of every compilation. -->
+  <Target Name="RemoveBrutalConventionAnalyzers" BeforeTargets="CoreCompile">
+    <ItemGroup>
+      <BrutalAnalyzer Include="@(Analyzer)" Condition="$([System.String]::Copy('%(Analyzer.NuGetPackageId)').StartsWith('Ahwoo.BRUTAL.', System.StringComparison.OrdinalIgnoreCase))" />
+      <Analyzer Remove="@(BrutalAnalyzer)" />
+    </ItemGroup>
+  </Target>
+
+</Project>

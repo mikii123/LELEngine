@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using Hexa.NET.ImGui;
 using LELEngine.Animation;
 using LELEngine.Audio;
-using OpenTK.Mathematics;
+using LELEngine.Mathematics;
 using NVector2 = System.Numerics.Vector2;
 using NVector3 = System.Numerics.Vector3;
 

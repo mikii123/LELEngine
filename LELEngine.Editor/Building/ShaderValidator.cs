@@ -5,7 +5,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
 using LELEngine.Shaders;
-using OpenTK.Graphics.OpenGL4;
+using LELEngine.Graphics;
 using Silk.NET.Shaderc;
 
 namespace LELEngine.Editor

@@ -1636,7 +1636,7 @@ namespace LELEngine.Editor
 					var material = new Shaders.Material(InternalStorage.GetOrCreateShader(Shaders.Material.DefaultShaderPath));
 					if (!material.HasProperty("Color"))
 					{
-						material.SetColor("Color", new OpenTK.Mathematics.Color4(0.8f, 0.8f, 0.8f, 1f));
+						material.SetColor("Color", new LELEngine.Mathematics.Color4(0.8f, 0.8f, 0.8f, 1f));
 					}
 
 					material.Save(AssetDatabase.ToAssetPath(target));
@@ -1818,7 +1818,7 @@ namespace LELEngine.Editor
 
 		private static string ScriptTemplate(string className)
 		{
-			return "using LELEngine;\nusing OpenTK.Mathematics;\n\npublic class " + className + " : Behaviour\n{\n" +
+			return "using LELEngine;\nusing LELEngine.Mathematics;\n\npublic class " + className + " : Behaviour\n{\n" +
 				"\tpublic float Speed = 1f;\n\n" +
 				"\t[SerializeField] private Vector3 offset;\n\n" +
 				"\tpublic override void Start()\n\t{\n\t}\n\n" +
@@ -1827,7 +1827,7 @@ namespace LELEngine.Editor
 
 		private static string ScriptableObjectTemplate(string className)
 		{
-			return "using System.Collections.Generic;\nusing LELEngine;\nusing OpenTK.Mathematics;\n\n" +
+			return "using System.Collections.Generic;\nusing LELEngine;\nusing LELEngine.Mathematics;\n\n" +
 				"[CreateAssetMenu(fileName = \"New" + className + "\", menuName = \"Data/" + className + "\")]\n" +
 				"public class " + className + " : ScriptableObject\n{\n" +
 				"\tpublic string displayName = \"\";\n\n" +

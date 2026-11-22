@@ -40,6 +40,58 @@
   does not compile. Intel's compiler warns "barrier call inside control flow" for a `barrier()` in a loop
   (`RadianceCacheSH.shader` unrolls its reduction for that).
 
+## BRUTAL framework in place of OpenTK (2026-11-22, branch `brutal-port`)
+
+- The user's ask: port the engine entirely from OpenTK to the BRUTAL framework (Ahwoo / RocketWerkz, NuGet
+  `Ahwoo.BRUTAL.*`, source github.com/ahwootech/BRUTAL): the renderer on OpenGL first, then on Vulkan with the backend
+  chosen in Project Settings > Graphics, then an optimization pass for the new backend (ray tracing, GI). On a separate
+  branch; picture differences are reported, not tuned away.
+- No OpenTK package is left. What the code used of it is the engine's own, under the same type and member names, so a
+  game's scripts change only their usings (`OpenTK.Mathematics` -> `LELEngine.Mathematics`, `OpenTK.Graphics.OpenGL4` ->
+  `LELEngine.Graphics`, `OpenTK.Windowing.*` -> `LELEngine.Windowing`):
+  - `LELEngine/Mathematics`: Vector2 / 3 / 4, Vector2i / 3i / 4i, Matrix3, Matrix4, Quaternion, Color4, MathHelper,
+    Box2i are OpenTK 4.9.4's source files (MIT) in the engine's namespace, so every result is bit for bit what it was;
+    18 members that needed types not carried over are gone (conversions to the double and half vectors, Matrix2
+    transforms). BRUTAL's own numerics (`Brutal.Numerics`: float3, float4x4, ...) are a System.Numerics mirror its
+    authors call temporary ("math libraries ... should be picked by the developer, not the framework"): they appear only
+    where BRUTAL's API takes them (window sizes, monitor positions). Same memory layouts (row-major matrices, xyzw).
+  - `LELEngine/Windowing` on `Brutal.GlfwApi` (GLFW 3.5.1, RocketWerkz's fork): `NativeWindow` (its `Handle` is
+    BRUTAL's `GlfwWindow`), `GameWindow` (OpenTK's loop as it was: one core for the loop's thread, 8 ms timer period),
+    settings, event args, `MouseState` / `KeyboardState`, `MouseCursor`, `Monitors`, `Joysticks`, `GraphicsContext`,
+    `WindowSystem` (starts GLFW; its error callback only logs, a refused context version is the constructor's
+    exception). `Keys`, `MouseButton`, `KeyModifiers`, `InputAction` are OpenTK's files: the same names and values, so
+    saved input configurations read as before. `NativeWindow.Current` = the window whose context is current on the
+    thread (`ShaderCompileThread` shares with it). Typed characters come from GLFW's own char callback: BRUTAL's
+    `OnChar` narrows code points to 16 bits.
+  - `LELEngine/Graphics`: `GL` (static: the ~190 overloads the engine calls, OpenTK's signatures) and 66 enum types
+    (`GLEnums.cs`, generated: OpenTK's names, OpenGL's values). `GL` forwards to the process's `GraphicsBackend`
+    (internal, abstract: every command once, in pointer form); `OpenGLBackend` calls
+    `Brutal.OpenGlApi.OpenGl.Native.*` (GLAD's pointers) and loads `glMaxShaderCompilerThreadsKHR / ARB` itself.
+    `GL.LoadBindings()` starts it for the current context (every `NativeWindow` with a context calls it: OpenTK's
+    auto-load). This is the seam the Vulkan backend plugs into: rendering code keeps calling `GL.*`.
+- The editor keeps Hexa.NET.ImGui (BRUTAL has no ImGuizmo); only its backend's window and graphics calls moved.
+  Generated script projects reference `Brutal.*.dll` next to the editor where they referenced `OpenTK*.dll`
+  (`ProjectGenerator.BrutalAssemblies`): an existing project's .csproj files are rewritten on the next open.
+- BRUTAL's packages bring analyzers for BRUTAL's own conventions (1,400 "prefer a UTF-8 string" warnings on the
+  editor's ImGui calls): `Directory.Build.targets` removes them from every compilation.
+- License (BRUTAL License v1.0, not OSI): a distributed game must ship BRUTAL's NOTICE.txt, name its copyright in the
+  credits and show the Brutal logo before gameplay. `LELEngine/NOTICE.txt` and `LELEngine/Licenses/` (BRUTAL's license
+  and third-party notices, OpenTK's MIT license for the math) are Content: they reach the editor, the players and
+  every game build. Not done: the logo on the splash screen and the credits line are each game's to add.
+- Platforms: BRUTAL ships natives for win-x64, linux-x64 and osx-arm64 only (OpenTK's GLFW had win-x86 / arm64,
+  linux-arm / arm64 and osx-x64 too).
+- Verified on the 780M against a build of the commit before (scratchpad `tools/` of session 9cb23804: `regress.ps1` +
+  `imgdiff`, `edtest.ps1`, `inputtest.ps1`): TestGame's 18 scenes at frame 400 (lumen, vct, gi=0, materials,
+  refraction, lights, suns, outdoor, gpudriven=0, ssaa, trails, vfx, volumetrics, impostors, ui, physics, anim, nav)
+  identical or within the old build's own run-to-run noise (max 0-6 of 255; the time-driven four differ as two runs of
+  the old build do); the GUI editor's Scene, Game, Inspector and play-mode screenshots and a built player's frame bit
+  for bit; keys posted to the window (WM_KEYDOWN) toggle what they toggled; batch `-createProject` and `-build`; the
+  Audio Studio and UI Builder windows open on the shared context. Not checked: Linux and the Docker build, gamepads,
+  fullscreen switching and the launcher by hand, a real mouse.
+- How the port was made (tools in that scratchpad): `apiscan` (Roslyn over every project: each OpenTK symbol used,
+  with signatures and enum values: 521 graphics, 217 math, ~350 windowing symbols), `glenums` (the enum file from
+  OpenTK's metadata), `mathshake` (copies source files into a namespace and removes members that no longer compile).
+
 ## Models and meshes
 
 - Every mesh file is a model (`LELEngine/Model`): `ModelAssets.Load(path)` gives a `Model` (node hierarchy, meshes

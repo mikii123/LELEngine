@@ -6,7 +6,7 @@ using LELEngine.Rendering;
 using LELEngine.Rendering.DistanceField;
 using LELEngine.Serialization;
 using LELEngine.Shaders;
-using OpenTK.Mathematics;
+using LELEngine.Mathematics;
 
 namespace LELEngine.Editor
 {
@@ -38,7 +38,7 @@ namespace LELEngine.Editor
 	///     Produces a runnable game folder:
 	///     <code>
 	///     Output/
-	///       &lt;Name&gt;.exe + LELEngine.Player.dll, engine and OpenTK assemblies, native GLFW (runtimes/), and the
+	///       &lt;Name&gt;.exe + LELEngine.Player.dll, engine and BRUTAL assemblies, native GLFW and GLAD (runtimes/), and the
 	///                         .NET runtime when the build is self-contained (see <see cref="PlayerFiles" />)
 	///       Shaders/Engine/   engine shader library
 	///       Game.dll          the scripts, compiled in the chosen configuration

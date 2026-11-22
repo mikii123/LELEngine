@@ -1,6 +1,6 @@
 using System;
 using LELEngine;
-using OpenTK.Mathematics;
+using LELEngine.Mathematics;
 
 /// <summary>
 ///     A shake that is playing: what <see cref="CameraShake.Play" />, <see cref="CameraShake.Impact" /> and the shakes

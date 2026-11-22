@@ -2,8 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using LELEngine.Shaders;
-using OpenTK.Graphics.OpenGL4;
-using OpenTK.Mathematics;
+using LELEngine.Graphics;
+using LELEngine.Mathematics;
 
 namespace LELEngine.Rendering
 {
@@ -563,7 +563,7 @@ namespace LELEngine.Rendering
 		}
 
 		/// <summary>
-		///     What GLSL computes as transpose(inverse(model)), uploaded as a matrix the shader reads directly (OpenTK's
+		///     What GLSL computes as transpose(inverse(model)), uploaded as a matrix the shader reads directly (the engine's
 		///     row-vector matrices reach GLSL transposed).
 		/// </summary>
 		private static Matrix4 NormalMatrix(Matrix4 model)

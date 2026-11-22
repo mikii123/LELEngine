@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using LELEngine;
 using LELEngine.Navigation;
-using OpenTK.Mathematics;
+using LELEngine.Mathematics;
 
 namespace TestGame.Scenes
 {

@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Text;
-using OpenTK.Mathematics;
+using LELEngine.Mathematics;
 
 namespace LELEngine.VFX
 {
@@ -910,7 +910,7 @@ namespace LELEngine.VFX
 			Register(new VfxIntrinsic("or", "({0} || {1})", VfxTypeRule.Fixed, VfxValueType.Bool, args => VfxValue.FromBool(args[0].Bool || args[1].Bool)));
 			Register(new VfxIntrinsic("not", "(!{0})", VfxTypeRule.Fixed, VfxValueType.Bool, args => VfxValue.FromBool(!args[0].Bool)));
 
-			// Transforms (OpenTK row-vector matrices: v * M; GLSL sees the transposed matrix, so M * v there).
+			// Transforms (the engine's row-vector matrices: v * M; GLSL sees the transposed matrix, so M * v there).
 			Register(new VfxIntrinsic("transformPoint", "({0} * vec4({1}, 1.0)).xyz", VfxTypeRule.Fixed, VfxValueType.Vector3, args => VfxValue.FromVector3(Vector3.TransformPosition(args[1].Vector3, args[0].Matrix))));
 			Register(new VfxIntrinsic("transformDirection", "VfxSafeNormalize(mat3({0}) * {1})", VfxTypeRule.Fixed, VfxValueType.Vector3, args =>
 			{
@@ -1075,7 +1075,7 @@ namespace LELEngine.VFX
 					return "vec4(" + Literal(v.X) + ", " + Literal(v.Y) + ", " + Literal(v.Z) + ", " + Literal(v.W) + ")";
 				case VfxValueType.Matrix:
 				{
-					// GLSL mat4 constructor takes columns; OpenTK's rows are the GLSL columns (row-vector convention).
+					// GLSL mat4 constructor takes columns; the engine's rows are the GLSL columns (row-vector convention).
 					Matrix4 m = value.Matrix;
 					var builder = new StringBuilder("mat4(");
 					for (int row = 0; row < 4; row++)

@@ -5,8 +5,8 @@ using System.Text;
 using Hexa.NET.ImGui;
 using Hexa.NET.ImGuizmo;
 using LELEngine.Rendering;
-using OpenTK.Graphics.OpenGL4;
-using OpenTK.Windowing.Desktop;
+using LELEngine.Graphics;
+using LELEngine.Windowing;
 using NVector2 = System.Numerics.Vector2;
 
 namespace LELEngine.Editor.Automation
@@ -136,7 +136,7 @@ namespace LELEngine.Editor.Automation
 			}
 
 			NativeWindow window = owner.Window;
-			if (!window.IsVisible || window.WindowState == OpenTK.Windowing.Common.WindowState.Minimized || window.ClientSize.X <= 0 || window.ClientSize.Y <= 0)
+			if (!window.IsVisible || window.WindowState == LELEngine.Windowing.WindowState.Minimized || window.ClientSize.X <= 0 || window.ClientSize.Y <= 0)
 			{
 				return false;
 			}

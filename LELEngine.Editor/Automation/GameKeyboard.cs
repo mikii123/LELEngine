@@ -2,8 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using Hexa.NET.ImGui;
-using OpenTK.Windowing.Common;
-using OpenTK.Windowing.GraphicsLibraryFramework;
+using LELEngine.Windowing;
 
 namespace LELEngine.Editor.Automation
 {

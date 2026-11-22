@@ -5,14 +5,20 @@
     <RootNamespace>LELEngine</RootNamespace>
     <AssemblyName>LELEngine</AssemblyName>
     <Nullable>disable</Nullable>
-    <!-- OpenTK's GLFW functions take and return Window* (GraphicsThread, Window). -->
+    <!-- The graphics commands hand pointers to the BRUTAL framework's bindings (LELEngine.Graphics). -->
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <ImplicitUsings>disable</ImplicitUsings>
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="OpenTK" Version="4.9.4" />
+    <!-- The BRUTAL framework (Ahwoo / RocketWerkz): windows and input (GLFW), OpenGL, numeric types. Its license
+         (BRUTAL License v1.0) asks for its notice, credit and logo in distributed games: NOTICE.txt and
+         Licenses/THIRD-PARTY-NOTICES.txt. Its convention analyzers are left out (Directory.Build.targets). -->
+    <PackageReference Include="Ahwoo.BRUTAL.Core" Version="2026.10.4" />
+    <PackageReference Include="Ahwoo.BRUTAL.Glfw" Version="2026.10.5" />
+    <PackageReference Include="Ahwoo.BRUTAL.OpenGl" Version="2026.10.2" />
+    <PackageReference Include="Ahwoo.BRUTAL.Numerics" Version="2026.10.2" />
     <PackageReference Include="StbImageSharp" Version="2.30.16" />
     <!-- 2D physics: Box2D v3 ported to pure C# (ikpil's Box2D.NET; LELEngine.Physics2D wraps it with a Unity-style API). -->
     <PackageReference Include="Box2D.NET" Version="3.1.654" />
@@ -35,6 +41,19 @@
     <Content Include="BuiltinAssets\**\*">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <TargetPath>BuiltinAssets\%(RecursiveDir)%(Filename)%(Extension)</TargetPath>
+    </Content>
+  </ItemGroup>
+
+  <!-- Notices that travel with the binaries, into the editor, the players and every game build: the BRUTAL
+       framework's NOTICE.txt (its license asks for it alongside every distributed product) and the licenses of the
+       third-party code the engine carries. -->
+  <ItemGroup>
+    <Content Include="NOTICE.txt">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="Licenses\**\*">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <TargetPath>Licenses\%(RecursiveDir)%(Filename)%(Extension)</TargetPath>
     </Content>
   </ItemGroup>
 

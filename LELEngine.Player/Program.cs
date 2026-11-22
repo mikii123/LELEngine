@@ -3,8 +3,8 @@ using System.Diagnostics;
 using System.IO;
 using System.Threading.Tasks;
 using LELEngine.Rendering;
-using OpenTK.Mathematics;
-using OpenTK.Windowing.Common;
+using LELEngine.Mathematics;
+using LELEngine.Windowing;
 
 namespace LELEngine.Player
 {
@@ -228,7 +228,7 @@ namespace LELEngine.Player
 			// The project's choice, read by the loader with the settings; vsync=0 / 1 on the command line wins.
 			string vsync = GetValue(args, "vsync");
 			bool waitForDisplay = vsync != null ? vsync != "0" : ProjectSettings.Current.Graphics?.VSync ?? true;
-			host.VSync = waitForDisplay ? OpenTK.Windowing.Common.VSyncMode.On : OpenTK.Windowing.Common.VSyncMode.Off;
+			host.VSync = waitForDisplay ? LELEngine.Windowing.VSyncMode.On : LELEngine.Windowing.VSyncMode.Off;
 			Log("VSync " + (waitForDisplay ? "on" : "off") + (vsync != null ? " (command line)" : ""));
 			bool first = true;
 			host.RenderFrame += _ =>

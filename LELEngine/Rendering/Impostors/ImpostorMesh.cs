@@ -1,7 +1,7 @@
 using System;
 using System.Globalization;
 using System.Text;
-using OpenTK.Mathematics;
+using LELEngine.Mathematics;
 
 namespace LELEngine.Rendering.Impostors
 {

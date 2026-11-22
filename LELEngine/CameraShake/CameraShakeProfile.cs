@@ -1,6 +1,6 @@
 using System;
 using LELEngine;
-using OpenTK.Mathematics;
+using LELEngine.Mathematics;
 
 /// <summary>
 ///     What a camera shake looks like (an asset; Create > Camera Shake Profile): layers of movement that add up. Five

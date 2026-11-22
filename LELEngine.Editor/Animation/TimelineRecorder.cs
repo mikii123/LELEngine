@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using Hexa.NET.ImGui;
 using LELEngine.Animation;
-using OpenTK.Mathematics;
+using LELEngine.Mathematics;
 
 namespace LELEngine.Editor.Animation
 {

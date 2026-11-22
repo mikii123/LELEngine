@@ -256,7 +256,7 @@ namespace LELEngine.Editor.VFX
 
 			// The view state travels with the asset.
 			document.Graph.ViewZoom = canvas.Zoom;
-			document.Graph.ViewOffset = new OpenTK.Mathematics.Vector2(canvas.Offset.X, canvas.Offset.Y);
+			document.Graph.ViewOffset = new LELEngine.Mathematics.Vector2(canvas.Offset.X, canvas.Offset.Y);
 		}
 
 		private void DrawMenuBar()
@@ -648,7 +648,7 @@ namespace LELEngine.Editor.VFX
 			canvas.ClearSelection();
 			canvas.Zoom = graph.ViewZoom > 0.01f ? graph.ViewZoom : 1f;
 			canvas.Offset = new NVector2(graph.ViewOffset.X, graph.ViewOffset.Y);
-			frameOnOpen = graph.ViewOffset == OpenTK.Mathematics.Vector2.Zero;
+			frameOnOpen = graph.ViewOffset == LELEngine.Mathematics.Vector2.Zero;
 			compiledVersion = -1;
 		}
 

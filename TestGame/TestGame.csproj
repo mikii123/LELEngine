@@ -12,10 +12,6 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="OpenTK" Version="4.9.4" />
-  </ItemGroup>
-
-  <ItemGroup>
     <ProjectReference Include="..\LELEngine\LELEngine.csproj" />
     <ProjectReference Include="..\TestGame.Scenes\TestGame.Scenes.csproj" />
   </ItemGroup>

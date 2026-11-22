@@ -430,7 +430,7 @@ namespace LELEngine
 		}
 
 		/// <summary>A copy of <paramref name="original" /> with its root at a world position and rotation.</summary>
-		public static GameObject Instantiate(GameObject original, OpenTK.Mathematics.Vector3 position, OpenTK.Mathematics.Quaternion rotation, Transform parent = null)
+		public static GameObject Instantiate(GameObject original, LELEngine.Mathematics.Vector3 position, LELEngine.Mathematics.Quaternion rotation, Transform parent = null)
 		{
 			return Clone(original, parent, position, rotation);
 		}
@@ -441,7 +441,7 @@ namespace LELEngine
 			return prefab?.Instantiate(parent);
 		}
 
-		public static GameObject Instantiate(Prefab prefab, OpenTK.Mathematics.Vector3 position, OpenTK.Mathematics.Quaternion rotation, Transform parent = null)
+		public static GameObject Instantiate(Prefab prefab, LELEngine.Mathematics.Vector3 position, LELEngine.Mathematics.Quaternion rotation, Transform parent = null)
 		{
 			return prefab?.Instantiate(position, rotation, parent);
 		}
@@ -499,7 +499,7 @@ namespace LELEngine
 			components.Remove(component);
 		}
 
-		private static GameObject Clone(GameObject original, Transform parent, OpenTK.Mathematics.Vector3? position, OpenTK.Mathematics.Quaternion? rotation)
+		private static GameObject Clone(GameObject original, Transform parent, LELEngine.Mathematics.Vector3? position, LELEngine.Mathematics.Quaternion? rotation)
 		{
 			if (!IsAlive(original))
 			{

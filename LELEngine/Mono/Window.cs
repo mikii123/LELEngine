@@ -1,16 +1,11 @@
 using System;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using Brutal.GlfwApi;
+using LELEngine.Graphics;
+using LELEngine.Mathematics;
 using LELEngine.Rendering;
-using OpenTK.Graphics.OpenGL4;
-using OpenTK.Mathematics;
-using OpenTK.Windowing.Common;
-using OpenTK.Windowing.Desktop;
-using ErrorCode = OpenTK.Windowing.GraphicsLibraryFramework.ErrorCode;
-using GLFW = OpenTK.Windowing.GraphicsLibraryFramework.GLFW;
-using GLFWBindingsContext = OpenTK.Windowing.GraphicsLibraryFramework.GLFWBindingsContext;
-using GLFWCallbacks = OpenTK.Windowing.GraphicsLibraryFramework.GLFWCallbacks;
-using WindowHintBool = OpenTK.Windowing.GraphicsLibraryFramework.WindowHintBool;
+using LELEngine.Windowing;
 
 namespace LELEngine
 {
@@ -51,9 +46,6 @@ namespace LELEngine
 		/// <summary>New windows take the keyboard focus. Automated runs turn it off so they do not interrupt the user.</summary>
 		public static bool StartFocused { get; set; } = true;
 
-		/// <summary>Rooted: GLFW keeps only the native function pointer.</summary>
-		private static readonly GLFWCallbacks.ErrorCallback glfwErrorLog = OnGlfwError;
-
 		public Window(int width, int height, string title)
 			: this(width, height, title, PreferredApiVersion)
 		{ }
@@ -77,9 +69,8 @@ namespace LELEngine
 				},
 				CreateSettings(width, height, title, apiVersion, visible || fullscreen, fullscreen))
 		{
-			// Only the bindings the engine uses: OpenTK would also load the compatibility and ES ones (~35 ms of the
-			// time before a window can show anything).
-			GL.LoadBindings(new GLFWBindingsContext());
+			// OpenGL's functions for this window's context (current since the base constructor made it).
+			GL.LoadBindings();
 			Console.WriteLine("GL version: " + GL.GetString(StringName.Version) + "\nRenderer: " + GL.GetString(StringName.Renderer) + "\nVSync: " + VSync);
 			GLCapabilities.Initialize();
 		}
@@ -119,13 +110,13 @@ namespace LELEngine
 			Time.deltaTimeD = deltaTime;
 			Time.timeD += deltaTime;
 
-			if (Input.GetKeyDown(OpenTK.Windowing.GraphicsLibraryFramework.Keys.F12))
+			if (Input.GetKeyDown(Keys.F12))
 			{
 				WindowState = WindowState == WindowState.Normal ? WindowState.Fullscreen : WindowState.Normal;
 			}
-			if (Input.GetKey(OpenTK.Windowing.GraphicsLibraryFramework.Keys.LeftAlt))
+			if (Input.GetKey(Keys.LeftAlt))
 			{
-				if (Input.GetKeyDown(OpenTK.Windowing.GraphicsLibraryFramework.Keys.F4))
+				if (Input.GetKeyDown(Keys.F4))
 				{
 					Close();
 				}
@@ -225,29 +216,33 @@ namespace LELEngine
 		}
 
 		/// <summary>Seconds of one refresh of the monitor the window's middle is on (the primary monitor's when none is found); 0 when unknown.</summary>
-		private unsafe double RefreshPeriod()
+		private double RefreshPeriod()
 		{
 			try
 			{
-				GLFW.GetWindowPos(WindowPtr, out int x, out int y);
-				GLFW.GetWindowSize(WindowPtr, out int width, out int height);
-				int centerX = x + width / 2;
-				int centerY = y + height / 2;
-				OpenTK.Windowing.GraphicsLibraryFramework.Monitor* chosen = GLFW.GetPrimaryMonitor();
-				OpenTK.Windowing.GraphicsLibraryFramework.Monitor** monitors = GLFW.GetMonitorsRaw(out int count);
-				for (int i = 0; i < count; i++)
+				Vector2i location = ClientLocation;
+				Vector2i size = ClientSize;
+				int centerX = location.X + size.X / 2;
+				int centerY = location.Y + size.Y / 2;
+				GlfwMonitor chosen = Glfw.PrimaryMonitor;
+				foreach (GlfwMonitor monitor in Glfw.GetMonitors())
 				{
-					OpenTK.Windowing.GraphicsLibraryFramework.VideoMode* candidate = GLFW.GetVideoMode(monitors[i]);
-					GLFW.GetMonitorPos(monitors[i], out int left, out int top);
-					if (candidate != null && centerX >= left && centerX < left + candidate->Width && centerY >= top && centerY < top + candidate->Height)
+					GlfwVidMode candidate = monitor.VideoMode;
+					Brutal.Numerics.int2 origin = monitor.Position;
+					if (centerX >= origin.X && centerX < origin.X + candidate.Width && centerY >= origin.Y && centerY < origin.Y + candidate.Height)
 					{
-						chosen = monitors[i];
+						chosen = monitor;
 						break;
 					}
 				}
 
-				OpenTK.Windowing.GraphicsLibraryFramework.VideoMode* mode = chosen != null ? GLFW.GetVideoMode(chosen) : null;
-				return mode != null && mode->RefreshRate > 0 ? 1.0 / mode->RefreshRate : 0.0;
+				if (chosen.IsNull())
+				{
+					return 0.0;
+				}
+
+				int refreshRate = chosen.VideoMode.RefreshRate;
+				return refreshRate > 0 ? 1.0 / refreshRate : 0.0;
 			}
 			catch (Exception)
 			{
@@ -282,9 +277,9 @@ namespace LELEngine
 		///     blank (white) for a moment, so on Windows the window is cloaked meanwhile (DWM composes it without
 		///     displaying it) until the image is presented and composed. A window already visible (fullscreen) is drawn.
 		/// </summary>
-		public unsafe void Show(Action drawFirstImage)
+		public void Show(Action drawFirstImage)
 		{
-			IntPtr handle = !IsVisible && OperatingSystem.IsWindows() ? GLFW.GetWin32Window(WindowPtr) : IntPtr.Zero;
+			IntPtr handle = !IsVisible ? Win32Window : IntPtr.Zero;
 			int on = 1;
 			bool cloaked = handle != IntPtr.Zero && DwmSetWindowAttribute(handle, DwmCloak, ref on, sizeof(int)) == 0;
 			IsVisible = true;
@@ -300,33 +295,25 @@ namespace LELEngine
 		}
 
 		/// <summary>
-		///     Initializes GLFW with an error callback that logs. OpenTK's default one throws from inside the native
-		///     callback, which aborts the process (exit 134 on Linux) before a refused context version reaches the
-		///     callers' fallback to an older one; with this one glfwCreateWindow returns NULL and NativeWindow throws a
-		///     managed exception they catch. Call before creating a window (after GLFWProvider.EnsureInitialized, which
-		///     installs OpenTK's callback right before glfwInit).
+		///     Initializes GLFW with an error callback that logs: a refused context version is then a managed exception
+		///     from the window's constructor, which the callers' fallback to an older version catches. Call before
+		///     creating a window.
 		/// </summary>
 		public static void InitializeGlfw()
 		{
-			GLFWProvider.EnsureInitialized();
-			GLFWProvider.SetErrorCallback(glfwErrorLog);
+			WindowSystem.EnsureInitialized();
 		}
 
 		#endregion
 
 		#region PrivateMethods
 
-		private static void OnGlfwError(ErrorCode error, string description)
-		{
-			Console.WriteLine($"[GLFW] {error}: {description}");
-		}
-
 		private static NativeWindowSettings CreateSettings(int width, int height, string title, Version apiVersion, bool visible, bool fullscreen)
 		{
 			// A hidden window takes the focus when it is shown (GLFW's focus-on-show), unless automated runs turned
-			// that off. Window hints stay set for the windows created later, and OpenTK leaves this one alone.
+			// that off. Window hints stay set for the windows created later, and no window's creation sets this one.
 			InitializeGlfw();
-			GLFW.WindowHint(WindowHintBool.FocusOnShow, StartFocused);
+			Glfw.WindowHint(GlfwWindowHint.FocusOnShow, StartFocused ? 1 : 0);
 			return new NativeWindowSettings
 			{
 				ClientSize = new Vector2i(width, height),
@@ -337,8 +324,7 @@ namespace LELEngine
 				Flags = ContextFlags.ForwardCompatible,
 				StartVisible = visible,
 				StartFocused = StartFocused && visible,
-				WindowState = fullscreen ? WindowState.Fullscreen : WindowState.Normal,
-				AutoLoadBindings = false
+				WindowState = fullscreen ? WindowState.Fullscreen : WindowState.Normal
 			};
 		}
 

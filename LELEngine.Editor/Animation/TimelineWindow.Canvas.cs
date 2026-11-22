@@ -4,7 +4,7 @@ using Hexa.NET.ImGui;
 using LELEngine.Animation;
 using LELEngine.Audio;
 using LELEngine.Editor.Audio;
-using OpenTK.Mathematics;
+using LELEngine.Mathematics;
 using NVector2 = System.Numerics.Vector2;
 
 namespace LELEngine.Editor.Animation

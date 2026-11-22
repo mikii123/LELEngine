@@ -139,11 +139,20 @@ namespace LELEngine.Editor
 			return false;
 		}
 
+		/// <summary>
+		///     The BRUTAL framework's assemblies next to the editor (windows and input, graphics bindings, numeric types):
+		///     the engine's API shows some of their types (a window's GLFW handle), so scripts compile against them too.
+		/// </summary>
+		private static IEnumerable<string> BrutalAssemblies(string editor)
+		{
+			return Directory.GetFiles(editor, "Brutal.*.dll").Select(Path.GetFileName).OrderBy(f => f, StringComparer.OrdinalIgnoreCase);
+		}
+
 		private static string Csproj(string name)
 		{
 			string editor = AppContext.BaseDirectory;
 			var references = new List<string> { "LELEngine.dll" };
-			references.AddRange(Directory.GetFiles(editor, "OpenTK*.dll").Select(Path.GetFileName).OrderBy(f => f, StringComparer.OrdinalIgnoreCase));
+			references.AddRange(BrutalAssemblies(editor));
 
 			var builder = new StringBuilder();
 			builder.AppendLine("<Project Sdk=\"Microsoft.NET.Sdk\">");
@@ -170,7 +179,7 @@ namespace LELEngine.Editor
 			string editor = AppContext.BaseDirectory;
 			var references = new List<string> { "LELEngine.dll", "LELEngine.Editor.dll" };
 			references.AddRange(Directory.GetFiles(editor, "Hexa*.dll").Select(Path.GetFileName).OrderBy(f => f, StringComparer.OrdinalIgnoreCase));
-			references.AddRange(Directory.GetFiles(editor, "OpenTK*.dll").Select(Path.GetFileName).OrderBy(f => f, StringComparer.OrdinalIgnoreCase));
+			references.AddRange(BrutalAssemblies(editor));
 
 			var builder = new StringBuilder();
 			builder.AppendLine("<Project Sdk=\"Microsoft.NET.Sdk\">");
@@ -198,7 +207,7 @@ namespace LELEngine.Editor
 		{
 			string editor = AppContext.BaseDirectory;
 			var references = new List<string> { "LELEngine.dll", TestFrameworkAssembly };
-			references.AddRange(Directory.GetFiles(editor, "OpenTK*.dll").Select(Path.GetFileName).OrderBy(f => f, StringComparer.OrdinalIgnoreCase));
+			references.AddRange(BrutalAssemblies(editor));
 
 			var builder = new StringBuilder();
 			builder.AppendLine("<Project Sdk=\"Microsoft.NET.Sdk\">");

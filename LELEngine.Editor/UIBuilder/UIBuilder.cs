@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using Hexa.NET.ImGui;
 using LELEngine.UIElements;
-using OpenTK.Mathematics;
+using LELEngine.Mathematics;
 using NVector2 = System.Numerics.Vector2;
 using NVector4 = System.Numerics.Vector4;
 
@@ -1351,22 +1351,22 @@ namespace LELEngine.Editor.UIBuilder
 			hoveredNode = null;
 		}
 
-		private static readonly (ImGuiKey imgui, OpenTK.Windowing.GraphicsLibraryFramework.Keys key)[] ForwardedKeys =
+		private static readonly (ImGuiKey imgui, LELEngine.Windowing.Keys key)[] ForwardedKeys =
 		{
-			(ImGuiKey.Backspace, OpenTK.Windowing.GraphicsLibraryFramework.Keys.Backspace), (ImGuiKey.Delete, OpenTK.Windowing.GraphicsLibraryFramework.Keys.Delete),
-			(ImGuiKey.Enter, OpenTK.Windowing.GraphicsLibraryFramework.Keys.Enter), (ImGuiKey.Tab, OpenTK.Windowing.GraphicsLibraryFramework.Keys.Tab),
-			(ImGuiKey.Escape, OpenTK.Windowing.GraphicsLibraryFramework.Keys.Escape), (ImGuiKey.Space, OpenTK.Windowing.GraphicsLibraryFramework.Keys.Space),
-			(ImGuiKey.LeftArrow, OpenTK.Windowing.GraphicsLibraryFramework.Keys.Left), (ImGuiKey.RightArrow, OpenTK.Windowing.GraphicsLibraryFramework.Keys.Right),
-			(ImGuiKey.UpArrow, OpenTK.Windowing.GraphicsLibraryFramework.Keys.Up), (ImGuiKey.DownArrow, OpenTK.Windowing.GraphicsLibraryFramework.Keys.Down),
-			(ImGuiKey.Home, OpenTK.Windowing.GraphicsLibraryFramework.Keys.Home), (ImGuiKey.End, OpenTK.Windowing.GraphicsLibraryFramework.Keys.End),
-			(ImGuiKey.A, OpenTK.Windowing.GraphicsLibraryFramework.Keys.A), (ImGuiKey.C, OpenTK.Windowing.GraphicsLibraryFramework.Keys.C),
-			(ImGuiKey.V, OpenTK.Windowing.GraphicsLibraryFramework.Keys.V), (ImGuiKey.X, OpenTK.Windowing.GraphicsLibraryFramework.Keys.X),
-			(ImGuiKey.Z, OpenTK.Windowing.GraphicsLibraryFramework.Keys.Z), (ImGuiKey.Y, OpenTK.Windowing.GraphicsLibraryFramework.Keys.Y)
+			(ImGuiKey.Backspace, LELEngine.Windowing.Keys.Backspace), (ImGuiKey.Delete, LELEngine.Windowing.Keys.Delete),
+			(ImGuiKey.Enter, LELEngine.Windowing.Keys.Enter), (ImGuiKey.Tab, LELEngine.Windowing.Keys.Tab),
+			(ImGuiKey.Escape, LELEngine.Windowing.Keys.Escape), (ImGuiKey.Space, LELEngine.Windowing.Keys.Space),
+			(ImGuiKey.LeftArrow, LELEngine.Windowing.Keys.Left), (ImGuiKey.RightArrow, LELEngine.Windowing.Keys.Right),
+			(ImGuiKey.UpArrow, LELEngine.Windowing.Keys.Up), (ImGuiKey.DownArrow, LELEngine.Windowing.Keys.Down),
+			(ImGuiKey.Home, LELEngine.Windowing.Keys.Home), (ImGuiKey.End, LELEngine.Windowing.Keys.End),
+			(ImGuiKey.A, LELEngine.Windowing.Keys.A), (ImGuiKey.C, LELEngine.Windowing.Keys.C),
+			(ImGuiKey.V, LELEngine.Windowing.Keys.V), (ImGuiKey.X, LELEngine.Windowing.Keys.X),
+			(ImGuiKey.Z, LELEngine.Windowing.Keys.Z), (ImGuiKey.Y, LELEngine.Windowing.Keys.Y)
 		};
 
 		private unsafe void ForwardKeyboard(RuntimePanel panel, ImGuiIOPtr io, EventModifiers modifiers)
 		{
-			foreach ((ImGuiKey imgui, OpenTK.Windowing.GraphicsLibraryFramework.Keys key) pair in ForwardedKeys)
+			foreach ((ImGuiKey imgui, LELEngine.Windowing.Keys key) pair in ForwardedKeys)
 			{
 				// Letters only as shortcuts (Ctrl+A/C/V/X/Z/Y); plain letters arrive as text.
 				bool letter = pair.imgui >= ImGuiKey.A && pair.imgui <= ImGuiKey.Z;

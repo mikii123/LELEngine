@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using LELEngine;
 using LELEngine.Rendering;
 using LELEngine.Serialization;
-using OpenTK.Mathematics;
+using LELEngine.Mathematics;
 
 /// <summary>
 ///     A static batch: the meshes of several static renderers (<see cref="GameObject.isStatic" />) merged into the one

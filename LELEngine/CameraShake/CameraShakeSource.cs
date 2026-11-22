@@ -1,5 +1,5 @@
 using LELEngine;
-using OpenTK.Mathematics;
+using LELEngine.Mathematics;
 
 /// <summary>How a <see cref="CameraShakeSource" /> shakes.</summary>
 public enum CameraShakeSourceMode

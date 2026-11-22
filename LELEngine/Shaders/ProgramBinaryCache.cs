@@ -4,7 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
-using OpenTK.Graphics.OpenGL4;
+using LELEngine.Graphics;
 
 namespace LELEngine.Shaders
 {

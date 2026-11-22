@@ -1,4 +1,4 @@
-using OpenTK.Windowing.GraphicsLibraryFramework;
+using LELEngine.Windowing;
 
 namespace LELEngine.Rendering
 {
@@ -13,10 +13,9 @@ namespace LELEngine.Rendering
 		#region PublicFields
 
 		/// <summary>
-		///     A GL context is current on the calling thread: the GLFW window whose context it is (any thread may ask),
-		///     through OpenTK's binding, which loads the GLFW library of each platform.
+		///     A GL context is current on the calling thread: the GLFW window whose context it is (any thread may ask).
 		/// </summary>
-		public static unsafe bool HasContext => GLFW.GetCurrentContext() != null;
+		public static bool HasContext => WindowSystem.HasCurrentContext;
 
 		#endregion
 	}

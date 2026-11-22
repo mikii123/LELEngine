@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using LELEngine.Rendering.Lumen;
 using LELEngine.Rendering.Passes;
 using LELEngine.Shaders;
-using OpenTK.Graphics.OpenGL4;
+using LELEngine.Graphics;
 
 namespace LELEngine.Rendering
 {

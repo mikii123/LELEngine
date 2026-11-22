@@ -3,18 +3,15 @@ using System.IO;
 using System.Runtime.InteropServices;
 using Hexa.NET.ImGui;
 using Hexa.NET.ImGuizmo;
-using OpenTK.Graphics.OpenGL4;
-using OpenTK.Windowing.Common;
-using OpenTK.Windowing.Common.Input;
-using OpenTK.Windowing.Desktop;
-using OpenTK.Windowing.GraphicsLibraryFramework;
+using LELEngine.Graphics;
+using LELEngine.Windowing;
 using NVector2 = System.Numerics.Vector2;
 
 namespace LELEngine.Editor
 {
 	/// <summary>
-	///     Dear ImGui platform and renderer backend for an OpenTK window: feeds window input into ImGui and draws
-	///     its draw lists with OpenGL 4. Implements the ImGui 1.92 texture protocol (the backend creates, updates and
+	///     Dear ImGui platform and renderer backend for an engine window: feeds window input into ImGui and draws
+	///     its draw lists with the engine's graphics commands. Implements the ImGui 1.92 texture protocol (the backend creates, updates and
 	///     destroys the textures ImGui asks for, e.g. the font atlas as glyphs are added).
 	/// </summary>
 	internal sealed unsafe class ImGuiController : IDisposable

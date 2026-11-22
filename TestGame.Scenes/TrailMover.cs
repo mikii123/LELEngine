@@ -1,6 +1,6 @@
 using System;
 using LELEngine;
-using OpenTK.Mathematics;
+using LELEngine.Mathematics;
 
 namespace TestGame.Scenes
 {

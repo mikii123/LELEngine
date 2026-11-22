@@ -6,7 +6,7 @@ using System.Threading.Tasks;
 using Hexa.NET.ImGui;
 using LELEngine.Rendering;
 using LELEngine.Serialization;
-using OpenTK.Mathematics;
+using LELEngine.Mathematics;
 using NVector2 = System.Numerics.Vector2;
 using NVector3 = System.Numerics.Vector3;
 using NVector4 = System.Numerics.Vector4;

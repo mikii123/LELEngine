@@ -1,5 +1,5 @@
-using OpenTK.Graphics.OpenGL4;
-using OpenTK.Mathematics;
+using LELEngine.Graphics;
+using LELEngine.Mathematics;
 
 namespace LELEngine.Shaders.Uniforms
 {
@@ -7,13 +7,13 @@ namespace LELEngine.Shaders.Uniforms
 	{
 		#region PublicFields
 
-		public OpenTK.Mathematics.Vector4 Vector;
+		public LELEngine.Mathematics.Vector4 Vector;
 
 		#endregion
 
 		#region Constructors
 
-		public Vector4(string name, OpenTK.Mathematics.Vector4 vector)
+		public Vector4(string name, LELEngine.Mathematics.Vector4 vector)
 		{
 			Name = name;
 			Vector = vector;

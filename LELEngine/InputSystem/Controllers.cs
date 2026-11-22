@@ -1,5 +1,5 @@
 using System;
-using OpenTK.Windowing.GraphicsLibraryFramework;
+using LELEngine.Windowing;
 
 namespace LELEngine.InputSystem
 {
@@ -173,7 +173,7 @@ namespace LELEngine.InputSystem
 			values[(int)MouseElement.WheelHorizontal] = Input.mouseScrollDelta.X;
 			for (int button = 0; button <= (int)MouseElement.Button8 - (int)MouseElement.LeftButton; button++)
 			{
-				var mouseButton = (OpenTK.Windowing.GraphicsLibraryFramework.MouseButton)button;
+				var mouseButton = (LELEngine.Windowing.MouseButton)button;
 				if (Input.GetMouseButton(mouseButton) || Input.GetMouseButtonDown(mouseButton))
 				{
 					values[(int)MouseElement.LeftButton + button] = 1f;
@@ -245,7 +245,7 @@ namespace LELEngine.InputSystem
 				return;
 			}
 
-			if (!GLFW.GetGamepadState(JoystickSlot, out GamepadState state))
+			if (!Joysticks.GetGamepadState(JoystickSlot, out GamepadState state))
 			{
 				return;
 			}

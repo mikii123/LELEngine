@@ -1,7 +1,7 @@
 using System;
 using Hexa.NET.ImGui;
 using LELEngine.Rendering;
-using OpenTK.Mathematics;
+using LELEngine.Mathematics;
 
 namespace LELEngine.Editor
 {

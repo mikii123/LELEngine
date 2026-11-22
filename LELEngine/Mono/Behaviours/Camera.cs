@@ -1,7 +1,7 @@
 using System.Collections.Generic;
 using LELEngine;
 using LELEngine.Shaders;
-using OpenTK.Mathematics;
+using LELEngine.Mathematics;
 
 /// <summary>
 ///     How a camera takes part in rendering (as URP's camera stacking): a base camera clears the image and renders,

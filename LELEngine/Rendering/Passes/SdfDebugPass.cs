@@ -1,5 +1,5 @@
 using LELEngine.Shaders;
-using OpenTK.Mathematics;
+using LELEngine.Mathematics;
 
 namespace LELEngine.Rendering.Passes
 {

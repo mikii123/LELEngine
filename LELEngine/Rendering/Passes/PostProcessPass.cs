@@ -1,5 +1,5 @@
 using LELEngine.Shaders;
-using OpenTK.Graphics.OpenGL4;
+using LELEngine.Graphics;
 
 namespace LELEngine.Rendering.Passes
 {

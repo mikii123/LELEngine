@@ -1,5 +1,5 @@
 using System;
-using OpenTK.Mathematics;
+using LELEngine.Mathematics;
 
 /// <summary>
 ///     What a shake adds to a camera at one moment, in the camera's own picture: where it is moved to and how its view

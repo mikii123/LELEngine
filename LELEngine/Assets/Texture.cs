@@ -1,5 +1,5 @@
 using System;
-using OpenTK.Graphics.OpenGL4;
+using LELEngine.Graphics;
 
 namespace LELEngine
 {
@@ -15,7 +15,7 @@ namespace LELEngine
 		Trilinear
 	}
 
-	/// <summary>How texture coordinates outside 0..1 sample (Unity's TextureWrapMode; named apart from OpenTK's enum).</summary>
+	/// <summary>How texture coordinates outside 0..1 sample (Unity's TextureWrapMode; named apart from the graphics API's enum).</summary>
 	public enum TextureWrap
 	{
 		Repeat,

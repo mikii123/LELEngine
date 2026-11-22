@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using LELEngine.Serialization;
-using OpenTK.Mathematics;
+using LELEngine.Mathematics;
 
 namespace LELEngine.Shaders
 {

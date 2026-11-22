@@ -1,9 +1,8 @@
 using System;
 using System.IO;
 using System.Text.Json;
-using OpenTK.Mathematics;
-using OpenTK.Windowing.Common;
-using OpenTK.Windowing.Desktop;
+using LELEngine.Mathematics;
+using LELEngine.Windowing;
 
 namespace LELEngine.Editor
 {
