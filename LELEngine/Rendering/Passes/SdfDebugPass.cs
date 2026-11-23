@@ -36,7 +36,7 @@ namespace LELEngine.Rendering.Passes
 		public override void Execute(RenderContext context)
 		{
 			GlobalIlluminationSettings gi = Lighting.GI;
-			if (gi.GlobalSdf == 0)
+			if (gi.GlobalSdf == null)
 			{
 				return;
 			}

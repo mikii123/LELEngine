@@ -43,12 +43,6 @@ namespace LELEngine.Rendering
 			}
 		}
 
-		/// <summary>The OpenGL buffer object of <see cref="VertexBuffer" />: only for the code that still gives OpenGL commands itself.</summary>
-		public static int VertexBufferHandle => ((Graphics.OpenGL.GLBuffer)VertexBuffer).Handle;
-
-		/// <summary>The OpenGL buffer object of <see cref="IndexBuffer" />: only for the code that still gives OpenGL commands itself.</summary>
-		public static int IndexBufferHandle => ((Graphics.OpenGL.GLBuffer)IndexBuffer).Handle;
-
 		/// <summary>The mesh's range in the pool (after <see cref="Prepare" />): base vertex, vertex count, first index, index count.</summary>
 		public static void GetRange(Mesh mesh, out int baseVertex, out int vertexCount, out int firstIndex, out int indexCount)
 		{
@@ -128,11 +122,6 @@ namespace LELEngine.Rendering
 			commands.SetVertexBuffer(0, vertexBuffer);
 			commands.SetVertexBuffer(1, instanceIndexBuffer);
 			commands.SetIndexBuffer(indexBuffer);
-			// For the code that still draws with OpenGL commands of its own after this.
-			if (commands is Graphics.OpenGL.GLCommandList legacy)
-			{
-				legacy.KeepVertexInputForLegacy();
-			}
 		}
 
 		/// <summary>Draws one mesh with the program in use (per-object path).</summary>

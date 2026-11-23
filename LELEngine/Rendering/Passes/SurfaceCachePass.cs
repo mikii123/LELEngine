@@ -135,11 +135,6 @@ namespace LELEngine.Rendering.Passes
 				for (int i = 0; i < o.Cards.Cards.Length; i++)
 				{
 					SurfaceCard card = o.Cards.Cards[i];
-					if (!commands.InRenderPass)
-					{
-						atlas.BeginCapture();
-					}
-
 					atlas.ClearRect(card.X, card.Y, card.Width, card.Height);
 					commands.SetViewport(card.X, card.Y, card.Width, card.Height);
 					capture.SetMatrix4("cardViewProjection", card.ViewProjection);
@@ -156,13 +151,6 @@ namespace LELEngine.Rendering.Passes
 
 						// The same conventional material inputs the voxelizer reads.
 						GISurface.SetUniforms(capture, material);
-						// A map used for the first time is uploaded here, and making its mip levels ends the pass.
-						if (!commands.InRenderPass)
-						{
-							atlas.BeginCapture();
-							commands.SetViewport(card.X, card.Y, card.Width, card.Height);
-						}
-
 						renderer.RenderSubMeshWith(capture, s);
 					}
 				}
@@ -270,8 +258,7 @@ namespace LELEngine.Rendering.Passes
 			Lighting.SetUniforms(program, false, false);
 			// The local lights' shadow rays (GI shadows) trace the global distance field.
 			Lighting.SetSdfUniforms(program);
-			// LEGACY(gl): GridShadowMap.cs binds its maps to texture units given by number
-			gridShadow.SetUniforms(program, Lighting.ShadowMapTextureUnit, 6);
+			gridShadow.SetUniforms(program);
 			program.SetTexture("CardIndex", atlas.CardIndex);
 			program.SetTexture("CardAlbedo", atlas.Albedo);
 			program.SetTexture("CardNormal", atlas.Normal);

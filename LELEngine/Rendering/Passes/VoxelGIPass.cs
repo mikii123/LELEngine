@@ -57,10 +57,6 @@ namespace LELEngine.Rendering.Passes
 			return previousValid && mipMode == VoxelMipMode.SphericalHarmonics ? shGradients[current][axis] : null;
 		}
 
-		// LEGACY(gl): no user in the engine's solution; kept for code outside it
-		public int VoxelTexture => previousValid ? HandleOf(radiance[current]) : 0;
-
-		// LEGACY(gl): no user in the engine's solution; kept for code outside it (Lighting.cs reads what Execute publishes)
 		/// <summary>The textures of the volume the materials read this frame (empty until the volume was lit once).</summary>
 		public VoxelVolumeTextures Volume => previousValid ? VolumeTextures(current) : default;
 
@@ -73,7 +69,7 @@ namespace LELEngine.Rendering.Passes
 
 		private const int BlockSize = 8;
 
-		/// <summary>Samples per pixel of the coverage voxelization (fewer when the context has fewer).</summary>
+		/// <summary>Samples per pixel of the coverage voxelization (fewer when the device gives a pass fewer).</summary>
 		private const int CoverageSamples = 8;
 
 		/// <summary>Profiler sections of the injection passes (pass 0 = direct light, then one per bounce).</summary>
@@ -99,7 +95,7 @@ namespace LELEngine.Rendering.Passes
 		private readonly GpuTexture[][] shGradients = { new GpuTexture[3], new GpuTexture[3] };
 		private int shLevels;
 
-		// The mips the volume has this frame (the setting, unless the context lacks the texture units).
+		// The mips the volume has this frame (the setting, unless the device lets a program sample too few textures).
 		private VoxelMipMode mipMode;
 
 		// The mips the volumes were made for (their directional textures exist for this mode only).
@@ -117,9 +113,7 @@ namespace LELEngine.Rendering.Passes
 		private int currentResolution;
 		private int mipLevels;
 
-		// LEGACY(gl): a render pass without attachments has no sample count, so the coverage voxelization keeps a
-		// framebuffer object of its own (default size and samples) and binds it with OpenGL commands.
-		private int coverageFramebuffer;
+		// Samples per pixel of the coverage voxelization's pass on this device.
 		private int coverageSamples;
 		private ShaderProgram voxelize;
 		private ShaderProgram voxelizeCoverage;
@@ -177,7 +171,7 @@ namespace LELEngine.Rendering.Passes
 			if (!gi.VoxelConeTracingActive)
 			{
 				Release();
-				gi.VoxelTexture = 0;
+				gi.VoxelTexture = null;
 				gi.VoxelVolume = default;
 				return;
 			}
@@ -252,8 +246,7 @@ namespace LELEngine.Rendering.Passes
 				previousValid = true;
 			}
 
-			// LEGACY(gl): Lighting.cs publishes the volume to the shaders by OpenGL texture names
-			gi.VoxelTexture = VoxelTexture;
+			gi.VoxelTexture = RadianceTexture;
 			gi.VoxelVolume = Volume;
 		}
 
@@ -276,7 +269,7 @@ namespace LELEngine.Rendering.Passes
 		public override void Dispose()
 		{
 			Release();
-			Lighting.GI.VoxelTexture = 0;
+			Lighting.GI.VoxelTexture = null;
 			Lighting.GI.VoxelVolume = default;
 		}
 
@@ -302,9 +295,7 @@ namespace LELEngine.Rendering.Passes
 			mipBlocks = new ComputeShader("Engine/VoxelMipBlocks.shader");
 
 			// Voxelization draws into passes without attachments: rasterization happens, but all output goes through images.
-			// LEGACY(gl): the multisampled one (see coverageFramebuffer)
-			coverageFramebuffer = GL.GenFramebuffer();
-			coverageSamples = Math.Max(1, Math.Min(CoverageSamples, GL.GetInteger((GetPName)0x9318))); // GL_MAX_FRAMEBUFFER_SAMPLES
+			coverageSamples = Math.Max(1, Math.Min(CoverageSamples, Gfx.Capabilities.MaxPassSamples));
 			// The indirect dispatch's arguments and, behind them, the list the dispatched groups read.
 			blockList = Gfx.Device.CreateBuffer(new BufferDescriptor(BufferUsage.Storage | BufferUsage.Indirect, 0, true, "Voxel GI occupied blocks"));
 
@@ -319,12 +310,6 @@ namespace LELEngine.Rendering.Passes
 			}
 
 			DeleteVolumes();
-			if (coverageFramebuffer != 0)
-			{
-				// LEGACY(gl): see coverageFramebuffer
-				GL.DeleteFramebuffer(coverageFramebuffer);
-				coverageFramebuffer = 0;
-			}
 			blockList.Dispose();
 			blockList = null;
 			gridShadow?.Delete();
@@ -430,8 +415,6 @@ namespace LELEngine.Rendering.Passes
 			uint[] header = { 0u, 1u, 1u, 0u };
 			blockList.SetSubData(0, header);
 
-			SetDefaultFramebufferSize(coverageFramebuffer, resolution, coverageSamples);
-
 			// Injection skips empty blocks, so the radiance volumes must start out zero.
 			ClearRadiance(0, VoxelRegion.Full(resolution));
 			ClearRadiance(1, VoxelRegion.Full(resolution));
@@ -447,21 +430,6 @@ namespace LELEngine.Rendering.Passes
 			string directional = mode == VoxelMipMode.Anisotropic ? $" + anisotropic {anisoLevels} levels" : mode == VoxelMipMode.SphericalHarmonics ? $" + SH gradients {shLevels} levels" : "";
 			double megabytes = (voxels * 4 * 6 + voxels * 8 * 2 * 8 / 7.0 + voxels / 8 * directionalTextures * 8 * 2 * 8 / 7.0) / (1024.0 * 1024.0);
 			Console.WriteLine($"[VoxelGI] Volume {resolution}^3: geometry 2x(RGBA8+RGBA8+R11G11B10F), radiance 2xRGBA16F {mipLevels} mips{directional}, {blockResolution}^3 blocks, ~{megabytes:0} MB (+{voxels * 20 / (1024 * 1024)} MB coverage accumulators when used), {coverageSamples}x coverage samples");
-		}
-
-		// LEGACY(gl): see coverageFramebuffer
-		private static void SetDefaultFramebufferSize(int handle, int resolution, int samples)
-		{
-			GL.BindFramebuffer(FramebufferTarget.Framebuffer, handle);
-			GL.FramebufferParameter(FramebufferTarget.Framebuffer, FramebufferDefaultParameter.FramebufferDefaultWidth, resolution);
-			GL.FramebufferParameter(FramebufferTarget.Framebuffer, FramebufferDefaultParameter.FramebufferDefaultHeight, resolution);
-			GL.FramebufferParameter(FramebufferTarget.Framebuffer, FramebufferDefaultParameter.FramebufferDefaultSamples, samples);
-			FramebufferErrorCode status = GL.CheckFramebufferStatus(FramebufferTarget.Framebuffer);
-			GL.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
-			if (status != FramebufferErrorCode.FramebufferComplete)
-			{
-				Console.WriteLine("[VoxelGI] Voxelization framebuffer incomplete: " + status);
-			}
 		}
 
 		private void DeleteVolumes()
@@ -561,12 +529,11 @@ namespace LELEngine.Rendering.Passes
 			mipMode = mode;
 		}
 
-		// Directional mips need their own texture units in the material shaders: without them the mips are isotropic.
+		// Directional mips are further textures for the material shaders to sample: without room for them the mips are isotropic.
 		private VoxelMipMode MipModeFor(GlobalIlluminationSettings gi)
 		{
-			int units = gi.VoxelMips == VoxelMipMode.SphericalHarmonics ? 3 : 1;
-			bool unitsAvailable = Lighting.VoxelDirectionalTextureUnit + units - 1 < GLCapabilities.MaxTextureUnits;
-			if (!unitsAvailable || (gi.VoxelMips == VoxelMipMode.Anisotropic && gi.AnisotropicMipLevels <= 0))
+			int textures = gi.VoxelMips == VoxelMipMode.SphericalHarmonics ? 3 : 1;
+			if (!Lighting.VoxelDirectionalSamplersAvailable(textures) || (gi.VoxelMips == VoxelMipMode.Anisotropic && gi.AnisotropicMipLevels <= 0))
 			{
 				return VoxelMipMode.Isotropic;
 			}
@@ -574,26 +541,19 @@ namespace LELEngine.Rendering.Passes
 			return gi.VoxelMips;
 		}
 
-		// LEGACY(gl): used by Lighting.cs (through GlobalIlluminationSettings.VoxelVolume)
 		// The textures of radiance volume index as the cones read them.
 		private VoxelVolumeTextures VolumeTextures(int index)
 		{
 			return new VoxelVolumeTextures
 			{
 				Mode = mipMode,
-				Radiance = HandleOf(radiance[index]),
-				Aniso = mipMode == VoxelMipMode.Anisotropic ? HandleOf(anisoRadiance[index]) : 0,
+				Radiance = radiance[index],
+				Aniso = mipMode == VoxelMipMode.Anisotropic ? anisoRadiance[index] : null,
 				AnisoLevels = AnisoLevelsUsed(Lighting.GI),
-				SHX = mipMode == VoxelMipMode.SphericalHarmonics ? HandleOf(shGradients[index][0]) : 0,
-				SHY = mipMode == VoxelMipMode.SphericalHarmonics ? HandleOf(shGradients[index][1]) : 0,
-				SHZ = mipMode == VoxelMipMode.SphericalHarmonics ? HandleOf(shGradients[index][2]) : 0
+				SHX = mipMode == VoxelMipMode.SphericalHarmonics ? shGradients[index][0] : null,
+				SHY = mipMode == VoxelMipMode.SphericalHarmonics ? shGradients[index][1] : null,
+				SHZ = mipMode == VoxelMipMode.SphericalHarmonics ? shGradients[index][2] : null
 			};
-		}
-
-		// LEGACY(gl): the OpenGL texture name Lighting.cs takes
-		private static int HandleOf(GpuTexture texture)
-		{
-			return texture != null ? ((Graphics.OpenGL.GLTexture)texture).Handle : 0;
 		}
 
 		// The textures of radiance volume index for a program of the pass's own that traces it (Engine/VoxelRadiance.glsl):
@@ -861,10 +821,7 @@ namespace LELEngine.Rendering.Passes
 			accumulators.BindImages(0, ImageAccess.Write);
 			DispatchRegions(clearAccumulators, regions);
 
-			// LEGACY(gl): a pass without attachments cannot be multisampled through the device (see coverageFramebuffer);
-			// the draws that follow go to the framebuffer object bound here.
-			GL.BindFramebuffer(FramebufferTarget.Framebuffer, coverageFramebuffer);
-			commands.SetViewport(0, 0, currentResolution, currentResolution);
+			commands.BeginRenderPass(currentResolution, currentResolution, coverageSamples);
 			commands.State.DepthTest = false;
 			commands.State.Culling = FaceCulling.None;
 			commands.State.DepthWrite = false;
@@ -882,8 +839,7 @@ namespace LELEngine.Rendering.Passes
 			commands.State.DepthWrite = true;
 			commands.State.DepthTest = true;
 			commands.State.Culling = FaceCulling.Back;
-			// LEGACY(gl): see above
-			GL.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
+			commands.EndRenderPass();
 
 			resolveGeometry.Use();
 			target.BindImages(0, ImageAccess.Write, false);
@@ -979,7 +935,7 @@ namespace LELEngine.Rendering.Passes
 			SetRadianceUniforms(program, current);
 			// The bounce traces like the materials: with SDF cones walls stop it, voxel cones would bring the light
 			// from outside in through them. The SDF detail trace is not used here (binary, too sharp per voxel).
-			bool sdf = gi.DistanceFieldEnabled && gi.GlobalSdf != 0;
+			bool sdf = gi.DistanceFieldEnabled && gi.GlobalSdf != null;
 			int traceMode = Lighting.TraceModeUniform(sdf) == 2 ? 2 : 0;
 			program.SetInt("giTraceMode", traceMode);
 			if (traceMode == 2)
@@ -1003,9 +959,7 @@ namespace LELEngine.Rendering.Passes
 
 			// The lights' lists; shadows come from the grid-covering maps, not the camera's.
 			Lighting.SetUniforms(program, false, false);
-			// LEGACY(gl): GridShadowMap.cs binds its maps to texture units by number (1 and 2: the units the lists' and
-			// the trace's textures leave free, 8 and 11 hold the distance field, 16 the sky)
-			gridShadow.SetUniforms(program, 1, 2);
+			gridShadow.SetUniforms(program);
 			program.SetInt("injectShadowTaps", gi.InjectShadowTaps);
 
 			SetTraceUniforms(program, gi);

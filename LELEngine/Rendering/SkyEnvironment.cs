@@ -19,9 +19,6 @@ namespace LELEngine.Rendering
 		/// <summary>The GI's sky cubemap of this frame's skybox (null without one).</summary>
 		public static GpuTexture CubemapTexture { get; private set; }
 
-		// LEGACY(gl): used by Lighting.cs
-		public static int CubemapHandle => CubemapTexture is Graphics.OpenGL.GLTexture texture ? texture.Handle : 0;
-
 		public static Vector4 TintExposure { get; private set; } = Vector4.One;
 		public static Vector2 Rotation { get; private set; } = new Vector2(1f, 0f);
 
@@ -34,9 +31,6 @@ namespace LELEngine.Rendering
 
 		/// <summary>A 1x1 black cubemap sampled when no skybox is set (the sampler stays complete).</summary>
 		public static GpuTexture BlackCubemapTexture => (blackCubemap ??= new Cubemap(1, "black sky", false)).Gpu;
-
-		// LEGACY(gl): used by Lighting.cs
-		public static int BlackCubemapHandle => BlackCubemapTexture is Graphics.OpenGL.GLTexture texture ? texture.Handle : 0;
 
 		#endregion
 

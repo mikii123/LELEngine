@@ -47,7 +47,7 @@ namespace LELEngine.Rendering
 			compositeProgram ??= new ShaderProgram("Engine/LowResolutionComposite.shader");
 
 			// The depth is drawn whole below.
-			Renderer.BeginPass(target, LoadOperation.Clear, ClearValue.OpaqueBlack, LoadOperation.DontCare);
+			target.Begin(LoadOperation.Clear, ClearValue.OpaqueBlack, LoadOperation.DontCare);
 
 			// The depth: written by a pass over the layer that leaves the colour alone.
 			ref RenderState state = ref Gfx.Commands.State;
@@ -72,7 +72,7 @@ namespace LELEngine.Rendering
 			}
 
 			Active = false;
-			Renderer.BeginPass(context.SceneTarget);
+			context.SceneTarget.Begin();
 			ref RenderState state = ref Gfx.Commands.State;
 			state.DepthTest = false;
 			state.DepthWrite = false;

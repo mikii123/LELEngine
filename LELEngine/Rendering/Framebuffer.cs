@@ -17,6 +17,7 @@ namespace LELEngine.Rendering
 		public IReadOnlyList<RenderTexture> ColorAttachments => colorAttachments;
 		public RenderTexture DepthAttachment { get; private set; }
 
+		// LEGACY(gl): used by LELEngine.Editor/Automation/WindowCapture.cs
 		/// <summary>
 		///     The OpenGL framebuffer object of the attachments: only for the code that still gives OpenGL commands
 		///     itself.
@@ -173,6 +174,7 @@ namespace LELEngine.Rendering
 			Begin(LoadOperation.Clear, clearColor, LoadOperation.Clear, clearDepth);
 		}
 
+		// LEGACY(gl): used by LELEngine.Editor (Automation/WindowCapture.cs, UIBuilder/BuilderPreview.cs)
 		/// <summary>
 		///     The OpenGL way (code that still gives OpenGL commands itself): binds the attachments for drawing, keeping
 		///     their contents, until something else is bound.
@@ -183,8 +185,10 @@ namespace LELEngine.Rendering
 			Graphics.OpenGL.GLDevice.Current.CommandsOfThread.KeepPassForLegacy();
 		}
 
+		// LEGACY(gl): used by LELEngine.Editor (MainWindow.cs, LauncherWindow.cs, Audio/AudioStudioWindow.cs, UIBuilder/BuilderWindow.cs)
 		/// <summary>
-		///     Begins a pass into the window's back buffer, with a viewport of the given size.
+		///     Begins a pass into the window's back buffer, with a viewport of the given size, that lasts for the code
+		///     that still gives OpenGL commands itself.
 		/// </summary>
 		public static void BindDefault(int width, int height)
 		{

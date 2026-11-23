@@ -206,7 +206,7 @@ namespace LELEngine.Rendering.Passes
 			}
 
 			CommandList commands = Gfx.Commands;
-			Renderer.BeginPass(context.SceneTarget);
+			context.SceneTarget.Begin();
 
 			// Particle outputs and materials drawn at half resolution (LowResolution) are drawn together into their layer,
 			// which is laid over the scene where the last of them sorts (LowResolutionTransparency); the layer needs the
@@ -237,7 +237,7 @@ namespace LELEngine.Rendering.Passes
 				if (needsDepth && depth == null && !DrawsLikeOpaque(entry))
 				{
 					depth = VFX.VfxRuntime.CaptureDepth(context);
-					Renderer.BeginPass(context.SceneTarget);
+					context.SceneTarget.Begin();
 				}
 
 				// Into the layer (a material's objects draw at full resolution when there is no layer: no depth copy).
@@ -488,8 +488,6 @@ namespace LELEngine.Rendering.Passes
 				state.ApplyTransparent();
 			}
 
-			// A texture the material made on the way here ended the pass.
-			Renderer.ContinuePass();
 			if (entry.Batch != null)
 			{
 				// A static batch's part, and the parts of the batch that follow it in the order: one run, drawn together.

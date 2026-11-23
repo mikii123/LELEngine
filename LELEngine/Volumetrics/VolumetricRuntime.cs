@@ -168,7 +168,7 @@ namespace LELEngine.Volumetrics
 
 		/// <summary>The scene has GI this frame that a volume can read (voxel cone tracing's volume or Lumen's radiance cache).</summary>
 		internal static bool SceneGIAvailable => Lighting.GI.Enabled
-			&& (Lighting.GIMethod == GIMode.VoxelConeTracing && Lighting.GI.VoxelTexture != 0 || Lighting.GIMethod == GIMode.Lumen && Lighting.RadianceCache.Valid);
+			&& (Lighting.GIMethod == GIMode.VoxelConeTracing && Lighting.GI.VoxelTexture != null || Lighting.GIMethod == GIMode.Lumen && Lighting.RadianceCache.Valid);
 
 		#endregion
 

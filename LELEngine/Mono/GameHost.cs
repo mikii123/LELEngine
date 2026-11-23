@@ -107,8 +107,6 @@ namespace LELEngine
 				Renderer.OutputTarget = output;
 				target.Delete();
 				DebugDraw.Clear();
-				// LEGACY(gl): the host's code that still gives OpenGL commands starts from nothing bound
-				GLState.Reset();
 			}
 		}
 
@@ -130,12 +128,6 @@ namespace LELEngine
 		public void SetRenderQueue(RenderQueue queue)
 		{
 			RenderQueue = queue;
-		}
-
-		// LEGACY(gl): for a host's code that still gives OpenGL commands (nothing in the engine calls it)
-		public void ResetDrawState()
-		{
-			GLState.Reset();
 		}
 
 		#endregion

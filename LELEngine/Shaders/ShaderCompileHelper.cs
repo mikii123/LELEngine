@@ -82,7 +82,7 @@ namespace LELEngine.Shaders
 				return 3;
 			}
 
-			GLCapabilities.Initialize();
+			GraphicsCapabilities.Initialize();
 			AssetDatabase.Initialize(request.DataFolder);
 			ProgramBinaryCache.Folder = request.CacheFolder;
 
@@ -153,8 +153,8 @@ namespace LELEngine.Shaders
 			{
 				new Request
 				{
-					GLMajor = GLCapabilities.Major,
-					GLMinor = GLCapabilities.Minor,
+					GLMajor = GraphicsCapabilities.Major,
+					GLMinor = GraphicsCapabilities.Minor,
 					DataFolder = AssetDatabase.Root,
 					CacheFolder = ProgramBinaryCache.Folder,
 					GpuDriven = gpuDriven,

@@ -100,7 +100,7 @@ void main()
 				return;
 			}
 
-			program ??= ShaderProgram.FromSources("Editor/SceneDepthProbe", new[] { new KeyValuePair<ShaderType, string>(ShaderType.ComputeShader, Source) });
+			program ??= ShaderProgram.FromSources("Editor/SceneDepthProbe", new[] { new KeyValuePair<ShaderStage, string>(ShaderStage.Compute, Source) });
 			if (buffer == 0)
 			{
 				buffer = GL.GenBuffer();

@@ -12,7 +12,7 @@ namespace LELEngine.Rendering
 	///     off, so the fallbacks can be tested on hardware that has everything;
 	///     LEL_GL_ENABLE keeps a feature a driver workaround would turn off.
 	/// </summary>
-	public static class GLCapabilities
+	public static class GraphicsCapabilities
 	{
 		#region PublicFields
 
@@ -34,7 +34,7 @@ namespace LELEngine.Rendering
 		public static int MaxImageUnits { get; private set; }
 
 		/// <summary>Textures a program can sample (at least 16).</summary>
-		public static int MaxTextureUnits { get; private set; } = 16;
+		public static int MaxSampledTextures { get; private set; } = 16;
 
 		/// <summary>The largest 3D texture extent (at least 256, 2048 on Intel, 16384 on NVIDIA).</summary>
 		public static int Max3DTextureSize { get; private set; } = 256;
@@ -83,15 +83,17 @@ namespace LELEngine.Rendering
 		{
 			GraphicsDevice device = GraphicsDevice.Current;
 			DeviceCapabilities capabilities = device.Capabilities;
-			if (device is Graphics.OpenGL.GLDevice gl)
+			Major = 4;
+			Minor = 6;
+			if (capabilities.Api == GraphicsApi.OpenGL)
 			{
-				Major = gl.Major;
-				Minor = gl.Minor;
-			}
-			else
-			{
-				Major = 4;
-				Minor = 6;
+				// "OpenGL 4.6"
+				string[] version = capabilities.ApiVersion.Substring(capabilities.ApiVersion.LastIndexOf(' ') + 1).Split('.');
+				if (version.Length >= 2 && int.TryParse(version[0], out int major) && int.TryParse(version[1], out int minor))
+				{
+					Major = major;
+					Minor = minor;
+				}
 			}
 
 			ClearTexture = true;
@@ -99,7 +101,7 @@ namespace LELEngine.Rendering
 			MaxAnisotropy = capabilities.MaxAnisotropy;
 			MaxImageUnits = capabilities.MaxImages;
 			Max3DTextureSize = capabilities.Max3DTextureSize;
-			MaxTextureUnits = capabilities.MaxSampledTextures;
+			MaxSampledTextures = capabilities.MaxSampledTextures;
 			ShaderDrawParametersExtension = capabilities.DrawParametersExtension;
 			ShaderDrawParameters = capabilities.DrawParameters;
 			IndirectParameters = capabilities.IndirectCount;
@@ -133,7 +135,7 @@ namespace LELEngine.Rendering
 			}
 			else
 			{
-				Console.WriteLine($"[Graphics] {capabilities.ApiVersion} | {capabilities.Renderer} | anisotropy {(AnisotropicFiltering ? MaxAnisotropy.ToString("0") + "x" : "no")} | images {MaxImageUnits} | sampled textures {MaxTextureUnits}");
+				Console.WriteLine($"[Graphics] {capabilities.ApiVersion} | {capabilities.Renderer} | anisotropy {(AnisotropicFiltering ? MaxAnisotropy.ToString("0") + "x" : "no")} | images {MaxImageUnits} | sampled textures {MaxSampledTextures}");
 				Console.WriteLine($"[Graphics] indirect count {Describe(IndirectParameters, "yes")} | compute subgroups {Describe(ComputeSubgroups, "yes")} | parallel shader compile {Describe(ParallelShaderCompile, "yes")} | ray queries {(capabilities.RayQuery ? "yes" : "no")} | storage bindings {MaxShaderStorageBindings}");
 			}
 		}

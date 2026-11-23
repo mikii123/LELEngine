@@ -189,8 +189,7 @@ namespace LELEngine.Rendering.Lumen
 			commands.SetStorageBuffer(1, ObjectBuffer);
 			commands.SetStorageBuffer(2, CardBuffer);
 			program.SetInt("sceneObjectCount", objects.Count);
-			// LEGACY(gl): the distance field atlas is an OpenGL texture object of DistanceFieldAtlas.cs
-			program.SetTexture("SdfAtlas", TextureTarget.Texture3D, DistanceFields.Texture, SdfAtlasTextureUnit);
+			program.SetTexture("SdfAtlas", DistanceFields.AtlasTexture);
 			program.SetVector3("sdfAtlasTexels", DistanceFields.TexelCount);
 			if (SurfaceCache != null)
 			{
@@ -223,10 +222,6 @@ namespace LELEngine.Rendering.Lumen
 		#endregion
 
 		#region PrivateFields
-
-		/// <summary>Texture unit of the distance field atlas in the shared scene uniforms (materials never bind this high).</summary>
-		// LEGACY(gl): used by SetUniforms for DistanceFieldAtlas.cs's texture object
-		public const int SdfAtlasTextureUnit = 10;
 
 		/// <summary>
 		///     Seconds a renderer's scale must keep its shape after changing before the renderer gets a field of that shape:

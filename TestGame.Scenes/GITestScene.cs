@@ -1446,6 +1446,22 @@ namespace TestGame.Scenes
 			cameraObject.transform.localPosition = Vector3.Zero;
 			cameraObject.transform.localRotation = Quaternion.Identity;
 
+			// TEMPORARY TEST (not to be committed): an overlay camera over the same view draws everything again.
+			if (System.Environment.GetEnvironmentVariable("LEL_TEST_OVERLAY") == "1")
+			{
+				GameObject overlayObject = scene.CreateGameObject("OverlayCamera");
+				Camera overlay = overlayObject.AddComponent<Camera>();
+				overlay.RenderType = CameraRenderType.Overlay;
+				overlay.FoV = 75f;
+				overlay.NearClip = 0.05f;
+				overlay.FarClip = 500f;
+				overlay.ClearDepth = true;
+				overlayObject.transform.SetParent(cameraObject.transform);
+				overlayObject.transform.localPosition = Vector3.Zero;
+				overlayObject.transform.localRotation = Quaternion.Identity;
+				camera.Stack.Add(overlay);
+			}
+
 			FpsController controller = player.AddComponent<FpsController>();
 			controller.CameraTransform = cameraObject.transform;
 			controller.EyeHeight = 1.7f;

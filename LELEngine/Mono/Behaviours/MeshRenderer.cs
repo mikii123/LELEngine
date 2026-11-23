@@ -432,16 +432,12 @@ public sealed class MeshRenderer : Behaviour
 	/// <summary>Binds the shared geometry and draws every sub-mesh in one call. No uniforms are touched.</summary>
 	public void DrawGeometry()
 	{
-		// A texture the material made on the way here ended the pass (Renderer.BeginPass).
-		LELEngine.Rendering.Renderer.ContinuePass();
 		LELEngine.Rendering.GeometryPool.Draw(DrawnMesh);
 	}
 
 	/// <summary>Binds the shared geometry and draws one sub-mesh. No uniforms are touched.</summary>
 	public void DrawSubMesh(int subMesh)
 	{
-		// A texture the material made on the way here ended the pass (Renderer.BeginPass).
-		LELEngine.Rendering.Renderer.ContinuePass();
 		LELEngine.Rendering.GeometryPool.DrawSubMesh(DrawnMesh, subMesh);
 	}
 

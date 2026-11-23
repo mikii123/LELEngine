@@ -596,7 +596,7 @@ namespace LELEngine.Shaders
 
 		private void Work(long deadline, bool gpuDriven)
 		{
-			int limit = GLCapabilities.ParallelShaderCompile ? ParallelPrograms : 1;
+			int limit = GraphicsCapabilities.ParallelShaderCompile ? ParallelPrograms : 1;
 			bool worked = false;
 			while (true)
 			{

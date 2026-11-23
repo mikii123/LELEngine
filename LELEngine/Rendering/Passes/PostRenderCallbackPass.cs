@@ -18,16 +18,18 @@ namespace LELEngine.Rendering.Passes
 
 		public override void Execute(RenderContext context)
 		{
-			Renderer.BeginPass(context.SceneTarget);
-			Gfx.Commands.State.SetDepth(true, true);
+			CommandList commands = Gfx.Commands;
+			context.SceneTarget.Begin();
+			commands.State.SetDepth(true, true);
 
 			foreach (Behaviour behaviour in context.Behaviours)
 			{
 				behaviour.PostRender();
-				// LEGACY(gl): a callback that gave OpenGL commands leaves nothing bound for the next one
-				GLState.Reset();
 				// A callback that ended the pass (a dispatch, a copy) leaves it open for the next one.
-				Renderer.ContinuePass();
+				if (!commands.InRenderPass)
+				{
+					context.SceneTarget.Begin();
+				}
 			}
 		}
 

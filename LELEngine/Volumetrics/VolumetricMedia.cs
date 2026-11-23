@@ -95,7 +95,7 @@ namespace LELEngine.Volumetrics
 			Lighting.Media = default;
 			Used = Vector3i.Zero;
 			CloudCount = 0;
-			if (!gi.Enabled || gi.VolumesInGI == VolumeGIMode.Off || Lighting.MediaFaceMinusTextureUnit >= GLCapabilities.MaxTextureUnits || VolumetricRuntime.Objects.Count == 0)
+			if (!gi.Enabled || gi.VolumesInGI == VolumeGIMode.Off || !Lighting.MediaSamplersAvailable || VolumetricRuntime.Objects.Count == 0)
 			{
 				Release();
 				return;
@@ -299,11 +299,10 @@ namespace LELEngine.Volumetrics
 			Lighting.Media = new Lighting.MediaBinding
 			{
 				Active = true,
-				// LEGACY(gl): Lighting.MediaBinding holds OpenGL texture names (Lighting.cs binds them to its texture units)
-				Texture = ((Graphics.OpenGL.GLTexture)texture).Handle,
-				SunTexture = ((Graphics.OpenGL.GLTexture)sunTexture).Handle,
-				FacePlusTexture = ((Graphics.OpenGL.GLTexture)facePlusTexture).Handle,
-				FaceMinusTexture = ((Graphics.OpenGL.GLTexture)faceMinusTexture).Handle,
+				Texture = texture,
+				SunTexture = sunTexture,
+				FacePlusTexture = facePlusTexture,
+				FaceMinusTexture = faceMinusTexture,
 				Min = min3,
 				Used = usedMin,
 				InvSize = new Vector3(1f / (size.X * voxel), 1f / (size.Y * voxel), 1f / (size.Z * voxel)),

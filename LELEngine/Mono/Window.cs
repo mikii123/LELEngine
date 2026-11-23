@@ -85,7 +85,7 @@ namespace LELEngine
 			DeviceCapabilities capabilities = GraphicsDevice.Current.Capabilities;
 			Console.WriteLine((capabilities.Api == GraphicsApi.OpenGL ? "GL version: " + capabilities.DriverVersion : "Graphics: " + capabilities.ApiVersion + ", driver " + capabilities.DriverVersion)
 				+ "\nRenderer: " + capabilities.Renderer + "\nVSync: " + VSync);
-			GLCapabilities.Initialize();
+			GraphicsCapabilities.Initialize();
 		}
 
 		#endregion

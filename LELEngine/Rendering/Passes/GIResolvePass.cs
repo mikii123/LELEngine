@@ -58,7 +58,7 @@ namespace LELEngine.Rendering.Passes
 		{
 			GlobalIlluminationSettings gi = Lighting.GI;
 			bool used = gi.VoxelConeTracingActive && gi.ScreenSpaceResolve;
-			bool active = used && gi.VoxelTexture != 0 && context.DepthPrepassDone && context.NormalRoughness != null;
+			bool active = used && gi.VoxelTexture != null && context.DepthPrepassDone && context.NormalRoughness != null;
 			if (!active)
 			{
 				gi.ResolveActive = false;
@@ -85,7 +85,7 @@ namespace LELEngine.Rendering.Passes
 			commands.State.Culling = FaceCulling.None;
 
 			// The variant of the mips the volume has (compiled when first needed).
-			int variant = (int)Lighting.EffectiveVoxelMips(gi.VoxelVolume, Lighting.VoxelDirectionalTextureUnit);
+			int variant = (int)Lighting.EffectiveVoxelMips(gi.VoxelVolume);
 			if (Lighting.MediaAlongConesExpected)
 			{
 				// Started ahead: no compile in the frame the first cloud's light arrives.
@@ -141,10 +141,9 @@ namespace LELEngine.Rendering.Passes
 			commands.State.SetDepth(true, true);
 			commands.State.Culling = FaceCulling.Back;
 
-			// LEGACY(gl): Lighting.cs takes the resolve's textures as OpenGL texture objects
-			gi.ResolvedDiffuse = final.Handle;
-			gi.ResolvedSpecular = specular.Handle;
-			gi.ResolvedNormals = context.NormalRoughness.Handle;
+			gi.ResolvedDiffuse = final.Gpu;
+			gi.ResolvedSpecular = specular.Gpu;
+			gi.ResolvedNormals = context.NormalRoughness.Gpu;
 			gi.ResolveWidth = width;
 			gi.ResolveHeight = height;
 			gi.ScreenWidth = context.Width;

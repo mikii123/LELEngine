@@ -30,7 +30,7 @@ namespace LELEngine.Rendering
 
 		public static ComputeShader FromSource(string name, string source)
 		{
-			Shader stage = new Shader(source, ShaderType.ComputeShader, name);
+			Shader stage = new Shader(source, ShaderStage.Compute, name);
 			ShaderProgram program = new ShaderProgram(name, stage);
 			stage.Delete();
 			return new ComputeShader(program);
@@ -67,29 +67,12 @@ namespace LELEngine.Rendering
 			GraphicsDevice.Current.Commands.DispatchIndirect(arguments, offsetBytes);
 		}
 
-		/// <summary>The OpenGL way, with a buffer object's name: only for the code that still gives OpenGL commands itself.</summary>
-		public void DispatchIndirect(int buffer, int offsetBytes)
-		{
-			GL.BindBuffer(BufferTarget.DispatchIndirectBuffer, buffer);
-			GL.DispatchComputeIndirect((IntPtr)offsetBytes);
-			GL.BindBuffer(BufferTarget.DispatchIndirectBuffer, 0);
-		}
-
 		public void DispatchThreads(int threadsX, int threadsY, int threadsZ, int localX, int localY, int localZ)
 		{
 			Dispatch(
 				DivideRoundUp(threadsX, localX),
 				DivideRoundUp(threadsY, localY),
 				DivideRoundUp(threadsZ, localZ));
-		}
-
-		/// <summary>
-		///     The OpenGL way of making a dispatch's writes visible: only for the code that still gives OpenGL commands
-		///     itself (the device does it for its own commands).
-		/// </summary>
-		public static void Barrier(MemoryBarrierFlags flags = MemoryBarrierFlags.ShaderImageAccessBarrierBit | MemoryBarrierFlags.TextureFetchBarrierBit)
-		{
-			GL.MemoryBarrier(flags);
 		}
 
 		public void Delete()

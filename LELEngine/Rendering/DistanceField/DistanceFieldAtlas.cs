@@ -119,9 +119,6 @@ namespace LELEngine.Rendering.DistanceField
 		/// <summary>The atlas on the GPU (another texture after it grew).</summary>
 		public GpuTexture AtlasTexture { get; private set; }
 
-		// LEGACY(gl): used by LumenScene.cs
-		public int Texture => AtlasTexture != null ? ((Graphics.OpenGL.GLTexture)AtlasTexture).Handle : 0;
-
 		/// <summary>Slices of the texture now.</summary>
 		public int Depth { get; private set; }
 
@@ -822,7 +819,7 @@ namespace LELEngine.Rendering.DistanceField
 		/// </summary>
 		private void KeepOnMesh(Mesh mesh, Vector3i key, MeshDistanceField field)
 		{
-			if (!GLCapabilities.DirectStateAccess)
+			if (!GraphicsCapabilities.DirectStateAccess)
 			{
 				return;
 			}

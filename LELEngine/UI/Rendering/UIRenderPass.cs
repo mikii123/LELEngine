@@ -41,7 +41,7 @@ namespace LELEngine.Rendering.Passes
 				return;
 			}
 
-			context.Renderer.BindOutput();
+			context.Renderer.BeginOutput();
 			long now = UIRuntime.TimeMs;
 			foreach (UIDocument document in documents)
 			{
