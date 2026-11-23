@@ -30,6 +30,7 @@ namespace LELEngine.Editor
 		private bool readOnly;
 		private string componentFilter = "";
 		private List<Type> componentTypes;
+		private LevelList componentLevels;
 		private int componentTypesVersion = -1;
 
 		// Euler angles last shown per transform: re-deriving them from the quaternion every frame flips between
@@ -772,11 +773,14 @@ namespace LELEngine.Editor
 			float width = Math.Min(avail, Math.Max(200f, avail * 0.6f));
 			ImGui.SetCursorPosX(ImGui.GetCursorPosX() + (avail - width) * 0.5f);
 			bool clicked = EditorGui.Button("Add Component", new NVector2(width, ImGui.GetFrameHeight() + 8f));
+			NVector2 below = new NVector2((ImGui.GetItemRectMin().X + ImGui.GetItemRectMax().X) * 0.5f, ImGui.GetItemRectMax().Y);
 			ImGui.Dummy(new NVector2(0f, 6f));
 			if (clicked)
 			{
 				componentFilter = "";
 				ImGui.OpenPopup("##add_component");
+				// Under the button (not where the mouse is: a click from automation has it anywhere).
+				ImGui.SetNextWindowPos(below, ImGuiCond.Always, new NVector2(0.5f, 0f));
 			}
 
 			if (!ImGui.BeginPopup("##add_component"))
@@ -784,29 +788,22 @@ namespace LELEngine.Editor
 				return;
 			}
 
-			if (ImGui.IsWindowAppearing())
+			// The components by namespace (levels), all matches of a search flat.
+			LevelList.SearchField("##filter", ref componentFilter, 280);
+			List<Type> types = GetComponentTypes();
+			componentLevels ??= LevelList.OfTypes(types);
+			if (LevelList.BeginArea("##components", 280f))
 			{
-				ImGui.SetKeyboardFocusHere();
-			}
-
-			ImGui.SetNextItemWidth(280);
-			EditorGui.InputTextWithHint("##filter", "Search", ref componentFilter, 128);
-			foreach (Type type in GetComponentTypes())
-			{
-				string name = type.FullName ?? type.Name;
-				if (componentFilter.Length > 0 && name.IndexOf(componentFilter, StringComparison.OrdinalIgnoreCase) < 0)
+				int chosen = componentLevels.Draw(componentFilter);
+				if (chosen >= 0)
 				{
-					continue;
-				}
-
-				if (EditorGui.Selectable(name))
-				{
-					Type selected = type;
-					editor.RecordStructural("Add " + type.Name, () => go.AddComponent(selected)?.Reset());
+					Type selected = types[chosen];
+					editor.RecordStructural("Add " + selected.Name, () => go.AddComponent(selected)?.Reset());
 					ImGui.CloseCurrentPopup();
 				}
 			}
 
+			ImGui.EndChild();
 			ImGui.EndPopup();
 		}
 
@@ -819,6 +816,7 @@ namespace LELEngine.Editor
 			}
 
 			componentTypesVersion = version;
+			componentLevels = null;
 			componentTypes = new List<Type>();
 			foreach (Assembly assembly in TypeRegistry.Assemblies)
 			{
@@ -852,6 +850,7 @@ namespace LELEngine.Editor
 		{
 			PrefabInspector.Forget();
 			componentTypes = null;
+			componentLevels = null;
 			eulerHints.Clear();
 			nameOwner = null;
 		}

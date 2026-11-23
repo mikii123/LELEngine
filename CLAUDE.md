@@ -3960,3 +3960,27 @@ was made: "static batching has to work in the editor at run time too" and "you c
   output changed (screenshots: magenta, cyan; GPU-driven instanced variant), a syntax error logged and recovered,
   ScriptableObject, physics material, clip length / controller duration / graph zoom (Version 2 / 2 / 3), model
   bounds, prefab field, gravity in ProjectSettings.asset, StartScene in Project.json, an editor script edit.
+
+## Lists in levels: LevelList (2026-11-23)
+
+- The user's ask: drop-downs and popups listing scripts or shaders split themselves into levels, scripts by namespace,
+  shaders by folder. `LevelList` (`LELEngine.Editor/LevelList.cs`): items with levels (`OfTypes`: the namespace's parts;
+  `OfPaths`: the folder's parts, the file's name as the label), drawn as foldable tree nodes (`Draw`: groups first with
+  their item count at the row's end, then the level's own items, both in name order; the groups holding the selected
+  item open when the window appears) or as sub-menus (`DrawMenu`). A search (`SearchField`, the caller keeps the text)
+  shows the matches flat with their level beside them. The levels split themselves: a level holding only one other
+  level is one row ("FORGE3D/Planets/Shaders", "LELEngine.Physics"), the levels every item shares are left out (audio
+  projects all under one folder list flat). `BeginArea`: a child as tall as what is open, up to a height, then it
+  scrolls (`ImGuiChildFlags.AutoResizeY` + size constraints).
+- Used by: Add Component (it also opens under its button now, not at the mouse), the material's Shader drop-down (with a
+  search), `TypeSelector.Popup` (polymorphic fields; `TypeSelector.Levels(baseType)`), Create > All ScriptableObject
+  Classes and the animator's Add Behaviour (sub-menus), the animator's script conditions, Project Settings' Add Shader
+  (with a search), the UI Builder's Add existing style sheet, the audio settings' Audio Project.
+- Automation: an item inside a closed group is no element until its group is open (`click tree:NewFrontier`,
+  `click tree:Ships`), or type into the search (`input input:filter wreck`) and click the match. Leaves keep the
+  type's or file's name (`item:WreckFracture`, `item:Shader/FogSheet.shader`), not the full path.
+- Verified in the GUI editor on New Frontier (CLI clicks, screenshots, quit with `--discard`, the project unchanged): Add
+  Component (LELEngine 32, NewFrontier 60 with Combat, Core, EditorTools, ..., Ships 12; global-namespace components at
+  the top; "wreck" gives the four Wreck components with NewFrontier.Ships beside them), the FogOrange material's Shader
+  (Engine 8, FORGE3D/Planets/Shaders 13, Shaders 4 opened by itself with FogSheet.shader selected). The other lists were
+  built only, not looked at.

@@ -323,15 +323,14 @@ namespace LELEngine.Editor.Audio
 					changed = true;
 				}
 
-				foreach (string path in projects)
+				// By folder (levels).
+				int chosen = LevelList.OfPaths(projects).Draw(null, i => string.Equals(projects[i], currentPath, StringComparison.OrdinalIgnoreCase));
+				if (chosen >= 0 && !string.Equals(projects[chosen], currentPath, StringComparison.OrdinalIgnoreCase))
 				{
-					if (EditorGui.Selectable(path, string.Equals(path, currentPath, StringComparison.OrdinalIgnoreCase)) && !string.Equals(path, currentPath, StringComparison.OrdinalIgnoreCase))
-					{
-						context.BeginEdit();
-						settings.Project = AssetDatabase.GetGuid(path) ?? "";
-						context.EndEdit();
-						changed = true;
-					}
+					context.BeginEdit();
+					settings.Project = AssetDatabase.GetGuid(projects[chosen]) ?? "";
+					context.EndEdit();
+					changed = true;
 				}
 
 				EditorGui.EndCombo();

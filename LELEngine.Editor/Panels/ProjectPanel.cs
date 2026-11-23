@@ -1144,12 +1144,11 @@ namespace LELEngine.Editor
 
 			if (EditorMenu.Begin("All ScriptableObject Classes"))
 			{
-				foreach (Type type in types)
+				// By namespace: a sub-menu for every level.
+				int chosen = TypeSelector.ScriptableObjectLevels().DrawMenu();
+				if (chosen >= 0)
 				{
-					if (EditorMenu.Item(type.FullName))
-					{
-						StartCreateAsset(type, null);
-					}
+					StartCreateAsset(types[chosen], null);
 				}
 
 				EditorMenu.End();

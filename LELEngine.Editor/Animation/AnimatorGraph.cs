@@ -1399,12 +1399,12 @@ namespace LELEngine.Editor.Animation
 						{
 							List<Type> types = TypeSelector.ConcreteTypes(typeof(StateMachineBehaviour));
 							if (types.Count == 0) ImGui.TextDisabled("No StateMachineBehaviour class in the scripts.");
-							foreach (Type type in types)
+							// By namespace: a sub-menu for every level.
+							int chosen = TypeSelector.Levels(typeof(StateMachineBehaviour)).DrawMenu();
+							if (chosen >= 0)
 							{
-								if (EditorMenu.Item(TypeSelector.DisplayName(type)))
-								{
-									Document.Edit("Add behaviour", () => state.behaviours.Add((StateMachineBehaviour)Activator.CreateInstance(type)));
-								}
+								Type type = types[chosen];
+								Document.Edit("Add behaviour", () => state.behaviours.Add((StateMachineBehaviour)Activator.CreateInstance(type)));
 							}
 
 							EditorMenu.End();

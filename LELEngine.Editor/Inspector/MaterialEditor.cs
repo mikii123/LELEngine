@@ -23,6 +23,8 @@ namespace LELEngine.Editor
 		#region PrivateFields
 
 		private static List<string> shaderChoices;
+		private static LevelList shaderLevels;
+		private static string shaderSearch = "";
 		private static int shaderChoicesVersion = -1;
 
 		#endregion
@@ -186,18 +188,19 @@ namespace LELEngine.Editor
 			FieldDrawer.Label("Shader", null, context);
 			string current = material.shader?.AssetPath ?? "None";
 			bool changed = false;
-			if (EditorGui.BeginCombo("##shader", current))
+			if (EditorGui.BeginCombo("##shader", current, ImGuiComboFlags.HeightLarge))
 			{
-				foreach (string choice in ShaderChoices(context.Editor))
+				// The shaders by folder (levels), a search's matches flat.
+				List<string> choices = ShaderChoices(context.Editor);
+				LevelList.SearchField("##shader_search", ref shaderSearch);
+				int chosen = shaderLevels.Draw(shaderSearch, i => string.Equals(choices[i], current, StringComparison.OrdinalIgnoreCase));
+				if (chosen >= 0 && !string.Equals(choices[chosen], current, StringComparison.OrdinalIgnoreCase))
 				{
-					bool selected = string.Equals(choice, current, StringComparison.OrdinalIgnoreCase);
-					if (EditorGui.Selectable(choice, selected) && !selected)
-					{
-						context.Editor.Edits.Begin(material);
-						material.shader = InternalStorage.GetOrCreateShader(choice);
-						context.Editor.Edits.RequestCommit();
-						changed = true;
-					}
+					context.Editor.Edits.Begin(material);
+					material.shader = InternalStorage.GetOrCreateShader(choices[chosen]);
+					context.Editor.Edits.RequestCommit();
+					changed = true;
+					ImGui.CloseCurrentPopup();
 				}
 
 				EditorGui.EndCombo();
@@ -277,6 +280,7 @@ namespace LELEngine.Editor
 			shaderChoicesVersion = editor.AssetsVersion;
 			shaderChoices = AssetDatabase.FindAssets(typeof(ShaderProgram));
 			shaderChoices.AddRange(ObjectPicker.EngineShaders());
+			shaderLevels = LevelList.OfPaths(shaderChoices);
 			return shaderChoices;
 		}
 

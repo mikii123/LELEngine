@@ -17,7 +17,9 @@ namespace LELEngine.Editor
 		#region PrivateFields
 
 		private static readonly Dictionary<Type, List<Type>> concreteTypes = new Dictionary<Type, List<Type>>();
+		private static readonly Dictionary<Type, LevelList> typeLevels = new Dictionary<Type, LevelList>();
 		private static List<Type> scriptableObjectTypes;
+		private static LevelList scriptableObjectLevels;
 		private static int cachedVersion = -1;
 		private static string search = "";
 
@@ -94,11 +96,20 @@ namespace LELEngine.Editor
 			return scriptableObjectTypes;
 		}
 
+		/// <summary>The ScriptableObject classes in levels by namespace (same order of items as <see cref="ScriptableObjectTypes" />).</summary>
+		public static LevelList ScriptableObjectLevels()
+		{
+			List<Type> types = ScriptableObjectTypes();
+			return scriptableObjectLevels ??= LevelList.OfTypes(types);
+		}
+
 		/// <summary>Drops every cached type (before the scripts unload).</summary>
 		public static void ClearCache()
 		{
 			concreteTypes.Clear();
+			typeLevels.Clear();
 			scriptableObjectTypes = null;
+			scriptableObjectLevels = null;
 		}
 
 		/// <summary>"Fire Sword" for FireSword (nested types with their outer class).</summary>
@@ -151,33 +162,17 @@ namespace LELEngine.Editor
 				}
 			}
 
-			float height = Math.Min(320f, Math.Max(1, types.Count) * ImGui.GetTextLineHeightWithSpacing() + 4f);
-			if (types.Count > 0 && ImGui.BeginChild("##types", new NVector2(300f, height)))
+			if (types.Count > 0)
 			{
-				foreach (Type type in types)
+				// The types by namespace (levels), a search's matches flat.
+				if (LevelList.BeginArea("##types", 300f, 320f))
 				{
-					string name = DisplayName(type);
-					if (search.Length > 0 && name.IndexOf(search, StringComparison.OrdinalIgnoreCase) < 0 && (type.FullName ?? "").IndexOf(search, StringComparison.OrdinalIgnoreCase) < 0)
+					int index = Levels(baseType).Draw(search, i => types[i] == current);
+					if (index >= 0)
 					{
-						continue;
-					}
-
-					if (EditorGui.Selectable(name + "##" + type.FullName, type == current))
-					{
-						chosen = type;
+						chosen = types[index];
 						result = true;
 						ImGui.CloseCurrentPopup();
-					}
-
-					if (ImGui.IsItemHovered())
-					{
-						ImGui.SetTooltip(type.FullName + (type.IsDefined(typeof(SerializableAttribute), false) ? "" : "\n(not marked [Serializable]: its fields are saved here, but a field of this exact class would not be)"));
-					}
-
-					if (type.Namespace != null)
-					{
-						ImGui.SameLine();
-						ImGui.TextDisabled(type.Namespace);
 					}
 				}
 
@@ -191,6 +186,28 @@ namespace LELEngine.Editor
 		#endregion
 
 		#region PrivateMethods
+
+		/// <summary>The types of <see cref="ConcreteTypes" /> in levels by namespace, named as the inspector shows them (same order of items).</summary>
+		public static LevelList Levels(Type baseType)
+		{
+			List<Type> types = ConcreteTypes(baseType);
+			LevelList levels;
+			if (!typeLevels.TryGetValue(baseType, out levels))
+			{
+				var items = new List<LevelList.Item>();
+				foreach (Type type in types)
+				{
+					string[] namespaces = string.IsNullOrEmpty(type.Namespace) ? Array.Empty<string>() : type.Namespace.Split('.');
+					string tooltip = type.FullName + (type.IsDefined(typeof(SerializableAttribute), false) ? "" : "\n(not marked [Serializable]: its fields are saved here, but a field of this exact class would not be)");
+					items.Add(new LevelList.Item(namespaces, DisplayName(type), type.FullName ?? type.Name, tooltip));
+				}
+
+				levels = new LevelList(items, ".");
+				typeLevels[baseType] = levels;
+			}
+
+			return levels;
+		}
 
 		private static void Validate()
 		{
