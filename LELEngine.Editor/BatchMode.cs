@@ -51,6 +51,7 @@ namespace LELEngine.Editor
 			"  -buildConfig Release|Debug configuration of the build (default Release)\n" +
 			"  -selfContained [true|false]\n" +
 			"                             ship the .NET runtime with the game (default: the project's Build setting)\n" +
+			"  -graphics opengl|vulkan    the graphics API to run on (default: the project's, Project Settings > Graphics)\n" +
 			"  -logFile <file>            also write the log to the file\n" +
 			"  -quit                      accepted for Unity compatibility (batch mode always quits)\n" +
 			"Exit code: 0 success, 1 failure.\n" +
@@ -120,6 +121,8 @@ namespace LELEngine.Editor
 			}
 
 			projectPath = Path.GetFullPath(projectPath);
+			// The device is made on the project's graphics API (Project Settings > Graphics); -graphics opengl|vulkan wins.
+			GraphicsDevice.RequestedApi = ProjectGraphicsApi.Requested(args, projectPath);
 			bool created = false;
 			if (!ProjectInfo.IsProjectFolder(projectPath))
 			{
@@ -289,7 +292,10 @@ namespace LELEngine.Editor
 			return File.Exists(pdb) ? File.ReadAllBytes(pdb) : null;
 		}
 
-		/// <summary>Hidden window owning the OpenGL context (newest version the driver grants, 4.6 down to 4.3).</summary>
+		/// <summary>
+		///     Hidden window owning the graphics context, on the project's graphics API (OpenGL: the newest version the
+		///     driver grants, 4.6 down to 4.3; Mesa grants 4.5, so 4.6 is refused there).
+		/// </summary>
 		private static void EnsureGraphics()
 		{
 			if (graphics != null)
@@ -297,31 +303,16 @@ namespace LELEngine.Editor
 				return;
 			}
 
-			// A refused version comes back as an exception this loop catches: GLFW's error callback only logs
-			// (Mesa grants 4.5, so 4.6 is refused there).
 			Window.InitializeGlfw();
-			Version version = Window.PreferredApiVersion;
-			while (true)
+			graphics = Window.Open(version => new NativeWindow(new NativeWindowSettings
 			{
-				try
-				{
-					graphics = new NativeWindow(new NativeWindowSettings
-					{
-						ClientSize = new LELEngine.Mathematics.Vector2i(64, 64),
-						Title = "LELEngine batch",
-						StartVisible = false,
-						APIVersion = version,
-						Profile = ContextProfile.Core,
-						Flags = ContextFlags.ForwardCompatible
-					});
-					break;
-				}
-				catch (Exception e) when (version > Window.MinimumApiVersion)
-				{
-					Console.WriteLine($"[Batch] OpenGL {version} context unavailable ({e.GetType().Name}), trying an older version");
-					version = version.Minor > 0 ? new Version(version.Major, version.Minor - 1) : Window.MinimumApiVersion;
-				}
-			}
+				ClientSize = new LELEngine.Mathematics.Vector2i(64, 64),
+				Title = "LELEngine batch",
+				StartVisible = false,
+				APIVersion = version,
+				Profile = ContextProfile.Core,
+				Flags = ContextFlags.ForwardCompatible
+			}));
 
 			graphics.MakeCurrent();
 			DeviceCapabilities capabilities = GraphicsDevice.Current.Capabilities;

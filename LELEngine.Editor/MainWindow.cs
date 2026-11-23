@@ -71,26 +71,18 @@ namespace LELEngine.Editor
 
 		#region PublicMethods
 
-		/// <summary>Creates the window with the newest OpenGL context the driver grants (4.6 down to 4.3).</summary>
+		/// <summary>
+		///     Creates the window on the graphics API asked for (<see cref="Graphics.GraphicsDevice.RequestedApi" />), on
+		///     OpenGL with the newest context the driver grants (4.6 down to 4.3) where this machine has no other.
+		/// </summary>
 		public static MainWindow Create(string[] args)
 		{
 			// focus=0: automated runs open the window without taking the keyboard focus (hidden=1: there is none to focus).
 			StartFocused = Array.IndexOf(args, "focus=0") < 0 && !StartHidden;
-			Version version = PreferredApiVersion;
-			while (true)
-			{
-				try
-				{
-					var window = new MainWindow(version, args);
-					window.placement.Restore(window.rememberPlacement);
-					return window;
-				}
-				catch (Exception e) when (version > MinimumApiVersion)
-				{
-					Console.WriteLine($"[Window] OpenGL {version} context unavailable ({e.GetType().Name}), trying an older version");
-					version = version.Minor > 0 ? new Version(version.Major, version.Minor - 1) : MinimumApiVersion;
-				}
-			}
+			// On the graphics API asked for (GraphicsDevice.RequestedApi: the project's), OpenGL where this machine has no other.
+			MainWindow window = Open(version => new MainWindow(version, args));
+			window.placement.Restore(window.rememberPlacement);
+			return window;
 		}
 
 		#endregion
@@ -132,21 +124,9 @@ namespace LELEngine.Editor
 		/// </summary>
 		public static MainWindow CreateWithoutUI(string[] args)
 		{
-			Version version = PreferredApiVersion;
-			while (true)
-			{
-				try
-				{
-					var window = new MainWindow(version, args);
-					window.StartWithoutUI();
-					return window;
-				}
-				catch (Exception e) when (version > MinimumApiVersion)
-				{
-					Console.WriteLine($"[Window] OpenGL {version} context unavailable ({e.GetType().Name}), trying an older version");
-					version = version.Minor > 0 ? new Version(version.Major, version.Minor - 1) : MinimumApiVersion;
-				}
-			}
+			MainWindow window = Open(version => new MainWindow(version, args));
+			window.StartWithoutUI();
+			return window;
 		}
 
 		/// <summary>The editor (null until the window loaded).</summary>
