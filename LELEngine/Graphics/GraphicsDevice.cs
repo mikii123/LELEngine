@@ -144,9 +144,17 @@ namespace LELEngine.Graphics
 		/// <summary>The GLFW client API hint windows are made with for this device's API.</summary>
 		internal static bool WindowsHaveOpenGLContexts => CurrentApi == GraphicsApi.OpenGL;
 
+		/// <summary>
+		///     Releases what the device holds of the system when it is given up before it ever drew (its first window
+		///     could not be made); nothing made with it may be used after.
+		/// </summary>
+		internal virtual void Destroy()
+		{ }
+
 		internal static GraphicsContext CreateContext(NativeWindow window, NativeWindowSettings settings)
 		{
-			if (Current == null)
+			bool first = Current == null;
+			if (first)
 			{
 				if (RequestedApi == GraphicsApi.Vulkan)
 				{
@@ -166,7 +174,19 @@ namespace LELEngine.Graphics
 				}
 			}
 
-			return Current.CreateWindowContext(window, settings);
+			try
+			{
+				return Current.CreateWindowContext(window, settings);
+			}
+			catch (Exception e) when (first && Current.Api != GraphicsApi.OpenGL)
+			{
+				// A device that cannot show anything in a window here (no surface, no swap chain) is given up as a
+				// whole: the process has no device again and may start with another API.
+				GraphicsDevice failed = Current;
+				Current = null;
+				failed.Destroy();
+				throw new GraphicsApiUnavailableException(failed.Api, e);
+			}
 		}
 
 		private static GraphicsDevice CreateVulkanDevice(NativeWindow window)
