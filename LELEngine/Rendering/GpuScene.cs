@@ -121,7 +121,7 @@ namespace LELEngine.Rendering
 	///     them with its own program (<see cref="DrawShadowBucket" />). Sub-meshes of such shaders that cannot be in a
 	///     bucket (<see cref="OwnPassParts" />) are in no table: every pass draws them one by one.
 	///     Native path: commands compacted in instance order, the draw count read by the GPU
-	///     (glMultiDrawElementsIndirectCount), the instance index from gl_BaseInstance, the culling scan with subgroup
+	///     (<see cref="CommandList.DrawIndexedIndirectCount" />), the instance index from gl_BaseInstance, the culling scan with subgroup
 	///     operations. Fallbacks, each on its own: one command per instance with instance count 0 when culled, a
 	///     per-instance attribute (see <see cref="GeometryPool" />), a shared memory scan.
 	///     Holds no scene references between frames (<see cref="EndFrame" />), so an unloaded scene can be collected.
@@ -203,9 +203,9 @@ namespace LELEngine.Rendering
 		private GpuInstance[] instances = new GpuInstance[256];
 		private Matrix4[] previousModels = new Matrix4[256];
 		private GpuMaterial[] materialData = new GpuMaterial[64];
-		private int instanceBuffer;
-		private int materialBuffer;
-		private int previousModelBuffer;
+		private GpuBuffer instanceBuffer;
+		private GpuBuffer materialBuffer;
+		private GpuBuffer previousModelBuffer;
 		private ObjectMotion motion;
 		private ComputeShader cull;
 		private bool cameraCulled;
@@ -602,35 +602,33 @@ namespace LELEngine.Rendering
 				materialData[i] = new GpuMaterial { Color = color, Emissive = emissive, Parameters = new Vector4(roughness, 0f, 0f, 0f) };
 			}
 
-			if (instanceBuffer == 0)
+			if (instanceBuffer == null)
 			{
-				instanceBuffer = GL.GenBuffer();
-				materialBuffer = GL.GenBuffer();
-				previousModelBuffer = GL.GenBuffer();
+				GraphicsDevice device = Gfx.Device;
+				instanceBuffer = device.CreateBuffer(new BufferDescriptor(BufferUsage.Storage, 0, true, "GPU scene instances"));
+				materialBuffer = device.CreateBuffer(new BufferDescriptor(BufferUsage.Storage, 0, true, "GPU scene materials"));
+				previousModelBuffer = device.CreateBuffer(new BufferDescriptor(BufferUsage.Storage, 0, true, "GPU scene previous models"));
 			}
 
-			// Re-specified every frame (orphaning): the driver gives a fresh store while the last frame still reads.
-			GL.BindBuffer(BufferTarget.ShaderStorageBuffer, instanceBuffer);
-			GL.BufferData(BufferTarget.ShaderStorageBuffer, InstanceCount * Marshal.SizeOf<GpuInstance>(), instances, BufferUsageHint.StreamDraw);
-			GL.BindBuffer(BufferTarget.ShaderStorageBuffer, materialBuffer);
-			GL.BufferData(BufferTarget.ShaderStorageBuffer, materials.Count * Marshal.SizeOf<GpuMaterial>(), materialData, BufferUsageHint.StreamDraw);
+			// New storage every frame: the last frame's draws still read the old one.
+			instanceBuffer.SetData(instances, InstanceCount);
+			materialBuffer.SetData(materialData, materials.Count);
 			if (SupportsPreviousModels)
 			{
-				GL.BindBuffer(BufferTarget.ShaderStorageBuffer, previousModelBuffer);
-				GL.BufferData(BufferTarget.ShaderStorageBuffer, InstanceCount * Marshal.SizeOf<Matrix4>(), previousModels, BufferUsageHint.StreamDraw);
+				previousModelBuffer.SetData(previousModels, InstanceCount);
 			}
 
-			GL.BindBuffer(BufferTarget.ShaderStorageBuffer, 0);
 			GeometryPool.EnsureInstanceIndices(InstanceCount);
 		}
 
 		private void BindTables()
 		{
-			GL.BindBufferBase(BufferRangeTarget.ShaderStorageBuffer, InstanceBinding, instanceBuffer);
-			GL.BindBufferBase(BufferRangeTarget.ShaderStorageBuffer, MaterialBinding, materialBuffer);
+			CommandList commands = Gfx.Commands;
+			commands.SetStorageBuffer(InstanceBinding, instanceBuffer);
+			commands.SetStorageBuffer(MaterialBinding, materialBuffer);
 			if (SupportsPreviousModels)
 			{
-				GL.BindBufferBase(BufferRangeTarget.ShaderStorageBuffer, PreviousModelBinding, previousModelBuffer);
+				commands.SetStorageBuffer(PreviousModelBinding, previousModelBuffer);
 			}
 		}
 
@@ -639,17 +637,17 @@ namespace LELEngine.Rendering
 			cull ??= new ComputeShader("Engine/InstanceCull.shader");
 			view.Upload(commandCount);
 			BindTables();
-			GL.BindBufferBase(BufferRangeTarget.ShaderStorageBuffer, CommandBinding, view.CommandBuffer);
-			GL.BindBufferBase(BufferRangeTarget.ShaderStorageBuffer, CountBinding, view.CountBuffer);
-			GL.BindBufferBase(BufferRangeTarget.ShaderStorageBuffer, SegmentBinding, view.SegmentBuffer);
+			CommandList commands = Gfx.Commands;
+			commands.SetStorageBuffer(CommandBinding, view.CommandBuffer);
+			commands.SetStorageBuffer(CountBinding, view.CountBuffer);
+			commands.SetStorageBuffer(SegmentBinding, view.SegmentBuffer);
 			cull.Use();
 			cull.Program.SetVector4Array("frustumPlanes", FrustumPlanes(viewProjection));
 			cull.Program.SetInt("compactCommands", GLCapabilities.IndirectParameters ? 1 : 0);
 			// A uint uniform: SetInt would leave it 0 (nothing visible).
 			cull.Program.SetUint("layerMask", unchecked((uint)layerMask));
+			// The commands and the counts it writes are read by the following indirect draws.
 			cull.Dispatch(view.Segments.Count);
-			// The commands and the counts are read by the following indirect draws.
-			GL.MemoryBarrier(MemoryBarrierFlags.CommandBarrierBit);
 		}
 
 		private void Draw(CullView view, int segment)
@@ -667,20 +665,17 @@ namespace LELEngine.Rendering
 
 			BindTables();
 			GeometryPool.Bind();
-			GL.BindBuffer(BufferTarget.DrawIndirectBuffer, view.CommandBuffer);
+			CommandList commands = Gfx.Commands;
 			if (GLCapabilities.IndirectParameters)
 			{
-				GL.BindBuffer(BufferTarget.ParameterBuffer, view.CountBuffer);
-				GL.MultiDrawElementsIndirectCount(PrimitiveType.Triangles, DrawElementsType.UnsignedInt, (IntPtr)(range.CommandOffset * CommandSize), (IntPtr)(segment * sizeof(uint)), (int)range.InstanceCount, CommandSize);
-				GL.BindBuffer(BufferTarget.ParameterBuffer, 0);
+				commands.DrawIndexedIndirectCount(view.CommandBuffer, (long)range.CommandOffset * CommandSize, view.CountBuffer, (long)segment * sizeof(uint), (int)range.InstanceCount, CommandSize);
 			}
 			else
 			{
-				GL.MultiDrawElementsIndirect(PrimitiveType.Triangles, DrawElementsType.UnsignedInt, (IntPtr)(range.CommandOffset * CommandSize), (int)range.InstanceCount, CommandSize);
+				commands.DrawIndexedIndirect(view.CommandBuffer, (long)range.CommandOffset * CommandSize, (int)range.InstanceCount, CommandSize);
 			}
 
 			DrawStatistics.DrawIndirect();
-			GL.BindBuffer(BufferTarget.DrawIndirectBuffer, 0);
 		}
 
 		/// <summary>World-space planes (inside: dot(n, p) + d >= 0) of a row-vector view-projection matrix.</summary>
@@ -703,13 +698,10 @@ namespace LELEngine.Rendering
 			return planes;
 		}
 
-		private static void DeleteBuffer(ref int buffer)
+		private static void DeleteBuffer(ref GpuBuffer buffer)
 		{
-			if (buffer != 0)
-			{
-				GL.DeleteBuffer(buffer);
-				buffer = 0;
-			}
+			buffer?.Dispose();
+			buffer = null;
 		}
 
 		#endregion
@@ -754,39 +746,38 @@ namespace LELEngine.Rendering
 		private sealed class CullView
 		{
 			public readonly List<CullSegment> Segments = new List<CullSegment>();
-			public int CommandBuffer;
-			public int CountBuffer;
-			public int SegmentBuffer;
+			public GpuBuffer CommandBuffer;
+			public GpuBuffer CountBuffer;
+			public GpuBuffer SegmentBuffer;
 			private int commandCapacity;
 			private int countCapacity;
 
 			public void Upload(int commandCount)
 			{
-				if (CommandBuffer == 0)
+				if (CommandBuffer == null)
 				{
-					CommandBuffer = GL.GenBuffer();
-					CountBuffer = GL.GenBuffer();
-					SegmentBuffer = GL.GenBuffer();
+					// The culling writes the commands and the counts as storage blocks; the draws read them as their
+					// arguments and their number.
+					GraphicsDevice device = Gfx.Device;
+					CommandBuffer = device.CreateBuffer(new BufferDescriptor(BufferUsage.Storage | BufferUsage.Indirect, 0, true, "GPU scene draw commands"));
+					CountBuffer = device.CreateBuffer(new BufferDescriptor(BufferUsage.Storage | BufferUsage.Indirect, 0, true, "GPU scene draw counts"));
+					SegmentBuffer = device.CreateBuffer(new BufferDescriptor(BufferUsage.Storage, 0, true, "GPU scene cull segments"));
 				}
 
 				if (commandCount > commandCapacity)
 				{
 					commandCapacity = Math.Max(commandCount, commandCapacity * 2);
-					GL.BindBuffer(BufferTarget.ShaderStorageBuffer, CommandBuffer);
-					GL.BufferData(BufferTarget.ShaderStorageBuffer, commandCapacity * CommandSize, IntPtr.Zero, BufferUsageHint.DynamicDraw);
+					CommandBuffer.Allocate((long)commandCapacity * CommandSize);
 				}
 
 				if (Segments.Count > countCapacity)
 				{
 					countCapacity = Math.Max(Segments.Count, countCapacity * 2);
-					GL.BindBuffer(BufferTarget.ShaderStorageBuffer, CountBuffer);
-					GL.BufferData(BufferTarget.ShaderStorageBuffer, countCapacity * sizeof(uint), IntPtr.Zero, BufferUsageHint.DynamicDraw);
+					CountBuffer.Allocate((long)countCapacity * sizeof(uint));
 				}
 
 				CullSegment[] data = Segments.ToArray();
-				GL.BindBuffer(BufferTarget.ShaderStorageBuffer, SegmentBuffer);
-				GL.BufferData(BufferTarget.ShaderStorageBuffer, data.Length * Marshal.SizeOf<CullSegment>(), data, BufferUsageHint.StreamDraw);
-				GL.BindBuffer(BufferTarget.ShaderStorageBuffer, 0);
+				SegmentBuffer.SetData(data);
 			}
 
 			public void Delete()

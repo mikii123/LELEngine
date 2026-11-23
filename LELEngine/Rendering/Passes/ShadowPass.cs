@@ -117,16 +117,39 @@ namespace LELEngine.Rendering.Passes
 			bool gpuDriven = gpu.Active && instancedDepth != null && instancedDepth.IsLinked;
 			ShaderProgram program = gpuDriven ? instancedDepth : context.DepthOnlyProgram;
 
-			shadowTarget.Bind();
-			GLState.SetDepth(true, true);
-			GLState.SetCull(true, TriangleFace.Back);
-			GLState.SetColorWrite(false);
-			GL.Clear(ClearBufferMask.DepthBufferBit);
+			// Whether the frame has transparent casters is asked once, not per tile; their transmittance attachment has
+			// to be there when the map's pass begins.
+			bool transparentCasters = TransparentShadows.HasCasters(context);
+			if (transparentCasters)
+			{
+				TransparentShadows.EnsureTransmittance(shadowTarget);
+			}
+
+			// What is drawn one by one with a program of its own.
+			if (gpuDriven)
+			{
+				foreach (RendererPart part in gpu.OwnPassParts)
+				{
+					if (part.Renderer.CastShadows && part.Renderer.IsSubMeshShadowCaster(part.SubMesh))
+					{
+						PrepareOwnCaster(part.Renderer, part.SubMesh);
+					}
+				}
+			}
+			else
+			{
+				PrepareOwnCasters(context.Renderers);
+			}
+
+			CommandList commands = Gfx.Commands;
+			ref RenderState state = ref commands.State;
+			state.SetDepth(true, true);
+			state.Culling = FaceCulling.Back;
+			state.ColorMask = ColorWriteMask.None;
 
 			bool culled = context.Settings.FrustumCulling;
 			for (int i = 0; i < tiles; i++)
 			{
-				SetTileViewport(i);
 				// What a tile draws one by one is culled by the tile's own view, as the GPU culls the tables' casters: a
 				// caster the camera does not see still throws its shadow into the picture.
 				Matrix4 tileViewProjection = views[i] * projections[i];
@@ -138,6 +161,13 @@ namespace LELEngine.Rendering.Passes
 					gpu.CullShadows(tileViewProjection, context.CullingMask);
 				}
 
+				// The map's pass: the first tile clears the depth; a culling dispatch ended the pass of the tile before.
+				if (i == 0)
+				{
+					shadowTarget.Begin(LoadOperation.Load, default, LoadOperation.Clear, 1f);
+				}
+
+				ContinueTile(i);
 				program.Use();
 				program.SetMatrix4("viewMatrix", views[i]);
 				program.SetMatrix4("projectionMatrix", projections[i]);
@@ -145,7 +175,7 @@ namespace LELEngine.Rendering.Passes
 				if (gpuDriven)
 				{
 					gpu.DrawShadowCasters();
-					DrawOwnPassCasters(gpu, context, views[i], projections[i]);
+					DrawOwnPassCasters(gpu, context, i);
 				}
 				else
 				{
@@ -169,19 +199,18 @@ namespace LELEngine.Rendering.Passes
 
 					if (own)
 					{
-						GLState.SetCull(true, TriangleFace.Back);
+						commands.State.Culling = FaceCulling.Back;
 					}
 				}
 			}
 
 			// Transparent casters: what they let through, in the map's transmittance attachment (cleared by the first tile).
-			// Whether the frame has any is asked once, not per tile.
 			RenderTexture transmittance = null;
-			if (TransparentShadows.HasCasters(context))
+			if (transparentCasters)
 			{
 				for (int i = 0; i < tiles; i++)
 				{
-					SetTileViewport(i);
+					ContinueTile(i);
 					tileCulling.Begin(views[i] * projections[i], culled);
 					transmittance = TransparentShadows.DrawCasters(context, shadowTarget, views[i], projections[i], i == 0, tileCulling) ?? transmittance;
 				}
@@ -190,15 +219,17 @@ namespace LELEngine.Rendering.Passes
 			// Particle outputs that cast shadows (alpha tested, depth only).
 			if (VFX.VfxRuntime.Instances.Count > 0)
 			{
-				GLState.SetColorWrite(false);
+				commands.State.ColorMask = ColorWriteMask.None;
 				for (int i = 0; i < tiles; i++)
 				{
-					SetTileViewport(i);
+					ContinueTile(i);
 					VFX.VfxRuntime.DrawShadowCasters(context, views[i], projections[i]);
 				}
 			}
 
-			GLState.SetColorWrite(true);
+			commands.State.ColorMask = ColorWriteMask.All;
+			// The map is sampled from here on.
+			commands.EndRenderPass();
 
 			Lighting.ShadowMap = shadowTarget.DepthAttachment;
 			Lighting.ShadowTransmittance = transmittance;
@@ -223,8 +254,10 @@ namespace LELEngine.Rendering.Passes
 		// for a mesh, surfaces cut out by alpha), each bucket with its shader's shadow caster variant, or the engine's
 		// depth program when the shader only draws the geometry prepass itself; then such sub-meshes outside the tables,
 		// one by one (those in the tile's view). Leaves the engine's depth program unbound.
-		private void DrawOwnPassCasters(GpuScene gpu, RenderContext context, Matrix4 view, Matrix4 projection)
+		private void DrawOwnPassCasters(GpuScene gpu, RenderContext context, int tile)
 		{
+			Matrix4 view = views[tile];
+			Matrix4 projection = projections[tile];
 			IReadOnlyList<OpaqueBucket> buckets = gpu.Buckets;
 			bool cullChanged = false;
 			for (int i = gpu.FirstOwnPassBucket; i < buckets.Count; i++)
@@ -256,10 +289,12 @@ namespace LELEngine.Rendering.Passes
 				}
 				else if (cullChanged)
 				{
-					GLState.SetCull(true, TriangleFace.Back);
+					Gfx.Commands.State.Culling = FaceCulling.Back;
 					cullChanged = false;
 				}
 
+				// A material's texture used for the first time is uploaded with its mip levels made, which ends the pass.
+				ContinueTile(tile);
 				gpu.DrawShadowBucket(i);
 			}
 
@@ -271,6 +306,7 @@ namespace LELEngine.Rendering.Passes
 					continue;
 				}
 
+				ContinueTile(tile);
 				if (renderer.RenderSubMeshPass(part.SubMesh, ShaderPass.ShadowCaster, view, projection))
 				{
 					cullChanged = true;
@@ -279,7 +315,7 @@ namespace LELEngine.Rendering.Passes
 
 				if (cullChanged)
 				{
-					GLState.SetCull(true, TriangleFace.Back);
+					Gfx.Commands.State.Culling = FaceCulling.Back;
 					cullChanged = false;
 				}
 
@@ -292,7 +328,7 @@ namespace LELEngine.Rendering.Passes
 
 			if (cullChanged)
 			{
-				GLState.SetCull(true, TriangleFace.Back);
+				Gfx.Commands.State.Culling = FaceCulling.Back;
 			}
 		}
 
@@ -320,10 +356,55 @@ namespace LELEngine.Rendering.Passes
 			shadowTarget.Validate();
 		}
 
+		/// <summary>
+		///     Gives the casters that are drawn one by one with their shader's own shadow caster variant their material's
+		///     values before a shadow map's pass begins. A texture used for the first time is uploaded then, with its mip
+		///     levels made: inside the pass that would end it between the material's values and the caster's draw.
+		/// </summary>
+		internal static void PrepareOwnCasters(IReadOnlyList<MeshRenderer> casters)
+		{
+			foreach (MeshRenderer renderer in casters)
+			{
+				if (!renderer.CastShadows || renderer.Mesh == null || !renderer.HasOwnShadowCasters)
+				{
+					continue;
+				}
+
+				for (int i = 0; i < renderer.SubMeshCount; i++)
+				{
+					if (!renderer.IsSubMeshTransparent(i) && renderer.IsSubMeshShadowCaster(i))
+					{
+						PrepareOwnCaster(renderer, i);
+					}
+				}
+			}
+		}
+
+		private static void PrepareOwnCaster(MeshRenderer renderer, int subMesh)
+		{
+			ShaderProgram variant = renderer.GetPassProgram(subMesh, ShaderPass.ShadowCaster);
+			if (variant != null)
+			{
+				renderer.GetMaterial(subMesh)?.SetUniforms(variant);
+			}
+		}
+
+		// Goes on drawing into a tile: the map's pass is begun again (keeping what it holds) when something that is not
+		// a draw has ended it.
+		private void ContinueTile(int tile)
+		{
+			if (!Gfx.Commands.InRenderPass)
+			{
+				shadowTarget.Begin();
+			}
+
+			SetTileViewport(tile);
+		}
+
 		private void SetTileViewport(int tile)
 		{
 			Vector3i viewport = viewports[tile];
-			GL.Viewport(viewport.X, viewport.Y, viewport.Z, viewport.Z);
+			Gfx.Commands.SetViewport(viewport.X, viewport.Y, viewport.Z, viewport.Z);
 		}
 
 		/// <summary>View from a light (the unit vector towards it), origin at the world origin: the cascades are positioned by their projections.</summary>
