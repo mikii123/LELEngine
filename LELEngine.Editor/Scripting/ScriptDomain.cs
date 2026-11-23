@@ -363,7 +363,8 @@ namespace LELEngine.Editor
 		///     current while the scripts give the same value: a deleted, added, renamed or moved script makes it stale, as
 		///     does an edit (a check of the newest modification time alone missed deletions and moves). Scripts in Tests
 		///     folders count only with <paramref name="includeTests" /> (the tests' stamp): a test edited leaves the game's
-		///     assemblies current.
+		///     assemblies current. The engine's assemblies count too: scripts built against another engine can call members
+		///     it no longer has (MissingMethodException when they run), so a new engine builds them again.
 		/// </summary>
 		public static string SourceStamp(ProjectInfo project, bool includeTests = false)
 		{
@@ -372,7 +373,11 @@ namespace LELEngine.Editor
 				return "";
 			}
 
-			var entries = new System.Collections.Generic.List<string>();
+			var entries = new System.Collections.Generic.List<string>
+			{
+				"engine|" + typeof(Game).Assembly.ManifestModule.ModuleVersionId + "|" + typeof(ScriptDomain).Assembly.ManifestModule.ModuleVersionId
+				+ "|" + typeof(LELEngine.Testing.TestRun).Assembly.ManifestModule.ModuleVersionId
+			};
 			foreach (string file in Directory.EnumerateFiles(project.AssetsPath, "*.cs", SearchOption.AllDirectories))
 			{
 				if (!includeTests && ProjectGenerator.IsTestScript(project, file))

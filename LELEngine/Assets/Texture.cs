@@ -104,10 +104,6 @@ namespace LELEngine
 			}
 		}
 
-		// LEGACY(gl): used by LELEngine.Editor (Inspector/ImpostorInspector.cs, ObjectPicker.cs, TextureImporterInspector.cs, Panels/ProjectSettingsWindow.cs)
-		/// <summary>The OpenGL texture object: only for the code that still gives OpenGL commands itself.</summary>
-		public int Handle => Gpu is Graphics.OpenGL.GLTexture texture ? texture.Handle : 0;
-
 		public bool IsValid => !failed && (HasData || gpu != null);
 
 		/// <summary>Linear filtering (bilinear) when scaled; off for pixel art (UI compatibility).</summary>

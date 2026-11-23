@@ -37,16 +37,7 @@ namespace LELEngine.Graphics.OpenGL
 		/// <summary>The kind of texture each unit's sampler reads.</summary>
 		public TextureTarget[] UnitTargets = Array.Empty<TextureTarget>();
 
-		/// <summary>
-		///     Beside the legacy OpenGL commands: the sampler was pointed at a texture unit by number (an int set on
-		///     it), so the legacy code binds its texture; giving it a texture through the device takes it back.
-		/// </summary>
-		public bool[] UnitLegacy = Array.Empty<bool>();
-
 		private int[] unitLocations = Array.Empty<int>();
-
-		/// <summary>Counts the textures given to the samplers (beside the legacy OpenGL commands: what a draw given past the device has to see bound).</summary>
-		public int TextureVersion;
 
 		/// <summary>A stage writes images or storage blocks: what it wrote has to be made visible to what follows.</summary>
 		public bool WritesStorage { get; private set; }
@@ -84,7 +75,6 @@ namespace LELEngine.Graphics.OpenGL
 			gl.LinkProgram(Handle);
 			WritesStorage = SourcesWriteStorage(descriptor);
 			GLDevice.Label(0x82E2, Handle, Name);
-			device.Register(this);
 		}
 
 		private GLProgram(GLDevice device, ProgramDescriptor descriptor, int handle)
@@ -101,7 +91,6 @@ namespace LELEngine.Graphics.OpenGL
 			IsLinked = true;
 			ReadUniforms();
 			finished = true;
-			device.Register(this);
 		}
 
 		/// <summary>The driver's binary, with its format in the first four bytes; null when the driver refuses it.</summary>
@@ -230,17 +219,13 @@ namespace LELEngine.Graphics.OpenGL
 				return;
 			}
 
-			GlProgram program = new GlProgram((uint)Handle);
-			for (int i = 0; i < count && components == 1 && slot + i < slotUnits.Count; i++)
+			if (components == 1 && slot < slotUnits.Count && slotUnits[slot] >= 0)
 			{
-				int unit = slotUnits[slot + i];
-				if (unit >= 0)
-				{
-					// A sampler pointed at a texture unit by number: the legacy way of binding its texture.
-					UnitLegacy[unit] = true;
-				}
+				// A sampler: it reads the texture given to it (SetTexture) on the unit the device keeps for it.
+				return;
 			}
 
+			GlProgram program = new GlProgram((uint)Handle);
 			switch (components)
 			{
 				case 1:
@@ -305,13 +290,6 @@ namespace LELEngine.Graphics.OpenGL
 			{
 				Textures[unit] = (GLTexture)texture;
 				Samplers[unit] = (GLSampler)sampler;
-				TextureVersion++;
-				if (UnitLegacy[unit])
-				{
-					int value = device.UnitBase + unit;
-					Native.glProgramUniform1iv(new GlProgram((uint)Handle), unitLocations[unit], 1, &value);
-					UnitLegacy[unit] = false;
-				}
 			}
 		}
 
@@ -413,7 +391,8 @@ namespace LELEngine.Graphics.OpenGL
 						int unit = targets.Count;
 						targets.Add(Target(type));
 						samplerLocations.Add(location);
-						int value = device.UnitBase + unit;
+						// Sampler i reads texture unit i (the device binds its texture there before a draw).
+						int value = unit;
 						Native.glProgramUniform1iv(new GlProgram((uint)Handle), location, 1, &value);
 						slotUnits.Add(unit);
 					}
@@ -432,7 +411,6 @@ namespace LELEngine.Graphics.OpenGL
 			UnitCount = targets.Count;
 			UnitTargets = targets.ToArray();
 			unitLocations = samplerLocations.ToArray();
-			UnitLegacy = new bool[UnitCount];
 			Textures = new GLTexture[UnitCount];
 			Samplers = new GLSampler[UnitCount];
 			if (UnitCount > device.Capabilities.MaxSampledTextures)

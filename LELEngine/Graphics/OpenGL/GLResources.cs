@@ -184,8 +184,6 @@ namespace LELEngine.Graphics.OpenGL
 			{
 				GLDevice.Label(0x1702, Handle, Name);
 			}
-
-			GLDevice.Current.Register(this);
 		}
 
 		/// <summary>A window's back buffer.</summary>

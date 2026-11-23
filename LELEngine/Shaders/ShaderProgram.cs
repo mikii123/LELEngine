@@ -1087,21 +1087,6 @@ namespace LELEngine.Shaders
 			SetTexture(name, texture?.Gpu, sampler);
 		}
 
-		// LEGACY(gl): used by LELEngine.Editor/Panels/SceneDepthProbe.cs
-		/// <summary>
-		///     The OpenGL way, for the code that still gives OpenGL commands itself: binds a texture object to a texture
-		///     unit and points the sampler at that unit.
-		/// </summary>
-		public void SetTexture(string name, TextureTarget target, int textureHandle, int unit)
-		{
-			int slot = GetSlot(name);
-			if (slot < 0) return;
-
-			GL.ActiveTexture(TextureUnit.Texture0 + unit);
-			GL.BindTexture(target, textureHandle);
-			gpu.SetInt(slot, unit);
-		}
-
 		#endregion
 
 		#region PrivateMethods

@@ -13,10 +13,6 @@ namespace LELEngine.Rendering
 		/// <summary>The texture on the GPU (another one after <see cref="Resize" />).</summary>
 		public GpuTexture Gpu { get; private set; }
 
-		// LEGACY(gl): used by LELEngine.Editor (ViewRenderer.cs, UIBuilder/BuilderPreview.cs, Panels/SceneDepthProbe.cs)
-		/// <summary>The OpenGL texture object: only for the code that still gives OpenGL commands itself.</summary>
-		public int Handle => Gpu is Graphics.OpenGL.GLTexture texture ? texture.Handle : 0;
-
 		public int Width { get; private set; }
 		public int Height { get; private set; }
 		public RenderTextureFormat Format { get; }
