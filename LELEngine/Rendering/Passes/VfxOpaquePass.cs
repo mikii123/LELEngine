@@ -26,13 +26,14 @@ namespace LELEngine.Rendering.Passes
 				return;
 			}
 
-			context.SceneTarget.Bind();
-			GLState.SetDepth(true, true, DepthFunction.Lequal);
-			GLState.SetCull(false);
+			CommandList commands = Gfx.Commands;
+			context.SceneTarget.Begin();
+			commands.State.SetDepth(true, true, CompareFunction.LessEqual);
+			commands.State.Culling = FaceCulling.None;
 			VfxRuntime.DrawOpaque(context);
-			GLState.SetDepth(true, true, DepthFunction.Less);
-			GLState.SetCull(true, TriangleFace.Back);
-			GLState.Reset();
+			commands.State.SetDepth(true, true, CompareFunction.Less);
+			commands.State.Culling = FaceCulling.Back;
+			commands.SetProgram(null);
 		}
 
 		#endregion
