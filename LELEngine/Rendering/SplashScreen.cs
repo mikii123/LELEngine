@@ -6,14 +6,14 @@ using LELEngine.Mathematics;
 namespace LELEngine.Rendering
 {
 	/// <summary>
-	///     The player's splash screen (<see cref="SplashScreenSettings" />), drawn with as little GL as there is: a clear
+	///     The player's splash screen (<see cref="SplashScreenSettings" />), drawn with as little as there is: a clear
 	///     to the background color and a scaled blit of the logo. Nothing compiles, so the first image is up a moment
 	///     after the window opens. The build bakes the logo over the background color (<see cref="WriteImage" />), so
-	///     nothing blends, into a 24-bit BMP: its bottom-up BGR rows padded to 4 bytes are the layout glTexImage2D takes
-	///     as it is. The logo is mipmapped and blitted from the smallest level still as large as its rectangle, so a
-	///     logo shown much smaller than baked does not alias.
+	///     nothing blends, into a 24-bit BMP: its rows are bottom-up as a texture's are, their BGR bytes padded to 4
+	///     become RGBA texels. The logo is mipmapped and blitted from the smallest level still as large as its
+	///     rectangle, so a logo shown much smaller than baked does not alias.
 	///     <see cref="Load" /> only reads the file (any thread); <see cref="Draw" /> and <see cref="Dispose" /> need the
-	///     window's GL context.
+	///     window's graphics context.
 	/// </summary>
 	public sealed class SplashScreen : IDisposable
 	{
@@ -38,8 +38,7 @@ namespace LELEngine.Rendering
 		private readonly int imageHeight;
 		private readonly int pixelOffset;
 		private byte[] file;
-		private int texture;
-		private int framebuffer;
+		private GpuTexture texture;
 		private int levels;
 
 		#endregion
@@ -103,7 +102,7 @@ namespace LELEngine.Rendering
 			return new SplashScreen(Math.Max(0f, config.Duration), background, Math.Clamp(config.ImageSize, 0f, 1f), data, offset, width, height);
 		}
 
-		/// <summary>Draws the splash screen into the window's default framebuffer of this size (in pixels); the caller presents it.</summary>
+		/// <summary>Draws the splash screen into the window's back buffer of this size (in pixels); the caller presents it.</summary>
 		public void Draw(int width, int height)
 		{
 			if (width <= 0 || height <= 0)
@@ -111,20 +110,19 @@ namespace LELEngine.Rendering
 				return;
 			}
 
-			// Whatever the loading left enabled must not clip or mask the clear and the blit.
-			GL.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
-			GL.Disable(EnableCap.ScissorTest);
-			GL.ColorMask(true, true, true, true);
-			GL.Viewport(0, 0, width, height);
-			GL.ClearColor(background.X, background.Y, background.Z, 1f);
-			GL.Clear(ClearBufferMask.ColorBufferBit);
-
 			if (file != null)
 			{
 				Upload();
 			}
 
-			if (texture == 0 || imageSize <= 0f)
+			// Whatever the loading left set neither clips nor masks the clear and the blit: a pass begins with the
+			// whole target and clears every channel, a blit knows no scissor or mask.
+			CommandList commands = Gfx.Commands;
+			GpuTexture backbuffer = Gfx.Device.Backbuffer;
+			commands.BeginRenderPass(backbuffer, null, LoadOperation.Clear, new ClearValue(background.X, background.Y, background.Z, 1f));
+			commands.EndRenderPass();
+
+			if (texture == null || imageSize <= 0f)
 			{
 				return;
 			}
@@ -142,27 +140,14 @@ namespace LELEngine.Rendering
 				level++;
 			}
 
-			GL.BindFramebuffer(FramebufferTarget.ReadFramebuffer, framebuffer);
-			GL.FramebufferTexture2D(FramebufferTarget.ReadFramebuffer, FramebufferAttachment.ColorAttachment0, TextureTarget.Texture2D, texture, level);
-			GL.BlitFramebuffer(0, 0, Math.Max(1, imageWidth >> level), Math.Max(1, imageHeight >> level), x, y, x + w, y + h,
-				ClearBufferMask.ColorBufferBit, BlitFramebufferFilter.Linear);
-			GL.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
+			commands.Blit(texture, level, 0, 0, 0, texture.MipWidth(level), texture.MipHeight(level), backbuffer, 0, 0, x, y, x + w, y + h, SamplerFilter.Linear);
 		}
 
 		public void Dispose()
 		{
 			file = null;
-			if (framebuffer != 0)
-			{
-				GL.DeleteFramebuffer(framebuffer);
-				framebuffer = 0;
-			}
-
-			if (texture != 0)
-			{
-				GL.DeleteTexture(texture);
-				texture = 0;
-			}
+			texture?.Dispose();
+			texture = null;
 		}
 
 		/// <summary>
@@ -228,16 +213,30 @@ namespace LELEngine.Rendering
 			byte[] data = file;
 			file = null;
 
-			texture = GL.GenTexture();
-			GL.BindTexture(TextureTarget.Texture2D, texture);
-			GL.PixelStore(PixelStoreParameter.UnpackAlignment, 4);
-			GL.TexImage2D(TextureTarget.Texture2D, 0, PixelInternalFormat.Rgb8, imageWidth, imageHeight, 0, PixelFormat.Bgr, PixelType.UnsignedByte, ref data[pixelOffset]);
-			GL.GenerateMipmap(GenerateMipmapTarget.Texture2D);
-			levels = 1 + (int)Math.Floor(Math.Log2(Math.Max(imageWidth, imageHeight)));
-			GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMaxLevel, levels - 1);
-			GL.BindTexture(TextureTarget.Texture2D, 0);
+			// The file's rows of blue, green, red (padded to 4 bytes) as packed rows of opaque RGBA texels.
+			int stride = (imageWidth * 3 + 3) & ~3;
+			byte[] rgba = new byte[imageWidth * imageHeight * 4];
+			for (int y = 0; y < imageHeight; y++)
+			{
+				int from = pixelOffset + y * stride;
+				int to = y * imageWidth * 4;
+				for (int x = 0; x < imageWidth; x++, from += 3, to += 4)
+				{
+					rgba[to] = data[from + 2];
+					rgba[to + 1] = data[from + 1];
+					rgba[to + 2] = data[from];
+					rgba[to + 3] = 255;
+				}
+			}
 
-			framebuffer = GL.GenFramebuffer();
+			// Every mip level, down to one texel. The levels are only blitted from, never sampled by a shader.
+			texture = Gfx.Device.CreateTexture(TextureDescriptor.Texture2D(TextureFormat.RGBA8, imageWidth, imageHeight, 0, TextureUsage.Sampled, "Splash screen logo"));
+			SamplerDescriptor sampler = new SamplerDescriptor(SamplerFilter.Linear, SamplerMipFilter.Linear, SamplerAddress.Repeat);
+			sampler.Min = SamplerFilter.Nearest;
+			texture.Sampler = Gfx.Device.GetSampler(sampler);
+			texture.SetData(0, rgba);
+			Gfx.Commands.GenerateMipmaps(texture);
+			levels = texture.MipLevels;
 		}
 
 		/// <summary>A 24-bit uncompressed bottom-up BMP (what <see cref="WriteImage" /> writes): where its pixels start and its size.</summary>

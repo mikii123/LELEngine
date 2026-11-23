@@ -9,8 +9,8 @@ using LELEngine.Mathematics;
 namespace LELEngine.Rendering
 {
 	/// <summary>
-	///     Measurement hooks for temporal analysis of the image, read back without stalling the GPU (pixel pack buffers
-	///     behind fences, read a few frames later and logged in frame order):
+	///     Measurement hooks for temporal analysis of the image, read back without stalling the GPU (texels copied into
+	///     buffers behind fences, read a few frames later and logged in frame order):
 	///     - regions: the mean linear luminance of screen rectangles every frame, "[Regions] frame v0 v1 ...";
 	///     - noise: per-pixel temporal statistics of the whole image over a window of frames, "[Noise] ...".
 	///     The source is the HDR scene color or the GI's indirect diffuse (the buffer the GI resolve publishes).
@@ -46,7 +46,7 @@ namespace LELEngine.Rendering
 		private readonly List<Vector4i> regions = new List<Vector4i>();
 		private readonly Queue<Readback> pending = new Queue<Readback>();
 		private readonly Stack<Readback> pool = new Stack<Readback>();
-		private int readFramebuffer;
+		private byte[] texels = new byte[0];
 		private float[] scratch = new float[0];
 
 		private int noiseRemaining;
@@ -91,7 +91,8 @@ namespace LELEngine.Rendering
 
 			int sourceWidth = renderer.Width;
 			int sourceHeight = renderer.Height;
-			if (!BindSource(renderer, ref sourceWidth, ref sourceHeight))
+			GpuTexture source = FindSource(renderer, ref sourceWidth, ref sourceHeight);
+			if (source == null)
 			{
 				return;
 			}
@@ -121,30 +122,26 @@ namespace LELEngine.Rendering
 				floats += rect.Z * rect.W * 4;
 			}
 
-			if (readback.Buffer == 0)
+			// The buffer takes the texels as the texture stores them; they become floats when they are read.
+			readback.Format = source.Format;
+			int texelSize = source.Format.TexelSize();
+			long bytes = (long)(floats / 4) * texelSize;
+			readback.Buffer ??= Gfx.Device.CreateBuffer(new BufferDescriptor(BufferUsage.Readback, 0, false, "Frame statistics readback"));
+			if (readback.Buffer.Size < bytes)
 			{
-				readback.Buffer = GL.GenBuffer();
+				readback.Buffer.Allocate(bytes);
 			}
 
-			GL.BindBuffer(BufferTarget.PixelPackBuffer, readback.Buffer);
-			if (readback.Capacity < floats)
-			{
-				readback.Capacity = floats;
-				GL.BufferData(BufferTarget.PixelPackBuffer, floats * sizeof(float), IntPtr.Zero, BufferUsageHint.StreamRead);
-			}
-
-			GL.PixelStore(PixelStoreParameter.PackAlignment, 4);
-			int offset = 0;
+			CommandList commands = Gfx.Commands;
+			long offset = 0;
 			foreach (Vector4i rect in readback.Rects)
 			{
-				GL.ReadPixels(rect.X, rect.Y, rect.Z, rect.W, PixelFormat.Rgba, PixelType.Float, (IntPtr)(offset * sizeof(float)));
-				offset += rect.Z * rect.W * 4;
+				commands.CopyTextureToBuffer(source, 0, rect.X, rect.Y, 0, rect.Z, rect.W, 1, readback.Buffer, offset);
+				offset += (long)rect.Z * rect.W * texelSize;
 			}
 
 			readback.Floats = floats;
-			GL.BindBuffer(BufferTarget.PixelPackBuffer, 0);
-			GL.BindFramebuffer(FramebufferTarget.ReadFramebuffer, 0);
-			readback.Fence = GL.FenceSync(SyncCondition.SyncGpuCommandsComplete, WaitSyncFlags.None);
+			readback.Fence = Gfx.Device.CreateFence();
 			pending.Enqueue(readback);
 
 			if (pending.Count > MaxPending)
@@ -176,59 +173,36 @@ namespace LELEngine.Rendering
 
 			pending.Clear();
 			pool.Clear();
-			if (readFramebuffer != 0)
-			{
-				GL.DeleteFramebuffer(readFramebuffer);
-				readFramebuffer = 0;
-			}
 		}
 
 		#endregion
 
 		#region PrivateMethods
 
-		/// <summary>Binds the source as the read framebuffer; its size goes to width / height. False when it does not exist.</summary>
-		private bool BindSource(Renderer renderer, ref int width, ref int height)
+		/// <summary>The texture of the source; its size goes to width / height. Null when it does not exist.</summary>
+		private GpuTexture FindSource(Renderer renderer, ref int width, ref int height)
 		{
 			if (ReadSource == Source.SceneColor)
 			{
 				// The scene's size (super sampled: larger than the window's).
 				width = renderer.RenderWidth;
 				height = renderer.RenderHeight;
-				GL.BindFramebuffer(FramebufferTarget.ReadFramebuffer, renderer.SceneTarget.Handle);
-				GL.ReadBuffer(ReadBufferMode.ColorAttachment0);
-				return true;
+				return renderer.SceneColor.Gpu;
 			}
 
-			int texture;
 			if (ReadSource == Source.Motion)
 			{
 				width = renderer.RenderWidth;
 				height = renderer.RenderHeight;
-				texture = renderer.GetPass<Passes.GeometryPrepass>()?.Motion?.Handle ?? 0;
-			}
-			else
-			{
-				GlobalIlluminationSettings gi = Lighting.GI;
-				texture = gi.ResolveActive ? gi.ResolvedDiffuse : 0;
-				width = Math.Max(1, gi.ResolveWidth);
-				height = Math.Max(1, gi.ResolveHeight);
+				return renderer.GetPass<Passes.GeometryPrepass>()?.Motion?.Gpu;
 			}
 
-			if (texture == 0)
-			{
-				return false;
-			}
-
-			if (readFramebuffer == 0)
-			{
-				readFramebuffer = GL.GenFramebuffer();
-			}
-
-			GL.BindFramebuffer(FramebufferTarget.ReadFramebuffer, readFramebuffer);
-			GL.FramebufferTexture2D(FramebufferTarget.ReadFramebuffer, FramebufferAttachment.ColorAttachment0, TextureTarget.Texture2D, texture, 0);
-			GL.ReadBuffer(ReadBufferMode.ColorAttachment0);
-			return true;
+			GlobalIlluminationSettings gi = Lighting.GI;
+			width = Math.Max(1, gi.ResolveWidth);
+			height = Math.Max(1, gi.ResolveHeight);
+			// LEGACY(gl): Lighting.cs publishes the GI's resolved diffuse as an OpenGL texture name
+			// (GlobalIlluminationSettings.ResolvedDiffuse); the device's texture of that name is looked up.
+			return gi.ResolveActive && gi.ResolvedDiffuse != 0 ? Graphics.OpenGL.GLDevice.Current.FindTexture(gi.ResolvedDiffuse) : null;
 		}
 
 		private static Vector4i ClampRect(Vector4i rect, int width, int height)
@@ -246,15 +220,15 @@ namespace LELEngine.Rendering
 			while (pending.Count > 0)
 			{
 				Readback readback = pending.Peek();
-				WaitSyncStatus status = GL.ClientWaitSync(readback.Fence, wait ? ClientWaitSyncFlags.SyncFlushCommandsBit : ClientWaitSyncFlags.None, wait ? 1_000_000_000L : 0L);
-				if (status != WaitSyncStatus.AlreadySignaled && status != WaitSyncStatus.ConditionSatisfied)
+				bool signaled = wait ? readback.Fence.Wait(1_000_000_000L) : readback.Fence.IsSignaled;
+				if (!signaled)
 				{
 					return;
 				}
 
 				pending.Dequeue();
-				GL.DeleteSync(readback.Fence);
-				readback.Fence = IntPtr.Zero;
+				readback.Fence.Dispose();
+				readback.Fence = null;
 				Process(readback);
 				pool.Push(readback);
 				wait = false;
@@ -268,17 +242,15 @@ namespace LELEngine.Rendering
 				scratch = new float[readback.Floats];
 			}
 
-			GL.BindBuffer(BufferTarget.PixelPackBuffer, readback.Buffer);
-			IntPtr data = GL.MapBufferRange(BufferTarget.PixelPackBuffer, IntPtr.Zero, readback.Floats * sizeof(float), MapBufferAccessMask.MapReadBit);
-			if (data == IntPtr.Zero)
+			int count = readback.Floats / 4;
+			int bytes = count * readback.Format.TexelSize();
+			if (texels.Length < bytes)
 			{
-				GL.BindBuffer(BufferTarget.PixelPackBuffer, 0);
-				return;
+				texels = new byte[bytes];
 			}
 
-			Marshal.Copy(data, scratch, 0, readback.Floats);
-			GL.UnmapBuffer(BufferTarget.PixelPackBuffer);
-			GL.BindBuffer(BufferTarget.PixelPackBuffer, 0);
+			readback.Buffer.GetData(0, new Span<byte>(texels, 0, bytes));
+			ToFloats(readback.Format, new ReadOnlySpan<byte>(texels, 0, bytes), new Span<float>(scratch, 0, readback.Floats));
 
 			int regionCount = readback.Rects.Count - (readback.FullFrame ? 1 : 0);
 			int offset = 0;
@@ -383,6 +355,61 @@ namespace LELEngine.Rendering
 			noiseSum = null;
 		}
 
+		/// <summary>Texels as a texture stores them into four floats each (a format's missing components: 0, alpha 1).</summary>
+		private static void ToFloats(TextureFormat format, ReadOnlySpan<byte> source, Span<float> floats)
+		{
+			int components = format.ComponentCount();
+			int count = floats.Length / 4;
+			switch (format)
+			{
+				case TextureFormat.RGBA16F:
+					TexelConversion.FromHalf(MemoryMarshal.Cast<byte, ushort>(source), floats);
+					return;
+				case TextureFormat.RGBA32F:
+					MemoryMarshal.Cast<byte, float>(source).CopyTo(floats);
+					return;
+				case TextureFormat.R16F:
+				case TextureFormat.RG16F:
+					ReadOnlySpan<ushort> halves = MemoryMarshal.Cast<byte, ushort>(source);
+					for (int i = 0; i < count; i++)
+					{
+						for (int c = 0; c < 4; c++)
+						{
+							floats[i * 4 + c] = c < components ? (float)BitConverter.UInt16BitsToHalf(halves[i * components + c]) : c == 3 ? 1f : 0f;
+						}
+					}
+
+					return;
+				case TextureFormat.R32F:
+				case TextureFormat.RG32F:
+					ReadOnlySpan<float> values = MemoryMarshal.Cast<byte, float>(source);
+					for (int i = 0; i < count; i++)
+					{
+						for (int c = 0; c < 4; c++)
+						{
+							floats[i * 4 + c] = c < components ? values[i * components + c] : c == 3 ? 1f : 0f;
+						}
+					}
+
+					return;
+				case TextureFormat.R8:
+				case TextureFormat.RG8:
+				case TextureFormat.RGBA8:
+				case TextureFormat.SRGBA8:
+					for (int i = 0; i < count; i++)
+					{
+						for (int c = 0; c < 4; c++)
+						{
+							floats[i * 4 + c] = c < components ? source[i * components + c] / 255f : c == 3 ? 1f : 0f;
+						}
+					}
+
+					return;
+				default:
+					throw new NotSupportedException("Texels of " + format + " are not read as floats.");
+			}
+		}
+
 		private static double Luminance(float r, float g, float b)
 		{
 			return 0.2126 * r + 0.7152 * g + 0.0722 * b;
@@ -396,27 +423,20 @@ namespace LELEngine.Rendering
 		{
 			public readonly List<Vector4i> Rects = new List<Vector4i>();
 			public int Frame;
-			public int Buffer;
-			public int Capacity;
+			public GpuBuffer Buffer;
+			public TextureFormat Format;
 			public int Floats;
 			public bool FullFrame;
 			public int Width;
 			public int Height;
-			public IntPtr Fence;
+			public GpuFence Fence;
 
 			public void Delete()
 			{
-				if (Fence != IntPtr.Zero)
-				{
-					GL.DeleteSync(Fence);
-					Fence = IntPtr.Zero;
-				}
-
-				if (Buffer != 0)
-				{
-					GL.DeleteBuffer(Buffer);
-					Buffer = 0;
-				}
+				Fence?.Dispose();
+				Fence = null;
+				Buffer?.Dispose();
+				Buffer = null;
 			}
 		}
 
