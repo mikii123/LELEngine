@@ -39,9 +39,10 @@ namespace LELEngine.Rendering.Passes
 
 		public override void Execute(RenderContext context)
 		{
-			GLState.SetDepth(false, false);
-			GLState.SetCull(false);
-			GLState.SetBlend(false);
+			CommandList commands = Gfx.Commands;
+			commands.State.SetDepth(false, false);
+			commands.State.Culling = FaceCulling.None;
+			commands.State.Blend = false;
 			if (context.Width != context.OutputWidth || context.Height != context.OutputHeight)
 			{
 				ResolveSuperSampled(context);
@@ -51,17 +52,17 @@ namespace LELEngine.Rendering.Passes
 				// Super sampling off: its target goes.
 				across?.Delete();
 				across = null;
-				context.Renderer.BindOutput();
+				context.Renderer.BeginOutput();
 				tonemap.Use();
-				tonemap.SetTexture("SceneColor", TextureTarget.Texture2D, context.SceneColor.Handle, 0);
+				tonemap.SetTexture("SceneColor", context.SceneColor);
 				tonemap.SetFloat("Exposure", context.Settings.Exposure);
 				tonemap.SetInt("TonemapEnabled", context.Settings.Tonemap ? 1 : 0);
 				tonemap.SetInt("KeepAlpha", context.Settings.PreserveAlpha ? 1 : 0);
 				context.Fullscreen.Draw();
 			}
 
-			GLState.SetDepth(true, true);
-			GLState.SetCull(true);
+			commands.State.SetDepth(true, true);
+			commands.State.Culling = FaceCulling.Back;
 		}
 
 		public override void Dispose()
@@ -102,9 +103,10 @@ namespace LELEngine.Rendering.Passes
 			// Window pixels: 0.25 keeps the 2 x 2 average of 4x nearly a box, 0.75 is soft (DSR's 0..100 %).
 			float sigma = 0.25f + 0.5f * smoothness;
 
-			across.Bind();
+			// Every pixel is drawn.
+			across.Begin(LoadOperation.DontCare);
 			superSampleAcross.Use();
-			superSampleAcross.SetTexture("ssSource", TextureTarget.Texture2D, context.SceneColor.Handle, 0);
+			superSampleAcross.SetTexture("ssSource", context.SceneColor);
 			superSampleAcross.SetFloat("ssRatio", context.Width / (float)context.OutputWidth);
 			superSampleAcross.SetInt("ssFilter", filter);
 			superSampleAcross.SetFloat("ssSigma", sigma);
@@ -112,9 +114,9 @@ namespace LELEngine.Rendering.Passes
 			superSampleAcross.SetInt("TonemapEnabled", context.Settings.Tonemap ? 1 : 0);
 			context.Fullscreen.Draw();
 
-			context.Renderer.BindOutput();
+			context.Renderer.BeginOutput();
 			superSampleDown.Use();
-			superSampleDown.SetTexture("ssSource", TextureTarget.Texture2D, across.ColorAttachments[0].Handle, 0);
+			superSampleDown.SetTexture("ssSource", across.ColorAttachments[0]);
 			superSampleDown.SetFloat("ssRatio", context.Height / (float)context.OutputHeight);
 			superSampleDown.SetInt("ssFilter", filter);
 			superSampleDown.SetFloat("ssSigma", sigma);

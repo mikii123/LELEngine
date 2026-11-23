@@ -78,9 +78,11 @@ namespace LELEngine.Rendering.Passes
 			Matrix4 invViewProjection = Matrix4.Invert(context.ViewProjection);
 			Vector3 cameraForward = context.Camera.transform.forward;
 
-			traceTarget.Bind();
-			GLState.SetDepth(false, false);
-			GLState.SetCull(false);
+			// Every pixel is drawn, here and by the filter passes.
+			CommandList commands = Gfx.Commands;
+			traceTarget.Begin(LoadOperation.DontCare);
+			commands.State.SetDepth(false, false);
+			commands.State.Culling = FaceCulling.None;
 
 			// The variant of the mips the volume has (compiled when first needed).
 			int variant = (int)Lighting.EffectiveVoxelMips(gi.VoxelVolume, Lighting.VoxelDirectionalTextureUnit);
@@ -97,8 +99,8 @@ namespace LELEngine.Rendering.Passes
 			// The resolve itself always traces; make sure it does not try to read its own output.
 			gi.ResolveActive = false;
 			Lighting.SetGIUniforms(program, true);
-			program.SetTexture("SceneDepth", TextureTarget.Texture2D, context.SceneDepth.Handle, 0);
-			program.SetTexture("NormalRoughness", TextureTarget.Texture2D, context.NormalRoughness.Handle, 1);
+			program.SetTexture("SceneDepth", context.SceneDepth);
+			program.SetTexture("NormalRoughness", context.NormalRoughness);
 			program.SetMatrix4("invViewProjection", invViewProjection);
 			program.SetVector2("resolveTargetSize", new Vector2(width, height));
 			program.SetVector3("cameraPosition", context.CameraPosition);
@@ -114,7 +116,7 @@ namespace LELEngine.Rendering.Passes
 				context.Renderer.Profiler.Split("GIResolve.filter");
 				filter ??= new ShaderProgram("Engine/GIFilter.shader");
 				filter.Use();
-				filter.SetTexture("Guide", TextureTarget.Texture2D, guide.Handle, 1);
+				filter.SetTexture("Guide", guide);
 				filter.SetVector2("resolveTargetSize", new Vector2(width, height));
 				filter.SetVector2("screenSize", new Vector2(context.Width, context.Height));
 				filter.SetVector3("cameraForward", cameraForward);
@@ -128,17 +130,18 @@ namespace LELEngine.Rendering.Passes
 				for (int pass = 0; pass < gi.ResolveFilterPasses; pass++)
 				{
 					int destination = pass & 1;
-					filterTargets[destination].Bind();
-					filter.SetTexture("Diffuse", TextureTarget.Texture2D, final.Handle, 0);
+					filterTargets[destination].Begin(LoadOperation.DontCare);
+					filter.SetTexture("Diffuse", final);
 					filter.SetInt("filterStep", 1 << pass);
 					context.Fullscreen.Draw();
 					final = filtered[destination];
 				}
 			}
 
-			GLState.SetDepth(true, true);
-			GLState.SetCull(true);
+			commands.State.SetDepth(true, true);
+			commands.State.Culling = FaceCulling.Back;
 
+			// LEGACY(gl): Lighting.cs takes the resolve's textures as OpenGL texture objects
 			gi.ResolvedDiffuse = final.Handle;
 			gi.ResolvedSpecular = specular.Handle;
 			gi.ResolvedNormals = context.NormalRoughness.Handle;

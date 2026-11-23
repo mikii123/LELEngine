@@ -132,13 +132,12 @@ namespace LELEngine.Rendering.Passes
 			}
 
 			// Depth was already cleared with the scene target (shared texture); clear only our color (no motion, no normal).
-			gbuffer.Bind();
-			GL.ClearColor(0f, 0f, 0f, 0f);
-			GL.Clear(ClearBufferMask.ColorBufferBit);
+			CommandList commands = Gfx.Commands;
+			Renderer.BeginPass(gbuffer, LoadOperation.Clear, ClearValue.Zero);
 
-			GLState.SetDepth(true, true, DepthFunction.Less);
-			GLState.SetCull(true, TriangleFace.Back);
-			GLState.SetColorWrite(true);
+			commands.State.SetDepth(true, true, CompareFunction.Less);
+			commands.State.Culling = FaceCulling.Back;
+			commands.State.ColorMask = ColorWriteMask.All;
 
 			if (gpuDriven)
 			{
@@ -181,10 +180,11 @@ namespace LELEngine.Rendering.Passes
 						variant.RenderState.ApplyCull();
 					}
 
+					Renderer.ContinuePass();
 					gpu.DrawCameraBucket(i);
 					if (own)
 					{
-						GLState.SetCull(true, TriangleFace.Back);
+						commands.State.Culling = FaceCulling.Back;
 					}
 				}
 
@@ -221,7 +221,7 @@ namespace LELEngine.Rendering.Passes
 						{
 							// Its shader drew it; the next sub-mesh binds the engine's program again.
 							current = null;
-							GLState.SetCull(true, TriangleFace.Back);
+							commands.State.Culling = FaceCulling.Back;
 							continue;
 						}
 
@@ -319,7 +319,7 @@ namespace LELEngine.Rendering.Passes
 				renderer.RenderSubMeshWith(program, part.SubMesh);
 			}
 
-			GLState.SetCull(true, TriangleFace.Back);
+			Gfx.Commands.State.Culling = FaceCulling.Back;
 		}
 
 		// The variant for the map bits (instanced or per object); null when it does not link.

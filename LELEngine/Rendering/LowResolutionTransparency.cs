@@ -46,23 +46,20 @@ namespace LELEngine.Rendering
 			depthProgram ??= new ShaderProgram("Engine/LowResolutionDepth.shader");
 			compositeProgram ??= new ShaderProgram("Engine/LowResolutionComposite.shader");
 
-			target.Bind();
-			GL.ClearColor(0f, 0f, 0f, 1f);
-			GL.Clear(ClearBufferMask.ColorBufferBit);
+			// The depth is drawn whole below.
+			Renderer.BeginPass(target, LoadOperation.Clear, ClearValue.OpaqueBlack, LoadOperation.DontCare);
 
 			// The depth: written by a pass over the layer that leaves the colour alone.
-			GL.Disable(EnableCap.Blend);
-			GL.Disable(EnableCap.CullFace);
-			GL.Enable(EnableCap.DepthTest);
-			GL.DepthFunc(DepthFunction.Always);
-			GL.DepthMask(true);
-			GL.ColorMask(false, false, false, false);
+			ref RenderState state = ref Gfx.Commands.State;
+			state.Blend = false;
+			state.Culling = FaceCulling.None;
+			state.SetDepth(true, true, CompareFunction.Always);
+			state.ColorMask = ColorWriteMask.None;
 			depthProgram.Use();
-			depthProgram.SetTexture("SceneDepth", TextureTarget.Texture2D, sceneDepth.Handle, 0);
+			depthProgram.SetTexture("SceneDepth", sceneDepth);
 			context.Fullscreen.Draw();
-			GL.ColorMask(true, true, true, true);
-			GL.DepthFunc(DepthFunction.Lequal);
-			GL.DepthMask(false);
+			state.ColorMask = ColorWriteMask.All;
+			state.SetDepth(true, false, CompareFunction.LessEqual);
 			Active = true;
 		}
 
@@ -75,22 +72,22 @@ namespace LELEngine.Rendering
 			}
 
 			Active = false;
-			context.SceneTarget.Bind();
-			GL.Disable(EnableCap.DepthTest);
-			GL.DepthMask(false);
-			GL.Disable(EnableCap.CullFace);
-			GL.Enable(EnableCap.Blend);
-			GL.BlendFuncSeparate(BlendingFactorSrc.One, BlendingFactorDest.SrcAlpha, BlendingFactorSrc.Zero, BlendingFactorDest.One);
+			Renderer.BeginPass(context.SceneTarget);
+			ref RenderState state = ref Gfx.Commands.State;
+			state.DepthTest = false;
+			state.DepthWrite = false;
+			state.Culling = FaceCulling.None;
+			state.SetBlend(BlendFactor.One, BlendFactor.SrcAlpha, BlendFactor.Zero, BlendFactor.One);
 			compositeProgram.Use();
-			compositeProgram.SetTexture("LayerColor", TextureTarget.Texture2D, target.ColorAttachments[0].Handle, 0);
-			compositeProgram.SetTexture("LayerDepth", TextureTarget.Texture2D, target.DepthAttachment.Handle, 1);
-			compositeProgram.SetTexture("SceneDepth", TextureTarget.Texture2D, sceneDepth.Handle, 2);
+			compositeProgram.SetTexture("LayerColor", target.ColorAttachments[0]);
+			compositeProgram.SetTexture("LayerDepth", target.DepthAttachment);
+			compositeProgram.SetTexture("SceneDepth", sceneDepth);
 			compositeProgram.SetVector4("depthParams", SceneGrab.DepthParams(context.Projection));
 			compositeProgram.SetVector2("targetSize", new Vector2(context.SceneTarget.Width, context.SceneTarget.Height));
 			context.Fullscreen.Draw();
-			GL.Disable(EnableCap.Blend);
-			GL.BlendFunc(BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
-			GL.Enable(EnableCap.DepthTest);
+			state.SetBlend(BlendFactor.SrcAlpha, BlendFactor.OneMinusSrcAlpha);
+			state.Blend = false;
+			state.DepthTest = true;
 		}
 
 		public void Delete()
@@ -118,13 +115,9 @@ namespace LELEngine.Rendering
 			target?.Delete();
 			target = new Framebuffer(width, height);
 			target.AddColorAttachment(RenderTextureFormat.RGBA16F);
-			RenderTexture depth = target.AddDepthAttachment(RenderTextureFormat.Depth32F);
+			// The composite reads the depth as numbers: a depth attachment compares only when asked to.
+			target.AddDepthAttachment(RenderTextureFormat.Depth32F);
 			target.Validate();
-
-			// The composite reads the depth as numbers.
-			GL.BindTexture(TextureTarget.Texture2D, depth.Handle);
-			GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureCompareMode, (int)TextureCompareMode.None);
-			GL.BindTexture(TextureTarget.Texture2D, 0);
 		}
 
 		#endregion

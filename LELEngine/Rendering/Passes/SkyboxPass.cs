@@ -31,9 +31,10 @@ namespace LELEngine.Rendering.Passes
 				return;
 			}
 
-			context.SceneTarget.Bind();
-			GLState.SetDepth(true, false, DepthFunction.Lequal);
-			GLState.SetCull(false);
+			CommandList commands = Gfx.Commands;
+			Renderer.BeginPass(context.SceneTarget);
+			commands.State.SetDepth(true, false, CompareFunction.LessEqual);
+			commands.State.Culling = FaceCulling.None;
 
 			// Directions only: the view matrix without its translation (row-vector convention: translation in row 3).
 			Matrix4 view = context.View;
@@ -44,10 +45,11 @@ namespace LELEngine.Rendering.Passes
 			program.SetMatrix4("invViewProjection", invViewProjection);
 			program.SetVector3("CamPosition", context.CameraPosition);
 			sky.SetUniforms(program);
+			Renderer.ContinuePass();
 			context.Fullscreen.Draw();
 
-			GLState.SetDepth(true, true, DepthFunction.Less);
-			GLState.SetCull(true);
+			commands.State.SetDepth(true, true, CompareFunction.Less);
+			commands.State.Culling = FaceCulling.Back;
 		}
 
 		#endregion

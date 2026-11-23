@@ -12,20 +12,10 @@ namespace LELEngine.Rendering
 	/// </summary>
 	public static class SceneDepthTexture
 	{
-		#region PublicFields
-
-		/// <summary>Texture unit of the copy in the drawing shader: above every unit the engine's lighting and the grab use.</summary>
-		public const int PreferredTextureUnit = 22;
-
-		/// <summary>The unit the copy binds to: <see cref="PreferredTextureUnit" />, or on a context with fewer units the last material unit.</summary>
-		public static int TextureUnit => PreferredTextureUnit < GLCapabilities.MaxTextureUnits ? PreferredTextureUnit : Material.MaxTextureUnits - 1;
-
-		#endregion
-
 		#region PublicMethods
 
 		/// <summary>
-		///     Binds the depth copy (or tells the shader there is none) to a program that reads the scene's depth.
+		///     Gives the depth copy (or tells the shader there is none) to a program that reads the scene's depth.
 		///     <paramref name="pixelScale" />: scene pixels per pixel of the target drawn into (2 in the half-resolution layer).
 		/// </summary>
 		public static void SetUniforms(ShaderProgram program, RenderContext context, VFX.VfxDepthCapture capture, float pixelScale = 1f)
@@ -36,7 +26,7 @@ namespace LELEngine.Rendering
 			program.SetFloat("lelSceneDepthPixelScale", pixelScale);
 			if (available)
 			{
-				program.SetTexture("lelSceneDepth", TextureTarget.Texture2D, capture.Depth.Handle, TextureUnit);
+				program.SetTexture("lelSceneDepth", capture.Depth);
 			}
 		}
 

@@ -205,7 +205,8 @@ namespace LELEngine.Rendering.Passes
 				context.Renderer.Profiler.Split("Transparent.Draw");
 			}
 
-			context.SceneTarget.Bind();
+			CommandList commands = Gfx.Commands;
+			Renderer.BeginPass(context.SceneTarget);
 
 			// Particle outputs and materials drawn at half resolution (LowResolution) are drawn together into their layer,
 			// which is laid over the scene where the last of them sorts (LowResolutionTransparency); the layer needs the
@@ -236,7 +237,7 @@ namespace LELEngine.Rendering.Passes
 				if (needsDepth && depth == null && !DrawsLikeOpaque(entry))
 				{
 					depth = VFX.VfxRuntime.CaptureDepth(context);
-					context.SceneTarget.Bind();
+					Renderer.BeginPass(context.SceneTarget);
 				}
 
 				// Into the layer (a material's objects draw at full resolution when there is no layer: no depth copy).
@@ -287,7 +288,7 @@ namespace LELEngine.Rendering.Passes
 
 				if (afterParticles)
 				{
-					GLState.SetDepth(true, false, DepthFunction.Lequal);
+					commands.State.SetDepth(true, false, CompareFunction.LessEqual);
 					afterParticles = false;
 				}
 
@@ -298,10 +299,9 @@ namespace LELEngine.Rendering.Passes
 			entries.Clear();
 			vfxEntries.Clear();
 			volumes.Clear();
-			GLState.SetBlend(false);
-			GLState.SetDepth(true, true, DepthFunction.Less);
-			GLState.SetCull(true, TriangleFace.Back);
-			GLState.Reset();
+			commands.State.Blend = false;
+			commands.State.SetDepth(true, true, CompareFunction.Less);
+			commands.State.Culling = FaceCulling.Back;
 		}
 
 		public override void ReleaseSceneReferences()
@@ -488,6 +488,8 @@ namespace LELEngine.Rendering.Passes
 				state.ApplyTransparent();
 			}
 
+			// A texture the material made on the way here ended the pass.
+			Renderer.ContinuePass();
 			if (entry.Batch != null)
 			{
 				// A static batch's part, and the parts of the batch that follow it in the order: one run, drawn together.
@@ -499,9 +501,9 @@ namespace LELEngine.Rendering.Passes
 			if (state.Cull == CullMode.Off)
 			{
 				// Back faces first, then front faces: the inside of a convex object ends up behind its outside.
-				GLState.SetCull(true, TriangleFace.Front);
+				Gfx.Commands.State.Culling = FaceCulling.Front;
 				DrawGeometry(entry);
-				GLState.SetCull(true, TriangleFace.Back);
+				Gfx.Commands.State.Culling = FaceCulling.Back;
 			}
 
 			DrawGeometry(entry);
@@ -681,7 +683,7 @@ namespace LELEngine.Rendering.Passes
 
 				if (count > 0)
 				{
-					GLState.SetCull(false);
+					Gfx.Commands.State.Culling = FaceCulling.None;
 					GeometryPool.DrawRanges(mesh, runRanges, count);
 				}
 
@@ -690,9 +692,9 @@ namespace LELEngine.Rendering.Passes
 					// Back faces first, then front faces: the inside of a convex object ends up behind its outside.
 					runRanges[0] = entries[at].RangeFirst;
 					runRanges[1] = entries[at].RangeCount;
-					GLState.SetCull(true, TriangleFace.Front);
+					Gfx.Commands.State.Culling = FaceCulling.Front;
 					GeometryPool.DrawRanges(mesh, runRanges, 1);
-					GLState.SetCull(true, TriangleFace.Back);
+					Gfx.Commands.State.Culling = FaceCulling.Back;
 					GeometryPool.DrawRanges(mesh, runRanges, 1);
 					at++;
 				}

@@ -33,20 +33,27 @@ namespace LELEngine.Rendering.Passes
 
 		public override void Execute(RenderContext context)
 		{
-			context.SceneTarget.Bind();
-			GLState.SetCull(true, TriangleFace.Back);
+			GpuScene gpu = context.Renderer.GpuScene;
+			if (context.RenderQueue != RenderQueue.PerObject && gpu.Active)
+			{
+				// The camera's culling is a dispatch: before the pass begins.
+				gpu.EnsureCameraCulled(context.ViewProjection, context.CullingMask);
+			}
+
+			CommandList commands = Gfx.Commands;
+			Renderer.BeginPass(context.SceneTarget);
+			commands.State.Culling = FaceCulling.Back;
 
 			if (context.DepthPrepassDone)
 			{
 				// Depth already resolved: shade only the visible surface, no depth writes needed.
-				GLState.SetDepth(true, false, DepthFunction.Lequal);
+				commands.State.SetDepth(true, false, CompareFunction.LessEqual);
 			}
 			else
 			{
-				GLState.SetDepth(true, true, DepthFunction.Less);
+				commands.State.SetDepth(true, true, CompareFunction.Less);
 			}
 
-			GpuScene gpu = context.Renderer.GpuScene;
 			if (context.RenderQueue == RenderQueue.PerObject)
 			{
 				PerObject(context.Renderers, context.Culling);
@@ -64,9 +71,8 @@ namespace LELEngine.Rendering.Passes
 				parts.Clear();
 			}
 
-			GLState.SetDepth(true, true, DepthFunction.Less);
-			GLState.SetCull(true, TriangleFace.Back);
-			GLState.Reset();
+			commands.State.SetDepth(true, true, CompareFunction.Less);
+			commands.State.Culling = FaceCulling.Back;
 		}
 
 		#endregion
@@ -75,7 +81,6 @@ namespace LELEngine.Rendering.Passes
 
 		private static void GpuDriven(GpuScene gpu, RenderContext context)
 		{
-			gpu.EnsureCameraCulled(context.ViewProjection, context.CullingMask);
 			IReadOnlyList<OpaqueBucket> buckets = gpu.Buckets;
 			for (int i = 0; i < buckets.Count; i++)
 			{
@@ -95,6 +100,7 @@ namespace LELEngine.Rendering.Passes
 				{
 					Material.SetDefaultTextures(program);
 				}
+				Renderer.ContinuePass();
 				gpu.DrawCameraBucket(i);
 			}
 		}
