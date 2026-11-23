@@ -140,7 +140,42 @@
   and samplers there before a draw (an int set on a sampler is ignored); the last unit is the device's own for uploads
   and reads; vertex arrays are made per layout (`glBindVertexBuffer`); a draw or dispatch of a program that writes
   images or storage blocks puts a full `glMemoryBarrier` before the next command. Uploads of half floats convert on the
-  CPU. Programs: parallel compile (KHR / ARB), binaries (`GetBinary`), labels with `LEL_GRAPHICS_LABELS=1`.
+  CPU. Programs: parallel compile (KHR / ARB), binaries (`GetBinary`), labels with `LEL_GRAPHICS_LABELS=1`. A window's
+  back buffer is colour only (no depth / stencil bits: draws with depth testing in a second window sharing the context
+  were tested against whatever its depth buffer held).
+- The Vulkan device (`Graphics/Vulkan`; BRUTAL's `Ahwoo.BRUTAL.Vulkan`, `.Vulkan.Abstractions`, `.Vulkan.Vma`,
+  `.ShaderC`): Vulkan 1.3 core (dynamic rendering, synchronization2, the extended dynamic states), VMA, and
+  `VK_EXT_depth_clip_control` (required: the engine's clip z -1..1). The engine's conventions without a flip anywhere:
+  viewports as given, `frontFace` clockwise, a back buffer of its own (RGBA8 at the window's size) blitted flipped into
+  the swapchain at present (vsync through present modes). Programs: each stage's GLSL compiled by shaderc (Vulkan 1.3
+  target, relaxed rules, auto bind / map, macros `LEL_VULKAN`, `gl_VertexID`, `gl_InstanceID` without the base
+  instance, `gl_PointCoord` turned to the engine's rows), reflected with `SpirvModule` and linked by the device: one
+  descriptor set, bindings dense over all stages, each stage's loose uniforms (its `gl_DefaultUniformBlock`) a
+  dynamic uniform buffer copied into frame memory when a value changed, varyings matched by name, the shaders' per-kind
+  `binding = N` of blocks and images mapped to the set; slots in OpenGL's naming (`FlattenMembers`). Pipelines cached
+  per program, render state, vertex layout, topology and attachment formats; descriptor sets per submission. Uploads
+  and `GenerateMipmaps` inside a pass go ahead of the stream into a setup command buffer while nothing recorded used
+  the resource, else the pass is suspended and resumed (~3 us). Unset or disposed bindings get stand-ins (black
+  textures, a zero buffer). Meanings kept equal to the OpenGL device: SRGBA8 textures are UNORM images with an sRGB
+  view for sampling (the OpenGL device never enables `GL_FRAMEBUFFER_SRGB`: draws, blending, clears and blits work on
+  the stored bytes, mips filter in linear light); Depth24 is D32F on AMD (no 24-bit depth), its constant depth bias
+  x4 (OpenGL's unit 2^-22: equal from depth 0.5 on). `Destroy()` releases everything when the device is given up; the
+  constructor throws with the reason when the machine cannot run it (no loader, no 1.3 GPU, a missing feature).
+  Validation: `LEL_VULKAN_VALIDATION=1` with the Khronos layer installed (or found through `VK_LAYER_PATH`),
+  `VK_KHRONOS_VALIDATION_VALIDATE_SYNC=true` for synchronization; `LEL_VULKAN_DISABLE=rayqueries`.
+- The devices' regression test: a console project in the scratchpad of session 9cb23804 (`vktest`; copies `vktest-rt`,
+  `vktest-perf` in session 2a1d1c21's) runs the same device calls on both APIs in two processes and compares what they
+  read back (526+ results: clears, passes, every blend pair, formats, samplers, mips, layers, cubes, 3D, BC7, blits,
+  copies, buffers, uniforms of every type, blocks, images, compute, every draw kind with the draw parameters, points,
+  lines, bias, wireframe, passes without attachments, fences, timestamps, hidden windows presented and resized, binary
+  round trips, geometry stages, ray queries, the fallback to OpenGL in one process) and builds every engine shader
+  variant on both (170 programs, pipelines on Vulkan). Known faults of AMD's OpenGL driver it shows: the first counted
+  indirect draw after a plain indirect draw of an earlier pass draws nothing; a pass without attachments is
+  rasterized single-sampled whatever its sample count.
+- Pictures, Vulkan against OpenGL (TestGame frame 400, 780M; Vulkan repeats run to run): equal but for `vct` (max
+  105, mean 13: AMD's OpenGL driver ignores the sample count of the coverage voxelization's pass without attachments,
+  so each covered pixel counts 1/8 and walls wash out; Vulkan gives what the shader intends) and isolated pixels (equal
+  depths where walls meet, navmesh debug lines on surfaces, impostor silhouettes). Not aligned: reported to the user.
 - How the move was checked (scratchpad tools of session 9cb23804; `check.ps1`, `regress.ps1`, `imgdiff`): TestGame
   runs hidden with a fixed time step (`hidden=1 fixeddt=0.0166667`: frame 400 is the same moment in every run; the
   same two switches were added to a build of the engine before the move for the baseline), its 18 scenes against
@@ -149,7 +184,13 @@
   (Inspector, Project, Hierarchy, Scene, Game, Console, Lighting, Project Settings, UI Builder, Audio Studio, the
   frames it drew, the scene view's depth probe) against the editor before the move (identical; the 3D views within 1),
   a built player's frame bit for bit, New Frontier's unit tests. The editor's `hidden=1` (never shows a window; needs
-  a project on the command line) was added for this.
+  a project on the command line) was added for this. On Vulkan: TestGame's 18 scenes with validation (no messages),
+  the editor's same CLI session on a project set to Vulkan (panels identical to OpenGL's, 3D views within 2, the depth
+  probe within 1e-6), a built player started on Vulkan by its boot.json (its frame within 2 of OpenGL's), New
+  Frontier's 535 tests in a batch editor with `-graphics vulkan` and its Flight scene in the Game view (edit mode
+  within 1 of OpenGL). OpenGL's frame times before and after the move (TestGame, 780M, frame trace medians): GPU the
+  same (lumen 6.72 / 6.72 ms, vct 8.88 / 8.96), CPU work 0.1-0.2 ms more a frame (the device's state and binding
+  layer).
 - Notes in later sections written before 2026-11-23 name OpenGL details that are gone: texture units and their
   constants (samplers are given textures by name now), `GL.*` calls, `GLCapabilities` (now `GraphicsCapabilities`),
   `Texture.Handle` / `RenderTexture.Handle` (now `.Gpu`), `GLState`, `ShaderType` (now `ShaderStage`).
