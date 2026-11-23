@@ -74,8 +74,8 @@ namespace LELEngine.Editor
 		/// <summary>Creates the window with the newest OpenGL context the driver grants (4.6 down to 4.3).</summary>
 		public static MainWindow Create(string[] args)
 		{
-			// focus=0: automated runs open the window without taking the keyboard focus.
-			StartFocused = Array.IndexOf(args, "focus=0") < 0;
+			// focus=0: automated runs open the window without taking the keyboard focus (hidden=1: there is none to focus).
+			StartFocused = Array.IndexOf(args, "focus=0") < 0 && !StartHidden;
 			Version version = PreferredApiVersion;
 			while (true)
 			{
@@ -232,9 +232,9 @@ namespace LELEngine.Editor
 
 			using (FrameProfiler.Begin("Editor UI drawn"))
 			{
-				Framebuffer.BindDefault(ClientSize.X, ClientSize.Y);
-				GL.ClearColor(0.11f, 0.11f, 0.12f, 1f);
-				GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
+				CommandList commands = Gfx.Commands;
+				commands.BeginRenderPass(Gfx.Device.Backbuffer, null, LoadOperation.Clear, new ClearValue(0.11f, 0.11f, 0.12f, 1f));
+				commands.SetViewport(0, 0, ClientSize.X, ClientSize.Y);
 				imgui.RenderDrawData(ClientSize.X, ClientSize.Y);
 			}
 
@@ -254,7 +254,7 @@ namespace LELEngine.Editor
 				if (screenshotFolder != null && Array.IndexOf(screenshotFrames, frame) >= 0)
 				{
 					screenshotDumper.Start(screenshotFrames.Length > 1 ? Path.Combine(screenshotFolder, "f" + frame.ToString("0000")) : screenshotFolder, 1);
-					screenshotDumper.Capture(ClientSize.X, ClientSize.Y);
+					screenshotDumper.Capture(Gfx.Device.Backbuffer, ClientSize.X, ClientSize.Y);
 				}
 			}
 
@@ -287,7 +287,7 @@ namespace LELEngine.Editor
 			string folder = Path.Combine(loadingShotsFolder, "load" + loadingShots.ToString("00"));
 			Console.WriteLine($"[Test] Loading frame {loadingShots:00}: {step}");
 			screenshotDumper.Start(folder, 1);
-			screenshotDumper.Capture(ClientSize.X, ClientSize.Y);
+			screenshotDumper.Capture(Gfx.Device.Backbuffer, ClientSize.X, ClientSize.Y);
 		}
 
 		protected override void OnClosing(CancelEventArgs e)

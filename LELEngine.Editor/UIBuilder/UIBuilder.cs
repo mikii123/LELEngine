@@ -1284,7 +1284,7 @@ namespace LELEngine.Editor.UIBuilder
 		private void DrawCanvasImage()
 		{
 			NVector2 avail = ImGui.GetContentRegionAvail();
-			if (avail.X < 8 || avail.Y < 8 || preview.Texture == 0)
+			if (avail.X < 8 || avail.Y < 8 || preview.Texture == null)
 			{
 				return;
 			}

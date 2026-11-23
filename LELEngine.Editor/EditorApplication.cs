@@ -3978,10 +3978,10 @@ namespace LELEngine.Editor
 			}
 		}
 
-		/// <summary>A run driven by a script (focus=0, exitframe=, screenshot=): no saved window state is used or written.</summary>
+		/// <summary>A run driven by a script (focus=0, hidden=1, exitframe=, screenshot=): no saved window state is used or written.</summary>
 		public static bool IsAutomatedRun(string[] args)
 		{
-			return Array.IndexOf(args, "focus=0") >= 0
+			return Array.IndexOf(args, "focus=0") >= 0 || Array.IndexOf(args, "hidden=1") >= 0
 				|| Array.Exists(args, a => a.StartsWith("exitframe=", StringComparison.OrdinalIgnoreCase) || a.StartsWith("screenshot=", StringComparison.OrdinalIgnoreCase));
 		}
 

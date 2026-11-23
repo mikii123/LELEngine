@@ -110,9 +110,9 @@ namespace LELEngine.Editor
 
 			imgui.EndFrame();
 
-			Framebuffer.BindDefault(ClientSize.X, ClientSize.Y);
-			GL.ClearColor(0.11f, 0.11f, 0.12f, 1f);
-			GL.Clear(ClearBufferMask.ColorBufferBit);
+			CommandList commands = Gfx.Commands;
+			commands.BeginRenderPass(Gfx.Device.Backbuffer, null, LoadOperation.Clear, new ClearValue(0.11f, 0.11f, 0.12f, 1f));
+			commands.SetViewport(0, 0, ClientSize.X, ClientSize.Y);
 			imgui.RenderDrawData(ClientSize.X, ClientSize.Y);
 			SwapBuffers();
 		}

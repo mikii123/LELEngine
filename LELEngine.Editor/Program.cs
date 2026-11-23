@@ -70,8 +70,17 @@ namespace LELEngine.Editor
 
 			// focus=0: automated runs open their windows without taking the keyboard focus.
 			Window.StartFocused = Array.IndexOf(args, "focus=0") < 0;
+			// hidden=1: automated runs that are only driven by commands never show their windows (nor give them the focus).
+			Window.StartHidden = Array.IndexOf(args, "hidden=1") >= 0;
 			if (!EditorApplication.OpensProjectDirectly(args))
 			{
+				if (Window.StartHidden)
+				{
+					// The project chooser is a window: nobody could choose in one that is not shown.
+					Console.Error.WriteLine("[Editor] hidden=1 needs a project to open (project=<folder>).");
+					return 1;
+				}
+
 				string chosen = LauncherWindow.Choose(null);
 				if (chosen == null)
 				{

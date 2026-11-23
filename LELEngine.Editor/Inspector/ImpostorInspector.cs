@@ -166,7 +166,7 @@ namespace LELEngine.Editor
 			}
 
 			float side = Math.Max(32f, Math.Min(ImGui.GetContentRegionAvail().X, 512f));
-			ImGui.Image(EditorGui.Texture(preview.Handle), new NVector2(side, side));
+			ImGui.Image(EditorGui.Texture(preview.Gpu), new NVector2(side, side));
 			if (ImGui.IsItemHovered())
 			{
 				ImGui.SetTooltip(shownAtlas == 1

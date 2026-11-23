@@ -343,21 +343,21 @@ namespace LELEngine.Editor
 				EditorGui.SliderInt("##slice", ref previewSlice, 0, Math.Max(0, volumeTexture.depth - 1), "slice %d");
 			}
 
-			int handle;
+			Graphics.GpuTexture shown;
 			NVector2 uv0;
 			NVector2 uv1;
 			if (texture is Texture3D slices)
 			{
 				Texture2D slice = slices.GetSlice(previewSlice);
-				handle = slice.Handle;
+				shown = slice.Gpu;
 				uv0 = new NVector2(0f, 1f);
 				uv1 = new NVector2(1f, 0f);
-				DrawImage(handle, slice.width, slice.height, uv0, uv1, null);
+				DrawImage(shown, slice.width, slice.height, uv0, uv1, null);
 				slice.Release();
 				return;
 			}
 
-			if (!AssetThumbnails.TryGet(texture, out handle, out uv0, out uv1))
+			if (!AssetThumbnails.TryGet(texture, out shown, out uv0, out uv1))
 			{
 				return;
 			}
@@ -365,16 +365,16 @@ namespace LELEngine.Editor
 			int width = texture is Cubemap c ? c.size * 4 : texture.width;
 			int height = texture is Cubemap c2 ? c2.size * 3 : texture.height;
 			List<SpriteMetaData> overlay = working.textureType == TextureImporterType.Sprite && working.spriteMode == SpriteImportMode.Multiple ? working.sprites : null;
-			DrawImage(handle, width, height, uv0, uv1, overlay);
+			DrawImage(shown, width, height, uv0, uv1, overlay);
 		}
 
-		private static void DrawImage(int handle, int width, int height, NVector2 uv0, NVector2 uv1, List<SpriteMetaData> sprites)
+		private static void DrawImage(Graphics.GpuTexture image, int width, int height, NVector2 uv0, NVector2 uv1, List<SpriteMetaData> sprites)
 		{
 			float available = ImGui.GetContentRegionAvail().X;
 			float scale = Math.Min(available / Math.Max(1, width), 320f / Math.Max(1, height));
 			NVector2 size = new NVector2(Math.Max(1f, width * scale), Math.Max(1f, height * scale));
 			NVector2 origin = ImGui.GetCursorScreenPos();
-			ImGui.Image(EditorGui.Texture(handle), size, uv0, uv1);
+			ImGui.Image(EditorGui.Texture(image), size, uv0, uv1);
 
 			if (sprites == null || sprites.Count == 0)
 			{

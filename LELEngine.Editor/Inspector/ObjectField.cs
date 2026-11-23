@@ -163,20 +163,20 @@ namespace LELEngine.Editor
 		{
 			float textX = start.X + 5f;
 			float icon = height - 6f;
-			int handle;
+			Graphics.GpuTexture thumbnail;
 			NVector2 uv0;
 			NVector2 uv1;
-			if (value is Texture texture && TextureThumbnail(texture, start, height, out handle, out uv0, out uv1))
+			if (value is Texture texture && TextureThumbnail(texture, start, height, out thumbnail, out uv0, out uv1))
 			{
-				draw.AddImage(EditorGui.Texture(handle), start + new NVector2(2f, 2f), start + new NVector2(height - 2f, height - 2f), uv0, uv1);
+				draw.AddImage(EditorGui.Texture(thumbnail), start + new NVector2(2f, 2f), start + new NVector2(height - 2f, height - 2f), uv0, uv1);
 				textX = start.X + height + 2f;
 			}
 			else if (value is Sprite whole && whole.AssetPath != null && whole.SubAssetName == null)
 			{
 				// The whole file: its thumbnail. A sprite of a sheet needs the sheet's texture: 32 pixels do not show one cell.
-				if (TextureThumbnail(whole.texture, start, height, out handle, out uv0, out uv1))
+				if (TextureThumbnail(whole.texture, start, height, out thumbnail, out uv0, out uv1))
 				{
-					draw.AddImage(EditorGui.Texture(handle), start + new NVector2(2f, 2f), start + new NVector2(height - 2f, height - 2f), uv0, uv1);
+					draw.AddImage(EditorGui.Texture(thumbnail), start + new NVector2(2f, 2f), start + new NVector2(height - 2f, height - 2f), uv0, uv1);
 					textX = start.X + height + 2f;
 				}
 				else
@@ -186,10 +186,10 @@ namespace LELEngine.Editor
 					textX = start.X + icon + 9f;
 				}
 			}
-			else if (value is Sprite sprite && AssetThumbnails.TryGet(sprite.texture, out handle, out uv0, out uv1))
+			else if (value is Sprite sprite && AssetThumbnails.TryGet(sprite.texture, out thumbnail, out uv0, out uv1))
 			{
 				LELEngine.Mathematics.Vector4 uv = sprite.uv;
-				draw.AddImage(EditorGui.Texture(handle), start + new NVector2(2f, 2f), start + new NVector2(height - 2f, height - 2f), new NVector2(uv.X, uv.W), new NVector2(uv.Z, uv.Y));
+				draw.AddImage(EditorGui.Texture(thumbnail), start + new NVector2(2f, 2f), start + new NVector2(height - 2f, height - 2f), new NVector2(uv.X, uv.W), new NVector2(uv.Z, uv.Y));
 				textX = start.X + height + 2f;
 			}
 			else if (value != null && !missing)
@@ -223,17 +223,17 @@ namespace LELEngine.Editor
 		}
 
 		/// <summary>A file's small thumbnail, not the texture: showing a field must not put a 4K image on the GPU. Textures made at runtime have no file.</summary>
-		private static bool TextureThumbnail(Texture texture, NVector2 start, float height, out int handle, out NVector2 uv0, out NVector2 uv1)
+		private static bool TextureThumbnail(Texture texture, NVector2 start, float height, out Graphics.GpuTexture thumbnail, out NVector2 uv0, out NVector2 uv1)
 		{
 			if (texture.AssetPath == null)
 			{
-				return AssetThumbnails.TryGet(texture, out handle, out uv0, out uv1);
+				return AssetThumbnails.TryGet(texture, out thumbnail, out uv0, out uv1);
 			}
 
-			handle = 0;
+			thumbnail = null;
 			uv0 = NVector2.Zero;
 			uv1 = NVector2.One;
-			return ImGui.IsRectVisible(start, start + new NVector2(height)) && AssetThumbnails.TryGet(texture.AssetPath, out handle, out uv0, out uv1);
+			return ImGui.IsRectVisible(start, start + new NVector2(height)) && AssetThumbnails.TryGet(texture.AssetPath, out thumbnail, out uv0, out uv1);
 		}
 
 		/// <summary>Tooltip of a referenced object: its hierarchy path or asset path.</summary>
