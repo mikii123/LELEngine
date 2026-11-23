@@ -92,8 +92,8 @@ namespace LELEngine.Shaders
 		}
 
 		/// <summary>
-		///     Loads the binary saved under <paramref name="key" /> into <paramref name="program" /> (a new program object);
-		///     true when it linked. False when there is none or the driver refused it (the file is deleted).
+		///     A finished, linked program from the binary saved under <paramref name="key" />; null when there is none or
+		///     the device refused it or could not link it (the file is deleted).
 		/// </summary>
 		public static GpuProgram TryLoad(ProgramDescriptor descriptor, string key)
 		{
@@ -124,6 +124,18 @@ namespace LELEngine.Shaders
 				Array.Copy(data, Magic.Length, binary, 0, 4);
 				Array.Copy(data, Magic.Length + 8, binary, 4, length);
 				GpuProgram program = GraphicsDevice.Current.CreateProgramFromBinary(descriptor, binary);
+				if (program != null)
+				{
+					// A device may link a binary on its own threads: the caller reads the uniforms at once, and a binary
+					// that does not link after all compiles from its sources.
+					program.Finish();
+					if (!program.IsLinked)
+					{
+						program.Dispose();
+						program = null;
+					}
+				}
+
 				if (program == null)
 				{
 					System.Threading.Interlocked.Increment(ref refused);
