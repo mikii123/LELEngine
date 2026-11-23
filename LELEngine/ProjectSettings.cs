@@ -30,6 +30,9 @@ namespace LELEngine
 		public ShadowSettings Shadows = new ShadowSettings();
 		public GlobalIlluminationSettings GI = new GlobalIlluminationSettings();
 
+		/// <summary>Shadows and reflections traced through the scene's triangles (with ray queries).</summary>
+		public RayTracingSettings RayTracing = new RayTracingSettings();
+
 		/// <summary>How LOD groups pick their levels (bias, most detailed level).</summary>
 		public LODSettings LOD = new LODSettings();
 

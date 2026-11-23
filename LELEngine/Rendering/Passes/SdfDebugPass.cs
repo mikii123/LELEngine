@@ -36,6 +36,8 @@ namespace LELEngine.Rendering.Passes
 		public override void Execute(RenderContext context)
 		{
 			GlobalIlluminationSettings gi = Lighting.GI;
+			// The view reads the field: built for it also while Lumen's rays trace the triangles (from the next frame).
+			Lighting.RequestDistanceField();
 			if (gi.GlobalSdf == null)
 			{
 				return;

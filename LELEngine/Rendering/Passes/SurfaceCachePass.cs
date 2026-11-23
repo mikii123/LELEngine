@@ -69,10 +69,17 @@ namespace LELEngine.Rendering.Passes
 
 			LumenScene scene = context.Renderer.LumenScene;
 			frameIndex++;
+			GpuProfiler profiler = context.Renderer.Profiler;
+			if (Lighting.HardwareRayTracingActive && !gi.DistanceFieldActive)
+			{
+				// No distance field pass placed the GI volume and updated the scene this frame (Lumen's rays trace the
+				// triangles): here, with the scene's acceleration structures.
+				gi.UpdateGridPlacement(context.CameraPosition, context.CameraForward);
+				profiler.Split("RayTracing.scene");
+			}
+
 			scene.Update(context.Renderer.FrameIndex, context.GIRenderers ?? context.Renderers, gi);
 			gridShadow.EnsureSize(gi.GridShadowMapSize);
-
-			GpuProfiler profiler = context.Renderer.Profiler;
 
 			profiler.Split("SurfaceCache.capture");
 			CaptureCards(scene);

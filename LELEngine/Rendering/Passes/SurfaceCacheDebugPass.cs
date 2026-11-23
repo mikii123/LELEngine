@@ -24,6 +24,9 @@ namespace LELEngine.Rendering.Passes
 
 		private ShaderProgram program;
 
+		// The program is the ray query variant (Lighting.HardwareRayTracingActive when it was made).
+		private bool rayQueries;
+
 		#endregion
 
 		#region Constructors
@@ -41,13 +44,22 @@ namespace LELEngine.Rendering.Passes
 		{
 			LumenScene scene = context.Renderer.LumenScene;
 			GlobalIlluminationSettings gi = Lighting.GI;
-			if (scene.SurfaceCache == null || gi.GlobalSdf == null || !context.DepthPrepassDone)
+			if (scene.SurfaceCache == null || !Lighting.LumenTracingReady || !context.DepthPrepassDone)
 			{
 				return;
 			}
 
-			// Compiled when the view is first shown.
-			program ??= new ShaderProgram("Engine/SurfaceCacheDebug.shader");
+			// Compiled when the view is first shown: the pixel's object from a short ray into the triangles, or from the
+			// distance field's object ids.
+			bool rays = Lighting.HardwareRayTracingActive;
+			if (program != null && rayQueries != rays)
+			{
+				program.Delete();
+				program = null;
+			}
+
+			rayQueries = rays;
+			program ??= new ShaderProgram("Engine/SurfaceCacheDebug.shader", Lighting.RayTracingDefines);
 
 			CommandList commands = Gfx.Commands;
 			context.SceneTarget.Begin();
@@ -61,7 +73,7 @@ namespace LELEngine.Rendering.Passes
 			program.SetTexture("NormalRoughness", context.NormalRoughness);
 			program.SetTexture("Lighting", ShowAlbedo ? scene.SurfaceCache.Albedo : scene.SurfaceCache.FinalLightingCurrent);
 			program.SetMatrix4("invViewProjection", Matrix4.Invert(context.ViewProjection));
-			program.SetFloat("searchDistance", gi.SdfVoxelSize * 2f);
+			program.SetFloat("searchDistance", rays ? SceneRayTracing.SurfaceReach : gi.SdfVoxelSize * 2f);
 
 			context.Fullscreen.Draw();
 
@@ -72,6 +84,7 @@ namespace LELEngine.Rendering.Passes
 		public override void Dispose()
 		{
 			program?.Delete();
+			program = null;
 		}
 
 		#endregion

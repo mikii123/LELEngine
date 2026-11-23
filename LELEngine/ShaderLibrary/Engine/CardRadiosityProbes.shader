@@ -103,8 +103,14 @@ void main()
 	vec3 h = CosineSampleHemisphere(u);
 	vec3 direction = normalize(tangent * h.x + bitangent * h.y + N * h.z);
 
+#ifdef LEL_RAY_QUERY
+	// Just off the card's point (no distance field voxel to clear): above what its half-float position is off the
+	// surface by.
+	vec3 origin = SceneRayOrigin(position, N, CardRayBias(localPos));
+#else
 	float sdfVoxel = SdfVoxelSize();
 	vec3 origin = position + N * sdfVoxel;
+#endif
 	float maxDistance = rcNearDistance > 0.0 ? rcNearDistance : sdfGridSize;
 
 	vec3 radiance = SkyRadiance(direction);
@@ -112,10 +118,10 @@ void main()
 	float reached = -1.0;
 	float hitT;
 #ifdef LEL_RAY_QUERY
-	// The scene's triangles: the hit knows its object and its normal.
-	int rayObject;
-	vec3 rayNormal;
-	bool hit = TraceSceneRay(origin, direction, 0.0, maxDistance, hitT, rayObject, rayNormal);
+	// The scene's triangles: the hit knows its object, its normal and its facing.
+	SceneHit sceneHit;
+	bool hit = TraceSceneRay(origin, direction, 0.0, maxDistance, sceneHit);
+	hitT = sceneHit.t;
 #else
 	bool hit = TraceSdf(origin, direction, maxDistance, hitT);
 #endif
@@ -124,7 +130,13 @@ void main()
 		vec3 far = origin + direction * maxDistance;
 		vec3 cached;
 		float beyond;
-		if (SampleSdf(far) >= rcProbeSpacing * 0.25 && SampleRadianceCache(far, direction, cached, beyond))
+#ifdef LEL_RAY_QUERY
+		// The clearance of the far field: the radiance cache's own test (Engine/RadianceCache.glsl).
+		bool clear = true;
+#else
+		bool clear = SampleSdf(far) >= rcProbeSpacing * 0.25;
+#endif
+		if (clear && SampleRadianceCache(far, direction, cached, beyond))
 		{
 			radiance = cached;
 			// The probes' misses lie the field's size away: the sky.
@@ -133,7 +145,8 @@ void main()
 		else
 		{
 #ifdef LEL_RAY_QUERY
-			hit = TraceSceneRay(origin, direction, maxDistance, maxDistance + sdfGridSize, hitT, rayObject, rayNormal);
+			hit = TraceSceneRay(origin, direction, maxDistance, maxDistance + sdfGridSize, sceneHit);
+			hitT = sceneHit.t;
 #else
 			hit = TraceSdf(far, direction, sdfGridSize, hitT);
 			hitT += maxDistance;
@@ -144,8 +157,9 @@ void main()
 	{
 		vec3 hitPos = origin + direction * hitT;
 #ifdef LEL_RAY_QUERY
-		int objectIndex = rayObject;
-		radiance = SampleSurfaceCacheAtSceneHit(rayObject, hitPos, rayNormal, FinalLightingPrev);
+		// A back face (the ray left from behind a surface) gives no light.
+		int objectIndex = sceneHit.objectIndex;
+		radiance = SceneHitRadiance(sceneHit, origin, direction, FinalLightingPrev);
 #else
 		vec3 lit;
 		int objectIndex;

@@ -10,8 +10,11 @@ namespace LELEngine.Rendering
 	///     (<see cref="GraphicsCapabilities.RayQueries" />): one per mesh, of all its triangles where the pool holds them
 	///     (the positions of the pool's vertices, its 32 bit indices, hidden ranges as they are on the GPU), made the first
 	///     time it is asked for and built with the others asked for before the next <see cref="BuildPending" /> in one
-	///     command; compacted once the GPU has told how small it can be (<see cref="Compact" />), built again when the
-	///     mesh's triangles change on the GPU, freed when the mesh leaves the pool. Graphics thread only.
+	///     command: everything at once in the first frame after a load (<see cref="BuildEverythingNext" />), later at most
+	///     <see cref="TrianglesPerFrame" /> a frame, so a mesh that appears in play waits a frame or two instead of stopping
+	///     one (<see cref="GetBuilt" />); compacted once the GPU has told how small it can be (<see cref="Compact" />), built
+	///     again when the mesh's triangles change on the GPU, freed when the mesh leaves the pool. Made with data access: the
+	///     rays read their hit triangles' corners from them where the device fetches positions. Graphics thread only.
 	/// </summary>
 	public static class MeshAccelerationStructures
 	{
@@ -37,10 +40,12 @@ namespace LELEngine.Rendering
 		private const float CompactionSaving = 0.125f;
 
 		private static readonly Dictionary<Mesh, Entry> entries = new Dictionary<Mesh, Entry>();
-		private static readonly List<GpuAccelerationStructure> pending = new List<GpuAccelerationStructure>();
+		private static readonly List<Entry> pending = new List<Entry>();
+		private static readonly List<GpuAccelerationStructure> building = new List<GpuAccelerationStructure>();
 		private static readonly List<Mesh> pendingMeshes = new List<Mesh>();
 		private static readonly List<Mesh> compacting = new List<Mesh>();
-		private static long pendingTriangles;
+		private static bool buildEverything;
+		private static int frameBuilds;
 
 		#endregion
 
@@ -89,33 +94,98 @@ namespace LELEngine.Rendering
 				}
 			};
 			string name = (mesh.SubAssetName ?? mesh.name) + " bottom level";
+			// Data access: the rays read the hit triangle's corners from it where the device fetches positions.
 			GpuAccelerationStructure structure = Gfx.Device.CreateAccelerationStructure(AccelerationStructureDescriptor.BottomLevel(triangles,
-				AccelerationStructureFlags.PreferFastTrace | AccelerationStructureFlags.AllowCompaction, name));
-			entry = new Entry { Structure = structure, FirstIndex = firstIndex, BaseVertex = baseVertex, IndexCount = indexCount };
+				AccelerationStructureFlags.PreferFastTrace | AccelerationStructureFlags.AllowCompaction | AccelerationStructureFlags.AllowDataAccess, name));
+			entry = new Entry { Structure = structure, FirstIndex = firstIndex, BaseVertex = baseVertex, IndexCount = indexCount, Triangles = indexCount / 3 };
 			entries.Add(mesh, entry);
-			pending.Add(structure);
+			pending.Add(entry);
 			pendingMeshes.Add(mesh);
-			pendingTriangles += indexCount / 3;
 			Bytes += structure.Size;
 			Version++;
 			return structure;
 		}
 
-		/// <summary>Builds the structures made since the last call, in one command (it ends an open pass).</summary>
+		/// <summary>
+		///     The bottom level of a mesh when it is built (or its build is recorded) by now: null while it waits for a later
+		///     frame's <see cref="BuildPending" /> (a frame builds <see cref="TrianglesPerFrame" /> at most), and for a mesh
+		///     without triangles. What traces the scene leaves such a mesh out until then.
+		/// </summary>
+		public static GpuAccelerationStructure GetBuilt(Mesh mesh)
+		{
+			GpuAccelerationStructure structure = Get(mesh);
+			return structure != null && entries.TryGetValue(mesh, out Entry entry) && entry.Recorded ? structure : null;
+		}
+
+		/// <summary>
+		///     Triangles whose bottom levels one frame builds at most, the smallest meshes first; what is left waits for the next
+		///     frames (a mesh that appears in play does not stop a frame). The frames after a load
+		///     (<see cref="BuildEverythingNext" />) build all they are given.
+		/// </summary>
+		public static long TrianglesPerFrame { get; set; } = 250000;
+
+		/// <summary>The next <see cref="BuildPending" /> builds everything that waits, whatever its size: a scene was loaded (its first frame is the load's).</summary>
+		public static void BuildEverythingNext()
+		{
+			buildEverything = true;
+		}
+
+		/// <summary>
+		///     Builds structures made since the last call, in one command (it ends an open pass): all of them after a load
+		///     (<see cref="BuildEverythingNext" />, the first frame), else up to <see cref="TrianglesPerFrame" /> (at least
+		///     one), smallest first.
+		/// </summary>
 		public static void BuildPending()
 		{
 			if (pending.Count == 0)
 			{
+				buildEverything = false;
 				return;
 			}
 
-			Gfx.Commands.BuildBottomLevels(CollectionsMarshal.AsSpan(pending));
-			Console.WriteLine($"[RayTracing] Bottom levels of {pending.Count} meshes built ({pendingTriangles:N0} triangles): {Bytes / 1048576.0:0.00} MB for {entries.Count} meshes");
+			building.Clear();
+			long triangles = 0;
+			if (buildEverything || frameBuilds == 0)
+			{
+				foreach (Entry entry in pending)
+				{
+					building.Add(entry.Structure);
+					entry.Recorded = true;
+					triangles += entry.Triangles;
+				}
+
+				pending.Clear();
+			}
+			else
+			{
+				pending.Sort((a, b) => a.Triangles.CompareTo(b.Triangles));
+				int taken = 0;
+				while (taken < pending.Count && (taken == 0 || triangles + pending[taken].Triangles <= TrianglesPerFrame))
+				{
+					building.Add(pending[taken].Structure);
+					pending[taken].Recorded = true;
+					triangles += pending[taken].Triangles;
+					taken++;
+				}
+
+				pending.RemoveRange(0, taken);
+			}
+
+			buildEverything = false;
+			frameBuilds++;
+			Gfx.Commands.BuildBottomLevels(CollectionsMarshal.AsSpan(building));
+			Console.WriteLine($"[RayTracing] Bottom levels of {building.Count} meshes built ({triangles:N0} triangles){(pending.Count > 0 ? $", {pending.Count} wait for the next frames" : "")}: {Bytes / 1048576.0:0.00} MB for {entries.Count} meshes");
 			// Their compacted sizes are read once the GPU has run the builds.
-			compacting.AddRange(pendingMeshes);
-			pending.Clear();
-			pendingMeshes.Clear();
-			pendingTriangles = 0;
+			for (int i = pendingMeshes.Count - 1; i >= 0; i--)
+			{
+				if (entries.TryGetValue(pendingMeshes[i], out Entry entry) && entry.Recorded)
+				{
+					compacting.Add(pendingMeshes[i]);
+					pendingMeshes.RemoveAt(i);
+				}
+			}
+
+			building.Clear();
 		}
 
 		/// <summary>
@@ -204,7 +274,10 @@ namespace LELEngine.Rendering
 
 			entries.Clear();
 			compacting.Clear();
+			pending.Clear();
 			pendingMeshes.Clear();
+			// Tracing again later starts as a load does: its first frame builds everything.
+			frameBuilds = 0;
 			Console.WriteLine("[RayTracing] Bottom levels released");
 		}
 
@@ -214,7 +287,7 @@ namespace LELEngine.Rendering
 
 		private static void Free(Entry entry)
 		{
-			pending.Remove(entry.Structure);
+			pending.Remove(entry);
 			Bytes -= entry.Structure.Size;
 			entry.Structure.Dispose();
 			Version++;
@@ -233,6 +306,10 @@ namespace LELEngine.Rendering
 
 			public int BaseVertex;
 			public int IndexCount;
+			public long Triangles;
+
+			/// <summary>Its build is recorded (a top level may place it).</summary>
+			public bool Recorded;
 
 			/// <summary>The mesh's triangles changed on the GPU since.</summary>
 			public bool Stale;

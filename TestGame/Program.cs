@@ -52,6 +52,10 @@ namespace TestGame
 		///            [noise=frames] [noisestart=frame]
 		///            [graphics=opengl|vulkan the graphics API] [hidden=1 the window never shows] [fixeddt=seconds every frame advances by]
 		///            [hwrt=0|1 Lumen's rays through the triangles with ray queries where the device has them (1, the default) or the distance fields]
+		///            Ray tracing besides (Project Settings > Lighting > Ray Tracing; devices with ray queries): [rtshadows=0|1 local lights' shadows traced (1)]
+		///            [rtshadowlights=1..8 how many at once] [rtsunshadows=0|1 directional lights' shadows traced on opaque surfaces instead of the maps (0)]
+		///            [rtsoft=0|1 soft by the lights' size, accumulated and filtered (1)] [rtreflect=0|1 glossy reflections traced with Lumen's rays (1)]
+		///            [rtrough=0.05..1 the roughness they trace up to (0.4)] [rtbudget=N triangles of bottom levels built a frame after the load's (250000)]
 		///            Fallback tests: environment LEL_GL_DISABLE=drawparameters,indirectparameters,subgroups
 		///     Loads the GI test room with the FPS controller.
 		/// </summary>
@@ -222,6 +226,17 @@ namespace TestGame
 				CameraPosition = GetVector3(args, "camera"),
 				CameraLookAt = GetVector3(args, "look")
 			};
+
+			// What is traced besides Lumen's rays (the project's settings, every scene): shadows, reflections.
+			RayTracingSettings rayTracing = ProjectSettings.Current.RayTracing;
+			rayTracing.LocalLightShadows = GetBool(args, "rtshadows", rayTracing.LocalLightShadows);
+			rayTracing.ShadowedLocalLights = GetInt(args, "rtshadowlights", rayTracing.ShadowedLocalLights);
+			rayTracing.DirectionalLightShadows = GetBool(args, "rtsunshadows", rayTracing.DirectionalLightShadows);
+			rayTracing.SoftShadows = GetBool(args, "rtsoft", rayTracing.SoftShadows);
+			rayTracing.Reflections = GetBool(args, "rtreflect", rayTracing.Reflections);
+			rayTracing.ReflectionMaxRoughness = GetFloat(args, "rtrough", rayTracing.ReflectionMaxRoughness);
+			// rtbudget=N: triangles of bottom levels a frame builds after the load's (the spreading over frames, tested small).
+			LELEngine.Rendering.MeshAccelerationStructures.TrianglesPerFrame = GetInt(args, "rtbudget", (int)LELEngine.Rendering.MeshAccelerationStructures.TrianglesPerFrame);
 
 			// view=ghost: the ghosting tests' view (from under the ceiling, down at the floor the orbs circle over).
 			if (string.Equals(GetValue(args, "view"), "ghost", StringComparison.OrdinalIgnoreCase) && !options.CameraPosition.HasValue)

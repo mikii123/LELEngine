@@ -167,8 +167,10 @@ namespace LELEngine.Rendering
 			AddPass(new RadianceCachePass());
 			AddPass(new VoxelGIPass());
 			AddPass(new GeometryPrepass());
+			AddPass(new RayTracedShadowPass());
 			AddPass(new GIResolvePass());
 			AddPass(new ScreenProbeGatherPass());
+			AddPass(new RayTracedReflectionPass());
 			AddPass(new OpaquePass());
 			AddPass(new VfxOpaquePass());
 			AddPass(new SkyboxPass());
@@ -436,6 +438,8 @@ namespace LELEngine.Rendering
 			int executed = 0;
 			Camera.current = stack[lightingIndex];
 			Lighting.ScreenGIView = true;
+			// No traced shadows of another renderer's view: this renderer's pass publishes its own.
+			Lighting.RayShadows = default;
 			executed = RunScope(RenderPassScope.Frame, lightingContext, executed);
 
 			for (int i = 0; i < stack.Count; i++)
@@ -955,6 +959,8 @@ namespace LELEngine.Rendering
 			Motion.Clear();
 			ClearLists();
 			Lighting.GI.InvalidateStatic();
+			// The new scene's meshes get their acceleration structures in its first frame, the load's, not over later ones.
+			MeshAccelerationStructures.BuildEverythingNext();
 		}
 
 		// What the GI uses changed: free the rest now, also while this renderer does not draw (a hidden editor view).
@@ -975,11 +981,15 @@ namespace LELEngine.Rendering
 				}
 			}
 
-			// Lumen's rays no longer trace with ray queries: the scene's top level and the meshes' bottom levels go.
+			// Lumen's rays no longer trace with ray queries: the scene's top level goes, and the meshes' bottom levels when
+			// no traced shadows use them either.
 			if (!Lighting.HardwareRayTracingActive)
 			{
 				LumenScene.ReleaseRayTracing();
-				MeshAccelerationStructures.Clear();
+				if (!Lighting.RayTracedLocalShadows && !Lighting.RayTracedDirectionalShadows)
+				{
+					MeshAccelerationStructures.Clear();
+				}
 			}
 		}
 

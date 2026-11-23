@@ -1429,6 +1429,10 @@ namespace LELEngine.Shaders
 			if (rayQueries)
 			{
 				preamble.Append("#extension GL_EXT_ray_query : require\n");
+				if (features.PositionFetch)
+				{
+					preamble.Append("#extension GL_EXT_ray_tracing_position_fetch : require\n#define LEL_RAY_POSITION_FETCH 1\n");
+				}
 			}
 
 			bool needs460 = false;

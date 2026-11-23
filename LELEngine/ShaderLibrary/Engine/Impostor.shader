@@ -151,6 +151,7 @@ void main()
 #include "Engine/StandardBRDF.glsl"
 #include "Engine/Lights.glsl"
 #include "Engine/DirectionalLights.glsl"
+#include "Engine/RayTracedShadows.glsl"
 #endif
 #include "Engine/Instancing.glsl"
 #include "Engine/Impostor.glsl"
@@ -455,7 +456,7 @@ void main()
 		float ndl = dot(N, L);
 		if (ndl > 0.0)
 		{
-			vec3 lightColor = LelDirectionalRadiance(i) * SampleLightShadowRGB(i, position, N, L);
+			vec3 lightColor = LelDirectionalRadiance(i) * LelDirectionalShadowRGB(i, position, N, L);
 			vec3 lit = LelStandardBRDFDirect(albedo, specColor, roughness, N, V, L, lightColor);
 #ifdef MIXED_WORKFLOW
 			float spec = pow(max(dot(N, normalize(L + V)), 0.0), LSpecular.specShine) * LSpecular.specStrength;
@@ -472,6 +473,8 @@ void main()
 		vec3 radiance;
 		if (LelLightAt(i, position, Li, radiance))
 		{
+			// Behind its traced shadows where it has them (Engine/RayTracedShadows.glsl).
+			radiance *= LelLocalLightShadow(i);
 			vec3 lit = LelStandardBRDFDirect(albedo, specColor, roughness, N, V, Li, radiance);
 #ifdef MIXED_WORKFLOW
 			float specularI = pow(max(dot(N, normalize(Li + V)), 0.0), LSpecular.specShine) * LSpecular.specStrength;
@@ -491,7 +494,7 @@ void main()
 		float ndl = dot(N, L);
 		if (ndl > 0.0)
 		{
-			vec3 lightColor = LelDirectionalRadiance(i) * SampleLightShadowRGB(i, position, N, L);
+			vec3 lightColor = LelDirectionalRadiance(i) * LelDirectionalShadowRGB(i, position, N, L);
 			float spec = pow(max(dot(N, normalize(L + V)), 0.0), LSpecular.specShine) * LSpecular.specStrength;
 			result += (albedo + spec) * lightColor * ndl;
 		}
@@ -504,6 +507,7 @@ void main()
 		vec3 radiance;
 		if (LelLightAt(i, position, Li, radiance))
 		{
+			radiance *= LelLocalLightShadow(i);
 			float specularI = pow(max(dot(N, normalize(Li + V)), 0.0), LSpecular.specShine) * LSpecular.specStrength;
 			result += (albedo + specularI) * radiance * max(dot(N, Li), 0.0);
 		}

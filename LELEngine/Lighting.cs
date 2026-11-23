@@ -36,6 +36,34 @@ namespace LELEngine
 		/// <summary>The shadow map: the project's quality settings with the active scene's reach.</summary>
 		public static ShadowSettings Shadows => ProjectSettings.Current.Shadows;
 
+		/// <summary>Shadows and reflections traced through the scene's triangles: the project's settings.</summary>
+		public static RayTracingSettings RayTracing => ProjectSettings.Current.RayTracing;
+
+		/// <summary>
+		///     Local lights' shadows on opaque surfaces are traced this frame (<see cref="RayTracingSettings.LocalLightShadows" />
+		///     on a device with ray queries): <see cref="Rendering.Passes.RayTracedShadowPass" />.
+		/// </summary>
+		public static bool RayTracedLocalShadows => RayTracing.LocalLightShadows && GraphicsCapabilities.RayQueries;
+
+		/// <summary>
+		///     The shadowed directional lights' shadows on opaque surfaces are traced this frame instead of read from the
+		///     maps (<see cref="RayTracingSettings.DirectionalLightShadows" />, shadows on, a device with ray queries).
+		/// </summary>
+		public static bool RayTracedDirectionalShadows => RayTracing.DirectionalLightShadows && Shadows.Enabled && GraphicsCapabilities.RayQueries;
+
+		/// <summary>
+		///     Glossy surfaces trace their reflections this frame (<see cref="RayTracingSettings.Reflections" /> with Lumen's
+		///     rays on the triangles, <see cref="HardwareRayTracingActive" />): <see cref="Rendering.Passes.RayTracedReflectionPass" />.
+		/// </summary>
+		public static bool RayTracedReflections => RayTracing.Reflections && HardwareRayTracingActive;
+
+		/// <summary>
+		///     The traced shadows of this frame's lighting camera for the lit materials (Engine/RayTracedShadows.glsl):
+		///     published by <see cref="Rendering.Passes.RayTracedShadowPass" />, bound by <see cref="SetShadowUniforms" />
+		///     for draws of that view; a default (inactive) binding otherwise.
+		/// </summary>
+		public static RayShadowBinding RayShadows;
+
 		/// <summary>Global illumination: the project's method and tunables with the active scene's volume and strengths.</summary>
 		public static GlobalIlluminationSettings GI => ProjectSettings.Current.GI;
 
@@ -61,6 +89,41 @@ namespace LELEngine
 
 		/// <summary>The defines of the GI's tracing programs: the ray query variant while <see cref="HardwareRayTracingActive" />.</summary>
 		public static string[] RayTracingDefines => HardwareRayTracingActive ? rayQueryDefines : Array.Empty<string>();
+
+		/// <summary>
+		///     Lumen's rays have what they trace this frame: the scene's triangles (<see cref="HardwareRayTracingActive" />)
+		///     or the global distance field.
+		/// </summary>
+		public static bool LumenTracingReady => HardwareRayTracingActive || GI.GlobalSdf != null;
+
+		/// <summary>
+		///     Frames a request keeps the global distance field built (<see cref="RequestDistanceField" />) while Lumen's rays
+		///     trace the triangles: an effect that reads it now and then does not make and free it in turns.
+		/// </summary>
+		public const int DistanceFieldRequestFrames = 300;
+
+		/// <summary>
+		///     Something other than Lumen's rays read the global distance field in the last
+		///     <see cref="DistanceFieldRequestFrames" /> frames (<see cref="RequestDistanceField" />): it is built also while
+		///     those rays trace the triangles (<see cref="GlobalIlluminationSettings.DistanceFieldActive" />).
+		/// </summary>
+		public static bool DistanceFieldRequested => distanceFieldRequestFrame >= 0 && Time.frameCount - distanceFieldRequestFrame <= DistanceFieldRequestFrames;
+
+		/// <summary>
+		///     Asks for the global distance field from now on (call it every frame it is read): effects that collide with it
+		///     or conform to it, the distance field and surface cache debug views. Without Lumen's rays on the triangles it is
+		///     built anyway; with them it is made on the next frame (the reader sees none until then) and freed
+		///     <see cref="DistanceFieldRequestFrames" /> frames after the last request.
+		/// </summary>
+		public static void RequestDistanceField()
+		{
+			if (!DistanceFieldRequested && GI.LumenActive && HardwareRayTracing)
+			{
+				Console.WriteLine("[SDF] The global distance field is asked for while Lumen's rays trace the triangles: built for its readers");
+			}
+
+			distanceFieldRequestFrame = Time.frameCount;
+		}
 
 		/// <summary>
 		///     Set by the editor while in edit mode: a change of <see cref="GlobalIlluminationSettings.Mode" /> becomes
@@ -172,6 +235,9 @@ namespace LELEngine
 		private static bool giMethodWarned;
 		private static bool? hardwareRayTracing;
 		private static bool rayTracingWarned;
+		private static long distanceFieldRequestFrame = -1;
+		private static bool rayTracingReported;
+		private static (bool, bool, bool, int, bool, bool, float, bool) rayTracingState;
 		private static readonly string[] rayQueryDefines = { ShaderProgram.RayQueryDefine };
 		private static (GIMode, bool, bool, bool, bool) giUsage;
 
@@ -207,6 +273,7 @@ namespace LELEngine
 
 			Environment.ApplyTo(settings);
 			UpdateGIMethod();
+			ReportRayTracing();
 			(GIMode, bool, bool, bool, bool) usage = (GIMethod, GI.Enabled, GI.DistanceFieldActive, GI.VoxelConeTracingActive && GI.ScreenSpaceResolve, HardwareRayTracingActive);
 			if (usage != giUsage)
 			{
@@ -290,6 +357,7 @@ namespace LELEngine
 			program.SetVector4(TimeName, new Vector4(time / 20f, time, time * 2f, time * 3f));
 
 			SetShadowUniforms(program, receiveShadows);
+			SetRayShadowUniforms(program, receiveShadows);
 			SetGIUniforms(program, receiveGI);
 			LightBuffer.EnsureBound();
 			DirectionalLightBuffer.EnsureBound();
@@ -525,6 +593,30 @@ namespace LELEngine
 		}
 
 		/// <summary>
+		///     The traced shadows for Engine/RayTracedShadows.glsl: given to draws of the lighting camera's view (whose pixels
+		///     the mask holds, <see cref="ScreenGIView" />) that receive shadows, while this frame has them
+		///     (<see cref="RayShadows" />); switched off for every other draw.
+		/// </summary>
+		public static void SetRayShadowUniforms(ShaderProgram program, bool receiveShadows)
+		{
+			RayShadowBinding shadows = RayShadows;
+			if (!shadows.Valid && !RayShadowBinding.EverPublished)
+			{
+				// Never traced in this process: every program still has its switches at 0.
+				return;
+			}
+
+			bool enabled = receiveShadows && ScreenGIView && shadows.Valid;
+			program.SetInt("rayShadowLocal", enabled && shadows.LocalSlots > 0 ? 1 : 0);
+			program.SetInt("rayShadowDirectional", enabled ? shadows.DirectionalLights : 0);
+			if (enabled)
+			{
+				program.SetInt("rayShadowDirectionalLayer", shadows.DirectionalLayer);
+				program.SetTexture("RayShadowMask", shadows.Mask);
+			}
+		}
+
+		/// <summary>
 		///     World position to shadow map texture space for Engine/Shadows.glsl: xy inside tile <paramref name="tile" />
 		///     of an atlas of <paramref name="columns" /> x <paramref name="rows" /> tiles (row by row from the bottom
 		///     left), z the depth 0..1.
@@ -627,6 +719,39 @@ namespace LELEngine
 			}
 		}
 
+		// A console line whenever what is traced besides Lumen's rays changes (shadows, reflections), and why not.
+		private static void ReportRayTracing()
+		{
+			RayTracingSettings settings = RayTracing;
+			bool rayQueries = GraphicsCapabilities.RayQueries;
+			bool reflections = RayTracedReflections;
+			(bool, bool, bool, int, bool, bool, float, bool) state = (RayTracedLocalShadows, RayTracedDirectionalShadows, settings.SoftShadows, settings.ShadowedLocalLights, reflections, settings.Reflections,
+				settings.ReflectionMaxRoughness, rayQueries);
+			if (rayTracingReported && state == rayTracingState)
+			{
+				return;
+			}
+
+			rayTracingReported = true;
+			rayTracingState = state;
+			if (!rayQueries)
+			{
+				if (settings.LocalLightShadows || settings.DirectionalLightShadows || settings.Reflections)
+				{
+					Console.WriteLine("[RayTracing] Shadows and reflections: not traced (the graphics device has no ray queries): local lights unshadowed, directional lights by shadow maps, reflections from the GI");
+				}
+
+				return;
+			}
+
+			string local = state.Item1 ? $"local lights traced (up to {Math.Clamp(settings.ShadowedLocalLights, 1, RayTracingSettings.MaxShadowedLocalLights)} at once)" : "local lights unshadowed";
+			string directional = state.Item2 ? "directional lights traced on opaque surfaces (maps for the rest)" : "directional lights by shadow maps";
+			string soft = state.Item1 || state.Item2 ? settings.SoftShadows ? ", soft by the lights' size" : ", hard" : "";
+			string reflection = reflections ? $"glossy surfaces traced (roughness up to {settings.ReflectionMaxRoughness:0.##})"
+				: settings.Reflections ? "from the GI (they trace with Lumen's hardware ray tracing only)" : "from the GI";
+			Console.WriteLine($"[RayTracing] Shadows: {local}, {directional}{soft} | reflections: {reflection}");
+		}
+
 		// Whether Lumen's rays trace with ray queries, and a console line that says which way and why.
 		private static bool DecideRayTracing()
 		{
@@ -635,7 +760,7 @@ namespace LELEngine
 			string device = GraphicsDevice.Current != null ? Gfx.Capabilities.ApiVersion + ", " + Gfx.Capabilities.Renderer : "no graphics device yet";
 			if (used)
 			{
-				Console.WriteLine($"[GI] Rays: hardware ray tracing (ray queries through the scene's triangles; {device})");
+				Console.WriteLine($"[GI] Rays: hardware ray tracing (ray queries through the scene's triangles, no distance fields built unless asked for; {device})");
 			}
 			else if (!GI.HardwareRayTracing)
 			{
@@ -724,6 +849,31 @@ namespace LELEngine
 			public int ProbesPerRow;
 			public int ProbeResolution;
 			public Vector2 AtlasSize;
+		}
+
+		/// <summary>
+		///     A frame's traced shadows (see <see cref="RayShadows" />): per pixel of the lighting camera's view, how much of
+		///     each traced light reaches the surface there (0..1), in a 2D array texture: first the local lights' slots
+		///     (slot s in layer s / 4, channel s % 4; a light's slot is in the light list, Engine/Lights.glsl), then a layer
+		///     of the directional lights (light i in channel i).
+		/// </summary>
+		public struct RayShadowBinding
+		{
+			/// <summary>Some frame of this process published a mask: programs may have their switches on.</summary>
+			public static bool EverPublished;
+
+			public GpuTexture Mask;
+
+			/// <summary>Local light slots in use (0: no local light is traced).</summary>
+			public int LocalSlots;
+
+			/// <summary>Bit i: directional light i's shadow is traced (layer <see cref="DirectionalLayer" />, channel i).</summary>
+			public int DirectionalLights;
+
+			/// <summary>The layer of the directional lights (after the local slots' layers).</summary>
+			public int DirectionalLayer;
+
+			public bool Valid => Mask != null && (LocalSlots > 0 || DirectionalLights != 0);
 		}
 
 		/// <summary>
@@ -1117,10 +1267,14 @@ namespace LELEngine
 		public bool LumenActive => Enabled && Lighting.GIMethod == GIMode.Lumen;
 
 		/// <summary>
-		///     The global distance field is built: Lumen traces it, voxel cone tracing only in an SDF trace mode
-		///     (<see cref="TraceMode" />; <see cref="GITraceMode.VoxelCones" /> never reads it).
+		///     The global distance field is built (and with it the meshes' fields): Lumen traces it unless its rays trace the
+		///     triangles (<see cref="Lighting.HardwareRayTracing" />: then only while something else asks for it,
+		///     <see cref="Lighting.DistanceFieldRequested" />: effects that collide with it, its debug views), voxel cone
+		///     tracing only in an SDF trace mode (<see cref="TraceMode" />; <see cref="GITraceMode.VoxelCones" /> never reads
+		///     it). The one place that decides it: the distance field passes and the GI's scene read this.
 		/// </summary>
-		public bool DistanceFieldActive => Enabled && DistanceFieldEnabled && (Lighting.GIMethod == GIMode.Lumen || TraceMode != GITraceMode.VoxelCones);
+		public bool DistanceFieldActive => Enabled && DistanceFieldEnabled
+			&& (Lighting.GIMethod == GIMode.Lumen ? !Lighting.HardwareRayTracing || Lighting.DistanceFieldRequested : TraceMode != GITraceMode.VoxelCones);
 
 		// ---- Lumen's rays (Engine/SceneRayQuery.glsl, SceneRayTracing) ----
 

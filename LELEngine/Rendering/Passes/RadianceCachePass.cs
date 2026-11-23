@@ -146,7 +146,7 @@ namespace LELEngine.Rendering.Passes
 		{
 			GlobalIlluminationSettings gi = Lighting.GI;
 			LumenScene scene = context.Renderer.LumenScene;
-			bool possible = gi.LumenActive && gi.GlobalSdf != null && scene.SurfaceCache != null;
+			bool possible = gi.LumenActive && Lighting.LumenTracingReady && scene.SurfaceCache != null;
 			bool transparents = context.TransparentRenderers != null && context.TransparentRenderers.Count > 0;
 			Running = possible && (gi.RadianceCacheEnabled || transparents);
 			Active = Running && gi.RadianceCacheEnabled;
@@ -165,17 +165,20 @@ namespace LELEngine.Rendering.Passes
 
 			if (trace != null && traceRayQueries != Lighting.HardwareRayTracingActive)
 			{
-				// The rays' way changed (the editor, in edit mode): the trace program of the other way.
+				// The rays' way changed (the editor, in edit mode): the trace and resolve programs of the other way (the
+				// resolve finds the probes inside geometry from the rays' back faces).
 				trace.Delete();
+				resolve.Delete();
 				traceRayQueries = Lighting.HardwareRayTracingActive;
 				trace = new ComputeShader("Engine/RadianceCacheTrace.shader", Lighting.RayTracingDefines);
+				resolve = new ComputeShader("Engine/RadianceCacheResolve.shader", Lighting.RayTracingDefines);
 			}
 
 			if (trace == null)
 			{
 				traceRayQueries = Lighting.HardwareRayTracingActive;
 				trace = new ComputeShader("Engine/RadianceCacheTrace.shader", Lighting.RayTracingDefines);
-				resolve = new ComputeShader("Engine/RadianceCacheResolve.shader");
+				resolve = new ComputeShader("Engine/RadianceCacheResolve.shader", Lighting.RayTracingDefines);
 				sh = new ComputeShader("Engine/RadianceCacheSH.shader");
 				reset = new ComputeShader("Engine/RadianceCacheReset.shader");
 				probeListBuffer = Gfx.Device.CreateBuffer(new BufferDescriptor(BufferUsage.Storage, 0, true, "Radiance cache probe list"));

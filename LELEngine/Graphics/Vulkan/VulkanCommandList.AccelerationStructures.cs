@@ -155,7 +155,7 @@ namespace LELEngine.Graphics.Vulkan
 					info[i] = new VkAccelerationStructureBuildGeometryInfoKHR
 					{
 						Type = VkAccelerationStructureTypeKHR.BottomLevelKHR,
-						Flags = VulkanAccelerationStructure.BuildFlags(structure.Flags),
+						Flags = structure.VkBuildFlags,
 						Mode = update ? VkBuildAccelerationStructureModeKHR.UpdateKHR : VkBuildAccelerationStructureModeKHR.BuildKHR,
 						SrcAccelerationStructure = update ? structure.Handle : default,
 						DstAccelerationStructure = structure.Handle,
@@ -284,7 +284,7 @@ namespace LELEngine.Graphics.Vulkan
 			VkAccelerationStructureBuildGeometryInfoKHR info = new VkAccelerationStructureBuildGeometryInfoKHR
 			{
 				Type = VkAccelerationStructureTypeKHR.TopLevelKHR,
-				Flags = VulkanAccelerationStructure.BuildFlags(structure.Flags),
+				Flags = structure.VkBuildFlags,
 				Mode = update ? VkBuildAccelerationStructureModeKHR.UpdateKHR : VkBuildAccelerationStructureModeKHR.BuildKHR,
 				SrcAccelerationStructure = update ? structure.Handle : default,
 				DstAccelerationStructure = structure.Handle,

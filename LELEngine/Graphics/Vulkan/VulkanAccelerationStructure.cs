@@ -21,6 +21,13 @@ namespace LELEngine.Graphics.Vulkan
 		/// <summary>The device has acceleration structures and ray queries (<see cref="DeviceCapabilities.RayQuery" />).</summary>
 		internal readonly bool HasRayQuery;
 
+		/// <summary>
+		///     Ray queries read the corners of a hit triangle from the structure (VK_KHR_ray_tracing_position_fetch,
+		///     <see cref="DeviceCapabilities.RayTracingPositionFetch" />): asked for with ray queries where the GPU has it and
+		///     LEL_VULKAN_ENABLE names "positionfetch".
+		/// </summary>
+		internal bool HasPositionFetch { get; private set; }
+
 		private int scratchAlignment;
 		private VkBuffer scratchBuffer;
 		private VmaAllocation scratchAllocation;
@@ -39,6 +46,7 @@ namespace LELEngine.Graphics.Vulkan
 		{
 			public VkPhysicalDeviceAccelerationStructureFeaturesKHR Structures;
 			public VkPhysicalDeviceRayQueryFeaturesKHR Queries;
+			public VkPhysicalDeviceRayTracingPositionFetchFeaturesKHR PositionFetch;
 		}
 
 		/// <summary>
@@ -80,6 +88,31 @@ namespace LELEngine.Graphics.Vulkan
 			extensions.Add("VK_KHR_acceleration_structure");
 			extensions.Add("VK_KHR_ray_query");
 			extensions.Add("VK_KHR_deferred_host_operations");
+
+			// The hit triangle's corners from the structure, where the GPU has it and LEL_VULKAN_ENABLE names "positionfetch":
+			// the rays read their hit's vertex normals from the geometry pool anyway, so it saves nothing measurable (780M),
+			// and the validation layer of this machine (1.3.290) does not know its SPIR-V capability.
+			HasPositionFetch = false;
+			string enabled = Environment.GetEnvironmentVariable("LEL_VULKAN_ENABLE") ?? "";
+			bool askedForFetch = enabled.IndexOf("positionfetch", StringComparison.OrdinalIgnoreCase) >= 0;
+			if (askedForFetch && candidate.SupportsExtension("VK_KHR_ray_tracing_position_fetch") && disabled.IndexOf("positionfetch", StringComparison.OrdinalIgnoreCase) < 0)
+			{
+				VkPhysicalDeviceRayTracingPositionFetchFeaturesKHR fetchHave = new VkPhysicalDeviceRayTracingPositionFetchFeaturesKHR();
+				VkPhysicalDeviceFeatures2 haveFetch = new VkPhysicalDeviceFeatures2 { Next = &fetchHave };
+				InstanceVk->vkGetPhysicalDeviceFeatures2.Invoke(candidate.Handle, &haveFetch);
+				if (fetchHave.RayTracingPositionFetch)
+				{
+					features->PositionFetch = new VkPhysicalDeviceRayTracingPositionFetchFeaturesKHR { RayTracingPositionFetch = true, Next = want->Next };
+					want->Next = &features->PositionFetch;
+					extensions.Add("VK_KHR_ray_tracing_position_fetch");
+					HasPositionFetch = true;
+				}
+			}
+			else if (askedForFetch)
+			{
+				Console.WriteLine("[Vulkan] LEL_VULKAN_ENABLE=positionfetch: the GPU has no VK_KHR_ray_tracing_position_fetch (or LEL_VULKAN_DISABLE names it)");
+			}
+
 			return true;
 		}
 
@@ -304,11 +337,15 @@ namespace LELEngine.Graphics.Vulkan
 		/// <summary>A top level: what they do to its instances buffer (a copy writes it, builds read it).</summary>
 		internal readonly SyncTarget Instances = new SyncTarget();
 
+		/// <summary>The flags its size queries and builds give (<see cref="BuildFlags(AccelerationStructureFlags, bool)" />: data access only where the device fetches positions).</summary>
+		public readonly VkBuildAccelerationStructureFlagsKHR VkBuildFlags;
+
 		public VulkanAccelerationStructure(VulkanDevice device, in AccelerationStructureDescriptor descriptor)
 			: base(descriptor.CompactedFrom != null ? descriptor.CompactedFrom.Level : descriptor.Level, descriptor.CompactedFrom != null ? descriptor.CompactedFrom.Flags : descriptor.Flags,
 				descriptor.Name)
 		{
 			this.device = device;
+			VkBuildFlags = BuildFlags(Flags, device.HasPositionFetch);
 			bool top = Level == AccelerationStructureLevel.Top;
 			long size;
 			if (descriptor.CompactedFrom != null)
@@ -339,7 +376,7 @@ namespace LELEngine.Graphics.Vulkan
 					VkAccelerationStructureBuildGeometryInfoKHR build = new VkAccelerationStructureBuildGeometryInfoKHR
 					{
 						Type = VkAccelerationStructureTypeKHR.TopLevelKHR,
-						Flags = BuildFlags(Flags),
+						Flags = VkBuildFlags,
 						Mode = VkBuildAccelerationStructureModeKHR.BuildKHR,
 						GeometryCount = 1,
 						Geometries = &geometry
@@ -376,7 +413,7 @@ namespace LELEngine.Graphics.Vulkan
 						VkAccelerationStructureBuildGeometryInfoKHR build = new VkAccelerationStructureBuildGeometryInfoKHR
 						{
 							Type = VkAccelerationStructureTypeKHR.BottomLevelKHR,
-							Flags = BuildFlags(Flags),
+							Flags = VkBuildFlags,
 							Mode = VkBuildAccelerationStructureModeKHR.BuildKHR,
 							GeometryCount = Geometries.Length,
 							Geometries = described
@@ -558,6 +595,18 @@ namespace LELEngine.Graphics.Vulkan
 			else if ((flags & AccelerationStructureFlags.PreferFastBuild) != 0)
 			{
 				result |= VkBuildAccelerationStructureFlagsKHR.PreferFastBuildBitKHR;
+			}
+
+			return result;
+		}
+
+		/// <summary>The build flags of a structure on this device: <see cref="AccelerationStructureFlags.AllowDataAccess" /> only where the device fetches positions.</summary>
+		public static VkBuildAccelerationStructureFlagsKHR BuildFlags(AccelerationStructureFlags flags, bool positionFetch)
+		{
+			VkBuildAccelerationStructureFlagsKHR result = BuildFlags(flags);
+			if (positionFetch && (flags & AccelerationStructureFlags.AllowDataAccess) != 0)
+			{
+				result |= VkBuildAccelerationStructureFlagsKHR.AllowDataAccessBitKHR;
 			}
 
 			return result;

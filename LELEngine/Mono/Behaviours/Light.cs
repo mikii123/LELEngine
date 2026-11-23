@@ -80,8 +80,11 @@ public sealed class Light : Behaviour
 	[ShowIf(nameof(Type), LightType.Spot)]
 	public float InnerSpot = 0.7f;
 
-	[Tooltip("The size of the light's source in units: closer than this the light stops growing")]
+	[Tooltip("The size of the light's source in units: closer than this the light stops growing; traced shadows are as soft as a sphere of this radius makes them")]
 	public float SourceRadius = 0.1f;
+
+	[Tooltip("Geometry casts the light's shadows on surfaces, traced through the scene's triangles (Project Settings > Lighting > Ray Tracing: Local Light Shadows, on a graphics device with ray queries). Off, or without ray tracing: it reaches through walls on surfaces")]
+	public bool CastShadows = true;
 
 	[Header("Global illumination")]
 	[Tooltip("The light bounces off what it lights (the GI: voxel cone tracing, Lumen)")]

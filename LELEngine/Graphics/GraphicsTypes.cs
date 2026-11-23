@@ -691,7 +691,13 @@ namespace LELEngine.Graphics
 		PreferFastTrace = 4,
 
 		/// <summary>Built faster, traced slower: for structures built every frame.</summary>
-		PreferFastBuild = 8
+		PreferFastBuild = 8,
+
+		/// <summary>
+		///     A bottom level whose hit triangles' corners the rays can read from it (GL_EXT_ray_tracing_position_fetch,
+		///     <see cref="DeviceCapabilities.RayTracingPositionFetch" />); ignored by devices without it.
+		/// </summary>
+		AllowDataAccess = 16
 	}
 
 	/// <summary>

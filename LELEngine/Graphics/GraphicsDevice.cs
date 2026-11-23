@@ -62,6 +62,12 @@ namespace LELEngine.Graphics
 		/// </summary>
 		public bool RayQuery { get; internal set; }
 
+		/// <summary>
+		///     A ray query reads the corners of the triangle it hit from the structure itself (GLSL's
+		///     GL_EXT_ray_tracing_position_fetch) in bottom levels made with <see cref="AccelerationStructureFlags.AllowDataAccess" />.
+		/// </summary>
+		public bool RayTracingPositionFetch { get; internal set; }
+
 		/// <summary>The driver holds every thread of the process while one compiles a program (compiling in another process helps).</summary>
 		public bool CompilesBlockEveryThread { get; internal set; }
 	}

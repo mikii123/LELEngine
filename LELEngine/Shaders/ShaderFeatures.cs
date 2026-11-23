@@ -25,12 +25,13 @@ namespace LELEngine.Shaders
 	{
 		#region Constructors
 
-		public ShaderFeatures(DrawParametersSupport drawParameters, bool computeSubgroups, bool previousModels, bool rayQueries = false)
+		public ShaderFeatures(DrawParametersSupport drawParameters, bool computeSubgroups, bool previousModels, bool rayQueries = false, bool positionFetch = false)
 		{
 			DrawParameters = drawParameters;
 			ComputeSubgroups = computeSubgroups;
 			PreviousModels = previousModels;
 			RayQueries = rayQueries;
+			PositionFetch = rayQueries && positionFetch;
 		}
 
 		#endregion
@@ -53,12 +54,20 @@ namespace LELEngine.Shaders
 		/// </summary>
 		public bool RayQueries { get; }
 
+		/// <summary>
+		///     A ray query reads its hit triangle's corners from the structure (GL_EXT_ray_tracing_position_fetch,
+		///     <see cref="GraphicsCapabilities.RayTracingPositionFetch" />): the ray query variants get the extension and
+		///     LEL_RAY_POSITION_FETCH.
+		/// </summary>
+		public bool PositionFetch { get; }
+
 		/// <summary>The features of the current context (<see cref="GraphicsCapabilities" />).</summary>
 		public static ShaderFeatures Current => new ShaderFeatures(
 			!GraphicsCapabilities.ShaderDrawParameters ? DrawParametersSupport.None : GraphicsCapabilities.ShaderDrawParametersExtension ? DrawParametersSupport.Extension : DrawParametersSupport.Core,
 			GraphicsCapabilities.ComputeSubgroups,
 			GpuScene.SupportsPreviousModels,
-			GraphicsCapabilities.RayQueries);
+			GraphicsCapabilities.RayQueries,
+			GraphicsCapabilities.RayTracingPositionFetch);
 
 		#endregion
 
@@ -68,7 +77,7 @@ namespace LELEngine.Shaders
 		public override string ToString()
 		{
 			string drawParameters = DrawParameters == DrawParametersSupport.Extension ? "draw parameters ARB" : DrawParameters == DrawParametersSupport.Core ? "draw parameters GLSL 4.60" : "no draw parameters";
-			return drawParameters + (ComputeSubgroups ? ", subgroups" : "") + (PreviousModels ? ", previous models" : "") + (RayQueries ? ", ray queries" : "");
+			return drawParameters + (ComputeSubgroups ? ", subgroups" : "") + (PreviousModels ? ", previous models" : "") + (RayQueries ? ", ray queries" : "") + (PositionFetch ? ", position fetch" : "");
 		}
 
 		#endregion
