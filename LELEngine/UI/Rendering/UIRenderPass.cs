@@ -64,8 +64,6 @@ namespace LELEngine.Rendering.Passes
 					Debug.LogException(e, document);
 				}
 			}
-
-			GLState.Reset();
 		}
 
 		public override void ReleaseSceneReferences()

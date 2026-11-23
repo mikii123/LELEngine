@@ -639,10 +639,7 @@ namespace TestGame.Scenes
 
 			int width = Game.Mono.Renderer.RenderWidth;
 			int height = Game.Mono.Renderer.RenderHeight;
-			var texels = new float[width * height * 4];
-			LELEngine.Graphics.GL.BindTexture(LELEngine.Graphics.TextureTarget.Texture2D, motion.Handle);
-			LELEngine.Graphics.GL.GetTexImage(LELEngine.Graphics.TextureTarget.Texture2D, 0, LELEngine.Graphics.PixelFormat.Rgba, LELEngine.Graphics.PixelType.Float, texels);
-			LELEngine.Graphics.GL.BindTexture(LELEngine.Graphics.TextureTarget.Texture2D, 0);
+			float[] texels = LELEngine.Graphics.TexelConversion.ReadFloats(motion.Gpu, 0, 0, 0, 0, width, height);
 			for (int quarter = 0; quarter < 4; quarter++)
 			{
 				int moved = 0;

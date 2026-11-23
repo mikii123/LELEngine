@@ -151,7 +151,7 @@ namespace LELEngine.Rendering.Impostors
 			int frames = settings.Frames;
 			int frameSize = settings.FrameSize;
 			int atlasSize = frames * frameSize;
-			int largest = Math.Min(MaxAtlasSize, GL.GetInteger(GetPName.MaxTextureSize));
+			int largest = Math.Min(MaxAtlasSize, Gfx.Capabilities.MaxTextureSize);
 			if (atlasSize > largest)
 			{
 				throw new ArgumentException($"{frames} x {frames} views of {frameSize} texels make an atlas of {atlasSize} texels a side (at most {largest}): fewer or smaller views.");
@@ -191,10 +191,13 @@ namespace LELEngine.Rendering.Impostors
 			Framebuffer atlas = null;
 			// A bake may run in the middle of a frame (the editor's Bake button): the targets and the viewport it found
 			// are put back.
+			// LEGACY(gl): the callers that bake in the middle of a frame (LELEngine.Editor's Bake button) draw on with
+			// OpenGL commands; the device cannot tell which pass was open, nor open it again.
 			var viewport = new int[4];
 			GL.GetInteger(GetPName.Viewport, viewport);
 			int drawTarget = GL.GetInteger(GetPName.DrawFramebufferBinding);
 			int readTarget = GL.GetInteger(GetPName.ReadFramebufferBinding);
+			CommandList commands = Gfx.Commands;
 			var fullscreen = new FullscreenQuad();
 			try
 			{
@@ -222,8 +225,16 @@ namespace LELEngine.Rendering.Impostors
 				var pending = new List<Task>();
 				int parallel = Math.Max(1, Environment.ProcessorCount);
 				Matrix4 projection = ImpostorMath.FrameProjection(radius);
-				GL.Disable(EnableCap.Blend);
-				GL.Disable(EnableCap.ScissorTest);
+				commands.State.Blend = false;
+
+				// A texture's first use uploads it and makes its mip levels, which ends a pass: every surface's values
+				// are given once before the first one.
+				commands.EndRenderPass();
+				foreach (Surface surface in surfaces)
+				{
+					SetSurface(surface, Matrix4.Identity, projection);
+				}
+
 				for (int row = 0; row < frames; row++)
 				{
 					for (int column = 0; column < frames; column++)
@@ -238,28 +249,24 @@ namespace LELEngine.Rendering.Impostors
 						// the faces of a mesh in the same order every time: bakes of one object differed in a texel here and
 						// there (measured on the 780M: about one texel in three bakes of a 2,000 triangle ship). Kept so,
 						// the picture does not depend on the order, and a bake of the same object is the same file.
-						capture.Bind();
-						GLState.SetDepth(true, true, DepthFunction.Less);
-						GLState.SetColorWrite(false);
-						GL.ClearDepth(1.0);
-						GL.Clear(ClearBufferMask.DepthBufferBit);
+						// The colours are cleared below anything a surface writes (normals are negative too); the samples
+						// nothing covers are told by their depth and never read.
+						capture.Begin(LoadOperation.Clear, new ClearValue(Lowest, Lowest, Lowest, Lowest), LoadOperation.Clear, 1f);
+						commands.State.SetDepth(true, true, CompareFunction.Less);
+						commands.State.ColorMask = ColorWriteMask.None;
 						DrawSurfaces(surfaces, view, projection);
 
-						// Cleared below anything a surface writes (normals are negative too); the samples nothing covers are
-						// told by their depth and never read.
-						GLState.SetColorWrite(true);
-						GL.ClearColor(Lowest, Lowest, Lowest, Lowest);
-						GL.Clear(ClearBufferMask.ColorBufferBit);
-						GLState.SetDepth(true, false, DepthFunction.Equal);
-						GL.Enable(EnableCap.Blend);
-						GL.BlendEquation(BlendEquationMode.Max);
+						commands.State.ColorMask = ColorWriteMask.All;
+						commands.State.SetDepth(true, false, CompareFunction.Equal);
+						commands.State.Blend = true;
+						commands.State.ColorOperation = BlendOperation.Max;
+						commands.State.AlphaOperation = BlendOperation.Max;
 						DrawSurfaces(surfaces, view, projection);
-						GL.Disable(EnableCap.Blend);
-						GL.BlendEquation(BlendEquationMode.FuncAdd);
+						commands.State.Blend = false;
+						commands.State.ColorOperation = BlendOperation.Add;
+						commands.State.AlphaOperation = BlendOperation.Add;
 
-						GL.BindFramebuffer(FramebufferTarget.ReadFramebuffer, capture.Handle);
-						GL.PixelStore(PixelStoreParameter.PackAlignment, 1);
-						GL.ReadPixels(0, 0, tile, tile, PixelFormat.DepthComponent, PixelType.Float, depth);
+						captureDepth.Gpu.GetData(0, depth);
 						var mask = new byte[tile * tile];
 						for (int i = 0; i < mask.Length; i++)
 						{
@@ -275,16 +282,16 @@ namespace LELEngine.Rendering.Impostors
 							pending.Clear();
 						}
 
-						atlas.Bind();
-						GL.Viewport(originX, originY, frameSize, frameSize);
-						GLState.SetDepth(false, false);
-						GLState.SetCull(false);
+						atlas.Begin();
+						commands.SetViewport(originX, originY, frameSize, frameSize);
+						commands.State.SetDepth(false, false);
+						commands.State.Culling = FaceCulling.None;
 						resolveProgram.Use();
-						resolveProgram.SetTexture("CaptureDiffuse", TextureTarget.Texture2D, captureDiffuse.Handle, 0);
-						resolveProgram.SetTexture("CaptureNormal", TextureTarget.Texture2D, captureNormal.Handle, 1);
-						resolveProgram.SetTexture("CaptureSpecular", TextureTarget.Texture2D, captureSpecular.Handle, 2);
-						resolveProgram.SetTexture("CaptureEmission", TextureTarget.Texture2D, captureEmission.Handle, 3);
-						resolveProgram.SetTexture("CaptureDepth", TextureTarget.Texture2D, captureDepth.Handle, 4);
+						resolveProgram.SetTexture("CaptureDiffuse", captureDiffuse);
+						resolveProgram.SetTexture("CaptureNormal", captureNormal);
+						resolveProgram.SetTexture("CaptureSpecular", captureSpecular);
+						resolveProgram.SetTexture("CaptureEmission", captureEmission);
+						resolveProgram.SetTexture("CaptureDepth", captureDepth);
 						resolveProgram.SetInt("samples", samples);
 						resolveProgram.SetInt2("frameOrigin", originX, originY);
 						resolveProgram.SetVector3("frameRight", right);
@@ -299,20 +306,20 @@ namespace LELEngine.Rendering.Impostors
 			}
 			finally
 			{
-				GL.BindFramebuffer(FramebufferTarget.DrawFramebuffer, drawTarget);
-				GL.BindFramebuffer(FramebufferTarget.ReadFramebuffer, readTarget);
-				GL.Viewport(viewport[0], viewport[1], viewport[2], viewport[3]);
+				commands.EndRenderPass();
 				capture?.Delete();
 				atlas?.Delete();
 				fullscreen.Delete();
-				GL.Disable(EnableCap.Blend);
-				GL.BlendEquation(BlendEquationMode.FuncAdd);
-				GL.ClearColor(0f, 0f, 0f, 0f);
-				GLState.SetDepth(true, true, DepthFunction.Less);
-				GLState.SetCull(true, TriangleFace.Back);
-				GLState.SetColorWrite(true);
-				GL.PixelStore(PixelStoreParameter.PackAlignment, 4);
-				GLState.Reset();
+				commands.State.Blend = false;
+				commands.State.ColorOperation = BlendOperation.Add;
+				commands.State.AlphaOperation = BlendOperation.Add;
+				commands.State.SetDepth(true, true, CompareFunction.Less);
+				commands.State.Culling = FaceCulling.Back;
+				commands.State.ColorMask = ColorWriteMask.All;
+				// LEGACY(gl): see above.
+				GL.BindFramebuffer(FramebufferTarget.DrawFramebuffer, drawTarget);
+				GL.BindFramebuffer(FramebufferTarget.ReadFramebuffer, readTarget);
+				GL.Viewport(viewport[0], viewport[1], viewport[2], viewport[3]);
 			}
 
 			bake.Milliseconds = watch.Elapsed.TotalMilliseconds;
@@ -426,34 +433,41 @@ namespace LELEngine.Rendering.Impostors
 			radius = MathF.Sqrt(squared);
 		}
 
-		// One view of the surfaces into the bound capture targets.
+		// One view of the surfaces into the capture targets of the open pass.
 		private static void DrawSurfaces(List<Surface> surfaces, Matrix4 view, Matrix4 projection)
 		{
+			CommandList commands = Gfx.Commands;
 			foreach (Surface surface in surfaces)
 			{
-				Material material = surface.Material;
-				ShaderProgram program = surface.Program;
-				material.RenderState.ApplyCull();
-				if (program != null)
-				{
-					program.Use();
-					program.SetMatrix4("viewMatrix", view);
-					program.SetMatrix4("projectionMatrix", projection);
-					program.SetMatrix4("modelMatrix", surface.Model);
-					material.SetUniforms(program, surface.Renderer.PropertyBlock);
-				}
-				else
-				{
-					captureProgram.Use();
-					captureProgram.SetMatrix4("viewMatrix", view);
-					captureProgram.SetMatrix4("projectionMatrix", projection);
-					captureProgram.SetMatrix4("modelMatrix", surface.Model);
-					GISurface.SetUniforms(captureProgram, material);
-					float roughness = material.TryGetFloat("Roughness", out float declared) && declared > 0f ? declared : 0.6f;
-					captureProgram.SetFloat("captureRoughness", roughness);
-				}
-
+				CullMode cull = surface.Material.RenderState.Cull;
+				commands.State.Culling = cull == CullMode.Off ? FaceCulling.None : cull == CullMode.Front ? FaceCulling.Front : FaceCulling.Back;
+				SetSurface(surface, view, projection);
 				surface.Renderer.DrawSubMesh(surface.SubMesh);
+			}
+		}
+
+		// The program a surface is captured with, in use and with the view's and the material's values.
+		private static void SetSurface(Surface surface, Matrix4 view, Matrix4 projection)
+		{
+			Material material = surface.Material;
+			ShaderProgram program = surface.Program;
+			if (program != null)
+			{
+				program.Use();
+				program.SetMatrix4("viewMatrix", view);
+				program.SetMatrix4("projectionMatrix", projection);
+				program.SetMatrix4("modelMatrix", surface.Model);
+				material.SetUniforms(program, surface.Renderer.PropertyBlock);
+			}
+			else
+			{
+				captureProgram.Use();
+				captureProgram.SetMatrix4("viewMatrix", view);
+				captureProgram.SetMatrix4("projectionMatrix", projection);
+				captureProgram.SetMatrix4("modelMatrix", surface.Model);
+				GISurface.SetUniforms(captureProgram, material);
+				float roughness = material.TryGetFloat("Roughness", out float declared) && declared > 0f ? declared : 0.6f;
+				captureProgram.SetFloat("captureRoughness", roughness);
 			}
 		}
 
@@ -467,13 +481,11 @@ namespace LELEngine.Rendering.Impostors
 			int size = bake.AtlasSize;
 			int frames = bake.Frames;
 			int frameSize = bake.FrameSize;
-			GL.BindFramebuffer(FramebufferTarget.ReadFramebuffer, atlas.Handle);
-			GL.PixelStore(PixelStoreParameter.PackAlignment, 1);
 
 			// rgb colour, a covered share of the texel; rg normal, b depth, a occlusion; rgb specular colour, a smoothness.
-			byte[] colour = ReadTexels(0, size);
-			byte[] shape = ReadTexels(1, size);
-			byte[] specular = ReadTexels(2, size);
+			byte[] colour = ReadTexels(atlas, 0, size);
+			byte[] shape = ReadTexels(atlas, 1, size);
+			byte[] specular = ReadTexels(atlas, 2, size);
 
 			// Texels wholly on a surface with a specular colour of its own, and wholly on one without (lit with the scene's
 			// highlight): which lighting the impostor needs.
@@ -512,14 +524,15 @@ namespace LELEngine.Rendering.Impostors
 
 			// The emitted radiance, a view at a time (floats: the atlas at once would be 16 bytes a texel): first how
 			// bright it gets, then its texels as a share of that.
-			GL.ReadBuffer(ReadBufferMode.ColorAttachment3);
+			GpuTexture emitted = atlas.ColorAttachments[3].Gpu;
 			var radiance = new float[frameSize * frameSize * 4];
+			var halves = new ushort[radiance.Length];
 			float brightest = 0f;
 			for (int row = 0; row < frames; row++)
 			{
 				for (int column = 0; column < frames; column++)
 				{
-					GL.ReadPixels(column * frameSize, row * frameSize, frameSize, frameSize, PixelFormat.Rgba, PixelType.Float, radiance);
+					ReadRadiance(emitted, column * frameSize, row * frameSize, frameSize, halves, radiance);
 					for (int i = 0; i < radiance.Length; i += 4)
 					{
 						brightest = Math.Max(brightest, Math.Max(radiance[i], Math.Max(radiance[i + 1], radiance[i + 2])));
@@ -535,7 +548,7 @@ namespace LELEngine.Rendering.Impostors
 				{
 					for (int column = 0; column < frames; column++)
 					{
-						GL.ReadPixels(column * frameSize, row * frameSize, frameSize, frameSize, PixelFormat.Rgba, PixelType.Float, radiance);
+						ReadRadiance(emitted, column * frameSize, row * frameSize, frameSize, halves, radiance);
 						for (int y = 0; y < frameSize; y++)
 						{
 							int target = ((row * frameSize + y) * size + column * frameSize) * 4;
@@ -623,12 +636,16 @@ namespace LELEngine.Rendering.Impostors
 			bake.Emission = emission;
 		}
 
-		private static byte[] ReadTexels(int attachment, int size)
+		private static byte[] ReadTexels(Framebuffer atlas, int attachment, int size)
 		{
-			var texels = new byte[size * size * 4];
-			GL.ReadBuffer(ReadBufferMode.ColorAttachment0 + attachment);
-			GL.ReadPixels(0, 0, size, size, PixelFormat.Rgba, PixelType.UnsignedByte, texels);
-			return texels;
+			return TexelConversion.ReadBytes(atlas.ColorAttachments[attachment].Gpu, 0, 0, 0, size, size);
+		}
+
+		// One view of the emission atlas (half floats) as floats.
+		private static void ReadRadiance(GpuTexture emitted, int x, int y, int frameSize, ushort[] halves, float[] radiance)
+		{
+			emitted.GetData<ushort>(0, x, y, 0, frameSize, frameSize, 1, halves);
+			TexelConversion.FromHalf(halves, radiance);
 		}
 
 		private static void Copy(byte[] texels, int source, int target)
