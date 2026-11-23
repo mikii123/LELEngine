@@ -29,17 +29,25 @@ namespace LELEngine.Rendering.Passes
 		public override string Name => "GlobalSDF";
 
 		public override RenderPassScope Scope => RenderPassScope.Frame;
-		public int GlobalSdf => globalSdf;
+
+		/// <summary>The field of this frame (null while there is none).</summary>
+		public GpuTexture GlobalSdfTexture => globalSdf;
+
+		/// <summary>The matching object-id volume (R16UI, index + 1 of the nearest object).</summary>
+		public GpuTexture GlobalSdfObjectIdsTexture => globalIds;
+
+		// LEGACY(gl): no user in the engine's solution; kept for code outside it
+		public int GlobalSdf => HandleOf(globalSdf);
 
 		#endregion
 
 		#region PrivateFields
 
 		private ComputeShader compose;
-		private int staticSdf;
-		private int globalSdf;
-		private int staticIds;
-		private int globalIds;
+		private GpuTexture staticSdf;
+		private GpuTexture globalSdf;
+		private GpuTexture staticIds;
+		private GpuTexture globalIds;
 		private int currentResolution;
 
 		// Where grid voxel 0 is stored (toroidal), and the move in voxels waiting to be applied this frame.
@@ -85,7 +93,7 @@ namespace LELEngine.Rendering.Passes
 			}
 
 			compose ??= new ComputeShader("Engine/SdfCompose.shader");
-			if (globalSdf == 0 || gi.SdfResolution != currentResolution)
+			if (globalSdf == null || gi.SdfResolution != currentResolution)
 			{
 				CreateVolumes(gi.SdfResolution);
 			}
@@ -127,8 +135,9 @@ namespace LELEngine.Rendering.Passes
 				dynamicPending = false;
 			}
 
-			gi.GlobalSdf = globalSdf;
-			gi.GlobalSdfObjectIds = globalIds;
+			// LEGACY(gl): Lighting.cs publishes the field to the shaders by OpenGL texture name
+			gi.GlobalSdf = HandleOf(globalSdf);
+			gi.GlobalSdfObjectIds = HandleOf(globalIds);
 		}
 
 		public override void ReleaseUnusedResources()
@@ -150,9 +159,15 @@ namespace LELEngine.Rendering.Passes
 
 		#region PrivateMethods
 
+		// LEGACY(gl): the OpenGL texture name Lighting.cs takes
+		private static int HandleOf(GpuTexture texture)
+		{
+			return texture != null ? ((Graphics.OpenGL.GLTexture)texture).Handle : 0;
+		}
+
 		private void Release()
 		{
-			if (compose == null && globalSdf == 0)
+			if (compose == null && globalSdf == null)
 			{
 				return;
 			}
@@ -173,10 +188,10 @@ namespace LELEngine.Rendering.Passes
 			resolution = Math.Max(8, resolution / 4 * 4);
 			DeleteVolumes();
 
-			staticSdf = CreateSdfTexture(resolution);
-			globalSdf = CreateSdfTexture(resolution);
-			staticIds = CreateIdTexture(resolution);
-			globalIds = CreateIdTexture(resolution);
+			staticSdf = CreateSdfTexture(resolution, false);
+			globalSdf = CreateSdfTexture(resolution, true);
+			staticIds = CreateIdTexture(resolution, false);
+			globalIds = CreateIdTexture(resolution, true);
 			currentResolution = resolution;
 			Lighting.GI.SdfResolution = resolution;
 			staticDirty = true;
@@ -187,51 +202,35 @@ namespace LELEngine.Rendering.Passes
 
 		private void DeleteVolumes()
 		{
-			foreach (int texture in new[] { staticSdf, globalSdf, staticIds, globalIds })
+			foreach (GpuTexture texture in new[] { staticSdf, globalSdf, staticIds, globalIds })
 			{
-				if (texture != 0)
-				{
-					GL.DeleteTexture(texture);
-				}
+				texture?.Dispose();
 			}
-			staticSdf = 0;
-			globalSdf = 0;
-			staticIds = 0;
-			globalIds = 0;
+			staticSdf = null;
+			globalSdf = null;
+			staticIds = null;
+			globalIds = null;
 			scroll = Vector3i.Zero;
 			pendingScroll = Vector3i.Zero;
 			Lighting.GI.SdfScroll = Vector3i.Zero;
 		}
 
 		// Object index + 1 of the nearest surface per voxel (0 = nothing within the band); fetched by texel.
-		private static int CreateIdTexture(int resolution)
+		private static GpuTexture CreateIdTexture(int resolution, bool sampled)
 		{
-			int texture = GL.GenTexture();
-			GL.BindTexture(TextureTarget.Texture3D, texture);
-			GL.TexImage3D(TextureTarget.Texture3D, 0, PixelInternalFormat.R16ui, resolution, resolution, resolution, 0, PixelFormat.RedInteger, PixelType.UnsignedShort, IntPtr.Zero);
-			GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
-			GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
-			GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureWrapS, (int)TextureWrapMode.ClampToEdge);
-			GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureWrapT, (int)TextureWrapMode.ClampToEdge);
-			GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureWrapR, (int)TextureWrapMode.ClampToEdge);
-			GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureMaxLevel, 0);
-			GL.BindTexture(TextureTarget.Texture3D, 0);
+			TextureUsage usage = TextureUsage.Storage | (sampled ? TextureUsage.Sampled : 0);
+			GpuTexture texture = Gfx.Device.CreateTexture(TextureDescriptor.Texture3D(TextureFormat.R16UI, resolution, resolution, resolution, 1, usage, "Global distance field object ids"));
+			texture.Sampler = Samplers.PointClamp;
 			return texture;
 		}
 
-		private static int CreateSdfTexture(int resolution)
+		// sampled: the field the shaders trace; the static field is only read and written as an image.
+		private static GpuTexture CreateSdfTexture(int resolution, bool sampled)
 		{
-			int texture = GL.GenTexture();
-			GL.BindTexture(TextureTarget.Texture3D, texture);
-			GL.TexImage3D(TextureTarget.Texture3D, 0, PixelInternalFormat.R16f, resolution, resolution, resolution, 0, PixelFormat.Red, PixelType.Float, IntPtr.Zero);
-			GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Linear);
-			GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Linear);
+			TextureUsage usage = TextureUsage.Storage | (sampled ? TextureUsage.Sampled : 0);
+			GpuTexture texture = Gfx.Device.CreateTexture(TextureDescriptor.Texture3D(TextureFormat.R16F, resolution, resolution, resolution, 1, usage, "Global distance field"));
 			// Toroidal storage: the sampling wraps, the clamp to the grid's edge is SampleSdf's.
-			GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureWrapS, (int)TextureWrapMode.Repeat);
-			GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureWrapT, (int)TextureWrapMode.Repeat);
-			GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureWrapR, (int)TextureWrapMode.Repeat);
-			GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureMaxLevel, 0);
-			GL.BindTexture(TextureTarget.Texture3D, 0);
+			texture.Sampler = Samplers.LinearRepeat;
 			return texture;
 		}
 
@@ -295,7 +294,7 @@ namespace LELEngine.Rendering.Passes
 				scrollRegions.Add(move.Z > 0 ? new VoxelRegion(0, 0, n - move.Z, n, n, n) : new VoxelRegion(0, 0, 0, n, n, -move.Z));
 			}
 
-			Compose(staticSdf, 0, 0, scene.StaticObjectCount, gi, scene, scrollRegions);
+			Compose(staticSdf, null, 0, scene.StaticObjectCount, gi, scene, scrollRegions);
 			Compose(globalSdf, staticSdf, scene.StaticObjectCount, scene.Objects.Count - scene.StaticObjectCount, gi, scene, scrollRegions);
 
 			// Last frame's stamps, in this grid's voxels (the parts that left are gone with their slabs): the dynamic
@@ -321,16 +320,11 @@ namespace LELEngine.Rendering.Passes
 		{
 			// Everything is composed again: the storage starts unscrolled.
 			scroll = Vector3i.Zero;
-			Compose(staticSdf, 0, 0, scene.StaticObjectCount, gi, scene, VoxelRegion.Full(currentResolution));
+			Compose(staticSdf, null, 0, scene.StaticObjectCount, gi, scene, VoxelRegion.Full(currentResolution));
 
-			GL.CopyImageSubData(
-				staticSdf, ImageTarget.Texture3D, 0, 0, 0, 0,
-				globalSdf, ImageTarget.Texture3D, 0, 0, 0, 0,
-				currentResolution, currentResolution, currentResolution);
-			GL.CopyImageSubData(
-				staticIds, ImageTarget.Texture3D, 0, 0, 0, 0,
-				globalIds, ImageTarget.Texture3D, 0, 0, 0, 0,
-				currentResolution, currentResolution, currentResolution);
+			CommandList commands = Gfx.Commands;
+			commands.CopyTexture(staticSdf, globalSdf);
+			commands.CopyTexture(staticIds, globalIds);
 
 			previousRegions.Clear();
 			staticDirty = false;
@@ -387,32 +381,33 @@ namespace LELEngine.Rendering.Passes
 			return (float)(total / ((double)currentResolution * currentResolution * currentResolution));
 		}
 
-		private void Compose(int target, int baseSdf, int objectStart, int objectCount, GlobalIlluminationSettings gi, LumenScene scene, VoxelRegion region)
+		private void Compose(GpuTexture target, GpuTexture baseSdf, int objectStart, int objectCount, GlobalIlluminationSettings gi, LumenScene scene, VoxelRegion region)
 		{
 			updateRegions.Clear();
 			updateRegions.Add(region);
 			Compose(target, baseSdf, objectStart, objectCount, gi, scene, updateRegions);
 		}
 
-		private void Compose(int target, int baseSdf, int objectStart, int objectCount, GlobalIlluminationSettings gi, LumenScene scene, List<VoxelRegion> regions)
+		private void Compose(GpuTexture target, GpuTexture baseSdf, int objectStart, int objectCount, GlobalIlluminationSettings gi, LumenScene scene, List<VoxelRegion> regions)
 		{
 			compose.Use();
 			scene.SetUniforms(compose.Program);
 			compose.Program.SetInt("objectStart", objectStart);
 			compose.Program.SetInt("objectCount", objectCount);
-			compose.Program.SetInt("useBase", baseSdf != 0 ? 1 : 0);
+			compose.Program.SetInt("useBase", baseSdf != null ? 1 : 0);
 			compose.Program.SetVector3("gridMin", gi.GridMin);
 			compose.Program.SetFloat("gridSize", gi.GridSize);
 			compose.Program.SetInt("sdfResolution", currentResolution);
 			compose.Program.SetFloat("maxDistance", gi.SdfBandVoxels * gi.SdfVoxelSize);
 			compose.Program.SetInt3("storageScroll", scroll.X, scroll.Y, scroll.Z);
 
-			bool fromStatic = baseSdf != 0;
-			int targetIds = target == staticSdf ? staticIds : globalIds;
-			GL.BindImageTexture(0, fromStatic ? baseSdf : target, 0, true, 0, TextureAccess.ReadOnly, SizedInternalFormat.R16f);
-			GL.BindImageTexture(1, target, 0, true, 0, TextureAccess.WriteOnly, SizedInternalFormat.R16f);
-			GL.BindImageTexture(2, fromStatic ? staticIds : targetIds, 0, true, 0, TextureAccess.ReadOnly, SizedInternalFormat.R16ui);
-			GL.BindImageTexture(3, targetIds, 0, true, 0, TextureAccess.WriteOnly, SizedInternalFormat.R16ui);
+			bool fromStatic = baseSdf != null;
+			GpuTexture targetIds = target == staticSdf ? staticIds : globalIds;
+			CommandList commands = Gfx.Commands;
+			commands.SetImage(0, fromStatic ? baseSdf : target, 0, -1, ImageAccess.Read);
+			commands.SetImage(1, target, 0, -1, ImageAccess.Write);
+			commands.SetImage(2, fromStatic ? staticIds : targetIds, 0, -1, ImageAccess.Read);
+			commands.SetImage(3, targetIds, 0, -1, ImageAccess.Write);
 
 			foreach (VoxelRegion region in regions)
 			{
@@ -425,8 +420,6 @@ namespace LELEngine.Rendering.Passes
 				compose.Program.SetInt3("dstSize", region.SizeX, region.SizeY, region.SizeZ);
 				compose.DispatchThreads(region.SizeX, region.SizeY, region.SizeZ, 4, 4, 4);
 			}
-
-			ComputeShader.Barrier(MemoryBarrierFlags.ShaderImageAccessBarrierBit | MemoryBarrierFlags.TextureFetchBarrierBit);
 		}
 
 		#endregion
