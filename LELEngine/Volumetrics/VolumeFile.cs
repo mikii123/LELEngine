@@ -43,6 +43,13 @@ namespace LELEngine.Volumetrics
 		/// <summary>X x Y x Z x 4 bytes (RGBA), or null.</summary>
 		public byte[] Lit;
 
+		/// <summary>
+		///     No voxel holds any cloud: never kept (<see cref="VolumeCache" />). A cloud with nothing in it costs little to
+		///     make, and an empty readback is far more likely a failed one: such a file, once written, hid the cloud at
+		///     every start (2026-11-23).
+		/// </summary>
+		public bool IsEmpty => Density == null || Density.AsSpan().IndexOfAnyExcept((byte)0) < 0;
+
 		#endregion
 
 		#region PrivateFields
