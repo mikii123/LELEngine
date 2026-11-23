@@ -10,7 +10,7 @@ namespace LELEngine.Graphics.Vulkan
 	///     reads. An upload given inside a pass that has to be ordered with the pass's draws suspends the rendering and
 	///     the next draw takes it up again, keeping what was drawn.
 	/// </summary>
-	internal sealed unsafe class VulkanCommandList : CommandList
+	internal sealed unsafe partial class VulkanCommandList : CommandList
 	{
 		public const int MaxBufferBindings = 96;
 		public const int MaxImageBindings = 64;

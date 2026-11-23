@@ -43,7 +43,10 @@ namespace LELEngine.Graphics.Vulkan
 		SeparateImage,
 
 		/// <summary>A sampler without a texture (sampler, samplerShadow).</summary>
-		SeparateSampler
+		SeparateSampler,
+
+		/// <summary>A top level acceleration structure rays are traced through (accelerationStructureEXT).</summary>
+		AccelerationStructure
 	}
 
 	/// <summary>The component type of a numeric type, or <see cref="Struct" /> for a structure.</summary>
@@ -363,7 +366,7 @@ namespace LELEngine.Graphics.Vulkan
 
 		/// <summary>
 		///     Every variable bound through a descriptor: the storage classes UniformConstant, Uniform and StorageBuffer.
-		///     Left out is what <see cref="SpirvResourceKind" /> has no name for (acceleration structures, push constants).
+		///     Left out is what <see cref="SpirvResourceKind" /> has no name for (push constants).
 		/// </summary>
 		public IReadOnlyList<SpirvResource> Resources => resources;
 
@@ -841,6 +844,7 @@ namespace LELEngine.Graphics.Vulkan
 			public const int ModuleProcessed = 330;
 			public const int ExecutionModeId = 331;
 			public const int DecorateId = 332;
+			public const int TypeAccelerationStructure = 5341;
 			public const int DecorateString = 5632;
 			public const int MemberDecorateString = 5633;
 		}
@@ -1003,7 +1007,8 @@ namespace LELEngine.Graphics.Vulkan
 						break;
 					case Op.TypeBool:
 					case Op.TypeSampler:
-						Require(words, 2, "OpTypeBool / OpTypeSampler");
+					case Op.TypeAccelerationStructure:
+						Require(words, 2, "OpTypeBool / OpTypeSampler / OpTypeAccelerationStructureKHR");
 						Declare(words[1], new TypeInfo { Opcode = opcode });
 						break;
 					case Op.TypeInt:
@@ -1162,6 +1167,9 @@ namespace LELEngine.Graphics.Vulkan
 						return DescribeImage(resource, type) ? resource : null;
 					case Op.TypeSampler:
 						resource.Kind = SpirvResourceKind.SeparateSampler;
+						return resource;
+					case Op.TypeAccelerationStructure:
+						resource.Kind = SpirvResourceKind.AccelerationStructure;
 						return resource;
 					default:
 						return null;

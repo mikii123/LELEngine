@@ -56,7 +56,10 @@ namespace LELEngine.Graphics
 		/// <summary><see cref="GpuProgram.GetBinary" /> gives something <see cref="GraphicsDevice.CreateProgramFromBinary" /> takes.</summary>
 		public bool ProgramBinaries { get; internal set; }
 
-		/// <summary>Shaders can trace rays against acceleration structures (ray queries).</summary>
+		/// <summary>
+		///     Shaders trace rays against acceleration structures (ray queries: GLSL's GL_EXT_ray_query), which the device
+		///     makes (<see cref="GraphicsDevice.CreateAccelerationStructure" />) and builds.
+		/// </summary>
 		public bool RayQuery { get; internal set; }
 
 		/// <summary>The driver holds every thread of the process while one compiles a program (compiling in another process helps).</summary>
@@ -118,6 +121,12 @@ namespace LELEngine.Graphics
 		public abstract GpuFence CreateFence();
 
 		public abstract GpuTimestamp CreateTimestamp();
+
+		/// <summary>
+		///     An acceleration structure of the size its triangles or its instances need, not built yet; throws
+		///     <see cref="NotSupportedException" /> on a device without ray queries (<see cref="DeviceCapabilities.RayQuery" />).
+		/// </summary>
+		public abstract GpuAccelerationStructure CreateAccelerationStructure(in AccelerationStructureDescriptor descriptor);
 
 		/// <summary>Sends the commands given so far to the GPU without waiting for them.</summary>
 		public abstract void Flush();

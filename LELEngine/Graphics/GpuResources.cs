@@ -361,6 +361,47 @@ namespace LELEngine.Graphics
 		public abstract void Dispose();
 	}
 
+	/// <summary>
+	///     An acceleration structure: triangles (bottom level) or instances of bottom levels (top level) in the form the
+	///     GPU traces rays through (<see cref="GraphicsDevice.CreateAccelerationStructure" />). Built by commands
+	///     (<see cref="CommandList.BuildBottomLevels" />, <see cref="CommandList.BuildTopLevel" />); shaders trace a top
+	///     level bound by number (<see cref="CommandList.SetAccelerationStructure" />). Only on devices with
+	///     <see cref="DeviceCapabilities.RayQuery" />.
+	/// </summary>
+	public abstract class GpuAccelerationStructure : IDisposable
+	{
+		protected GpuAccelerationStructure(AccelerationStructureLevel level, AccelerationStructureFlags flags, string name)
+		{
+			Level = level;
+			Flags = flags;
+			Name = name;
+		}
+
+		public AccelerationStructureLevel Level { get; }
+		public AccelerationStructureFlags Flags { get; }
+		public string Name { get; set; }
+
+		/// <summary>Bytes the structure takes on the GPU.</summary>
+		public long Size { get; protected set; }
+
+		/// <summary>A top level: the most instances a build gives it (0 for a bottom level).</summary>
+		public int MaxInstances { get; protected set; }
+
+		/// <summary>A build or a copy into it has been given: rays may trace it (and an update may refit it).</summary>
+		public bool IsBuilt { get; protected set; }
+
+		public bool IsDisposed { get; protected set; }
+
+		/// <summary>
+		///     Bytes a compacted copy of the structure takes (<see cref="AccelerationStructureFlags.AllowCompaction" />):
+		///     known once the GPU has run its last build, 0 before and for a structure made without the flag. Never waits.
+		/// </summary>
+		public abstract long CompactedSize { get; }
+
+		/// <summary>Frees the structure once the GPU no longer uses it.</summary>
+		public abstract void Dispose();
+	}
+
 	/// <summary>Layout of the vertex buffers a draw reads: part of the pipeline. Immutable; make one per layout and keep it.</summary>
 	public sealed class VertexInputLayout
 	{

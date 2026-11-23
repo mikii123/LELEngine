@@ -224,7 +224,13 @@ namespace LELEngine.Graphics
 		Indirect = 16,
 
 		/// <summary>Read back often (<see cref="GpuBuffer.GetData" />): kept where the CPU reads fast.</summary>
-		Readback = 32
+		Readback = 32,
+
+		/// <summary>
+		///     Read by acceleration structure builds: the vertices and indices of a bottom level
+		///     (<see cref="AccelerationStructureTriangles" />). A device without ray queries ignores it.
+		/// </summary>
+		AccelerationStructureInput = 64
 	}
 
 	public struct BufferDescriptor
@@ -646,6 +652,164 @@ namespace LELEngine.Graphics
 			hash.Add(DepthBiasSlope);
 			hash.Add(DepthBiasConstant);
 			return hash.ToHashCode();
+		}
+	}
+
+	/// <summary>What an acceleration structure holds.</summary>
+	public enum AccelerationStructureLevel : byte
+	{
+		/// <summary>Triangles, in their own space.</summary>
+		Bottom,
+
+		/// <summary>Instances of bottom levels, each placed by a transform: what ray queries trace.</summary>
+		Top
+	}
+
+	/// <summary>How an acceleration structure is built and what can be done with it after.</summary>
+	[Flags]
+	public enum AccelerationStructureFlags : byte
+	{
+		None = 0,
+
+		/// <summary>
+		///     Can be updated after a build (refitted: moved vertices of the same triangles, new transforms of the same
+		///     instances) instead of built again.
+		/// </summary>
+		AllowUpdate = 1,
+
+		/// <summary>Can be copied into a smaller structure after a build (<see cref="GpuAccelerationStructure.CompactedSize" />).</summary>
+		AllowCompaction = 2,
+
+		/// <summary>Traced faster, built slower: for structures built once.</summary>
+		PreferFastTrace = 4,
+
+		/// <summary>Built faster, traced slower: for structures built every frame.</summary>
+		PreferFastBuild = 8
+	}
+
+	/// <summary>
+	///     Triangles a bottom level acceleration structure is built from: positions in a vertex buffer, three indices a
+	///     triangle in an index buffer (or every three vertices one, without). The buffers are made with
+	///     <see cref="BufferUsage.AccelerationStructureInput" />; a build reads what they hold when it runs.
+	/// </summary>
+	public struct AccelerationStructureTriangles
+	{
+		public GpuBuffer VertexBuffer;
+
+		/// <summary>Bytes from the buffer's start to the position of vertex 0 (the vertex index 0 names), a multiple of 4.</summary>
+		public long VertexOffset;
+
+		/// <summary>Bytes from one vertex's position to the next one's.</summary>
+		public int VertexStride;
+
+		/// <summary>Vertices the triangles may name: the highest index + 1.</summary>
+		public int VertexCount;
+
+		/// <summary>The position's components: <see cref="VertexFormat.Float3" />, or <see cref="VertexFormat.Float2" /> (z 0).</summary>
+		public VertexFormat PositionFormat;
+
+		/// <summary>The indices; null: not indexed.</summary>
+		public GpuBuffer IndexBuffer;
+
+		/// <summary>Bytes from the buffer's start to the first index, a multiple of the index size.</summary>
+		public long IndexOffset;
+
+		public IndexFormat IndexFormat;
+
+		public int TriangleCount;
+
+		/// <summary>Rays take every hit on the triangles as it is (no test of what they let through): opaque geometry.</summary>
+		public bool Opaque;
+	}
+
+	/// <summary>
+	///     What an acceleration structure is made for (<see cref="GraphicsDevice.CreateAccelerationStructure" />): a bottom
+	///     level of triangles, a top level of instances, or a compacted copy of another structure.
+	/// </summary>
+	public ref struct AccelerationStructureDescriptor
+	{
+		public AccelerationStructureLevel Level;
+		public AccelerationStructureFlags Flags;
+
+		/// <summary>
+		///     A bottom level's triangles, by as many geometries as the hits tell apart: kept by the structure, which every
+		///     build (<see cref="CommandList.BuildBottomLevels" />) reads.
+		/// </summary>
+		public ReadOnlySpan<AccelerationStructureTriangles> Geometries;
+
+		/// <summary>A top level: the most instances a build gives it.</summary>
+		public int MaxInstances;
+
+		/// <summary>
+		///     A structure made to take the compacted copy of this one (<see cref="CommandList.CopyAccelerationStructure" />):
+		///     of its level, at its <see cref="GpuAccelerationStructure.CompactedSize" />, built by nothing else. The other
+		///     fields but the name are not read.
+		/// </summary>
+		public GpuAccelerationStructure CompactedFrom;
+
+		public string Name;
+
+		public static AccelerationStructureDescriptor BottomLevel(ReadOnlySpan<AccelerationStructureTriangles> geometries, AccelerationStructureFlags flags = AccelerationStructureFlags.PreferFastTrace, string name = null)
+		{
+			return new AccelerationStructureDescriptor { Level = AccelerationStructureLevel.Bottom, Flags = flags, Geometries = geometries, Name = name };
+		}
+
+		public static AccelerationStructureDescriptor TopLevel(int maxInstances, AccelerationStructureFlags flags = AccelerationStructureFlags.PreferFastTrace, string name = null)
+		{
+			return new AccelerationStructureDescriptor { Level = AccelerationStructureLevel.Top, Flags = flags, MaxInstances = maxInstances, Name = name };
+		}
+
+		public static AccelerationStructureDescriptor CompactCopyOf(GpuAccelerationStructure source, string name = null)
+		{
+			return new AccelerationStructureDescriptor { Level = source.Level, Flags = source.Flags, CompactedFrom = source, Name = name ?? source.Name };
+		}
+	}
+
+	/// <summary>How an instance's triangles meet rays (<see cref="AccelerationStructureInstance.Flags" />).</summary>
+	[Flags]
+	public enum AccelerationStructureInstanceFlags : byte
+	{
+		None = 0,
+
+		/// <summary>Rays that cull back or front faces hit both sides of these triangles.</summary>
+		TwoSided = 1,
+
+		/// <summary>
+		///     The other side faces the rays: a triangle's front is where its vertices are seen clockwise (by default
+		///     counter-clockwise, as rasterization takes them: cross(v1 - v0, v2 - v0) points out of the front).
+		/// </summary>
+		FlipFacing = 2,
+
+		/// <summary>Every geometry of the instance counts as opaque.</summary>
+		ForceOpaque = 4,
+
+		/// <summary>No geometry of the instance counts as opaque.</summary>
+		ForceNotOpaque = 8
+	}
+
+	/// <summary>A bottom level placed in a top level (<see cref="CommandList.BuildTopLevel" />).</summary>
+	public struct AccelerationStructureInstance
+	{
+		/// <summary>From the bottom level's space to the top level's, as the engine's matrices transform (row vectors: translation in the fourth row).</summary>
+		public Matrix4 Transform;
+
+		/// <summary>What a ray query reads of the instance it hit (rayQueryGetIntersectionInstanceCustomIndexEXT): 24 bits.</summary>
+		public int CustomIndex;
+
+		/// <summary>Rays see the instance when their cull mask and this have a bit in common.</summary>
+		public byte Mask;
+
+		public AccelerationStructureInstanceFlags Flags;
+
+		public GpuAccelerationStructure BottomLevel;
+
+		public AccelerationStructureInstance(GpuAccelerationStructure bottomLevel, in Matrix4 transform, int customIndex, byte mask = 0xFF, AccelerationStructureInstanceFlags flags = AccelerationStructureInstanceFlags.None)
+		{
+			BottomLevel = bottomLevel;
+			Transform = transform;
+			CustomIndex = customIndex;
+			Mask = mask;
+			Flags = flags;
 		}
 	}
 

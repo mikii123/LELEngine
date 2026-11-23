@@ -843,6 +843,12 @@ namespace LELEngine.Graphics.Vulkan
 				usage |= VkBufferUsageFlags.IndirectBufferBit;
 			}
 
+			if ((Usage & BufferUsage.AccelerationStructureInput) != 0 && device.HasRayQuery)
+			{
+				// Builds read the vertices and indices by address.
+				usage |= VkBufferUsageFlags.AccelerationStructureBuildInputReadOnlyBitKHR | VkBufferUsageFlags.ShaderDeviceAddressBit;
+			}
+
 			VkBufferCreateInfo info = new VkBufferCreateInfo { Size = (Brutal.ByteSize64)(ulong)size, Usage = usage };
 			VmaAllocationCreateInfo allocationInfo = new VmaAllocationCreateInfo { Usage = VmaMemoryUsage.Auto };
 			if (hostVisible)

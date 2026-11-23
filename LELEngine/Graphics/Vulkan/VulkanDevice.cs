@@ -21,7 +21,7 @@ namespace LELEngine.Graphics.Vulkan
 	///         (<see cref="VulkanContext.MakeCurrent" />). Programs are built on any thread.
 	///     </para>
 	/// </summary>
-	internal sealed unsafe class VulkanDevice : GraphicsDevice
+	internal sealed unsafe partial class VulkanDevice : GraphicsDevice
 	{
 		/// <summary>Bytes of a block of the memory commands take for a frame (uniform values, texels on their way to a texture).</summary>
 		private const long ChunkSize = 1 << 20;
@@ -309,6 +309,10 @@ namespace LELEngine.Graphics.Vulkan
 					deviceExtensions.Add("VK_EXT_provoking_vertex");
 				}
 
+				// Ray queries where the GPU has them (VulkanAccelerationStructure.cs); the device is made without them otherwise.
+				RayQueryFeatures rayQueries = new RayQueryFeatures();
+				HasRayQuery = AskForRayQueries(physicalDevice, deviceExtensions, &rayQueries, &want, &want12);
+
 				float priority = 1f;
 				VkDeviceQueueCreateInfo queueInfo = new VkDeviceQueueCreateInfo { QueueFamilyIndex = QueueFamily, QueueCount = 1, QueuePriorities = &priority };
 				BrutalDevice.CreateInfo deviceInfo = new BrutalDevice.CreateInfo();
@@ -324,6 +328,8 @@ namespace LELEngine.Graphics.Vulkan
 
 				Allocator = device.CreateVmaAllocatorHandle(new VmaAllocatorCreateInfo
 				{
+					// Acceleration structure builds read their inputs by address.
+					Flags = HasRayQuery ? VmaAllocatorCreateFlags.BufferDeviceAddressBit : VmaAllocatorCreateFlags.None,
 					PhysicalDevice = PhysicalHandle,
 					Device = Handle,
 					Instance = InstanceHandle,
@@ -510,6 +516,7 @@ namespace LELEngine.Graphics.Vulkan
 				dummyBuffer = null;
 				attributeDefaults?.Dispose();
 				attributeDefaults = null;
+				ReleaseRayQueries();
 				DestroyAllRetired();
 				foreach (VulkanSampler sampler in samplers.Values)
 				{
@@ -1083,15 +1090,16 @@ namespace LELEngine.Graphics.Vulkan
 
 		private VkDescriptorPool CreateDescriptorPool()
 		{
-			const int Count = 6;
-			VkDescriptorPoolSize* sizes = stackalloc VkDescriptorPoolSize[Count];
+			int count = HasRayQuery ? 7 : 6;
+			VkDescriptorPoolSize* sizes = stackalloc VkDescriptorPoolSize[7];
 			sizes[0] = new VkDescriptorPoolSize { Type = VkDescriptorType.CombinedImageSampler, DescriptorCount = 8192 };
 			sizes[1] = new VkDescriptorPoolSize { Type = VkDescriptorType.UniformBufferDynamic, DescriptorCount = 2048 };
 			sizes[2] = new VkDescriptorPoolSize { Type = VkDescriptorType.UniformBuffer, DescriptorCount = 4096 };
 			sizes[3] = new VkDescriptorPoolSize { Type = VkDescriptorType.StorageBuffer, DescriptorCount = 4096 };
 			sizes[4] = new VkDescriptorPoolSize { Type = VkDescriptorType.StorageImage, DescriptorCount = 2048 };
 			sizes[5] = new VkDescriptorPoolSize { Type = VkDescriptorType.SampledImage, DescriptorCount = 16 };
-			VkDescriptorPoolCreateInfo info = new VkDescriptorPoolCreateInfo { MaxSets = 1024, PoolSizeCount = Count, PoolSizes = sizes };
+			sizes[6] = new VkDescriptorPoolSize { Type = VkDescriptorType.AccelerationStructureKHR, DescriptorCount = 256 };
+			VkDescriptorPoolCreateInfo info = new VkDescriptorPoolCreateInfo { MaxSets = 1024, PoolSizeCount = count, PoolSizes = sizes };
 			VkDescriptorPool pool;
 			Check(Vk->vkCreateDescriptorPool.Invoke(Handle, &info, null, &pool), "vkCreateDescriptorPool");
 			return pool;
@@ -1273,6 +1281,9 @@ namespace LELEngine.Graphics.Vulkan
 					break;
 				case RetiredKind.Semaphore:
 					Vk->vkDestroySemaphore.Invoke(Handle, new VkSemaphore(item.Handle), null);
+					break;
+				case RetiredKind.AccelerationStructure:
+					Vk->vkDestroyAccelerationStructureKHR.Invoke(Handle, new VkAccelerationStructureKHR(item.Handle), null);
 					break;
 			}
 		}
@@ -1565,8 +1576,7 @@ namespace LELEngine.Graphics.Vulkan
 			caps.ComputeSubgroups = (properties11.SubgroupSupportedStages & VkShaderStageFlags.ComputeBit) != 0 && (properties11.SubgroupSupportedOperations & operations) == operations;
 			caps.ParallelShaderCompile = true;
 			caps.ProgramBinaries = true;
-			// Shaders could trace rays where VK_KHR_ray_query is; the device makes no acceleration structures yet.
-			caps.RayQuery = false;
+			caps.RayQuery = HasRayQuery;
 			caps.CompilesBlockEveryThread = false;
 		}
 
@@ -1612,7 +1622,8 @@ namespace LELEngine.Graphics.Vulkan
 		SetLayout,
 		PipelineLayout,
 		Swapchain,
-		Semaphore
+		Semaphore,
+		AccelerationStructure
 	}
 
 	/// <summary>Vulkan's format behind a texel format, and what the device does with it.</summary>
