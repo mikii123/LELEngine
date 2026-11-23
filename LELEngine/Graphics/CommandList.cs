@@ -78,11 +78,12 @@ namespace LELEngine.Graphics
 		}
 
 		/// <summary>A pass without attachments: draws only run their shaders, over a target of the given size.</summary>
-		public void BeginRenderPass(int width, int height)
+		public void BeginRenderPass(int width, int height, int samples = 1)
 		{
 			RenderPassDescriptor descriptor = default;
 			descriptor.Width = width;
 			descriptor.Height = height;
+			descriptor.Samples = samples;
 			BeginRenderPass(descriptor);
 		}
 

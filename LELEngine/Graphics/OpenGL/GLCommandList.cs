@@ -164,6 +164,8 @@ namespace LELEngine.Graphics.OpenGL
 					passHeight = Math.Max(1, descriptor.Height);
 					key.Width = passWidth;
 					key.Height = passHeight;
+					// The sample count of a pass without attachments, in the key's count (which is 0 colours here).
+					key.Count = Math.Max(1, descriptor.Samples) << 16;
 				}
 
 				if (!framebuffers.TryGetValue(key, out framebuffer))
@@ -1549,6 +1551,11 @@ namespace LELEngine.Graphics.OpenGL
 				{
 					gl.FramebufferParameteri(FramebufferTarget.Framebuffer, FramebufferDefaultParameter.FramebufferDefaultWidth, key.Width);
 					gl.FramebufferParameteri(FramebufferTarget.Framebuffer, FramebufferDefaultParameter.FramebufferDefaultHeight, key.Height);
+					if (key.Count >> 16 > 1)
+					{
+						// GL_FRAMEBUFFER_DEFAULT_SAMPLES
+						gl.FramebufferParameteri(FramebufferTarget.Framebuffer, (FramebufferDefaultParameter)0x9313, key.Count >> 16);
+					}
 				}
 
 				gl.DrawBuffer(DrawBufferMode.None);

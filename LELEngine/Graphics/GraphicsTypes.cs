@@ -535,6 +535,12 @@ namespace LELEngine.Graphics
 		public int Width;
 
 		public int Height;
+
+		/// <summary>
+		///     Samples a pixel of a pass without attachments (0 or 1: one): fragments run per covered sample position
+		///     set (gl_SampleMaskIn), up to <see cref="DeviceCapabilities.MaxPassSamples" />.
+		/// </summary>
+		public int Samples;
 	}
 
 	/// <summary>

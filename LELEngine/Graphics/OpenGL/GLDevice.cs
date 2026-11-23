@@ -387,6 +387,9 @@ namespace LELEngine.Graphics.OpenGL
 			UnitBase = ScratchUnit >= LegacyUnits + caps.MaxSampledTextures ? LegacyUnits : 0;
 			// The legacy OpenGL commands, for the rendering code not moved to the device yet.
 			LELEngine.Graphics.GL.LoadBindings();
+			// GL_MAX_FRAMEBUFFER_SAMPLES, GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT.
+			caps.MaxPassSamples = Math.Max(1, gl.GetInteger((GetPName)0x9318));
+			caps.UniformBufferOffsetAlignment = Math.Max(1, gl.GetInteger((GetPName)0x8A34));
 			caps.DrawParametersExtension = HasExtension("GL_ARB_shader_draw_parameters");
 			caps.DrawParameters = caps.DrawParametersExtension || IsAtLeast(4, 6);
 			caps.IndirectCount = HasExtension("GL_ARB_indirect_parameters") || IsAtLeast(4, 6);

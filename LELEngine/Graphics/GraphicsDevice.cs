@@ -28,6 +28,12 @@ namespace LELEngine.Graphics
 		public int MaxSampledTextures { get; internal set; } = 16;
 
 		public int MaxImages { get; internal set; } = 8;
+
+		/// <summary>The most samples a render pass without attachments can have (<see cref="RenderPassDescriptor.Samples" />).</summary>
+		public int MaxPassSamples { get; internal set; } = 1;
+
+		/// <summary>Offsets of uniform buffer ranges (<see cref="CommandList.SetUniformBuffer" />) are multiples of this.</summary>
+		public int UniformBufferOffsetAlignment { get; internal set; } = 256;
 		public int MaxStorageBufferBindings { get; internal set; } = 8;
 		public int VertexStorageBlocks { get; internal set; }
 		public int FragmentStorageBlocks { get; internal set; }
