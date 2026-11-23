@@ -352,6 +352,12 @@ namespace LELEngine
 		/// <summary>Raised when a reimport had to replace the texture object (its shape changed): holders swap their references.</summary>
 		public static event Action<string, Texture, Texture> TextureReplaced;
 
+		/// <summary>
+		///     Where texture assets load from baked files instead of their images (the editor sets it: its baked textures are
+		///     a game build's, so the editor draws and holds the same compressed texels); null loads every image as it is.
+		/// </summary>
+		public static ITextureBakeSource BakeSource { get; set; }
+
 		#endregion
 
 		#region PrivateFields
@@ -862,11 +868,13 @@ namespace LELEngine
 					return entry;
 				}
 
-				byte[] file = File.ReadAllBytes(absolute);
+				// The editor's bake of the image (the file a build ships), when there is a current one.
+				string bakedFile = BakeSource?.Find(assetPath, importer, false);
+				byte[] file = File.ReadAllBytes(bakedFile ?? absolute);
 				if (KtxFile.IsKtx(file))
 				{
 					KtxFile ktx = KtxFile.Read(file);
-					Texture baked = CreateBaked(ktx, previous?.Texture, importer);
+					Texture baked = CreateBaked(ktx, previous?.Texture, importer, bakedFile != null ? assetPath : null);
 					baked.name = name;
 					baked.AssetPath = assetPath;
 					entry.Shape = ktx.Faces == 6 ? TextureImporterShape.Cube : ktx.Depth > 0 ? TextureImporterShape.Texture3D : TextureImporterShape.Texture2D;
@@ -879,7 +887,7 @@ namespace LELEngine
 					// Only with the hitch profiler on (its text is not built otherwise).
 					if (started != 0)
 					{
-						FrameProfiler.EventSince(started, "texture load", assetPath, "baked file read on this thread (" + file.Length / 1024 + " KB)");
+						FrameProfiler.EventSince(started, "texture load", assetPath, (bakedFile != null ? "its bake in the Library" : "baked file") + " read on this thread (" + file.Length / 1024 + " KB)");
 					}
 					return entry;
 				}
@@ -1004,8 +1012,19 @@ namespace LELEngine
 					height = factor > 1 ? Math.Max(1, source.Height / factor) : source.Height;
 					srgb = importer.StoresSrgb;
 					mipmaps = importer.generateMipmaps;
+					ITextureBakeSource bakes = BakeSource;
 					work = () =>
 					{
+						// The editor's bake (made now on this worker thread when it is missing and quick to make): the same
+						// size and color space as the image's import, its levels made and compressed.
+						string bakedFile = bakes?.Find(assetPath, importer, true);
+						if (bakedFile != null)
+						{
+							KtxFile ktx = KtxFile.Read(File.ReadAllBytes(bakedFile));
+							bool generate = importer.generateMipmaps;
+							return texture => texture.SetBaked(ktx, generate, assetPath);
+						}
+
 						ImportedTexture imported = Import(assetPath, importer);
 						return texture => texture.SetImage(imported.Image, imported.Srgb, true, imported.Mipmaps);
 					};
@@ -1132,8 +1151,11 @@ namespace LELEngine
 			}
 		}
 
-		/// <summary>A texture of the baked file's shape filled from its levels (no decoding, no GL work until it is used).</summary>
-		private static Texture CreateBaked(KtxFile ktx, Texture previous, TextureImporter importer)
+		/// <summary>
+		///     A texture of the baked file's shape filled from its levels (no decoding, no GL work until it is used).
+		///     <paramref name="source" />: the image asset the editor baked it from (its pixels are read from there when asked for).
+		/// </summary>
+		private static Texture CreateBaked(KtxFile ktx, Texture previous, TextureImporter importer, string source)
 		{
 			if (ktx.Faces == 6)
 			{
@@ -1152,7 +1174,7 @@ namespace LELEngine
 			}
 
 			Texture2D texture = previous as Texture2D ?? new Texture2D();
-			texture.SetBaked(ktx, importer.generateMipmaps);
+			texture.SetBaked(ktx, importer.generateMipmaps, source);
 			texture.SetSamplerState(importer.filterMode, importer.wrapMode, importer.anisoLevel);
 			return texture;
 		}
