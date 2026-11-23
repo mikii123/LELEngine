@@ -22,8 +22,8 @@ namespace LELEngine.Rendering.Lumen
 		/// <summary>Lumen's surface cache; null unless Lumen runs (voxel cone tracing reads only the distance fields).</summary>
 		public SurfaceCacheAtlas SurfaceCache { get; private set; }
 
-		public int ObjectBuffer { get; private set; }
-		public int CardBuffer { get; private set; }
+		public GpuBuffer ObjectBuffer { get; private set; }
+		public GpuBuffer CardBuffer { get; private set; }
 
 		/// <summary>The GPU resources exist: made by the first <see cref="Update" />, never by a renderer whose GI needs no scene.</summary>
 		public bool Allocated => DistanceFields != null;
@@ -126,8 +126,8 @@ namespace LELEngine.Rendering.Lumen
 			if (DistanceFields == null)
 			{
 				DistanceFields = new DistanceFieldAtlas();
-				ObjectBuffer = GL.GenBuffer();
-				CardBuffer = GL.GenBuffer();
+				ObjectBuffer = Gfx.Device.CreateBuffer(new BufferDescriptor(BufferUsage.Storage, 0, true, "Lumen scene objects"));
+				CardBuffer = Gfx.Device.CreateBuffer(new BufferDescriptor(BufferUsage.Storage, 0, true, "Lumen scene cards"));
 			}
 
 			DistanceFields.BeginFrame(frame);
@@ -185,15 +185,17 @@ namespace LELEngine.Rendering.Lumen
 		/// </summary>
 		public void SetUniforms(ShaderProgram program)
 		{
-			GL.BindBufferBase(BufferRangeTarget.ShaderStorageBuffer, 1, ObjectBuffer);
-			GL.BindBufferBase(BufferRangeTarget.ShaderStorageBuffer, 2, CardBuffer);
+			CommandList commands = Gfx.Commands;
+			commands.SetStorageBuffer(1, ObjectBuffer);
+			commands.SetStorageBuffer(2, CardBuffer);
 			program.SetInt("sceneObjectCount", objects.Count);
+			// LEGACY(gl): the distance field atlas is an OpenGL texture object of DistanceFieldAtlas.cs
 			program.SetTexture("SdfAtlas", TextureTarget.Texture3D, DistanceFields.Texture, SdfAtlasTextureUnit);
 			program.SetVector3("sdfAtlasTexels", DistanceFields.TexelCount);
 			if (SurfaceCache != null)
 			{
 				program.SetVector2("surfaceCacheAtlasSize", new Vector2(SurfaceCache.Size, SurfaceCache.Size));
-				program.SetTexture("CardLocalPosition", TextureTarget.Texture2D, SurfaceCache.LocalPosition, CardPositionTextureUnit);
+				program.SetTexture("CardLocalPosition", SurfaceCache.LocalPosition);
 			}
 		}
 
@@ -214,21 +216,16 @@ namespace LELEngine.Rendering.Lumen
 		{
 			DistanceFields?.Delete();
 			SurfaceCache?.Delete();
-			if (ObjectBuffer != 0)
-			{
-				GL.DeleteBuffer(ObjectBuffer);
-			}
-			if (CardBuffer != 0)
-			{
-				GL.DeleteBuffer(CardBuffer);
-			}
+			ObjectBuffer?.Dispose();
+			CardBuffer?.Dispose();
 		}
 
 		#endregion
 
 		#region PrivateFields
 
-		/// <summary>Texture units used by the shared scene uniforms (materials never bind this high).</summary>
+		/// <summary>Texture unit of the distance field atlas in the shared scene uniforms (materials never bind this high).</summary>
+		// LEGACY(gl): used by SetUniforms for DistanceFieldAtlas.cs's texture object
 		public const int SdfAtlasTextureUnit = 10;
 
 		/// <summary>
@@ -236,8 +233,6 @@ namespace LELEngine.Rendering.Lumen
 		///     a scale animated every frame (effects growing, stretching) builds no fields, it borrows the one it had.
 		/// </summary>
 		public const double ShapeSettleSeconds = 0.25;
-
-		public const int CardPositionTextureUnit = 9;
 
 		#endregion
 
@@ -585,29 +580,26 @@ namespace LELEngine.Rendering.Lumen
 			// (glBufferData every frame makes the driver allocate and orphan two buffers per frame). The rows array has
 			// room to spare: the buffer gets all of it, so it grows as rarely as the array.
 			int objectBytes = rowCount * SceneObjectData.Size;
-			GL.BindBuffer(BufferTarget.ShaderStorageBuffer, ObjectBuffer);
 			if (objectBytes > objectBufferBytes)
 			{
 				objectBufferBytes = objectRows.Length * SceneObjectData.Size;
-				GL.BufferData(BufferTarget.ShaderStorageBuffer, objectBufferBytes, objectRows, BufferUsageHint.DynamicDraw);
+				ObjectBuffer.SetData(objectRows);
 			}
 			else
 			{
-				GL.BufferSubData(BufferTarget.ShaderStorageBuffer, IntPtr.Zero, objectBytes, objectRows);
+				ObjectBuffer.SetSubData(0, objectRows, rowCount);
 			}
 
 			int cardBytes = cardData.Length * CardData.Size;
-			GL.BindBuffer(BufferTarget.ShaderStorageBuffer, CardBuffer);
 			if (cardBytes > cardBufferBytes)
 			{
-				GL.BufferData(BufferTarget.ShaderStorageBuffer, cardBytes, cardData, BufferUsageHint.DynamicDraw);
+				CardBuffer.SetData(cardData);
 				cardBufferBytes = cardBytes;
 			}
 			else
 			{
-				GL.BufferSubData(BufferTarget.ShaderStorageBuffer, IntPtr.Zero, cardBytes, cardData);
+				CardBuffer.SetSubData(0, cardData);
 			}
-			GL.BindBuffer(BufferTarget.ShaderStorageBuffer, 0);
 		}
 
 		#endregion
