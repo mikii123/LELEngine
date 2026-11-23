@@ -9,7 +9,9 @@
   are copied to `bin/.../Shaders/Engine/...` at build time. Python is not installed; use PowerShell with
   `System.Drawing` for image work (BMP to PNG, cropping).
 - GPUs: the C:\NewFrontier machine has only an AMD Radeon 780M (OpenGL 4.6; the volumetrics and lights measurements of
-  2026-11 are from it); other notes measured on an NVIDIA RTX 3080 Ti, an RTX 5070 Ti or an Intel iGPU, as they say.
+  2026-11 are from it); the C:\Users\Miki\NewFrontier machine an Intel Core Ultra 7 155H's Arc iGPU (15.4 GB of RAM
+  shared with it: mind the memory, "Uploads' memory on Vulkan" below); other notes measured on an NVIDIA RTX 3080 Ti,
+  an RTX 5070 Ti or an Intel iGPU, as they say.
   On the NVIDIA card small test scenes run at 1000+ fps with vsync off, so
   frame-count based automation (`exitframe`, `dumpframe`) covers well under a second: prefer `exitseconds=S` and
   `dump=1 dumpafter=S` for anything time dependent.
@@ -369,6 +371,50 @@
   ms (cone tracing through 3D textures: the shaders as compiled for Vulkan or the textures' tiling, not looked into).
   The bench's CPU per draw: the same draw again 98 -> 161 ns (OpenGL 83), materials 263 -> 376 (353; the ordering's
   bookkeeping when the textures change), a uniform per draw 266 -> 124 (112).
+
+## Uploads' memory on Vulkan, the editor's textures from the build's bakes (2026-11-23, branch `brutal-port`)
+
+- The user's report (a machine with an Intel Core Ultra 7 155H: Arc iGPU, driver 101.8132, 15.4 GB of RAM, one Vulkan
+  heap of 8.76 GB with a budget of ~8 GB): a game's editor on Vulkan "does not enter play mode" and runs miserably.
+  Measured on its flight scene: play mode prepares every asset of the scene and of the prefabs it reads through in one
+  frame (224 textures, 28 of them 4096 x 4096 images uploaded as RGBA8 with their mips generated), and the Vulkan
+  device kept every upload's staging copy and every sRGB mip chain's scratch image (the whole chain, the texture's
+  size again) until that frame's submission finished: `vmaCreateImage ... ErrorOutOfDeviceMemory` for 9 textures, 8.4
+  GB of GPU memory and 12 GB of private bytes, so the machine paged; the preparation took 7.7 to 33 s.
+- Device (`VulkanDevice.BeforeUpload`): an upload (a texture's `SetData`, a buffer write through staging, the scratch
+  image of an sRGB mip chain) first sends the submission being recorded when it would hold more than 128 MB of frame
+  memory and scratch images, and waits for the oldest submission while those in flight hold more than 256 MB. It runs
+  between commands only (the engine's uploads; the device's own stand-ins write mapped memory), and the next command
+  binds everything again (`AfterSubmit`). Blocks of frame memory over 1 MB are kept for the next uploads (256 MB at
+  most, the nearest size up to twice the asked one) and freed 300 submissions after the last one was taken.
+  `LEL_VULKAN_STATS=1` adds VMA's memory (blocks, allocated, the system's budget) and the uploads in flight to its line;
+  `=2` also names, by program, what the renderings suspended in a pass waited for.
+- The editor's textures are a build's (the user's idea: "compressed in the build, so why not in the editor, kept in
+  the Library"): `TextureAssets.BakeSource` (`ITextureBakeSource`, null in players) gives the KTX file a texture asset
+  loads from instead of its image; the editor's `EditorTextureBakes` (set while a project is open) answers with
+  `TextureBaker`'s bake in `Library/TextureCache`, the file a build ships, made with the asset's import settings
+  (compression BC7 / BC7HighQuality / None, maximum size, color space, mip levels in linear light). Baked: what a build
+  bakes but HDR images and volumes (their bakes hold what the images give); sprites stay images as in builds. A scene
+  load's worker thread (`TextureImportBatch`) bakes a missing one itself (BC7; the import's header stays the image's,
+  the same size and color space); BC7HighQuality (minutes for a large image) and loads on the main thread (cubemaps,
+  reimports, inspectors) load the image as it is and queue the bake on one background thread, after which
+  `EditorTextureBakes.Update` (each editor frame) reimports the loaded texture in place. A failed bake logs once and
+  loads the image until its files change. CPU pixels of an editor bake (`GetPixel`, `GetRawPixels`: impostor atlases,
+  the sky's panorama) come from the image (`Texture2D` remembers its source; it then uploads those pixels).
+- `TextureBaker`: one bake of an asset at a time (a lock per cache file), files written whole (a temporary file moved
+  over), the stamp file's second line the sizes and times of the image(s) and the meta file (unchanged: current
+  without hashing; a checkout's new times: the contents decide and the times are noted again), the other images of a
+  six-file cubemap or a numbered volume in the stamp (a changed face left the bake as it was), mip levels halved over
+  rows in parallel (the same bytes).
+- Results (that machine, the flight scene, Release editor): the first open baked its 30 textures in 9.5 s on the load's
+  worker threads, the first play the 104 more in 11.2 s (1.3 GB of Library for 268 files); play mode then entered
+  without an error with 2.4 GB of GPU memory (8.4 before) and 5.6 GB of private bytes (12), the assets prepared in 3.5
+  s; a second play 1 s. The game's 535 tests pass in a batch editor on Vulkan. Hidden GUI editor in play mode (Game view
+  933 x 574, scene 1400 x 861 with super sampling 2.25, VCT): Vulkan GPU 18-20 ms, CPU work 17.5 ms a frame; OpenGL
+  19.1 ms and 23.5 ms (VCT's coverage voxelization ends the rendering for a barrier between each of its 127 draws, as
+  OpenGL puts a `glMemoryBarrier` between them: 1.3 ms against OpenGL's 1.7). Not checked: the editor on screen at
+  its full size, a background BC7HighQuality bake (the game's only such image besides sprites is a cube: minutes of
+  every core once), Vulkan's synchronization validation (no Khronos layer on that machine).
 
 ## Models and meshes
 
@@ -2860,6 +2906,15 @@ lighting and the engine's other features. Octahedral impostors, baked into atlas
     `Library/VolumeCache` into `Data/Volumes`, and makes the missing ones' density when it has the GL context (batch:
     `MakeDensity`; the player lights them: the lit voxels need the scene's sun). Log: `Volumes: 1 clouds (1 from the
     editor's cache, 0 made now), 23.8 MB.` `GameLoader` sets the folder before the scene is read.
+  - Empty clouds are never kept (2026-11-23, the user's report: New Frontier's storm did not show from the editor's
+    start until any of its settings changed): its file in `Library/VolumeCache` held only zeros (density and lit
+    voxels, 800 KB for 16 M voxels), written from a readback that failed under some earlier state of the Vulkan port
+    (not reproduced: the port's readbacks now give the made cloud, checked on the Intel iGPU). Every start read the empty
+    cloud; a change made a new key, so a made, visible cloud; going back to the settings read the empty file again.
+    `VolumeFile.IsEmpty` (no voxel above 0): `VolumeCache.Write` skips such a cloud and `ReadFile` drops such a file (the
+    editor deletes it), so the cloud is made and written again. Checked with `LEL_VOL_DEBUG=1` in a hidden editor on
+    Vulkan: the empty file dropped, the storm made (54 % of its voxels cloud) and written, read from that file at the
+    next start; the march's centre texel equal made and read (0 before).
   - Measured: editor open from the file 31 ms of the GPU for the upload (mips and occupancy included) instead of 108-180 ms;
     play and stop nothing; the player (warm shader cache) storm ready 471 ms after its build began (upload 36 ms) against
     1081 ms made (generate 586 + light 77 ms), and no density readback. Each object's first cloud logs
