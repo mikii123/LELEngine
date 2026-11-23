@@ -983,7 +983,7 @@ namespace LELEngine.Graphics.Vulkan
 				}
 
 				device.WaitFor(serial, long.MaxValue);
-				return device.ReadQuery(query);
+				return device.ReadQuery(query, serial);
 			}
 		}
 

@@ -771,6 +771,24 @@ namespace LELEngine.Graphics.Vulkan
 			return device.MainCommands;
 		}
 
+		/// <summary>
+		///     The submission is about to end: the values of the timestamps it wrote are copied into memory the CPU reads,
+		///     after everything before (the stamps' writes, and the last submission's copies into the same memory).
+		/// </summary>
+		private void CopyTimestamps()
+		{
+			if (!device.HasWrittenQueries)
+			{
+				return;
+			}
+
+			VkCommandBuffer commands = device.MainCommands;
+			streamBatch.AddMemory(VkPipelineStageFlags2.AllCommandsBit, VkAccessFlags2.TransferWriteBit, Sync.Transfer, VkAccessFlags2.TransferWriteBit);
+			streamBatch.Record(device, commands);
+			device.CopyQueryResults(commands);
+			device.HostReads |= Sync.Transfer;
+		}
+
 		/// <summary>The submission is about to end: what the GPU wrote into buffers the CPU reads is made visible to it.</summary>
 		private void FinishForHost()
 		{

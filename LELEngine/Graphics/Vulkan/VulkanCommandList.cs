@@ -347,10 +347,14 @@ namespace LELEngine.Graphics.Vulkan
 
 		#region For the device
 
-		/// <summary>The command buffer is about to be sent: rendering ends in it, and what the CPU will read is made visible to it.</summary>
+		/// <summary>
+		///     The command buffer is about to be sent: rendering ends in it, its timestamps are copied where the CPU reads
+		///     them, and what the CPU will read is made visible to it.
+		/// </summary>
 		internal void BeforeSubmit()
 		{
 			SuspendRendering();
+			CopyTimestamps();
 			FinishForHost();
 		}
 

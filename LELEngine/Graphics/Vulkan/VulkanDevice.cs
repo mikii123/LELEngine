@@ -549,6 +549,7 @@ namespace LELEngine.Graphics.Vulkan
 
 				queryPools.Clear();
 				freeQueries.Clear();
+				ReleaseQueryValues();
 				freeCommandBuffers.Clear();
 				if (!commandPool.IsNull())
 				{
@@ -993,10 +994,7 @@ namespace LELEngine.Graphics.Vulkan
 				freePools.Push(pool);
 			}
 
-			foreach (int query in submission.Queries)
-			{
-				freeQueries.Push(query);
-			}
+			releasedQueries.AddRange(submission.Queries);
 
 			if (!submission.WaitSemaphore.IsNull())
 			{
@@ -1143,9 +1141,14 @@ namespace LELEngine.Graphics.Vulkan
 
 		#region Timestamps
 
-		/// <summary>A timestamp query no unfinished command writes; it is free again once the submission being recorded has finished.</summary>
+		/// <summary>A reset timestamp query no unfinished command writes, for the submission being recorded.</summary>
 		internal int TakeQuery()
 		{
+			if (freeQueries.Count == 0 && releasedQueries.Count > 0)
+			{
+				ResetReleasedQueries();
+			}
+
 			if (freeQueries.Count == 0)
 			{
 				VkQueryPoolCreateInfo info = new VkQueryPoolCreateInfo { QueryType = VkQueryType.Timestamp, QueryCount = QueriesPerPool };
@@ -1154,6 +1157,7 @@ namespace LELEngine.Graphics.Vulkan
 				Vk->vkResetQueryPool.Invoke(Handle, pool, 0, QueriesPerPool);
 				int first = queryPools.Count * QueriesPerPool;
 				queryPools.Add(pool);
+				AddQueryValues();
 				for (int i = QueriesPerPool - 1; i >= 0; i--)
 				{
 					freeQueries.Push(first + i);
@@ -1161,16 +1165,17 @@ namespace LELEngine.Graphics.Vulkan
 			}
 
 			int query = freeQueries.Pop();
-			Vk->vkResetQueryPool.Invoke(Handle, queryPools[query / QueriesPerPool], query % QueriesPerPool, 1);
+			queryWrites[query] = RecordingSerial;
+			writtenQueries.Add(query);
 			return query;
 		}
 
-		/// <summary>The query is free once the given submission has finished (0: now).</summary>
+		/// <summary>The query is given back once the given submission has finished (0: now); it is reset before it is taken again.</summary>
 		internal void ReleaseQuery(int query, long serial)
 		{
 			if (serial <= CompletedSerial)
 			{
-				freeQueries.Push(query);
+				releasedQueries.Add(query);
 			}
 			else if (serial >= RecordingSerial)
 			{
@@ -1187,7 +1192,7 @@ namespace LELEngine.Graphics.Vulkan
 					}
 				}
 
-				freeQueries.Push(query);
+				releasedQueries.Add(query);
 			}
 		}
 
@@ -1195,14 +1200,6 @@ namespace LELEngine.Graphics.Vulkan
 		{
 			index = query % QueriesPerPool;
 			return queryPools[query / QueriesPerPool];
-		}
-
-		internal long ReadQuery(int query)
-		{
-			ulong ticks = 0;
-			Vk->vkGetQueryPoolResults.Invoke(Handle, queryPools[query / QueriesPerPool], query % QueriesPerPool, 1, sizeof(ulong), &ticks, (Brutal.ByteSize64)(ulong)sizeof(ulong),
-				VkQueryResultFlags._64Bit);
-			return (long)(ticks * (double)TimestampPeriod);
 		}
 
 		#endregion
