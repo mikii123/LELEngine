@@ -486,6 +486,7 @@ namespace LELEngine.Graphics.Vulkan
 					VkPipeline pipeline;
 					VulkanDevice.Check(device.Vk->vkCreateComputePipelines.Invoke(device.Handle, device.PipelineCache, 1, &info, null, &pipeline), "vkCreateComputePipelines (" + Name + ")");
 					device.PipelineMade();
+					device.ReportShaderInfo(pipeline, VkShaderStageFlags.ComputeBit, Name, "");
 					computePipeline = pipeline;
 				}
 			}
@@ -1280,9 +1281,16 @@ namespace LELEngine.Graphics.Vulkan
 				{
 					ProvokingVertexMode = VkProvokingVertexModeEXT.LastVertexEXT
 				};
-				VkPipelineRasterizationStateCreateInfo rasterization = new VkPipelineRasterizationStateCreateInfo
+				// Overestimating by exactly what the GPU does (no extra size): every pixel a triangle touches.
+				VkPipelineRasterizationConservativeStateCreateInfoEXT conservative = new VkPipelineRasterizationConservativeStateCreateInfoEXT
 				{
 					Next = device.HasProvokingVertexLast ? &provoking : null,
+					ConservativeRasterizationMode = VkConservativeRasterizationModeEXT.OverestimateEXT
+				};
+				bool conservativeRasterization = (pipelineKey.State & 1UL << 32) != 0;
+				VkPipelineRasterizationStateCreateInfo rasterization = new VkPipelineRasterizationStateCreateInfo
+				{
+					Next = conservativeRasterization ? &conservative : device.HasProvokingVertexLast ? &provoking : null,
 					PolygonMode = state.Wireframe && device.HasWireframe ? VkPolygonMode.Line : VkPolygonMode.Fill,
 					// The engine's counter-clockwise front faces, seen in a target whose first row is the lowest.
 					FrontFace = VkFrontFace.Clockwise,
@@ -1343,6 +1351,15 @@ namespace LELEngine.Graphics.Vulkan
 				VkPipeline pipeline;
 				VulkanDevice.Check(device.Vk->vkCreateGraphicsPipelines.Invoke(device.Handle, device.PipelineCache, 1, &info, null, &pipeline), "vkCreateGraphicsPipelines (" + Name + ")");
 				device.PipelineMade();
+				if (device.HasShaderInfo)
+				{
+					string variant = $" ({colorCount} colours, depth {depthFormat}, samples {Math.Max(1, (int)pipelineKey.Samples)})";
+					for (int i = 0; i < stages.Length; i++)
+					{
+						device.ReportShaderInfo(pipeline, stages[i].Flag, Name, variant);
+					}
+				}
+
 				entry.Pipeline = pipeline;
 			}
 
@@ -1528,7 +1545,7 @@ namespace LELEngine.Graphics.Vulkan
 	/// <summary>What a pipeline is made for besides its program: the key of a program's pipelines.</summary>
 	internal struct PipelineKey : IEquatable<PipelineKey>
 	{
-		/// <summary>Blending and the colour mask (zero factors without blending).</summary>
+		/// <summary>Blending and the colour mask (zero factors without blending); bit 32 conservative rasterization.</summary>
 		public ulong State;
 
 		/// <summary>The colour attachments' formats, a byte each.</summary>

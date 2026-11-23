@@ -62,6 +62,12 @@ namespace LELEngine.Graphics
 		/// </summary>
 		public bool RayQuery { get; internal set; }
 
+		/// <summary>
+		///     Draws rasterize conservatively when their render state asks (<see cref="RenderState.ConservativeRasterization" />):
+		///     every pixel a triangle touches gets a fragment.
+		/// </summary>
+		public bool ConservativeRasterization { get; internal set; }
+
 		/// <summary>The driver holds every thread of the process while one compiles a program (compiling in another process helps).</summary>
 		public bool CompilesBlockEveryThread { get; internal set; }
 	}

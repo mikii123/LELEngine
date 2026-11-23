@@ -313,6 +313,8 @@ namespace LELEngine.Graphics.Vulkan
 				// Ray queries where the GPU has them (VulkanAccelerationStructure.cs); the device is made without them otherwise.
 				RayQueryFeatures rayQueries = new RayQueryFeatures();
 				HasRayQuery = AskForRayQueries(physicalDevice, deviceExtensions, &rayQueries, &want, &want12);
+				AskForConservativeRasterization(physicalDevice, deviceExtensions);
+				AskForShaderInfo(physicalDevice, deviceExtensions);
 
 				float priority = 1f;
 				VkDeviceQueueCreateInfo queueInfo = new VkDeviceQueueCreateInfo { QueueFamilyIndex = QueueFamily, QueueCount = 1, QueuePriorities = &priority };
@@ -1597,6 +1599,7 @@ namespace LELEngine.Graphics.Vulkan
 			caps.ParallelShaderCompile = true;
 			caps.ProgramBinaries = true;
 			caps.RayQuery = HasRayQuery;
+			caps.ConservativeRasterization = HasConservativeRasterization;
 			caps.CompilesBlockEveryThread = false;
 		}
 
