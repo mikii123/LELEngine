@@ -1,6 +1,6 @@
 // The scene's local lights (Light components: point and spot) for the lit materials, the GI and the volumetric objects:
 // every light that shines, however many (Rendering.LightBuffer fills the list every frame: a storage buffer on binding
-// 16, its header a uniform block on binding 7). Physical falloff: the inverse square of the distance (from a source of
+// 13, its header a uniform block on binding 7; a program reading them gets them bound by Lighting.SetUniforms). Physical falloff: the inverse square of the distance (from a source of
 // the light's radius), faded to nothing at its range (Frostbite's window); a spot's cone fades between its inner and
 // outer angle; the clouds between the light and the point dim it (the volumes' transmittance from the light towards six
 // directions, blended for the direction). Radiance units as the sun's: a white surface facing a light of radiance 1
@@ -8,7 +8,7 @@
 //
 // A point visits only the lights that may reach it, so no light takes another's place and a light costs only where it
 // reaches. Drawn surfaces: the view of the camera being drawn is cut into clusters (Rendering.LightClusterPass: tiles
-// of the screen x slices of depth, a bit per light whose range reaches the cluster's box, binding 17), and a point
+// of the screen x slices of depth, a bit per light whose range reaches the cluster's box, binding 14), and a point
 // visits its cluster's lights:
 //     for (LelLightIterator lights = LelLightsAt(position); LelNextLight(lights);)
 //     {
@@ -51,14 +51,14 @@ layout(std140, binding = 7) uniform LelLightBlock
 	vec4 lelLightClusterSlicing;         // a depth's slice: floor(log(depth) * x + y); z, w: the nearest and furthest depth covered
 };
 
-layout(std430, binding = 16) readonly buffer LelLightList
+layout(std430, binding = 13) readonly buffer LelLightList
 {
 	LelLight lelLights[];
 };
 
 #ifndef LEL_LIGHT_GROUPS
 // A cluster's mask: lelLightCount.y words, light i is bit i % 32 of word i / 32.
-layout(std430, binding = 17) readonly buffer LelLightClusterMasks
+layout(std430, binding = 14) readonly buffer LelLightClusterMasks
 {
 	uint lelLightClusterMasks[];
 };

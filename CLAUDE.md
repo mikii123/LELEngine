@@ -2969,11 +2969,11 @@ Clouds in the GI:
   (geometry does not block it on surfaces); the GI's injection does block it.
 - `Rendering/LightBuffer` (static): every frame (`Renderer.RenderFrame`, after `Lighting.BeginFrame`) every light that
   shines (enabled, intensity, range, colour), however many, in `Light.Active` order: a std430 storage buffer on binding
-  16 (`ListBinding`; grown by doubling), 6 vec4 per light (position + range, radiance + GI strength, spot direction + cos
+  13 (`ListBinding`; grown by doubling; see "Storage bindings under 16" below), 6 vec4 per light (position + range, radiance + GI strength, spot direction + cos
   outer, spot scale / flags / source radius, the clouds' transmittance towards +x -x +y and -y +z -z), and its header,
   a std140 uniform block on binding 7 (`LelLightBlock`, 128 bytes, `WriteHeader`: the count, the clusters' grid, the
   camera's view-projection, depth row and slicing). `Update` binds the plain header (no clusters: y = 0, every light
-  is visited) with an empty mask buffer on 17; `UseClusters` / `UseNoClusters` switch the header and masks bound, and
+  is visited) with an empty mask buffer on 14; `UseClusters` / `UseNoClusters` switch the header and masks bound, and
   `Bind` / `EnsureBound` (called by `Lighting.SetUniforms` for every draw: programs drawn before the first frame never
   read an unbound block) bind the ones in use. `Count` is what was uploaded (`Forget` takes a light out of `Shining` at
   once, the buffer keeps it until the next update).
@@ -3002,13 +3002,23 @@ Clouds in the GI:
   x 32 slices of depth, logarithmic from the near to the far plane (the first reaching back to the camera, the last to
   1.01 x far), and gives each cluster a bit per light whose range sphere reaches the cluster's view-space box (the
   bounds of its part of the view, through the inverse projection, with 0.002 x its far depth of room). On the GPU, one
-  thread per cluster and 32 lights, into a storage buffer per camera of the frame (output on binding 18: VFX caches
-  what it bound on 0..15; a later camera never writes masks an earlier one's draws read), then `UseClusters`. A lit
+  thread per cluster and 32 lights, into a storage buffer per camera of the frame (output on binding 15, see below; a
+  later camera never writes masks an earlier one's draws read), then `UseClusters`. A lit
   point finds its cluster from its world position through the matrices of the camera the clusters were made for (the
   header), not from `gl_FragCoord`: any draw (an overlay camera, a preview, another renderer's camera) gets a cluster
   that holds every light reaching that point, and a point outside that view (or before any clusters) visits every
   light. Memory: tiles x 32 x ceil(lights / 32) x 4 bytes (1080p, 130 lights: ~330 KB); a pixel reads ceil(lights / 32)
   mask words and tests only its cluster's lights.
+- Storage bindings under 16 (2026-11-23): Intel's driver (Intel Graphics, 32.0.101.8132) has 16 storage buffer bindings
+  (0..15; GL's minimum is 8) and refused the list on 16 / 17 and the build on 18 ("binding must be less than
+  GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS"; its compile log for VoxelInject came out empty, the message followed in the
+  link log). Now the list is on 13, the masks on 14, the build's output on 15. The particles cache 0..12 (`VfxRuntime.BindStorage`),
+  so 13 / 14 are shared with the instance culling (`GpuScene`: it binds its count and segment buffers there right before
+  its dispatch); every program that reads the lights binds them first (`Lighting.SetUniforms` -> `EnsureBound`: lit draws,
+  VoxelInject, CardLighting, VFX lit outputs; `LightClusterPass` itself). 15 is `GpuScene`'s previous models, bound
+  before every cull and draw (`BindTables`). Checked on that Intel GPU with TestGame (`lights=1` with `gi=vct`,
+  `impostors=1`, `refraction=1`, `materials=1`): no compile or link error. Not checked: Lumen's CardLighting there, the
+  NVIDIA / AMD cards.
 - Lit materials: `Lit`, `LitTextured` (Scene workflow: Blinn-Phong as the sun; Metallic / Specular:
   `LelStandardBRDFDirect` in `StandardBRDF.glsl`), `LitTransparent` and `Impostor` add the lights of their point's
   cluster after the sun (unshadowed).

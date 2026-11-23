@@ -133,10 +133,16 @@ namespace LELEngine.Rendering
 		public const int InstanceBinding = 10;
 		public const int MaterialBinding = 11;
 		public const int CommandBinding = 12;
+
+		// 13 and 14 are also the light list's (LightBuffer.ListBinding, ClusterBinding): the culling binds its buffers there
+		// right before its dispatch, the programs reading the lights bind those before they run.
 		public const int CountBinding = 13;
 		public const int SegmentBinding = 14;
 
-		/// <summary>Last frame's world matrix per instance (same order as the instance table), read by the geometry prepass for motion vectors.</summary>
+		/// <summary>
+		///     Last frame's world matrix per instance (same order as the instance table), read by the geometry prepass for motion
+		///     vectors. Bound before every cull and draw (<see cref="BindTables" />): the lights' cluster build writes there.
+		/// </summary>
 		public const int PreviousModelBinding = 15;
 
 		/// <summary>Instance flag: casts shadows.</summary>

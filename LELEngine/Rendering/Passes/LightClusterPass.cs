@@ -34,8 +34,9 @@ namespace LELEngine.Rendering.Passes
 
 		#region PrivateFields
 
-		// The build's output binding: one no other pass binds (VFX caches what it bound on 0..15).
-		private const int BuildBinding = 18;
+		// The build's output binding: not the list's or the masks' (the build reads those), nor one of 0..12, which the
+		// particles (VFX) cache; the GPU-driven draws bind their previous models there before each use (GpuScene).
+		private const int BuildBinding = 15;
 		private const int GroupSize = 64;
 
 		private readonly List<Clusters> perCamera = new List<Clusters>();
