@@ -486,8 +486,9 @@ namespace LELEngine.Graphics.Vulkan
 		}
 
 		/// <summary>
-		///     Gives the stages' inputs and outputs their locations: vertex inputs those the descriptor names (the
-		///     others the free ones), and between two stages the same location to an output and the input of its name.
+		///     Gives the stages' inputs and outputs their locations: vertex inputs those the descriptor names, the others
+		///     their own (the source's layout(location = N), or the compiler's in declaration order) where that is free,
+		///     else the lowest free ones; between two stages the same location to an output and the input of its name.
 		/// </summary>
 		private void LinkInterfaces(SpirvModule[] modules, Stage[] made, List<KeyValuePair<string, int>> locations)
 		{
@@ -499,7 +500,7 @@ namespace LELEngine.Graphics.Vulkan
 				}
 
 				HashSet<int> taken = new HashSet<int>();
-				List<SpirvInterfaceVariable> free = new List<SpirvInterfaceVariable>();
+				List<SpirvInterfaceVariable> own = new List<SpirvInterfaceVariable>();
 				foreach (SpirvInterfaceVariable input in modules[i].Inputs)
 				{
 					int location = -1;
@@ -513,14 +514,27 @@ namespace LELEngine.Graphics.Vulkan
 
 					if (location < 0)
 					{
-						free.Add(input);
+						own.Add(input);
 						continue;
 					}
 
 					Place(modules[i], input, location, taken);
 				}
 
-				foreach (SpirvInterfaceVariable input in free)
+				List<SpirvInterfaceVariable> moved = new List<SpirvInterfaceVariable>();
+				foreach (SpirvInterfaceVariable input in own)
+				{
+					if (input.Location >= 0 && IsFree(taken, input.Location, Math.Max(1, input.LocationCount)))
+					{
+						Place(modules[i], input, input.Location, taken);
+					}
+					else
+					{
+						moved.Add(input);
+					}
+				}
+
+				foreach (SpirvInterfaceVariable input in moved)
 				{
 					int location = 0;
 					while (!IsFree(taken, location, Math.Max(1, input.LocationCount)))
