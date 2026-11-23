@@ -467,7 +467,7 @@ namespace LELEngine.Volumetrics
 			double megabytes = voxels * (5.0 * 8.0 / 7.0) / (1024.0 * 1024.0);
 			long transportVoxels = (long)((grid.X + 1) / 2) * ((grid.Y + 1) / 2) * ((grid.Z + 1) / 2);
 			bool made = data != null && data.Ready;
-			int transportTextures = made ? (data.LightsA != 0 ? 2 : 0) + (data.LightsC != 0 ? 1 : 0) : Lights.Count > 0 ? 2 : 0;
+			int transportTextures = made ? (data.LightsA != null ? 2 : 0) + (data.LightsC != null ? 1 : 0) : Lights.Count > 0 ? 2 : 0;
 			megabytes += transportTextures * transportVoxels * (8.0 * 8.0 / 7.0) / (1024.0 * 1024.0);
 			string state = data == null ? "not made yet" : data.Ready ? data.Pending ? "ready, being made again" : "ready" : "being made";
 			string lights = made && data.LightCount + data.BakedCount > 0 ? data.BakedCount > 0 ? $", {data.LightCount} live lights and {data.BakedCount} baked" : $", {data.LightCount} live lights" : "";

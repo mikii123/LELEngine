@@ -72,23 +72,6 @@ namespace LELEngine.Volumetrics
 		/// </summary>
 		private static readonly bool Debug = Environment.GetEnvironmentVariable("LEL_VOL_DEBUG") == "1";
 
-		// Texture units of the march (the lighting's own units stay free: shadow map 15, transmittance 10, sky 16).
-		private const int LitUnit = 0;
-		private const int OccupancyUnit = 1;
-		private const int DetailUnit = 2;
-		private const int LightsAUnit = 3;
-		private const int LightsBUnit = 4;
-		private const int DepthUnit = 5;
-		private const int GIAUnit = 6;
-		private const int GIBUnit = 7;
-		private const int LightsCUnit = 8;
-		private const int ResultUnit = 0;
-		private const int ResultDepthUnit = 1;
-		private const int SceneDepthUnit = 2;
-		private const int DynamicResultUnit = 3;
-		private const int HistoryUnit = 2;
-		private const int HistoryMetaUnit = 3;
-
 		// A history texel matches when its light lay within this share of the distance expected (the light-weighted mean
 		// distance moves with the march's jitter by a few percent; an object in front, or other cloud, is far further off).
 		private const float HistoryDistanceTolerance = 0.2f;
@@ -160,14 +143,14 @@ namespace LELEngine.Volumetrics
 		private const int DynamicLightBinding = 8;
 		private static readonly float[] dynamicData = new float[VolumetricObjectBase.MaxDynamicLights * 4 * 4];
 		private static readonly List<VolumeLightSlot> dynamicSlots = new List<VolumeLightSlot>();
-		private static int dynamicBuffer;
+		private static GpuBuffer dynamicBuffer;
 		private static ShaderProgram depthDownsample;
 		private static ShaderProgram temporal;
 		private static ShaderProgram composite;
 
 		// Bit 0 / 1: the programs of the standard / high quality preset were made (StartPrograms).
 		private static int programsStarted;
-		private static int detailTexture;
+		private static GpuTexture detailTexture;
 		private static long frameStamp;
 		private static int drawnThisFrame;
 
@@ -295,7 +278,7 @@ namespace LELEngine.Volumetrics
 				}
 			}
 
-			GL.UseProgram(0);
+			Gfx.Commands.SetProgram(null);
 		}
 
 		/// <summary>
@@ -439,9 +422,10 @@ namespace LELEngine.Volumetrics
 			Matrix4 invViewProjection = context.ViewProjection.Inverted();
 			Vector4 depthParams = SceneGrab.DepthParams(context.Projection);
 
-			GLState.SetDepth(false, false);
-			GLState.SetCull(false);
-			GLState.SetBlend(false);
+			CommandList commands = Gfx.Commands;
+			commands.State.SetDepth(false, false);
+			commands.State.Culling = FaceCulling.None;
+			commands.State.Blend = false;
 
 			// The opaque scene's depth at the march's resolution (once per frame, view and resolution).
 			Framebuffer lowDepth = null;
@@ -451,9 +435,9 @@ namespace LELEngine.Volumetrics
 				lowDepth = view.Depth[level];
 				if (view.DepthStamp[level] != frameStamp)
 				{
-					lowDepth.Bind();
+					lowDepth.Begin();
 					depthDownsample.Use();
-					depthDownsample.SetTexture("volSceneDepth", TextureTarget.Texture2D, depth.Depth.Handle, 0);
+					depthDownsample.SetTexture("volSceneDepth", depth.Depth);
 					depthDownsample.SetVector4("volDepthParams", depthParams);
 					depthDownsample.SetInt("volScale", scale);
 					context.Fullscreen.Draw();
@@ -478,15 +462,20 @@ namespace LELEngine.Volumetrics
 
 			var lowRect = new PixelRect(rect.X0 / scale, rect.Y0 / scale, Math.Min(lowWidth, (rect.X1 + scale - 1) / scale + 1), Math.Min(lowHeight, (rect.Y1 + scale - 1) / scale + 1));
 			History history = volume.TemporalFilter ? HistoryOf(context, volume, lowWidth, lowHeight) : null;
-			target.Bind();
-			GL.Enable(EnableCap.ScissorTest);
+			target.Begin();
 			// A temporal filter reads the march around each pixel: march a texel more on every side.
 			int margin = history != null ? 2 : 0;
-			GL.Scissor(Math.Max(0, lowRect.X0 - margin), Math.Max(0, lowRect.Y0 - margin), lowRect.X1 - lowRect.X0 + margin * 2, lowRect.Y1 - lowRect.Y0 + margin * 2);
-			GL.ClearColor(0f, 0f, 0f, 0f);
-			GL.Clear(ClearBufferMask.ColorBufferBit);
+			int marchX = Math.Max(0, lowRect.X0 - margin);
+			int marchY = Math.Max(0, lowRect.Y0 - margin);
+			int marchWidth = Math.Max(0, lowRect.X1 - lowRect.X0 + margin * 2);
+			int marchHeight = Math.Max(0, lowRect.Y1 - lowRect.Y0 + margin * 2);
+			commands.SetScissor(marchX, marchY, marchWidth, marchHeight);
+			for (int i = 0; i < target.ColorAttachments.Count; i++)
+			{
+				commands.ClearColor(i, default, marchX, marchY, marchWidth, marchHeight);
+			}
 
-			ShaderProgram program = MarchProgram(hq, data.LightsA != 0 && AnyLightLit(volume, data), data.LightsC != 0 && data.BakedLit, dynamic);
+			ShaderProgram program = MarchProgram(hq, data.LightsA != null && AnyLightLit(volume, data), data.LightsC != null && data.BakedLit, dynamic);
 			program.Use();
 			SetViewUniforms(program, context, volume, data, worldToLocal, invViewProjection, lowWidth, lowHeight);
 			SetMarchUniforms(program, context, volume, data, localToWorld, scale, lowHeight, history, depth, lowDepth, depthParams);
@@ -499,9 +488,8 @@ namespace LELEngine.Volumetrics
 
 			if (Debug && frameStamp % 120 == 1)
 			{
-				var probe = new float[4];
-				GL.ReadPixels((lowRect.X0 + lowRect.X1) / 2, (lowRect.Y0 + lowRect.Y1) / 2, 1, 1, PixelFormat.Rgba, PixelType.Float, probe);
-				Console.WriteLine($"[Volumetrics] March {volume.gameObject?.Name}: centre texel ({probe[0]:0.000}, {probe[1]:0.000}, {probe[2]:0.000}, {probe[3]:0.000}), grid {data.Resolution}, blocks {data.Blocks}, lit {data.Lit}, occupancy {data.Occupancy}");
+				float[] probe = TexelConversion.ReadFloats(target.ColorAttachments[0].Gpu, 0, (lowRect.X0 + lowRect.X1) / 2, (lowRect.Y0 + lowRect.Y1) / 2, 0, 1, 1);
+				Console.WriteLine($"[Volumetrics] March {volume.gameObject?.Name}: centre texel ({probe[0]:0.000}, {probe[1]:0.000}, {probe[2]:0.000}, {probe[3]:0.000}), grid {data.Resolution}, blocks {data.Blocks}, lit {data.Lit != null}, occupancy {data.Occupancy != null}");
 			}
 
 			// The temporal filter: this frame's march blended with the history, into the other history target.
@@ -509,19 +497,15 @@ namespace LELEngine.Volumetrics
 			if (history != null)
 			{
 				Framebuffer next = history.Targets[1 - history.Current];
-				next.Bind();
 				// Cleared whole (both targets): what lies outside this frame's rectangle is no history next frame.
-				GL.Disable(EnableCap.ScissorTest);
-				GL.ClearColor(0f, 0f, 0f, 0f);
-				GL.Clear(ClearBufferMask.ColorBufferBit);
-				GL.Enable(EnableCap.ScissorTest);
-				GL.Scissor(lowRect.X0, lowRect.Y0, lowRect.X1 - lowRect.X0, lowRect.Y1 - lowRect.Y0);
+				next.Begin(LoadOperation.Clear);
+				commands.SetScissor(lowRect.X0, lowRect.Y0, Math.Max(0, lowRect.X1 - lowRect.X0), Math.Max(0, lowRect.Y1 - lowRect.Y0));
 				temporal.Use();
 				SetViewUniforms(temporal, context, volume, data, worldToLocal, invViewProjection, lowWidth, lowHeight);
-				temporal.SetTexture("volCurrent", TextureTarget.Texture2D, target.ColorAttachments[0].Handle, ResultUnit);
-				temporal.SetTexture("volCurrentDistance", TextureTarget.Texture2D, target.ColorAttachments[1].Handle, ResultDepthUnit);
-				temporal.SetTexture("volHistory", TextureTarget.Texture2D, history.Targets[history.Current].ColorAttachments[0].Handle, HistoryUnit);
-				temporal.SetTexture("volHistoryMeta", TextureTarget.Texture2D, history.Targets[history.Current].ColorAttachments[1].Handle, HistoryMetaUnit);
+				temporal.SetTexture("volCurrent", target.ColorAttachments[0]);
+				temporal.SetTexture("volCurrentDistance", target.ColorAttachments[1]);
+				temporal.SetTexture("volHistory", history.Targets[history.Current].ColorAttachments[0]);
+				temporal.SetTexture("volHistoryMeta", history.Targets[history.Current].ColorAttachments[1]);
 				temporal.SetMatrix4("volPreviousViewProjection", history.PreviousViewProjection);
 				temporal.SetMatrix4("volPreviousLocalToWorld", history.PreviousLocalToWorld);
 				temporal.SetVector3("volPreviousCameraPosition", history.PreviousCameraPosition);
@@ -541,27 +525,25 @@ namespace LELEngine.Volumetrics
 			}
 
 			// Blended over the scene inside the object's rectangle.
-			context.SceneTarget.Bind();
-			GL.Scissor(rect.X0, rect.Y0, rect.X1 - rect.X0, rect.Y1 - rect.Y0);
-			GL.Enable(EnableCap.Blend);
-			GL.BlendFuncSeparate(BlendingFactorSrc.One, BlendingFactorDest.OneMinusSrcAlpha, BlendingFactorSrc.Zero, BlendingFactorDest.One);
+			context.SceneTarget.Begin();
+			commands.SetScissor(rect.X0, rect.Y0, Math.Max(0, rect.X1 - rect.X0), Math.Max(0, rect.Y1 - rect.Y0));
+			commands.State.SetBlend(BlendFactor.One, BlendFactor.OneMinusSrcAlpha, BlendFactor.Zero, BlendFactor.One);
 			composite.Use();
 			SetViewUniforms(composite, context, volume, data, worldToLocal, invViewProjection, width, height);
-			composite.SetTexture("volResult", TextureTarget.Texture2D, result.Handle, ResultUnit);
-			composite.SetTexture("volResultDepth", TextureTarget.Texture2D, lowDepth != null ? lowDepth.ColorAttachments[0].Handle : 0, ResultDepthUnit);
-			composite.SetTexture("volSceneDepth", TextureTarget.Texture2D, depth.Depth.Handle, SceneDepthUnit);
+			composite.SetTexture("volResult", result);
+			composite.SetTexture("volResultDepth", lowDepth?.ColorAttachments[0]);
+			composite.SetTexture("volSceneDepth", depth.Depth);
 			// This frame's dynamic light, not through the temporal filter: a moving light leaves no trail.
-			composite.SetTexture("volDynamic", TextureTarget.Texture2D, dynamic ? target.ColorAttachments[2].Handle : 0, DynamicResultUnit);
+			composite.SetTexture("volDynamic", dynamic ? target.ColorAttachments[2] : null);
 			composite.SetInt("volDynamicActive", dynamic ? 1 : 0);
 			composite.SetVector4("volDepthParams", depthParams);
 			composite.SetInt("volUpsample", scale > 1 ? 1 : 0);
 			context.Fullscreen.Draw();
 
-			GL.Disable(EnableCap.ScissorTest);
-			GLState.SetBlend(false);
-			GLState.SetDepth(true, false, DepthFunction.Lequal);
-			GLState.SetCull(true, TriangleFace.Back);
-			UnbindCloudTextures();
+			commands.DisableScissor();
+			commands.State.Blend = false;
+			commands.State.SetDepth(true, false, CompareFunction.LessEqual);
+			commands.State.Culling = FaceCulling.Back;
 			drawnThisFrame++;
 		}
 
@@ -615,10 +597,7 @@ namespace LELEngine.Volumetrics
 			depthDownsample ??= new ShaderProgram("Engine/Volumetrics/VolumetricDepth.shader");
 			temporal ??= new ShaderProgram("Engine/Volumetrics/VolumetricTemporal.shader");
 			composite ??= new ShaderProgram("Engine/Volumetrics/VolumetricComposite.shader");
-			if (detailTexture == 0)
-			{
-				detailTexture = MakeDetail();
-			}
+			detailTexture ??= MakeDetail();
 		}
 
 		/// <summary>
@@ -686,48 +665,31 @@ namespace LELEngine.Volumetrics
 				dynamicData[stride * 3 + at + 3] = 0f;
 			}
 
-			if (dynamicBuffer == 0)
-			{
-				dynamicBuffer = GL.GenBuffer();
-				GL.BindBuffer(BufferTarget.UniformBuffer, dynamicBuffer);
-				GL.BufferData(BufferTarget.UniformBuffer, dynamicData.Length * sizeof(float), IntPtr.Zero, BufferUsageHint.StreamDraw);
-			}
+			dynamicBuffer ??= Gfx.Device.CreateBuffer(new BufferDescriptor(BufferUsage.Uniform, 0, true, "Volumetric dynamic lights"));
 
-			// A new store for each cloud (orphaned): the last cloud's draw may still read the old one.
-			GL.BindBuffer(BufferTarget.UniformBuffer, dynamicBuffer);
-			GL.BufferData(BufferTarget.UniformBuffer, dynamicData.Length * sizeof(float), dynamicData, BufferUsageHint.StreamDraw);
-			GL.BindBuffer(BufferTarget.UniformBuffer, 0);
-			GL.BindBufferBase(BufferRangeTarget.UniformBuffer, DynamicLightBinding, dynamicBuffer);
+			// A new store for each cloud: the last cloud's draw may still read the old one.
+			dynamicBuffer.SetData(dynamicData);
+			Gfx.Commands.SetUniformBuffer(DynamicLightBinding, dynamicBuffer);
 			program.SetInt("volDynamicCount", count);
 			program.SetFloat("volWorldScale", volume.WorldScale);
 			program.SetFloat("volDynamicGlow", volume.LightGlow);
 		}
 
 		// The tiling detail noise every object shares: made once.
-		private static int MakeDetail()
+		private static GpuTexture MakeDetail()
 		{
 			int levels = 1 + (int)MathF.Floor(MathF.Log2(DetailResolution));
-			int texture = GL.GenTexture();
-			GL.BindTexture(TextureTarget.Texture3D, texture);
-			GL.TexStorage3D(TextureTarget3d.Texture3D, levels, SizedInternalFormat.R8, DetailResolution, DetailResolution, DetailResolution);
-			GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.LinearMipmapLinear);
-			GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Linear);
-			GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureWrapS, (int)TextureWrapMode.Repeat);
-			GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureWrapT, (int)TextureWrapMode.Repeat);
-			GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureWrapR, (int)TextureWrapMode.Repeat);
-			GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureMaxLevel, levels - 1);
-			GL.BindTexture(TextureTarget.Texture3D, 0);
+			GpuTexture texture = Gfx.Device.CreateTexture(TextureDescriptor.Texture3D(TextureFormat.R8, DetailResolution, DetailResolution, DetailResolution, levels,
+				TextureUsage.Sampled | TextureUsage.Storage, "Volumetric detail"));
+			texture.Sampler = Samplers.TrilinearRepeat;
 
 			var shader = new ComputeShader("Engine/Volumetrics/VolumetricDetail.shader");
 			shader.Use();
 			shader.Program.SetInt("volResolution", DetailResolution);
-			GL.BindImageTexture(0, texture, 0, true, 0, TextureAccess.WriteOnly, SizedInternalFormat.R8);
-			GL.DispatchCompute(DetailResolution / 8, DetailResolution / 8, DetailResolution);
-			GL.BindImageTexture(0, 0, 0, true, 0, TextureAccess.WriteOnly, SizedInternalFormat.R8);
-			GL.MemoryBarrier(MemoryBarrierFlags.AllBarrierBits);
-			GL.BindTexture(TextureTarget.Texture3D, texture);
-			GL.GenerateMipmap(GenerateMipmapTarget.Texture3D);
-			GL.BindTexture(TextureTarget.Texture3D, 0);
+			CommandList commands = Gfx.Commands;
+			commands.SetImage(0, texture, 0, -1, ImageAccess.Write);
+			shader.Dispatch(DetailResolution / 8, DetailResolution / 8, DetailResolution);
+			commands.GenerateMipmaps(texture);
 			shader.Delete();
 			return texture;
 		}
@@ -805,20 +767,16 @@ namespace LELEngine.Volumetrics
 
 		private static void SetMarchUniforms(ShaderProgram program, RenderContext context, VolumetricObjectBase volume, VolumetricData data, Matrix4 localToWorld, int scale, int lowHeight, History history, VFX.VfxDepthCapture depth, Framebuffer lowDepth, Vector4 depthParams)
 		{
-			// Every sampler on a unit of its own (unused ones too: two sampler types on one unit fail the draw).
-			program.SetInt("ShadowMap", Lighting.ShadowMapTextureUnit);
-			program.SetInt("ShadowTransmittance", Lighting.ShadowTransmittanceTextureUnit);
-			program.SetInt("giSkybox", Lighting.SkyboxTextureUnit);
-			program.SetTexture("volOccupancy", TextureTarget.Texture3D, data.Occupancy, OccupancyUnit);
-			program.SetTexture("volDetail", TextureTarget.Texture3D, detailTexture, DetailUnit);
+			program.SetTexture("volOccupancy", data.Occupancy);
+			program.SetTexture("volDetail", detailTexture);
 			if (lowDepth != null)
 			{
-				program.SetTexture("volDepth", TextureTarget.Texture2D, lowDepth.ColorAttachments[0].Handle, DepthUnit);
+				program.SetTexture("volDepth", lowDepth.ColorAttachments[0]);
 				program.SetInt("volDepthIsWindow", 0);
 			}
 			else
 			{
-				program.SetTexture("volDepth", TextureTarget.Texture2D, depth.Depth.Handle, DepthUnit);
+				program.SetTexture("volDepth", depth.Depth);
 				program.SetInt("volDepthIsWindow", 1);
 			}
 
@@ -866,18 +824,18 @@ namespace LELEngine.Volumetrics
 		///     How a cloud is lit right now, for a program that reads its lit voxels (the march; the GI's media volume,
 		///     VolumetricMedia.shader): the lit voxels, the sun (direction, colour, the scene's shadows of it), the sky and the
 		///     flat ambient light, the albedo and emission, the GI the cloud receives, and its lights (the live ones' channels
-		///     with their colour x intensity right now, the baked ones' texture). Texture units 0 and 3..8 of the program.
+		///     with their colour x intensity right now, the baked ones' texture).
 		///     <paramref name="forGI" />: the light as the GI takes it, each light's times its Indirect Strength, nothing of
 		///     one with Affects GI off (the baked lights' texture holds their sum: they count as they are seen).
 		/// </summary>
 		internal static void SetCloudLightUniforms(ShaderProgram program, VolumetricObjectBase volume, VolumetricData data, Matrix4 worldToLocal, bool forGI = false)
 		{
-			program.SetTexture("volLit", TextureTarget.Texture3D, data.Lit, LitUnit);
-			bool lights = data.LightsA != 0 && AnyLightLit(volume, data);
-			program.SetTexture("volLightsA", TextureTarget.Texture3D, lights ? data.LightsA : 0, LightsAUnit);
-			program.SetTexture("volLightsB", TextureTarget.Texture3D, lights ? data.LightsB : 0, LightsBUnit);
-			bool baked = data.LightsC != 0 && data.BakedLit;
-			program.SetTexture("volLightsC", TextureTarget.Texture3D, baked ? data.LightsC : 0, LightsCUnit);
+			program.SetTexture("volLit", data.Lit);
+			bool lights = data.LightsA != null && AnyLightLit(volume, data);
+			program.SetTexture("volLightsA", lights ? data.LightsA : null);
+			program.SetTexture("volLightsB", lights ? data.LightsB : null);
+			bool baked = data.LightsC != null && data.BakedLit;
+			program.SetTexture("volLightsC", baked ? data.LightsC : null);
 			program.SetInt("volBakedActive", baked ? 1 : 0);
 			program.SetFloat("volSigma", data.Sigma);
 			program.SetFloat("volTauMax", VolumetricData.TauMax);
@@ -910,8 +868,8 @@ namespace LELEngine.Volumetrics
 			// The GI it receives, once its grid has been worked out whole.
 			bool gi = volume.ReceiveGI && data.GIValid && SceneGIAvailable;
 			program.SetInt("volGIActive", gi ? 1 : 0);
-			program.SetTexture("volGIA", TextureTarget.Texture3D, gi ? data.GIA : 0, GIAUnit);
-			program.SetTexture("volGIB", TextureTarget.Texture3D, gi ? data.GIB : 0, GIBUnit);
+			program.SetTexture("volGIA", gi ? data.GIA : null);
+			program.SetTexture("volGIB", gi ? data.GIB : null);
 			program.SetFloat("volGIStrength", volume.GIStrength);
 
 			// The live lights (its own and the scene's, as their transport was worked out): colour x intensity right now.
@@ -953,7 +911,7 @@ namespace LELEngine.Volumetrics
 				{
 					program.SetVector4Array("volDirectionalDirs", directionalDirs);
 					program.SetVector4Array("volDirectionalColors", directionalColors);
-					GL.Uniform4(program.GetUniformLocation("volDirectionalSlots"), directionalSlots[0], directionalSlots[1], directionalSlots[2], directionalSlots[3]);
+					program.SetInt4("volDirectionalSlots", directionalSlots[0], directionalSlots[1], directionalSlots[2], directionalSlots[3]);
 				}
 			}
 
@@ -966,30 +924,17 @@ namespace LELEngine.Volumetrics
 		/// </summary>
 		internal static void SetDetailUniforms(ShaderProgram program, VolumetricObjectBase volume)
 		{
-			if (detailTexture == 0)
+			if (detailTexture == null)
 			{
 				detailTexture = MakeDetail();
 				// MakeDetail used its own program.
 				program.Use();
 			}
 
-			program.SetTexture("volDetail", TextureTarget.Texture3D, detailTexture, DetailUnit);
+			program.SetTexture("volDetail", detailTexture);
 			program.SetFloat("volDetailStrength", volume.DetailStrength);
 			program.SetFloat("volDetailShade", volume.DetailShade);
 			program.SetFloat("volEdgeBand", MathF.Max(volume.EdgeBand, 0.05f));
-		}
-
-		// The units a cloud's textures were bound to (SetCloudLightUniforms, the march): nothing of them stays bound.
-		internal static void UnbindCloudTextures()
-		{
-			for (int unit = 0; unit <= LightsCUnit; unit++)
-			{
-				GL.ActiveTexture(TextureUnit.Texture0 + unit);
-				GL.BindTexture(TextureTarget.Texture3D, 0);
-				GL.BindTexture(TextureTarget.Texture2D, 0);
-			}
-
-			GL.ActiveTexture(TextureUnit.Texture0);
 		}
 
 		private static readonly Vector3[] Axes = { Vector3.UnitX, -Vector3.UnitX, Vector3.UnitY, -Vector3.UnitY, Vector3.UnitZ, -Vector3.UnitZ };

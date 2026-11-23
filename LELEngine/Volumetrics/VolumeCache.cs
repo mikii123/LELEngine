@@ -64,9 +64,9 @@ namespace LELEngine.Volumetrics
 			public string DensityKey;
 			public string LitKey;
 			public Vector3 Sun;
-			public int Density;
-			public int Occupancy;
-			public int Lit;
+			public GpuTexture Density;
+			public GpuTexture Occupancy;
+			public GpuTexture Lit;
 			public Vector3i Resolution;
 			public Vector3i Blocks;
 			public Vector3 Size;
@@ -368,10 +368,10 @@ namespace LELEngine.Volumetrics
 
 		private static void Delete(ParkedCloud cloud)
 		{
-			if (cloud.Density != 0) GL.DeleteTexture(cloud.Density);
-			if (cloud.Occupancy != 0) GL.DeleteTexture(cloud.Occupancy);
-			if (cloud.Lit != 0) GL.DeleteTexture(cloud.Lit);
-			cloud.Density = cloud.Occupancy = cloud.Lit = 0;
+			cloud.Density?.Dispose();
+			cloud.Occupancy?.Dispose();
+			cloud.Lit?.Dispose();
+			cloud.Density = cloud.Occupancy = cloud.Lit = null;
 		}
 
 		// Files unused for 30 days go, then the least recently used past MaxFolderBytes.
