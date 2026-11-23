@@ -460,10 +460,6 @@ namespace LELEngine.Volumetrics
 				points[i] = new Vector4(local[i], 0f);
 			}
 
-			// Other passes keep their own storage buffers bound: put theirs back afterwards.
-			// LEGACY(gl): the passes that still bind their storage buffers with OpenGL commands count on them staying bound
-			GL.GetInteger((GetIndexedPName)All.ShaderStorageBufferBinding, 0, out int previous0);
-			GL.GetInteger((GetIndexedPName)All.ShaderStorageBufferBinding, 1, out int previous1);
 			GpuBuffer input = Gfx.Device.CreateBuffer(new BufferDescriptor(BufferUsage.Storage, 0, true, "Volumetric points"));
 			GpuBuffer output = Gfx.Device.CreateBuffer(new BufferDescriptor(BufferUsage.Storage | BufferUsage.Readback, count * 4, false, "Volumetric point densities"));
 			input.SetData(points);
@@ -479,9 +475,8 @@ namespace LELEngine.Volumetrics
 
 			var results = new float[count];
 			output.GetData(0, results);
-			// LEGACY(gl): see above
-			GL.BindBufferBase(BufferRangeTarget.ShaderStorageBuffer, 0, previous0);
-			GL.BindBufferBase(BufferRangeTarget.ShaderStorageBuffer, 1, previous1);
+			commands.SetStorageBuffer(0, null);
+			commands.SetStorageBuffer(1, null);
 			input.Dispose();
 			output.Dispose();
 			results.AsSpan().CopyTo(densities);

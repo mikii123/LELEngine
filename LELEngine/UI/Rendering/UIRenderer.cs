@@ -212,8 +212,8 @@ namespace LELEngine.UIElements.Rendering
 				return;
 			}
 
-			var vertex = new Shader(UIShaders.Vertex, ShaderType.VertexShader, "UI");
-			var fragment = new Shader(UIShaders.Fragment, ShaderType.FragmentShader, "UI");
+			var vertex = new Shader(UIShaders.Vertex, ShaderStage.Vertex, "UI");
+			var fragment = new Shader(UIShaders.Fragment, ShaderStage.Fragment, "UI");
 			program = new ShaderProgram("Builtin/UI", vertex, fragment);
 			vertex.Delete();
 			fragment.Delete();

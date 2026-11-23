@@ -16,8 +16,8 @@ namespace LELEngine.Editor
 		public int Width => output.Width;
 		public int Height => output.Height;
 
-		/// <summary>GL texture of the last rendered frame (bottom-up, tonemapped).</summary>
-		public int Texture => output.ColorAttachments[0].Handle;
+		/// <summary>Texture of the last rendered frame (bottom-up, tonemapped).</summary>
+		public Graphics.GpuTexture Texture => output.ColorAttachments[0].Gpu;
 
 		#endregion
 

@@ -70,15 +70,37 @@ namespace LELEngine.Editor
 
 			// focus=0: automated runs open their windows without taking the keyboard focus.
 			Window.StartFocused = Array.IndexOf(args, "focus=0") < 0;
+			// hidden=1: automated runs that are only driven by commands never show their windows (nor give them the focus).
+			Window.StartHidden = Array.IndexOf(args, "hidden=1") >= 0;
 			if (!EditorApplication.OpensProjectDirectly(args))
 			{
+				if (Window.StartHidden)
+				{
+					// The project chooser is a window: nobody could choose in one that is not shown.
+					Console.Error.WriteLine("[Editor] hidden=1 needs a project to open (project=<folder>).");
+					return 1;
+				}
+
+				// The chooser's window makes the graphics device (graphics=, else OpenGL).
+				LELEngine.Graphics.GraphicsDevice.RequestedApi = ProjectGraphicsApi.Requested(args, null);
 				string chosen = LauncherWindow.Choose(null);
 				if (chosen == null)
 				{
 					return 0;
 				}
 
-				args = WithProject(args, chosen);
+				// The device is the chooser's: a project on another graphics API opens in an editor process of its own.
+				if (ProjectGraphicsApi.NeedsNewProcess(ProjectGraphicsApi.Of(chosen), args))
+				{
+					return ProjectGraphicsApi.Relaunch(args, chosen) ? 0 : 1;
+				}
+
+				args = ProjectGraphicsApi.WithProject(args, chosen);
+			}
+			else
+			{
+				// The project's graphics API (Project Settings > Graphics), as its built game runs; graphics= wins.
+				LELEngine.Graphics.GraphicsDevice.RequestedApi = ProjectGraphicsApi.Requested(args, EditorApplication.ProjectArgument(args));
 			}
 
 			using (MainWindow window = MainWindow.Create(args))
@@ -86,32 +108,15 @@ namespace LELEngine.Editor
 				window.Run();
 			}
 
-			return 0;
-		}
-
-		/// <summary>The command line with the chosen project instead of any project given before.</summary>
-		private static string[] WithProject(string[] args, string project)
-		{
-			var result = new System.Collections.Generic.List<string>();
-			for (int i = 0; i < args.Length; i++)
+			// Restart Editor (a project whose graphics API changed), or a project chosen after File > Close Project that runs
+			// on another API: the same editor again, in a process of its own.
+			string restart = EditorApplication.RestartProject;
+			if (restart != null)
 			{
-				string arg = args[i];
-				if (arg.StartsWith("project=", StringComparison.OrdinalIgnoreCase) || arg.StartsWith("newproject=", StringComparison.OrdinalIgnoreCase))
-				{
-					continue;
-				}
-
-				if (string.Equals(arg, "-projectPath", StringComparison.OrdinalIgnoreCase))
-				{
-					i++;
-					continue;
-				}
-
-				result.Add(arg);
+				return ProjectGraphicsApi.Relaunch(args, restart) ? 0 : 1;
 			}
 
-			result.Add("project=" + project);
-			return result.ToArray();
+			return 0;
 		}
 
 		private static int ShowHelp()

@@ -71,26 +71,18 @@ namespace LELEngine.Editor
 
 		#region PublicMethods
 
-		/// <summary>Creates the window with the newest OpenGL context the driver grants (4.6 down to 4.3).</summary>
+		/// <summary>
+		///     Creates the window on the graphics API asked for (<see cref="Graphics.GraphicsDevice.RequestedApi" />), on
+		///     OpenGL with the newest context the driver grants (4.6 down to 4.3) where this machine has no other.
+		/// </summary>
 		public static MainWindow Create(string[] args)
 		{
-			// focus=0: automated runs open the window without taking the keyboard focus.
-			StartFocused = Array.IndexOf(args, "focus=0") < 0;
-			Version version = PreferredApiVersion;
-			while (true)
-			{
-				try
-				{
-					var window = new MainWindow(version, args);
-					window.placement.Restore(window.rememberPlacement);
-					return window;
-				}
-				catch (Exception e) when (version > MinimumApiVersion)
-				{
-					Console.WriteLine($"[Window] OpenGL {version} context unavailable ({e.GetType().Name}), trying an older version");
-					version = version.Minor > 0 ? new Version(version.Major, version.Minor - 1) : MinimumApiVersion;
-				}
-			}
+			// focus=0: automated runs open the window without taking the keyboard focus (hidden=1: there is none to focus).
+			StartFocused = Array.IndexOf(args, "focus=0") < 0 && !StartHidden;
+			// On the graphics API asked for (GraphicsDevice.RequestedApi: the project's), OpenGL where this machine has no other.
+			MainWindow window = Open(version => new MainWindow(version, args));
+			window.placement.Restore(window.rememberPlacement);
+			return window;
 		}
 
 		#endregion
@@ -132,21 +124,9 @@ namespace LELEngine.Editor
 		/// </summary>
 		public static MainWindow CreateWithoutUI(string[] args)
 		{
-			Version version = PreferredApiVersion;
-			while (true)
-			{
-				try
-				{
-					var window = new MainWindow(version, args);
-					window.StartWithoutUI();
-					return window;
-				}
-				catch (Exception e) when (version > MinimumApiVersion)
-				{
-					Console.WriteLine($"[Window] OpenGL {version} context unavailable ({e.GetType().Name}), trying an older version");
-					version = version.Minor > 0 ? new Version(version.Major, version.Minor - 1) : MinimumApiVersion;
-				}
-			}
+			MainWindow window = Open(version => new MainWindow(version, args));
+			window.StartWithoutUI();
+			return window;
 		}
 
 		/// <summary>The editor (null until the window loaded).</summary>
@@ -232,9 +212,9 @@ namespace LELEngine.Editor
 
 			using (FrameProfiler.Begin("Editor UI drawn"))
 			{
-				Framebuffer.BindDefault(ClientSize.X, ClientSize.Y);
-				GL.ClearColor(0.11f, 0.11f, 0.12f, 1f);
-				GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
+				CommandList commands = Gfx.Commands;
+				commands.BeginRenderPass(Gfx.Device.Backbuffer, null, LoadOperation.Clear, new ClearValue(0.11f, 0.11f, 0.12f, 1f));
+				commands.SetViewport(0, 0, ClientSize.X, ClientSize.Y);
 				imgui.RenderDrawData(ClientSize.X, ClientSize.Y);
 			}
 
@@ -254,7 +234,7 @@ namespace LELEngine.Editor
 				if (screenshotFolder != null && Array.IndexOf(screenshotFrames, frame) >= 0)
 				{
 					screenshotDumper.Start(screenshotFrames.Length > 1 ? Path.Combine(screenshotFolder, "f" + frame.ToString("0000")) : screenshotFolder, 1);
-					screenshotDumper.Capture(ClientSize.X, ClientSize.Y);
+					screenshotDumper.Capture(Gfx.Device.Backbuffer, ClientSize.X, ClientSize.Y);
 				}
 			}
 
@@ -287,7 +267,7 @@ namespace LELEngine.Editor
 			string folder = Path.Combine(loadingShotsFolder, "load" + loadingShots.ToString("00"));
 			Console.WriteLine($"[Test] Loading frame {loadingShots:00}: {step}");
 			screenshotDumper.Start(folder, 1);
-			screenshotDumper.Capture(ClientSize.X, ClientSize.Y);
+			screenshotDumper.Capture(Gfx.Device.Backbuffer, ClientSize.X, ClientSize.Y);
 		}
 
 		protected override void OnClosing(CancelEventArgs e)

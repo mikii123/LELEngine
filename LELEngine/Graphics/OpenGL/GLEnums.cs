@@ -1,10 +1,9 @@
-// The graphics API's enumerations: OpenGL's values under the names the engine's rendering code uses.
-// Generated from the usage of the engine's sources; values are OpenGL's (Khronos registry).
+// OpenGL's enumerations as the OpenGL device uses them: OpenGL's values (Khronos registry) under OpenTK's names.
 using System;
 
-namespace LELEngine.Graphics
+namespace LELEngine.Graphics.OpenGL
 {
-	public enum ActiveUniformType : int
+	internal enum ActiveUniformType : int
 	{
 		Int = 0x1404,
 		UnsignedInt = 0x1405,
@@ -111,19 +110,19 @@ namespace LELEngine.Graphics
 		UnsignedIntAtomicCounter = 0x92DB,
 	}
 
-	public enum All : int
+	internal enum All : int
 	{
 		Lequal = 0x203,
 		ShaderStorageBufferBinding = 0x90D3,
 	}
 
-	public enum BinaryFormat : int
+	internal enum BinaryFormat : int
 	{
 		ShaderBinaryFormatSpirV = 0x9551,
 		ShaderBinaryFormatSpirVArb = 0x9551,
 	}
 
-	public enum BlendEquationMode : int
+	internal enum BlendEquationMode : int
 	{
 		FuncAdd = 0x8006,
 		Min = 0x8007,
@@ -132,7 +131,7 @@ namespace LELEngine.Graphics
 		FuncReverseSubtract = 0x800B,
 	}
 
-	public enum BlendingFactor : int
+	internal enum BlendingFactor : int
 	{
 		Zero = 0,
 		SrcColor = 0x300,
@@ -155,7 +154,7 @@ namespace LELEngine.Graphics
 		One = 1,
 	}
 
-	public enum BlendingFactorDest : int
+	internal enum BlendingFactorDest : int
 	{
 		Zero = 0,
 		SrcColor = 0x300,
@@ -178,7 +177,7 @@ namespace LELEngine.Graphics
 		One = 1,
 	}
 
-	public enum BlendingFactorSrc : int
+	internal enum BlendingFactorSrc : int
 	{
 		Zero = 0,
 		SrcColor = 0x300,
@@ -201,13 +200,13 @@ namespace LELEngine.Graphics
 		One = 1,
 	}
 
-	public enum BlitFramebufferFilter : int
+	internal enum BlitFramebufferFilter : int
 	{
 		Nearest = 0x2600,
 		Linear = 0x2601,
 	}
 
-	public enum BufferRangeTarget : int
+	internal enum BufferRangeTarget : int
 	{
 		UniformBuffer = 0x8A11,
 		TransformFeedbackBuffer = 0x8C8E,
@@ -215,7 +214,7 @@ namespace LELEngine.Graphics
 		AtomicCounterBuffer = 0x92C0,
 	}
 
-	public enum BufferTarget : int
+	internal enum BufferTarget : int
 	{
 		ParameterBuffer = 0x80EE,
 		ArrayBuffer = 0x8892,
@@ -234,7 +233,7 @@ namespace LELEngine.Graphics
 		AtomicCounterBuffer = 0x92C0,
 	}
 
-	public enum BufferUsageHint : int
+	internal enum BufferUsageHint : int
 	{
 		StreamDraw = 0x88E0,
 		StreamRead = 0x88E1,
@@ -247,7 +246,7 @@ namespace LELEngine.Graphics
 		DynamicCopy = 0x88EA,
 	}
 
-	public enum ClearBuffer : int
+	internal enum ClearBuffer : int
 	{
 		Color = 0x1800,
 		Depth = 0x1801,
@@ -255,7 +254,7 @@ namespace LELEngine.Graphics
 	}
 
 	[Flags]
-	public enum ClearBufferMask : int
+	internal enum ClearBufferMask : int
 	{
 		None = 0,
 		DepthBufferBit = 0x100,
@@ -265,13 +264,13 @@ namespace LELEngine.Graphics
 		CoverageBufferBitNv = 0x8000,
 	}
 
-	public enum ClientWaitSyncFlags : int
+	internal enum ClientWaitSyncFlags : int
 	{
 		None = 0,
 		SyncFlushCommandsBit = 1,
 	}
 
-	public enum DepthFunction : int
+	internal enum DepthFunction : int
 	{
 		Never = 0x200,
 		Less = 0x201,
@@ -283,7 +282,7 @@ namespace LELEngine.Graphics
 		Always = 0x207,
 	}
 
-	public enum DrawBufferMode : int
+	internal enum DrawBufferMode : int
 	{
 		None = 0,
 		NoneOes = 0,
@@ -346,7 +345,7 @@ namespace LELEngine.Graphics
 		ColorAttachment31 = 0x8CFF,
 	}
 
-	public enum DrawBuffersEnum : int
+	internal enum DrawBuffersEnum : int
 	{
 		None = 0,
 		FrontLeft = 0x400,
@@ -375,14 +374,14 @@ namespace LELEngine.Graphics
 		ColorAttachment15 = 0x8CEF,
 	}
 
-	public enum DrawElementsType : int
+	internal enum DrawElementsType : int
 	{
 		UnsignedByte = 0x1401,
 		UnsignedShort = 0x1403,
 		UnsignedInt = 0x1405,
 	}
 
-	public enum EnableCap : int
+	internal enum EnableCap : int
 	{
 		LineSmooth = 0xB20,
 		PolygonSmooth = 0xB41,
@@ -495,7 +494,7 @@ namespace LELEngine.Graphics
 		ShadingRatePreserveAspectRatioQcom = 0x96A5,
 	}
 
-	public enum FramebufferAttachment : int
+	internal enum FramebufferAttachment : int
 	{
 		FrontLeft = 0x400,
 		FrontRight = 0x401,
@@ -564,7 +563,7 @@ namespace LELEngine.Graphics
 		ShadingRateAttachmentExt = 0x96D1,
 	}
 
-	public enum FramebufferDefaultParameter : int
+	internal enum FramebufferDefaultParameter : int
 	{
 		FramebufferDefaultWidth = 0x9310,
 		FramebufferDefaultHeight = 0x9311,
@@ -573,7 +572,7 @@ namespace LELEngine.Graphics
 		FramebufferDefaultFixedSampleLocations = 0x9314,
 	}
 
-	public enum FramebufferErrorCode : int
+	internal enum FramebufferErrorCode : int
 	{
 		FramebufferUndefined = 0x8219,
 		FramebufferComplete = 0x8CD5,
@@ -595,7 +594,7 @@ namespace LELEngine.Graphics
 		FramebufferIncompleteLayerCount = 0x8DA9,
 	}
 
-	public enum FramebufferTarget : int
+	internal enum FramebufferTarget : int
 	{
 		ReadFramebuffer = 0x8CA8,
 		DrawFramebuffer = 0x8CA9,
@@ -604,7 +603,7 @@ namespace LELEngine.Graphics
 		FramebufferOes = 0x8D40,
 	}
 
-	public enum GenerateMipmapTarget : int
+	internal enum GenerateMipmapTarget : int
 	{
 		Texture1D = 0xDE0,
 		Texture2D = 0xDE1,
@@ -617,7 +616,7 @@ namespace LELEngine.Graphics
 		Texture2DMultisampleArray = 0x9102,
 	}
 
-	public enum GetIndexedPName : int
+	internal enum GetIndexedPName : int
 	{
 		DepthRange = 0xB70,
 		Viewport = 0xBA2,
@@ -644,7 +643,7 @@ namespace LELEngine.Graphics
 		ShaderStorageBufferSize = 0x90D5,
 	}
 
-	public enum GetPName : int
+	internal enum GetPName : int
 	{
 		PointSmooth = 0xB10,
 		PointSize = 0xB11,
@@ -1272,7 +1271,7 @@ namespace LELEngine.Graphics
 		ShaderCoreFmaRateArm = 0x96F6,
 	}
 
-	public enum GetProgramParameterName : int
+	internal enum GetProgramParameterName : int
 	{
 		ProgramBinaryRetrievableHint = 0x8257,
 		ProgramSeparable = 0x8258,
@@ -1304,7 +1303,7 @@ namespace LELEngine.Graphics
 		ActiveAtomicCounterBuffers = 0x92D9,
 	}
 
-	public enum GetQueryObjectParam : int
+	internal enum GetQueryObjectParam : int
 	{
 		QueryTarget = 0x82EA,
 		QueryResult = 0x8866,
@@ -1312,7 +1311,7 @@ namespace LELEngine.Graphics
 		QueryResultNoWait = 0x9194,
 	}
 
-	public enum ImageTarget : int
+	internal enum ImageTarget : int
 	{
 		Texture1D = 0xDE0,
 		Texture2D = 0xDE1,
@@ -1328,7 +1327,7 @@ namespace LELEngine.Graphics
 		Texture2DMultisampleArray = 0x9102,
 	}
 
-	public enum InternalFormat : int
+	internal enum InternalFormat : int
 	{
 		StencilIndex = 0x1901,
 		StencilIndexOes = 0x1901,
@@ -1707,7 +1706,7 @@ namespace LELEngine.Graphics
 	}
 
 	[Flags]
-	public enum MapBufferAccessMask : int
+	internal enum MapBufferAccessMask : int
 	{
 		MapReadBit = 1,
 		MapReadBitExt = 1,
@@ -1727,7 +1726,7 @@ namespace LELEngine.Graphics
 		MapCoherentBitExt = 0x80,
 	}
 
-	public enum MemoryBarrierFlags : int
+	internal enum MemoryBarrierFlags : int
 	{
 		VertexAttribArrayBarrierBit = 1,
 		ElementArrayBarrierBit = 2,
@@ -1747,7 +1746,7 @@ namespace LELEngine.Graphics
 		AllBarrierBits = unchecked((int)0xFFFFFFFF),
 	}
 
-	public enum PixelFormat : int
+	internal enum PixelFormat : int
 	{
 		UnsignedShort = 0x1403,
 		UnsignedInt = 0x1405,
@@ -1791,7 +1790,7 @@ namespace LELEngine.Graphics
 		BgraInteger = 0x8D9B,
 	}
 
-	public enum PixelInternalFormat : int
+	internal enum PixelInternalFormat : int
 	{
 		DepthComponent = 0x1902,
 		Alpha = 0x1906,
@@ -1965,7 +1964,7 @@ namespace LELEngine.Graphics
 		Four = 4,
 	}
 
-	public enum PixelStoreParameter : int
+	internal enum PixelStoreParameter : int
 	{
 		UnpackSwapBytes = 0xCF0,
 		UnpackLsbFirst = 0xCF1,
@@ -2019,7 +2018,7 @@ namespace LELEngine.Graphics
 		PackCompressedBlockSize = 0x912E,
 	}
 
-	public enum PixelType : int
+	internal enum PixelType : int
 	{
 		Byte = 0x1400,
 		UnsignedByte = 0x1401,
@@ -2077,14 +2076,14 @@ namespace LELEngine.Graphics
 		Float32UnsignedInt248RevNv = 0x8DAD,
 	}
 
-	public enum PolygonMode : int
+	internal enum PolygonMode : int
 	{
 		Point = 0x1B00,
 		Line = 0x1B01,
 		Fill = 0x1B02,
 	}
 
-	public enum PrimitiveType : int
+	internal enum PrimitiveType : int
 	{
 		Points = 0,
 		Lines = 1,
@@ -2111,19 +2110,19 @@ namespace LELEngine.Graphics
 		PatchesExt = 14,
 	}
 
-	public enum ProgramParameterName : int
+	internal enum ProgramParameterName : int
 	{
 		ProgramBinaryRetrievableHint = 0x8257,
 		ProgramSeparable = 0x8258,
 	}
 
-	public enum QueryCounterTarget : int
+	internal enum QueryCounterTarget : int
 	{
 		Timestamp = 0x8E28,
 		TimestampExt = 0x8E28,
 	}
 
-	public enum QueryTarget : int
+	internal enum QueryTarget : int
 	{
 		TransformFeedbackOverflow = 0x82EC,
 		VerticesSubmitted = 0x82EE,
@@ -2138,7 +2137,7 @@ namespace LELEngine.Graphics
 		Timestamp = 0x8E28,
 	}
 
-	public enum ReadBufferMode : int
+	internal enum ReadBufferMode : int
 	{
 		None = 0,
 		NoneOes = 0,
@@ -2173,7 +2172,7 @@ namespace LELEngine.Graphics
 		ColorAttachment15 = 0x8CEF,
 	}
 
-	public enum RenderbufferStorage : int
+	internal enum RenderbufferStorage : int
 	{
 		DepthComponent = 0x1902,
 		R3G3B2 = 0x2A10,
@@ -2251,14 +2250,14 @@ namespace LELEngine.Graphics
 		Rgb10A2ui = 0x906F,
 	}
 
-	public enum RenderbufferTarget : int
+	internal enum RenderbufferTarget : int
 	{
 		Renderbuffer = 0x8D41,
 		RenderbufferExt = 0x8D41,
 		RenderbufferOes = 0x8D41,
 	}
 
-	public enum SamplerParameterName : int
+	internal enum SamplerParameterName : int
 	{
 		TextureBorderColor = 0x1004,
 		TextureMagFilter = 0x2800,
@@ -2274,7 +2273,7 @@ namespace LELEngine.Graphics
 		TextureCompareFunc = 0x884D,
 	}
 
-	public enum ShaderParameter : int
+	internal enum ShaderParameter : int
 	{
 		ShaderType = 0x8B4F,
 		DeleteStatus = 0x8B80,
@@ -2283,7 +2282,7 @@ namespace LELEngine.Graphics
 		ShaderSourceLength = 0x8B88,
 	}
 
-	public enum ShaderType : int
+	internal enum ShaderType : int
 	{
 		FragmentShader = 0x8B30,
 		FragmentShaderArb = 0x8B30,
@@ -2295,7 +2294,7 @@ namespace LELEngine.Graphics
 		ComputeShader = 0x91B9,
 	}
 
-	public enum SizedInternalFormat : int
+	internal enum SizedInternalFormat : int
 	{
 		R3G3B2 = 0x2A10,
 		Alpha4 = 0x803B,
@@ -2646,7 +2645,7 @@ namespace LELEngine.Graphics
 		CompressedSrgb8Alpha8Astc6X6x6Oes = 0x93E9,
 	}
 
-	public enum StringName : int
+	internal enum StringName : int
 	{
 		Vendor = 0x1F00,
 		Renderer = 0x1F01,
@@ -2655,32 +2654,32 @@ namespace LELEngine.Graphics
 		ShadingLanguageVersion = 0x8B8C,
 	}
 
-	public enum StringNameIndexed : int
+	internal enum StringNameIndexed : int
 	{
 		Extensions = 0x1F03,
 		ShadingLanguageVersion = 0x8B8C,
 	}
 
-	public enum SyncCondition : int
+	internal enum SyncCondition : int
 	{
 		SyncGpuCommandsComplete = 0x9117,
 	}
 
-	public enum TextureAccess : int
+	internal enum TextureAccess : int
 	{
 		ReadOnly = 0x88B8,
 		WriteOnly = 0x88B9,
 		ReadWrite = 0x88BA,
 	}
 
-	public enum TextureCompareMode : int
+	internal enum TextureCompareMode : int
 	{
 		None = 0,
 		CompareRefToTexture = 0x884E,
 		CompareRToTexture = 0x884E,
 	}
 
-	public enum TextureMagFilter : int
+	internal enum TextureMagFilter : int
 	{
 		Nearest = 0x2600,
 		Linear = 0x2601,
@@ -2696,7 +2695,7 @@ namespace LELEngine.Graphics
 		PixelTexGenQFloorSgix = 0x8186,
 	}
 
-	public enum TextureMinFilter : int
+	internal enum TextureMinFilter : int
 	{
 		Nearest = 0x2600,
 		Linear = 0x2601,
@@ -2714,7 +2713,7 @@ namespace LELEngine.Graphics
 		LinearClipmapNearestSgix = 0x844F,
 	}
 
-	public enum TextureParameterName : int
+	internal enum TextureParameterName : int
 	{
 		TextureWidth = 0x1000,
 		TextureHeight = 0x1001,
@@ -2802,7 +2801,7 @@ namespace LELEngine.Graphics
 		TextureCbcrDegammaQcom = 0x9711,
 	}
 
-	public enum TextureTarget : int
+	internal enum TextureTarget : int
 	{
 		Texture1D = 0xDE0,
 		Texture2D = 0xDE1,
@@ -2876,7 +2875,7 @@ namespace LELEngine.Graphics
 		ProxyTexture2DMultisampleArray = 0x9103,
 	}
 
-	public enum TextureTarget2d : int
+	internal enum TextureTarget2d : int
 	{
 		Texture2D = 0xDE1,
 		ProxyTexture2D = 0x8064,
@@ -2888,7 +2887,7 @@ namespace LELEngine.Graphics
 		ProxyTexture1DArray = 0x8C19,
 	}
 
-	public enum TextureTarget3d : int
+	internal enum TextureTarget3d : int
 	{
 		Texture3D = 0x806F,
 		ProxyTexture3D = 0x8070,
@@ -2900,7 +2899,7 @@ namespace LELEngine.Graphics
 		ProxyTextureCubeMapArray = 0x900B,
 	}
 
-	public enum TextureUnit : int
+	internal enum TextureUnit : int
 	{
 		Texture0 = 0x84C0,
 		Texture1 = 0x84C1,
@@ -2936,7 +2935,7 @@ namespace LELEngine.Graphics
 		Texture31 = 0x84DF,
 	}
 
-	public enum TextureWrapMode : int
+	internal enum TextureWrapMode : int
 	{
 		Repeat = 0x2901,
 		ClampToBorder = 0x812D,
@@ -2953,14 +2952,14 @@ namespace LELEngine.Graphics
 		MirroredRepeatOes = 0x8370,
 	}
 
-	public enum TriangleFace : int
+	internal enum TriangleFace : int
 	{
 		Front = 0x404,
 		Back = 0x405,
 		FrontAndBack = 0x408,
 	}
 
-	public enum VertexAttribIntegerType : int
+	internal enum VertexAttribIntegerType : int
 	{
 		Byte = 0x1400,
 		UnsignedByte = 0x1401,
@@ -2970,7 +2969,7 @@ namespace LELEngine.Graphics
 		UnsignedInt = 0x1405,
 	}
 
-	public enum VertexAttribPointerType : int
+	internal enum VertexAttribPointerType : int
 	{
 		Byte = 0x1400,
 		UnsignedByte = 0x1401,
@@ -2992,12 +2991,12 @@ namespace LELEngine.Graphics
 		Int2101010Rev = 0x8D9F,
 	}
 
-	public enum WaitSyncFlags : int
+	internal enum WaitSyncFlags : int
 	{
 		None = 0,
 	}
 
-	public enum WaitSyncStatus : int
+	internal enum WaitSyncStatus : int
 	{
 		AlreadySignaled = 0x911A,
 		TimeoutExpired = 0x911B,

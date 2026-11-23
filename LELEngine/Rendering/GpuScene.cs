@@ -143,10 +143,10 @@ namespace LELEngine.Rendering
 		public const uint CastsShadowsFlag = 1;
 
 		/// <summary>The context can run GPU-driven rendering (shader storage blocks in vertex and fragment shaders, bindings up to 14).</summary>
-		public static bool IsSupported => GLCapabilities.MaxShaderStorageBindings > SegmentBinding && GLCapabilities.VertexShaderStorageBlocks >= 1 && GLCapabilities.FragmentShaderStorageBlocks >= 2;
+		public static bool IsSupported => GraphicsCapabilities.MaxShaderStorageBindings > SegmentBinding && GraphicsCapabilities.VertexShaderStorageBlocks >= 1 && GraphicsCapabilities.FragmentShaderStorageBlocks >= 2;
 
 		/// <summary>The previous world matrices can be bound next to the instance table (one more binding and vertex shader storage block).</summary>
-		public static bool SupportsPreviousModels => GLCapabilities.MaxShaderStorageBindings > PreviousModelBinding && GLCapabilities.VertexShaderStorageBlocks >= 2;
+		public static bool SupportsPreviousModels => GraphicsCapabilities.MaxShaderStorageBindings > PreviousModelBinding && GraphicsCapabilities.VertexShaderStorageBlocks >= 2;
 
 		/// <summary>Built for this frame and not empty: the passes draw GPU-driven.</summary>
 		public bool Active { get; private set; }
@@ -363,9 +363,9 @@ namespace LELEngine.Rendering
 			if (!reported)
 			{
 				reported = true;
-				Console.WriteLine("[GpuScene] GPU-driven rendering: draw count " + (GLCapabilities.IndirectParameters ? "from the GPU (indirect count)" : "fixed (fallback: culled draws have 0 instances)")
-					+ ", instance index " + (GLCapabilities.ShaderDrawParameters ? "gl_BaseInstance" : "per-instance attribute (fallback)")
-					+ ", culling scan " + (GLCapabilities.ComputeSubgroups ? "subgroups" : "shared memory (fallback)"));
+				Console.WriteLine("[GpuScene] GPU-driven rendering: draw count " + (GraphicsCapabilities.IndirectParameters ? "from the GPU (indirect count)" : "fixed (fallback: culled draws have 0 instances)")
+					+ ", instance index " + (GraphicsCapabilities.ShaderDrawParameters ? "gl_BaseInstance" : "per-instance attribute (fallback)")
+					+ ", culling scan " + (GraphicsCapabilities.ComputeSubgroups ? "subgroups" : "shared memory (fallback)"));
 			}
 		}
 
@@ -643,7 +643,7 @@ namespace LELEngine.Rendering
 			commands.SetStorageBuffer(SegmentBinding, view.SegmentBuffer);
 			cull.Use();
 			cull.Program.SetVector4Array("frustumPlanes", FrustumPlanes(viewProjection));
-			cull.Program.SetInt("compactCommands", GLCapabilities.IndirectParameters ? 1 : 0);
+			cull.Program.SetInt("compactCommands", GraphicsCapabilities.IndirectParameters ? 1 : 0);
 			// A uint uniform: SetInt would leave it 0 (nothing visible).
 			cull.Program.SetUint("layerMask", unchecked((uint)layerMask));
 			// The commands and the counts it writes are read by the following indirect draws.
@@ -666,7 +666,7 @@ namespace LELEngine.Rendering
 			BindTables();
 			GeometryPool.Bind();
 			CommandList commands = Gfx.Commands;
-			if (GLCapabilities.IndirectParameters)
+			if (GraphicsCapabilities.IndirectParameters)
 			{
 				commands.DrawIndexedIndirectCount(view.CommandBuffer, (long)range.CommandOffset * CommandSize, view.CountBuffer, (long)segment * sizeof(uint), (int)range.InstanceCount, CommandSize);
 			}

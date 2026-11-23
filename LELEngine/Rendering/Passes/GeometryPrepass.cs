@@ -133,7 +133,7 @@ namespace LELEngine.Rendering.Passes
 
 			// Depth was already cleared with the scene target (shared texture); clear only our color (no motion, no normal).
 			CommandList commands = Gfx.Commands;
-			Renderer.BeginPass(gbuffer, LoadOperation.Clear, ClearValue.Zero);
+			gbuffer.Begin(LoadOperation.Clear, ClearValue.Zero);
 
 			commands.State.SetDepth(true, true, CompareFunction.Less);
 			commands.State.Culling = FaceCulling.Back;
@@ -180,7 +180,6 @@ namespace LELEngine.Rendering.Passes
 						variant.RenderState.ApplyCull();
 					}
 
-					Renderer.ContinuePass();
 					gpu.DrawCameraBucket(i);
 					if (own)
 					{

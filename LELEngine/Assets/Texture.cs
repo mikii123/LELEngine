@@ -104,9 +104,6 @@ namespace LELEngine
 			}
 		}
 
-		/// <summary>The OpenGL texture object: only for the code that still gives OpenGL commands itself.</summary>
-		public int Handle => Gpu is Graphics.OpenGL.GLTexture texture ? texture.Handle : 0;
-
 		public bool IsValid => !failed && (HasData || gpu != null);
 
 		/// <summary>Linear filtering (bilinear) when scaled; off for pixel art (UI compatibility).</summary>
@@ -162,9 +159,6 @@ namespace LELEngine
 		#endregion
 
 		#region InternalMethods
-
-		/// <summary>The OpenGL binding target of this texture type: only for the code that still gives OpenGL commands itself.</summary>
-		internal TextureTarget Target => Kind == TextureKind.Cube ? TextureTarget.TextureCubeMap : Kind == TextureKind.Texture3D ? TextureTarget.Texture3D : TextureTarget.Texture2D;
 
 		/// <summary>What kind of texture the GPU gets.</summary>
 		internal abstract TextureKind Kind { get; }

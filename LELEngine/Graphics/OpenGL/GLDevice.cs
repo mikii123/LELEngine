@@ -161,73 +161,6 @@ namespace LELEngine.Graphics.OpenGL
 			Gl.Finish();
 		}
 
-		#region Beside the legacy OpenGL commands
-
-		// While rendering code moves from OpenGL commands (the GL class) to the device, both give commands to the same
-		// context. The device's samplers then use texture units from this one on, the legacy code those below it.
-		internal const int LegacyUnits = 64;
-
-		/// <summary>The first texture unit the device binds program textures to.</summary>
-		internal int UnitBase { get; private set; }
-
-		private readonly Dictionary<int, GLTexture> texturesByHandle = new Dictionary<int, GLTexture>();
-		private readonly Dictionary<int, GLProgram> programsByHandle = new Dictionary<int, GLProgram>();
-
-		/// <summary>An OpenGL command is about to be given past the device (every one says so).</summary>
-		internal static void BeforeLegacyCommand()
-		{
-			currentContext?.Commands?.BeforeLegacy();
-		}
-
-		internal static void LegacyActiveTexture(int unit)
-		{
-			currentContext?.Commands?.LegacyActiveTexture(unit);
-		}
-
-		internal static void LegacyTextureBound(int handle)
-		{
-			currentContext?.Commands?.LegacyTextureBound(handle);
-		}
-
-		internal static void LegacyFramebufferBound()
-		{
-			currentContext?.Commands?.LegacyFramebufferBound();
-		}
-
-		internal void Register(GLTexture texture)
-		{
-			lock (sync)
-			{
-				texturesByHandle[texture.Handle] = texture;
-			}
-		}
-
-		internal void Register(GLProgram program)
-		{
-			lock (sync)
-			{
-				programsByHandle[program.Handle] = program;
-			}
-		}
-
-		internal GLTexture FindTexture(int handle)
-		{
-			lock (sync)
-			{
-				return texturesByHandle.TryGetValue(handle, out GLTexture texture) ? texture : null;
-			}
-		}
-
-		internal GLProgram FindProgram(int handle)
-		{
-			lock (sync)
-			{
-				return programsByHandle.TryGetValue(handle, out GLProgram program) ? program : null;
-			}
-		}
-
-		#endregion
-
 		#region Object lifetimes
 
 		internal void BindForEdit(GLTexture texture)
@@ -244,7 +177,6 @@ namespace LELEngine.Graphics.OpenGL
 		{
 			lock (sync)
 			{
-				texturesByHandle.Remove(texture.Handle);
 				deadTextures.Add(texture.Handle);
 				// The log of deleted names is kept short: contexts that fall behind it drop every framebuffer object.
 				if (DeletedTextures.Count >= 1024)
@@ -285,7 +217,6 @@ namespace LELEngine.Graphics.OpenGL
 		{
 			lock (sync)
 			{
-				programsByHandle.Remove(program);
 				deadPrograms.Add(program);
 			}
 
@@ -384,9 +315,6 @@ namespace LELEngine.Graphics.OpenGL
 			caps.MaxSampledTextures = Math.Max(16, Math.Min(gl.GetInteger((GetPName)0x8872), gl.GetInteger((GetPName)0x91BC)));
 			// GL_MAX_COMBINED_TEXTURE_IMAGE_UNITS: the last unit is the device's own.
 			ScratchUnit = Math.Max(caps.MaxSampledTextures, gl.GetInteger((GetPName)0x8B4D) - 1);
-			UnitBase = ScratchUnit >= LegacyUnits + caps.MaxSampledTextures ? LegacyUnits : 0;
-			// The legacy OpenGL commands, for the rendering code not moved to the device yet.
-			LELEngine.Graphics.GL.LoadBindings();
 			// GL_MAX_FRAMEBUFFER_SAMPLES, GL_UNIFORM_BUFFER_OFFSET_ALIGNMENT.
 			caps.MaxPassSamples = Math.Max(1, gl.GetInteger((GetPName)0x9318));
 			caps.UniformBufferOffsetAlignment = Math.Max(1, gl.GetInteger((GetPName)0x8A34));

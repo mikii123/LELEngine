@@ -36,9 +36,6 @@ namespace LELEngine.Rendering.Passes
 		/// <summary>The matching object-id volume (R16UI, index + 1 of the nearest object).</summary>
 		public GpuTexture GlobalSdfObjectIdsTexture => globalIds;
 
-		// LEGACY(gl): no user in the engine's solution; kept for code outside it
-		public int GlobalSdf => HandleOf(globalSdf);
-
 		#endregion
 
 		#region PrivateFields
@@ -82,8 +79,8 @@ namespace LELEngine.Rendering.Passes
 			if (!gi.DistanceFieldActive)
 			{
 				Release();
-				gi.GlobalSdf = 0;
-				gi.GlobalSdfObjectIds = 0;
+				gi.GlobalSdf = null;
+				gi.GlobalSdfObjectIds = null;
 				// Lumen without the distance field still has its surface cache in the scene.
 				if (!gi.LumenActive)
 				{
@@ -135,9 +132,8 @@ namespace LELEngine.Rendering.Passes
 				dynamicPending = false;
 			}
 
-			// LEGACY(gl): Lighting.cs publishes the field to the shaders by OpenGL texture name
-			gi.GlobalSdf = HandleOf(globalSdf);
-			gi.GlobalSdfObjectIds = HandleOf(globalIds);
+			gi.GlobalSdf = globalSdf;
+			gi.GlobalSdfObjectIds = globalIds;
 		}
 
 		public override void ReleaseUnusedResources()
@@ -151,19 +147,13 @@ namespace LELEngine.Rendering.Passes
 		public override void Dispose()
 		{
 			Release();
-			Lighting.GI.GlobalSdf = 0;
-			Lighting.GI.GlobalSdfObjectIds = 0;
+			Lighting.GI.GlobalSdf = null;
+			Lighting.GI.GlobalSdfObjectIds = null;
 		}
 
 		#endregion
 
 		#region PrivateMethods
-
-		// LEGACY(gl): the OpenGL texture name Lighting.cs takes
-		private static int HandleOf(GpuTexture texture)
-		{
-			return texture != null ? ((Graphics.OpenGL.GLTexture)texture).Handle : 0;
-		}
 
 		private void Release()
 		{

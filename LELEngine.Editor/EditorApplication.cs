@@ -110,6 +110,32 @@ namespace LELEngine.Editor
 		/// <summary>Why the last project could not be opened (the project chooser shows it), or null.</summary>
 		public string OpenError { get; private set; }
 
+		/// <summary>The editor's command line (a new editor process for another project gets it too).</summary>
+		private readonly string[] commandLine;
+
+		/// <summary>
+		///     The project the editor opens again in a new process once this one has closed (<see cref="RestartEditor" />, or
+		///     a project chosen after Close Project that runs on another graphics API than this process's device); null: none.
+		/// </summary>
+		public static string RestartProject { get; private set; }
+
+		/// <summary>
+		///     Closes the editor and starts it again on the open project: a change of the project's graphics API takes
+		///     effect (the device is made once per process). Nothing unsaved may be left: what is throws
+		///     <see cref="InvalidOperationException" /> with the reason, and the editor stays.
+		/// </summary>
+		public void RestartEditor()
+		{
+			if (Project == null || projectLoad != null)
+			{
+				throw new InvalidOperationException("No project is open.");
+			}
+
+			PrepareClose(UnsavedChanges.Refuse);
+			RestartProject = Project.RootPath;
+			Window.Close();
+		}
+
 		/// <summary>A run driven by a script (<see cref="IsAutomatedRun" />): windows open as by default, nothing about them is saved.</summary>
 		public bool IsAutomated => automated;
 
@@ -318,6 +344,7 @@ namespace LELEngine.Editor
 			Instance = this;
 			Window = window;
 			HasUI = hasUI;
+			commandLine = args;
 			// Play mode's ShaderCompilation compiles the variants a build of the project would list.
 			LELEngine.Shaders.ShaderCompilation.EditorVariants = CollectBuildShaderVariants;
 			mainPanel = new Automation.MainWindowPanel(this);
@@ -1003,6 +1030,15 @@ namespace LELEngine.Editor
 				}
 
 				OpenError = null;
+				if (ProjectGraphicsApi.NeedsNewProcess(ProjectGraphicsApi.Of(chosen), commandLine))
+				{
+					// Its graphics API is not this process's device's: the project opens in a new editor once this one closed.
+					RestartProject = chosen;
+					closeConfirmed = true;
+					Window.Close();
+					return;
+				}
+
 				try
 				{
 					OpenProject(chosen);
@@ -3978,10 +4014,10 @@ namespace LELEngine.Editor
 			}
 		}
 
-		/// <summary>A run driven by a script (focus=0, exitframe=, screenshot=): no saved window state is used or written.</summary>
+		/// <summary>A run driven by a script (focus=0, hidden=1, exitframe=, screenshot=): no saved window state is used or written.</summary>
 		public static bool IsAutomatedRun(string[] args)
 		{
-			return Array.IndexOf(args, "focus=0") >= 0
+			return Array.IndexOf(args, "focus=0") >= 0 || Array.IndexOf(args, "hidden=1") >= 0
 				|| Array.Exists(args, a => a.StartsWith("exitframe=", StringComparison.OrdinalIgnoreCase) || a.StartsWith("screenshot=", StringComparison.OrdinalIgnoreCase));
 		}
 

@@ -19,23 +19,6 @@ namespace LELEngine.Shaders
 
 		public const string Extension = ".material";
 
-		// LEGACY(gl): the engine's lighting still binds its maps on texture units 8..26 (Lighting.cs)
-		/// <summary>The textures a material can always give its program: those a program can sample beside the engine's own maps.</summary>
-		public const int MaxTextureUnits = 8;
-
-		// LEGACY(gl): used by Lighting.cs (the documentation of its texture units)
-		/// <summary>
-		///     The first texture unit above the engine's reserved ones (8..26; the last four are the GI's media volume,
-		///     <see cref="Lighting.MediaTextureUnit" />).
-		/// </summary>
-		public const int ExtraTextureUnitStart = 27;
-
-		/// <summary>
-		///     How many textures a material can give its program on this device (<see cref="MaterialProperty" /> counts
-		///     them as they are set): 8, and what a program can sample beyond the engine's own maps.
-		/// </summary>
-		public static int MaxTextures => MaxTextureUnits + Math.Max(0, Rendering.GLCapabilities.MaxTextureUnits - ExtraTextureUnitStart);
-
 		/// <summary>The engine's lit shader: new materials and unreadable material files use it.</summary>
 		public const string DefaultShaderPath = "Engine/Lit.shader";
 
@@ -507,13 +490,6 @@ namespace LELEngine.Shaders
 			return texture is Texture2D ? texture.Gpu : null;
 		}
 
-		// LEGACY(gl): used by GISurface.cs
-		/// <summary>The OpenGL texture object of a 2D texture property, or 0 when the material has no such texture.</summary>
-		public int GetTextureHandle(string propertyName)
-		{
-			return GetTexture2D(propertyName) is Graphics.OpenGL.GLTexture texture ? texture.Handle : 0;
-		}
-
 		// ---------------------------------------------------------------- drawing
 
 		/// <summary>
@@ -537,24 +513,23 @@ namespace LELEngine.Shaders
 
 		/// <summary>
 		///     Uploads this material's values, then a renderer's own (<paramref name="block" />, may be null or empty), which
-		///     win; the block's textures are counted after the material's (<see cref="MaxTextures" />).
+		///     win.
 		/// </summary>
 		public void SetUniforms(ShaderProgram program, MaterialPropertyBlock block)
 		{
 			ResetStandardUniforms(program);
-			int textureCount = 0;
 			foreach (MaterialProperty property in m_Properties)
 			{
 				if (property != null && property.name != null)
 				{
-					property.Apply(program, ref textureCount);
+					property.Apply(program);
 				}
 			}
 
-			ApplyMissingProperties(program, this, ref textureCount);
+			ApplyMissingProperties(program, this);
 			if (block != null && !block.isEmpty)
 			{
-				block.Apply(program, ref textureCount);
+				block.Apply(program);
 			}
 		}
 
@@ -565,8 +540,7 @@ namespace LELEngine.Shaders
 		/// </summary>
 		public static void SetDefaultTextures(ShaderProgram program)
 		{
-			int textureCount = 0;
-			ApplyMissingProperties(program, null, ref textureCount);
+			ApplyMissingProperties(program, null);
 		}
 
 		/// <summary>
@@ -734,7 +708,7 @@ namespace LELEngine.Shaders
 		///     parameters have theirs from <see cref="ResetStandardUniforms" /> or the material table): a program keeps its
 		///     uniform values between draws, so they would show the last material drawn with it.
 		/// </summary>
-		private static void ApplyMissingProperties(ShaderProgram program, Material material, ref int textureCount)
+		private static void ApplyMissingProperties(ShaderProgram program, Material material)
 		{
 			foreach (ShaderProperty declared in program.Properties)
 			{
@@ -747,7 +721,7 @@ namespace LELEngine.Shaders
 				{
 					if (!IsStandardUniform(declared.Name))
 					{
-						declared.DefaultValueProperty.Apply(program, ref textureCount);
+						declared.DefaultValueProperty.Apply(program);
 					}
 
 					continue;
@@ -763,7 +737,7 @@ namespace LELEngine.Shaders
 					}
 				}
 
-				fallback.Apply(program, ref textureCount);
+				fallback.Apply(program);
 			}
 		}
 

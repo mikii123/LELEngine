@@ -18,7 +18,7 @@ namespace LELEngine.Editor.UIBuilder
 		#region PublicFields
 
 		public RuntimePanel panel { get; }
-		public int Texture => target?.ColorAttachments[0].Handle ?? 0;
+		public GpuTexture Texture => target?.ColorAttachments[0].Gpu;
 		public int Width => target?.Width ?? 0;
 		public int Height => target?.Height ?? 0;
 		public List<string> errors { get; } = new List<string>();
@@ -111,13 +111,10 @@ namespace LELEngine.Editor.UIBuilder
 
 			panel.SetTargetSize(width, height, scale);
 			panel.Update(UIRuntime.TimeMs);
-			target.Bind();
-			GL.Disable(EnableCap.ScissorTest);
-			GL.ClearColor(0.16f, 0.16f, 0.18f, 1f);
-			GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
+			target.BeginCleared(new ClearValue(0.16f, 0.16f, 0.18f, 1f));
 			panel.renderer ??= new UIRenderer();
 			panel.renderer.Render(panel, width, height);
-			GLState.Reset();
+			Gfx.Commands.SetProgram(null);
 		}
 
 		/// <summary>The model node under a point (panel units), or null.</summary>

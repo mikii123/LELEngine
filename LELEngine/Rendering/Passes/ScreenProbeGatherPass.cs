@@ -109,7 +109,7 @@ namespace LELEngine.Rendering.Passes
 		{
 			GlobalIlluminationSettings gi = Lighting.GI;
 			LumenScene scene = context.Renderer.LumenScene;
-			bool active = gi.LumenActive && gi.GlobalSdf != 0 && context.DepthPrepassDone && context.NormalRoughness != null && context.Motion != null && scene.SurfaceCache != null;
+			bool active = gi.LumenActive && gi.GlobalSdf != null && context.DepthPrepassDone && context.NormalRoughness != null && context.Motion != null && scene.SurfaceCache != null;
 			if (!active)
 			{
 				historyValid = false;
@@ -386,10 +386,9 @@ namespace LELEngine.Rendering.Passes
 			commands.State.Culling = FaceCulling.Back;
 
 			// Publish for the material shaders (same contract as GIResolvePass).
-			// LEGACY(gl): Lighting.cs takes the resolve buffers as OpenGL texture objects
-			gi.ResolvedDiffuse = target.ColorAttachments[0].Handle;
-			gi.ResolvedSpecular = target.ColorAttachments[1].Handle;
-			gi.ResolvedNormals = context.NormalRoughness.Handle;
+			gi.ResolvedDiffuse = target.ColorAttachments[0].Gpu;
+			gi.ResolvedSpecular = target.ColorAttachments[1].Gpu;
+			gi.ResolvedNormals = context.NormalRoughness.Gpu;
 			gi.ResolveWidth = outputWidth;
 			gi.ResolveHeight = outputHeight;
 			gi.ScreenWidth = context.Width;

@@ -17,19 +17,6 @@ namespace LELEngine.Rendering
 		public IReadOnlyList<RenderTexture> ColorAttachments => colorAttachments;
 		public RenderTexture DepthAttachment { get; private set; }
 
-		/// <summary>
-		///     The OpenGL framebuffer object of the attachments: only for the code that still gives OpenGL commands
-		///     itself.
-		/// </summary>
-		public int Handle
-		{
-			get
-			{
-				RenderPassDescriptor descriptor = Describe(LoadOperation.Load, default, LoadOperation.Load, 1f);
-				return Graphics.OpenGL.GLDevice.Current.CommandsOfThread.LegacyFramebuffer(descriptor);
-			}
-		}
-
 		#endregion
 
 		#region PrivateFields
@@ -171,31 +158,6 @@ namespace LELEngine.Rendering
 		public void BeginCleared(ClearValue clearColor = default, float clearDepth = 1f)
 		{
 			Begin(LoadOperation.Clear, clearColor, LoadOperation.Clear, clearDepth);
-		}
-
-		/// <summary>
-		///     The OpenGL way (code that still gives OpenGL commands itself): binds the attachments for drawing, keeping
-		///     their contents, until something else is bound.
-		/// </summary>
-		public void Bind()
-		{
-			Begin();
-			Graphics.OpenGL.GLDevice.Current.CommandsOfThread.KeepPassForLegacy();
-		}
-
-		/// <summary>
-		///     Begins a pass into the window's back buffer, with a viewport of the given size.
-		/// </summary>
-		public static void BindDefault(int width, int height)
-		{
-			GraphicsDevice device = GraphicsDevice.Current;
-			CommandList commands = device.Commands;
-			commands.BeginRenderPass(device.Backbuffer);
-			commands.SetViewport(0, 0, width, height);
-			if (commands is Graphics.OpenGL.GLCommandList legacy)
-			{
-				legacy.KeepPassForLegacy();
-			}
 		}
 
 		public void Delete()

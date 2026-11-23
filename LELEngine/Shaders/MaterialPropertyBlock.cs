@@ -229,11 +229,8 @@ namespace LELEngine.Shaders
 
 		#region InternalMethods
 
-		/// <summary>
-		///     Uploads the values to the active program; textures go on the material texture units from
-		///     <paramref name="textureUnit" /> on (after the material's own).
-		/// </summary>
-		internal void Apply(ShaderProgram program, ref int textureUnit)
+		/// <summary>Uploads the values to the program (after the material's own, which they replace).</summary>
+		internal void Apply(ShaderProgram program)
 		{
 			foreach (Entry entry in entries)
 			{
@@ -250,7 +247,7 @@ namespace LELEngine.Shaders
 						program.SetMatrix4(entry.Name, entry.Matrix);
 						break;
 					case Kind.Texture:
-						TextureProperty.Bind(program, entry.Name, entry.Texture, ref textureUnit);
+						TextureProperty.Bind(program, entry.Name, entry.Texture);
 						break;
 					case Kind.FloatArray:
 						if (entry.Count > 0)

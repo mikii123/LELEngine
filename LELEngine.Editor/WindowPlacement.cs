@@ -65,7 +65,8 @@ namespace LELEngine.Editor
 
 			normalLocation = window.ClientLocation;
 			normalSize = window.ClientSize;
-			window.IsVisible = true;
+			// Runs that never show their windows (hidden=1) keep them hidden.
+			window.IsVisible = !Window.StartHidden;
 			if (saved != null && saved.Maximized)
 			{
 				window.WindowState = WindowState.Maximized;

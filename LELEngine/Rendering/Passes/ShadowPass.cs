@@ -125,22 +125,6 @@ namespace LELEngine.Rendering.Passes
 				TransparentShadows.EnsureTransmittance(shadowTarget);
 			}
 
-			// What is drawn one by one with a program of its own.
-			if (gpuDriven)
-			{
-				foreach (RendererPart part in gpu.OwnPassParts)
-				{
-					if (part.Renderer.CastShadows && part.Renderer.IsSubMeshShadowCaster(part.SubMesh))
-					{
-						PrepareOwnCaster(part.Renderer, part.SubMesh);
-					}
-				}
-			}
-			else
-			{
-				PrepareOwnCasters(context.Renderers);
-			}
-
 			CommandList commands = Gfx.Commands;
 			ref RenderState state = ref commands.State;
 			state.SetDepth(true, true);
@@ -293,8 +277,6 @@ namespace LELEngine.Rendering.Passes
 					cullChanged = false;
 				}
 
-				// A material's texture used for the first time is uploaded with its mip levels made, which ends the pass.
-				ContinueTile(tile);
 				gpu.DrawShadowBucket(i);
 			}
 
@@ -306,7 +288,6 @@ namespace LELEngine.Rendering.Passes
 					continue;
 				}
 
-				ContinueTile(tile);
 				if (renderer.RenderSubMeshPass(part.SubMesh, ShaderPass.ShadowCaster, view, projection))
 				{
 					cullChanged = true;
@@ -354,39 +335,6 @@ namespace LELEngine.Rendering.Passes
 			depth.SetBorderColor(1f, 1f, 1f, 1f);
 			depth.SetShadowCompare(true);
 			shadowTarget.Validate();
-		}
-
-		/// <summary>
-		///     Gives the casters that are drawn one by one with their shader's own shadow caster variant their material's
-		///     values before a shadow map's pass begins. A texture used for the first time is uploaded then, with its mip
-		///     levels made: inside the pass that would end it between the material's values and the caster's draw.
-		/// </summary>
-		internal static void PrepareOwnCasters(IReadOnlyList<MeshRenderer> casters)
-		{
-			foreach (MeshRenderer renderer in casters)
-			{
-				if (!renderer.CastShadows || renderer.Mesh == null || !renderer.HasOwnShadowCasters)
-				{
-					continue;
-				}
-
-				for (int i = 0; i < renderer.SubMeshCount; i++)
-				{
-					if (!renderer.IsSubMeshTransparent(i) && renderer.IsSubMeshShadowCaster(i))
-					{
-						PrepareOwnCaster(renderer, i);
-					}
-				}
-			}
-		}
-
-		private static void PrepareOwnCaster(MeshRenderer renderer, int subMesh)
-		{
-			ShaderProgram variant = renderer.GetPassProgram(subMesh, ShaderPass.ShadowCaster);
-			if (variant != null)
-			{
-				renderer.GetMaterial(subMesh)?.SetUniforms(variant);
-			}
 		}
 
 		// Goes on drawing into a tile: the map's pass is begun again (keeping what it holds) when something that is not

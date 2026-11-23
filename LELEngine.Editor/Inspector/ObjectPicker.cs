@@ -57,9 +57,9 @@ namespace LELEngine.Editor
 		///     frame). One at a time on a worker thread. False until it is ready, or when the file has none: the row draws its
 		///     icon. Ask only for visible rows: a row that stops asking starts no work.
 		/// </summary>
-		public static bool TryGet(string assetPath, out int handle, out NVector2 uv0, out NVector2 uv1)
+		public static bool TryGet(string assetPath, out Graphics.GpuTexture gpu, out NVector2 uv0, out NVector2 uv1)
 		{
-			handle = 0;
+			gpu = null;
 			uv0 = NVector2.Zero;
 			uv1 = NVector2.One;
 			if (assetPath == null || !TextureAssets.IsImageFile(assetPath))
@@ -104,39 +104,39 @@ namespace LELEngine.Editor
 				thumbnail.Texture.SetSamplerState(FilterMode.Bilinear, TextureWrap.Clamp, 1);
 			}
 
-			handle = thumbnail.Texture?.Handle ?? 0;
-			return handle != 0;
+			gpu = thumbnail.Texture?.Gpu;
+			return gpu != null;
 		}
 
-		public static bool TryGet(Texture texture, out int handle, out NVector2 uv0, out NVector2 uv1)
+		public static bool TryGet(Texture texture, out Graphics.GpuTexture gpu, out NVector2 uv0, out NVector2 uv1)
 		{
-			handle = 0;
+			gpu = null;
 			uv0 = NVector2.Zero;
 			uv1 = NVector2.One;
 			switch (texture)
 			{
 				case Texture2D texture2D:
-					handle = texture2D.Handle;
+					gpu = texture2D.Gpu;
 					if (texture2D.bottomUp)
 					{
 						uv0 = new NVector2(0f, 1f);
 						uv1 = new NVector2(1f, 0f);
 					}
 
-					return handle != 0;
+					return gpu != null;
 				case Cubemap cubemap:
 				{
 					Texture2D preview = Preview(cubemap.AssetPath ?? cubemap.name, () => cubemap.CreatePreview());
-					handle = preview?.Handle ?? 0;
-					return handle != 0;
+					gpu = preview?.Gpu;
+					return gpu != null;
 				}
 				case Texture3D volume:
 				{
 					Texture2D preview = Preview(volume.AssetPath ?? volume.name, () => volume.GetSlice(volume.depth / 2));
-					handle = preview?.Handle ?? 0;
+					gpu = preview?.Gpu;
 					uv0 = new NVector2(0f, 1f);
 					uv1 = new NVector2(1f, 0f);
-					return handle != 0;
+					return gpu != null;
 				}
 				default:
 					return false;
@@ -621,13 +621,13 @@ namespace LELEngine.Editor
 
 					// Thumbnail or icon, then the label, drawn over the selectable (no items: the layout stays the selectable's).
 					float iconSize = row - 4f;
-					int handle;
+					Graphics.GpuTexture thumbnail;
 					NVector2 uv0;
 					NVector2 uv1;
 					ImDrawListPtr draw = ImGui.GetWindowDrawList();
-					if (!showScene && ImGui.IsRectVisible(start, start + new NVector2(4f + iconSize, 2f + iconSize)) && AssetThumbnails.TryGet(entry.Path, out handle, out uv0, out uv1))
+					if (!showScene && ImGui.IsRectVisible(start, start + new NVector2(4f + iconSize, 2f + iconSize)) && AssetThumbnails.TryGet(entry.Path, out thumbnail, out uv0, out uv1))
 					{
-						draw.AddImage(EditorGui.Texture(handle), start + new NVector2(4f, 2f), start + new NVector2(4f + iconSize, 2f + iconSize), uv0, uv1);
+						draw.AddImage(EditorGui.Texture(thumbnail), start + new NVector2(4f, 2f), start + new NVector2(4f + iconSize, 2f + iconSize), uv0, uv1);
 					}
 					else
 					{

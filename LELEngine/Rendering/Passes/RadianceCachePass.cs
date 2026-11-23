@@ -143,7 +143,7 @@ namespace LELEngine.Rendering.Passes
 		{
 			GlobalIlluminationSettings gi = Lighting.GI;
 			LumenScene scene = context.Renderer.LumenScene;
-			bool possible = gi.LumenActive && gi.GlobalSdf != 0 && scene.SurfaceCache != null;
+			bool possible = gi.LumenActive && gi.GlobalSdf != null && scene.SurfaceCache != null;
 			bool transparents = context.TransparentRenderers != null && context.TransparentRenderers.Count > 0;
 			Running = possible && (gi.RadianceCacheEnabled || transparents);
 			Active = Running && gi.RadianceCacheEnabled;
@@ -362,7 +362,7 @@ namespace LELEngine.Rendering.Passes
 
 		private void Release()
 		{
-			if (Lighting.RadianceCache.Atlas != 0 && Lighting.RadianceCache.Atlas == LegacyHandle(atlas))
+			if (Lighting.RadianceCache.Atlas != null && Lighting.RadianceCache.Atlas == atlas)
 			{
 				Lighting.RadianceCache = default;
 			}
@@ -403,9 +403,8 @@ namespace LELEngine.Rendering.Passes
 			Lighting.RadianceCache = new Lighting.RadianceCacheBinding
 			{
 				Valid = true,
-				// LEGACY(gl): Lighting.cs takes the cache's textures as OpenGL texture objects
-				Atlas = LegacyHandle(atlas),
-				SH = LegacyHandle(shTexture),
+				Atlas = atlas,
+				SH = shTexture,
 				GridMin = gridMin,
 				ProbeSpacing = probeSpacing,
 				ProbesPerAxis = probesPerAxis,
@@ -414,12 +413,6 @@ namespace LELEngine.Rendering.Passes
 				ProbeResolution = probeResolution,
 				AtlasSize = new Vector2(atlasWidth, atlasHeight)
 			};
-		}
-
-		// LEGACY(gl): used by Publish and Release for Lighting.RadianceCache (Lighting.cs)
-		private static int LegacyHandle(GpuTexture texture)
-		{
-			return texture != null ? ((Graphics.OpenGL.GLTexture)texture).Handle : 0;
 		}
 
 		private void SetScheduleUniforms(ShaderProgram program, int interiorCount)

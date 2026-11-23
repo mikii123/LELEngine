@@ -110,9 +110,9 @@ namespace LELEngine.Editor
 
 			imgui.EndFrame();
 
-			Framebuffer.BindDefault(ClientSize.X, ClientSize.Y);
-			GL.ClearColor(0.11f, 0.11f, 0.12f, 1f);
-			GL.Clear(ClearBufferMask.ColorBufferBit);
+			CommandList commands = Gfx.Commands;
+			commands.BeginRenderPass(Gfx.Device.Backbuffer, null, LoadOperation.Clear, new ClearValue(0.11f, 0.11f, 0.12f, 1f));
+			commands.SetViewport(0, 0, ClientSize.X, ClientSize.Y);
 			imgui.RenderDrawData(ClientSize.X, ClientSize.Y);
 			SwapBuffers();
 		}
@@ -128,23 +128,11 @@ namespace LELEngine.Editor
 
 		#region PrivateMethods
 
-		/// <summary>With the newest OpenGL context the driver grants, as the editor's window.</summary>
+		/// <summary>On the process's graphics device, or the first window that makes it (as the editor's window).</summary>
 		private static LauncherWindow Create(string error)
 		{
 			Window.InitializeGlfw();
-			Version version = Window.PreferredApiVersion;
-			while (true)
-			{
-				try
-				{
-					return new LauncherWindow(version, error);
-				}
-				catch (Exception e) when (version > Window.MinimumApiVersion)
-				{
-					Console.WriteLine($"[Launcher] OpenGL {version} context unavailable ({e.GetType().Name}), trying an older version");
-					version = version.Minor > 0 ? new Version(version.Major, version.Minor - 1) : Window.MinimumApiVersion;
-				}
-			}
+			return Window.Open(version => new LauncherWindow(version, error));
 		}
 
 		#endregion

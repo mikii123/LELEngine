@@ -44,10 +44,10 @@ namespace LELEngine.Shaders
 		/// <summary>A storage binding left for last frame's model matrices (else LEL_NO_PREVIOUS_MODELS).</summary>
 		public bool PreviousModels { get; }
 
-		/// <summary>The features of the current context (<see cref="GLCapabilities" />).</summary>
+		/// <summary>The features of the current context (<see cref="GraphicsCapabilities" />).</summary>
 		public static ShaderFeatures Current => new ShaderFeatures(
-			!GLCapabilities.ShaderDrawParameters ? DrawParametersSupport.None : GLCapabilities.ShaderDrawParametersExtension ? DrawParametersSupport.Extension : DrawParametersSupport.Core,
-			GLCapabilities.ComputeSubgroups,
+			!GraphicsCapabilities.ShaderDrawParameters ? DrawParametersSupport.None : GraphicsCapabilities.ShaderDrawParametersExtension ? DrawParametersSupport.Extension : DrawParametersSupport.Core,
+			GraphicsCapabilities.ComputeSubgroups,
 			GpuScene.SupportsPreviousModels);
 
 		#endregion

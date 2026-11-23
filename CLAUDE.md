@@ -47,8 +47,8 @@
   chosen in Project Settings > Graphics, then an optimization pass for the new backend (ray tracing, GI). On a separate
   branch; picture differences are reported, not tuned away.
 - No OpenTK package is left. What the code used of it is the engine's own, under the same type and member names, so a
-  game's scripts change only their usings (`OpenTK.Mathematics` -> `LELEngine.Mathematics`, `OpenTK.Graphics.OpenGL4` ->
-  `LELEngine.Graphics`, `OpenTK.Windowing.*` -> `LELEngine.Windowing`):
+  game's scripts change only their usings (`OpenTK.Mathematics` -> `LELEngine.Mathematics`, `OpenTK.Windowing.*` ->
+  `LELEngine.Windowing`); OpenGL commands of a game's own go through the graphics device now (next section):
   - `LELEngine/Mathematics`: Vector2 / 3 / 4, Vector2i / 3i / 4i, Matrix3, Matrix4, Quaternion, Color4, MathHelper,
     Box2i are OpenTK 4.9.4's source files (MIT) in the engine's namespace, so every result is bit for bit what it was;
     18 members that needed types not carried over are gone (conversions to the double and half vectors, Matrix2
@@ -63,12 +63,10 @@
     saved input configurations read as before. `NativeWindow.Current` = the window whose context is current on the
     thread (`ShaderCompileThread` shares with it). Typed characters come from GLFW's own char callback: BRUTAL's
     `OnChar` narrows code points to 16 bits.
-  - `LELEngine/Graphics`: `GL` (static: the ~190 overloads the engine calls, OpenTK's signatures) and 66 enum types
-    (`GLEnums.cs`, generated: OpenTK's names, OpenGL's values). `GL` forwards to the process's `GraphicsBackend`
-    (internal, abstract: every command once, in pointer form); `OpenGLBackend` calls
-    `Brutal.OpenGlApi.OpenGl.Native.*` (GLAD's pointers) and loads `glMaxShaderCompilerThreadsKHR / ARB` itself.
-    `GL.LoadBindings()` starts it for the current context (every `NativeWindow` with a context calls it: OpenTK's
-    auto-load). This is the seam the Vulkan backend plugs into: rendering code keeps calling `GL.*`.
+  - OpenGL itself: `Brutal.OpenGlApi.OpenGl.Native.*` (GLAD's pointers), called only by the OpenGL device through
+    `Graphics/OpenGL/OpenGLBackend.cs` (internal; it loads `glMaxShaderCompilerThreadsKHR / ARB` itself) with OpenGL's
+    values under OpenTK's names (`Graphics/OpenGL/GLEnums.cs`, internal). The first phase of the port kept a static
+    `GL` class with OpenTK's signatures for all rendering code; it is gone with the move to the device.
 - The editor keeps Hexa.NET.ImGui (BRUTAL has no ImGuizmo); only its backend's window and graphics calls moved.
   Generated script projects reference `Brutal.*.dll` next to the editor where they referenced `OpenTK*.dll`
   (`ProjectGenerator.BrutalAssemblies`): an existing project's .csproj files are rewritten on the next open.
@@ -91,6 +89,70 @@
 - How the port was made (tools in that scratchpad): `apiscan` (Roslyn over every project: each OpenTK symbol used,
   with signatures and enum values: 521 graphics, 217 math, ~350 windowing symbols), `glenums` (the enum file from
   OpenTK's metadata), `mathshake` (copies source files into a namespace and removes members that no longer compile).
+
+## Graphics device: the engine's own API, OpenGL and Vulkan under it (2026-11-23, branch `brutal-port`)
+
+- The user's ask, after a first design laid OpenGL's commands over Vulkan: Vulkan "not as an emulator; if anything the
+  other way round, OpenGL should be the emulated one". So the engine renders through an API of its own, shaped like
+  Vulkan (`LELEngine/Graphics`, namespace `LELEngine.Graphics`), and each graphics API is a device under it:
+  `Vulkan/VulkanDevice` natively, `OpenGL/GLDevice` laying it over OpenGL's state machine. Nothing outside
+  `LELEngine/Graphics/OpenGL` and `LELEngine/Graphics/Vulkan` gives API commands: no `GL` class, GL enums, object
+  handles or texture units in rendering code, the editor or games.
+- The API (`GraphicsTypes.cs`, `GpuResources.cs`, `CommandList.cs`, `GraphicsDevice.cs`, `TexelConversion.cs`):
+  `Gfx.Device` (`GraphicsDevice.Current`), `Gfx.Commands`, `Gfx.Capabilities` (`DeviceCapabilities`; the engine's
+  `GraphicsCapabilities` reads it). Objects: `GpuTexture` / `GpuBuffer` made from descriptors with usages
+  (`TextureDescriptor`, `TextureUsage` Sampled / Storage / Attachment; `BufferDescriptor`, `BufferUsage`), samplers
+  apart from textures (`Samplers.LinearClamp` ..., `GetSampler(SamplerDescriptor)`), `GpuProgram` (`ProgramDescriptor`:
+  the GLSL stages as the engine writes them, the attribute locations; it holds its uniform values and its samplers'
+  textures by slot), `GpuFence`, `GpuTimestamp`. The engine's wrappers keep their names: `Texture.Gpu`,
+  `RenderTexture.Gpu`, `Framebuffer.Begin`, `ShaderProgram.SetTexture(name, texture[, sampler])` (by name: a sampler not
+  given a texture reads a black dummy), `GeometryPool.Bind`.
+- Commands (`CommandList`): render passes with load operations (`BeginRenderPass(descriptor)`, the
+  `(color, depth, loads)` and `(width, height, samples)` overloads, `EndRenderPass`); draws only inside a pass;
+  `State` (`RenderState`: depth test / write / compare, culling, blend factors and operations, colour mask, depth bias,
+  wireframe: part of a pipeline on Vulkan), viewport, scissor, program, vertex input (`VertexInputLayout`), vertex and
+  index buffers, uniform and storage buffers and images by binding number (the shaders' `layout(binding = N)`), draws
+  (indexed, instanced, indirect, indirect count, ranges), dispatches (direct, indirect), buffer and texture copies,
+  blits, texture clears, mip generation, copies into buffers for readbacks, timestamps. Dispatches, copies, blits,
+  texture clears and `CommandList.GenerateMipmaps` end an open pass (begin it again after them); uploads
+  (`GpuBuffer.SetData`, `GpuTexture.SetData`, `GpuTexture.GenerateMipmaps`) may be given anywhere, also inside a pass
+  (a texture made the moment a draw first needs it).
+- Conventions on every API: clip space y up and z from -1 to 1, the first row of a texture or target is the lowest,
+  counter-clockwise front faces. Shaders stay GLSL as written for OpenGL (loose uniforms, samplers without bindings,
+  blocks and images with `binding = N`); the Vulkan device compiles them itself (below).
+- Choosing the API (the user's ask: in Project Settings > Graphics): `GraphicsSettings.GraphicsApi` (OpenGL by
+  default; the combo under Rendering). Builds write it into boot.json (`BootConfig.GraphicsApi`: the player's window
+  comes before the project settings are read); the player and TestGame take `graphics=opengl|vulkan`; the editor runs a
+  project on its API (`ProjectGraphicsApi`; `graphics=` on its command line, `-graphics` in batch mode, wins).
+  `Window.Open` makes the first window: a Vulkan device that cannot be made on the machine
+  (`GraphicsApiUnavailableException`; the device's `Destroy()` releases what it made, the window is destroyed) is
+  replaced by OpenGL (`GraphicsDevice.FellBackFrom`; Player.log `[Player] Graphics API OpenGL (Vulkan is not available
+  on this machine)`), OpenGL steps from 4.6 down to 4.3. The device is made once per process: a project chosen in the
+  project chooser (or after Close Project) on another API opens in a new editor process, and Restart Editor (under the
+  combo while the setting and the running device differ) closes the editor and starts it again on the same project; it
+  refuses while anything is unsaved (`EditorApplication.RestartEditor`). The shader compile helper process runs on
+  OpenGL only (it exists for OpenGL drivers that hold a process while it compiles).
+- The OpenGL device (`Graphics/OpenGL`): commands run as they are given. A state cache (what the context was last
+  told: render state, program, vertex array, framebuffer, textures and samplers per unit, buffer ranges, viewport,
+  scissor) is the only thing that sets OpenGL state, so it is always right. A pass binds a framebuffer object made for
+  its attachments (cached per attachment set, dropped when one of its textures is deleted) and clears what its load
+  operations say; a program's samplers take texture units 0, 1, ... in slot order and the device binds their textures
+  and samplers there before a draw (an int set on a sampler is ignored); the last unit is the device's own for uploads
+  and reads; vertex arrays are made per layout (`glBindVertexBuffer`); a draw or dispatch of a program that writes
+  images or storage blocks puts a full `glMemoryBarrier` before the next command. Uploads of half floats convert on the
+  CPU. Programs: parallel compile (KHR / ARB), binaries (`GetBinary`), labels with `LEL_GRAPHICS_LABELS=1`.
+- How the move was checked (scratchpad tools of session 9cb23804; `check.ps1`, `regress.ps1`, `imgdiff`): TestGame
+  runs hidden with a fixed time step (`hidden=1 fixeddt=0.0166667`: frame 400 is the same moment in every run; the
+  same two switches were added to a build of the engine before the move for the baseline), its 18 scenes against
+  that baseline within the baseline's own noise (max 1-6 of 255; `vfx` is not deterministic), ~30 variants of the GI,
+  media, impostor and GPU-driven paths against the build each step started from (max 1-6), the editor's panels
+  (Inspector, Project, Hierarchy, Scene, Game, Console, Lighting, Project Settings, UI Builder, Audio Studio, the
+  frames it drew, the scene view's depth probe) against the editor before the move (identical; the 3D views within 1),
+  a built player's frame bit for bit, New Frontier's unit tests. The editor's `hidden=1` (never shows a window; needs
+  a project on the command line) was added for this.
+- Notes in later sections written before 2026-11-23 name OpenGL details that are gone: texture units and their
+  constants (samplers are given textures by name now), `GL.*` calls, `GLCapabilities` (now `GraphicsCapabilities`),
+  `Texture.Handle` / `RenderTexture.Handle` (now `.Gpu`), `GLState`, `ShaderType` (now `ShaderStage`).
 
 ## Models and meshes
 
@@ -189,7 +251,10 @@
   `EditorAutomation` work there; a plain `-build` keeps the light path.
 - Whether the built scripts are current (editor start, batch mode; `ScriptDomain.IsAssemblyCurrent`): a successful
   build records the scripts it compiled next to its assemblies (`Game.dll.sources`, `Game.Editor.dll.sources`: a
-  SHA-256 of every .cs under Assets with its size and modification time, taken when the build starts), and the build is
+  SHA-256 of every .cs under Assets with its size and modification time, and since 2026-11-23 of the module version ids
+  of the engine, editor and test framework assemblies (a game built against another engine threw MissingMethodException
+  where the engine's API had changed: New Frontier's tests after the move to the graphics device), taken when the build
+  starts), and the build is
   current while the scripts give the same value and the generated projects are older than it (2026-10-25). Before, only
   the newest script time counted, so a deleted, renamed or moved script left the old types loaded ("Scripts are up to
   date"). A build without the record (older engines, an IDE build) is built again once. Running editors also rebuild

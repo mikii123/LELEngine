@@ -200,9 +200,7 @@ namespace LELEngine.Rendering
 			GlobalIlluminationSettings gi = Lighting.GI;
 			width = Math.Max(1, gi.ResolveWidth);
 			height = Math.Max(1, gi.ResolveHeight);
-			// LEGACY(gl): Lighting.cs publishes the GI's resolved diffuse as an OpenGL texture name
-			// (GlobalIlluminationSettings.ResolvedDiffuse); the device's texture of that name is looked up.
-			return gi.ResolveActive && gi.ResolvedDiffuse != 0 ? Graphics.OpenGL.GLDevice.Current.FindTexture(gi.ResolvedDiffuse) : null;
+			return gi.ResolveActive ? gi.ResolvedDiffuse : null;
 		}
 
 		private static Vector4i ClampRect(Vector4i rect, int width, int height)

@@ -64,8 +64,8 @@ void main()
 		private static readonly System.Diagnostics.Stopwatch Clock = System.Diagnostics.Stopwatch.StartNew();
 
 		private ShaderProgram program;
-		private int buffer;
-		private IntPtr fence;
+		private GpuBuffer buffer;
+		private GpuFence fence;
 		private double lastCapture = -1.0;
 
 		// The capture in flight and the last one read: the camera it was drawn with.
@@ -89,38 +89,29 @@ void main()
 		/// <summary>After the view rendered: reduces its depth unless a capture is in flight or the last one is very recent.</summary>
 		public void Capture(Renderer renderer, Camera camera)
 		{
-			if (fence != IntPtr.Zero || renderer?.SceneTarget == null || Clock.Elapsed.TotalSeconds - lastCapture < CaptureInterval)
+			if (fence != null || renderer?.SceneTarget == null || Clock.Elapsed.TotalSeconds - lastCapture < CaptureInterval)
 			{
 				return;
 			}
 
 			RenderTexture depth = renderer.SceneDepth;
-			if (depth == null || depth.Handle == 0)
+			if (depth == null || depth.Gpu == null)
 			{
 				return;
 			}
 
-			program ??= ShaderProgram.FromSources("Editor/SceneDepthProbe", new[] { new KeyValuePair<ShaderType, string>(ShaderType.ComputeShader, Source) });
-			if (buffer == 0)
-			{
-				buffer = GL.GenBuffer();
-				GL.BindBuffer(BufferTarget.ShaderStorageBuffer, buffer);
-				GL.BufferData(BufferTarget.ShaderStorageBuffer, cells.Length * sizeof(float), IntPtr.Zero, BufferUsageHint.StreamRead);
-				GL.BindBuffer(BufferTarget.ShaderStorageBuffer, 0);
-			}
+			program ??= ShaderProgram.FromSources("Editor/SceneDepthProbe", new[] { new KeyValuePair<ShaderStage, string>(ShaderStage.Compute, Source) });
+			buffer ??= Gfx.Device.CreateBuffer(new BufferDescriptor(BufferUsage.Storage | BufferUsage.Readback, cells.Length * sizeof(float), false, "Scene depth probe cells"));
 
-			// Other passes keep their own storage buffer on binding 0: put it back afterwards.
-			GL.GetInteger((GetIndexedPName)All.ShaderStorageBufferBinding, 0, out int previous);
+			CommandList commands = Gfx.Commands;
 			program.Use();
-			program.SetTexture("SceneDepth", TextureTarget.Texture2D, depth.Handle, 0);
+			program.SetTexture("SceneDepth", depth, Samplers.PointClamp);
 			program.SetInt2("sourceSize", depth.Width, depth.Height);
 			program.SetInt2("gridSize", GridWidth, GridHeight);
-			GL.BindBufferBase(BufferRangeTarget.ShaderStorageBuffer, 0, buffer);
-			GL.DispatchCompute((GridWidth + 7) / 8, (GridHeight + 7) / 8, 1);
-			GL.MemoryBarrier(MemoryBarrierFlags.BufferUpdateBarrierBit | MemoryBarrierFlags.ClientMappedBufferBarrierBit);
-			GL.BindBufferBase(BufferRangeTarget.ShaderStorageBuffer, 0, previous);
-			GL.UseProgram(0);
-			fence = GL.FenceSync(SyncCondition.SyncGpuCommandsComplete, WaitSyncFlags.None);
+			commands.SetStorageBuffer(0, buffer);
+			commands.Dispatch((GridWidth + 7) / 8, (GridHeight + 7) / 8, 1);
+			commands.SetProgram(null);
+			fence = Gfx.Device.CreateFence();
 			pendingInverseViewProjection = camera.ViewProjectionMatrix.Inverted();
 			lastCapture = Clock.Elapsed.TotalSeconds;
 		}
@@ -128,35 +119,16 @@ void main()
 		/// <summary>Every frame: takes the capture in flight once the GPU finished it.</summary>
 		public void Update()
 		{
-			if (fence == IntPtr.Zero)
+			if (fence == null || !fence.IsSignaled)
 			{
 				return;
 			}
 
-			WaitSyncStatus status = GL.ClientWaitSync(fence, ClientWaitSyncFlags.None, 0);
-			if (status == WaitSyncStatus.TimeoutExpired)
-			{
-				return;
-			}
-
-			GL.DeleteSync(fence);
-			fence = IntPtr.Zero;
-			if (status == WaitSyncStatus.WaitFailed)
-			{
-				return;
-			}
-
-			GL.BindBuffer(BufferTarget.ShaderStorageBuffer, buffer);
-			IntPtr mapped = GL.MapBufferRange(BufferTarget.ShaderStorageBuffer, IntPtr.Zero, cells.Length * sizeof(float), MapBufferAccessMask.MapReadBit);
-			if (mapped != IntPtr.Zero)
-			{
-				System.Runtime.InteropServices.Marshal.Copy(mapped, cells, 0, cells.Length);
-				GL.UnmapBuffer(BufferTarget.ShaderStorageBuffer);
-				inverseViewProjection = pendingInverseViewProjection;
-				hasCells = true;
-			}
-
-			GL.BindBuffer(BufferTarget.ShaderStorageBuffer, 0);
+			fence.Dispose();
+			fence = null;
+			buffer.GetData(0, cells);
+			inverseViewProjection = pendingInverseViewProjection;
+			hasCells = true;
 		}
 
 		/// <summary>
@@ -249,17 +221,10 @@ void main()
 
 		public void Dispose()
 		{
-			if (fence != IntPtr.Zero)
-			{
-				GL.DeleteSync(fence);
-				fence = IntPtr.Zero;
-			}
-
-			if (buffer != 0)
-			{
-				GL.DeleteBuffer(buffer);
-				buffer = 0;
-			}
+			fence?.Dispose();
+			fence = null;
+			buffer?.Dispose();
+			buffer = null;
 
 			program?.Delete();
 			program = null;

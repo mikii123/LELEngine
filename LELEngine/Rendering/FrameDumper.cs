@@ -67,34 +67,6 @@ namespace LELEngine.Rendering
 			Write(width, height, size);
 		}
 
-		/// <summary>
-		///     Reads the currently bound framebuffer (the default one's back buffer, or an offscreen target's first
-		///     color attachment) and writes it. Call after the frame is complete, before the buffer swap.
-		/// </summary>
-		// LEGACY(gl): used by Renderer.cs, LELEngine.Editor/MainWindow.cs, Audio/AudioStudioWindow.cs, UIBuilder/BuilderWindow.cs
-		public void Capture(int width, int height, bool offscreen = false)
-		{
-			if (remaining <= 0)
-			{
-				return;
-			}
-
-			if (!offscreen)
-			{
-				Capture(Gfx.Device.Backbuffer, width, height);
-				return;
-			}
-
-			// Which texture the caller bound is known to OpenGL only: its pixels are read as OpenGL packs them.
-			int size = PrepareRows(width, height, out _);
-			GL.PixelStore(PixelStoreParameter.PackAlignment, 4);
-			GL.ReadBuffer(ReadBufferMode.ColorAttachment0);
-			GL.ReadPixels(0, 0, width, height, PixelFormat.Bgr, PixelType.UnsignedByte, pixels);
-			// The device reads and writes texels with rows packed.
-			GL.PixelStore(PixelStoreParameter.PackAlignment, 1);
-			Write(width, height, size);
-		}
-
 		#endregion
 
 		#region PrivateMethods

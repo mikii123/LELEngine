@@ -29,7 +29,7 @@ namespace LELEngine.Shaders
 		public abstract MaterialProperty Clone();
 
 		/// <summary>Uploads the value to the program's uniform of this name (no-op when the shader has none).</summary>
-		internal abstract void Apply(ShaderProgram program, ref int textureUnit);
+		internal abstract void Apply(ShaderProgram program);
 
 		#endregion
 	}
@@ -46,7 +46,7 @@ namespace LELEngine.Shaders
 			return new FloatProperty { name = name, value = value };
 		}
 
-		internal override void Apply(ShaderProgram program, ref int textureUnit)
+		internal override void Apply(ShaderProgram program)
 		{
 			UploadFloat(program, name, value);
 		}
@@ -84,7 +84,7 @@ namespace LELEngine.Shaders
 			return new IntProperty { name = name, value = value };
 		}
 
-		internal override void Apply(ShaderProgram program, ref int textureUnit)
+		internal override void Apply(ShaderProgram program)
 		{
 			int slot = program.GetSlot(name);
 			if (slot < 0)
@@ -116,7 +116,7 @@ namespace LELEngine.Shaders
 			return new VectorProperty { name = name, value = value };
 		}
 
-		internal override void Apply(ShaderProgram program, ref int textureUnit)
+		internal override void Apply(ShaderProgram program)
 		{
 			UploadVector(program, name, value);
 		}
@@ -157,7 +157,7 @@ namespace LELEngine.Shaders
 			return new ColorProperty { name = name, value = value };
 		}
 
-		internal override void Apply(ShaderProgram program, ref int textureUnit)
+		internal override void Apply(ShaderProgram program)
 		{
 			VectorProperty.UploadVector(program, name, new Vector4(value.R, value.G, value.B, value.A));
 		}
@@ -175,26 +175,17 @@ namespace LELEngine.Shaders
 			return new TextureProperty { name = name, value = value };
 		}
 
-		internal override void Apply(ShaderProgram program, ref int textureUnit)
+		internal override void Apply(ShaderProgram program)
 		{
-			Bind(program, name, value, ref textureUnit);
+			Bind(program, name, value);
 		}
 
-		/// <summary>
-		///     Gives a sampler its texture (or the sampler kind's neutral default when it is null or of the wrong kind);
-		///     <paramref name="textureUnit" /> counts the material's textures.
-		/// </summary>
-		internal static void Bind(ShaderProgram program, string name, Texture value, ref int textureUnit)
+		/// <summary>Gives a sampler its texture (or the sampler kind's neutral default when it is null or of the wrong kind).</summary>
+		internal static void Bind(ShaderProgram program, string name, Texture value)
 		{
 			int slot = program.GetSlot(name);
 			if (slot < 0)
 			{
-				return;
-			}
-
-			if (textureUnit >= Material.MaxTextures)
-			{
-				Debug.LogWarning($"[Material] More than {Material.MaxTextures} textures; '{name}' is not bound");
 				return;
 			}
 
@@ -213,7 +204,6 @@ namespace LELEngine.Shaders
 			}
 
 			program.Gpu.SetTexture(slot, gpu);
-			textureUnit++;
 		}
 
 		/// <summary>The texture kind a sampler uniform accepts.</summary>

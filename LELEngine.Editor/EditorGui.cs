@@ -8,10 +8,10 @@ namespace LELEngine.Editor
 	{
 		#region PublicMethods
 
-		/// <summary>Reference to a GL texture for ImGui.Image.</summary>
-		public static unsafe ImTextureRef Texture(int handle)
+		/// <summary>Reference to a texture for ImGui.Image (ImGui names it by its id; null: none, nothing is drawn).</summary>
+		public static unsafe ImTextureRef Texture(Graphics.GpuTexture texture)
 		{
-			return new ImTextureRef(null, new ImTextureID((ulong)handle));
+			return new ImTextureRef(null, new ImTextureID((ulong)(texture != null ? texture.Id : 0)));
 		}
 
 		public static NVector2 ViewportCenter()

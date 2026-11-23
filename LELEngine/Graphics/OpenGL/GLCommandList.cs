@@ -71,13 +71,6 @@ namespace LELEngine.Graphics.OpenGL
 		/// <summary>A draw or dispatch wrote images or storage blocks: a barrier goes before whatever comes next.</summary>
 		private bool barrierPending;
 
-		// Beside the legacy OpenGL commands (see GLDevice): who gave the context its last command, the texture unit
-		// the legacy code made active, and a "pass" that is only the framebuffer the legacy code bound.
-		private bool legacyActive = true;
-		private int legacyUnit;
-		private bool legacyPass;
-		private bool legacyVertexInput;
-		private int legacyTextureVersion;
 		private int deletedEpochSeen;
 
 		public GLCommandList(GLDevice device, GLContext context)
@@ -105,15 +98,8 @@ namespace LELEngine.Graphics.OpenGL
 		public override int PassHeight => passHeight;
 		public override int PassColorCount => passColorCount;
 
-		protected override void OnStateAccess()
-		{
-			EnterDevice();
-		}
-
 		public override void BeginRenderPass(in RenderPassDescriptor descriptor)
 		{
-			EnterDevice();
-			legacyPass = false;
 			EndRenderPass();
 			FlushBarriers();
 			ForgetDeletedTextures();
@@ -202,11 +188,7 @@ namespace LELEngine.Graphics.OpenGL
 
 		public override void EndRenderPass()
 		{
-			// A framebuffer the legacy code bound stays what draws go to until a pass begins or it binds another.
-			if (!legacyPass)
-			{
-				inPass = false;
-			}
+			inPass = false;
 		}
 
 		public override void ClearColor(int attachment, in ClearValue value, int x = 0, int y = 0, int width = -1, int height = -1)
@@ -263,7 +245,6 @@ namespace LELEngine.Graphics.OpenGL
 
 		public override void SetViewport(int x, int y, int width, int height)
 		{
-			EnterDevice();
 			if (x != viewportX || y != viewportY || width != viewportWidth || height != viewportHeight)
 			{
 				gl.Viewport(x, y, width, height);
@@ -276,7 +257,6 @@ namespace LELEngine.Graphics.OpenGL
 
 		public override void SetScissor(int x, int y, int width, int height)
 		{
-			EnterDevice();
 			scissorOn = true;
 			scissorX = x;
 			scissorY = y;
@@ -287,7 +267,6 @@ namespace LELEngine.Graphics.OpenGL
 
 		public override void DisableScissor()
 		{
-			EnterDevice();
 			scissorOn = false;
 			ApplyScissor();
 		}
@@ -300,14 +279,12 @@ namespace LELEngine.Graphics.OpenGL
 
 		public override void SetProgram(GpuProgram value)
 		{
-			EnterDevice();
 			program = (GLProgram)value;
 		}
 
 		public override void SetVertexInput(VertexInputLayout value)
 		{
 			layout = value ?? VertexInputLayout.Empty;
-			legacyVertexInput = false;
 		}
 
 		public override void SetVertexBuffer(int index, GpuBuffer buffer, long offset = 0)
@@ -334,7 +311,6 @@ namespace LELEngine.Graphics.OpenGL
 
 		public override void SetImage(int binding, GpuTexture texture, int mip = 0, int layer = -1, ImageAccess access = ImageAccess.ReadWrite)
 		{
-			EnterDevice();
 			GLTexture image = (GLTexture)texture;
 			if (image == null)
 			{
@@ -508,7 +484,6 @@ namespace LELEngine.Graphics.OpenGL
 
 		public override void CopyBuffer(GpuBuffer source, long sourceOffset, GpuBuffer destination, long destinationOffset, long size)
 		{
-			EnterDevice();
 			EndRenderPass();
 			FlushBarriers();
 			gl.BindBuffer(BufferTarget.CopyReadBuffer, ((GLBuffer)source).Handle);
@@ -519,7 +494,6 @@ namespace LELEngine.Graphics.OpenGL
 		public override void CopyTexture(GpuTexture source, int sourceMip, int sourceX, int sourceY, int sourceZ, GpuTexture destination, int destinationMip, int destinationX,
 			int destinationY, int destinationZ, int width, int height, int depth)
 		{
-			EnterDevice();
 			EndRenderPass();
 			FlushBarriers();
 			GLTexture from = (GLTexture)source;
@@ -531,10 +505,7 @@ namespace LELEngine.Graphics.OpenGL
 		public override void Blit(GpuTexture source, int sourceMip, int sourceLayer, int sourceX0, int sourceY0, int sourceX1, int sourceY1, GpuTexture destination,
 			int destinationMip, int destinationLayer, int destinationX0, int destinationY0, int destinationX1, int destinationY1, SamplerFilter filter)
 		{
-			EnterDevice();
 			EndRenderPass();
-			legacyPass = false;
-			inPass = false;
 			FlushBarriers();
 			GLTexture from = (GLTexture)source;
 			GLTexture to = (GLTexture)destination;
@@ -606,7 +577,6 @@ namespace LELEngine.Graphics.OpenGL
 
 		public override void ClearTexture(GpuTexture texture, int mip, in ClearValue value)
 		{
-			EnterDevice();
 			EndRenderPass();
 			FlushBarriers();
 			GLTexture target = (GLTexture)texture;
@@ -634,7 +604,6 @@ namespace LELEngine.Graphics.OpenGL
 				return;
 			}
 
-			EnterDevice();
 			EndRenderPass();
 			FlushBarriers();
 			GLTexture target = (GLTexture)texture;
@@ -666,272 +635,11 @@ namespace LELEngine.Graphics.OpenGL
 
 		#endregion
 
-		#region Beside the legacy OpenGL commands
-
-		/// <summary>
-		///     A command of the device follows OpenGL commands given past it: what the context holds now is read back,
-		///     and becomes what the device's state says (the legacy code set it as the code that follows expects it).
-		/// </summary>
-		private void EnterDevice()
-		{
-			if (legacyActive)
-			{
-				legacyActive = false;
-				ReadContextState();
-			}
-		}
-
-		/// <summary>
-		///     An OpenGL command is about to be given past the device: the context gets what the device's commands
-		///     left unsaid (state set but not drawn with, the program in use), and what the legacy code expects to be
-		///     its own (no vertex array of the device bound, its texture unit active).
-		/// </summary>
-		internal void BeforeLegacy()
-		{
-			if (legacyActive)
-			{
-				// Textures given to the program in use since the hand-over (a material's, between two draws the
-				// legacy code gives itself) are bound for the draw that follows.
-				if (program != null && program.TextureVersion != legacyTextureVersion && !program.IsDisposed && program.IsLinked)
-				{
-					legacyTextureVersion = program.TextureVersion;
-					activeUnit = -1;
-					Array.Fill(unitTextures, -1, device.UnitBase, Math.Min(program.UnitCount, unitTextures.Length - device.UnitBase));
-					Array.Fill(unitSamplers, -1, device.UnitBase, Math.Min(program.UnitCount, unitSamplers.Length - device.UnitBase));
-					ApplyProgramTextures(program);
-					gl.ActiveTexture(TextureUnit.Texture0 + legacyUnit);
-					activeUnit = legacyUnit;
-				}
-
-				return;
-			}
-
-			legacyActive = true;
-			FlushBarriers();
-			ApplyRenderState();
-			if (program != null && !program.IsDisposed && program.IsLinked)
-			{
-				// In use, with the textures given to its samplers through the device bound.
-				ApplyProgram();
-				legacyTextureVersion = program.TextureVersion;
-			}
-
-			if (legacyVertexInput && layout.Buffers.Length > 0 && vertexBuffers[0] != null)
-			{
-				// The code that follows draws the device's vertex input with OpenGL commands of its own.
-				ApplyVertexInput(indexBuffer != null);
-			}
-			else if (boundVertexArray != 0)
-			{
-				gl.BindVertexArray(0);
-				boundVertexArray = 0;
-			}
-
-			gl.ActiveTexture(TextureUnit.Texture0 + legacyUnit);
-			activeUnit = legacyUnit;
-		}
-
-		/// <summary>
-		///     The vertex input just set is for draws the legacy code gives with OpenGL commands of its own: its vertex
-		///     array is bound when the context is handed over.
-		/// </summary>
-		internal void KeepVertexInputForLegacy()
-		{
-			EnterDevice();
-			legacyVertexInput = true;
-		}
-
-		internal void LegacyActiveTexture(int unit)
-		{
-			legacyUnit = unit;
-		}
-
-		/// <summary>
-		///     The legacy code bound a texture by name to its active unit: a texture of the device is sampled there as
-		///     its sampler says, any other as its own parameters say.
-		/// </summary>
-		internal void LegacyTextureBound(int handle)
-		{
-			GLTexture texture = handle != 0 ? device.FindTexture(handle) : null;
-			int sampler = 0;
-			if (texture != null)
-			{
-				sampler = ((GLSampler)texture.Sampler ?? (defaultSampler ??= (GLSampler)Samplers.LinearClamp)).Handle;
-			}
-
-			if (legacyUnit < unitSamplers.Length)
-			{
-				gl.BindSampler(legacyUnit, sampler);
-				unitSamplers[legacyUnit] = sampler;
-				unitTextures[legacyUnit] = -1;
-			}
-		}
-
-		/// <summary>
-		///     The open pass was begun for code that still gives OpenGL commands itself: it lasts until another pass
-		///     begins or that code binds a framebuffer (OpenGL's binding outlives dispatches and copies).
-		/// </summary>
-		internal void KeepPassForLegacy()
-		{
-			legacyPass = true;
-		}
-
-		/// <summary>The OpenGL framebuffer object the device draws a pass's attachments through (made when there is none yet).</summary>
-		internal int LegacyFramebuffer(in RenderPassDescriptor descriptor)
-		{
-			EnterDevice();
-			ForgetDeletedTextures();
-			FramebufferKey key = default;
-			key.Count = descriptor.Colors.Length;
-			for (int i = 0; i < descriptor.Colors.Length; i++)
-			{
-				key.Set(i, ((GLTexture)descriptor.Colors[i].Texture).Handle, descriptor.Colors[i].Mip, descriptor.Colors[i].Layer);
-			}
-
-			if (descriptor.Depth.Texture != null)
-			{
-				key.Set(8, ((GLTexture)descriptor.Depth.Texture).Handle, descriptor.Depth.Mip, descriptor.Depth.Layer);
-			}
-
-			if (!framebuffers.TryGetValue(key, out int framebuffer))
-			{
-				int previous = boundFramebuffer;
-				framebuffer = CreateFramebuffer(descriptor, key);
-				framebuffers.Add(key, framebuffer);
-				if (previous >= 0)
-				{
-					BindFramebuffer(previous);
-				}
-			}
-
-			return framebuffer;
-		}
-
-		/// <summary>The legacy code bound a framebuffer to draw into: draws given through the device go there.</summary>
-		internal void LegacyFramebufferBound()
-		{
-			inPass = true;
-			legacyPass = true;
-			boundFramebuffer = -1;
-			passColorCount = 0;
-			passHasDepth = false;
-		}
-
-		private bool IsEnabled(int capability)
-		{
-			return Native.glIsEnabled((uint)capability);
-		}
-
-		private void ReadContextState()
-		{
-			int* values = stackalloc int[4];
-			RenderState now = state;
-			now.DepthTest = IsEnabled(0x0B71);
-			now.DepthWrite = gl.GetInteger((GetPName)0x0B72) != 0;
-			now.DepthCompare = (CompareFunction)(gl.GetInteger((GetPName)0x0B74) - 0x200);
-			now.Culling = !IsEnabled(0x0B44) ? FaceCulling.None : gl.GetInteger((GetPName)0x0B45) == 0x0404 ? FaceCulling.Front : FaceCulling.Back;
-			values[0] = values[1] = 0;
-			gl.GetIntegerv((GetPName)0x0B40, values);
-			now.Wireframe = values[0] == 0x1B01;
-			now.Blend = IsEnabled(0x0BE2);
-			now.SourceColor = ReadFactor(0x80C9);
-			now.DestinationColor = ReadFactor(0x80C8);
-			now.SourceAlpha = ReadFactor(0x80CB);
-			now.DestinationAlpha = ReadFactor(0x80CA);
-			now.ColorOperation = ReadOperation(0x8009);
-			now.AlphaOperation = ReadOperation(0x883D);
-			gl.GetIntegerv((GetPName)0x0C23, values);
-			now.ColorMask = (values[0] != 0 ? ColorWriteMask.Red : 0) | (values[1] != 0 ? ColorWriteMask.Green : 0) | (values[2] != 0 ? ColorWriteMask.Blue : 0)
-				| (values[3] != 0 ? ColorWriteMask.Alpha : 0);
-			if (IsEnabled(0x8037))
-			{
-				now.DepthBiasSlope = gl.GetFloat((GetPName)0x8038);
-				now.DepthBiasConstant = gl.GetFloat((GetPName)0x2A00);
-			}
-			else
-			{
-				now.DepthBiasSlope = 0f;
-				now.DepthBiasConstant = 0f;
-			}
-
-			state = now;
-			applied = now;
-			appliedValid = true;
-
-			scissorOn = scissorApplied = IsEnabled(0x0C11);
-			gl.GetIntegerv((GetPName)0x0C10, values);
-			scissorX = values[0];
-			scissorY = values[1];
-			scissorWidth = values[2];
-			scissorHeight = values[3];
-			gl.GetIntegerv((GetPName)0x0BA2, values);
-			viewportX = values[0];
-			viewportY = values[1];
-			viewportWidth = values[2];
-			viewportHeight = values[3];
-			if (legacyPass)
-			{
-				passWidth = viewportWidth;
-				passHeight = viewportHeight;
-			}
-
-			int current = gl.GetInteger((GetPName)0x8B8D);
-			boundProgram = current;
-			if (current != 0 && (program == null || program.Handle != current))
-			{
-				program = device.FindProgram(current) ?? program;
-			}
-
-			// Unknown from here on: asked for again when needed.
-			boundVertexArray = -1;
-			boundFramebuffer = legacyPass ? -1 : gl.GetInteger((GetPName)0x8CA6);
-			activeUnit = -1;
-			Array.Fill(unitTextures, -1);
-			Array.Fill(unitSamplers, -1);
-			Array.Clear(uniformBuffers);
-			Array.Clear(storageBuffers);
-			foreach (VertexArray array in vertexArrays.Values)
-			{
-				array.ElementBuffer = -1;
-			}
-		}
-
-		private BlendFactor ReadFactor(int name)
-		{
-			int value = gl.GetInteger((GetPName)name);
-			for (BlendFactor factor = BlendFactor.Zero; factor <= BlendFactor.SrcAlphaSaturate; factor++)
-			{
-				if (Factor(factor) == value)
-				{
-					return factor;
-				}
-			}
-
-			return BlendFactor.One;
-		}
-
-		private BlendOperation ReadOperation(int name)
-		{
-			int value = gl.GetInteger((GetPName)name);
-			for (BlendOperation operation = BlendOperation.Add; operation <= BlendOperation.Max; operation++)
-			{
-				if ((int)Equation(operation) == value)
-				{
-					return operation;
-				}
-			}
-
-			return BlendOperation.Add;
-		}
-
-		#endregion
-
 		#region For the device
 
 		/// <summary>Binds a texture to the device's own unit for making, writing or reading it; draws never use that unit.</summary>
 		internal void BindForEdit(GLTexture texture)
 		{
-			EnterDevice();
 			if (activeUnit != device.ScratchUnit)
 			{
 				gl.ActiveTexture(TextureUnit.Texture0 + device.ScratchUnit);
@@ -953,7 +661,6 @@ namespace LELEngine.Graphics.OpenGL
 
 		internal void ReadTexture(GLTexture texture, int mip, int x, int y, int z, int width, int height, int depth, void* destination, int size, GLBuffer packBuffer, long packOffset)
 		{
-			EnterDevice();
 			EndRenderPass();
 			FlushBarriers();
 			if (packBuffer != null)
@@ -1155,7 +862,6 @@ namespace LELEngine.Graphics.OpenGL
 
 		private void RequirePass(string what)
 		{
-			EnterDevice();
 			if (!inPass)
 			{
 				throw new InvalidOperationException(what + " outside a render pass: begin one first (a dispatch, copy, blit or mip generation ends the open pass).");
@@ -1192,7 +898,6 @@ namespace LELEngine.Graphics.OpenGL
 
 		private bool PrepareDispatch()
 		{
-			EnterDevice();
 			EndRenderPass();
 			if (program == null || program.IsDisposed || !program.IsLinked || !program.IsCompute)
 			{
@@ -1320,16 +1025,10 @@ namespace LELEngine.Graphics.OpenGL
 		private void ApplyProgramTextures(GLProgram current)
 		{
 			int units = current.UnitCount;
-			int unitBase = device.UnitBase;
 			for (int index = 0; index < units; index++)
 			{
-				if (current.UnitLegacy[index])
-				{
-					// The sampler was pointed at a texture unit of the legacy code's.
-					continue;
-				}
-
-				int unit = unitBase + index;
+				// A program's samplers take the texture units from 0 on, in the order of their slots.
+				int unit = index;
 				GLTexture texture = current.Textures[index];
 				int handle;
 				TextureTarget target;
@@ -1454,7 +1153,6 @@ namespace LELEngine.Graphics.OpenGL
 				throw new ArgumentOutOfRangeException(nameof(binding), $"Buffer binding {binding} is outside 0..{MaxBufferBindings - 1}.");
 			}
 
-			EnterDevice();
 			int handle = buffer != null && !buffer.IsDisposed ? buffer.Handle : 0;
 			// A buffer's storage can be replaced under the same name, with another size: a whole-buffer binding is
 			// made again every time (it is what the driver does itself for glBindBufferBase).

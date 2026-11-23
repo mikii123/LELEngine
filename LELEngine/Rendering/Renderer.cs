@@ -113,9 +113,6 @@ namespace LELEngine.Rendering
 		private readonly Dictionary<(string, int), string> profileNames = new Dictionary<(string, int), string>();
 		private Framebuffer dumpTarget;
 
-		/// <summary>The framebuffer of <see cref="BeginPass" />, while the pass that began it executes.</summary>
-		private static Framebuffer passTarget;
-
 		// The frame being rendered, for LastFrame: its cameras, the renderers in their lists, the GPU-driven instances; and the
 		// frames rendered (RenderFrame calls: FrameIndex leaves out the frames without a camera).
 		private int renderedFrames;
@@ -372,9 +369,6 @@ namespace LELEngine.Rendering
 					if (pass.Enabled && pass.RunsWithoutCamera)
 					{
 						pass.Execute(overlayContext);
-						passTarget = null;
-						// LEGACY(gl): the passes that still give OpenGL commands start from nothing bound
-						GLState.Reset();
 					}
 				}
 
@@ -507,9 +501,7 @@ namespace LELEngine.Rendering
 
 			if (FrameDumper.Active)
 			{
-				// LEGACY(gl): FrameDumper reads the pixels of the framebuffer bound
-				BindOutput();
-				FrameDumper.Capture(Width, Height, OutputTarget != null);
+				FrameDumper.Capture(OutputTarget != null ? OutputTarget.ColorAttachments[0].Gpu : Gfx.Device.Backbuffer, Width, Height);
 			}
 
 			if (dumpOffscreen)
@@ -574,9 +566,6 @@ namespace LELEngine.Rendering
 				pass.Execute(context);
 			}
 
-			passTarget = null;
-			// LEGACY(gl): the passes that still give OpenGL commands start from nothing bound
-			GLState.Reset();
 			Profiler.End();
 			executed++;
 
@@ -945,45 +934,6 @@ namespace LELEngine.Rendering
 				CommandList commands = Gfx.Commands;
 				commands.BeginRenderPass(Gfx.Device.Backbuffer, null, color, clearColor);
 				commands.SetViewport(0, 0, Width, Height);
-			}
-		}
-
-		/// <summary>
-		///     Begins a render pass into a framebuffer for draws whose materials may make textures on the way: a texture's
-		///     first use uploads it and generates its mip levels, and that ends the open pass (it is not a draw).
-		///     <see cref="ContinuePass" /> before such a draw begins the pass again when that happened, keeping what the
-		///     target holds. The target is forgotten when the pass of the renderer that began it returns.
-		/// </summary>
-		public static void BeginPass(Framebuffer target, LoadOperation color = LoadOperation.Load, ClearValue clearColor = default, LoadOperation depth = LoadOperation.Load, float clearDepth = 1f)
-		{
-			passTarget = target;
-			target.Begin(color, clearColor, depth, clearDepth);
-		}
-
-		/// <summary>
-		///     The pass begun with <see cref="BeginPass" /> is open for the draw that follows: begun again, loading its
-		///     target, when something given since ended it. Nothing happens while a pass is open or outside
-		///     <see cref="BeginPass" />.
-		/// </summary>
-		public static void ContinuePass()
-		{
-			if (passTarget != null && !Gfx.Commands.InRenderPass)
-			{
-				passTarget.Begin();
-			}
-		}
-
-		// LEGACY(gl): used by UIRenderPass.cs, and here for FrameDumper
-		/// <summary>Binds the frame's final destination (<see cref="OutputTarget" /> or the default framebuffer).</summary>
-		public void BindOutput()
-		{
-			if (OutputTarget != null)
-			{
-				OutputTarget.Bind();
-			}
-			else
-			{
-				Framebuffer.BindDefault(Width, Height);
 			}
 		}
 

@@ -27,7 +27,7 @@ namespace LELEngine.Shaders
 	///     Compiling is started and finished apart (<see cref="StartBuild" />, <see cref="EnsureBuilt" />): a program made on
 	///     the context's thread hands its stages to the driver and links without waiting, and the results (status, logs,
 	///     uniforms, the binary cache) are read when it is first used or <see cref="FinishStartedBuilds" /> runs. With
-	///     parallel shader compile (<see cref="GLCapabilities.ParallelShaderCompile" />) the programs a load started
+	///     parallel shader compile (<see cref="GraphicsCapabilities.ParallelShaderCompile" />) the programs a load started
 	///     compile together on the driver's threads.
 	/// </summary>
 	public sealed class ShaderProgram : IAsset
@@ -47,16 +47,6 @@ namespace LELEngine.Shaders
 			{
 				EnsureBuilt();
 				return gpu;
-			}
-		}
-
-		/// <summary>The OpenGL program object: only for the code that still gives OpenGL commands itself.</summary>
-		public int Handle
-		{
-			get
-			{
-				EnsureBuilt();
-				return gpu is Graphics.OpenGL.GLProgram program ? program.Handle : 0;
 			}
 		}
 
@@ -98,7 +88,7 @@ namespace LELEngine.Shaders
 				}
 
 				GpuProgram building = gpu;
-				if (!buildStarted || building == null || !GLCapabilities.ParallelShaderCompile || !GraphicsThread.HasContext)
+				if (!buildStarted || building == null || !GraphicsCapabilities.ParallelShaderCompile || !GraphicsThread.HasContext)
 				{
 					return true;
 				}
@@ -177,13 +167,10 @@ namespace LELEngine.Shaders
 
 		private GpuProgram gpu;
 		private bool linked;
-		private List<KeyValuePair<ShaderType, string>> pendingStages;
+		private List<KeyValuePair<ShaderStage, string>> pendingStages;
 
 		// Slots of the uniforms asked for by name (-1: the program has none of that name).
 		private readonly Dictionary<string, int> uniformCache = new Dictionary<string, int>();
-
-		// OpenGL locations by name, for the code that still gives OpenGL commands itself.
-		private readonly Dictionary<string, int> locationCache = new Dictionary<string, int>();
 		private readonly Dictionary<string, UniformType> uniformTypes = new Dictionary<string, UniformType>(StringComparer.Ordinal);
 		private readonly List<ShaderProperty> properties = new List<ShaderProperty>();
 		private readonly List<ShaderProperty> keywordProperties = new List<ShaderProperty>();
@@ -288,7 +275,7 @@ namespace LELEngine.Shaders
 		// The binary cache has the program of these sources (as the constructor reads them); state gets their render state.
 		private static bool Cached(string path, string[] defines, out bool includesInstancing, ShaderRenderState state = null)
 		{
-			List<KeyValuePair<ShaderType, string>> stages = ReadStages(path, defines, new List<ShaderProperty>(), state ?? new ShaderRenderState(), ShaderFeatures.Current, false, out includesInstancing);
+			List<KeyValuePair<ShaderStage, string>> stages = ReadStages(path, defines, new List<ShaderProperty>(), state ?? new ShaderRenderState(), ShaderFeatures.Current, false, out includesInstancing);
 			return ProgramBinaryCache.Has(ProgramBinaryCache.Key(stages));
 		}
 
@@ -309,10 +296,10 @@ namespace LELEngine.Shaders
 		public ShaderProgram(string name, params Shader[] shaders)
 		{
 			Name = name;
-			var stages = new List<KeyValuePair<ShaderType, string>>();
+			var stages = new List<KeyValuePair<ShaderStage, string>>();
 			foreach (Shader shader in shaders)
 			{
-				stages.Add(new KeyValuePair<ShaderType, string>(shader.Type, shader.Source));
+				stages.Add(new KeyValuePair<ShaderStage, string>(shader.Type, shader.Source));
 			}
 
 			gpu = GraphicsDevice.Current.CreateProgram(Describe(name, stages, false));
@@ -332,7 +319,7 @@ namespace LELEngine.Shaders
 		}
 
 		// A generated program whose build is started and finished apart, as a file program's (StartFromSources).
-		private ShaderProgram(string name, List<KeyValuePair<ShaderType, string>> stages)
+		private ShaderProgram(string name, List<KeyValuePair<ShaderStage, string>> stages)
 		{
 			Name = name;
 			pendingStages = stages;
@@ -467,9 +454,9 @@ namespace LELEngine.Shaders
 		///     engine shader library and every stage gets the engine preamble (stage define, variant defines, native
 		///     features), as .shader files do. The compile and link messages end up in <see cref="BuildLog" />.
 		/// </summary>
-		public static ShaderProgram FromSources(string name, IEnumerable<KeyValuePair<ShaderType, string>> stages, params string[] defines)
+		public static ShaderProgram FromSources(string name, IEnumerable<KeyValuePair<ShaderStage, string>> stages, params string[] defines)
 		{
-			List<KeyValuePair<ShaderType, string>> sources = GeneratedSources(name, stages, defines);
+			List<KeyValuePair<ShaderStage, string>> sources = GeneratedSources(name, stages, defines);
 
 			// The driver's binary of the same sources, when an earlier start saved one (ProgramBinaryCache).
 			long startedAt = FrameProfiler.Timestamp;
@@ -507,21 +494,21 @@ namespace LELEngine.Shaders
 		///     program (<see cref="IsLinked" />, a uniform, <see cref="Use" />) waits for it; its messages are in
 		///     <see cref="BuildLog" /> then.
 		/// </summary>
-		public static ShaderProgram StartFromSources(string name, IEnumerable<KeyValuePair<ShaderType, string>> stages, params string[] defines)
+		public static ShaderProgram StartFromSources(string name, IEnumerable<KeyValuePair<ShaderStage, string>> stages, params string[] defines)
 		{
 			return new ShaderProgram(name, GeneratedSources(name, stages, defines));
 		}
 
 		// The stages of a generated program as they are compiled: includes expanded, the engine preamble in front.
-		private static List<KeyValuePair<ShaderType, string>> GeneratedSources(string name, IEnumerable<KeyValuePair<ShaderType, string>> stages, string[] defines)
+		private static List<KeyValuePair<ShaderStage, string>> GeneratedSources(string name, IEnumerable<KeyValuePair<ShaderStage, string>> stages, string[] defines)
 		{
-			var sources = new List<KeyValuePair<ShaderType, string>>();
+			var sources = new List<KeyValuePair<ShaderStage, string>>();
 			string virtualPath = Path.Combine(ShadersRoot, "Generated", name.Replace('/', '_') + ".glsl");
-			foreach (KeyValuePair<ShaderType, string> stage in stages)
+			foreach (KeyValuePair<ShaderStage, string> stage in stages)
 			{
 				var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 				string code = ExpandIncludes(stage.Value.Replace("\r\n", "\n").Split('\n'), virtualPath, visited);
-				sources.Add(new KeyValuePair<ShaderType, string>(stage.Key, InsertPreamble(code, stage.Key, defines ?? Array.Empty<string>(), ShaderFeatures.Current)));
+				sources.Add(new KeyValuePair<ShaderStage, string>(stage.Key, InsertPreamble(code, stage.Key, defines ?? Array.Empty<string>(), ShaderFeatures.Current)));
 			}
 
 			return sources;
@@ -779,7 +766,7 @@ namespace LELEngine.Shaders
 			var readProperties = new List<ShaderProperty>();
 			var readState = new ShaderRenderState();
 			var files = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-			List<KeyValuePair<ShaderType, string>> stages;
+			List<KeyValuePair<ShaderStage, string>> stages;
 			bool includesInstancing;
 			try
 			{
@@ -804,7 +791,6 @@ namespace LELEngine.Shaders
 				sourceFiles = files.ToArray();
 				sourceStamp = StampOf(sourceFiles);
 				uniformCache.Clear();
-				locationCache.Clear();
 				uniformTypes.Clear();
 				linked = false;
 				linkLog = "";
@@ -891,21 +877,6 @@ namespace LELEngine.Shaders
 			return slot;
 		}
 
-		/// <summary>The OpenGL location of a uniform: only for the code that still gives OpenGL commands itself.</summary>
-		public int GetUniformLocation(string name)
-		{
-			EnsureBuilt();
-			int location;
-			if (!locationCache.TryGetValue(name, out location))
-			{
-				int program = Handle;
-				location = program != 0 ? GL.GetUniformLocation(program, name) : -1;
-				locationCache[name] = location;
-			}
-
-			return location;
-		}
-
 		public bool HasUniform(string name)
 		{
 			return GetSlot(name) >= 0;
@@ -966,7 +937,7 @@ namespace LELEngine.Shaders
 		///     the code carries #line directives naming each file (GL_GOOGLE_cpp_style_line_directive), so a compiler's
 		///     messages point into the shader file and its includes: offline validation (drivers get the code without them).
 		/// </summary>
-		public static List<KeyValuePair<ShaderType, string>> ReadSources(string path, IEnumerable<string> defines, ShaderFeatures features, bool lineDirectives, out bool includesInstancing)
+		public static List<KeyValuePair<ShaderStage, string>> ReadSources(string path, IEnumerable<string> defines, ShaderFeatures features, bool lineDirectives, out bool includesInstancing)
 		{
 			string[] all = defines?.ToArray() ?? Array.Empty<string>();
 			return ReadStages(path, all, new List<ShaderProperty>(), new ShaderRenderState(), features, lineDirectives, out includesInstancing);
@@ -986,7 +957,7 @@ namespace LELEngine.Shaders
 					break;
 				}
 
-				ShaderType ignored;
+				ShaderStage ignored;
 				if (Shader.TryParseTag(trimmed, out ignored))
 				{
 					// A stage closed before any Properties block: the file has none.
@@ -1116,31 +1087,17 @@ namespace LELEngine.Shaders
 			SetTexture(name, texture?.Gpu, sampler);
 		}
 
-		/// <summary>
-		///     The OpenGL way, for the code that still gives OpenGL commands itself: binds a texture object to a texture
-		///     unit and points the sampler at that unit.
-		/// </summary>
-		public void SetTexture(string name, TextureTarget target, int textureHandle, int unit)
-		{
-			int slot = GetSlot(name);
-			if (slot < 0) return;
-
-			GL.ActiveTexture(TextureUnit.Texture0 + unit);
-			GL.BindTexture(target, textureHandle);
-			gpu.SetInt(slot, unit);
-		}
-
 		#endregion
 
 		#region PrivateMethods
 
 		/// <summary>What the device builds a program from: the stages' sources and the fixed attribute locations.</summary>
-		private static ProgramDescriptor Describe(string name, List<KeyValuePair<ShaderType, string>> stages, bool asynchronous)
+		private static ProgramDescriptor Describe(string name, List<KeyValuePair<ShaderStage, string>> stages, bool asynchronous)
 		{
 			var descriptor = new ProgramDescriptor { Name = name, Asynchronous = asynchronous };
-			foreach (KeyValuePair<ShaderType, string> stage in stages)
+			foreach (KeyValuePair<ShaderStage, string> stage in stages)
 			{
-				descriptor.Stages.Add(new KeyValuePair<ShaderStage, string>(Shader.StageOf(stage.Key), stage.Value));
+				descriptor.Stages.Add(stage);
 			}
 
 			// Fixed attribute slots: a mesh's buffers are laid out once for every shader.
@@ -1262,7 +1219,7 @@ namespace LELEngine.Shaders
 		/// </summary>
 		private void Start()
 		{
-			List<KeyValuePair<ShaderType, string>> stages = pendingStages;
+			List<KeyValuePair<ShaderStage, string>> stages = pendingStages;
 			pendingStages = null;
 			startedOnThisThread++;
 			long startedAt = FrameProfiler.Timestamp;
@@ -1331,7 +1288,7 @@ namespace LELEngine.Shaders
 			foreach (KeyValuePair<ShaderStage, string> error in gpu.StageErrors)
 			{
 				Console.WriteLine($"[Shader] Compile error in {debugName} ({error.Key}):\n{error.Value}");
-				log.Append(StageName(Shader.TypeOf(error.Key))).Append(": ").Append((error.Value ?? "").Trim()).Append('\n');
+				log.Append(StageName(error.Key)).Append(": ").Append((error.Value ?? "").Trim()).Append('\n');
 			}
 
 			linked = gpu.IsLinked && gpu.StageErrors.Count == 0;
@@ -1368,7 +1325,7 @@ namespace LELEngine.Shaders
 		}
 
 		/// <summary>The stages of a .shader file with their includes expanded and the engine preamble (no GL calls: any thread).</summary>
-		private static List<KeyValuePair<ShaderType, string>> ReadStages(string path, string[] defines, List<ShaderProperty> properties, ShaderRenderState state, out bool includesInstancing)
+		private static List<KeyValuePair<ShaderStage, string>> ReadStages(string path, string[] defines, List<ShaderProperty> properties, ShaderRenderState state, out bool includesInstancing)
 		{
 			return ReadStages(path, defines, properties, state, ShaderFeatures.Current, false, out includesInstancing);
 		}
@@ -1378,10 +1335,10 @@ namespace LELEngine.Shaders
 		///     native features, with #line directives naming the files when <paramref name="lineDirectives" /> is set;
 		///     <paramref name="files" /> gets every file read (the .shader and its includes).
 		/// </summary>
-		private static List<KeyValuePair<ShaderType, string>> ReadStages(string path, string[] defines, List<ShaderProperty> properties, ShaderRenderState state, ShaderFeatures features, bool lineDirectives, out bool includesInstancing,
+		private static List<KeyValuePair<ShaderStage, string>> ReadStages(string path, string[] defines, List<ShaderProperty> properties, ShaderRenderState state, ShaderFeatures features, bool lineDirectives, out bool includesInstancing,
 			HashSet<string> files = null)
 		{
-			var shaders = new List<KeyValuePair<ShaderType, string>>();
+			var shaders = new List<KeyValuePair<ShaderStage, string>>();
 			string fullPath = ResolveShaderPath(path);
 			files?.Add(Path.GetFullPath(fullPath));
 			string instancing = Path.GetFullPath(Path.Combine(ShadersRoot, InstancingInclude));
@@ -1404,7 +1361,7 @@ namespace LELEngine.Shaders
 					continue;
 				}
 
-				ShaderType type;
+				ShaderStage type;
 				if (!Shader.TryParseTag(line, out type))
 				{
 					stage.Add(rawLine);
@@ -1422,7 +1379,7 @@ namespace LELEngine.Shaders
 					Console.WriteLine("[Shader] Warning: stage " + type + " in " + path + " is shorter than 10 characters!");
 				}
 
-				shaders.Add(new KeyValuePair<ShaderType, string>(type, InsertPreamble(code, type, defines, features, lineName, stageFirstLine)));
+				shaders.Add(new KeyValuePair<ShaderStage, string>(type, InsertPreamble(code, type, defines, features, lineName, stageFirstLine)));
 				stageFirstLine = lineNumber + 1;
 			}
 
@@ -1434,7 +1391,7 @@ namespace LELEngine.Shaders
 		///     (<paramref name="features" />: each with its extension directive, which must precede any code). With a
 		///     <paramref name="lineName" /> (#line directives) the main file's numbering resumes after them.
 		/// </summary>
-		private static string InsertPreamble(string code, ShaderType type, string[] defines, ShaderFeatures features, string lineName = null, int firstLine = 1)
+		private static string InsertPreamble(string code, ShaderStage type, string[] defines, ShaderFeatures features, string lineName = null, int firstLine = 1)
 		{
 			var preamble = new System.Text.StringBuilder();
 			if (lineName != null)
@@ -1450,7 +1407,7 @@ namespace LELEngine.Shaders
 			}
 
 			bool needs460 = false;
-			if (type == ShaderType.VertexShader && features.DrawParameters != DrawParametersSupport.None)
+			if (type == ShaderStage.Vertex && features.DrawParameters != DrawParametersSupport.None)
 			{
 				if (features.DrawParameters == DrawParametersSupport.Extension)
 				{
@@ -1463,13 +1420,13 @@ namespace LELEngine.Shaders
 				}
 			}
 
-			if (type == ShaderType.ComputeShader && features.ComputeSubgroups)
+			if (type == ShaderStage.Compute && features.ComputeSubgroups)
 			{
 				preamble.Append("#extension GL_KHR_shader_subgroup_basic : enable\n#extension GL_KHR_shader_subgroup_arithmetic : enable\n#define LEL_SUBGROUPS 1\n");
 			}
 
 			// No binding left for the previous world matrices (Engine/Instancing.glsl): motion vectors see static objects.
-			if (type == ShaderType.VertexShader && !features.PreviousModels)
+			if (type == ShaderStage.Vertex && !features.PreviousModels)
 			{
 				preamble.Append("#define LEL_NO_PREVIOUS_MODELS 1\n");
 			}
@@ -1504,15 +1461,15 @@ namespace LELEngine.Shaders
 			return name == null ? "" : "#line " + line + " \"" + name + "\"\n";
 		}
 
-		private static string StageName(ShaderType type)
+		private static string StageName(ShaderStage type)
 		{
 			switch (type)
 			{
-				case ShaderType.FragmentShader: return "FRAGMENT";
-				case ShaderType.GeometryShader: return "GEOMETRY";
-				case ShaderType.ComputeShader: return "COMPUTE";
-				case ShaderType.TessControlShader: return "TESS_CONTROL";
-				case ShaderType.TessEvaluationShader: return "TESS_EVALUATION";
+				case ShaderStage.Fragment: return "FRAGMENT";
+				case ShaderStage.Geometry: return "GEOMETRY";
+				case ShaderStage.Compute: return "COMPUTE";
+				case ShaderStage.TessControl: return "TESS_CONTROL";
+				case ShaderStage.TessEvaluation: return "TESS_EVALUATION";
 				default: return "VERTEX";
 			}
 		}

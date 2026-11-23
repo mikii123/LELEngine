@@ -60,66 +60,38 @@ namespace LELEngine
 		/// </summary>
 		internal static event Action GIUsageChanged;
 
-		/// <summary>Texture unit reserved for the directional shadow map (material textures use 0..N).</summary>
-		public const int ShadowMapTextureUnit = 15;
-
-		/// <summary>Texture unit reserved for the shadow map's transmittance attachment (transparent casters).</summary>
-		public const int ShadowTransmittanceTextureUnit = 10;
-
-		/// <summary>Texture unit reserved for the voxel radiance volume.</summary>
-		public const int VoxelTextureUnit = 14;
-
-		/// <summary>Texture units reserved for the screen-space GI resolve buffers.</summary>
-		public const int IndirectDiffuseTextureUnit = 13;
-		public const int IndirectSpecularTextureUnit = 12;
+		/// <summary>
+		///     The device lets a program sample the GI's sky cubemap (Engine/Sky.glsl). Which of the engine's own textures
+		///     a lit program reads depends on how many textures the device lets a program sample
+		///     (<see cref="GraphicsCapabilities.MaxSampledTextures" />, 16 at least): every device has room, beside 8 of a
+		///     material, for the shadow map and its transmittance, the voxel radiance, the GI resolve's three buffers (or
+		///     the radiance cache) and the distance field's two; each further one needs a higher limit: the sky (17), the
+		///     radiance cache SH of opaque materials (18), the voxel radiance's directional mips (19 or 21), the grab pass
+		///     and the scene depth (23), the GI's media volume (27).
+		/// </summary>
+		public static bool SkySamplerAvailable => GraphicsCapabilities.MaxSampledTextures >= 17;
 
 		/// <summary>
-		///     Texture units of the radiance cache atlas and its per-probe SH for the GI volume path of transparent
-		///     materials (Engine/VolumeLighting.glsl). The same units as the resolve buffers: a draw reads one or the other.
+		///     ... and the radiance cache SH of opaque materials lit from Lumen's probes (the cameras of a stack other than
+		///     its lighting camera).
 		/// </summary>
-		public const int VolumeProbeTextureUnit = 13;
-		public const int VolumeProbeSHTextureUnit = 12;
-
-		/// <summary>Texture unit reserved for the global signed distance field.</summary>
-		public const int GlobalSdfTextureUnit = 11;
-
-		/// <summary>Texture unit reserved for the global distance field's object-id volume.</summary>
-		public const int GlobalSdfObjectIdTextureUnit = 8;
-
-		/// <summary>Texture unit reserved for the G-buffer normals of the GI resolve's upsampling.</summary>
-		public const int ResolveNormalTextureUnit = 9;
+		public static bool OpaqueProbeSamplerAvailable => GraphicsCapabilities.MaxSampledTextures >= 18;
 
 		/// <summary>
-		///     Texture unit of the skybox cubemap the GI samples for rays that leave the scene. Above the 16 units every
-		///     context has, so it never collides with a pass's own textures; bound only when the context has it.
+		///     ... and <paramref name="count" /> textures of the voxel radiance's directional mips
+		///     (<see cref="GlobalIlluminationSettings.VoxelVolume" />): one for the anisotropic views, three for the SH
+		///     gradients. Without them the voxel GI reads isotropic mips.
 		/// </summary>
-		public const int SkyboxTextureUnit = 16;
+		public static bool VoxelDirectionalSamplersAvailable(int count)
+		{
+			return GraphicsCapabilities.MaxSampledTextures >= 18 + count;
+		}
 
 		/// <summary>
-		///     Texture unit of the radiance cache SH (a 2D array) for opaque materials lit from Lumen's probes (the cameras
-		///     of a stack other than its lighting camera): not one of the resolve buffers' units, whose samplers are 2D (a
-		///     unit must not hold samplers of two types). The atlas, 2D, shares <see cref="VolumeProbeTextureUnit" /> with
-		///     the resolve's diffuse. Used only when the context has the unit.
+		///     ... and the four textures of the GI's media volume (<see cref="Media" />, Engine/GIMedia.glsl: the clouds'
+		///     light, the directional lights' part of it, and its luminance seen from the + and from the - sides).
 		/// </summary>
-		public const int OpaqueProbeSHTextureUnit = 17;
-
-		/// <summary>
-		///     First texture unit of the voxel radiance's directional mips (<see cref="GlobalIlluminationSettings.VoxelVolume" />):
-		///     one unit for the anisotropic views, this and the next two for the SH gradients. Used only when the context
-		///     has the units; otherwise the voxel GI reads isotropic mips.
-		/// </summary>
-		public const int VoxelDirectionalTextureUnit = 18;
-
-		/// <summary>
-		///     Texture units of the GI's media volume (<see cref="Media" />, Engine/GIMedia.glsl: the clouds' light, the
-		///     directional lights' part of it, and its luminance seen from the + and from the - sides): above the units of
-		///     the grab pass (21) and the scene depth (22), below the materials' further textures
-		///     (<see cref="Shaders.Material.ExtraTextureUnitStart" />). Used only when the context has the units.
-		/// </summary>
-		public const int MediaTextureUnit = 23;
-		public const int MediaSunTextureUnit = 24;
-		public const int MediaFacePlusTextureUnit = 25;
-		public const int MediaFaceMinusTextureUnit = 26;
+		public static bool MediaSamplersAvailable => GraphicsCapabilities.MaxSampledTextures >= 27;
 
 		/// <summary>
 		///     The view being drawn is its stack's lighting camera (<see cref="Camera.GetStackLightingCamera" />): the
@@ -175,7 +147,7 @@ namespace LELEngine
 		///     The scene has volumetric objects and the project asks for the accurate gather: the resolve starts its
 		///     GI_MEDIA variant ahead, so the frame a cloud's light first arrives in compiles nothing.
 		/// </summary>
-		public static bool MediaAlongConesExpected => GI.Enabled && GI.VolumesInGI == VolumeGIMode.Accurate && Volumetrics.VolumetricRuntime.Objects.Count > 0 && MediaFaceMinusTextureUnit < GLCapabilities.MaxTextureUnits;
+		public static bool MediaAlongConesExpected => GI.Enabled && GI.VolumesInGI == VolumeGIMode.Accurate && Volumetrics.VolumetricRuntime.Objects.Count > 0 && MediaSamplersAvailable;
 
 		#endregion
 
@@ -242,15 +214,15 @@ namespace LELEngine
 		public static void SetSkyUniforms(ShaderProgram program)
 		{
 			program.SetVector3("giSkyRadiance", GI.SkyRadiance);
-			bool hasUnit = SkyboxTextureUnit < GLCapabilities.MaxTextureUnits;
-			bool enabled = SkyEnvironment.Enabled && hasUnit;
+			bool available = SkySamplerAvailable;
+			bool enabled = SkyEnvironment.Enabled && available;
 			program.SetInt("giSkyboxEnabled", enabled ? 1 : 0);
-			if (!hasUnit)
+			if (!available)
 			{
 				return;
 			}
 
-			program.SetTexture("giSkybox", TextureTarget.TextureCubeMap, enabled ? SkyEnvironment.CubemapHandle : SkyEnvironment.BlackCubemapHandle, SkyboxTextureUnit);
+			program.SetTexture("giSkybox", enabled ? SkyEnvironment.CubemapTexture : SkyEnvironment.BlackCubemapTexture);
 			if (enabled)
 			{
 				program.SetVector4("giSkyboxTint", SkyEnvironment.TintExposure);
@@ -312,20 +284,13 @@ namespace LELEngine
 		/// </summary>
 		public static void SetGIUniforms(ShaderProgram program, bool receiveGI)
 		{
-			// The radiance cache SH is a 2D array: in an opaque material its sampler keeps a unit of its own even while
-			// unused, never one a 2D texture is bound to.
-			bool probeUnit = OpaqueProbeSHTextureUnit < GLCapabilities.MaxTextureUnits;
-			bool opaqueMaterial = program.GetUniformLocation("giResolveMode") >= 0;
-			if (probeUnit && opaqueMaterial)
-			{
-				program.SetInt("RadianceCacheSH", OpaqueProbeSHTextureUnit);
-			}
+			bool opaqueMaterial = program.HasUniform("giResolveMode");
 
 			// What this view can read this frame: its screen-space resolve (the lighting camera), the voxel volume, or
 			// the Lumen probes.
-			bool resolve = ScreenGIView && GI.ResolveActive && GI.ResolvedDiffuse != 0;
-			bool voxels = GIMethod == GIMode.VoxelConeTracing && GI.VoxelTexture != 0;
-			bool probes = !resolve && GIMethod == GIMode.Lumen && RadianceCache.Valid && probeUnit && opaqueMaterial;
+			bool resolve = ScreenGIView && GI.ResolveActive && GI.ResolvedDiffuse != null;
+			bool voxels = GIMethod == GIMode.VoxelConeTracing && GI.VoxelTexture != null;
+			bool probes = !resolve && GIMethod == GIMode.Lumen && RadianceCache.Valid && OpaqueProbeSamplerAvailable && opaqueMaterial;
 			bool enabled = receiveGI && GI.Enabled && (resolve || voxels || probes);
 			program.SetInt("giEnabled", enabled ? 1 : 0);
 			if (!enabled)
@@ -340,12 +305,12 @@ namespace LELEngine
 			program.SetFloat("giSpecularStrength", GI.SpecularStrength);
 			program.SetFloat("giOcclusionStrength", GI.OcclusionStrength);
 			program.SetFloat("giConeMaxDistance", GI.ConeMaxDistance);
-			SetVoxelRadianceUniforms(program, GI.VoxelVolume, VoxelTextureUnit, VoxelDirectionalTextureUnit);
+			SetVoxelRadianceUniforms(program, GI.VoxelVolume);
 
 			SetSkyUniforms(program);
 			// The clouds on the cones' way (the cones are traced with the voxel volume only).
 			SetMediaUniforms(program, voxels);
-			bool sdf = GI.DistanceFieldEnabled && GI.GlobalSdf != 0;
+			bool sdf = GI.DistanceFieldEnabled && GI.GlobalSdf != null;
 			program.SetInt("giTraceMode", TraceModeUniform(sdf));
 			program.SetFloat("giSdfDetailDistance", GI.SdfDetailDistance);
 			if (sdf)
@@ -358,14 +323,15 @@ namespace LELEngine
 			{
 				program.SetVector2("giResolveSize", new Vector2(GI.ResolveWidth, GI.ResolveHeight));
 				program.SetVector2("giScreenSize", new Vector2(GI.ScreenWidth, GI.ScreenHeight));
-				program.SetTexture("IndirectDiffuse", TextureTarget.Texture2D, GI.ResolvedDiffuse, IndirectDiffuseTextureUnit);
-				program.SetTexture("IndirectSpecular", TextureTarget.Texture2D, GI.ResolvedSpecular, IndirectSpecularTextureUnit);
-				program.SetInt("giResolveNormals", GI.ResolvedNormals != 0 ? 1 : 0);				program.SetTexture("GINormalRoughness", TextureTarget.Texture2D, GI.ResolvedNormals, ResolveNormalTextureUnit);
+				program.SetTexture("IndirectDiffuse", GI.ResolvedDiffuse);
+				program.SetTexture("IndirectSpecular", GI.ResolvedSpecular);
+				program.SetInt("giResolveNormals", GI.ResolvedNormals != null ? 1 : 0);
+				program.SetTexture("GINormalRoughness", GI.ResolvedNormals);
 			}
 			else if (probes)
 			{
-				SetRadianceCacheUniforms(program, VolumeProbeTextureUnit);
-				program.SetTexture("RadianceCacheSH", TextureTarget.Texture2DArray, RadianceCache.SH, OpaqueProbeSHTextureUnit);
+				SetRadianceCacheUniforms(program);
+				program.SetTexture("RadianceCacheSH", RadianceCache.SH);
 			}
 		}
 
@@ -377,7 +343,7 @@ namespace LELEngine
 		/// </summary>
 		public static void SetVolumeGIUniforms(ShaderProgram program, bool receiveGI)
 		{
-			bool voxels = GIMethod == GIMode.VoxelConeTracing && GI.VoxelTexture != 0;
+			bool voxels = GIMethod == GIMode.VoxelConeTracing && GI.VoxelTexture != null;
 			bool probes = GIMethod == GIMode.Lumen && RadianceCache.Valid;
 			bool enabled = receiveGI && GI.Enabled && (voxels || probes);
 			program.SetInt("giEnabled", enabled ? 1 : 0);
@@ -399,8 +365,8 @@ namespace LELEngine
 				program.SetFloat("voxelGridSize", GI.GridSize);
 				program.SetInt("voxelResolution", GI.Resolution);
 				program.SetFloat("giConeMaxDistance", GI.ConeMaxDistance);
-				SetVoxelRadianceUniforms(program, GI.VoxelVolume, VoxelTextureUnit, VoxelDirectionalTextureUnit);
-				bool sdf = GI.DistanceFieldEnabled && GI.GlobalSdf != 0;
+				SetVoxelRadianceUniforms(program, GI.VoxelVolume);
+				bool sdf = GI.DistanceFieldEnabled && GI.GlobalSdf != null;
 				program.SetInt("giTraceMode", TraceModeUniform(sdf));
 				program.SetFloat("giSdfDetailDistance", GI.SdfDetailDistance);
 				if (sdf)
@@ -410,62 +376,62 @@ namespace LELEngine
 			}
 			else
 			{
-				SetRadianceCacheUniforms(program, VolumeProbeTextureUnit);
-				program.SetTexture("RadianceCacheSH", TextureTarget.Texture2DArray, RadianceCache.SH, VolumeProbeSHTextureUnit);
+				SetRadianceCacheUniforms(program);
+				program.SetTexture("RadianceCacheSH", RadianceCache.SH);
 			}
 		}
 
 		/// <summary>
-		///     Binds a voxel radiance volume for Engine/VoxelRadiance.glsl: the voxels (and their isotropic mips) on
-		///     <paramref name="unit" />, the directional mips on <paramref name="directionalUnit" /> and up (one unit for
-		///     the anisotropic views, three for the SH gradients). Samplers of data the volume does not have share the
-		///     voxels' unit (same sampler type) and go unused. Mode falls back to isotropic when the units are missing.
+		///     Gives a program a voxel radiance volume for Engine/VoxelRadiance.glsl: the voxels (and their isotropic mips)
+		///     and the directional mips the volume has (the anisotropic views, or the three SH gradients). Samplers of data
+		///     the volume does not have read the voxels (same sampler type) and go unused. Mode falls back to isotropic
+		///     when the device lets a program sample too few textures.
 		/// </summary>
-		public static void SetVoxelRadianceUniforms(ShaderProgram program, VoxelVolumeTextures volume, int unit, int directionalUnit)
+		public static void SetVoxelRadianceUniforms(ShaderProgram program, VoxelVolumeTextures volume)
 		{
-			VoxelMipMode mode = EffectiveVoxelMips(volume, directionalUnit);
-			program.SetTexture("VoxelRadiance", TextureTarget.Texture3D, volume.Radiance, unit);
+			VoxelMipMode mode = EffectiveVoxelMips(volume);
+			program.SetTexture("VoxelRadiance", volume.Radiance);
 			program.SetInt("giVoxelMips", (int)mode);
 			if (mode == VoxelMipMode.Anisotropic)
 			{
 				program.SetInt("giVoxelAnisoLevels", volume.AnisoLevels);
-				program.SetTexture("VoxelRadianceAniso", TextureTarget.Texture3D, volume.Aniso, directionalUnit);
+				program.SetTexture("VoxelRadianceAniso", volume.Aniso);
 			}
 			else
 			{
-				program.SetInt("VoxelRadianceAniso", unit);
+				program.SetTexture("VoxelRadianceAniso", volume.Radiance);
 			}
 
 			if (mode == VoxelMipMode.SphericalHarmonics)
 			{
-				program.SetTexture("VoxelRadianceSHX", TextureTarget.Texture3D, volume.SHX, directionalUnit);
-				program.SetTexture("VoxelRadianceSHY", TextureTarget.Texture3D, volume.SHY, directionalUnit + 1);
-				program.SetTexture("VoxelRadianceSHZ", TextureTarget.Texture3D, volume.SHZ, directionalUnit + 2);
+				program.SetTexture("VoxelRadianceSHX", volume.SHX);
+				program.SetTexture("VoxelRadianceSHY", volume.SHY);
+				program.SetTexture("VoxelRadianceSHZ", volume.SHZ);
 			}
 			else
 			{
-				program.SetInt("VoxelRadianceSHX", unit);
-				program.SetInt("VoxelRadianceSHY", unit);
-				program.SetInt("VoxelRadianceSHZ", unit);
+				program.SetTexture("VoxelRadianceSHX", volume.Radiance);
+				program.SetTexture("VoxelRadianceSHY", volume.Radiance);
+				program.SetTexture("VoxelRadianceSHZ", volume.Radiance);
 			}
 		}
 
-		/// <summary>The mip mode a volume is read with when its directional data starts at <paramref name="directionalUnit" />.</summary>
-		public static VoxelMipMode EffectiveVoxelMips(VoxelVolumeTextures volume, int directionalUnit)
+		/// <summary>The mip mode a volume is read with on this device (<see cref="VoxelDirectionalSamplersAvailable" />).</summary>
+		public static VoxelMipMode EffectiveVoxelMips(VoxelVolumeTextures volume)
 		{
 			switch (volume.Mode)
 			{
 				case VoxelMipMode.Anisotropic:
-					return volume.Aniso != 0 && directionalUnit < GLCapabilities.MaxTextureUnits ? VoxelMipMode.Anisotropic : VoxelMipMode.Isotropic;
+					return volume.Aniso != null && VoxelDirectionalSamplersAvailable(1) ? VoxelMipMode.Anisotropic : VoxelMipMode.Isotropic;
 				case VoxelMipMode.SphericalHarmonics:
-					return volume.SHX != 0 && directionalUnit + 2 < GLCapabilities.MaxTextureUnits ? VoxelMipMode.SphericalHarmonics : VoxelMipMode.Isotropic;
+					return volume.SHX != null && VoxelDirectionalSamplersAvailable(3) ? VoxelMipMode.SphericalHarmonics : VoxelMipMode.Isotropic;
 				default:
 					return VoxelMipMode.Isotropic;
 			}
 		}
 
 		/// <summary>Binds the published radiance cache for Engine/RadianceCache.glsl (an unavailable cache sets rcNearDistance 0).</summary>
-		public static void SetRadianceCacheUniforms(ShaderProgram program, int textureUnit)
+		public static void SetRadianceCacheUniforms(ShaderProgram program)
 		{
 			RadianceCacheBinding cache = RadianceCache;
 			if (!cache.Valid)
@@ -474,7 +440,7 @@ namespace LELEngine
 				return;
 			}
 
-			program.SetTexture("RadianceCacheAtlas", TextureTarget.Texture2D, cache.Atlas, textureUnit);
+			program.SetTexture("RadianceCacheAtlas", cache.Atlas);
 			program.SetVector3("rcGridMin", cache.GridMin);
 			program.SetFloat("rcProbeSpacing", cache.ProbeSpacing);
 			program.SetInt("rcProbesPerAxis", cache.ProbesPerAxis);
@@ -488,12 +454,12 @@ namespace LELEngine
 
 		/// <summary>
 		///     The GI's media volume for Engine/GIMedia.glsl (every program that traces the GI's cones or rays includes
-		///     it): bound when clouds contribute this frame and <paramref name="enabled" />, else switched off. The sampler
-		///     keeps its own unit either way (a 3D sampler left on unit 0 would share it with a 2D one).
+		///     it): given when clouds contribute this frame and <paramref name="enabled" />, else switched off (the
+		///     samplers then read nothing).
 		/// </summary>
 		public static void SetMediaUniforms(ShaderProgram program, bool enabled = true)
 		{
-			if (MediaFaceMinusTextureUnit >= GLCapabilities.MaxTextureUnits)
+			if (!MediaSamplersAvailable)
 			{
 				program.SetInt("giMediaActive", 0);
 				return;
@@ -502,10 +468,10 @@ namespace LELEngine
 			MediaBinding media = Media;
 			bool active = enabled && media.Active && GI.Enabled;
 			program.SetInt("giMediaActive", active ? 1 : 0);
-			program.SetTexture("giMedia", TextureTarget.Texture3D, active ? media.Texture : 0, MediaTextureUnit);
-			program.SetTexture("giMediaSun", TextureTarget.Texture3D, active ? media.SunTexture : 0, MediaSunTextureUnit);
-			program.SetTexture("giMediaFacePlus", TextureTarget.Texture3D, active ? media.FacePlusTexture : 0, MediaFacePlusTextureUnit);
-			program.SetTexture("giMediaFaceMinus", TextureTarget.Texture3D, active ? media.FaceMinusTexture : 0, MediaFaceMinusTextureUnit);
+			program.SetTexture("giMedia", active ? media.Texture : null);
+			program.SetTexture("giMediaSun", active ? media.SunTexture : null);
+			program.SetTexture("giMediaFacePlus", active ? media.FacePlusTexture : null);
+			program.SetTexture("giMediaFaceMinus", active ? media.FaceMinusTexture : null);
 			if (!active)
 			{
 				return;
@@ -533,15 +499,11 @@ namespace LELEngine
 			program.SetInt("shadowsEnabled", enabled ? 1 : 0);
 			if (!enabled)
 			{
-				// The samplers keep their own units while there are no maps (no light shines or casts shadows): left on
-				// unit 0 they would share it with a sampler of another type.
-				program.SetInt("ShadowMap", ShadowMapTextureUnit);
-				program.SetInt("ShadowTransmittance", ShadowTransmittanceTextureUnit);
 				return;
 			}
 
-			program.SetTexture("ShadowMap", TextureTarget.Texture2D, ShadowMap.Handle, ShadowMapTextureUnit);
-			TransparentShadows.SetUniforms(program, ShadowTransmittance, ShadowTransmittanceTextureUnit);
+			program.SetTexture("ShadowMap", ShadowMap);
+			TransparentShadows.SetUniforms(program, ShadowTransmittance);
 		}
 
 		/// <summary>
@@ -595,9 +557,9 @@ namespace LELEngine
 			program.SetInt3("sdfScroll", GI.SdfScroll.X, GI.SdfScroll.Y, GI.SdfScroll.Z);
 			program.SetInt("sdfMaxSteps", GI.SdfMaxSteps);
 			program.SetFloat("sdfMaxDistance", GI.SdfBandVoxels * GI.SdfVoxelSize);
-			program.SetTexture("GlobalSdf", TextureTarget.Texture3D, GI.GlobalSdf, GlobalSdfTextureUnit);
+			program.SetTexture("GlobalSdf", GI.GlobalSdf);
 			// Without the id volume the shaders fall back to testing every object (A/B switch, measurement).
-			program.SetTexture("GlobalSdfObjectIds", TextureTarget.Texture3D, GI.SdfObjectIdLookup ? GI.GlobalSdfObjectIds : 0, GlobalSdfObjectIdTextureUnit);
+			program.SetTexture("GlobalSdfObjectIds", GI.SdfObjectIdLookup ? GI.GlobalSdfObjectIds : null);
 		}
 
 		#endregion
@@ -685,16 +647,16 @@ namespace LELEngine
 			}
 		}
 
-		/// <summary>GL handles and layout of a frame's radiance cache (see <see cref="RadianceCache" />).</summary>
+		/// <summary>Textures and layout of a frame's radiance cache (see <see cref="RadianceCache" />).</summary>
 		public struct RadianceCacheBinding
 		{
 			public bool Valid;
 
 			/// <summary>Octahedral radiance maps of the probes (rgb radiance, a = hit distance + 1).</summary>
-			public int Atlas;
+			public GpuTexture Atlas;
 
 			/// <summary>Second-order spherical harmonics of every probe, 7 RGBA layers (Engine/RadianceCacheSH.shader).</summary>
-			public int SH;
+			public GpuTexture SH;
 
 			public Vector3 GridMin;
 			public float ProbeSpacing;
@@ -719,15 +681,15 @@ namespace LELEngine
 		public struct MediaBinding
 		{
 			public bool Active;
-			public int Texture;
-			public int SunTexture;
+			public GpuTexture Texture;
+			public GpuTexture SunTexture;
 
 			/// <summary>
 			///     The light's luminance as the clouds look from the + side of x, y, z and from the - side (the levels above
 			///     the finest): a thick cloud lit from one side is bright from there, dark from behind.
 			/// </summary>
-			public int FacePlusTexture;
-			public int FaceMinusTexture;
+			public GpuTexture FacePlusTexture;
+			public GpuTexture FaceMinusTexture;
 
 			/// <summary>World position of the texture's first corner.</summary>
 			public Vector3 Min;
@@ -1410,8 +1372,8 @@ namespace LELEngine
 
 		// ---- Runtime data written by VoxelGIPass / GIResolvePass ----
 
-		/// <summary>GL handle of the 3D radiance texture, 0 when unavailable.</summary>
-		[NonSerialized] public int VoxelTexture;
+		/// <summary>The 3D radiance texture, null when unavailable.</summary>
+		[NonSerialized] public GpuTexture VoxelTexture;
 
 		/// <summary>
 		///     The textures of the voxel radiance volume of this frame (<see cref="VoxelTexture" /> and the directional
@@ -1422,21 +1384,21 @@ namespace LELEngine
 		/// <summary>World-space minimum corner of the volume for the current frame.</summary>
 		[NonSerialized] public Vector3 GridMin;
 
-		/// <summary>GL handle of the global distance field texture, 0 when unavailable.</summary>
-		[NonSerialized] public int GlobalSdf;
+		/// <summary>The global distance field texture, null when unavailable.</summary>
+		[NonSerialized] public GpuTexture GlobalSdf;
 
-		/// <summary>GL handle of the matching object-id volume (R16UI, index + 1 of the nearest object), 0 when unavailable.</summary>
-		[NonSerialized] public int GlobalSdfObjectIds;
+		/// <summary>The matching object-id volume (R16UI, index + 1 of the nearest object), null when unavailable.</summary>
+		[NonSerialized] public GpuTexture GlobalSdfObjectIds;
 
 		/// <summary>Where grid voxel 0 is stored in the distance field textures (they are toroidal, see Engine/DistanceField.glsl).</summary>
 		[NonSerialized] public Vector3i SdfScroll;
 
 		[NonSerialized] public bool ResolveActive;
-		[NonSerialized] public int ResolvedDiffuse;
-		[NonSerialized] public int ResolvedSpecular;
+		[NonSerialized] public GpuTexture ResolvedDiffuse;
+		[NonSerialized] public GpuTexture ResolvedSpecular;
 
 		/// <summary>Full-resolution G-buffer normals the resolve was computed with (normal-aware upsampling).</summary>
-		[NonSerialized] public int ResolvedNormals;
+		[NonSerialized] public GpuTexture ResolvedNormals;
 		[NonSerialized] public int ResolveWidth;
 		[NonSerialized] public int ResolveHeight;
 		[NonSerialized] public int ScreenWidth;
@@ -1522,10 +1484,10 @@ namespace LELEngine
 		public VoxelMipMode Mode;
 
 		/// <summary>Radiance premultiplied by occupancy (rgb) and occupancy (a), with isotropic mips.</summary>
-		public int Radiance;
+		public GpuTexture Radiance;
 
 		/// <summary><see cref="VoxelMipMode.Anisotropic" />: six views side by side along x, level 0 = the volume's mip 1.</summary>
-		public int Aniso;
+		public GpuTexture Aniso;
 
 		public int AnisoLevels;
 
@@ -1533,10 +1495,10 @@ namespace LELEngine
 		///     <see cref="VoxelMipMode.SphericalHarmonics" />: d.x, d.y, d.z coefficients of radiance (rgb) and coverage (a),
 		///     level 0 = the volume's mip 1.
 		/// </summary>
-		public int SHX;
+		public GpuTexture SHX;
 
-		public int SHY;
-		public int SHZ;
+		public GpuTexture SHY;
+		public GpuTexture SHZ;
 	}
 
 	public enum GIMode

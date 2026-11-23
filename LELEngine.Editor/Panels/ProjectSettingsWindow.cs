@@ -618,12 +618,12 @@ namespace LELEngine.Editor
 			Color4 color = splash.Enabled ? splash.BackgroundColor : Color4.Black;
 			draw.AddRectFilled(start, start + extent, ImGui.GetColorU32(new NVector4(Math.Clamp(color.R, 0f, 1f), Math.Clamp(color.G, 0f, 1f), Math.Clamp(color.B, 0f, 1f), 1f)));
 			Texture2D logo = splash.Enabled && logoPath != null ? TextureAssets.LoadForUI(logoPath, logoPath) : null;
-			if (logo != null && logo.Handle != 0 && logo.width > 0 && logo.height > 0)
+			if (logo != null && logo.Gpu != null && logo.width > 0 && logo.height > 0)
 			{
 				float scale = Math.Min(width * splash.LogoSize / logo.width, height * splash.LogoSize / logo.height);
 				var size = new NVector2(logo.width * scale, logo.height * scale);
 				NVector2 min = start + (extent - size) * 0.5f;
-				draw.AddImage(EditorGui.Texture(logo.Handle), min, min + size);
+				draw.AddImage(EditorGui.Texture(logo.Gpu), min, min + size);
 			}
 
 			draw.AddRect(start, start + extent, ImGui.GetColorU32(ImGuiCol.Border));
@@ -910,6 +910,65 @@ namespace LELEngine.Editor
 			return changed;
 		}
 
+		/// <summary>
+		///     The graphics API of the project's builds and of the editor running it. The device is made once per process,
+		///     so a change shows the API the editor runs on and offers to start it again (nothing unsaved may be left).
+		/// </summary>
+		private bool DrawGraphicsApi(GraphicsSettings content)
+		{
+			bool changed = false;
+			ImGui.SeparatorText("Rendering");
+			FieldDrawer.Label("Graphics API", null, context);
+			ImGui.SetNextItemWidth(-1f);
+			if (EditorGui.BeginCombo("##graphicsapi", content.GraphicsApi.ToString()))
+			{
+				foreach (Graphics.GraphicsApi api in Enum.GetValues<Graphics.GraphicsApi>())
+				{
+					bool selected = api == content.GraphicsApi;
+					if (EditorGui.Selectable(api.ToString(), selected) && !selected)
+					{
+						context.BeginEdit();
+						content.GraphicsApi = api;
+						context.EndEdit();
+						changed = true;
+					}
+				}
+
+				EditorGui.EndCombo();
+			}
+
+			Tooltip("The graphics API built games draw with, and the editor runs this project on (so the editor shows what the game shows).\n" +
+				"Vulkan: the engine's native path. OpenGL: the same rendering through OpenGL 4.3 .. 4.6.\n" +
+				"A machine without a Vulkan driver or GPU runs the game on OpenGL instead (Player.log says so).\n" +
+				"The player's command line overrides it: graphics=opengl or graphics=vulkan; the editor's too.");
+
+			Graphics.GraphicsDevice device = Graphics.GraphicsDevice.Current;
+			if (device != null && device.Api != content.GraphicsApi)
+			{
+				if (Graphics.GraphicsDevice.FellBackFrom == content.GraphicsApi)
+				{
+					ImGui.TextDisabled($"{content.GraphicsApi} is not available on this machine: the editor runs on {device.Api}.");
+				}
+				else
+				{
+					ImGui.TextDisabled($"The editor runs on {device.Api}: {content.GraphicsApi} takes effect when it starts again.");
+					if (EditorGui.Button("Restart Editor"))
+					{
+						try
+						{
+							editor.RestartEditor();
+						}
+						catch (InvalidOperationException e)
+						{
+							Debug.LogWarning("[Editor] Restart Editor: " + e.Message);
+						}
+					}
+				}
+			}
+
+			return changed;
+		}
+
 		/// <summary>"1.78x (2560 x 1440 at 1080p)", "Off".</summary>
 		private static string FactorLabel(float factor)
 		{
@@ -925,7 +984,8 @@ namespace LELEngine.Editor
 
 		private bool DrawGraphics(GraphicsSettings content)
 		{
-			bool changed = false;
+			bool changed = DrawGraphicsApi(content);
+			ImGui.Spacing();
 			ImGui.SeparatorText("Display");
 			bool vsync = content.VSync;
 			FieldDrawer.Label("VSync", null, context);

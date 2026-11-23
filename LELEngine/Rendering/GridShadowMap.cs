@@ -124,8 +124,6 @@ namespace LELEngine.Rendering
 				TransparentShadows.EnsureTransmittance(target);
 			}
 
-			Passes.ShadowPass.PrepareOwnCasters(casters);
-
 			CommandList commands = Gfx.Commands;
 			ref RenderState state = ref commands.State;
 			state.SetDepth(true, true);
@@ -156,9 +154,6 @@ namespace LELEngine.Rendering
 				{
 					if (renderer.CastShadows && culling.IsVisible(renderer))
 					{
-						// A material's texture used for the first time is uploaded with its mip levels made, which
-						// ends the pass.
-						ContinueTile(i);
 						own |= renderer.RenderOwnShadowCasters(views[i], projections[i]);
 					}
 				}
@@ -195,28 +190,6 @@ namespace LELEngine.Rendering
 			program.SetInt("shadowsEnabled", enabled ? 1 : 0);
 			program.SetTexture("ShadowMap", enabled ? target.DepthAttachment : null);
 			TransparentShadows.SetUniforms(program, enabled ? Transmittance : null);
-		}
-
-		/// <summary>
-		///     Binds these maps for Engine/Shadows.glsl: their layout to the shadow block's binding (the camera's is bound
-		///     again by the next <see cref="Lighting.SetShadowUniforms" />), the depth on <paramref name="depthUnit" /> and
-		///     the transmittance on <paramref name="transmittanceUnit" /> (units the program does not use otherwise).
-		/// </summary>
-		// LEGACY(gl): used by SurfaceCachePass.cs, VoxelGIPass.cs
-		public void SetUniforms(ShaderProgram program, int depthUnit, int transmittanceUnit)
-		{
-			uniforms.Bind();
-			bool enabled = LightCount > 0 && target != null && Lighting.Shadows.Enabled;
-			program.SetInt("shadowsEnabled", enabled ? 1 : 0);
-			// The sampler keeps a unit of its own also while no light has a map: left on unit 0 it shares it with a
-			// sampler of another type, and the dispatch fails (no light was injected at all with the sun dark).
-			program.SetInt("ShadowMap", depthUnit);
-			if (enabled)
-			{
-				program.SetTexture("ShadowMap", TextureTarget.Texture2D, target.DepthAttachment.Handle, depthUnit);
-			}
-
-			TransparentShadows.SetUniforms(program, enabled ? Transmittance : null, transmittanceUnit);
 		}
 
 		public void Delete()

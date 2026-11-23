@@ -41,7 +41,7 @@ namespace LELEngine.Rendering.Passes
 		{
 			LumenScene scene = context.Renderer.LumenScene;
 			GlobalIlluminationSettings gi = Lighting.GI;
-			if (scene.SurfaceCache == null || gi.GlobalSdf == 0 || !context.DepthPrepassDone)
+			if (scene.SurfaceCache == null || gi.GlobalSdf == null || !context.DepthPrepassDone)
 			{
 				return;
 			}
