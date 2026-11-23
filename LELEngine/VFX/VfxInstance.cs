@@ -34,18 +34,18 @@ namespace LELEngine.VFX
 		/// <summary>First attribute plane of the position (the generic sort kernel reads it).</summary>
 		public int PositionPlane = -1;
 
-		public int Attributes;
-		public int AliveA;
-		public int AliveB;
-		public int Dead;
-		public int Curves;
-		public int Strip;
-		public int AliveMask;
+		public GpuBuffer Attributes;
+		public GpuBuffer AliveA;
+		public GpuBuffer AliveB;
+		public GpuBuffer Dead;
+		public GpuBuffer Curves;
+		public GpuBuffer Strip;
+		public GpuBuffer AliveMask;
 
 		/// <summary>This frame the update walks every slot (most are alive) instead of the alive list.</summary>
 		public bool Dense;
-		public readonly int[] EventOut = new int[VfxCompiler.MaxEventsPerSystem];
-		public int[] SortKeys;
+		public readonly GpuBuffer[] EventOut = new GpuBuffer[VfxCompiler.MaxEventsPerSystem];
+		public GpuBuffer[] SortKeys;
 		public int SortLength;
 
 		/// <summary>Low bits of a sort key that hold the particle index (2 ^ bits is above the capacity).</summary>
@@ -82,9 +82,9 @@ namespace LELEngine.VFX
 		public int CounterBase => CounterBlock * VfxCodegen.CounterBlock;
 
 		/// <summary>The list the last update wrote: this frame's draw list and the next update's input.</summary>
-		public int Current => CurrentIsA ? AliveA : AliveB;
+		public GpuBuffer Current => CurrentIsA ? AliveA : AliveB;
 
-		public int Other => CurrentIsA ? AliveB : AliveA;
+		public GpuBuffer Other => CurrentIsA ? AliveB : AliveA;
 
 		/// <summary>
 		///     At least the particles alive on the GPU right now: the last readback's count plus everything spawned
@@ -775,7 +775,7 @@ namespace LELEngine.VFX
 				VfxRuntime.BindStorage(2, state.Other);
 				for (int e = 0; e < VfxCompiler.MaxEventsPerSystem; e++)
 				{
-					if (state.EventOut[e] != 0)
+					if (state.EventOut[e] != null)
 					{
 						VfxRuntime.BindStorage(7 + e, state.EventOut[e]);
 					}
@@ -783,8 +783,8 @@ namespace LELEngine.VFX
 			}
 			else if (state.Parent != null && description.ParentEvent >= 0 && description.ParentEvent < VfxCompiler.MaxEventsPerSystem)
 			{
-				int eventBuffer = state.Parent.EventOut[description.ParentEvent];
-				if (eventBuffer != 0)
+				GpuBuffer eventBuffer = state.Parent.EventOut[description.ParentEvent];
+				if (eventBuffer != null)
 				{
 					VfxRuntime.BindStorage(6, eventBuffer);
 				}
@@ -792,10 +792,10 @@ namespace LELEngine.VFX
 
 			if (description.Resources.Meshes.Count > 0)
 			{
-				VfxRuntime.BindStorage(9, GeometryPool.VertexBufferHandle);
+				VfxRuntime.BindStorage(9, GeometryPool.VertexBuffer);
 			}
 
-			if (state.Strip != 0)
+			if (state.Strip != null)
 			{
 				VfxRuntime.BindStorage(10, state.Strip);
 			}
@@ -825,7 +825,7 @@ namespace LELEngine.VFX
 		internal bool PrepareSort(VfxDrawEntry entry)
 		{
 			VfxSystemState state = entry.State;
-			if (state == null || state.SortKeys == null || entry.Output >= state.SortKeys.Length || state.SortKeys[entry.Output] == 0 || !state.Description.Outputs[entry.Output].Sorted)
+			if (state == null || state.SortKeys == null || entry.Output >= state.SortKeys.Length || state.SortKeys[entry.Output] == null || !state.Description.Outputs[entry.Output].Sorted)
 			{
 				entry.SortCount = 0;
 				return false;
@@ -1059,7 +1059,7 @@ namespace LELEngine.VFX
 				state.SortLength *= 2;
 			}
 
-			state.SortKeys = new int[description.Outputs.Count];
+			state.SortKeys = new GpuBuffer[description.Outputs.Count];
 			for (int o = 0; o < description.Outputs.Count; o++)
 			{
 				if (description.Outputs[o].Sorted)
@@ -1081,13 +1081,9 @@ namespace LELEngine.VFX
 			ResetBuffers(state, frame);
 		}
 
-		private static int CreateBuffer(int bytes)
+		private static GpuBuffer CreateBuffer(int bytes)
 		{
-			int buffer = GL.GenBuffer();
-			GL.BindBuffer(BufferTarget.ShaderStorageBuffer, buffer);
-			GL.BufferData(BufferTarget.ShaderStorageBuffer, Math.Max(16, bytes), IntPtr.Zero, BufferUsageHint.DynamicCopy);
-			GL.BindBuffer(BufferTarget.ShaderStorageBuffer, 0);
-			return buffer;
+			return Gfx.Device.CreateBuffer(new BufferDescriptor(BufferUsage.Storage, Math.Max(16, bytes)));
 		}
 
 		/// <summary>Empties a system: every slot on the dead stack (slot 0 on top), the counters at zero, the draw arguments set up.</summary>
@@ -1101,12 +1097,9 @@ namespace LELEngine.VFX
 				dead[i] = (uint)(capacity - 1 - i);
 			}
 
-			GL.BindBuffer(BufferTarget.ShaderStorageBuffer, state.Dead);
-			GL.BufferSubData(BufferTarget.ShaderStorageBuffer, IntPtr.Zero, capacity * sizeof(uint), dead);
+			state.Dead.SetSubData(0, dead);
 			Array.Clear(dead, 0, dead.Length);
-			GL.BindBuffer(BufferTarget.ShaderStorageBuffer, state.AliveMask);
-			GL.BufferSubData(BufferTarget.ShaderStorageBuffer, IntPtr.Zero, capacity * sizeof(uint), dead);
-			GL.BindBuffer(BufferTarget.ShaderStorageBuffer, 0);
+			state.AliveMask.SetSubData(0, dead);
 
 			uint[] block = counterInit;
 			Array.Clear(block, 0, block.Length);
@@ -1144,9 +1137,7 @@ namespace LELEngine.VFX
 				}
 			}
 
-			GL.BindBuffer(BufferTarget.ShaderStorageBuffer, VfxRuntime.CounterBuffer);
-			GL.BufferSubData(BufferTarget.ShaderStorageBuffer, (IntPtr)(state.CounterBase * sizeof(uint)), block.Length * sizeof(uint), block);
-			GL.BindBuffer(BufferTarget.ShaderStorageBuffer, 0);
+			VfxRuntime.CounterBuffer.SetSubData((long)state.CounterBase * sizeof(uint), block);
 
 			state.SpawnedTotal = 0;
 			state.CurrentIsA = true;
@@ -1178,15 +1169,11 @@ namespace LELEngine.VFX
 				state.MeshRanges[o * 3] = indexCount;
 				state.MeshRanges[o * 3 + 1] = firstIndex;
 				state.MeshRanges[o * 3 + 2] = baseVertex;
-				uint[] fields = { (uint)indexCount };
-				int b = state.CounterBase + VfxCodegen.CounterDraw + o * VfxCodegen.CounterDrawStride;
-				GL.BindBuffer(BufferTarget.ShaderStorageBuffer, VfxRuntime.CounterBuffer);
-				GL.BufferSubData(BufferTarget.ShaderStorageBuffer, (IntPtr)(b * sizeof(uint)), sizeof(uint), fields);
-				fields[0] = (uint)firstIndex;
-				GL.BufferSubData(BufferTarget.ShaderStorageBuffer, (IntPtr)((b + 2) * sizeof(uint)), sizeof(uint), fields);
-				fields[0] = (uint)baseVertex;
-				GL.BufferSubData(BufferTarget.ShaderStorageBuffer, (IntPtr)((b + 3) * sizeof(uint)), sizeof(uint), fields);
-				GL.BindBuffer(BufferTarget.ShaderStorageBuffer, 0);
+				long b = state.CounterBase + VfxCodegen.CounterDraw + o * VfxCodegen.CounterDrawStride;
+				GpuBuffer counters = VfxRuntime.CounterBuffer;
+				counters.SetSubData(b * sizeof(uint), (uint)indexCount);
+				counters.SetSubData((b + 2) * sizeof(uint), (uint)firstIndex);
+				counters.SetSubData((b + 3) * sizeof(uint), (uint)baseVertex);
 			}
 		}
 
@@ -1228,13 +1215,10 @@ namespace LELEngine.VFX
 			AliveCount = 0;
 		}
 
-		private static void DeleteBuffer(ref int buffer)
+		private static void DeleteBuffer(ref GpuBuffer buffer)
 		{
-			if (buffer != 0)
-			{
-				GL.DeleteBuffer(buffer);
-				buffer = 0;
-			}
+			buffer?.Dispose();
+			buffer = null;
 		}
 
 		private Mesh ResolveMesh(VfxExpression expression)
@@ -1249,47 +1233,37 @@ namespace LELEngine.VFX
 		}
 
 		/// <summary>
-		///     Textures and meshes of the system's resource table on a program: the textures on their units (skipped
-		///     when bound already), the samplers pointed at the units once per program.
+		///     Textures and meshes of the system's resource table on a program: each sampler gets its texture (the
+		///     fallback of its kind when the slot has none), each mesh slot its range of the geometry pool.
 		/// </summary>
 		private void BindResources(ShaderProgram program, VfxSystemState state)
 		{
 			VfxResourceTable resources = state.Description.Resources;
-			VfxRuntime.ProgramState programState = VfxRuntime.StateOf(program);
-			bool setSamplers = !programState.SamplersSet;
-			programState.SamplersSet = true;
 			foreach (VfxResourceTable.TextureSlot slot in resources.Textures)
 			{
 				VfxValue value = ResolveResource(slot.Expression);
 				Texture texture = slot.Volume ? (Texture)value?.Texture3D : value?.Texture;
-				TextureTarget target;
-				int handle;
-				if (texture != null && texture.Handle != 0)
+				GpuTexture gpu = texture?.Gpu;
+				if (gpu == null)
 				{
-					target = texture.Target;
-					handle = texture.Handle;
-				}
-				else if (slot.Volume)
-				{
-					target = TextureTarget.Texture3D;
-					handle = VfxDefaults.WhiteVolume.Handle;
-				}
-				else
-				{
-					target = TextureTarget.Texture2D;
-					handle = slot.StripeDefault ? VfxDefaults.SoftStripe.Handle : slot.SoftDefault ? VfxDefaults.SoftDisc.Handle : Texture2D.whiteTexture.Handle;
+					if (slot.Volume)
+					{
+						texture = VfxDefaults.WhiteVolume;
+					}
+					else
+					{
+						texture = slot.StripeDefault ? VfxDefaults.SoftStripe : slot.SoftDefault ? VfxDefaults.SoftDisc : Texture2D.whiteTexture;
+					}
+
+					gpu = texture.Gpu;
 				}
 
-				VfxRuntime.BindTexture(slot.Index, target, handle);
-				if (setSamplers)
-				{
-					program.SetInt(slot.Uniform, slot.Index);
-				}
+				program.SetTexture(slot.Uniform, gpu);
 			}
 
 			foreach (VfxResourceTable.MeshSlot slot in resources.Meshes)
 			{
-				int location = program.GetUniformLocation(slot.InfoUniform);
+				int location = program.GetSlot(slot.InfoUniform);
 				if (location < 0)
 				{
 					continue;
@@ -1301,7 +1275,7 @@ namespace LELEngine.VFX
 				int firstIndex;
 				int indexCount;
 				GeometryPool.GetRange(mesh, out baseVertex, out vertexCount, out firstIndex, out indexCount);
-				GL.Uniform4(location, (uint)baseVertex, (uint)vertexCount, (uint)firstIndex, (uint)indexCount);
+				program.Gpu.SetUInt4(location, (uint)baseVertex, (uint)vertexCount, (uint)firstIndex, (uint)indexCount);
 			}
 		}
 
@@ -1461,9 +1435,7 @@ namespace LELEngine.VFX
 
 			state.CurvesVersion = PropertyVersion;
 			float[] data = resources.Bake(ResolveResource);
-			GL.BindBuffer(BufferTarget.ShaderStorageBuffer, state.Curves);
-			GL.BufferData(BufferTarget.ShaderStorageBuffer, data.Length * sizeof(float), data, BufferUsageHint.DynamicDraw);
-			GL.BindBuffer(BufferTarget.ShaderStorageBuffer, 0);
+			state.Curves.SetData(data);
 		}
 
 		// ---------------------------------------------------------------- bounds
@@ -1531,13 +1503,13 @@ namespace LELEngine.VFX
 			VfxRuntime.BindParameters(state);
 			VfxRuntime.BindStorage(0, state.Attributes);
 			VfxRuntime.BindStorage(5, state.Curves);
-			if (state.Strip != 0)
+			if (state.Strip != null)
 			{
 				VfxRuntime.BindStorage(10, state.Strip);
 			}
 
 			uint mask = 0xFFFFFFFFu;
-			if (output.Sorted && !shadowPass && state.SortKeys != null && output.Index < state.SortKeys.Length && state.SortKeys[output.Index] != 0 && state.PositionPlane >= 0)
+			if (output.Sorted && !shadowPass && state.SortKeys != null && output.Index < state.SortKeys.Length && state.SortKeys[output.Index] != null && state.PositionPlane >= 0)
 			{
 				VfxRuntime.BindStorage(1, state.SortKeys[output.Index]);
 				mask = (1u << state.SortIndexBits) - 1u;
@@ -1582,7 +1554,8 @@ namespace LELEngine.VFX
 				}
 				else if (depth != null && depth.Valid && depth.Depth != null)
 				{
-					VfxRuntime.BindTexture(VfxRuntime.DepthTextureUnit, TextureTarget.Texture2D, depth.Depth.Handle);
+					// The capture's texture is another one after the view changed size.
+					program.SetTexture("vfxSceneDepth", depth.Depth);
 				}
 			}
 
@@ -1603,36 +1576,34 @@ namespace LELEngine.VFX
 				VfxRuntime.SetDrawState(blend, output.ZWrite, output.CullBack);
 			}
 
-			// The draw arguments the update kernel wrote (the frame's simulation already ended with a barrier).
+			// The draw arguments the update kernel wrote.
 			VfxRuntime.CountDraw();
-			GL.BindBuffer(BufferTarget.DrawIndirectBuffer, VfxRuntime.CounterBuffer);
-			var offset = (IntPtr)((state.CounterBase + VfxCodegen.CounterDraw + output.Index * VfxCodegen.CounterDrawStride) * sizeof(uint));
+			CommandList commands = Gfx.Commands;
+			GpuBuffer arguments = VfxRuntime.CounterBuffer;
+			long offset = (long)(state.CounterBase + VfxCodegen.CounterDraw + output.Index * VfxCodegen.CounterDrawStride) * sizeof(uint);
 			switch (output.Kind)
 			{
 				case VfxOutputKind.Mesh:
 					GeometryPool.Bind();
-					GL.DrawElementsIndirect(PrimitiveType.Triangles, DrawElementsType.UnsignedInt, offset);
+					commands.DrawIndexedIndirect(arguments, offset);
 					break;
 				case VfxOutputKind.Point:
-					GL.BindVertexArray(VfxRuntime.EmptyVao);
-					GL.Enable(EnableCap.ProgramPointSize);
-					GL.DrawArraysIndirect(PrimitiveType.Points, offset);
-					GL.Disable(EnableCap.ProgramPointSize);
+					commands.SetVertexInput(VertexInputLayout.Empty);
+					commands.DrawIndirect(arguments, offset, 1, 16, PrimitiveTopology.Points);
 					break;
 				case VfxOutputKind.Line:
-					GL.BindVertexArray(VfxRuntime.EmptyVao);
-					GL.DrawArraysIndirect(PrimitiveType.Lines, offset);
+					commands.SetVertexInput(VertexInputLayout.Empty);
+					commands.DrawIndirect(arguments, offset, 1, 16, PrimitiveTopology.Lines);
 					break;
 				default:
 					// Quads and strips: indexed, so the corners shared by their triangles are shaded once.
-					GL.BindVertexArray(VfxRuntime.IndexedVao(output, state.Description.Capacity));
-					GL.DrawElementsIndirect(PrimitiveType.Triangles, DrawElementsType.UnsignedInt, offset);
+					commands.SetVertexInput(VertexInputLayout.Empty);
+					commands.SetIndexBuffer(VfxRuntime.ShapeIndexBuffer(output, state.Description.Capacity));
+					commands.DrawIndexedIndirect(arguments, offset);
 					break;
 			}
 
 			DrawStatistics.DrawIndirect();
-			GL.BindBuffer(BufferTarget.DrawIndirectBuffer, 0);
-			GL.BindVertexArray(0);
 		}
 
 		#endregion
