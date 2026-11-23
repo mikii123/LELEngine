@@ -19,6 +19,12 @@
     <PackageReference Include="Ahwoo.BRUTAL.Glfw" Version="2026.10.5" />
     <PackageReference Include="Ahwoo.BRUTAL.OpenGl" Version="2026.10.2" />
     <PackageReference Include="Ahwoo.BRUTAL.Numerics" Version="2026.10.2" />
+    <!-- The Vulkan device (LELEngine.Graphics.Vulkan): Vulkan's functions, the memory allocator (VMA) and the GLSL to
+         SPIR-V compiler (shaderc). -->
+    <PackageReference Include="Ahwoo.BRUTAL.Vulkan" Version="2026.10.3" />
+    <PackageReference Include="Ahwoo.BRUTAL.Vulkan.Abstractions" Version="2026.10.3" />
+    <PackageReference Include="Ahwoo.BRUTAL.Vulkan.Vma" Version="2026.10.3" />
+    <PackageReference Include="Ahwoo.BRUTAL.ShaderC" Version="2026.10.3" />
     <PackageReference Include="StbImageSharp" Version="2.30.16" />
     <!-- 2D physics: Box2D v3 ported to pure C# (ikpil's Box2D.NET; LELEngine.Physics2D wraps it with a Unity-style API). -->
     <PackageReference Include="Box2D.NET" Version="3.1.654" />
