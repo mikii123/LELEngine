@@ -83,6 +83,13 @@ namespace LELEngine.Graphics
 		/// </summary>
 		public abstract void SetData(int mip, int x, int y, int z, int width, int height, int depth, void* data, long size);
 
+		/// <summary>
+		///     Fills every mip level below the first by filtering the level above, as part of uploading the texture:
+		///     ordered with the commands like <see cref="SetData(int, int, int, int, int, int, int, void*, long)" />, and like
+		///     it allowed inside a render pass (a texture made and filled the moment a draw first needs it).
+		/// </summary>
+		public abstract void GenerateMipmaps();
+
 		/// <summary>Reads a box of a mip level in the texture's own format (rows packed); waits for the GPU.</summary>
 		public abstract void GetData(int mip, int x, int y, int z, int width, int height, int depth, void* destination, long size);
 

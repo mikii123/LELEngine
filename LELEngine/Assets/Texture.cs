@@ -285,7 +285,7 @@ namespace LELEngine
 				gpu.Sampler = CreateSampler();
 				if (generate)
 				{
-					GraphicsDevice.Current.Commands.GenerateMipmaps(gpu);
+					gpu.GenerateMipmaps();
 				}
 
 				if (FrameProfiler.Enabled)

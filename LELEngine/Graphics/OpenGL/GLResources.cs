@@ -258,6 +258,17 @@ namespace LELEngine.Graphics.OpenGL
 			}
 		}
 
+		public override void GenerateMipmaps()
+		{
+			if (MipLevels <= 1 || backbuffer)
+			{
+				return;
+			}
+
+			GLDevice.Current.BindForEdit(this);
+			GLDevice.Gl.GenerateMipmap((GenerateMipmapTarget)Target);
+		}
+
 		public override void GetData(int mip, int x, int y, int z, int width, int height, int depth, void* destination, long size)
 		{
 			long expected = Format.LevelSize(width, height, depth);
