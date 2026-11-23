@@ -318,6 +318,11 @@ namespace LELEngine.Graphics.OpenGL
 				return;
 			}
 
+			if (layer >= 0 && image.Kind == TextureKind.Texture3D && (image.Usage & TextureUsage.SliceImages) == 0)
+			{
+				throw new InvalidOperationException($"Texture '{image.Name}' is bound as an image by one slice but was made without TextureUsage.SliceImages.");
+			}
+
 			TextureAccess glAccess = access == ImageAccess.Read ? TextureAccess.ReadOnly : access == ImageAccess.Write ? TextureAccess.WriteOnly : TextureAccess.ReadWrite;
 			gl.BindImageTexture(binding, image.Handle, mip, layer < 0, Math.Max(0, layer), glAccess, (SizedInternalFormat)image.GL.Internal);
 		}

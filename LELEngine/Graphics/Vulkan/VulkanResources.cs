@@ -79,11 +79,11 @@ namespace LELEngine.Graphics.Vulkan
 	}
 
 	/// <summary>
-	///     A texture on Vulkan: an image that stays in the general layout from the moment it is made, with image views
-	///     made as they are first needed (the whole texture for a sampler, one level of one layer for an attachment,
-	///     one level for an image binding).
+	///     A texture on Vulkan: an image whose levels and layers are each in the layout of their last use (the device
+	///     tracks them: VulkanResourcesSync.cs), with image views made as they are first needed (the whole texture for a
+	///     sampler, one level of one layer for an attachment, one level for an image binding).
 	/// </summary>
-	internal sealed unsafe class VulkanTexture : GpuTexture
+	internal sealed unsafe partial class VulkanTexture : GpuTexture
 	{
 		private readonly VulkanDevice device;
 		private readonly VmaAllocation allocation;
@@ -179,7 +179,8 @@ namespace LELEngine.Graphics.Vulkan
 					flags |= VkImageCreateFlags._2DArrayCompatibleBit;
 				}
 
-				if ((Usage & TextureUsage.Storage) != 0 && device.Has2DViewsOf3D)
+				// Only where asked for: such an image's slices are laid out apart, which samples it slower.
+				if ((Usage & TextureUsage.SliceImages) != 0 && device.Has2DViewsOf3D)
 				{
 					flags |= VkImageCreateFlags._2DViewCompatibleBitEXT;
 				}
@@ -215,25 +216,7 @@ namespace LELEngine.Graphics.Vulkan
 			VulkanDevice.Check(Vma.PInvoke.vmaCreateImage(device.Allocator, &info, &allocationInfo, &image, &handle, default), "vmaCreateImage (" + Name + ", " + Format + ")");
 			Image = image;
 			allocation = handle;
-
-			// The one layout change of the image's life.
-			VkCommandBuffer commands = device.BeginSetupCommand();
-			VkImageMemoryBarrier2 barrier = new VkImageMemoryBarrier2
-			{
-				SrcStageMask = VkPipelineStageFlags2.None,
-				SrcAccessMask = VkAccessFlags2.None,
-				DstStageMask = VkPipelineStageFlags2.AllCommandsBit,
-				DstAccessMask = VkAccessFlags2.MemoryReadBit | VkAccessFlags2.MemoryWriteBit,
-				OldLayout = VkImageLayout.Undefined,
-				NewLayout = VkImageLayout.General,
-				SrcQueueFamilyIndex = -1,
-				DstQueueFamilyIndex = -1,
-				Image = Image,
-				SubresourceRange = new VkImageSubresourceRange { AspectMask = Aspect, BaseMipLevel = 0, LevelCount = MipLevels, BaseArrayLayer = 0, LayerCount = Layers }
-			};
-			VkDependencyInfo dependency = new VkDependencyInfo { ImageMemoryBarrierCount = 1, ImageMemoryBarriers = &barrier };
-			device.Vk->vkCmdPipelineBarrier2.Invoke(commands, &dependency);
-			LastUse = device.RecordingSerial;
+			// Undefined until its first use takes it into the layout of that use.
 		}
 
 		public override bool IsBackbuffer => backbuffer;
@@ -326,8 +309,9 @@ namespace LELEngine.Graphics.Vulkan
 			}
 
 			VkBufferImageCopy region = Region(mip, x, y, z, width, height, depth, offset);
-			VkCommandBuffer commands = BeginUpload();
-			device.Vk->vkCmdCopyBufferToImage.Invoke(commands, buffer, Image, VkImageLayout.General, 1, &region);
+			bool volume = Kind == TextureKind.Texture3D;
+			VkCommandBuffer commands = device.CommandList.UploadCommands(this, mip, 1, volume ? 0 : z, volume ? 1 : depth, Covers(mip, x, y, z, width, height, depth));
+			device.Vk->vkCmdCopyBufferToImage.Invoke(commands, buffer, Image, CopyDestinationLayout, 1, &region);
 		}
 
 		public override void GetData(int mip, int x, int y, int z, int width, int height, int depth, void* destination, long size)
@@ -356,11 +340,23 @@ namespace LELEngine.Graphics.Vulkan
 			VmaAllocationInfo made;
 			VulkanDevice.Check(Vma.PInvoke.vmaCreateBuffer(device.Allocator, &info, &allocationInfo, &buffer, &handle, &made), "vmaCreateBuffer");
 			VkBufferImageCopy region = Region(mip, x, y, z, width, height, depth, 0);
-			VkCommandBuffer commands = list.BeginTransfer();
-			Use();
-			device.Vk->vkCmdCopyImageToBuffer.Invoke(commands, Image, VkImageLayout.General, buffer, 1, &region);
-			device.Submit();
-			device.WaitFor(device.RecordingSerial - 1, long.MaxValue);
+			bool volume = Kind == TextureKind.Texture3D;
+			int layer = volume ? 0 : z;
+			int layers = volume ? 1 : depth;
+			// What is being recorded does not use the texture: the copy goes alone, and only what was sent before is waited for.
+			bool aside = LastUse < device.RecordingSerial;
+			VkCommandBuffer commands = aside ? list.AsideCommands(this, mip, 1, layer, layers) : list.TransferCommands(this, false, mip, 1, layer, layers, CopySourceLayout, false, false);
+			device.Vk->vkCmdCopyImageToBuffer.Invoke(commands, Image, CopySourceLayout, buffer, 1, &region);
+			list.TransfersToHost(commands);
+			if (aside)
+			{
+				device.SubmitAsideAndWait(commands);
+			}
+			else
+			{
+				device.Submit();
+				device.WaitFor(device.RecordingSerial - 1, long.MaxValue);
+			}
 			Vma.PInvoke.vmaInvalidateAllocation(device.Allocator, handle, default, (Brutal.ByteSize64)(ulong)expected);
 			byte* mapped = (byte*)(void*)made.PMappedData;
 			if (packedDepth)
@@ -382,11 +378,12 @@ namespace LELEngine.Graphics.Vulkan
 				return;
 			}
 
-			RecordMipmaps(BeginUpload());
+			// As an upload: ahead of the stream when the stream has not used the texture in this submission.
+			RecordMipmaps(MainUse != device.RecordingSerial);
 		}
 
-		/// <summary>Records the blits that fill each level from the one above.</summary>
-		internal void RecordMipmaps(VkCommandBuffer commands)
+		/// <summary>Records the blits that fill each level from the one above: ahead of the stream (<paramref name="ahead" />) or in it.</summary>
+		internal void RecordMipmaps(bool ahead)
 		{
 			if ((Features & VkFormatFeatureFlags.BlitSrcBit) == 0 || (Features & VkFormatFeatureFlags.BlitDstBit) == 0)
 			{
@@ -396,34 +393,50 @@ namespace LELEngine.Graphics.Vulkan
 			VkFilter filter = Filters && !Format.IsInteger() && !Format.IsDepth() ? VkFilter.Linear : VkFilter.Nearest;
 			if (SampledFormat != VkFormat)
 			{
-				RecordDecodedMipmaps(commands, filter);
+				RecordDecodedMipmaps(ahead, filter);
 				return;
 			}
 
-			RecordBlits(commands, Image, filter);
-		}
-
-		/// <summary>The blits that fill each level of an image of this texture's size from the level above.</summary>
-		private void RecordBlits(VkCommandBuffer commands, VkImage image, VkFilter filter)
-		{
-			bool volume = Kind == TextureKind.Texture3D;
 			for (int level = 1; level < MipLevels; level++)
 			{
-				if (level > 1)
-				{
-					// The level just written is read now.
-					device.GlobalBarrier(commands);
-				}
-
-				VkImageBlit blit = default;
-				blit.SrcSubresource = new VkImageSubresourceLayers { AspectMask = Aspect, MipLevel = level - 1, BaseArrayLayer = 0, LayerCount = Layers };
-				blit.DstSubresource = new VkImageSubresourceLayers { AspectMask = Aspect, MipLevel = level, BaseArrayLayer = 0, LayerCount = Layers };
-				VkOffset3D* source = (VkOffset3D*)&blit.SrcOffsets;
-				VkOffset3D* target = (VkOffset3D*)&blit.DstOffsets;
-				source[1] = new VkOffset3D { X = MipWidth(level - 1), Y = MipHeight(level - 1), Z = volume ? MipDepth(level - 1) : 1 };
-				target[1] = new VkOffset3D { X = MipWidth(level), Y = MipHeight(level), Z = volume ? MipDepth(level) : 1 };
-				device.Vk->vkCmdBlitImage.Invoke(commands, image, VkImageLayout.General, image, VkImageLayout.General, 1, &blit, filter);
+				VkCommandBuffer commands = device.CommandList.MipCommands(this, ahead, level);
+				VkImageBlit blit = LevelBlit(level);
+				device.Vk->vkCmdBlitImage.Invoke(commands, Image, CopySourceLayout, Image, CopyDestinationLayout, 1, &blit, filter);
 			}
+		}
+
+		/// <summary>The blit that fills a level of an image of this texture's size from the level above.</summary>
+		private VkImageBlit LevelBlit(int level)
+		{
+			bool volume = Kind == TextureKind.Texture3D;
+			VkImageBlit blit = default;
+			blit.SrcSubresource = new VkImageSubresourceLayers { AspectMask = Aspect, MipLevel = level - 1, BaseArrayLayer = 0, LayerCount = Layers };
+			blit.DstSubresource = new VkImageSubresourceLayers { AspectMask = Aspect, MipLevel = level, BaseArrayLayer = 0, LayerCount = Layers };
+			VkOffset3D* source = (VkOffset3D*)&blit.SrcOffsets;
+			VkOffset3D* target = (VkOffset3D*)&blit.DstOffsets;
+			source[1] = new VkOffset3D { X = MipWidth(level - 1), Y = MipHeight(level - 1), Z = volume ? MipDepth(level - 1) : 1 };
+			target[1] = new VkOffset3D { X = MipWidth(level), Y = MipHeight(level), Z = volume ? MipDepth(level) : 1 };
+			return blit;
+		}
+
+		/// <summary>A layout change of levels of an image the device does not track (a scratch image), after the transfers before it.</summary>
+		private void ScratchBarrier(VkCommandBuffer commands, VkImage image, int mip, int mips, VkImageLayout from, VkImageLayout to)
+		{
+			VkImageMemoryBarrier2 barrier = new VkImageMemoryBarrier2
+			{
+				SrcStageMask = from == VkImageLayout.Undefined ? VkPipelineStageFlags2.None : Sync.Transfer,
+				SrcAccessMask = from == VkImageLayout.Undefined ? VkAccessFlags2.None : VkAccessFlags2.TransferWriteBit,
+				DstStageMask = Sync.Transfer,
+				DstAccessMask = VkAccessFlags2.TransferReadBit | VkAccessFlags2.TransferWriteBit,
+				OldLayout = from,
+				NewLayout = to,
+				SrcQueueFamilyIndex = -1,
+				DstQueueFamilyIndex = -1,
+				Image = image,
+				SubresourceRange = new VkImageSubresourceRange { AspectMask = Aspect, BaseMipLevel = mip, LevelCount = mips, BaseArrayLayer = 0, LayerCount = Layers }
+			};
+			VkDependencyInfo dependency = new VkDependencyInfo { ImageMemoryBarrierCount = 1, ImageMemoryBarriers = &barrier };
+			device.Vk->vkCmdPipelineBarrier2.Invoke(commands, &dependency);
 		}
 
 		/// <summary>
@@ -431,7 +444,7 @@ namespace LELEngine.Graphics.Vulkan
 		///     generation filters them): the first level is copied into a scratch image of the sRGB format, whose blits
 		///     decode and encode, and the levels made there are copied back. The scratch image goes with the submission.
 		/// </summary>
-		private void RecordDecodedMipmaps(VkCommandBuffer commands, VkFilter filter)
+		private void RecordDecodedMipmaps(bool ahead, VkFilter filter)
 		{
 			bool volume = Kind == TextureKind.Texture3D;
 			VkImageCreateInfo info = new VkImageCreateInfo
@@ -451,22 +464,6 @@ namespace LELEngine.Graphics.Vulkan
 			VkImage scratch;
 			VmaAllocation scratchAllocation;
 			VulkanDevice.Check(Vma.PInvoke.vmaCreateImage(device.Allocator, &info, &allocationInfo, &scratch, &scratchAllocation, default), "vmaCreateImage (mip levels of " + Name + ")");
-			VkImageMemoryBarrier2 toGeneral = new VkImageMemoryBarrier2
-			{
-				SrcStageMask = VkPipelineStageFlags2.None,
-				SrcAccessMask = VkAccessFlags2.None,
-				DstStageMask = VkPipelineStageFlags2.AllCommandsBit,
-				DstAccessMask = VkAccessFlags2.MemoryReadBit | VkAccessFlags2.MemoryWriteBit,
-				OldLayout = VkImageLayout.Undefined,
-				NewLayout = VkImageLayout.General,
-				SrcQueueFamilyIndex = -1,
-				DstQueueFamilyIndex = -1,
-				Image = scratch,
-				SubresourceRange = new VkImageSubresourceRange { AspectMask = Aspect, BaseMipLevel = 0, LevelCount = MipLevels, BaseArrayLayer = 0, LayerCount = Layers }
-			};
-			VkDependencyInfo dependency = new VkDependencyInfo { ImageMemoryBarrierCount = 1, ImageMemoryBarriers = &toGeneral };
-			device.Vk->vkCmdPipelineBarrier2.Invoke(commands, &dependency);
-
 			VkImageCopy* regions = stackalloc VkImageCopy[MipLevels];
 			for (int level = 0; level < MipLevels; level++)
 			{
@@ -479,11 +476,21 @@ namespace LELEngine.Graphics.Vulkan
 				};
 			}
 
-			device.Vk->vkCmdCopyImage.Invoke(commands, Image, VkImageLayout.General, scratch, VkImageLayout.General, 1, regions);
-			device.GlobalBarrier(commands);
-			RecordBlits(commands, scratch, filter);
-			device.GlobalBarrier(commands);
-			device.Vk->vkCmdCopyImage.Invoke(commands, scratch, VkImageLayout.General, Image, VkImageLayout.General, MipLevels - 1, regions + 1);
+			// The first level into the scratch image, the levels made there one by one, and back.
+			VulkanCommandList list = device.CommandList;
+			VkCommandBuffer commands = list.TransferCommands(this, ahead, 0, 1, 0, Layers, CopySourceLayout, false, false);
+			ScratchBarrier(commands, scratch, 0, MipLevels, VkImageLayout.Undefined, VkImageLayout.TransferDstOptimal);
+			device.Vk->vkCmdCopyImage.Invoke(commands, Image, CopySourceLayout, scratch, VkImageLayout.TransferDstOptimal, 1, regions);
+			for (int level = 1; level < MipLevels; level++)
+			{
+				ScratchBarrier(commands, scratch, level - 1, 1, VkImageLayout.TransferDstOptimal, VkImageLayout.TransferSrcOptimal);
+				VkImageBlit blit = LevelBlit(level);
+				device.Vk->vkCmdBlitImage.Invoke(commands, scratch, VkImageLayout.TransferSrcOptimal, scratch, VkImageLayout.TransferDstOptimal, 1, &blit, filter);
+			}
+
+			ScratchBarrier(commands, scratch, MipLevels - 1, 1, VkImageLayout.TransferDstOptimal, VkImageLayout.TransferSrcOptimal);
+			commands = list.TransferCommands(this, ahead, 1, MipLevels - 1, 0, Layers, CopyDestinationLayout, true, true);
+			device.Vk->vkCmdCopyImage.Invoke(commands, scratch, VkImageLayout.TransferSrcOptimal, Image, CopyDestinationLayout, MipLevels - 1, regions + 1);
 			device.Retire(RetiredKind.Image, scratch.VkHandle, scratchAllocation.VkHandle, device.RecordingSerial);
 		}
 
@@ -528,18 +535,6 @@ namespace LELEngine.Graphics.Vulkan
 		}
 
 		internal bool PackedDepth => packedDepth;
-
-		/// <summary>
-		///     Where an upload is recorded: ahead of the stream when no command of the stream has used the texture yet
-		///     (an open render pass goes on undisturbed), else in the stream, where it is ordered with those commands.
-		/// </summary>
-		private VkCommandBuffer BeginUpload()
-		{
-			long serial = device.RecordingSerial;
-			VkCommandBuffer commands = MainUse == serial ? device.CommandList.BeginTransferInPass() : device.BeginSetupCommand();
-			LastUse = serial;
-			return commands;
-		}
 	}
 
 	/// <summary>
@@ -547,9 +542,14 @@ namespace LELEngine.Graphics.Vulkan
 	///     while no unfinished command uses them; everything else goes through a copy ordered with the commands.
 	///     Replacing the storage of a buffer in use leaves the old storage to the commands that use it.
 	/// </summary>
-	internal sealed unsafe class VulkanBuffer : GpuBuffer
+	internal sealed unsafe partial class VulkanBuffer : GpuBuffer
 	{
 		private const int MaxSpares = 4;
+
+		/// <summary>Spare storages kept of a buffer of at most <see cref="SmallStorage" /> bytes.</summary>
+		private const int MaxSmallSpares = 16;
+
+		private const long SmallStorage = 64 * 1024;
 
 		private readonly VulkanDevice device;
 		private readonly bool hostVisible;
@@ -615,6 +615,7 @@ namespace LELEngine.Graphics.Vulkan
 				Release();
 				storage = TakeStorage(size);
 				Size = size;
+				ForgetUses();
 				device.BindingEpoch++;
 			}
 
@@ -661,12 +662,13 @@ namespace LELEngine.Graphics.Vulkan
 				{
 					Buffer.MemoryCopy(old.Mapped, fresh.Mapped, size, copied);
 					LastUse = MainUse = 0;
+					ForgetUses();
 				}
 				else
 				{
 					// Ordered with the commands that wrote the old storage.
 					bool inStream = oldMainUse == serial;
-					VkCommandBuffer commands = inStream ? device.CommandList.BeginTransferInPass() : device.BeginSetupCommand();
+					VkCommandBuffer commands = CopyIntoNewStorage(inStream);
 					VkBufferCopy region = new VkBufferCopy { Size = (Brutal.ByteSize64)(ulong)copied };
 					device.Vk->vkCmdCopyBuffer.Invoke(commands, old.Buffer, fresh.Buffer, 1, &region);
 					oldLastUse = serial;
@@ -677,6 +679,7 @@ namespace LELEngine.Graphics.Vulkan
 			else
 			{
 				LastUse = MainUse = 0;
+				ForgetUses();
 			}
 
 			if (!old.Buffer.IsNull())
@@ -725,12 +728,21 @@ namespace LELEngine.Graphics.Vulkan
 			VmaAllocation handle;
 			VmaAllocationInfo made;
 			VulkanDevice.Check(Vma.PInvoke.vmaCreateBuffer(device.Allocator, &info, &allocationInfo, &buffer, &handle, &made), "vmaCreateBuffer");
-			VkCommandBuffer commands = list.BeginTransfer();
-			Use();
+			// What is being recorded does not use the buffer: the copy goes alone, and only what was sent before is waited for.
+			bool aside = LastUse < device.RecordingSerial;
+			VkCommandBuffer commands = aside ? list.AsideCommands(this) : list.ReadCommands(this);
 			VkBufferCopy region = new VkBufferCopy { SrcOffset = (Brutal.ByteSize64)(ulong)offset, Size = (Brutal.ByteSize64)(ulong)size };
 			device.Vk->vkCmdCopyBuffer.Invoke(commands, storage.Buffer, buffer, 1, &region);
-			device.Submit();
-			device.WaitFor(device.RecordingSerial - 1, long.MaxValue);
+			list.TransfersToHost(commands);
+			if (aside)
+			{
+				device.SubmitAsideAndWait(commands);
+			}
+			else
+			{
+				device.Submit();
+				device.WaitFor(device.RecordingSerial - 1, long.MaxValue);
+			}
 			Vma.PInvoke.vmaInvalidateAllocation(device.Allocator, handle, default, (Brutal.ByteSize64)(ulong)size);
 			Buffer.MemoryCopy((void*)made.PMappedData, destination, size, size);
 			Vma.PInvoke.vmaDestroyBuffer(device.Allocator, buffer, handle);
@@ -766,7 +778,9 @@ namespace LELEngine.Graphics.Vulkan
 				{
 					Storage old = outgoing[i];
 					outgoing.RemoveAt(i);
-					if (!IsDisposed && old.Size == Size && spares.Count < MaxSpares)
+					// Small buffers rewritten several times a frame keep enough storages for every frame in flight.
+					int kept = old.Size <= SmallStorage ? MaxSmallSpares : MaxSpares;
+					if (!IsDisposed && old.Size == Size && spares.Count < kept)
 					{
 						spares.Add(old);
 						return true;
@@ -796,6 +810,7 @@ namespace LELEngine.Graphics.Vulkan
 			device.Retire(RetiredKind.Buffer, storage.Buffer.VkHandle, storage.Allocation.VkHandle, LastUse, recycle ? this : null);
 			storage = default;
 			LastUse = MainUse = 0;
+			ForgetUses();
 		}
 
 		private Storage TakeStorage(long size)
@@ -869,8 +884,7 @@ namespace LELEngine.Graphics.Vulkan
 
 			byte* staging = device.AllocateTransient(size, 16, out VkBuffer source, out long sourceOffset);
 			Buffer.MemoryCopy(data, staging, size, size);
-			long serial = device.RecordingSerial;
-			VkCommandBuffer commands = MainUse == serial ? device.CommandList.BeginTransferInPass() : device.BeginSetupCommand();
+			VkCommandBuffer commands = device.CommandList.UploadCommands(this);
 			VkBufferCopy region = new VkBufferCopy
 			{
 				SrcOffset = (Brutal.ByteSize64)(ulong)sourceOffset,
@@ -878,7 +892,6 @@ namespace LELEngine.Graphics.Vulkan
 				Size = (Brutal.ByteSize64)(ulong)size
 			};
 			device.Vk->vkCmdCopyBuffer.Invoke(commands, source, storage.Buffer, 1, &region);
-			LastUse = serial;
 		}
 
 		private struct Storage

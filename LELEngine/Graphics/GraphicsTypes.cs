@@ -76,7 +76,14 @@ namespace LELEngine.Graphics
 		Storage = 2,
 
 		/// <summary>Rendered into: a colour or, with a depth format, the depth attachment of a render pass.</summary>
-		Attachment = 4
+		Attachment = 4,
+
+		/// <summary>
+		///     With <see cref="Storage" />: a slice of the 3D texture is read or written by itself as a 2D image
+		///     (<see cref="CommandList.SetImage" /> with a layer). Some GPUs lay out a 3D texture made for this slice by slice,
+		///     which samples it slower: only textures that need it ask for it.
+		/// </summary>
+		SliceImages = 8
 	}
 
 	public struct TextureDescriptor

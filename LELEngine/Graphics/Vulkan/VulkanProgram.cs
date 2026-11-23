@@ -18,7 +18,7 @@ namespace LELEngine.Graphics.Vulkan
 	///     uniform block: the program keeps a copy of each such block in memory, the setters write into the copies, and
 	///     a draw whose values changed copies them into the frame's uniform memory.
 	/// </summary>
-	internal sealed unsafe class VulkanProgram : GpuProgram
+	internal sealed unsafe partial class VulkanProgram : GpuProgram
 	{
 		/// <summary>Counts the ways programs are compiled and kept: binaries of another number are refused.</summary>
 		public const int BinaryVersion = 1;
@@ -337,7 +337,8 @@ namespace LELEngine.Graphics.Vulkan
 							Shadow = resource.Shadow,
 							SampledType = resource.SampledType,
 							ImageFormat = resource.ImageFormat,
-							Expected = Expected(resource)
+							Expected = Expected(resource),
+							Writable = (kind == BindingKind.StorageBuffer || kind == BindingKind.Image) && !resource.NonWritable
 						};
 						if (kind == BindingKind.Texture)
 						{
@@ -351,6 +352,7 @@ namespace LELEngine.Graphics.Vulkan
 					Binding merged = layout[index];
 					merged.Stages |= made[i].Flag;
 					merged.BlockSize = Math.Max(merged.BlockSize, resource.BlockSize);
+					merged.Writable |= (kind == BindingKind.StorageBuffer || kind == BindingKind.Image) && !resource.NonWritable;
 					layout[index] = merged;
 					modules[i].SetBinding(resource.VariableId, 0, index);
 				}
@@ -480,6 +482,7 @@ namespace LELEngine.Graphics.Vulkan
 					};
 					VkPipeline pipeline;
 					VulkanDevice.Check(device.Vk->vkCreateComputePipelines.Invoke(device.Handle, device.PipelineCache, 1, &info, null, &pipeline), "vkCreateComputePipelines (" + Name + ")");
+					device.PipelineMade();
 					computePipeline = pipeline;
 				}
 			}
@@ -831,25 +834,38 @@ namespace LELEngine.Graphics.Vulkan
 			foreach (UniformTarget target in entry.Targets)
 			{
 				Stage stage = stages[target.Stage];
+				bool changed = false;
 				for (int i = 0; i < count; i++)
 				{
 					byte* destination = stage.Block + target.Offset + (long)(first + i) * target.Stride;
 					float* source = values + i * 16;
 					if (target.MatrixStride == 16)
 					{
-						Buffer.MemoryCopy(source, destination, 64, 64);
+						changed |= CopyChanged(source, destination, 64);
 					}
 					else
 					{
 						for (int column = 0; column < 4; column++)
 						{
-							Buffer.MemoryCopy(source + column * 4, destination + column * target.MatrixStride, 16, 16);
+							changed |= CopyChanged(source + column * 4, destination + column * target.MatrixStride, 16);
 						}
 					}
 				}
 
-				stage.Dirty = true;
+				stage.Dirty |= changed;
 			}
+		}
+
+		/// <summary>Copies bytes over others; true when they differed (the stage's block then reaches the GPU again).</summary>
+		private static bool CopyChanged(void* source, void* destination, int bytes)
+		{
+			if (new ReadOnlySpan<byte>(source, bytes).SequenceEqual(new ReadOnlySpan<byte>(destination, bytes)))
+			{
+				return false;
+			}
+
+			Buffer.MemoryCopy(source, destination, bytes, bytes);
+			return true;
 		}
 
 		public override void SetTexture(int slot, GpuTexture texture, GpuSampler sampler = null)
@@ -909,6 +925,7 @@ namespace LELEngine.Graphics.Vulkan
 			foreach (UniformTarget target in entry.Targets)
 			{
 				Stage stage = stages[target.Stage];
+				bool changed = false;
 				for (int i = 0; i < count; i++)
 				{
 					byte* destination = stage.Block + target.Offset + (long)(first + i) * target.Stride;
@@ -917,16 +934,19 @@ namespace LELEngine.Graphics.Vulkan
 					{
 						for (int c = 0; c < components; c++)
 						{
-							((uint*)destination)[c] = ((float*)source)[c] != 0f ? 1u : 0u;
+							uint value = ((float*)source)[c] != 0f ? 1u : 0u;
+							changed |= ((uint*)destination)[c] != value;
+							((uint*)destination)[c] = value;
 						}
 					}
 					else
 					{
-						Buffer.MemoryCopy(source, destination, bytes, bytes);
+						changed |= CopyChanged(source, destination, bytes);
 					}
 				}
 
-				stage.Dirty = true;
+				// A block whose values stay the same keeps its copy in the frame's memory: no new offset, no new binding.
+				stage.Dirty |= changed;
 			}
 		}
 
@@ -973,7 +993,8 @@ namespace LELEngine.Graphics.Vulkan
 				return currentSet;
 			}
 
-			// Everything the set binds, as numbers; what is bound is marked as used by this submission on the way.
+			// Everything the set binds, as numbers; what is bound is noted for the barriers of the program's commands.
+			BeginTracking(list);
 			int length = 0;
 			key[length++] = (ulong)setLayout.VkHandle;
 			for (int b = 0; b < bindings.Length; b++)
@@ -1010,11 +1031,12 @@ namespace LELEngine.Graphics.Vulkan
 				}
 			}
 
+			list.Resolving = null;
 			DescriptorKey lookup = new DescriptorKey(key, length);
 			if (!device.DescriptorCache.TryGetValue(lookup, out VkDescriptorSet set))
 			{
 				set = WriteSet(length);
-				device.DescriptorCache.Add(lookup.Copy(), set);
+				device.CacheDescriptorSet(lookup.Copy(), set);
 			}
 
 			currentSet = set;
@@ -1034,8 +1056,7 @@ namespace LELEngine.Graphics.Vulkan
 				texture = device.DummyTexture(binding.Expected, binding.SampledType, binding.Shadow);
 			}
 
-			texture.Use();
-			view = texture.SampledView;
+			view = device.CommandList.SampledView(this, texture, unit);
 			VulkanSampler chosen = Samplers[unit] ?? (VulkanSampler)texture.Sampler ?? (VulkanSampler)LELEngine.Graphics.Samplers.LinearClamp;
 			if (!texture.Filters)
 			{
@@ -1095,7 +1116,7 @@ namespace LELEngine.Graphics.Vulkan
 							{
 								ImageView = new VkImageView((nint)key[position]),
 								Sampler = new VkSampler((nint)key[position + 1]),
-								ImageLayout = VkImageLayout.General
+								ImageLayout = textureLayouts[binding.Unit + i]
 							};
 							position += 2;
 						}
@@ -1298,6 +1319,7 @@ namespace LELEngine.Graphics.Vulkan
 				};
 				VkPipeline pipeline;
 				VulkanDevice.Check(device.Vk->vkCreateGraphicsPipelines.Invoke(device.Handle, device.PipelineCache, 1, &info, null, &pipeline), "vkCreateGraphicsPipelines (" + Name + ")");
+				device.PipelineMade();
 				entry.Pipeline = pipeline;
 			}
 
@@ -1417,6 +1439,9 @@ namespace LELEngine.Graphics.Vulkan
 			public int ImageFormat;
 
 			public TextureKind Expected;
+
+			/// <summary>Storage blocks and images: a stage writes them.</summary>
+			public bool Writable;
 		}
 
 		private sealed class Stage

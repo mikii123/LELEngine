@@ -107,13 +107,12 @@ namespace LELEngine.Graphics.Vulkan
 				return;
 			}
 
-			VkCommandBuffer commands = list.BeginTransfer();
+			VulkanTexture source = backbuffer != null && !backbuffer.IsDisposed ? backbuffer : null;
+			VkCommandBuffer commands = list.PresentCommands(source);
 			VkImage image = swapImages[index];
 			Transition(commands, image, VkImageLayout.Undefined, VkImageLayout.TransferDstOptimal);
-			VulkanTexture source = backbuffer;
-			if (source != null && !source.IsDisposed)
+			if (source != null)
 			{
-				source.Use();
 				VkImageBlit blit = default;
 				blit.SrcSubresource = new VkImageSubresourceLayers { AspectMask = VkImageAspectFlags.ColorBit, LayerCount = 1 };
 				blit.DstSubresource = new VkImageSubresourceLayers { AspectMask = VkImageAspectFlags.ColorBit, LayerCount = 1 };
@@ -123,12 +122,15 @@ namespace LELEngine.Graphics.Vulkan
 				from[0] = new VkOffset3D { X = 0, Y = source.Height, Z = 0 };
 				from[1] = new VkOffset3D { X = source.Width, Y = 0, Z = 1 };
 				to[1] = new VkOffset3D { X = swapWidth, Y = swapHeight, Z = 1 };
-				device.Vk->vkCmdBlitImage.Invoke(commands, source.Image, VkImageLayout.General, image, VkImageLayout.TransferDstOptimal, 1, &blit, VkFilter.Nearest);
+				device.Vk->vkCmdBlitImage.Invoke(commands, source.Image, source.CopySourceLayout, image, VkImageLayout.TransferDstOptimal, 1, &blit, VkFilter.Nearest);
 			}
 
 			Transition(commands, image, VkImageLayout.TransferDstOptimal, VkImageLayout.PresentSrcKHR);
 			VkSemaphore rendered = presentSemaphores[index];
-			device.Submit(acquired, rendered);
+			// Only the blit into the window's image waits for the image: the frame's other commands need not.
+			device.Submit(acquired, rendered, Sync.Transfer);
+			device.CountFrame();
+			device.SavePipelineCacheWhenQuiet();
 			VkSwapchainKHR chain = swapchain;
 			VkPresentInfoKHR present = new VkPresentInfoKHR { WaitSemaphoreCount = 1, WaitSemaphores = &rendered, SwapchainCount = 1, Swapchains = &chain, ImageIndices = &index };
 			VkResult result = device.Vk->vkQueuePresentKHR.Invoke(device.Queue, &present);
@@ -173,6 +175,9 @@ namespace LELEngine.Graphics.Vulkan
 			}
 
 			device.Finish();
+			// The presentation engine lets go of the semaphores of the last presents (the queue's operations).
+			device.Vk->vkQueueWaitIdle.Invoke(device.Queue);
+			device.SavePipelineCache();
 			backbuffer?.Dispose();
 			backbuffer = null;
 			DestroySwapchain(true);
@@ -384,9 +389,10 @@ namespace LELEngine.Graphics.Vulkan
 
 		private void Transition(VkCommandBuffer commands, VkImage image, VkImageLayout from, VkImageLayout to)
 		{
+			// From undefined: after the acquire, which the transfer stage waits for (the submission's semaphore).
 			VkImageMemoryBarrier2 barrier = new VkImageMemoryBarrier2
 			{
-				SrcStageMask = VkPipelineStageFlags2.AllCommandsBit,
+				SrcStageMask = from == VkImageLayout.Undefined ? Sync.Transfer : VkPipelineStageFlags2.AllCommandsBit,
 				SrcAccessMask = from == VkImageLayout.Undefined ? VkAccessFlags2.None : VkAccessFlags2.MemoryWriteBit,
 				DstStageMask = VkPipelineStageFlags2.AllCommandsBit,
 				DstAccessMask = to == VkImageLayout.PresentSrcKHR ? VkAccessFlags2.None : VkAccessFlags2.MemoryWriteBit,

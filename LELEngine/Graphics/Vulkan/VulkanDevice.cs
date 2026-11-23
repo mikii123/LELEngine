@@ -21,7 +21,7 @@ namespace LELEngine.Graphics.Vulkan
 	///         (<see cref="VulkanContext.MakeCurrent" />). Programs are built on any thread.
 	///     </para>
 	/// </summary>
-	internal sealed unsafe class VulkanDevice : GraphicsDevice
+	internal sealed unsafe partial class VulkanDevice : GraphicsDevice
 	{
 		/// <summary>Bytes of a block of the memory commands take for a frame (uniform values, texels on their way to a texture).</summary>
 		private const long ChunkSize = 1 << 20;
@@ -54,7 +54,6 @@ namespace LELEngine.Graphics.Vulkan
 		private VkCommandBuffer setupCommands;
 		private bool mainBegun;
 		private bool setupBegun;
-		private bool setupDirty;
 		private Submission recording = new Submission();
 		private readonly Queue<Submission> pending = new Queue<Submission>();
 		private readonly Stack<Submission> freeSubmissions = new Stack<Submission>();
@@ -86,7 +85,6 @@ namespace LELEngine.Graphics.Vulkan
 		internal readonly VkQueue Queue;
 		internal readonly int QueueFamily;
 		internal readonly VmaAllocatorHandle Allocator;
-		internal readonly VkPipelineCache PipelineCache;
 		internal readonly VkPhysicalDeviceLimits Limits;
 		internal readonly float TimestampPeriod;
 		internal readonly bool Has2DViewsOf3D;
@@ -113,7 +111,10 @@ namespace LELEngine.Graphics.Vulkan
 		/// </summary>
 		internal int BindingEpoch;
 
-		/// <summary>The descriptor sets written for the submission being recorded, by everything bound in them.</summary>
+		/// <summary>
+		///     The descriptor sets written, by everything bound in them: kept over submissions until an object they name is
+		///     destroyed or their pools are full (<see cref="ForgetDescriptorSets" />).
+		/// </summary>
 		internal readonly Dictionary<DescriptorKey, VkDescriptorSet> DescriptorCache = new Dictionary<DescriptorKey, VkDescriptorSet>();
 
 		/// <summary>
@@ -335,11 +336,6 @@ namespace LELEngine.Graphics.Vulkan
 				Check(Vk->vkCreateCommandPool.Invoke(Handle, &poolInfo, null, &pool), "vkCreateCommandPool");
 				commandPool = pool;
 
-				VkPipelineCacheCreateInfo cacheInfo = new VkPipelineCacheCreateInfo();
-				VkPipelineCache cache;
-				Check(Vk->vkCreatePipelineCache.Invoke(Handle, &cacheInfo, null, &cache), "vkCreatePipelineCache");
-				PipelineCache = cache;
-
 				VkPhysicalDeviceVulkan11Properties properties11 = new VkPhysicalDeviceVulkan11Properties();
 				VkPhysicalDeviceProperties2 properties = new VkPhysicalDeviceProperties2 { Next = &properties11 };
 				InstanceVk->vkGetPhysicalDeviceProperties2.Invoke(PhysicalHandle, &properties);
@@ -484,6 +480,7 @@ namespace LELEngine.Graphics.Vulkan
 				}
 
 				contexts.Clear();
+				ReleaseDescriptorCache();
 
 				// What was recorded and never sent goes back unsent: its memory and pools are free.
 				foreach (Chunk chunk in recording.Chunks)
@@ -553,9 +550,10 @@ namespace LELEngine.Graphics.Vulkan
 					commandPool = default;
 				}
 
-				if (!PipelineCache.IsNull())
+				if (!pipelineCache.IsNull())
 				{
-					Vk->vkDestroyPipelineCache.Invoke(Handle, PipelineCache, null);
+					Vk->vkDestroyPipelineCache.Invoke(Handle, pipelineCache, null);
+					pipelineCache = default;
 				}
 
 				if (!Allocator.IsNull())
@@ -762,30 +760,37 @@ namespace LELEngine.Graphics.Vulkan
 		}
 
 		/// <summary>
-		///     The command buffer that runs before the stream's: for uploads into what no command of the stream has
-		///     used yet, which so need not interrupt a render pass. What it did before is made visible first.
+		///     The command buffer that runs before the stream's, for a command recorded outside the tracking of uses: what
+		///     it does is made visible to the whole stream (a barrier ends the command buffer).
 		/// </summary>
 		internal VkCommandBuffer BeginSetupCommand()
 		{
-			if (!setupBegun)
-			{
-				setupCommands = BeginCommandBuffer();
-				setupBegun = true;
-				setupDirty = true;
-			}
-
-			if (setupDirty)
-			{
-				GlobalBarrier(setupCommands);
-			}
-
-			setupDirty = true;
-			return setupCommands;
+			setupUntracked = true;
+			return SetupCommands;
 		}
 
 		/// <summary>
-		///     Every earlier command's writes become visible to every later command. The one place synchronization is
-		///     decided: per-resource tracking would give narrower barriers and layouts here.
+		///     The command buffer that runs before the stream's: for uploads into what no command of the stream has
+		///     used yet, which so need not interrupt a render pass, and for the barriers of such resources. Each command
+		///     recorded into it comes with the barriers its uses need (<see cref="Sync" />).
+		/// </summary>
+		internal VkCommandBuffer SetupCommands
+		{
+			get
+			{
+				if (!setupBegun)
+				{
+					setupCommands = BeginCommandBuffer();
+					setupBegun = true;
+				}
+
+				return setupCommands;
+			}
+		}
+
+		/// <summary>
+		///     Every earlier command's writes become visible to every later command: for commands recorded outside the
+		///     tracking of uses (<see cref="VulkanCommandList.BeginTransfer" />).
 		/// </summary>
 		internal void GlobalBarrier(VkCommandBuffer commands)
 		{
@@ -820,9 +825,10 @@ namespace LELEngine.Graphics.Vulkan
 
 		/// <summary>
 		///     Sends what was recorded to the GPU (nothing when nothing was recorded and no semaphore is given) and
-		///     starts the next submission. An open render pass goes on in the next one.
+		///     starts the next submission. An open render pass goes on in the next one. The commands of the stages
+		///     <paramref name="waitStages" /> wait for the semaphore <paramref name="wait" />.
 		/// </summary>
-		internal void Submit(VkSemaphore wait = default, VkSemaphore signal = default)
+		internal void Submit(VkSemaphore wait = default, VkSemaphore signal = default, VkPipelineStageFlags2 waitStages = VkPipelineStageFlags2.AllCommandsBit)
 		{
 			if (!HasRecorded && wait.IsNull() && signal.IsNull())
 			{
@@ -835,6 +841,11 @@ namespace LELEngine.Graphics.Vulkan
 			int count = 0;
 			if (setupBegun)
 			{
+				if (setupUntracked)
+				{
+					GlobalBarrier(setupCommands);
+				}
+
 				Check(Vk->vkEndCommandBuffer.Invoke(setupCommands), "vkEndCommandBuffer");
 				buffers[count++] = new VkCommandBufferSubmitInfo { CommandBuffer = setupCommands };
 				recording.Commands.Add(setupCommands);
@@ -847,7 +858,7 @@ namespace LELEngine.Graphics.Vulkan
 				recording.Commands.Add(mainCommands);
 			}
 
-			VkSemaphoreSubmitInfo waitInfo = new VkSemaphoreSubmitInfo { Semaphore = wait, StageMask = VkPipelineStageFlags2.AllCommandsBit };
+			VkSemaphoreSubmitInfo waitInfo = new VkSemaphoreSubmitInfo { Semaphore = wait, StageMask = waitStages };
 			VkSemaphoreSubmitInfo signalInfo = new VkSemaphoreSubmitInfo { Semaphore = signal, StageMask = VkPipelineStageFlags2.AllCommandsBit };
 			VkSubmitInfo2 submit = new VkSubmitInfo2
 			{
@@ -878,10 +889,8 @@ namespace LELEngine.Graphics.Vulkan
 			RecordingSerial++;
 			mainBegun = false;
 			setupBegun = false;
-			setupDirty = false;
+			setupUntracked = false;
 			currentChunk = null;
-			currentPool = default;
-			DescriptorCache.Clear();
 			CommandList.AfterSubmit();
 			Poll();
 		}
@@ -1055,15 +1064,20 @@ namespace LELEngine.Graphics.Vulkan
 			return chunk;
 		}
 
-		/// <summary>A descriptor set of a layout, alive until the submission being recorded has finished.</summary>
+		/// <summary>A descriptor set of a layout, for the descriptor cache: alive until the cache gives it up (<see cref="ForgetDescriptorSets" />).</summary>
 		internal VkDescriptorSet AllocateDescriptorSet(VkDescriptorSetLayout layout)
 		{
 			for (int attempt = 0; attempt < 2; attempt++)
 			{
 				if (currentPool.IsNull())
 				{
+					if (cachePools.Count >= MaxCachePools)
+					{
+						ForgetDescriptorSets();
+					}
+
 					currentPool = freePools.Count > 0 ? freePools.Pop() : CreateDescriptorPool();
-					recording.Pools.Add(currentPool);
+					cachePools.Add(currentPool);
 				}
 
 				VkDescriptorSetAllocateInfo info = new VkDescriptorSetAllocateInfo { DescriptorPool = currentPool, DescriptorSetCount = 1, SetLayouts = &layout };
@@ -1071,6 +1085,7 @@ namespace LELEngine.Graphics.Vulkan
 				VkResult result = Vk->vkAllocateDescriptorSets.Invoke(Handle, &info, &set);
 				if (result == VkResult.Success)
 				{
+					DescriptorSetsWritten++;
 					return set;
 				}
 
@@ -1241,14 +1256,22 @@ namespace LELEngine.Graphics.Vulkan
 		/// <param name="final">The device is being given up: a buffer's storage is not kept for the buffer's next use.</param>
 		private void DestroyRetired(in Retired item, bool final)
 		{
+			if (item.Kind == RetiredKind.Buffer && !final && item.Owner != null && item.Owner.TakeBack(item.Handle, item.Allocation))
+			{
+				// Kept for the buffer's next storage.
+				return;
+			}
+
+			if (NamedByDescriptorSets(item.Kind) && DescriptorCache.Count > 0)
+			{
+				// The handle may come back as another object's: no cached set may name it then.
+				ForgetDescriptorSetsNaming(item.Kind, item.Handle);
+			}
+
 			switch (item.Kind)
 			{
 				case RetiredKind.Buffer:
-					if (final || item.Owner == null || !item.Owner.TakeBack(item.Handle, item.Allocation))
-					{
-						Vma.PInvoke.vmaDestroyBuffer(Allocator, new VkBuffer(item.Handle), new VmaAllocation(item.Allocation));
-					}
-
+					Vma.PInvoke.vmaDestroyBuffer(Allocator, new VkBuffer(item.Handle), new VmaAllocation(item.Allocation));
 					break;
 				case RetiredKind.Image:
 					Vma.PInvoke.vmaDestroyImage(Allocator, new VkImage(item.Handle), new VmaAllocation(item.Allocation));
