@@ -135,8 +135,8 @@ void main()
 
 		private static ShaderProgram Create(string name, string vertexSource, string fragmentSource)
 		{
-			Shader vertex = new Shader(vertexSource, ShaderType.VertexShader, name);
-			Shader fragment = new Shader(fragmentSource, ShaderType.FragmentShader, name);
+			Shader vertex = new Shader(vertexSource, ShaderStage.Vertex, name);
+			Shader fragment = new Shader(fragmentSource, ShaderStage.Fragment, name);
 			ShaderProgram program = new ShaderProgram(name, vertex, fragment);
 			vertex.Delete();
 			fragment.Delete();

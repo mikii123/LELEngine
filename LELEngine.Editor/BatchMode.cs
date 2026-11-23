@@ -317,7 +317,7 @@ namespace LELEngine.Editor
 			graphics.MakeCurrent();
 			DeviceCapabilities capabilities = GraphicsDevice.Current.Capabilities;
 			Console.WriteLine((capabilities.Api == GraphicsApi.OpenGL ? "[Batch] OpenGL " + capabilities.DriverVersion : "[Batch] " + capabilities.ApiVersion) + " | " + capabilities.Renderer);
-			GLCapabilities.Initialize();
+			GraphicsCapabilities.Initialize();
 		}
 
 		#endregion

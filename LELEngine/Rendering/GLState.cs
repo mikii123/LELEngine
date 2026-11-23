@@ -2,8 +2,9 @@ using LELEngine.Graphics;
 
 namespace LELEngine.Rendering
 {
+	// LEGACY(gl): used by LELEngine.Editor/UIBuilder/BuilderPreview.cs
 	/// <summary>
-	///     Small helpers for commonly toggled pipeline state so passes stay readable.
+	///     For the code that still gives OpenGL commands itself: the bindings it expects to start from.
 	/// </summary>
 	public static class GLState
 	{
@@ -20,52 +21,6 @@ namespace LELEngine.Rendering
 			GL.ActiveTexture(TextureUnit.Texture0);
 			GL.BindTexture(TextureTarget.Texture2D, 0);
 			GL.UseProgram(0);
-		}
-
-		public static void SetDepth(bool test, bool write, DepthFunction function = DepthFunction.Less)
-		{
-			if (test)
-			{
-				GL.Enable(EnableCap.DepthTest);
-			}
-			else
-			{
-				GL.Disable(EnableCap.DepthTest);
-			}
-
-			GL.DepthMask(write);
-			GL.DepthFunc(function);
-		}
-
-		public static void SetCull(bool enabled, TriangleFace face = TriangleFace.Back)
-		{
-			if (enabled)
-			{
-				GL.Enable(EnableCap.CullFace);
-				GL.CullFace(face);
-			}
-			else
-			{
-				GL.Disable(EnableCap.CullFace);
-			}
-		}
-
-		public static void SetColorWrite(bool enabled)
-		{
-			GL.ColorMask(enabled, enabled, enabled, enabled);
-		}
-
-		public static void SetBlend(bool enabled, bool premultiplied = false)
-		{
-			if (enabled)
-			{
-				GL.Enable(EnableCap.Blend);
-				GL.BlendFunc(premultiplied ? BlendingFactor.One : BlendingFactor.SrcAlpha, BlendingFactor.OneMinusSrcAlpha);
-			}
-			else
-			{
-				GL.Disable(EnableCap.Blend);
-			}
 		}
 
 		#endregion

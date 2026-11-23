@@ -13,6 +13,7 @@ namespace LELEngine.Rendering
 		/// <summary>The texture on the GPU (another one after <see cref="Resize" />).</summary>
 		public GpuTexture Gpu { get; private set; }
 
+		// LEGACY(gl): used by LELEngine.Editor (ViewRenderer.cs, UIBuilder/BuilderPreview.cs, Panels/SceneDepthProbe.cs)
 		/// <summary>The OpenGL texture object: only for the code that still gives OpenGL commands itself.</summary>
 		public int Handle => Gpu is Graphics.OpenGL.GLTexture texture ? texture.Handle : 0;
 
@@ -88,13 +89,6 @@ namespace LELEngine.Rendering
 			}
 
 			Gpu.Sampler = CreateSampler();
-		}
-
-		/// <summary>The OpenGL way: binds the texture object to a texture unit (code that still gives OpenGL commands itself).</summary>
-		public void Bind(int unit)
-		{
-			GL.ActiveTexture(TextureUnit.Texture0 + unit);
-			GL.BindTexture(TextureTarget.Texture2D, Handle);
 		}
 
 		public void Delete()

@@ -132,10 +132,10 @@ namespace LELEngine.Editor
 		{
 			// Each stage's code per kind of GPU, the same code once with the kinds that get it (most stages: all of them).
 			bool includesInstancing = false;
-			var codes = new List<(ShaderType Type, string Source, List<ShaderFeatures> Profiles)>();
+			var codes = new List<(ShaderStage Type, string Source, List<ShaderFeatures> Profiles)>();
 			foreach (ShaderFeatures profile in Profiles)
 			{
-				List<KeyValuePair<ShaderType, string>> stages;
+				List<KeyValuePair<ShaderStage, string>> stages;
 				try
 				{
 					stages = ShaderProgram.ReadSources(variant.Shader, defines, profile, true, out includesInstancing);
@@ -150,10 +150,10 @@ namespace LELEngine.Editor
 					return false;
 				}
 
-				foreach (KeyValuePair<ShaderType, string> stage in stages)
+				foreach (KeyValuePair<ShaderStage, string> stage in stages)
 				{
 					string source = stage.Value;
-					if (profile.DrawParameters == DrawParametersSupport.Extension && stage.Key == ShaderType.VertexShader)
+					if (profile.DrawParameters == DrawParametersSupport.Extension && stage.Key == ShaderStage.Vertex)
 					{
 						// glslang declares gl_BaseInstanceARB from GLSL 4.50 on only (the extension asks for 1.40, drivers
 						// take it in 4.30): the checked copy says 450. The profile without draw parameters checks the
@@ -173,7 +173,7 @@ namespace LELEngine.Editor
 				}
 			}
 
-			foreach ((ShaderType type, string source, List<ShaderFeatures> profiles) in codes)
+			foreach ((ShaderStage type, string source, List<ShaderFeatures> profiles) in codes)
 			{
 				// Code another variant has (stages a keyword does not touch) was checked already.
 				if (!checkedSources.Add(Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes((int)type + "\n" + source)))))
@@ -195,7 +195,7 @@ namespace LELEngine.Editor
 		}
 
 		// The compiler's errors (null when the stage compiles).
-		private static string Compile(Shaderc api, Compiler* compiler, CompileOptions* options, ShaderType type, string source, string name, out int warnings)
+		private static string Compile(Shaderc api, Compiler* compiler, CompileOptions* options, ShaderStage type, string source, string name, out int warnings)
 		{
 			byte[] text = Encoding.UTF8.GetBytes(source);
 			CompilationResult* compiled;
@@ -222,15 +222,15 @@ namespace LELEngine.Editor
 			}
 		}
 
-		private static ShaderKind Kind(ShaderType type)
+		private static ShaderKind Kind(ShaderStage type)
 		{
 			switch (type)
 			{
-				case ShaderType.FragmentShader: return ShaderKind.FragmentShader;
-				case ShaderType.GeometryShader: return ShaderKind.GeometryShader;
-				case ShaderType.ComputeShader: return ShaderKind.ComputeShader;
-				case ShaderType.TessControlShader: return ShaderKind.TessControlShader;
-				case ShaderType.TessEvaluationShader: return ShaderKind.TessEvaluationShader;
+				case ShaderStage.Fragment: return ShaderKind.FragmentShader;
+				case ShaderStage.Geometry: return ShaderKind.GeometryShader;
+				case ShaderStage.Compute: return ShaderKind.ComputeShader;
+				case ShaderStage.TessControl: return ShaderKind.TessControlShader;
+				case ShaderStage.TessEvaluation: return ShaderKind.TessEvaluationShader;
 				default: return ShaderKind.VertexShader;
 			}
 		}

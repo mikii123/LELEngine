@@ -1292,7 +1292,7 @@ namespace LELEngine.VFX
 		private static void SetSdfUniforms(ShaderProgram program)
 		{
 			GlobalIlluminationSettings gi = Lighting.GI;
-			bool available = gi.DistanceFieldEnabled && gi.GlobalSdf != 0 && gi.Enabled;
+			bool available = gi.DistanceFieldEnabled && gi.GlobalSdf != null && gi.Enabled;
 			if (available)
 			{
 				Lighting.SetSdfUniforms(program);

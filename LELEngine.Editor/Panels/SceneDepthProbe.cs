@@ -100,12 +100,9 @@ void main()
 				return;
 			}
 
-			program ??= ShaderProgram.FromSources("Editor/SceneDepthProbe", new[] { new KeyValuePair<ShaderType, string>(ShaderType.ComputeShader, Source) });
+			program ??= ShaderProgram.FromSources("Editor/SceneDepthProbe", new[] { new KeyValuePair<ShaderStage, string>(ShaderStage.Compute, Source) });
 			buffer ??= Gfx.Device.CreateBuffer(new BufferDescriptor(BufferUsage.Storage | BufferUsage.Readback, cells.Length * sizeof(float), false, "Scene depth probe cells"));
 
-			// Other passes keep their own storage buffer on binding 0: put it back afterwards.
-			// LEGACY(gl): the passes that still bind their storage buffers with OpenGL commands count on them staying bound
-			GL.GetInteger((GetIndexedPName)All.ShaderStorageBufferBinding, 0, out int previous);
 			CommandList commands = Gfx.Commands;
 			program.Use();
 			program.SetTexture("SceneDepth", depth, Samplers.PointClamp);
@@ -113,8 +110,6 @@ void main()
 			program.SetInt2("gridSize", GridWidth, GridHeight);
 			commands.SetStorageBuffer(0, buffer);
 			commands.Dispatch((GridWidth + 7) / 8, (GridHeight + 7) / 8, 1);
-			// LEGACY(gl): see above
-			GL.BindBufferBase(BufferRangeTarget.ShaderStorageBuffer, 0, previous);
 			commands.SetProgram(null);
 			fence = Gfx.Device.CreateFence();
 			pendingInverseViewProjection = camera.ViewProjectionMatrix.Inverted();

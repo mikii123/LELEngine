@@ -112,9 +112,8 @@ namespace LELEngine.Rendering
 
 		/// <summary>
 		///     Copies the scene target into the grab inside <paramref name="count" /> rectangles of
-		///     <paramref name="rects" /> from <paramref name="start" />, then begins a pass into the scene target again
-		///     (<see cref="Renderer.BeginPass" />). Leaves blending, depth testing and face culling off and another program
-		///     in use.
+		///     <paramref name="rects" /> from <paramref name="start" />, then begins a pass into the scene target again.
+		///     Leaves blending, depth testing and face culling off and another program in use.
 		/// </summary>
 		public void Copy(RenderContext context, List<PixelRect> rects, int start, int count)
 		{
@@ -138,7 +137,7 @@ namespace LELEngine.Rendering
 			}
 
 			commands.DisableScissor();
-			Renderer.BeginPass(context.SceneTarget);
+			context.SceneTarget.Begin();
 			CopyCount++;
 		}
 

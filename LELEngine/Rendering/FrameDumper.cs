@@ -71,7 +71,7 @@ namespace LELEngine.Rendering
 		///     Reads the currently bound framebuffer (the default one's back buffer, or an offscreen target's first
 		///     color attachment) and writes it. Call after the frame is complete, before the buffer swap.
 		/// </summary>
-		// LEGACY(gl): used by Renderer.cs, LELEngine.Editor/MainWindow.cs, Audio/AudioStudioWindow.cs, UIBuilder/BuilderWindow.cs
+		// LEGACY(gl): used by LELEngine.Editor/MainWindow.cs, Audio/AudioStudioWindow.cs, UIBuilder/BuilderWindow.cs
 		public void Capture(int width, int height, bool offscreen = false)
 		{
 			if (remaining <= 0)

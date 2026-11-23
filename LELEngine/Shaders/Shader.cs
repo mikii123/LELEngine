@@ -12,7 +12,7 @@ namespace LELEngine.Shaders
 	{
 		#region PublicFields
 
-		public ShaderType Type { get; }
+		public ShaderStage Type { get; }
 		public string Source { get; }
 
 		/// <summary>What messages about the stage call it.</summary>
@@ -34,7 +34,7 @@ namespace LELEngine.Shaders
 			}
 		}
 
-		public Shader(string code, ShaderType type, string debugName = null)
+		public Shader(string code, ShaderStage type, string debugName = null)
 		{
 			Type = type;
 			Source = code;
@@ -49,58 +49,31 @@ namespace LELEngine.Shaders
 		public void Delete()
 		{ }
 
-		public static bool TryParseTag(string line, out ShaderType type)
+		public static bool TryParseTag(string line, out ShaderStage type)
 		{
 			switch (line)
 			{
 				case "/////Vertex":
-					type = ShaderType.VertexShader;
+					type = ShaderStage.Vertex;
 					return true;
 				case "/////Fragment":
-					type = ShaderType.FragmentShader;
+					type = ShaderStage.Fragment;
 					return true;
 				case "/////Geometry":
-					type = ShaderType.GeometryShader;
+					type = ShaderStage.Geometry;
 					return true;
 				case "/////Compute":
-					type = ShaderType.ComputeShader;
+					type = ShaderStage.Compute;
 					return true;
 				case "/////TessControl":
-					type = ShaderType.TessControlShader;
+					type = ShaderStage.TessControl;
 					return true;
 				case "/////TessEvaluation":
-					type = ShaderType.TessEvaluationShader;
+					type = ShaderStage.TessEvaluation;
 					return true;
 				default:
-					type = ShaderType.VertexShader;
+					type = ShaderStage.Vertex;
 					return false;
-			}
-		}
-
-		/// <summary>The device's name of a stage.</summary>
-		public static ShaderStage StageOf(ShaderType type)
-		{
-			switch (type)
-			{
-				case ShaderType.FragmentShader: return ShaderStage.Fragment;
-				case ShaderType.GeometryShader: return ShaderStage.Geometry;
-				case ShaderType.ComputeShader: return ShaderStage.Compute;
-				case ShaderType.TessControlShader: return ShaderStage.TessControl;
-				case ShaderType.TessEvaluationShader: return ShaderStage.TessEvaluation;
-				default: return ShaderStage.Vertex;
-			}
-		}
-
-		public static ShaderType TypeOf(ShaderStage stage)
-		{
-			switch (stage)
-			{
-				case ShaderStage.Fragment: return ShaderType.FragmentShader;
-				case ShaderStage.Geometry: return ShaderType.GeometryShader;
-				case ShaderStage.Compute: return ShaderType.ComputeShader;
-				case ShaderStage.TessControl: return ShaderType.TessControlShader;
-				case ShaderStage.TessEvaluation: return ShaderType.TessEvaluationShader;
-				default: return ShaderType.VertexShader;
 			}
 		}
 
@@ -108,9 +81,9 @@ namespace LELEngine.Shaders
 
 		#region PrivateMethods
 
-		private static ShaderType ParseTag(string tag)
+		private static ShaderStage ParseTag(string tag)
 		{
-			ShaderType type;
+			ShaderStage type;
 			TryParseTag(tag, out type);
 			return type;
 		}

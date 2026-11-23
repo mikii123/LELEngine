@@ -189,14 +189,8 @@ namespace LELEngine.Rendering.Impostors
 			int tile = frameSize * samples;
 			Framebuffer capture = null;
 			Framebuffer atlas = null;
-			// A bake may run in the middle of a frame (the editor's Bake button): the targets and the viewport it found
-			// are put back.
-			// LEGACY(gl): the callers that bake in the middle of a frame (LELEngine.Editor's Bake button) draw on with
-			// OpenGL commands; the device cannot tell which pass was open, nor open it again.
-			var viewport = new int[4];
-			GL.GetInteger(GetPName.Viewport, viewport);
-			int drawTarget = GL.GetInteger(GetPName.DrawFramebufferBinding);
-			int readTarget = GL.GetInteger(GetPName.ReadFramebufferBinding);
+			// A bake may run in the middle of a frame (the editor's Bake button): it ends the pass that was open, and its
+			// caller begins that pass again to draw on.
 			CommandList commands = Gfx.Commands;
 			var fullscreen = new FullscreenQuad();
 			try
@@ -226,14 +220,6 @@ namespace LELEngine.Rendering.Impostors
 				int parallel = Math.Max(1, Environment.ProcessorCount);
 				Matrix4 projection = ImpostorMath.FrameProjection(radius);
 				commands.State.Blend = false;
-
-				// A texture's first use uploads it and makes its mip levels, which ends a pass: every surface's values
-				// are given once before the first one.
-				commands.EndRenderPass();
-				foreach (Surface surface in surfaces)
-				{
-					SetSurface(surface, Matrix4.Identity, projection);
-				}
 
 				for (int row = 0; row < frames; row++)
 				{
@@ -316,10 +302,6 @@ namespace LELEngine.Rendering.Impostors
 				commands.State.SetDepth(true, true, CompareFunction.Less);
 				commands.State.Culling = FaceCulling.Back;
 				commands.State.ColorMask = ColorWriteMask.All;
-				// LEGACY(gl): see above.
-				GL.BindFramebuffer(FramebufferTarget.DrawFramebuffer, drawTarget);
-				GL.BindFramebuffer(FramebufferTarget.ReadFramebuffer, readTarget);
-				GL.Viewport(viewport[0], viewport[1], viewport[2], viewport[3]);
 			}
 
 			bake.Milliseconds = watch.Elapsed.TotalMilliseconds;

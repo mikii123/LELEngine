@@ -168,26 +168,6 @@ namespace LELEngine.Rendering
 			program.SetTexture("ShadowTransmittance", transmittance);
 		}
 
-		/// <summary>
-		///     Binds a transmittance map for Engine/Shadows.glsl (null: receivers use the opaque shadow only). The sampler
-		///     gets its unit either way: left on unit 0 it shares it with a sampler of another type, and a program lighting
-		///     the GI then did not run at all (no light went into the voxels or the cards of a frame without transparent
-		///     casters).
-		/// </summary>
-		// LEGACY(gl): used by Lighting.cs
-		public static void SetUniforms(ShaderProgram program, RenderTexture transmittance, int textureUnit)
-		{
-			program.SetInt("shadowTransmittanceEnabled", transmittance != null ? 1 : 0);
-			if (transmittance != null)
-			{
-				program.SetTexture("ShadowTransmittance", TextureTarget.Texture2D, transmittance.Handle, textureUnit);
-			}
-			else
-			{
-				program.SetInt("ShadowTransmittance", textureUnit);
-			}
-		}
-
 		#endregion
 	}
 }

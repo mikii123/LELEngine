@@ -104,6 +104,7 @@ namespace LELEngine
 			}
 		}
 
+		// LEGACY(gl): used by LELEngine.Editor (Inspector/ImpostorInspector.cs, ObjectPicker.cs, TextureImporterInspector.cs, Panels/ProjectSettingsWindow.cs)
 		/// <summary>The OpenGL texture object: only for the code that still gives OpenGL commands itself.</summary>
 		public int Handle => Gpu is Graphics.OpenGL.GLTexture texture ? texture.Handle : 0;
 
@@ -162,9 +163,6 @@ namespace LELEngine
 		#endregion
 
 		#region InternalMethods
-
-		/// <summary>The OpenGL binding target of this texture type: only for the code that still gives OpenGL commands itself.</summary>
-		internal TextureTarget Target => Kind == TextureKind.Cube ? TextureTarget.TextureCubeMap : Kind == TextureKind.Texture3D ? TextureTarget.Texture3D : TextureTarget.Texture2D;
 
 		/// <summary>What kind of texture the GPU gets.</summary>
 		internal abstract TextureKind Kind { get; }

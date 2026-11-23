@@ -41,7 +41,7 @@ namespace LELEngine.Rendering.Passes
 			}
 
 			CommandList commands = Gfx.Commands;
-			Renderer.BeginPass(context.SceneTarget);
+			context.SceneTarget.Begin();
 			commands.State.Culling = FaceCulling.Back;
 
 			if (context.DepthPrepassDone)
@@ -100,7 +100,6 @@ namespace LELEngine.Rendering.Passes
 				{
 					Material.SetDefaultTextures(program);
 				}
-				Renderer.ContinuePass();
 				gpu.DrawCameraBucket(i);
 			}
 		}

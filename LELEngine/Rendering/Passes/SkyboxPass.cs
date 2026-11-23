@@ -32,7 +32,7 @@ namespace LELEngine.Rendering.Passes
 			}
 
 			CommandList commands = Gfx.Commands;
-			Renderer.BeginPass(context.SceneTarget);
+			context.SceneTarget.Begin();
 			commands.State.SetDepth(true, false, CompareFunction.LessEqual);
 			commands.State.Culling = FaceCulling.None;
 
@@ -45,7 +45,6 @@ namespace LELEngine.Rendering.Passes
 			program.SetMatrix4("invViewProjection", invViewProjection);
 			program.SetVector3("CamPosition", context.CameraPosition);
 			sky.SetUniforms(program);
-			Renderer.ContinuePass();
 			context.Fullscreen.Draw();
 
 			commands.State.SetDepth(true, true, CompareFunction.Less);

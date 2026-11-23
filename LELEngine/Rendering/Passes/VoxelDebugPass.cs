@@ -42,7 +42,7 @@ namespace LELEngine.Rendering.Passes
 			GlobalIlluminationSettings gi = Lighting.GI;
 			// The volume this renderer's voxel pass lit (what it published for the materials this frame).
 			VoxelGIPass volume = context.Renderer.GetPass<VoxelGIPass>();
-			if (gi.VoxelTexture == 0 || volume == null || volume.RadianceTexture == null)
+			if (gi.VoxelTexture == null || volume == null || volume.RadianceTexture == null)
 			{
 				return;
 			}
@@ -70,8 +70,8 @@ namespace LELEngine.Rendering.Passes
 			program.SetInt("voxelResolution", gi.Resolution);
 			program.SetFloat("debugMip", Mip);
 			// The voxels and the directional data their mips have (Engine/VoxelRadiance.glsl), all point sampled; the
-			// directional data only where the materials read it too (the context has their texture units).
-			VoxelMipMode mode = Lighting.EffectiveVoxelMips(gi.VoxelVolume, Lighting.VoxelDirectionalTextureUnit);
+			// directional data only where the materials read it too (the device lets a program sample that many textures).
+			VoxelMipMode mode = Lighting.EffectiveVoxelMips(gi.VoxelVolume);
 			program.SetTexture("VoxelRadiance", volume.RadianceTexture, nearestSampler);
 			program.SetInt("giVoxelMips", (int)mode);
 			if (mode == VoxelMipMode.Anisotropic)

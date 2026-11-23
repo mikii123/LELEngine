@@ -211,8 +211,8 @@ void main()
 
 		public override void Initialize(Renderer renderer)
 		{
-			var vertex = new Shader(VertexSource, ShaderType.VertexShader, "Builtin/DebugDraw");
-			var fragment = new Shader(FragmentSource, ShaderType.FragmentShader, "Builtin/DebugDraw");
+			var vertex = new Shader(VertexSource, ShaderStage.Vertex, "Builtin/DebugDraw");
+			var fragment = new Shader(FragmentSource, ShaderStage.Fragment, "Builtin/DebugDraw");
 			program = new ShaderProgram("Builtin/DebugDraw", vertex, fragment);
 			vertex.Delete();
 			fragment.Delete();

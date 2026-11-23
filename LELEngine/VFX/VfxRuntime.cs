@@ -135,7 +135,7 @@ namespace LELEngine.VFX
 		}
 
 		/// <summary>The GL context is up: effects can allocate buffers and run.</summary>
-		public static bool Available => GLCapabilities.Initialized;
+		public static bool Available => GraphicsCapabilities.Initialized;
 
 		/// <summary>The depth of the view rendered last (collisions in the next simulation use it).</summary>
 		public static VfxDepthCapture LastDepth { get; private set; }
@@ -1644,7 +1644,7 @@ namespace LELEngine.VFX
 
 		private static ComputeShader Compute(VfxProgramSet set, string name, string source, Action drop)
 		{
-			ShaderProgram program = ShaderProgram.StartFromSources("VFX/" + name, new[] { new KeyValuePair<ShaderType, string>(ShaderType.ComputeShader, source) });
+			ShaderProgram program = ShaderProgram.StartFromSources("VFX/" + name, new[] { new KeyValuePair<ShaderStage, string>(ShaderStage.Compute, source) });
 			set.Started.Add((name, program, drop));
 			return ComputeShader.FromProgram(program);
 		}
@@ -1653,8 +1653,8 @@ namespace LELEngine.VFX
 		{
 			ShaderProgram program = ShaderProgram.StartFromSources("VFX/" + name, new[]
 			{
-				new KeyValuePair<ShaderType, string>(ShaderType.VertexShader, vertex),
-				new KeyValuePair<ShaderType, string>(ShaderType.FragmentShader, fragment)
+				new KeyValuePair<ShaderStage, string>(ShaderStage.Vertex, vertex),
+				new KeyValuePair<ShaderStage, string>(ShaderStage.Fragment, fragment)
 			}, defines);
 			set.Started.Add((name, program, drop));
 			return program;

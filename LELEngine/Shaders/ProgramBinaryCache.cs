@@ -76,12 +76,12 @@ namespace LELEngine.Shaders
 		}
 
 		/// <summary>The cache key of a program: a hash of its stages' types and final sources.</summary>
-		public static string Key(IEnumerable<KeyValuePair<ShaderType, string>> stages)
+		public static string Key(IEnumerable<KeyValuePair<ShaderStage, string>> stages)
 		{
 			using (var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256))
 			{
 				hash.AppendData(Encoding.UTF8.GetBytes(LinkState));
-				foreach (KeyValuePair<ShaderType, string> stage in stages)
+				foreach (KeyValuePair<ShaderStage, string> stage in stages)
 				{
 					hash.AppendData(Encoding.UTF8.GetBytes("\n" + (int)stage.Key + "\n"));
 					hash.AppendData(Encoding.UTF8.GetBytes(stage.Value));
