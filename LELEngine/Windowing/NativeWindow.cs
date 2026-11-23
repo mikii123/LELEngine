@@ -171,6 +171,10 @@ namespace LELEngine.Windowing
 			Glfw.WindowHint(GlfwWindowHint.RedBits, mode.RedBits);
 			Glfw.WindowHint(GlfwWindowHint.GreenBits, mode.GreenBits);
 			Glfw.WindowHint(GlfwWindowHint.BlueBits, mode.BlueBits);
+			// A window's back buffer is colour only on every graphics API (a pass into it has no depth attachment): an
+			// OpenGL window with a depth buffer of its own would depth-test draws against whatever it holds.
+			Glfw.WindowHint(GlfwWindowHint.DepthBits, 0);
+			Glfw.WindowHint(GlfwWindowHint.StencilBits, 0);
 			Glfw.WindowHint(GlfwWindowHint.RefreshRate, mode.RefreshRate);
 
 			cachedLocation = settings.Location ?? new Vector2i(32, 32);
