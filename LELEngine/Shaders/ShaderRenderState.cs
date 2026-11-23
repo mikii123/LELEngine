@@ -131,14 +131,14 @@ namespace LELEngine.Shaders
 		public static readonly ShaderRenderState Default = new ShaderRenderState();
 
 		public bool BlendEnabled;
-		public BlendingFactor SrcColor = BlendingFactor.SrcAlpha;
-		public BlendingFactor DstColor = BlendingFactor.OneMinusSrcAlpha;
-		public BlendingFactor SrcAlpha = BlendingFactor.SrcAlpha;
-		public BlendingFactor DstAlpha = BlendingFactor.OneMinusSrcAlpha;
+		public BlendFactor SrcColor = BlendFactor.SrcAlpha;
+		public BlendFactor DstColor = BlendFactor.OneMinusSrcAlpha;
+		public BlendFactor SrcAlpha = BlendFactor.SrcAlpha;
+		public BlendFactor DstAlpha = BlendFactor.OneMinusSrcAlpha;
 		public bool ZWrite = true;
 
 		/// <summary>Depth test the shader asks for; null leaves the pass's own (Less, or LEqual behind a depth prepass).</summary>
-		public DepthFunction? ZTest;
+		public CompareFunction? ZTest;
 
 		public CullMode Cull = CullMode.Back;
 		public int Queue = MaterialQueue.Geometry;
@@ -303,30 +303,30 @@ namespace LELEngine.Shaders
 					return false;
 				}
 
-				BlendingFactor source = SrcColor;
-				BlendingFactor target = DstColor;
-				bool sourceReadsTarget = source == BlendingFactor.DstColor || source == BlendingFactor.OneMinusDstColor || source == BlendingFactor.DstAlpha
-					|| source == BlendingFactor.OneMinusDstAlpha || source == BlendingFactor.SrcAlphaSaturate;
+				BlendFactor source = SrcColor;
+				BlendFactor target = DstColor;
+				bool sourceReadsTarget = source == BlendFactor.DstColor || source == BlendFactor.OneMinusDstColor || source == BlendFactor.DstAlpha
+					|| source == BlendFactor.OneMinusDstAlpha || source == BlendFactor.SrcAlphaSaturate;
 
 				// target + source x something of the source's own.
-				if (target == BlendingFactor.One && !sourceReadsTarget)
+				if (target == BlendFactor.One && !sourceReadsTarget)
 				{
 					return true;
 				}
 
 				// target x source (also twice), and nothing else.
-				if (source == BlendingFactor.DstColor && (target == BlendingFactor.Zero || target == BlendingFactor.SrcColor))
+				if (source == BlendFactor.DstColor && (target == BlendFactor.Zero || target == BlendFactor.SrcColor))
 				{
 					return true;
 				}
 
-				if (source == BlendingFactor.Zero && target == BlendingFactor.SrcColor)
+				if (source == BlendFactor.Zero && target == BlendFactor.SrcColor)
 				{
 					return true;
 				}
 
 				// Screen: 1 - (1 - source) x (1 - target).
-				return source == BlendingFactor.One && target == BlendingFactor.OneMinusSrcColor;
+				return source == BlendFactor.One && target == BlendFactor.OneMinusSrcColor;
 			}
 		}
 
@@ -388,13 +388,13 @@ namespace LELEngine.Shaders
 				return "it grabs the scene (GrabPass)";
 			}
 
-			if (DstColor != BlendingFactor.One && DstColor != BlendingFactor.OneMinusSrcAlpha)
+			if (DstColor != BlendFactor.One && DstColor != BlendFactor.OneMinusSrcAlpha)
 			{
 				return "its blend's target factor is " + DstColor + " (One or OneMinusSrcAlpha can be laid over the scene)";
 			}
 
-			bool sourceReadsTarget = SrcColor == BlendingFactor.DstColor || SrcColor == BlendingFactor.OneMinusDstColor || SrcColor == BlendingFactor.DstAlpha
-				|| SrcColor == BlendingFactor.OneMinusDstAlpha || SrcColor == BlendingFactor.SrcAlphaSaturate;
+			bool sourceReadsTarget = SrcColor == BlendFactor.DstColor || SrcColor == BlendFactor.OneMinusDstColor || SrcColor == BlendFactor.DstAlpha
+				|| SrcColor == BlendFactor.OneMinusDstAlpha || SrcColor == BlendFactor.SrcAlphaSaturate;
 			return sourceReadsTarget ? "its blend's source factor " + SrcColor + " reads the target" : null;
 		}
 
@@ -414,19 +414,17 @@ namespace LELEngine.Shaders
 		/// <summary>Sets the blend, depth write / test and cull state of a transparent draw.</summary>
 		public void ApplyTransparent()
 		{
+			ref RenderState state = ref GraphicsDevice.Current.Commands.State;
 			if (BlendEnabled)
 			{
-				GL.Enable(EnableCap.Blend);
-				GL.BlendFuncSeparate((BlendingFactorSrc)SrcColor, (BlendingFactorDest)DstColor, (BlendingFactorSrc)SrcAlpha, (BlendingFactorDest)DstAlpha);
+				state.SetBlend(SrcColor, DstColor, SrcAlpha, DstAlpha);
 			}
 			else
 			{
-				GL.Disable(EnableCap.Blend);
+				state.Blend = false;
 			}
 
-			GL.Enable(EnableCap.DepthTest);
-			GL.DepthMask(ZWrite);
-			GL.DepthFunc(ZTest ?? DepthFunction.Lequal);
+			state.SetDepth(true, ZWrite, ZTest ?? CompareFunction.LessEqual);
 			ApplyCull();
 		}
 
@@ -437,26 +435,27 @@ namespace LELEngine.Shaders
 		/// </summary>
 		public void ApplyLowResolution()
 		{
-			GL.Enable(EnableCap.Blend);
-			GL.BlendFuncSeparate((BlendingFactorSrc)SrcColor, (BlendingFactorDest)DstColor, BlendingFactorSrc.Zero,
-				DstColor == BlendingFactor.One ? BlendingFactorDest.One : BlendingFactorDest.OneMinusSrcAlpha);
-			GL.Enable(EnableCap.DepthTest);
-			GL.DepthMask(false);
-			GL.DepthFunc(ZTest ?? DepthFunction.Lequal);
+			ref RenderState state = ref GraphicsDevice.Current.Commands.State;
+			state.SetBlend(SrcColor, DstColor, BlendFactor.Zero, DstColor == BlendFactor.One ? BlendFactor.One : BlendFactor.OneMinusSrcAlpha);
+			state.SetDepth(true, false, ZTest ?? CompareFunction.LessEqual);
 			ApplyCull();
 		}
 
 		/// <summary>Sets the cull state (every pass that draws with the material's shader).</summary>
 		public void ApplyCull()
 		{
-			if (Cull == CullMode.Off)
+			GraphicsDevice.Current.Commands.State.Culling = Cull == CullMode.Off ? FaceCulling.None : Cull == CullMode.Front ? FaceCulling.Front : FaceCulling.Back;
+		}
+
+		// The words the render state's description always used for depth tests.
+		private static string TestName(CompareFunction function)
+		{
+			switch (function)
 			{
-				GL.Disable(EnableCap.CullFace);
-			}
-			else
-			{
-				GL.Enable(EnableCap.CullFace);
-				GL.CullFace(Cull == CullMode.Front ? TriangleFace.Front : TriangleFace.Back);
+				case CompareFunction.LessEqual: return "Lequal";
+				case CompareFunction.GreaterEqual: return "Gequal";
+				case CompareFunction.NotEqual: return "Notequal";
+				default: return function.ToString();
 			}
 		}
 
@@ -475,7 +474,7 @@ namespace LELEngine.Shaders
 			}
 
 			if (!ZWrite) text.Append(", ZWrite Off");
-			if (ZTest.HasValue) text.Append(", ZTest ").Append(ZTest.Value);
+			if (ZTest.HasValue) text.Append(", ZTest ").Append(TestName(ZTest.Value));
 			if (Cull != CullMode.Back) text.Append(", Cull ").Append(Cull);
 			if (!CastShadows) text.Append(", no shadows");
 			if (CustomShadowCaster) text.Append(", own shadow caster");
@@ -507,7 +506,7 @@ namespace LELEngine.Shaders
 			// "Src Dst" or "Src Dst, SrcAlpha DstAlpha".
 			string[] groups = text.Split(',');
 			string[] color = Split(groups[0]);
-			if (groups.Length > 2 || color.Length != 2 || !TryFactor(color[0], out BlendingFactor src) || !TryFactor(color[1], out BlendingFactor dst))
+			if (groups.Length > 2 || color.Length != 2 || !TryFactor(color[0], out BlendFactor src) || !TryFactor(color[1], out BlendFactor dst))
 			{
 				error = "expected 'Blend <SrcFactor> <DstFactor>[, <SrcFactor> <DstFactor>]' or 'Blend Off'";
 				return false;
@@ -531,22 +530,22 @@ namespace LELEngine.Shaders
 			return true;
 		}
 
-		private static bool TryFactor(string name, out BlendingFactor factor)
+		private static bool TryFactor(string name, out BlendFactor factor)
 		{
 			switch (name.ToLowerInvariant())
 			{
-				case "one": factor = BlendingFactor.One; return true;
-				case "zero": factor = BlendingFactor.Zero; return true;
-				case "srccolor": factor = BlendingFactor.SrcColor; return true;
-				case "srcalpha": factor = BlendingFactor.SrcAlpha; return true;
-				case "dstcolor": factor = BlendingFactor.DstColor; return true;
-				case "dstalpha": factor = BlendingFactor.DstAlpha; return true;
-				case "oneminussrccolor": factor = BlendingFactor.OneMinusSrcColor; return true;
-				case "oneminussrcalpha": factor = BlendingFactor.OneMinusSrcAlpha; return true;
-				case "oneminusdstcolor": factor = BlendingFactor.OneMinusDstColor; return true;
-				case "oneminusdstalpha": factor = BlendingFactor.OneMinusDstAlpha; return true;
+				case "one": factor = BlendFactor.One; return true;
+				case "zero": factor = BlendFactor.Zero; return true;
+				case "srccolor": factor = BlendFactor.SrcColor; return true;
+				case "srcalpha": factor = BlendFactor.SrcAlpha; return true;
+				case "dstcolor": factor = BlendFactor.DstColor; return true;
+				case "dstalpha": factor = BlendFactor.DstAlpha; return true;
+				case "oneminussrccolor": factor = BlendFactor.OneMinusSrcColor; return true;
+				case "oneminussrcalpha": factor = BlendFactor.OneMinusSrcAlpha; return true;
+				case "oneminusdstcolor": factor = BlendFactor.OneMinusDstColor; return true;
+				case "oneminusdstalpha": factor = BlendFactor.OneMinusDstAlpha; return true;
 				default:
-					factor = BlendingFactor.One;
+					factor = BlendFactor.One;
 					return false;
 			}
 		}
@@ -640,15 +639,15 @@ namespace LELEngine.Shaders
 			error = null;
 			switch (text.Trim().ToLowerInvariant())
 			{
-				case "less": ZTest = DepthFunction.Less; return true;
-				case "lequal": ZTest = DepthFunction.Lequal; return true;
-				case "equal": ZTest = DepthFunction.Equal; return true;
-				case "gequal": ZTest = DepthFunction.Gequal; return true;
-				case "greater": ZTest = DepthFunction.Greater; return true;
-				case "notequal": ZTest = DepthFunction.Notequal; return true;
+				case "less": ZTest = CompareFunction.Less; return true;
+				case "lequal": ZTest = CompareFunction.LessEqual; return true;
+				case "equal": ZTest = CompareFunction.Equal; return true;
+				case "gequal": ZTest = CompareFunction.GreaterEqual; return true;
+				case "greater": ZTest = CompareFunction.Greater; return true;
+				case "notequal": ZTest = CompareFunction.NotEqual; return true;
 				case "always":
 				case "off":
-					ZTest = DepthFunction.Always;
+					ZTest = CompareFunction.Always;
 					return true;
 				default:
 					error = "expected Less, LEqual, Equal, GEqual, Greater, NotEqual or Always";

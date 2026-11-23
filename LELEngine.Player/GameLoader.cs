@@ -310,7 +310,7 @@ namespace LELEngine.Player
 				Debug.LogWarning("[Player] Rendering the start scene ahead failed: " + e.Message);
 			}
 
-			GL.Finish();
+			GraphicsDevice.Current.Finish();
 		}
 
 		#endregion

@@ -81,9 +81,10 @@ namespace LELEngine
 				},
 				CreateSettings(width, height, title, apiVersion, visible || fullscreen, fullscreen))
 		{
-			// OpenGL's functions for this window's context (current since the base constructor made it).
-			GL.LoadBindings();
-			Console.WriteLine("GL version: " + GL.GetString(StringName.Version) + "\nRenderer: " + GL.GetString(StringName.Renderer) + "\nVSync: " + VSync);
+			// The graphics device was made with this window's context (current since the base constructor made it).
+			DeviceCapabilities capabilities = GraphicsDevice.Current.Capabilities;
+			Console.WriteLine((capabilities.Api == GraphicsApi.OpenGL ? "GL version: " + capabilities.DriverVersion : "Graphics: " + capabilities.ApiVersion + ", driver " + capabilities.DriverVersion)
+				+ "\nRenderer: " + capabilities.Renderer + "\nVSync: " + VSync);
 			GLCapabilities.Initialize();
 		}
 
@@ -97,7 +98,7 @@ namespace LELEngine
 			// every frame binds its own viewport.
 			if (Context.IsCurrent)
 			{
-				GL.Viewport(0, 0, e.Width, e.Height);
+				GraphicsDevice.Current.Commands.SetViewport(0, 0, e.Width, e.Height);
 			}
 
 			// The pending frame has the old size; the next swap waits for the earlier ones (see PresentPendingFrame).
@@ -141,7 +142,7 @@ namespace LELEngine
 			// the next frame is submitted (PresentPendingFrame). On this driver SwapBuffers blocks until the
 			// GPU has finished the frame, so swapping here would leave the GPU idle during the next update
 			// and command submission; deferring the swap overlaps that CPU work with GPU rendering.
-			GL.Flush();
+			GraphicsDevice.Current.Flush();
 			framePending = true;
 			pendingFrameSize = FramebufferSize;
 
@@ -311,7 +312,7 @@ namespace LELEngine
 			Present();
 			if (cloaked)
 			{
-				GL.Finish();
+				GraphicsDevice.Current.Finish();
 				DwmFlush();
 				int off = 0;
 				DwmSetWindowAttribute(handle, DwmCloak, ref off, sizeof(int));
@@ -360,7 +361,7 @@ namespace LELEngine
 		/// </summary>
 		private static void WaitForQueuedPresents()
 		{
-			GL.Finish();
+			GraphicsDevice.Current.Finish();
 			if (OperatingSystem.IsWindows())
 			{
 				DwmFlush();

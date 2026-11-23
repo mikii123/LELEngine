@@ -37,7 +37,6 @@ namespace LELEngine
 
 		private byte[][] faces;
 		private float[][] floatFaces;
-		private static bool seamlessEnabled;
 
 		#endregion
 

@@ -5,10 +5,9 @@ using System.Globalization;
 using System.IO;
 using System.Text;
 using System.Threading;
-using Brutal.GlfwApi;
-using Brutal.Numerics;
 using LELEngine.Graphics;
 using LELEngine.Rendering;
+using LELEngine.Windowing;
 
 namespace LELEngine.Shaders
 {
@@ -62,25 +61,27 @@ namespace LELEngine.Shaders
 			}
 
 			Window.InitializeGlfw();
-			Glfw.WindowHint(GlfwWindowHint.Visible, 0);
-			Glfw.WindowHint(GlfwWindowHint.ClientApi, Glfw.Constants.GLFW_OPENGL_API);
-			Glfw.WindowHint(GlfwWindowHint.ContextVersionMajor, request.GLMajor);
-			Glfw.WindowHint(GlfwWindowHint.ContextVersionMinor, request.GLMinor);
-			Glfw.WindowHint(GlfwWindowHint.OpenGlProfile, Glfw.Constants.GLFW_OPENGL_CORE_PROFILE);
-			Glfw.WindowHint(GlfwWindowHint.OpenGlForwardCompat, 1);
-			GlfwWindow window;
+			// A hidden window of its own: the graphics device is made with it, as the game's is with its window.
+			NativeWindow window;
 			try
 			{
-				window = Glfw.CreateWindow(new GlfwWindow.CreateInfo { Title = "LELEngine shader compile helper", Size = new int2(1, 1) });
+				window = new NativeWindow(new NativeWindowSettings
+				{
+					ClientSize = new Mathematics.Vector2i(1, 1),
+					Title = "LELEngine shader compile helper",
+					APIVersion = new Version(request.GLMajor, request.GLMinor),
+					Profile = ContextProfile.Core,
+					Flags = ContextFlags.ForwardCompatible,
+					StartVisible = false,
+					StartFocused = false
+				});
 			}
-			catch (InvalidOperationException)
+			catch (Exception e) when (e is InvalidOperationException || e is NotSupportedException)
 			{
 				Console.Error.WriteLine($"No GL {request.GLMajor}.{request.GLMinor} context");
 				return 3;
 			}
 
-			window.MakeContextCurrent();
-			GL.LoadBindings();
 			GLCapabilities.Initialize();
 			AssetDatabase.Initialize(request.DataFolder);
 			ProgramBinaryCache.Folder = request.CacheFolder;

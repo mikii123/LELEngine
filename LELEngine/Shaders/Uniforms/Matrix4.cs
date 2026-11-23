@@ -23,11 +23,7 @@ namespace LELEngine.Shaders.Uniforms
 
 		public override void Set(ShaderProgram program)
 		{
-			// get uniform location
-			int handle = program.GetUniformLocation(Name);
-
-			// set uniform value
-			GL.UniformMatrix4(handle, false, ref Matrix);
+			program.SetMatrix4(Name, Matrix);
 		}
 
 		#endregion

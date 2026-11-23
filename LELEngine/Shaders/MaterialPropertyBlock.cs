@@ -247,29 +247,29 @@ namespace LELEngine.Shaders
 						VectorProperty.UploadVector(program, entry.Name, entry.Value);
 						break;
 					case Kind.Matrix:
-						int matrixLocation = program.GetUniformLocation(entry.Name);
-						if (matrixLocation >= 0)
-						{
-							GL.UniformMatrix4(matrixLocation, false, ref entry.Matrix);
-						}
-
+						program.SetMatrix4(entry.Name, entry.Matrix);
 						break;
 					case Kind.Texture:
 						TextureProperty.Bind(program, entry.Name, entry.Texture, ref textureUnit);
 						break;
 					case Kind.FloatArray:
-						int floatsLocation = program.GetUniformLocation(entry.Name);
-						if (floatsLocation >= 0 && entry.Count > 0)
+						if (entry.Count > 0)
 						{
-							GL.Uniform1(floatsLocation, entry.Count, entry.Data);
+							program.SetFloatArray(entry.Name, new ReadOnlySpan<float>(entry.Data, 0, entry.Count));
 						}
 
 						break;
 					case Kind.VectorArray:
-						int vectorsLocation = program.GetUniformLocation(entry.Name);
-						if (vectorsLocation >= 0 && entry.Count > 0)
+						int vectorsSlot = program.GetSlot(entry.Name);
+						if (vectorsSlot >= 0 && entry.Count > 0)
 						{
-							GL.Uniform4(vectorsLocation, entry.Count, entry.Data);
+							unsafe
+							{
+								fixed (float* vectors = entry.Data)
+								{
+									program.Gpu.SetFloats(vectorsSlot, vectors, 4, entry.Count);
+								}
+							}
 						}
 
 						break;

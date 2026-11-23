@@ -25,8 +25,7 @@ namespace LELEngine.Shaders.Uniforms
 
 		public override void Set(ShaderProgram program)
 		{
-			int handle = program.GetUniformLocation(Name);
-			GL.Uniform4(handle, ref Vector);
+			program.SetVector4(Name, Vector);
 		}
 
 		#endregion

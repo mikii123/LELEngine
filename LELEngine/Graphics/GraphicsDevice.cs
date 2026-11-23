@@ -113,6 +113,19 @@ namespace LELEngine.Graphics
 		/// <summary>Sends the commands given so far and waits until the GPU has executed them.</summary>
 		public abstract void Finish();
 
+		/// <summary>Programs build on the device's own threads from now on, or (false) on the thread that makes them.</summary>
+		public virtual void SetParallelShaderCompile(bool enabled)
+		{ }
+
+		/// <summary>
+		///     A context without a window of its own, for a thread that only builds programs beside the thread that
+		///     draws: the thread makes it current, makes programs, and releases it. Null when the device has none to give.
+		/// </summary>
+		public virtual GraphicsContext CreateWorkerContext()
+		{
+			return null;
+		}
+
 		/// <summary>The graphics side of a window: made by the window's constructor.</summary>
 		internal abstract GraphicsContext CreateWindowContext(NativeWindow window, NativeWindowSettings settings);
 

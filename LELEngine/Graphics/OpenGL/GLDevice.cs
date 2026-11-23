@@ -404,6 +404,53 @@ namespace LELEngine.Graphics.OpenGL
 			initialized = true;
 		}
 
+		public override void SetParallelShaderCompile(bool enabled)
+		{
+			SetCompilerThreads(enabled);
+		}
+
+		/// <summary>A hidden 1 x 1 window whose context shares objects with the current one (main thread: GLFW makes windows only there).</summary>
+		public override GraphicsContext CreateWorkerContext()
+		{
+			GLContext current = currentContext;
+			if (current == null)
+			{
+				return null;
+			}
+
+			Glfw.WindowHint(GlfwWindowHint.Visible, 0);
+			Glfw.WindowHint(GlfwWindowHint.ClientApi, Glfw.Constants.GLFW_OPENGL_API);
+			Glfw.WindowHint(GlfwWindowHint.ContextVersionMajor, Major);
+			Glfw.WindowHint(GlfwWindowHint.ContextVersionMinor, Minor);
+			Glfw.WindowHint(GlfwWindowHint.OpenGlProfile, Glfw.Constants.GLFW_OPENGL_CORE_PROFILE);
+			Glfw.WindowHint(GlfwWindowHint.OpenGlForwardCompat, 1);
+			GlfwWindow hidden;
+			try
+			{
+				hidden = Glfw.CreateWindow(new GlfwWindow.CreateInfo { Title = "LELEngine shader compiler", Size = new Brutal.Numerics.int2(1, 1), Share = current.Window });
+			}
+			catch (InvalidOperationException)
+			{
+				// The window could not be made (GLFW's reason is in the log).
+				hidden = null;
+			}
+
+			// GLFW's defaults back for the windows made later (the engine's windows set their own context hints anyway).
+			Glfw.WindowHint(GlfwWindowHint.Visible, 1);
+			Glfw.WindowHint(GlfwWindowHint.ContextVersionMajor, 1);
+			Glfw.WindowHint(GlfwWindowHint.ContextVersionMinor, 0);
+			Glfw.WindowHint(GlfwWindowHint.OpenGlProfile, Glfw.Constants.GLFW_OPENGL_ANY_PROFILE);
+			Glfw.WindowHint(GlfwWindowHint.OpenGlForwardCompat, 0);
+
+			// glfwCreateWindow leaves the current context alone; checked all the same.
+			if (Glfw.GetCurrentContext() != current.WindowPtr)
+			{
+				current.MakeCurrent();
+			}
+
+			return hidden != null ? new GLContext(this, hidden) : null;
+		}
+
 		/// <summary>How many driver threads compile programs: all it likes, or none (the calling thread compiles).</summary>
 		internal void SetCompilerThreads(bool parallel)
 		{

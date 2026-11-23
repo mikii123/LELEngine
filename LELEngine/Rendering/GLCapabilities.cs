@@ -1,12 +1,12 @@
 using System;
-using System.Collections.Generic;
 using LELEngine.Graphics;
 
 namespace LELEngine.Rendering
 {
 	/// <summary>
-	///     What the current OpenGL context offers beyond the 4.3 baseline the engine requires. Queried once after
-	///     context creation; passes use it to pick the native path and fall back to 4.3 code otherwise.
+	///     What the graphics device offers beyond the baseline the engine requires (<see cref="DeviceCapabilities" />),
+	///     as the rendering code asks for it. Read once after the device is made; passes use it to pick the native
+	///     path and fall back otherwise.
 	///     The environment variable LEL_GL_DISABLE (comma separated: drawparameters, indirectparameters, subgroups,
 	///     parallelcompile, compilethread: <see cref="Shaders.ShaderCompilation.UseCompileThread" />) turns detected features
 	///     off, so the fallbacks can be tested on hardware that has everything;
@@ -16,26 +16,27 @@ namespace LELEngine.Rendering
 	{
 		#region PublicFields
 
+		/// <summary>The OpenGL version of an OpenGL device (4.6 for any other: what its shaders are written to).</summary>
 		public static int Major { get; private set; }
+
 		public static int Minor { get; private set; }
 
-		/// <summary>glClearTexImage / glClearTexSubImage (OpenGL 4.4).</summary>
+		/// <summary>Textures can be cleared without drawing (always, through the device).</summary>
 		public static bool ClearTexture { get; private set; }
 
-		/// <summary>Direct state access (OpenGL 4.5).</summary>
+		/// <summary>OpenGL 4.5's direct state access, for the code that still gives OpenGL commands itself.</summary>
 		public static bool DirectStateAccess { get; private set; }
 
-		/// <summary>Anisotropic texture filtering (OpenGL 4.6 core, or EXT_texture_filter_anisotropic).</summary>
-		public static bool AnisotropicFiltering { get; private set; }
+		public static bool AnisotropicFiltering => MaxAnisotropy > 1f;
 
 		public static float MaxAnisotropy { get; private set; } = 1f;
 
 		public static int MaxImageUnits { get; private set; }
 
-		/// <summary>Texture units a fragment or compute stage can sample (at least 16).</summary>
+		/// <summary>Textures a program can sample (at least 16).</summary>
 		public static int MaxTextureUnits { get; private set; } = 16;
 
-		/// <summary>The largest 3D texture extent (GL_MAX_3D_TEXTURE_SIZE; at least 256, 2048 on Intel, 16384 on NVIDIA).</summary>
+		/// <summary>The largest 3D texture extent (at least 256, 2048 on Intel, 16384 on NVIDIA).</summary>
 		public static int Max3DTextureSize { get; private set; } = 256;
 
 		/// <summary>
@@ -48,8 +49,8 @@ namespace LELEngine.Rendering
 		public static bool ShaderDrawParametersExtension { get; private set; }
 
 		/// <summary>
-		///     glMultiDrawElementsIndirectCount (ARB_indirect_parameters, core in 4.6): the GPU writes how many draws
-		///     follow. Fallback: one command per instance, culled ones with instance count 0.
+		///     Indirect draws whose count the GPU reads from a buffer: the GPU writes how many draws follow. Fallback:
+		///     one command per instance, culled ones with instance count 0.
 		/// </summary>
 		public static bool IndirectParameters { get; private set; }
 
@@ -59,37 +60,20 @@ namespace LELEngine.Rendering
 		/// </summary>
 		public static bool ComputeSubgroups { get; private set; }
 
-		/// <summary>Shader storage buffer binding points, and storage blocks per vertex / fragment shader (GPU-driven rendering).</summary>
+		/// <summary>Storage buffer binding points, and storage blocks per vertex / fragment shader (GPU-driven rendering).</summary>
 		public static int MaxShaderStorageBindings { get; private set; }
 
 		public static int VertexShaderStorageBlocks { get; private set; }
 		public static int FragmentShaderStorageBlocks { get; private set; }
 
 		/// <summary>
-		///     The driver compiles and links on its own threads (KHR / ARB_parallel_shader_compile, switched on here with as
-		///     many threads as it likes): programs started together compile together (<see cref="Shaders.ShaderProgram" />
-		///     asks for the results only when a program is first used). Without it the same code works, compiling in turn.
+		///     The device builds programs on threads of its own: programs started together compile together
+		///     (<see cref="Shaders.ShaderProgram" /> asks for the results only when a program is first used). Without it the
+		///     same code works, compiling in turn.
 		/// </summary>
 		public static bool ParallelShaderCompile { get; private set; }
 
-		/// <summary>The driver has KHR_ / ARB_parallel_shader_compile (also when LEL_GL_DISABLE switched it off): the compiler thread count can be set.</summary>
-		internal static bool ParallelShaderCompileKhr { get; private set; }
-
-		internal static bool ParallelShaderCompileArb { get; private set; }
-
 		public static bool Initialized { get; private set; }
-
-		#endregion
-
-		#region PrivateFields
-
-		private const GetPName SubgroupSupportedStages = (GetPName)0x9533;
-		private const GetPName SubgroupSupportedFeatures = (GetPName)0x9534;
-		private const int ComputeStageBit = 0x20;
-		private const int SubgroupBasicBit = 0x1;
-		private const int SubgroupArithmeticBit = 0x4;
-
-		private static readonly HashSet<string> extensions = new HashSet<string>(StringComparer.Ordinal);
 
 		#endregion
 
@@ -97,84 +81,66 @@ namespace LELEngine.Rendering
 
 		public static void Initialize()
 		{
-			Major = GL.GetInteger(GetPName.MajorVersion);
-			Minor = GL.GetInteger(GetPName.MinorVersion);
-			extensions.Clear();
-			int count = GL.GetInteger(GetPName.NumExtensions);
-			for (int i = 0; i < count; i++)
+			GraphicsDevice device = GraphicsDevice.Current;
+			DeviceCapabilities capabilities = device.Capabilities;
+			if (device is Graphics.OpenGL.GLDevice gl)
 			{
-				extensions.Add(GL.GetString(StringNameIndexed.Extensions, i));
+				Major = gl.Major;
+				Minor = gl.Minor;
+			}
+			else
+			{
+				Major = 4;
+				Minor = 6;
 			}
 
-			ClearTexture = IsAtLeast(4, 4);
+			ClearTexture = true;
 			DirectStateAccess = IsAtLeast(4, 5);
-			AnisotropicFiltering = IsAtLeast(4, 6) || HasExtension("GL_EXT_texture_filter_anisotropic") || HasExtension("GL_ARB_texture_filter_anisotropic");
-			if (AnisotropicFiltering)
-			{
-				// GL_MAX_TEXTURE_MAX_ANISOTROPY (same value in core 4.6 and the EXT extension).
-				MaxAnisotropy = GL.GetFloat((GetPName)0x84FF);
-			}
-			MaxImageUnits = GL.GetInteger((GetPName)0x8F38);
-			Max3DTextureSize = Math.Max(256, GL.GetInteger(GetPName.Max3DTextureSize));
-			// GL_MAX_TEXTURE_IMAGE_UNITS (fragment) and GL_MAX_COMPUTE_TEXTURE_IMAGE_UNITS.
-			MaxTextureUnits = Math.Max(16, Math.Min(GL.GetInteger((GetPName)0x8872), GL.GetInteger((GetPName)0x91BC)));
+			MaxAnisotropy = capabilities.MaxAnisotropy;
+			MaxImageUnits = capabilities.MaxImages;
+			Max3DTextureSize = capabilities.Max3DTextureSize;
+			MaxTextureUnits = capabilities.MaxSampledTextures;
+			ShaderDrawParametersExtension = capabilities.DrawParametersExtension;
+			ShaderDrawParameters = capabilities.DrawParameters;
+			IndirectParameters = capabilities.IndirectCount;
+			ComputeSubgroups = capabilities.ComputeSubgroups;
+			MaxShaderStorageBindings = capabilities.MaxStorageBufferBindings;
+			VertexShaderStorageBlocks = capabilities.VertexStorageBlocks;
+			FragmentShaderStorageBlocks = capabilities.FragmentStorageBlocks;
 
-			ShaderDrawParametersExtension = HasExtension("GL_ARB_shader_draw_parameters");
-			ShaderDrawParameters = ShaderDrawParametersExtension || IsAtLeast(4, 6);
-			IndirectParameters = HasExtension("GL_ARB_indirect_parameters") || IsAtLeast(4, 6);
-			ComputeSubgroups = HasExtension("GL_KHR_shader_subgroup")
-				&& (GL.GetInteger(SubgroupSupportedStages) & ComputeStageBit) != 0
-				&& (GL.GetInteger(SubgroupSupportedFeatures) & (SubgroupBasicBit | SubgroupArithmeticBit)) == (SubgroupBasicBit | SubgroupArithmeticBit);
-			MaxShaderStorageBindings = GL.GetInteger(GetPName.MaxShaderStorageBufferBindings);
-			VertexShaderStorageBlocks = GL.GetInteger(GetPName.MaxVertexShaderStorageBlocks);
-			FragmentShaderStorageBlocks = GL.GetInteger(GetPName.MaxFragmentShaderStorageBlocks);
 			// Driver workaround: Intel's OpenGL driver makes the CPU wait for the GPU when a draw reads its count from a
 			// buffer (measured: 3000 objects 81 fps with the count read by the GPU, 118 fps with a fixed count and empty
 			// draws for the culled objects). LEL_GL_ENABLE=indirectparameters keeps the GPU count anyway.
-			string vendor = GL.GetString(StringName.Vendor) ?? "";
 			string enabled = Environment.GetEnvironmentVariable("LEL_GL_ENABLE") ?? "";
-			if (IndirectParameters && vendor.IndexOf("Intel", StringComparison.OrdinalIgnoreCase) >= 0 && enabled.IndexOf("indirectparameters", StringComparison.OrdinalIgnoreCase) < 0)
+			if (IndirectParameters && capabilities.Api == GraphicsApi.OpenGL && capabilities.Vendor.IndexOf("Intel", StringComparison.OrdinalIgnoreCase) >= 0
+			    && enabled.IndexOf("indirectparameters", StringComparison.OrdinalIgnoreCase) < 0)
 			{
 				IndirectParameters = false;
 				Console.WriteLine("[GL] Indirect draw count off on Intel: the driver stalls on it, fixed-count multi-draw is faster (LEL_GL_ENABLE=indirectparameters to force it)");
 			}
 
-			bool parallelKhr = HasExtension("GL_KHR_parallel_shader_compile");
-			bool parallelArb = HasExtension("GL_ARB_parallel_shader_compile");
-			ParallelShaderCompileKhr = parallelKhr;
-			ParallelShaderCompileArb = parallelArb;
-			ParallelShaderCompile = parallelKhr || parallelArb;
+			ParallelShaderCompile = capabilities.ParallelShaderCompile;
 			ApplyDisabledFeatures(Environment.GetEnvironmentVariable("LEL_GL_DISABLE"));
-			if (parallelKhr || parallelArb)
-			{
-				// 0xFFFFFFFF: as many threads as the driver likes (measured on an RTX 5070 Ti: the 13 FORGE3D planet programs
-				// 13.8 s one by one, 2.8 s started together); 0 when switched off: it compiles on the calling thread (the
-				// driver's default is neither).
-				uint threads = ParallelShaderCompile ? 0xFFFFFFFF : 0u;
-				if (parallelKhr)
-				{
-					GL.Khr.MaxShaderCompilerThreads(threads);
-				}
-				else
-				{
-					GL.Arb.MaxShaderCompilerThreads(threads);
-				}
-			}
-
+			// As many threads as the driver likes (measured on an RTX 5070 Ti: the 13 FORGE3D planet programs 13.8 s one by
+			// one, 2.8 s started together); none when switched off: it compiles on the calling thread (the driver's
+			// default is neither).
+			device.SetParallelShaderCompile(ParallelShaderCompile);
 			Initialized = true;
-
-			Console.WriteLine($"[GL] {Major}.{Minor} | clear texture {(ClearTexture ? "yes" : "no")} | DSA {(DirectStateAccess ? "yes" : "no")} | anisotropy {(AnisotropicFiltering ? MaxAnisotropy.ToString("0") + "x" : "no")} | image units {MaxImageUnits}");
-			Console.WriteLine($"[GL] draw parameters {Describe(ShaderDrawParameters, ShaderDrawParametersExtension ? "ARB" : "core")} | indirect count {Describe(IndirectParameters, "yes")} | compute subgroups {Describe(ComputeSubgroups, "yes")} | parallel shader compile {Describe(ParallelShaderCompile, "yes")} | storage bindings {MaxShaderStorageBindings} (vertex {VertexShaderStorageBlocks}, fragment {FragmentShaderStorageBlocks})");
+			if (capabilities.Api == GraphicsApi.OpenGL)
+			{
+				Console.WriteLine($"[GL] {Major}.{Minor} | clear texture {(IsAtLeast(4, 4) ? "yes" : "no")} | DSA {(DirectStateAccess ? "yes" : "no")} | anisotropy {(AnisotropicFiltering ? MaxAnisotropy.ToString("0") + "x" : "no")} | image units {MaxImageUnits}");
+				Console.WriteLine($"[GL] draw parameters {Describe(ShaderDrawParameters, ShaderDrawParametersExtension ? "ARB" : "core")} | indirect count {Describe(IndirectParameters, "yes")} | compute subgroups {Describe(ComputeSubgroups, "yes")} | parallel shader compile {Describe(ParallelShaderCompile, "yes")} | storage bindings {MaxShaderStorageBindings} (vertex {VertexShaderStorageBlocks}, fragment {FragmentShaderStorageBlocks})");
+			}
+			else
+			{
+				Console.WriteLine($"[Graphics] {capabilities.ApiVersion} | {capabilities.Renderer} | anisotropy {(AnisotropicFiltering ? MaxAnisotropy.ToString("0") + "x" : "no")} | images {MaxImageUnits} | sampled textures {MaxTextureUnits}");
+				Console.WriteLine($"[Graphics] indirect count {Describe(IndirectParameters, "yes")} | compute subgroups {Describe(ComputeSubgroups, "yes")} | parallel shader compile {Describe(ParallelShaderCompile, "yes")} | ray queries {(capabilities.RayQuery ? "yes" : "no")} | storage bindings {MaxShaderStorageBindings}");
+			}
 		}
 
 		public static bool IsAtLeast(int major, int minor)
 		{
 			return Major > major || (Major == major && Minor >= minor);
-		}
-
-		public static bool HasExtension(string name)
-		{
-			return extensions.Contains(name);
 		}
 
 		#endregion
