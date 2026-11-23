@@ -20,6 +20,9 @@ void main()
 #include "Engine/DistanceField.glsl"
 #include "Engine/SceneObjects.glsl"
 #include "Engine/SurfaceCache.glsl"
+#ifdef LEL_RAY_QUERY
+#include "Engine/SceneRayQuery.glsl"
+#endif
 #include "Engine/Sampling.glsl"
 // Rays that would read cache texels of a moving object trace on (see RadianceCache.glsl).
 #define RC_MOVING_MASK 1
@@ -36,9 +39,10 @@ void main()
 // ProbeCompose.shader turns the ray results back into the octahedral map.
 //
 // Each ray first marches the depth buffer (screen trace: pixel-exact near-field occlusion), then continues
-// through the global distance field up to the near distance; hits read the surface cache, rays that get
-// further read the world-space radiance cache, and without a cache they trace on to the sky. A hit on an object
-// that moved since the previous frame is flagged (see EncodeMovingHit): its direction's history stays short.
+// through the global distance field (or, in the LEL_RAY_QUERY variant, through the scene's triangles) up to the near
+// distance; hits read the surface cache, rays that get further read the world-space radiance cache, and without a
+// cache they trace on to the sky. A hit on an object that moved since the previous frame is flagged (see
+// EncodeMovingHit): its direction's history stays short.
 out vec4 OutRay; // rgb radiance, a = hit distance (-1 sky / far field, -2 probe on sky / invalid, moving hits encoded)
 
 uniform sampler2D FinalLighting;
@@ -140,7 +144,14 @@ vec4 TraceSurfaces(vec3 position, vec3 normal, vec3 direction, float jitter, out
 
 	float maxDistance = rcNearDistance > 0.0 ? rcNearDistance : sdfGridSize;
 	float hitT;
+#ifdef LEL_RAY_QUERY
+	// The scene's triangles: the hit knows its object and its normal.
+	int rayObject;
+	vec3 rayNormal;
+	bool hit = TraceSceneRay(origin, direction, 0.0, maxDistance, hitT, rayObject, rayNormal);
+#else
 	bool hit = TraceSdf(origin, direction, maxDistance, hitT);
+#endif
 
 	if (!hit && rcNearDistance > 0.0)
 	{
@@ -157,8 +168,12 @@ vec4 TraceSurfaces(vec3 position, vec3 normal, vec3 direction, float jitter, out
 			return vec4(radiance, -1.0);
 		}
 
+#ifdef LEL_RAY_QUERY
+		hit = TraceSceneRay(origin, direction, maxDistance, maxDistance + sdfGridSize, hitT, rayObject, rayNormal);
+#else
 		hit = TraceSdf(far, direction, sdfGridSize, hitT);
 		hitT += maxDistance;
+#endif
 	}
 
 	if (hit)
@@ -166,10 +181,15 @@ vec4 TraceSurfaces(vec3 position, vec3 normal, vec3 direction, float jitter, out
 		vec3 hitPos = origin + direction * hitT;
 		vec3 radiance;
 		int objectIndex;
+#ifdef LEL_RAY_QUERY
+		objectIndex = rayObject;
+		radiance = SampleSurfaceCacheAtSceneHit(rayObject, hitPos, rayNormal, FinalLighting);
+#else
 		if (!SampleSurfaceCacheAtHitObject(hitPos, SdfNormal(hitPos), voxel * 2.0, FinalLighting, radiance, objectIndex))
 		{
 			radiance = vec3(0.0);
 		}
+#endif
 		float distance = length(hitPos - position);
 		reached = distance;
 		return vec4(radiance, SceneObjectMoved(objectIndex) ? EncodeMovingHit(distance) : distance);

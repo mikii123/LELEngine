@@ -14,7 +14,8 @@ namespace LELEngine.Shaders
 	///     Programs loaded from .shader files get an engine preamble after each stage's #version line: LEL_STAGE_VERTEX
 	///     (FRAGMENT, GEOMETRY, COMPUTE...), the variant's defines, and the native features of the context
 	///     (LEL_BASE_INSTANCE with the draw parameters extension in vertex stages, LEL_SUBGROUPS with the subgroup
-	///     extensions in compute stages). A shader that includes "Engine/Instancing.glsl" also has an instanced
+	///     extensions in compute stages, GL_EXT_ray_query in the <see cref="RayQueryDefine" /> variants of a device with ray
+	///     queries). A shader that includes "Engine/Instancing.glsl" also has an instanced
 	///     variant (<see cref="GetInstancedVariant" />) for GPU-driven draws.
 	///     Keyword variants (Unity's shader_feature, automatic): the keywords of a material's [Toggle] / [KeywordEnum]
 	///     properties (<see cref="ShaderProperty.Keywords" />) are defines of a program of their own
@@ -36,6 +37,13 @@ namespace LELEngine.Shaders
 
 		/// <summary>Define of the instanced variant: instance and material data come from the GPU scene buffers.</summary>
 		public const string InstancedDefine = "LEL_INSTANCED";
+
+		/// <summary>
+		///     Define of a variant that traces rays with ray queries (the GI's passes while they trace the scene's triangles):
+		///     with it the preamble enables GL_EXT_ray_query; on a device without ray queries it is left out
+		///     (<see cref="ShaderFeatures.RayQueries" />).
+		/// </summary>
+		public const string RayQueryDefine = "LEL_RAY_QUERY";
 
 		/// <summary>Closing tag of the Properties block of a .shader file (material parameters, see <see cref="ShaderProperty" />).</summary>
 		public const string PropertiesTag = "/////Properties";
@@ -1401,9 +1409,26 @@ namespace LELEngine.Shaders
 			}
 
 			preamble.Append("#define LEL_STAGE_").Append(StageName(type)).Append(" 1\n");
+			bool rayQueries = false;
 			foreach (string define in defines)
 			{
+				if (define == RayQueryDefine)
+				{
+					// Only where the device traces rays: without, the stage compiles its other path.
+					if (!features.RayQueries)
+					{
+						continue;
+					}
+
+					rayQueries = true;
+				}
+
 				preamble.Append("#define ").Append(define).Append(" 1\n");
+			}
+
+			if (rayQueries)
+			{
+				preamble.Append("#extension GL_EXT_ray_query : require\n");
 			}
 
 			bool needs460 = false;

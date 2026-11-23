@@ -5,9 +5,10 @@ namespace LELEngine.Graphics
 	/// <summary>
 	///     The commands the GPU will execute, in the order they are given. Draws happen inside a render pass
 	///     (<see cref="BeginRenderPass(in RenderPassDescriptor)" /> .. <see cref="EndRenderPass" />); dispatches, copies,
-	///     blits, mip generation and texture clears happen outside one and end an open pass. What a draw or dispatch
-	///     uses is what was set when it is given: the program (with the values and textures it holds then), the render
-	///     state, the vertex input, and the buffers and images bound by number.
+	///     blits, mip generation, texture clears and acceleration structure builds happen outside one and end an open
+	///     pass. What a draw or dispatch uses is what was set when it is given: the program (with the values and
+	///     textures it holds then), the render state, the vertex input, and the buffers, images and acceleration
+	///     structures bound by number.
 	///     <para>
 	///         Uploads (<see cref="GpuBuffer.SetData(void*, long)" />, <see cref="GpuTexture.SetData(int, void*, long)" />)
 	///         are ordered with the commands and may be given anywhere, also inside a pass.
@@ -220,6 +221,58 @@ namespace LELEngine.Graphics
 		{
 			Blit(source, 0, 0, 0, 0, source.Width, source.Height, destination, 0, 0, 0, 0, destination.Width, destination.Height, filter);
 		}
+
+		#endregion
+
+		#region Acceleration structures
+
+		// A device without ray queries (DeviceCapabilities.RayQuery false) throws NotSupportedException for every command
+		// of acceleration structures.
+
+		/// <summary>
+		///     Builds bottom levels from the triangles they were made with, as the buffers hold them when the builds run:
+		///     from scratch, or (<paramref name="update" />) refitted to moved vertices of the same triangles (structures
+		///     made with <see cref="AccelerationStructureFlags.AllowUpdate" /> and built before). Like a dispatch it ends an
+		///     open pass; what draws and dispatches given after it trace sees the builds.
+		/// </summary>
+		public abstract void BuildBottomLevels(ReadOnlySpan<GpuAccelerationStructure> bottomLevels, bool update = false);
+
+		/// <summary>
+		///     Builds a top level from instances (at most its <see cref="GpuAccelerationStructure.MaxInstances" />): from
+		///     scratch, or (<paramref name="update" />) refitted to new transforms of the same instances, the same count of
+		///     the same bottom levels (made with <see cref="AccelerationStructureFlags.AllowUpdate" />, built before). The
+		///     bottom levels are built already (given earlier). Ends an open pass.
+		/// </summary>
+		public abstract void BuildTopLevel(GpuAccelerationStructure topLevel, ReadOnlySpan<AccelerationStructureInstance> instances, bool update = false);
+
+		/// <summary>
+		///     Copies a built structure into another of its level: compacted into one made for that
+		///     (<see cref="AccelerationStructureDescriptor.CompactedFrom" />). Ends an open pass. A top level that holds
+		///     the source still holds the source: build it again with the copy.
+		/// </summary>
+		public abstract void CopyAccelerationStructure(GpuAccelerationStructure source, GpuAccelerationStructure destination);
+
+		/// <summary>
+		///     The top level behind the acceleration structures the shaders declare with this binding number
+		///     (<c>layout(binding = N) uniform accelerationStructureEXT</c>); null: an empty one.
+		/// </summary>
+		public abstract void SetAccelerationStructure(int binding, GpuAccelerationStructure topLevel);
+
+		/// <summary>Builds one bottom level (<see cref="BuildBottomLevels" />).</summary>
+		public void BuildBottomLevel(GpuAccelerationStructure bottomLevel, bool update = false)
+		{
+			singleStructure[0] = bottomLevel;
+			try
+			{
+				BuildBottomLevels(singleStructure, update);
+			}
+			finally
+			{
+				singleStructure[0] = null;
+			}
+		}
+
+		private readonly GpuAccelerationStructure[] singleStructure = new GpuAccelerationStructure[1];
 
 		#endregion
 

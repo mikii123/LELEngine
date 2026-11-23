@@ -99,6 +99,13 @@ namespace LELEngine.Rendering.Passes
 
 			LumenScene scene = context.Renderer.LumenScene;
 			frameIndex++;
+			GpuProfiler profiler = context.Renderer.Profiler;
+			if (Lighting.HardwareRayTracingActive)
+			{
+				// The scene's update builds its acceleration structures too.
+				profiler.Split("GlobalSDF.rayTracing");
+			}
+
 			scene.Update(context.Renderer.FrameIndex, context.GIRenderers ?? context.Renderers, gi);
 			DetectStaticChanges(gi, scene);
 
@@ -106,7 +113,6 @@ namespace LELEngine.Rendering.Passes
 			// latched until a due frame, so an update interval > 1 cannot drop a change that happened in between.
 			dynamicPending |= scene.DynamicChanged;
 			bool dynamicDue = dynamicPending && (gi.DynamicUpdateInterval <= 1 || frameIndex % gi.DynamicUpdateInterval == 0);
-			GpuProfiler profiler = context.Renderer.Profiler;
 
 			if (staticDirty || gi.StaticVersion != builtStaticVersion)
 			{

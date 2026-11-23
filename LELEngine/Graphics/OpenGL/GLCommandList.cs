@@ -631,6 +631,32 @@ namespace LELEngine.Graphics.OpenGL
 
 		#endregion
 
+		#region Acceleration structures
+
+		// OpenGL has no ray queries (DeviceCapabilities.RayQuery is false): nothing makes or traces acceleration structures.
+
+		public override void BuildBottomLevels(ReadOnlySpan<GpuAccelerationStructure> bottomLevels, bool update = false)
+		{
+			throw new NotSupportedException("OpenGL builds no acceleration structures (DeviceCapabilities.RayQuery is false).");
+		}
+
+		public override void BuildTopLevel(GpuAccelerationStructure topLevel, ReadOnlySpan<AccelerationStructureInstance> instances, bool update = false)
+		{
+			throw new NotSupportedException("OpenGL builds no acceleration structures (DeviceCapabilities.RayQuery is false).");
+		}
+
+		public override void CopyAccelerationStructure(GpuAccelerationStructure source, GpuAccelerationStructure destination)
+		{
+			throw new NotSupportedException("OpenGL has no acceleration structures (DeviceCapabilities.RayQuery is false).");
+		}
+
+		public override void SetAccelerationStructure(int binding, GpuAccelerationStructure topLevel)
+		{
+			throw new NotSupportedException("OpenGL shaders trace no acceleration structures (DeviceCapabilities.RayQuery is false).");
+		}
+
+		#endregion
+
 		#region Queries
 
 		public override void WriteTimestamp(GpuTimestamp timestamp)

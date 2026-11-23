@@ -48,6 +48,21 @@ namespace LELEngine
 		public static GIMode GIMethod => giMethod ??= GI.Mode;
 
 		/// <summary>
+		///     Lumen's rays trace the scene's triangles with ray queries: the project asks for it
+		///     (<see cref="GlobalIlluminationSettings.HardwareRayTracing" />) and the device has them
+		///     (<see cref="GraphicsCapabilities.RayQueries" />); else they trace the distance fields. Taken when first asked,
+		///     like <see cref="GIMethod" />, and as it fixed while the game runs (the editor changes it in edit mode). The
+		///     console says which.
+		/// </summary>
+		public static bool HardwareRayTracing => hardwareRayTracing ??= DecideRayTracing();
+
+		/// <summary>Lumen runs and its rays trace with ray queries (<see cref="HardwareRayTracing" />).</summary>
+		public static bool HardwareRayTracingActive => GI.LumenActive && HardwareRayTracing;
+
+		/// <summary>The defines of the GI's tracing programs: the ray query variant while <see cref="HardwareRayTracingActive" />.</summary>
+		public static string[] RayTracingDefines => HardwareRayTracingActive ? rayQueryDefines : Array.Empty<string>();
+
+		/// <summary>
 		///     Set by the editor while in edit mode: a change of <see cref="GlobalIlluminationSettings.Mode" /> becomes
 		///     <see cref="GIMethod" /> at the next frame. Off in play mode and in players.
 		/// </summary>
@@ -55,8 +70,8 @@ namespace LELEngine
 
 		/// <summary>
 		///     Raised by <see cref="BeginFrame" /> when what the GI uses changed (the method, the scene's GI switch, the
-		///     distance field, the screen-space resolve): every renderer frees what is no longer used at once, also one
-		///     that does not draw this frame (a hidden editor view).
+		///     distance field, the screen-space resolve, the ray queries): every renderer frees what is no longer used at
+		///     once, also one that does not draw this frame (a hidden editor view).
 		/// </summary>
 		internal static event Action GIUsageChanged;
 
@@ -155,7 +170,10 @@ namespace LELEngine
 
 		private static GIMode? giMethod;
 		private static bool giMethodWarned;
-		private static (GIMode, bool, bool, bool) giUsage;
+		private static bool? hardwareRayTracing;
+		private static bool rayTracingWarned;
+		private static readonly string[] rayQueryDefines = { ShaderProgram.RayQueryDefine };
+		private static (GIMode, bool, bool, bool, bool) giUsage;
 
 		#endregion
 
@@ -189,7 +207,7 @@ namespace LELEngine
 
 			Environment.ApplyTo(settings);
 			UpdateGIMethod();
-			(GIMode, bool, bool, bool) usage = (GIMethod, GI.Enabled, GI.DistanceFieldActive, GI.VoxelConeTracingActive && GI.ScreenSpaceResolve);
+			(GIMode, bool, bool, bool, bool) usage = (GIMethod, GI.Enabled, GI.DistanceFieldActive, GI.VoxelConeTracingActive && GI.ScreenSpaceResolve, HardwareRayTracingActive);
 			if (usage != giUsage)
 			{
 				giUsage = usage;
@@ -568,9 +586,26 @@ namespace LELEngine
 
 
 		// A changed GI.Mode becomes the method only where the editor allows it (edit mode); while the game runs it is
-		// reported once and ignored.
+		// reported once and ignored. The same for the hardware ray tracing setting, once it has been taken.
 		private static void UpdateGIMethod()
 		{
+			if (hardwareRayTracing.HasValue && hardwareRayTracing.Value != (GI.HardwareRayTracing && GraphicsCapabilities.RayQueries))
+			{
+				if (AllowGIMethodChange)
+				{
+					hardwareRayTracing = DecideRayTracing();
+				}
+				else if (!rayTracingWarned)
+				{
+					rayTracingWarned = true;
+					Debug.LogWarning("[GI] Hardware ray tracing cannot change while the game runs: the GI's rays keep their way until the next start");
+				}
+			}
+			else
+			{
+				rayTracingWarned = false;
+			}
+
 			if (GI.Mode == GIMethod)
 			{
 				giMethodWarned = false;
@@ -590,6 +625,28 @@ namespace LELEngine
 				giMethodWarned = true;
 				Debug.LogWarning($"[GI] The GI method cannot change while the game runs: {GIMethod} stays, {GI.Mode} applies at the next start");
 			}
+		}
+
+		// Whether Lumen's rays trace with ray queries, and a console line that says which way and why.
+		private static bool DecideRayTracing()
+		{
+			bool available = GraphicsCapabilities.RayQueries;
+			bool used = GI.HardwareRayTracing && available;
+			string device = GraphicsDevice.Current != null ? Gfx.Capabilities.ApiVersion + ", " + Gfx.Capabilities.Renderer : "no graphics device yet";
+			if (used)
+			{
+				Console.WriteLine($"[GI] Rays: hardware ray tracing (ray queries through the scene's triangles; {device})");
+			}
+			else if (!GI.HardwareRayTracing)
+			{
+				Console.WriteLine("[GI] Rays: distance fields (Hardware Ray Tracing is off in Project Settings > Lighting)");
+			}
+			else
+			{
+				Console.WriteLine($"[GI] Rays: distance fields (the graphics device has no ray queries: {device})");
+			}
+
+			return used;
 		}
 
 		#endregion
@@ -1064,6 +1121,17 @@ namespace LELEngine
 		///     (<see cref="TraceMode" />; <see cref="GITraceMode.VoxelCones" /> never reads it).
 		/// </summary>
 		public bool DistanceFieldActive => Enabled && DistanceFieldEnabled && (Lighting.GIMethod == GIMode.Lumen || TraceMode != GITraceMode.VoxelCones);
+
+		// ---- Lumen's rays (Engine/SceneRayQuery.glsl, SceneRayTracing) ----
+
+		/// <summary>
+		///     Lumen's rays (screen probes, radiance cache probes, surface cache radiosity, the local lights' GI shadows)
+		///     trace the scene's triangles with ray queries where the graphics device has them; elsewhere, or off, they
+		///     sphere trace the distance fields. Read once with the method (<see cref="Lighting.HardwareRayTracing" />).
+		/// </summary>
+		[Header("Ray Tracing")]
+		[Tooltip("Lumen's rays (screen probes, radiance cache probes, surface cache radiosity, the local lights' GI shadows) trace the scene's triangles with the GPU's ray tracing where the graphics device has it (Vulkan on a GPU with ray queries); elsewhere, or off, they sphere trace the distance fields. What a ray hits is lit from the surface cache either way. Taken when the GI first runs, like the method: it does not change while the game runs")]
+		[GIMethod(GIMode.Lumen)] public bool HardwareRayTracing = true;
 
 		// ---- Lumen surface cache (SurfaceCachePass) ----
 
