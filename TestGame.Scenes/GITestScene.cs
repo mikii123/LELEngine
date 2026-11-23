@@ -151,6 +151,9 @@ namespace TestGame.Scenes
 			public bool RadianceCache = true;
 			public bool RadianceCacheForRadiosity = true;
 			public bool SdfObjectIdLookup = true;
+
+			/// <summary>Lumen's rays trace the scene's triangles with ray queries where the device has them (GlobalIlluminationSettings.HardwareRayTracing).</summary>
+			public bool HardwareRayTracing = true;
 			public bool RadianceCacheFarShortcut = true;
 			public bool ProbeAdaptiveFlaggedRefine;
 			public int RadiosityIdleDivisor = 4;
@@ -676,6 +679,7 @@ namespace TestGame.Scenes
 			Lighting.GI.ProbeFilterRadius = options.ProbeFilterRadius;
 			Lighting.GI.RadianceCacheEnabled = options.RadianceCache;
 			Lighting.GI.SdfObjectIdLookup = options.SdfObjectIdLookup;
+			Lighting.GI.HardwareRayTracing = options.HardwareRayTracing;
 			Lighting.GI.RadianceCacheFarShortcut = options.RadianceCacheFarShortcut;
 			Lighting.GI.ProbeAdaptiveFlaggedRefine = options.ProbeAdaptiveFlaggedRefine;
 			Lighting.GI.RadiosityIdleDivisor = options.RadiosityIdleDivisor;

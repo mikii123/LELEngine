@@ -5,13 +5,17 @@
 #include "Engine/DistanceField.glsl"
 #include "Engine/SceneObjects.glsl"
 #include "Engine/SurfaceCache.glsl"
+#ifdef LEL_RAY_QUERY
+#include "Engine/SceneRayQuery.glsl"
+#endif
 #include "Engine/Sampling.glsl"
 // Rays that would read cache texels of a moving object trace on (see RadianceCache.glsl).
 #define RC_MOVING_MASK 1
 #include "Engine/RadianceCache.glsl"
 
 // Surface cache radiosity probes (Lumen's radiosity): one hemispherical probe per 4x4 block of card texels.
-// Every frame each probe traces 16 cosine-distributed rays from its anchor texel (one ray per thread), the
+// Every frame each probe traces 16 cosine-distributed rays from its anchor texel (one ray per thread: through the global
+// distance field, or in the LEL_RAY_QUERY variant through the scene's triangles), the
 // rays are averaged (an estimate of irradiance / pi) and accumulated into the probe. Texels then interpolate
 // the probes of their card (CardLighting.shader). Sixteen rays shared by sixteen texels cost a quarter of
 // four rays per texel, and the interpolation plus the 16-ray average give far smoother indirect lighting
@@ -107,7 +111,14 @@ void main()
 	// How far along the ray what the radiance comes from lies (negative: the sky).
 	float reached = -1.0;
 	float hitT;
+#ifdef LEL_RAY_QUERY
+	// The scene's triangles: the hit knows its object and its normal.
+	int rayObject;
+	vec3 rayNormal;
+	bool hit = TraceSceneRay(origin, direction, 0.0, maxDistance, hitT, rayObject, rayNormal);
+#else
 	bool hit = TraceSdf(origin, direction, maxDistance, hitT);
+#endif
 	if (!hit && rcNearDistance > 0.0)
 	{
 		vec3 far = origin + direction * maxDistance;
@@ -121,16 +132,25 @@ void main()
 		}
 		else
 		{
+#ifdef LEL_RAY_QUERY
+			hit = TraceSceneRay(origin, direction, maxDistance, maxDistance + sdfGridSize, hitT, rayObject, rayNormal);
+#else
 			hit = TraceSdf(far, direction, sdfGridSize, hitT);
 			hitT += maxDistance;
+#endif
 		}
 	}
 	if (hit)
 	{
 		vec3 hitPos = origin + direction * hitT;
+#ifdef LEL_RAY_QUERY
+		int objectIndex = rayObject;
+		radiance = SampleSurfaceCacheAtSceneHit(rayObject, hitPos, rayNormal, FinalLightingPrev);
+#else
 		vec3 lit;
 		int objectIndex;
 		radiance = SampleSurfaceCacheAtHitObject(hitPos, SdfNormal(hitPos), sdfVoxel * 2.0, FinalLightingPrev, lit, objectIndex) ? lit : vec3(0.0);
+#endif
 		if (SceneObjectMoved(objectIndex)) atomicOr(movingMask, 1u);
 		reached = hitT;
 	}

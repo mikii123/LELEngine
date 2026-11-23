@@ -51,6 +51,7 @@ namespace TestGame
 		///            [mover=frame] [moverz=path depth] [moveremission=intensity] [regions=x,y,z;x,y,z;...] [regionsize=px] [regionstart=frame] [regionsource=scene|gi]
 		///            [noise=frames] [noisestart=frame]
 		///            [graphics=opengl|vulkan the graphics API] [hidden=1 the window never shows] [fixeddt=seconds every frame advances by]
+		///            [hwrt=0|1 Lumen's rays through the triangles with ray queries where the device has them (1, the default) or the distance fields]
 		///            Fallback tests: environment LEL_GL_DISABLE=drawparameters,indirectparameters,subgroups
 		///     Loads the GI test room with the FPS controller.
 		/// </summary>
@@ -148,6 +149,7 @@ namespace TestGame
 				SurfaceCacheTexelsPerMeter = GetInt(args, "texels", 6),
 				RadianceCache = GetBool(args, "rcache", true),
 				SdfObjectIdLookup = GetBool(args, "objectids", true),
+				HardwareRayTracing = GetBool(args, "hwrt", true),
 				RadianceCacheFarShortcut = GetBool(args, "rcfar", true),
 				ProbeAdaptiveFlaggedRefine = GetBool(args, "pflag", false),
 				RadiosityIdleDivisor = GetInt(args, "radidle", 4),

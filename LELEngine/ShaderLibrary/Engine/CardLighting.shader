@@ -12,13 +12,16 @@ layout(local_size_x = 8, local_size_y = 8) in;
 #include "Engine/DistanceField.glsl"
 #include "Engine/SceneObjects.glsl"
 #include "Engine/SurfaceCache.glsl"
+#ifdef LEL_RAY_QUERY
+#include "Engine/SceneRayQuery.glsl"
+#endif
 #include "Engine/Lights.glsl"
 #include "Engine/DirectionalLights.glsl"
 
 // Surface cache lighting, Lumen style, one thread per atlas texel:
 //   direct   = the directional lights that go into the GI, each with its shadows at the captured surface point, and
-//              the local lights that go into the GI, blocked by the global distance field towards them when they ask
-//              (recomputed every frame)
+//              the local lights that go into the GI, blocked by the global distance field (or the scene's triangles,
+//              LEL_RAY_QUERY) towards them when they ask (recomputed every frame)
 //   indirect = radiosity interpolated from the card's probes (CardRadiosityProbes.shader: one probe per 4x4
 //              texels, 16 rays per frame, accumulated over frames so multi-bounce lighting converges)
 //   final    = albedo * (direct + indirect) + emission
@@ -66,8 +69,9 @@ vec3 InterpolateRadiosity(ivec2 texel, Card card)
 	return own.a > 0.5 ? own.rgb : vec3(0.0);
 }
 
-// How much of a local light reaches a texel: a sphere trace through the global distance field towards it (a surface
-// before the light blocks it; a ray leaving the field gets through).
+// How much of a local light reaches a texel: a sphere trace through the global distance field towards it, or in the
+// LEL_RAY_QUERY variant a ray through the scene's triangles (a surface before the light blocks it; a ray leaving the
+// field gets through).
 float CardLightVisibility(vec3 position, vec3 N, vec3 lightPosition)
 {
 	float voxel = SdfVoxelSize();
@@ -79,8 +83,12 @@ float CardLightVisibility(vec3 position, vec3 N, vec3 lightPosition)
 		return 1.0;
 	}
 
+#ifdef LEL_RAY_QUERY
+	return SceneRayClear(origin, toLight / distanceToLight, 0.0, distanceToLight - voxel) ? 1.0 : 0.0;
+#else
 	float hitT;
 	return TraceSdf(origin, toLight / distanceToLight, distanceToLight - voxel, hitT) ? 0.0 : 1.0;
+#endif
 }
 
 void main()
