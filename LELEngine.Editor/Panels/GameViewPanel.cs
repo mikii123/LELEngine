@@ -214,7 +214,7 @@ namespace LELEngine.Editor
 				{
 					// The image the window shows when it is current at the capture's size, else one rendered for the capture
 					// (RenderCapture keeps its renderer: its frame statistics are the overlay's).
-					int texture = Automation.WindowCapture.ViewTexture(this, ViewRenderer, visible, (int)size.X, (int)size.Y, RenderCapture);
+					Graphics.GpuTexture texture = Automation.WindowCapture.ViewTexture(this, ViewRenderer, visible, (int)size.X, (int)size.Y, RenderCapture);
 					ViewRenderer drawn = ViewRenderer;
 					if (ViewRenderer == null || texture != ViewRenderer.Texture)
 					{

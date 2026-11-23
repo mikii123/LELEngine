@@ -42,7 +42,8 @@ namespace LELEngine.Editor.Automation
 
 		public void Focus()
 		{
-			if (editor.HasUI)
+			// A window that is not shown (hidden=1) takes no keyboard focus.
+			if (editor.HasUI && editor.Window.IsVisible)
 			{
 				editor.Window.Focus();
 			}

@@ -66,12 +66,12 @@ namespace LELEngine.Editor.Automation
 			public bool HasDocking;
 			public int Frame;
 			public int ViewFrames;
-			public readonly Dictionary<object, int> Views = new Dictionary<object, int>();
+			public readonly Dictionary<object, GpuTexture> Views = new Dictionary<object, GpuTexture>();
 		}
 
 		private static Session session;
 
-		/// <summary>One renderer per GL context (vertex arrays are not shared).</summary>
+		/// <summary>One renderer per window (graphics context).</summary>
 		private static readonly Dictionary<NativeWindow, ImGuiRenderer> renderers = new Dictionary<NativeWindow, ImGuiRenderer>();
 
 		/// <summary>Renderers of the views for sizes their panel does not show (kept: their allocations are reused).</summary>
@@ -214,7 +214,7 @@ namespace LELEngine.Editor.Automation
 		///     image when it is current at that size (<paramref name="ownIsCurrent" />), else an image rendered for the capture
 		///     (once per capture; <paramref name="render" /> draws one frame of the view into the renderer it is given).
 		/// </summary>
-		public static int ViewTexture(object view, ViewRenderer own, bool ownIsCurrent, int width, int height, Action<ViewRenderer> render)
+		public static GpuTexture ViewTexture(object view, ViewRenderer own, bool ownIsCurrent, int width, int height, Action<ViewRenderer> render)
 		{
 			width = Math.Max(16, width);
 			height = Math.Max(16, height);
@@ -223,7 +223,7 @@ namespace LELEngine.Editor.Automation
 				return own.Texture;
 			}
 
-			if (session.Views.TryGetValue(view, out int texture))
+			if (session.Views.TryGetValue(view, out GpuTexture texture))
 			{
 				return texture;
 			}
@@ -634,28 +634,21 @@ namespace LELEngine.Editor.Automation
 			{
 				target.AddColorAttachment(RenderTextureFormat.RGBA8);
 				target.Validate();
-				target.Bind();
-				GL.ClearColor(0.11f, 0.11f, 0.12f, 1f);
-				GL.Clear(ClearBufferMask.ColorBufferBit);
+				target.Begin(LoadOperation.Clear, new ClearValue(0.11f, 0.11f, 0.12f, 1f));
 				draw(renderer);
 
-				byte[] pixels = new byte[width * height * 4];
-				GL.BindFramebuffer(FramebufferTarget.ReadFramebuffer, target.Handle);
-				GL.ReadBuffer(ReadBufferMode.ColorAttachment0);
-				GL.PixelStore(PixelStoreParameter.PackAlignment, 1);
-				GL.ReadPixels(0, 0, width, height, PixelFormat.Rgba, PixelType.UnsignedByte, pixels);
-				GL.PixelStore(PixelStoreParameter.PackAlignment, 4);
+				byte[] pixels = TexelConversion.ReadBytes(target.ColorAttachments[0].Gpu, 0, 0, 0, width, height);
 				FlipAndOpaque(pixels, width, height);
 				return pixels;
 			}
 			finally
 			{
-				GL.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
+				Gfx.Commands.EndRenderPass();
 				target.Delete();
 			}
 		}
 
-		/// <summary>GL rows are bottom-up: top row first; alpha 255 (the UI is opaque, blending left fractions in places).</summary>
+		/// <summary>A texture's rows are bottom-up: top row first; alpha 255 (the UI is opaque, blending left fractions in places).</summary>
 		private static void FlipAndOpaque(byte[] pixels, int width, int height)
 		{
 			int row = width * 4;

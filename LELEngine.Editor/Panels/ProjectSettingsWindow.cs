@@ -618,12 +618,12 @@ namespace LELEngine.Editor
 			Color4 color = splash.Enabled ? splash.BackgroundColor : Color4.Black;
 			draw.AddRectFilled(start, start + extent, ImGui.GetColorU32(new NVector4(Math.Clamp(color.R, 0f, 1f), Math.Clamp(color.G, 0f, 1f), Math.Clamp(color.B, 0f, 1f), 1f)));
 			Texture2D logo = splash.Enabled && logoPath != null ? TextureAssets.LoadForUI(logoPath, logoPath) : null;
-			if (logo != null && logo.Handle != 0 && logo.width > 0 && logo.height > 0)
+			if (logo != null && logo.Gpu != null && logo.width > 0 && logo.height > 0)
 			{
 				float scale = Math.Min(width * splash.LogoSize / logo.width, height * splash.LogoSize / logo.height);
 				var size = new NVector2(logo.width * scale, logo.height * scale);
 				NVector2 min = start + (extent - size) * 0.5f;
-				draw.AddImage(EditorGui.Texture(logo.Handle), min, min + size);
+				draw.AddImage(EditorGui.Texture(logo.Gpu), min, min + size);
 			}
 
 			draw.AddRect(start, start + extent, ImGui.GetColorU32(ImGuiCol.Border));

@@ -327,7 +327,7 @@ namespace LELEngine.Editor
 				TestAnchors.Record("sceneview", min, min + size);
 				if (editor.Scene != null)
 				{
-					int texture = Automation.WindowCapture.ViewTexture(this, ViewRenderer, visible, (int)size.X, (int)size.Y, RenderCapture);
+					Graphics.GpuTexture texture = Automation.WindowCapture.ViewTexture(this, ViewRenderer, visible, (int)size.X, (int)size.Y, RenderCapture);
 					ImGui.Image(EditorGui.Texture(texture), size, new NVector2(0, 1), new NVector2(1, 0));
 					camera.UpdateMatrices(size.X / size.Y);
 					physicsGizmos.SetView(camera.ViewProjectionMatrix, min, size);

@@ -119,15 +119,15 @@ namespace LELEngine.Editor.Audio
 				}
 
 				imgui.EndFrame();
-				Framebuffer.BindDefault(size.X, size.Y);
-				GL.ClearColor(0.11f, 0.11f, 0.12f, 1f);
-				GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
+				CommandList commands = Gfx.Commands;
+				commands.BeginRenderPass(Gfx.Device.Backbuffer, null, LoadOperation.Clear, new ClearValue(0.11f, 0.11f, 0.12f, 1f));
+				commands.SetViewport(0, 0, size.X, size.Y);
 				imgui.RenderDrawData(size.X, size.Y);
 				if (ScreenshotFolder != null)
 				{
 					var dumper = new FrameDumper();
 					dumper.Start(ScreenshotFolder, 1);
-					dumper.Capture(size.X, size.Y);
+					dumper.Capture(Gfx.Device.Backbuffer, size.X, size.Y);
 					ScreenshotFolder = null;
 				}
 
@@ -141,7 +141,11 @@ namespace LELEngine.Editor.Audio
 
 		public void Focus()
 		{
-			native?.Focus();
+			// A window that is not shown (hidden=1) takes no keyboard focus.
+			if (native != null && native.IsVisible)
+			{
+				native.Focus();
+			}
 		}
 
 		/// <summary>Closes the window like its close button (unsaved changes ask first). Safe mid-frame.</summary>

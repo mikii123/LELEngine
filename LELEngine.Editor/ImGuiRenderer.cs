@@ -8,26 +8,35 @@ using NVector4 = System.Numerics.Vector4;
 namespace LELEngine.Editor
 {
 	/// <summary>
-	///     Draws Dear ImGui draw data with OpenGL 4 into the bound framebuffer, and serves the ImGui 1.92 texture protocol
-	///     (creates, updates and destroys the textures ImGui asks for, e.g. the font atlas as glyphs are added). Its objects
-	///     belong to the GL context it was made in (vertex arrays are not shared between contexts): one per context.
+	///     Draws Dear ImGui draw data through the graphics device into the open render pass, and serves the ImGui 1.92
+	///     texture protocol (creates, updates and destroys the textures ImGui asks for, e.g. the font atlas as glyphs are
+	///     added). ImGui names a texture by its <see cref="GpuTexture.Id" />. One per window (graphics context).
 	/// </summary>
 	internal sealed unsafe class ImGuiRenderer : IDisposable
 	{
 		#region PrivateFields
 
-		private int vertexArray;
-		private int vertexBuffer;
-		private int indexBuffer;
+		// ImDrawVert: position, UV, colour as four bytes.
+		private static readonly VertexInputLayout vertexLayout = new VertexInputLayout(sizeof(ImDrawVert),
+			new VertexAttributeDescriptor(0, VertexFormat.Float2, 0),
+			new VertexAttributeDescriptor(1, VertexFormat.Float2, 8),
+			new VertexAttributeDescriptor(2, VertexFormat.UByte4Normalized, 16));
+
+		// The textures made for ImGui (font atlases), by id: ImGui keeps only the number.
+		private static readonly Dictionary<int, GpuTexture> ownTextures = new Dictionary<int, GpuTexture>();
+		private static byte[] updateRows = Array.Empty<byte>();
+
+		private GpuBuffer vertexBuffer;
+		private GpuBuffer indexBuffer;
 		private int vertexBufferSize;
 		private int indexBufferSize;
 
 		// Base vertex and first index of each draw list in this frame's buffers.
 		private (int vertex, int index)[] drawLists = new (int, int)[16];
 		private readonly List<(nint list, NVector4 clip)> allLists = new List<(nint, NVector4)>();
-		private int program;
-		private int projectionLocation;
-		private int textureLocation;
+		private GpuProgram program;
+		private int projectionSlot;
+		private int textureSlot;
 
 		private const string VertexSource = @"#version 410 core
 layout(location = 0) in vec2 Position;
@@ -66,7 +75,7 @@ void main()
 
 		#region PublicMethods
 
-		/// <summary>Draws the current context's ended frame into the bound framebuffer.</summary>
+		/// <summary>Draws the current context's ended frame into the open render pass.</summary>
 		public void Render(int framebufferWidth, int framebufferHeight)
 		{
 			ImDrawData* raw = ImGui.GetDrawData().Handle;
@@ -102,7 +111,7 @@ void main()
 
 		/// <summary>
 		///     Draws some draw lists of a context's last frame (still valid until its next frame) as seen in the rectangle at
-		///     <paramref name="displayPos" /> of <paramref name="displaySize" />, into the bound framebuffer of that size; each
+		///     <paramref name="displayPos" /> of <paramref name="displaySize" />, into the open render pass's target of that size; each
 		///     list draws only inside its clip rectangle (display coordinates: min x, min y, max x, max y). The textures are
 		///     the ones the context's own frame uploaded.
 		/// </summary>
@@ -116,15 +125,20 @@ void main()
 
 		private void Draw(IReadOnlyList<(nint list, NVector4 clip)> lists, NVector2 displayPos, NVector2 displaySize, int framebufferWidth, int framebufferHeight)
 		{
-			GL.Enable(EnableCap.Blend);
-			GL.BlendEquation(BlendEquationMode.FuncAdd);
-			GL.BlendFuncSeparate(BlendingFactorSrc.SrcAlpha, BlendingFactorDest.OneMinusSrcAlpha, BlendingFactorSrc.One, BlendingFactorDest.OneMinusSrcAlpha);
-			GL.Disable(EnableCap.CullFace);
-			GL.Disable(EnableCap.DepthTest);
-			GL.Disable(EnableCap.StencilTest);
-			GL.Enable(EnableCap.ScissorTest);
-			GL.PolygonMode(TriangleFace.FrontAndBack, PolygonMode.Fill);
-			GL.Viewport(0, 0, framebufferWidth, framebufferHeight);
+			if (program == null || !program.IsLinked)
+			{
+				return;
+			}
+
+			CommandList commands = Gfx.Commands;
+			ref RenderState state = ref commands.State;
+			state.SetBlend(BlendFactor.SrcAlpha, BlendFactor.OneMinusSrcAlpha, BlendFactor.One, BlendFactor.OneMinusSrcAlpha);
+			state.ColorOperation = BlendOperation.Add;
+			state.AlphaOperation = BlendOperation.Add;
+			state.Culling = FaceCulling.None;
+			state.DepthTest = false;
+			state.Wireframe = false;
+			commands.SetViewport(0, 0, framebufferWidth, framebufferHeight);
 
 			float left = displayPos.X;
 			float right = displayPos.X + displaySize.X;
@@ -138,17 +152,12 @@ void main()
 				(right + left) / (left - right), (top + bottom) / (bottom - top), 0f, 1f
 			};
 
-			GL.UseProgram(program);
-			GL.UniformMatrix4(projectionLocation, 1, false, projection);
-			GL.Uniform1(textureLocation, 0);
-			GL.BindVertexArray(vertexArray);
-			GL.BindBuffer(BufferTarget.ArrayBuffer, vertexBuffer);
-			GL.BindBuffer(BufferTarget.ElementArrayBuffer, indexBuffer);
-			GL.ActiveTexture(TextureUnit.Texture0);
+			commands.SetProgram(program);
+			program.SetMatrices(projectionSlot, projection, 1);
 
-			// All draw lists go into one fresh buffer store per frame. Orphaning (BufferData with no data) never waits
-			// for the GPU to finish reading the previous frame's data; rewriting the store in place would wait for
-			// it, which stalls the UI for as long as the driver holds the GPU (seconds right after a window resize).
+			// All draw lists go into one fresh buffer store per frame. New storage (Allocate) never waits for the GPU
+			// to finish reading the previous frame's data; rewriting the store in place would wait for it, which
+			// stalls the UI for as long as the driver holds the GPU (seconds right after a window resize).
 			int totalVertexBytes = 0;
 			int totalIndexBytes = 0;
 			for (int n = 0; n < lists.Count; n++)
@@ -160,8 +169,8 @@ void main()
 
 			vertexBufferSize = Math.Max(vertexBufferSize, totalVertexBytes);
 			indexBufferSize = Math.Max(indexBufferSize, totalIndexBytes);
-			GL.BufferData(BufferTarget.ArrayBuffer, vertexBufferSize, IntPtr.Zero, BufferUsageHint.StreamDraw);
-			GL.BufferData(BufferTarget.ElementArrayBuffer, indexBufferSize, IntPtr.Zero, BufferUsageHint.StreamDraw);
+			vertexBuffer.Allocate(vertexBufferSize);
+			indexBuffer.Allocate(indexBufferSize);
 			if (drawLists.Length < lists.Count)
 			{
 				Array.Resize(ref drawLists, lists.Count * 2);
@@ -174,12 +183,24 @@ void main()
 				var list = (ImDrawList*)lists[n].list;
 				int vertexBytes = list->VtxBuffer.Size * sizeof(ImDrawVert);
 				int indexBytes = list->IdxBuffer.Size * sizeof(ushort);
-				GL.BufferSubData(BufferTarget.ArrayBuffer, (IntPtr)vertexOffset, vertexBytes, (IntPtr)list->VtxBuffer.Data);
-				GL.BufferSubData(BufferTarget.ElementArrayBuffer, (IntPtr)indexOffset, indexBytes, (IntPtr)list->IdxBuffer.Data);
+				if (vertexBytes > 0)
+				{
+					vertexBuffer.SetSubData(vertexOffset, list->VtxBuffer.Data, vertexBytes);
+				}
+
+				if (indexBytes > 0)
+				{
+					indexBuffer.SetSubData(indexOffset, list->IdxBuffer.Data, indexBytes);
+				}
+
 				drawLists[n] = (vertexOffset / sizeof(ImDrawVert), indexOffset / sizeof(ushort));
 				vertexOffset += vertexBytes;
 				indexOffset += indexBytes;
 			}
+
+			commands.SetVertexInput(vertexLayout);
+			commands.SetVertexBuffer(0, vertexBuffer);
+			commands.SetIndexBuffer(indexBuffer, IndexFormat.UInt16);
 
 			NVector2 clipOffset = displayPos;
 			for (int n = 0; n < lists.Count; n++)
@@ -205,22 +226,26 @@ void main()
 						continue;
 					}
 
-					GL.Scissor((int)clipMinX, (int)(framebufferHeight - clipMaxY), (int)(clipMaxX - clipMinX), (int)(clipMaxY - clipMinY));
-					ImTextureID texture = new ImDrawCmdPtr(cmd).GetTexID();
-					GL.BindTexture(TextureTarget.Texture2D, (int)texture.Handle);
-					GL.DrawElementsBaseVertex(PrimitiveType.Triangles, (int)cmd->ElemCount, DrawElementsType.UnsignedShort, (IntPtr)((baseIndex + cmd->IdxOffset) * sizeof(ushort)), baseVertex + (int)cmd->VtxOffset);
+					// A texture freed since the UI named it draws nothing.
+					GpuTexture texture = GpuTexture.FromId((int)new ImDrawCmdPtr(cmd).GetTexID().Handle);
+					if (texture == null)
+					{
+						continue;
+					}
+
+					commands.SetScissor((int)clipMinX, (int)(framebufferHeight - clipMaxY), (int)(clipMaxX - clipMinX), (int)(clipMaxY - clipMinY));
+					program.SetTexture(textureSlot, texture);
+					commands.DrawIndexed((int)cmd->ElemCount, baseIndex + (int)cmd->IdxOffset, baseVertex + (int)cmd->VtxOffset);
 				}
 			}
 
 			// Back to the state the engine's passes expect.
-			GL.Disable(EnableCap.ScissorTest);
-			GL.Disable(EnableCap.Blend);
-			GL.Enable(EnableCap.DepthTest);
-			GL.BindVertexArray(0);
-			GL.BindBuffer(BufferTarget.ArrayBuffer, 0);
-			GL.BindBuffer(BufferTarget.ElementArrayBuffer, 0);
-			GL.BindTexture(TextureTarget.Texture2D, 0);
-			GL.UseProgram(0);
+			commands.DisableScissor();
+			state = ref commands.State;
+			state.Blend = false;
+			state.DepthTest = true;
+			program.SetTexture(textureSlot, null);
+			commands.SetProgram(null);
 		}
 
 		/// <summary>Deletes the textures the current context alone uses (call with that context current, before destroying it).</summary>
@@ -232,19 +257,19 @@ void main()
 				ImTextureDataPtr texture = platform.Textures.Data[i];
 				if (texture.RefCount == 1 && texture.TexID.Handle != 0)
 				{
-					GL.DeleteTexture((int)texture.TexID.Handle);
-					texture.SetTexID(ImTextureID.Null);
-					texture.SetStatus(ImTextureStatus.Destroyed);
+					DestroyTexture(texture);
 				}
 			}
 		}
 
 		public void Dispose()
 		{
-			GL.DeleteBuffer(vertexBuffer);
-			GL.DeleteBuffer(indexBuffer);
-			GL.DeleteVertexArray(vertexArray);
-			GL.DeleteProgram(program);
+			vertexBuffer?.Dispose();
+			indexBuffer?.Dispose();
+			program?.Dispose();
+			vertexBuffer = null;
+			indexBuffer = null;
+			program = null;
 		}
 
 		#endregion
@@ -253,60 +278,26 @@ void main()
 
 		private void CreateDeviceObjects()
 		{
-			int vertex = CompileShader(ShaderType.VertexShader, VertexSource);
-			int fragment = CompileShader(ShaderType.FragmentShader, FragmentSource);
-			program = GL.CreateProgram();
-			GL.AttachShader(program, vertex);
-			GL.AttachShader(program, fragment);
-			GL.LinkProgram(program);
-			GL.GetProgram(program, GetProgramParameterName.LinkStatus, out int linked);
-			if (linked == 0)
+			var descriptor = new ProgramDescriptor { Name = "Editor/ImGui", Asynchronous = false };
+			descriptor.Stages.Add(new KeyValuePair<ShaderStage, string>(ShaderStage.Vertex, VertexSource));
+			descriptor.Stages.Add(new KeyValuePair<ShaderStage, string>(ShaderStage.Fragment, FragmentSource));
+			descriptor.AttributeLocations.Add(new KeyValuePair<string, int>("Position", 0));
+			descriptor.AttributeLocations.Add(new KeyValuePair<string, int>("UV", 1));
+			descriptor.AttributeLocations.Add(new KeyValuePair<string, int>("Color", 2));
+			program = Gfx.Device.CreateProgram(descriptor);
+			program.Finish();
+			if (!program.IsLinked)
 			{
-				Debug.LogError("[ImGui] Shader link failed: " + GL.GetProgramInfoLog(program));
+				Debug.LogError("[ImGui] Shader build failed: " + program.Log);
 			}
 
-			GL.DetachShader(program, vertex);
-			GL.DetachShader(program, fragment);
-			GL.DeleteShader(vertex);
-			GL.DeleteShader(fragment);
-			projectionLocation = GL.GetUniformLocation(program, "ProjMtx");
-			textureLocation = GL.GetUniformLocation(program, "Texture");
+			projectionSlot = program.GetUniformSlot("ProjMtx");
+			textureSlot = program.GetUniformSlot("Texture");
 
-			vertexArray = GL.GenVertexArray();
-			vertexBuffer = GL.GenBuffer();
-			indexBuffer = GL.GenBuffer();
-			GL.BindVertexArray(vertexArray);
-			GL.BindBuffer(BufferTarget.ArrayBuffer, vertexBuffer);
-			GL.BindBuffer(BufferTarget.ElementArrayBuffer, indexBuffer);
 			vertexBufferSize = 10000 * sizeof(ImDrawVert);
 			indexBufferSize = 20000 * sizeof(ushort);
-			GL.BufferData(BufferTarget.ArrayBuffer, vertexBufferSize, IntPtr.Zero, BufferUsageHint.StreamDraw);
-			GL.BufferData(BufferTarget.ElementArrayBuffer, indexBufferSize, IntPtr.Zero, BufferUsageHint.StreamDraw);
-
-			int stride = sizeof(ImDrawVert);
-			GL.EnableVertexAttribArray(0);
-			GL.VertexAttribPointer(0, 2, VertexAttribPointerType.Float, false, stride, 0);
-			GL.EnableVertexAttribArray(1);
-			GL.VertexAttribPointer(1, 2, VertexAttribPointerType.Float, false, stride, 8);
-			GL.EnableVertexAttribArray(2);
-			GL.VertexAttribPointer(2, 4, VertexAttribPointerType.UnsignedByte, true, stride, 16);
-			GL.BindVertexArray(0);
-			GL.BindBuffer(BufferTarget.ArrayBuffer, 0);
-			GL.BindBuffer(BufferTarget.ElementArrayBuffer, 0);
-		}
-
-		private static int CompileShader(ShaderType type, string source)
-		{
-			int shader = GL.CreateShader(type);
-			GL.ShaderSource(shader, source);
-			GL.CompileShader(shader);
-			GL.GetShader(shader, ShaderParameter.CompileStatus, out int compiled);
-			if (compiled == 0)
-			{
-				Debug.LogError("[ImGui] Shader compile failed: " + GL.GetShaderInfoLog(shader));
-			}
-
-			return shader;
+			vertexBuffer = Gfx.Device.CreateBuffer(new BufferDescriptor(BufferUsage.Vertex, vertexBufferSize, true, "ImGui vertices"));
+			indexBuffer = Gfx.Device.CreateBuffer(new BufferDescriptor(BufferUsage.Index, indexBufferSize, true, "ImGui indices"));
 		}
 
 		// ImGui 1.92 texture protocol: create / update / destroy what ImGui asks for.
@@ -316,40 +307,58 @@ void main()
 			{
 				case ImTextureStatus.WantCreate:
 				{
-					int handle = GL.GenTexture();
-					GL.BindTexture(TextureTarget.Texture2D, handle);
-					GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Linear);
-					GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Linear);
-					GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)TextureWrapMode.ClampToEdge);
-					GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)TextureWrapMode.ClampToEdge);
-					GL.PixelStore(PixelStoreParameter.UnpackRowLength, 0);
-					GL.PixelStore(PixelStoreParameter.UnpackAlignment, 1);
-					GL.TexImage2D(TextureTarget.Texture2D, 0, PixelInternalFormat.Rgba8, texture.Width, texture.Height, 0, PixelFormat.Rgba, PixelType.UnsignedByte, (IntPtr)texture.GetPixels());
-					GL.PixelStore(PixelStoreParameter.UnpackAlignment, 4);
-					GL.BindTexture(TextureTarget.Texture2D, 0);
-					texture.SetTexID(new ImTextureID((ulong)handle));
+					GpuTexture created = Gfx.Device.CreateTexture(TextureDescriptor.Texture2D(TextureFormat.RGBA8, texture.Width, texture.Height, 1, TextureUsage.Sampled, "ImGui texture"));
+					created.Sampler = Samplers.LinearClamp;
+					created.SetData(0, texture.GetPixels(), (long)texture.Width * texture.Height * 4);
+					ownTextures[created.Id] = created;
+					texture.SetTexID(new ImTextureID((ulong)created.Id));
 					texture.SetStatus(ImTextureStatus.Ok);
 					break;
 				}
 				case ImTextureStatus.WantUpdates:
 				{
 					ImTextureRect rect = texture.UpdateRect;
-					GL.BindTexture(TextureTarget.Texture2D, (int)texture.TexID.Handle);
-					GL.PixelStore(PixelStoreParameter.UnpackRowLength, texture.Width);
-					GL.PixelStore(PixelStoreParameter.UnpackAlignment, 1);
-					GL.TexSubImage2D(TextureTarget.Texture2D, 0, rect.X, rect.Y, rect.W, rect.H, PixelFormat.Rgba, PixelType.UnsignedByte, (IntPtr)texture.GetPixelsAt(rect.X, rect.Y));
-					GL.PixelStore(PixelStoreParameter.UnpackRowLength, 0);
-					GL.PixelStore(PixelStoreParameter.UnpackAlignment, 4);
-					GL.BindTexture(TextureTarget.Texture2D, 0);
+					GpuTexture existing = GpuTexture.FromId((int)texture.TexID.Handle);
+					if (existing != null && rect.W > 0 && rect.H > 0)
+					{
+						// The rectangle's rows lie a whole texture row apart in ImGui's pixels: the texture takes them packed.
+						int rowBytes = rect.W * 4;
+						int size = rowBytes * rect.H;
+						if (updateRows.Length < size)
+						{
+							updateRows = new byte[size];
+						}
+
+						fixed (byte* rows = updateRows)
+						{
+							for (int y = 0; y < rect.H; y++)
+							{
+								System.Buffer.MemoryCopy(texture.GetPixelsAt(rect.X, rect.Y + y), rows + (long)y * rowBytes, rowBytes, rowBytes);
+							}
+
+							existing.SetData(0, rect.X, rect.Y, 0, rect.W, rect.H, 1, rows, size);
+						}
+					}
+
 					texture.SetStatus(ImTextureStatus.Ok);
 					break;
 				}
 				case ImTextureStatus.WantDestroy when texture.UnusedFrames > 0:
-					GL.DeleteTexture((int)texture.TexID.Handle);
-					texture.SetTexID(ImTextureID.Null);
-					texture.SetStatus(ImTextureStatus.Destroyed);
+					DestroyTexture(texture);
 					break;
 			}
+		}
+
+		private static void DestroyTexture(ImTextureDataPtr texture)
+		{
+			int id = (int)texture.TexID.Handle;
+			if (ownTextures.Remove(id, out GpuTexture owned))
+			{
+				owned.Dispose();
+			}
+
+			texture.SetTexID(ImTextureID.Null);
+			texture.SetStatus(ImTextureStatus.Destroyed);
 		}
 
 		#endregion
