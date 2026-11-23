@@ -35,8 +35,32 @@ namespace LELEngine.Rendering.Passes
 		public override string Name => "VoxelGI";
 
 		public override RenderPassScope Scope => RenderPassScope.Frame;
-		public int VoxelTexture => previousValid ? radiance[current] : 0;
 
+		/// <summary>
+		///     The volume the materials read this frame: radiance premultiplied by occupancy (rgb) and occupancy (a), with
+		///     isotropic mips. Null until the volume was lit once.
+		/// </summary>
+		public GpuTexture RadianceTexture => previousValid ? radiance[current] : null;
+
+		/// <summary>The mips that volume has (what its directional textures hold).</summary>
+		public VoxelMipMode MipMode => mipMode;
+
+		/// <summary><see cref="VoxelMipMode.Anisotropic" />: six views side by side along x, level 0 = the volume's mip 1 (null otherwise).</summary>
+		public GpuTexture AnisoTexture => previousValid && mipMode == VoxelMipMode.Anisotropic ? anisoRadiance[current] : null;
+
+		/// <summary>Directional levels the cones read of <see cref="AnisoTexture" />.</summary>
+		public int AnisoLevels => AnisoLevelsUsed(Lighting.GI);
+
+		/// <summary><see cref="VoxelMipMode.SphericalHarmonics" />: the gradient of an axis (0..2), level 0 = the volume's mip 1 (null otherwise).</summary>
+		public GpuTexture SHTexture(int axis)
+		{
+			return previousValid && mipMode == VoxelMipMode.SphericalHarmonics ? shGradients[current][axis] : null;
+		}
+
+		// LEGACY(gl): no user in the engine's solution; kept for code outside it
+		public int VoxelTexture => previousValid ? HandleOf(radiance[current]) : 0;
+
+		// LEGACY(gl): no user in the engine's solution; kept for code outside it (Lighting.cs reads what Execute publishes)
 		/// <summary>The textures of the volume the materials read this frame (empty until the volume was lit once).</summary>
 		public VoxelVolumeTextures Volume => previousValid ? VolumeTextures(current) : default;
 
@@ -62,17 +86,17 @@ namespace LELEngine.Rendering.Passes
 		private AccumulatorVolume accumulators;
 
 		// Ping-pong radiance: each injection pass reads the other volume for its bounce.
-		private readonly int[] radiance = new int[2];
+		private readonly GpuTexture[] radiance = new GpuTexture[2];
 		private int current;
 		private bool previousValid;
 
 		// Directional mips of each radiance volume: six slabs side by side along x, level 0 = the volume's mip 1.
-		private readonly int[] anisoRadiance = new int[2];
+		private readonly GpuTexture[] anisoRadiance = new GpuTexture[2];
 		private int anisoSlabSize;
 		private int anisoLevels;
 
 		// SH L1 gradients of each radiance volume (d.x, d.y, d.z terms), half resolution, level 0 = the volume's mip 1.
-		private readonly int[][] shGradients = { new int[3], new int[3] };
+		private readonly GpuTexture[][] shGradients = { new GpuTexture[3], new GpuTexture[3] };
 		private int shLevels;
 
 		// The mips the volume has this frame (the setting, unless the context lacks the texture units).
@@ -82,17 +106,19 @@ namespace LELEngine.Rendering.Passes
 		private VoxelMipMode volumeMipMode;
 
 		// The bounce per 2x2x2 voxels (irradiance / pi of every cell), refilled every pass.
-		private int bounceCells;
+		private GpuTexture bounceCells;
 
 		// Dynamic regions each radiance buffer held when it was last written; cleared before reuse.
 		private readonly List<VoxelRegion>[] radianceRegions = { new List<VoxelRegion>(), new List<VoxelRegion>() };
 
-		private int blockList;
+		private GpuBuffer blockList;
 		private int blockResolution;
 
 		private int currentResolution;
 		private int mipLevels;
-		private int framebuffer;
+
+		// LEGACY(gl): a render pass without attachments has no sample count, so the coverage voxelization keeps a
+		// framebuffer object of its own (default size and samples) and binds it with OpenGL commands.
 		private int coverageFramebuffer;
 		private int coverageSamples;
 		private ShaderProgram voxelize;
@@ -158,7 +184,7 @@ namespace LELEngine.Rendering.Passes
 
 			EnsureCreated(gi);
 			VoxelMipMode volumeMode = MipModeFor(gi);
-			if (radiance[0] == 0 || gi.Resolution != currentResolution || volumeMode != volumeMipMode)
+			if (radiance[0] == null || gi.Resolution != currentResolution || volumeMode != volumeMipMode)
 			{
 				CreateVolumes(gi.Resolution, volumeMode);
 			}
@@ -219,7 +245,6 @@ namespace LELEngine.Rendering.Passes
 
 					profiler.Split(MipSections[Math.Min(pass, MipSections.Length - 1)]);
 					UpdateMips(target);
-					ComputeShader.Barrier(MemoryBarrierFlags.ShaderImageAccessBarrierBit | MemoryBarrierFlags.TextureFetchBarrierBit);
 
 					current = target;
 				}
@@ -227,6 +252,7 @@ namespace LELEngine.Rendering.Passes
 				previousValid = true;
 			}
 
+			// LEGACY(gl): Lighting.cs publishes the volume to the shaders by OpenGL texture names
 			gi.VoxelTexture = VoxelTexture;
 			gi.VoxelVolume = Volume;
 		}
@@ -264,7 +290,7 @@ namespace LELEngine.Rendering.Passes
 		// the coverage voxelization, the directional mips).
 		private void EnsureCreated(GlobalIlluminationSettings gi)
 		{
-			if (framebuffer != 0)
+			if (blockList != null)
 			{
 				return;
 			}
@@ -275,35 +301,32 @@ namespace LELEngine.Rendering.Passes
 			mip = new ComputeShader("Engine/VoxelMip.shader");
 			mipBlocks = new ComputeShader("Engine/VoxelMipBlocks.shader");
 
-			// Attachment-less framebuffers: rasterization happens, but all output goes through images.
-			framebuffer = GL.GenFramebuffer();
+			// Voxelization draws into passes without attachments: rasterization happens, but all output goes through images.
+			// LEGACY(gl): the multisampled one (see coverageFramebuffer)
 			coverageFramebuffer = GL.GenFramebuffer();
 			coverageSamples = Math.Max(1, Math.Min(CoverageSamples, GL.GetInteger((GetPName)0x9318))); // GL_MAX_FRAMEBUFFER_SAMPLES
-			blockList = GL.GenBuffer();
+			// The indirect dispatch's arguments and, behind them, the list the dispatched groups read.
+			blockList = Gfx.Device.CreateBuffer(new BufferDescriptor(BufferUsage.Storage | BufferUsage.Indirect, 0, true, "Voxel GI occupied blocks"));
 
 			gridShadow = new GridShadowMap(gi.GridShadowMapSize);
 		}
 
 		private void Release()
 		{
-			if (framebuffer == 0)
+			if (blockList == null)
 			{
 				return;
 			}
 
 			DeleteVolumes();
-			GL.DeleteFramebuffer(framebuffer);
-			framebuffer = 0;
 			if (coverageFramebuffer != 0)
 			{
+				// LEGACY(gl): see coverageFramebuffer
 				GL.DeleteFramebuffer(coverageFramebuffer);
 				coverageFramebuffer = 0;
 			}
-			if (blockList != 0)
-			{
-				GL.DeleteBuffer(blockList);
-				blockList = 0;
-			}
+			blockList.Dispose();
+			blockList = null;
 			gridShadow?.Delete();
 			gridShadow = null;
 			voxelize?.Delete();
@@ -394,7 +417,7 @@ namespace LELEngine.Rendering.Passes
 				}
 			}
 			volumeMipMode = mode;
-			bounceCells = CreateVolumeTexture(resolution / 2, PixelInternalFormat.Rgba16f, PixelFormat.Rgba, PixelType.Float);
+			bounceCells = CreateVolumeTexture(resolution / 2, TextureFormat.RGBA16F, TextureUsage.Sampled | TextureUsage.Storage);
 
 			current = 0;
 			previousValid = false;
@@ -403,13 +426,10 @@ namespace LELEngine.Rendering.Passes
 
 			// Block list: 16-byte indirect dispatch header followed by one packed uint per occupied block.
 			int blockCapacity = blockResolution * blockResolution * blockResolution;
-			GL.BindBuffer(BufferTarget.ShaderStorageBuffer, blockList);
-			GL.BufferData(BufferTarget.ShaderStorageBuffer, 16 + sizeof(uint) * blockCapacity, IntPtr.Zero, BufferUsageHint.DynamicDraw);
+			blockList.Allocate(16 + sizeof(uint) * blockCapacity);
 			uint[] header = { 0u, 1u, 1u, 0u };
-			GL.BufferSubData(BufferTarget.ShaderStorageBuffer, IntPtr.Zero, 16, header);
-			GL.BindBuffer(BufferTarget.ShaderStorageBuffer, 0);
+			blockList.SetSubData(0, header);
 
-			SetDefaultFramebufferSize(framebuffer, resolution, 0);
 			SetDefaultFramebufferSize(coverageFramebuffer, resolution, coverageSamples);
 
 			// Injection skips empty blocks, so the radiance volumes must start out zero.
@@ -429,6 +449,7 @@ namespace LELEngine.Rendering.Passes
 			Console.WriteLine($"[VoxelGI] Volume {resolution}^3: geometry 2x(RGBA8+RGBA8+R11G11B10F), radiance 2xRGBA16F {mipLevels} mips{directional}, {blockResolution}^3 blocks, ~{megabytes:0} MB (+{voxels * 20 / (1024 * 1024)} MB coverage accumulators when used), {coverageSamples}x coverage samples");
 		}
 
+		// LEGACY(gl): see coverageFramebuffer
 		private static void SetDefaultFramebufferSize(int handle, int resolution, int samples)
 		{
 			GL.BindFramebuffer(FramebufferTarget.Framebuffer, handle);
@@ -450,64 +471,39 @@ namespace LELEngine.Rendering.Passes
 			accumulators.Delete();
 			for (int i = 0; i < 2; i++)
 			{
-				if (radiance[i] != 0)
-				{
-					GL.DeleteTexture(radiance[i]);
-					radiance[i] = 0;
-				}
-				if (anisoRadiance[i] != 0)
-				{
-					GL.DeleteTexture(anisoRadiance[i]);
-					anisoRadiance[i] = 0;
-				}
+				radiance[i]?.Dispose();
+				radiance[i] = null;
+				anisoRadiance[i]?.Dispose();
+				anisoRadiance[i] = null;
 				for (int axis = 0; axis < 3; axis++)
 				{
-					if (shGradients[i][axis] != 0)
-					{
-						GL.DeleteTexture(shGradients[i][axis]);
-						shGradients[i][axis] = 0;
-					}
+					shGradients[i][axis]?.Dispose();
+					shGradients[i][axis] = null;
 				}
 			}
-			if (bounceCells != 0)
-			{
-				GL.DeleteTexture(bounceCells);
-				bounceCells = 0;
-			}
+			bounceCells?.Dispose();
+			bounceCells = null;
 		}
 
-		private static int CreateRadianceTexture(int resolution)
+		private static GpuTexture CreateRadianceTexture(int resolution)
 		{
-			int texture = GL.GenTexture();
-			GL.BindTexture(TextureTarget.Texture3D, texture);
-			GL.TexImage3D(TextureTarget.Texture3D, 0, PixelInternalFormat.Rgba16f, resolution, resolution, resolution, 0, PixelFormat.Rgba, PixelType.Float, IntPtr.Zero);
-			GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.LinearMipmapLinear);
-			GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Linear);
-			GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureWrapS, (int)TextureWrapMode.ClampToBorder);
-			GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureWrapT, (int)TextureWrapMode.ClampToBorder);
-			GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureWrapR, (int)TextureWrapMode.ClampToBorder);
-			GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureBorderColor, new[] { 0f, 0f, 0f, 0f });
-			// Allocate the mip chain once; levels are filled by the mip compute shader.
-			GL.GenerateMipmap(GenerateMipmapTarget.Texture3D);
-			GL.BindTexture(TextureTarget.Texture3D, 0);
+			// The whole mip chain; levels are filled by the mip compute shader.
+			GpuTexture texture = Gfx.Device.CreateTexture(TextureDescriptor.Texture3D(TextureFormat.RGBA16F, resolution, resolution, resolution, 0,
+				TextureUsage.Sampled | TextureUsage.Storage, "Voxel radiance"));
+			// Zero outside the volume.
+			texture.Sampler = Samplers.Get(SamplerFilter.Linear, SamplerMipFilter.Linear, SamplerAddress.ClampToBorder);
 			return texture;
 		}
 
 		// Six slabs of slabSize^3 side by side along x. The slabs' own edges are kept by the sampling code (it clamps x
 		// inside the slab); y and z read zero outside the volume, as the isotropic mips do.
-		private static int CreateAnisoTexture(int slabSize, int levels)
+		private static GpuTexture CreateAnisoTexture(int slabSize, int levels)
 		{
-			int texture = GL.GenTexture();
-			GL.BindTexture(TextureTarget.Texture3D, texture);
-			GL.TexStorage3D(TextureTarget3d.Texture3D, levels, SizedInternalFormat.Rgba16f, slabSize * 6, slabSize, slabSize);
-			GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.LinearMipmapLinear);
-			GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Linear);
-			GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureWrapS, (int)TextureWrapMode.ClampToEdge);
-			GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureWrapT, (int)TextureWrapMode.ClampToBorder);
-			GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureWrapR, (int)TextureWrapMode.ClampToBorder);
-			GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureBorderColor, new[] { 0f, 0f, 0f, 0f });
-			GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureMaxLevel, levels - 1);
-			GL.BindTexture(TextureTarget.Texture3D, 0);
+			GpuTexture texture = Gfx.Device.CreateTexture(TextureDescriptor.Texture3D(TextureFormat.RGBA16F, slabSize * 6, slabSize, slabSize, levels,
+				TextureUsage.Sampled | TextureUsage.Storage, "Voxel radiance, directional"));
+			SamplerDescriptor sampler = new SamplerDescriptor(SamplerFilter.Linear, SamplerMipFilter.Linear, SamplerAddress.ClampToBorder);
+			sampler.AddressU = SamplerAddress.ClampToEdge;
+			texture.Sampler = Gfx.Device.GetSampler(sampler);
 			return texture;
 		}
 
@@ -578,19 +574,45 @@ namespace LELEngine.Rendering.Passes
 			return gi.VoxelMips;
 		}
 
+		// LEGACY(gl): used by Lighting.cs (through GlobalIlluminationSettings.VoxelVolume)
 		// The textures of radiance volume index as the cones read them.
 		private VoxelVolumeTextures VolumeTextures(int index)
 		{
 			return new VoxelVolumeTextures
 			{
 				Mode = mipMode,
-				Radiance = radiance[index],
-				Aniso = mipMode == VoxelMipMode.Anisotropic ? anisoRadiance[index] : 0,
+				Radiance = HandleOf(radiance[index]),
+				Aniso = mipMode == VoxelMipMode.Anisotropic ? HandleOf(anisoRadiance[index]) : 0,
 				AnisoLevels = AnisoLevelsUsed(Lighting.GI),
-				SHX = mipMode == VoxelMipMode.SphericalHarmonics ? shGradients[index][0] : 0,
-				SHY = mipMode == VoxelMipMode.SphericalHarmonics ? shGradients[index][1] : 0,
-				SHZ = mipMode == VoxelMipMode.SphericalHarmonics ? shGradients[index][2] : 0
+				SHX = mipMode == VoxelMipMode.SphericalHarmonics ? HandleOf(shGradients[index][0]) : 0,
+				SHY = mipMode == VoxelMipMode.SphericalHarmonics ? HandleOf(shGradients[index][1]) : 0,
+				SHZ = mipMode == VoxelMipMode.SphericalHarmonics ? HandleOf(shGradients[index][2]) : 0
 			};
+		}
+
+		// LEGACY(gl): the OpenGL texture name Lighting.cs takes
+		private static int HandleOf(GpuTexture texture)
+		{
+			return texture != null ? ((Graphics.OpenGL.GLTexture)texture).Handle : 0;
+		}
+
+		// The textures of radiance volume index for a program of the pass's own that traces it (Engine/VoxelRadiance.glsl):
+		// the voxels with their isotropic mips, and the directional data of the mode.
+		private void SetRadianceUniforms(ShaderProgram program, int index)
+		{
+			program.SetTexture("VoxelRadiance", radiance[index]);
+			program.SetInt("giVoxelMips", (int)mipMode);
+			if (mipMode == VoxelMipMode.Anisotropic)
+			{
+				program.SetInt("giVoxelAnisoLevels", AnisoLevelsUsed(Lighting.GI));
+				program.SetTexture("VoxelRadianceAniso", anisoRadiance[index]);
+			}
+			else if (mipMode == VoxelMipMode.SphericalHarmonics)
+			{
+				program.SetTexture("VoxelRadianceSHX", shGradients[index][0]);
+				program.SetTexture("VoxelRadianceSHY", shGradients[index][1]);
+				program.SetTexture("VoxelRadianceSHZ", shGradients[index][2]);
+			}
 		}
 
 		// Directional levels the cones read (built and used); the isotropic mips take over above them.
@@ -670,9 +692,8 @@ namespace LELEngine.Rendering.Passes
 			}
 
 			clearGeometry.Use();
-			target.BindImages(0, TextureAccess.WriteOnly, true);
+			target.BindImages(0, ImageAccess.Write, true);
 			DispatchRegion(clearGeometry, region);
-			ComputeShader.Barrier(MemoryBarrierFlags.ShaderImageAccessBarrierBit);
 		}
 
 		private void ClearGeometry(GeometryVolume target, List<VoxelRegion> regions)
@@ -683,12 +704,11 @@ namespace LELEngine.Rendering.Passes
 			}
 
 			clearGeometry.Use();
-			target.BindImages(0, TextureAccess.WriteOnly, true);
+			target.BindImages(0, ImageAccess.Write, true);
 			foreach (VoxelRegion region in regions)
 			{
 				DispatchRegion(clearGeometry, region);
 			}
-			ComputeShader.Barrier(MemoryBarrierFlags.ShaderImageAccessBarrierBit);
 		}
 
 		// Radiance levels 0 and 1 and the directional level 0 are only rewritten for occupied blocks, so they must be
@@ -700,30 +720,30 @@ namespace LELEngine.Rendering.Passes
 				return;
 			}
 
+			CommandList commands = Gfx.Commands;
 			clearRadiance.Use();
 			for (int level = 0; level <= 1; level++)
 			{
-				GL.BindImageTexture(0, radiance[index], level, true, 0, TextureAccess.WriteOnly, SizedInternalFormat.Rgba16f);
+				commands.SetImage(0, radiance[index], level, -1, ImageAccess.Write);
 				DispatchRegion(clearRadiance, region.AtLevel(level, Math.Max(1, currentResolution >> level)));
 			}
 
 			// The directional textures of the volume's mips (only one kind exists).
 			VoxelRegion slabRegion = region.AtLevel(1, anisoSlabSize);
-			if (anisoRadiance[index] != 0)
+			if (anisoRadiance[index] != null)
 			{
-				GL.BindImageTexture(0, anisoRadiance[index], 0, true, 0, TextureAccess.WriteOnly, SizedInternalFormat.Rgba16f);
+				commands.SetImage(0, anisoRadiance[index], 0, -1, ImageAccess.Write);
 				for (int slab = 0; slab < 6; slab++)
 				{
 					DispatchRegion(clearRadiance, slabRegion.OffsetX(slab * anisoSlabSize));
 				}
 			}
 
-			for (int axis = 0; axis < 3 && shGradients[index][axis] != 0; axis++)
+			for (int axis = 0; axis < 3 && shGradients[index][axis] != null; axis++)
 			{
-				GL.BindImageTexture(0, shGradients[index][axis], 0, true, 0, TextureAccess.WriteOnly, SizedInternalFormat.Rgba16f);
+				commands.SetImage(0, shGradients[index][axis], 0, -1, ImageAccess.Write);
 				DispatchRegion(clearRadiance, slabRegion);
 			}
-			ComputeShader.Barrier(MemoryBarrierFlags.ShaderImageAccessBarrierBit);
 		}
 
 		private void ClearRadiance(int index, List<VoxelRegion> regions)
@@ -739,10 +759,11 @@ namespace LELEngine.Rendering.Passes
 				return;
 			}
 
+			CommandList commands = Gfx.Commands;
 			clearRadiance.Use();
 			for (int level = 0; level <= 1; level++)
 			{
-				GL.BindImageTexture(0, radiance[index], level, true, 0, TextureAccess.WriteOnly, SizedInternalFormat.Rgba16f);
+				commands.SetImage(0, radiance[index], level, -1, ImageAccess.Write);
 				int levelSize = Math.Max(1, currentResolution >> level);
 				foreach (VoxelRegion region in regions)
 				{
@@ -750,9 +771,9 @@ namespace LELEngine.Rendering.Passes
 				}
 			}
 
-			if (anisoRadiance[index] != 0)
+			if (anisoRadiance[index] != null)
 			{
-				GL.BindImageTexture(0, anisoRadiance[index], 0, true, 0, TextureAccess.WriteOnly, SizedInternalFormat.Rgba16f);
+				commands.SetImage(0, anisoRadiance[index], 0, -1, ImageAccess.Write);
 				foreach (VoxelRegion region in regions)
 				{
 					VoxelRegion slabRegion = region.AtLevel(1, anisoSlabSize);
@@ -763,15 +784,14 @@ namespace LELEngine.Rendering.Passes
 				}
 			}
 
-			for (int axis = 0; axis < 3 && shGradients[index][axis] != 0; axis++)
+			for (int axis = 0; axis < 3 && shGradients[index][axis] != null; axis++)
 			{
-				GL.BindImageTexture(0, shGradients[index][axis], 0, true, 0, TextureAccess.WriteOnly, SizedInternalFormat.Rgba16f);
+				commands.SetImage(0, shGradients[index][axis], 0, -1, ImageAccess.Write);
 				foreach (VoxelRegion region in regions)
 				{
 					DispatchRegion(clearRadiance, region.AtLevel(1, anisoSlabSize));
 				}
 			}
-			ComputeShader.Barrier(MemoryBarrierFlags.ShaderImageAccessBarrierBit);
 		}
 
 		// Shared by the region clear shaders: dstOffset / dstSize uniforms, 4^3 work groups.
@@ -801,34 +821,31 @@ namespace LELEngine.Rendering.Passes
 				return;
 			}
 
-			GL.BindFramebuffer(FramebufferTarget.Framebuffer, framebuffer);
-			GL.Viewport(0, 0, currentResolution, currentResolution);
-			GL.Disable(EnableCap.DepthTest);
-			GL.Disable(EnableCap.CullFace);
-			GL.DepthMask(false);
+			CommandList commands = Gfx.Commands;
+			commands.BeginRenderPass(currentResolution, currentResolution);
+			commands.State.DepthTest = false;
+			commands.State.Culling = FaceCulling.None;
+			commands.State.DepthWrite = false;
 
 			voxelize ??= new ShaderProgram("Engine/Voxelize.shader");
 			voxelize.Use();
 			voxelize.SetVector3("voxelGridMin", gi.GridMin);
 			voxelize.SetFloat("voxelGridSize", gi.GridSize);
 			voxelize.SetInt("voxelResolution", currentResolution);
-			target.BindImages(0, TextureAccess.WriteOnly, true);
+			target.BindImages(0, ImageAccess.Write, true);
 			DrawRenderers(voxelize, renderers);
 
-			// Geometry is read as images (injection) and block flags as textures (compaction).
-			ComputeShader.Barrier(MemoryBarrierFlags.ShaderImageAccessBarrierBit | MemoryBarrierFlags.TextureFetchBarrierBit);
-
-			GL.DepthMask(true);
-			GL.Enable(EnableCap.DepthTest);
-			GL.Enable(EnableCap.CullFace);
-			GL.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
+			commands.State.DepthWrite = true;
+			commands.State.DepthTest = true;
+			commands.State.Culling = FaceCulling.Back;
+			commands.EndRenderPass();
 		}
 
 		// Coverage voxelization: clear the accumulators where the renderers can be, rasterize them with multisampling
 		// into the accumulators (block flags straight into the target), then resolve the accumulators into the target.
 		private void VoxelizeCoverage(GeometryVolume target, IReadOnlyList<MeshRenderer> renderers, GlobalIlluminationSettings gi, List<VoxelRegion> regions)
 		{
-			if (accumulators.AlbedoRG == 0)
+			if (accumulators.AlbedoRG == null)
 			{
 				accumulators = AccumulatorVolume.Create(currentResolution);
 			}
@@ -839,17 +856,18 @@ namespace LELEngine.Rendering.Passes
 				resolveGeometry = new ComputeShader("Engine/VoxelResolveGeometry.shader");
 			}
 
+			CommandList commands = Gfx.Commands;
 			clearAccumulators.Use();
-			accumulators.BindImages(0, TextureAccess.WriteOnly);
+			accumulators.BindImages(0, ImageAccess.Write);
 			DispatchRegions(clearAccumulators, regions);
-			ComputeShader.Barrier(MemoryBarrierFlags.ShaderImageAccessBarrierBit);
 
+			// LEGACY(gl): a pass without attachments cannot be multisampled through the device (see coverageFramebuffer);
+			// the draws that follow go to the framebuffer object bound here.
 			GL.BindFramebuffer(FramebufferTarget.Framebuffer, coverageFramebuffer);
-			GL.Viewport(0, 0, currentResolution, currentResolution);
-			GL.Disable(EnableCap.DepthTest);
-			GL.Disable(EnableCap.CullFace);
-			GL.DepthMask(false);
-			GL.Enable(EnableCap.Multisample);
+			commands.SetViewport(0, 0, currentResolution, currentResolution);
+			commands.State.DepthTest = false;
+			commands.State.Culling = FaceCulling.None;
+			commands.State.DepthWrite = false;
 
 			voxelizeCoverage.Use();
 			voxelizeCoverage.SetVector3("voxelGridMin", gi.GridMin);
@@ -857,29 +875,26 @@ namespace LELEngine.Rendering.Passes
 			voxelizeCoverage.SetInt("voxelResolution", currentResolution);
 			voxelizeCoverage.SetInt("voxSamples", coverageSamples);
 			voxelizeCoverage.SetInt("voxSplatWidth", gi.CoverageSplatWidth);
-			accumulators.BindImages(0, TextureAccess.ReadWrite);
-			GL.BindImageTexture(5, target.Blocks, 0, true, 0, TextureAccess.WriteOnly, SizedInternalFormat.R8);
+			accumulators.BindImages(0, ImageAccess.ReadWrite);
+			commands.SetImage(5, target.Blocks, 0, -1, ImageAccess.Write);
 			DrawRenderers(voxelizeCoverage, renderers);
 
-			ComputeShader.Barrier(MemoryBarrierFlags.ShaderImageAccessBarrierBit | MemoryBarrierFlags.TextureFetchBarrierBit);
-			GL.DepthMask(true);
-			GL.Enable(EnableCap.DepthTest);
-			GL.Enable(EnableCap.CullFace);
+			commands.State.DepthWrite = true;
+			commands.State.DepthTest = true;
+			commands.State.Culling = FaceCulling.Back;
+			// LEGACY(gl): see above
 			GL.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
 
 			resolveGeometry.Use();
-			target.BindImages(0, TextureAccess.WriteOnly, false);
+			target.BindImages(0, ImageAccess.Write, false);
 			ShaderProgram program = resolveGeometry.Program;
-			program.SetTexture("AccAlbedoRG", TextureTarget.Texture3D, accumulators.AlbedoRG, 0);
-			program.SetTexture("AccAlbedoBW", TextureTarget.Texture3D, accumulators.AlbedoBW, 1);
-			program.SetTexture("AccNormalXY", TextureTarget.Texture3D, accumulators.NormalXY, 2);
-			program.SetTexture("AccNormalZ", TextureTarget.Texture3D, accumulators.NormalZ, 3);
-			program.SetTexture("AccEmission", TextureTarget.Texture3D, accumulators.Emission, 4);
+			program.SetTexture("AccAlbedoRG", accumulators.AlbedoRG);
+			program.SetTexture("AccAlbedoBW", accumulators.AlbedoBW);
+			program.SetTexture("AccNormalXY", accumulators.NormalXY);
+			program.SetTexture("AccNormalZ", accumulators.NormalZ);
+			program.SetTexture("AccEmission", accumulators.Emission);
 			program.SetFloat("occupancyScale", gi.CoverageOccupancyScale);
 			DispatchRegions(resolveGeometry, regions);
-
-			// Geometry is read as images (injection) and block flags as textures (compaction).
-			ComputeShader.Barrier(MemoryBarrierFlags.ShaderImageAccessBarrierBit | MemoryBarrierFlags.TextureFetchBarrierBit);
 		}
 
 		private void DispatchRegions(ComputeShader shader, List<VoxelRegion> regions)
@@ -922,17 +937,14 @@ namespace LELEngine.Rendering.Passes
 		private void CompactOccupiedBlocks()
 		{
 			uint zero = 0;
-			GL.BindBuffer(BufferTarget.ShaderStorageBuffer, blockList);
-			GL.BufferSubData(BufferTarget.ShaderStorageBuffer, IntPtr.Zero, sizeof(uint), ref zero);
-			GL.BindBufferBase(BufferRangeTarget.ShaderStorageBuffer, 0, blockList);
+			blockList.SetSubData(0, in zero);
+			Gfx.Commands.SetStorageBuffer(0, blockList);
 
 			compactBlocks.Use();
 			compactBlocks.Program.SetInt("blockResolution", blockResolution);
-			compactBlocks.Program.SetTexture("StaticBlocks", TextureTarget.Texture3D, staticGeometry.Blocks, 0);
-			compactBlocks.Program.SetTexture("DynamicBlocks", TextureTarget.Texture3D, dynamicGeometry.Blocks, 1);
+			compactBlocks.Program.SetTexture("StaticBlocks", staticGeometry.Blocks);
+			compactBlocks.Program.SetTexture("DynamicBlocks", dynamicGeometry.Blocks);
 			compactBlocks.DispatchThreads(blockResolution, blockResolution, blockResolution, 4, 4, 4);
-
-			ComputeShader.Barrier(MemoryBarrierFlags.ShaderStorageBarrierBit | MemoryBarrierFlags.CommandBarrierBit);
 		}
 
 		// The bounce of the next injection pass per 2x2x2 voxels, traced from radiance[current] (the previous pass).
@@ -942,18 +954,15 @@ namespace LELEngine.Rendering.Passes
 			shader.Use();
 			ShaderProgram program = shader.Program;
 			SetTraceUniforms(program, gi);
-			program.SetTexture("StaticAlbedo", TextureTarget.Texture3D, staticGeometry.Albedo, 4);
-			program.SetTexture("StaticNormal", TextureTarget.Texture3D, staticGeometry.Normal, 5);
-			program.SetTexture("DynamicAlbedo", TextureTarget.Texture3D, dynamicGeometry.Albedo, 6);
-			program.SetTexture("DynamicNormal", TextureTarget.Texture3D, dynamicGeometry.Normal, 7);
-			GL.BindImageTexture(0, bounceCells, 0, true, 0, TextureAccess.WriteOnly, SizedInternalFormat.Rgba16f);
+			program.SetTexture("StaticAlbedo", staticGeometry.Albedo);
+			program.SetTexture("StaticNormal", staticGeometry.Normal);
+			program.SetTexture("DynamicAlbedo", dynamicGeometry.Albedo);
+			program.SetTexture("DynamicNormal", dynamicGeometry.Normal);
+			CommandList commands = Gfx.Commands;
+			commands.SetImage(0, bounceCells, 0, -1, ImageAccess.Write);
 
-			GL.BindBufferBase(BufferRangeTarget.ShaderStorageBuffer, 0, blockList);
-			GL.BindBuffer(BufferTarget.DispatchIndirectBuffer, blockList);
-			GL.DispatchComputeIndirect(IntPtr.Zero);
-			GL.BindBuffer(BufferTarget.DispatchIndirectBuffer, 0);
-
-			ComputeShader.Barrier(MemoryBarrierFlags.ShaderImageAccessBarrierBit | MemoryBarrierFlags.TextureFetchBarrierBit);
+			commands.SetStorageBuffer(0, blockList);
+			shader.DispatchIndirect(blockList, 0);
 		}
 
 		// Grid and cone parameters of the volume's own traces (bounce cells, per-voxel bounce): the previous pass's
@@ -967,9 +976,7 @@ namespace LELEngine.Rendering.Passes
 			// Per-voxel bounces jitter per voxel, bounce cells per cell (their own hash).
 			program.SetInt("giConeJitter", gi.ConeJitter ? 1 : 0);
 			program.SetFloat("giConeJitterCell", gi.VoxelSize);
-			// Directional data on units 12-14: 1 and 2 hold the shadow maps, 4-7 the geometry and the bounce cells, 8 and
-			// 11 the distance field, 16 the sky.
-			Lighting.SetVoxelRadianceUniforms(program, VolumeTextures(current), 0, 12);
+			SetRadianceUniforms(program, current);
 			// The bounce traces like the materials: with SDF cones walls stop it, voxel cones would bring the light
 			// from outside in through them. The SDF detail trace is not used here (binary, too sharp per voxel).
 			bool sdf = gi.DistanceFieldEnabled && gi.GlobalSdf != 0;
@@ -996,6 +1003,8 @@ namespace LELEngine.Rendering.Passes
 
 			// The lights' lists; shadows come from the grid-covering maps, not the camera's.
 			Lighting.SetUniforms(program, false, false);
+			// LEGACY(gl): GridShadowMap.cs binds its maps to texture units by number (1 and 2: the units the lists' and
+			// the trace's textures leave free, 8 and 11 hold the distance field, 16 the sky)
 			gridShadow.SetUniforms(program, 1, 2);
 			program.SetInt("injectShadowTaps", gi.InjectShadowTaps);
 
@@ -1003,19 +1012,16 @@ namespace LELEngine.Rendering.Passes
 			program.SetFloat("giBounceStrength", bounce ? gi.BounceStrength : 0f);
 			program.SetInt("giBounceCones", gi.BounceCones);
 			program.SetInt("giBounceCells", cells ? 1 : 0);
-			program.SetTexture("VoxelBounceCells", TextureTarget.Texture3D, bounceCells, 4);
+			program.SetTexture("VoxelBounceCells", bounceCells);
 
-			staticGeometry.BindImages(0, TextureAccess.ReadOnly, false);
-			dynamicGeometry.BindImages(3, TextureAccess.ReadOnly, false);
-			GL.BindImageTexture(6, radiance[target], 0, true, 0, TextureAccess.WriteOnly, SizedInternalFormat.Rgba16f);
+			staticGeometry.BindImages(0, ImageAccess.Read, false);
+			dynamicGeometry.BindImages(3, ImageAccess.Read, false);
+			CommandList commands = Gfx.Commands;
+			commands.SetImage(6, radiance[target], 0, -1, ImageAccess.Write);
 
 			// One work group per occupied block, count taken from the compaction result.
-			GL.BindBufferBase(BufferRangeTarget.ShaderStorageBuffer, 0, blockList);
-			GL.BindBuffer(BufferTarget.DispatchIndirectBuffer, blockList);
-			GL.DispatchComputeIndirect(IntPtr.Zero);
-			GL.BindBuffer(BufferTarget.DispatchIndirectBuffer, 0);
-
-			ComputeShader.Barrier(MemoryBarrierFlags.ShaderImageAccessBarrierBit);
+			commands.SetStorageBuffer(0, blockList);
+			shader.DispatchIndirect(blockList, 0);
 		}
 
 		// The mips the cones read: isotropic (always, except where the directional levels cover every level), then the
@@ -1044,36 +1050,34 @@ namespace LELEngine.Rendering.Passes
 
 		// Box-filters the mip chain of a radiance volume. Level 1, which holds most of the work, is only
 		// computed for occupied blocks (indirect dispatch over the block list); coarser levels run whole.
-		private void UpdateIsotropicMips(int texture)
+		private void UpdateIsotropicMips(GpuTexture texture)
 		{
 			if (mipLevels > 1)
 			{
+				CommandList commands = Gfx.Commands;
 				mipBlocks.Use();
-				GL.BindImageTexture(0, texture, 0, true, 0, TextureAccess.ReadOnly, SizedInternalFormat.Rgba16f);
-				GL.BindImageTexture(1, texture, 1, true, 0, TextureAccess.WriteOnly, SizedInternalFormat.Rgba16f);
-				GL.BindBufferBase(BufferRangeTarget.ShaderStorageBuffer, 0, blockList);
-				GL.BindBuffer(BufferTarget.DispatchIndirectBuffer, blockList);
-				GL.DispatchComputeIndirect(IntPtr.Zero);
-				GL.BindBuffer(BufferTarget.DispatchIndirectBuffer, 0);
-				ComputeShader.Barrier(MemoryBarrierFlags.ShaderImageAccessBarrierBit);
+				commands.SetImage(0, texture, 0, -1, ImageAccess.Read);
+				commands.SetImage(1, texture, 1, -1, ImageAccess.Write);
+				commands.SetStorageBuffer(0, blockList);
+				mipBlocks.DispatchIndirect(blockList, 0);
 			}
 
 			BoxMips(texture, currentResolution, 2, mipLevels);
 		}
 
 		// Levels [firstLevel, levels) of a texture whose level 0 is baseSize^3, each the 2x2x2 average of the one below.
-		private void BoxMips(int texture, int baseSize, int firstLevel, int levels)
+		private void BoxMips(GpuTexture texture, int baseSize, int firstLevel, int levels)
 		{
+			CommandList commands = Gfx.Commands;
 			mip.Use();
 			for (int level = firstLevel; level < levels; level++)
 			{
 				int levelSize = Math.Max(1, baseSize >> level);
-				GL.BindImageTexture(0, texture, level - 1, true, 0, TextureAccess.ReadOnly, SizedInternalFormat.Rgba16f);
-				GL.BindImageTexture(1, texture, level, true, 0, TextureAccess.WriteOnly, SizedInternalFormat.Rgba16f);
+				commands.SetImage(0, texture, level - 1, -1, ImageAccess.Read);
+				commands.SetImage(1, texture, level, -1, ImageAccess.Write);
 				mip.Program.SetInt3("dstOffset", 0, 0, 0);
 				mip.Program.SetInt3("dstSize", levelSize, levelSize, levelSize);
 				mip.DispatchThreads(levelSize, levelSize, levelSize, 4, 4, 4);
-				ComputeShader.Barrier(MemoryBarrierFlags.ShaderImageAccessBarrierBit);
 			}
 		}
 
@@ -1084,20 +1088,18 @@ namespace LELEngine.Rendering.Passes
 			shBase ??= new ComputeShader("Engine/VoxelSHBase.shader");
 			shBase.Use();
 			ShaderProgram program = shBase.Program;
-			program.SetTexture("StaticAlbedo", TextureTarget.Texture3D, staticGeometry.Albedo, 4);
-			program.SetTexture("StaticNormal", TextureTarget.Texture3D, staticGeometry.Normal, 5);
-			program.SetTexture("DynamicAlbedo", TextureTarget.Texture3D, dynamicGeometry.Albedo, 6);
-			program.SetTexture("DynamicNormal", TextureTarget.Texture3D, dynamicGeometry.Normal, 7);
-			GL.BindImageTexture(0, radiance[index], 0, true, 0, TextureAccess.ReadOnly, SizedInternalFormat.Rgba16f);
+			program.SetTexture("StaticAlbedo", staticGeometry.Albedo);
+			program.SetTexture("StaticNormal", staticGeometry.Normal);
+			program.SetTexture("DynamicAlbedo", dynamicGeometry.Albedo);
+			program.SetTexture("DynamicNormal", dynamicGeometry.Normal);
+			CommandList commands = Gfx.Commands;
+			commands.SetImage(0, radiance[index], 0, -1, ImageAccess.Read);
 			for (int axis = 0; axis < 3; axis++)
 			{
-				GL.BindImageTexture(1 + axis, shGradients[index][axis], 0, true, 0, TextureAccess.WriteOnly, SizedInternalFormat.Rgba16f);
+				commands.SetImage(1 + axis, shGradients[index][axis], 0, -1, ImageAccess.Write);
 			}
-			GL.BindBufferBase(BufferRangeTarget.ShaderStorageBuffer, 0, blockList);
-			GL.BindBuffer(BufferTarget.DispatchIndirectBuffer, blockList);
-			GL.DispatchComputeIndirect(IntPtr.Zero);
-			GL.BindBuffer(BufferTarget.DispatchIndirectBuffer, 0);
-			ComputeShader.Barrier(MemoryBarrierFlags.ShaderImageAccessBarrierBit);
+			commands.SetStorageBuffer(0, blockList);
+			shBase.DispatchIndirect(blockList, 0);
 
 			for (int axis = 0; axis < 3; axis++)
 			{
@@ -1113,23 +1115,20 @@ namespace LELEngine.Rendering.Passes
 			anisoMip ??= new ComputeShader("Engine/VoxelAnisoMip.shader");
 			anisoBase.Use();
 			anisoBase.Program.SetInt("slabSize", anisoSlabSize);
-			GL.BindImageTexture(0, radiance[index], 0, true, 0, TextureAccess.ReadOnly, SizedInternalFormat.Rgba16f);
-			GL.BindImageTexture(1, anisoRadiance[index], 0, true, 0, TextureAccess.WriteOnly, SizedInternalFormat.Rgba16f);
-			GL.BindBufferBase(BufferRangeTarget.ShaderStorageBuffer, 0, blockList);
-			GL.BindBuffer(BufferTarget.DispatchIndirectBuffer, blockList);
-			GL.DispatchComputeIndirect(IntPtr.Zero);
-			GL.BindBuffer(BufferTarget.DispatchIndirectBuffer, 0);
-			ComputeShader.Barrier(MemoryBarrierFlags.ShaderImageAccessBarrierBit);
+			CommandList commands = Gfx.Commands;
+			commands.SetImage(0, radiance[index], 0, -1, ImageAccess.Read);
+			commands.SetImage(1, anisoRadiance[index], 0, -1, ImageAccess.Write);
+			commands.SetStorageBuffer(0, blockList);
+			anisoBase.DispatchIndirect(blockList, 0);
 
 			anisoMip.Use();
 			for (int level = 1; level < levels; level++)
 			{
 				int slabSize = anisoSlabSize >> level;
-				GL.BindImageTexture(0, anisoRadiance[index], level - 1, true, 0, TextureAccess.ReadOnly, SizedInternalFormat.Rgba16f);
-				GL.BindImageTexture(1, anisoRadiance[index], level, true, 0, TextureAccess.WriteOnly, SizedInternalFormat.Rgba16f);
+				commands.SetImage(0, anisoRadiance[index], level - 1, -1, ImageAccess.Read);
+				commands.SetImage(1, anisoRadiance[index], level, -1, ImageAccess.Write);
 				anisoMip.Program.SetInt("slabSize", slabSize);
 				anisoMip.DispatchThreads(slabSize * 6, slabSize, slabSize, 4, 4, 4);
-				ComputeShader.Barrier(MemoryBarrierFlags.ShaderImageAccessBarrierBit);
 			}
 		}
 
@@ -1140,43 +1139,45 @@ namespace LELEngine.Rendering.Passes
 		/// <summary>Surface attributes of voxelized geometry (albedo + occupancy, normal, emission) plus block flags.</summary>
 		private struct GeometryVolume
 		{
-			public int Albedo;
-			public int Normal;
-			public int Emissive;
+			public GpuTexture Albedo;
+			public GpuTexture Normal;
+			public GpuTexture Emissive;
 
 			/// <summary>R8 volume at 1/8 resolution: 1 where the 8^3 block contains any geometry.</summary>
-			public int Blocks;
+			public GpuTexture Blocks;
 
 			public static GeometryVolume Create(int resolution, int blockResolution)
 			{
+				// Albedo and normal are also fetched as textures (bounce cells, SH gradients), the block flags by the compaction.
 				return new GeometryVolume
 				{
-					Albedo = CreateVolumeTexture(resolution, PixelInternalFormat.Rgba8, PixelFormat.Rgba, PixelType.UnsignedByte),
-					Normal = CreateVolumeTexture(resolution, PixelInternalFormat.Rgba8, PixelFormat.Rgba, PixelType.UnsignedByte),
-					Emissive = CreateVolumeTexture(resolution, PixelInternalFormat.R11fG11fB10f, PixelFormat.Rgb, PixelType.Float),
-					Blocks = CreateVolumeTexture(blockResolution, PixelInternalFormat.R8, PixelFormat.Red, PixelType.UnsignedByte)
+					Albedo = CreateVolumeTexture(resolution, TextureFormat.RGBA8, TextureUsage.Sampled | TextureUsage.Storage),
+					Normal = CreateVolumeTexture(resolution, TextureFormat.RGBA8, TextureUsage.Sampled | TextureUsage.Storage),
+					Emissive = CreateVolumeTexture(resolution, TextureFormat.R11G11B10F, TextureUsage.Storage),
+					Blocks = CreateVolumeTexture(blockResolution, TextureFormat.R8, TextureUsage.Sampled | TextureUsage.Storage)
 				};
 			}
 
-			/// <summary>Binds albedo, normal, emissive (and optionally the block flags) as images from unit upwards.</summary>
-			public void BindImages(int unit, TextureAccess access, bool includeBlocks)
+			/// <summary>Binds albedo, normal, emissive (and optionally the block flags) as images from binding upwards.</summary>
+			public void BindImages(int binding, ImageAccess access, bool includeBlocks)
 			{
-				GL.BindImageTexture(unit, Albedo, 0, true, 0, access, SizedInternalFormat.Rgba8);
-				GL.BindImageTexture(unit + 1, Normal, 0, true, 0, access, SizedInternalFormat.Rgba8);
-				GL.BindImageTexture(unit + 2, Emissive, 0, true, 0, access, SizedInternalFormat.R11fG11fB10f);
+				CommandList commands = Gfx.Commands;
+				commands.SetImage(binding, Albedo, 0, -1, access);
+				commands.SetImage(binding + 1, Normal, 0, -1, access);
+				commands.SetImage(binding + 2, Emissive, 0, -1, access);
 				if (includeBlocks)
 				{
-					GL.BindImageTexture(unit + 3, Blocks, 0, true, 0, access, SizedInternalFormat.R8);
+					commands.SetImage(binding + 3, Blocks, 0, -1, access);
 				}
 			}
 
 			public void Delete()
 			{
-				if (Albedo != 0) GL.DeleteTexture(Albedo);
-				if (Normal != 0) GL.DeleteTexture(Normal);
-				if (Emissive != 0) GL.DeleteTexture(Emissive);
-				if (Blocks != 0) GL.DeleteTexture(Blocks);
-				Albedo = Normal = Emissive = Blocks = 0;
+				Albedo?.Dispose();
+				Normal?.Dispose();
+				Emissive?.Dispose();
+				Blocks?.Dispose();
+				Albedo = Normal = Emissive = Blocks = null;
 			}
 		}
 
@@ -1187,59 +1188,57 @@ namespace LELEngine.Rendering.Passes
 		/// </summary>
 		private struct AccumulatorVolume
 		{
-			public int AlbedoRG;
-			public int AlbedoBW;
-			public int NormalXY;
-			public int NormalZ;
-			public int Emission;
+			public GpuTexture AlbedoRG;
+			public GpuTexture AlbedoBW;
+			public GpuTexture NormalXY;
+			public GpuTexture NormalZ;
+			public GpuTexture Emission;
 
 			public static AccumulatorVolume Create(int resolution)
 			{
+				// Written as images by the voxelization, fetched as textures by the resolve.
+				const TextureUsage usage = TextureUsage.Sampled | TextureUsage.Storage;
 				return new AccumulatorVolume
 				{
-					AlbedoRG = CreateVolumeTexture(resolution, PixelInternalFormat.R32ui, PixelFormat.RedInteger, PixelType.UnsignedInt),
-					AlbedoBW = CreateVolumeTexture(resolution, PixelInternalFormat.R32ui, PixelFormat.RedInteger, PixelType.UnsignedInt),
-					NormalXY = CreateVolumeTexture(resolution, PixelInternalFormat.R32ui, PixelFormat.RedInteger, PixelType.UnsignedInt),
-					NormalZ = CreateVolumeTexture(resolution, PixelInternalFormat.R32ui, PixelFormat.RedInteger, PixelType.UnsignedInt),
-					Emission = CreateVolumeTexture(resolution, PixelInternalFormat.R32ui, PixelFormat.RedInteger, PixelType.UnsignedInt)
+					AlbedoRG = CreateVolumeTexture(resolution, TextureFormat.R32UI, usage),
+					AlbedoBW = CreateVolumeTexture(resolution, TextureFormat.R32UI, usage),
+					NormalXY = CreateVolumeTexture(resolution, TextureFormat.R32UI, usage),
+					NormalZ = CreateVolumeTexture(resolution, TextureFormat.R32UI, usage),
+					Emission = CreateVolumeTexture(resolution, TextureFormat.R32UI, usage)
 				};
 			}
 
-			public void BindImages(int unit, TextureAccess access)
+			public void BindImages(int binding, ImageAccess access)
 			{
-				GL.BindImageTexture(unit, AlbedoRG, 0, true, 0, access, SizedInternalFormat.R32ui);
-				GL.BindImageTexture(unit + 1, AlbedoBW, 0, true, 0, access, SizedInternalFormat.R32ui);
-				GL.BindImageTexture(unit + 2, NormalXY, 0, true, 0, access, SizedInternalFormat.R32ui);
-				GL.BindImageTexture(unit + 3, NormalZ, 0, true, 0, access, SizedInternalFormat.R32ui);
-				GL.BindImageTexture(unit + 4, Emission, 0, true, 0, access, SizedInternalFormat.R32ui);
+				CommandList commands = Gfx.Commands;
+				commands.SetImage(binding, AlbedoRG, 0, -1, access);
+				commands.SetImage(binding + 1, AlbedoBW, 0, -1, access);
+				commands.SetImage(binding + 2, NormalXY, 0, -1, access);
+				commands.SetImage(binding + 3, NormalZ, 0, -1, access);
+				commands.SetImage(binding + 4, Emission, 0, -1, access);
 			}
 
 			public void Delete()
 			{
-				if (AlbedoRG != 0) GL.DeleteTexture(AlbedoRG);
-				if (AlbedoBW != 0) GL.DeleteTexture(AlbedoBW);
-				if (NormalXY != 0) GL.DeleteTexture(NormalXY);
-				if (NormalZ != 0) GL.DeleteTexture(NormalZ);
-				if (Emission != 0) GL.DeleteTexture(Emission);
-				AlbedoRG = AlbedoBW = NormalXY = NormalZ = Emission = 0;
+				AlbedoRG?.Dispose();
+				AlbedoBW?.Dispose();
+				NormalXY?.Dispose();
+				NormalZ?.Dispose();
+				Emission?.Dispose();
+				AlbedoRG = AlbedoBW = NormalXY = NormalZ = Emission = null;
 			}
 		}
 
-		private static int CreateVolumeTexture(int resolution, PixelInternalFormat internalFormat, PixelFormat format, PixelType type)
+		private static GpuTexture CreateVolumeTexture(int resolution, TextureFormat format, TextureUsage usage)
 		{
-			return CreateTexture3D(resolution, resolution, resolution, internalFormat, format, type);
+			return CreateTexture3D(resolution, resolution, resolution, format, usage);
 		}
 
 		// Accessed through image load/store or texelFetch only; no filtering, no mips.
-		private static int CreateTexture3D(int width, int height, int depth, PixelInternalFormat internalFormat, PixelFormat format, PixelType type)
+		private static GpuTexture CreateTexture3D(int width, int height, int depth, TextureFormat format, TextureUsage usage)
 		{
-			int texture = GL.GenTexture();
-			GL.BindTexture(TextureTarget.Texture3D, texture);
-			GL.TexImage3D(TextureTarget.Texture3D, 0, internalFormat, width, height, depth, 0, format, type, IntPtr.Zero);
-			GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
-			GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
-			GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureMaxLevel, 0);
-			GL.BindTexture(TextureTarget.Texture3D, 0);
+			GpuTexture texture = Gfx.Device.CreateTexture(TextureDescriptor.Texture3D(format, width, height, depth, 1, usage, "Voxel GI volume"));
+			texture.Sampler = Samplers.PointRepeat;
 			return texture;
 		}
 

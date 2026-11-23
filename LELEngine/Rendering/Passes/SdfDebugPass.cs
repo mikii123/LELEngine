@@ -1,4 +1,5 @@
 using LELEngine.Shaders;
+using LELEngine.Graphics;
 using LELEngine.Mathematics;
 
 namespace LELEngine.Rendering.Passes
@@ -43,9 +44,10 @@ namespace LELEngine.Rendering.Passes
 			// Compiled when the view is first shown.
 			program ??= new ShaderProgram("Engine/SdfDebug.shader");
 
-			context.SceneTarget.Bind();
-			GLState.SetDepth(false, false);
-			GLState.SetCull(false);
+			context.SceneTarget.Begin();
+			CommandList commands = Gfx.Commands;
+			commands.State.SetDepth(false, false);
+			commands.State.Culling = FaceCulling.None;
 
 			program.Use();
 			Lighting.SetSdfUniforms(program);
@@ -56,8 +58,8 @@ namespace LELEngine.Rendering.Passes
 
 			context.Fullscreen.Draw();
 
-			GLState.SetDepth(true, true);
-			GLState.SetCull(true);
+			commands.State.SetDepth(true, true);
+			commands.State.Culling = FaceCulling.Back;
 		}
 
 		public override void Dispose()

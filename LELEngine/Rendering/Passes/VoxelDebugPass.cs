@@ -1,4 +1,3 @@
-using System;
 using LELEngine.Shaders;
 using LELEngine.Graphics;
 using LELEngine.Mathematics;
@@ -23,7 +22,7 @@ namespace LELEngine.Rendering.Passes
 		#region PrivateFields
 
 		private ShaderProgram program;
-		private int nearestSampler;
+		private GpuSampler nearestSampler;
 
 		#endregion
 
@@ -41,7 +40,9 @@ namespace LELEngine.Rendering.Passes
 		public override void Execute(RenderContext context)
 		{
 			GlobalIlluminationSettings gi = Lighting.GI;
-			if (gi.VoxelTexture == 0)
+			// The volume this renderer's voxel pass lit (what it published for the materials this frame).
+			VoxelGIPass volume = context.Renderer.GetPass<VoxelGIPass>();
+			if (gi.VoxelTexture == 0 || volume == null || volume.RadianceTexture == null)
 			{
 				return;
 			}
@@ -52,18 +53,14 @@ namespace LELEngine.Rendering.Passes
 				program = new ShaderProgram("Engine/VoxelDebug.shader");
 
 				// Point sampling makes individual voxels visible.
-				nearestSampler = GL.GenSampler();
-				GL.SamplerParameter(nearestSampler, SamplerParameterName.TextureMinFilter, (int)TextureMinFilter.NearestMipmapNearest);
-				GL.SamplerParameter(nearestSampler, SamplerParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
-				GL.SamplerParameter(nearestSampler, SamplerParameterName.TextureWrapS, (int)TextureWrapMode.ClampToBorder);
-				GL.SamplerParameter(nearestSampler, SamplerParameterName.TextureWrapT, (int)TextureWrapMode.ClampToBorder);
-				GL.SamplerParameter(nearestSampler, SamplerParameterName.TextureWrapR, (int)TextureWrapMode.ClampToBorder);
+				nearestSampler = Samplers.Get(SamplerFilter.Nearest, SamplerMipFilter.Nearest, SamplerAddress.ClampToBorder);
 			}
 
-			context.SceneTarget.Bind();
-			GLState.SetDepth(false, false);
-			GLState.SetCull(false);
-			GLState.SetBlend(true, true);
+			context.SceneTarget.Begin();
+			CommandList commands = Gfx.Commands;
+			commands.State.SetDepth(false, false);
+			commands.State.Culling = FaceCulling.None;
+			commands.State.SetBlend(BlendFactor.One, BlendFactor.OneMinusSrcAlpha);
 
 			program.Use();
 			program.SetMatrix4("invViewProjection", Matrix4.Invert(context.ViewProjection));
@@ -72,35 +69,33 @@ namespace LELEngine.Rendering.Passes
 			program.SetFloat("voxelGridSize", gi.GridSize);
 			program.SetInt("voxelResolution", gi.Resolution);
 			program.SetFloat("debugMip", Mip);
-			Lighting.SetVoxelRadianceUniforms(program, gi.VoxelVolume, Lighting.VoxelTextureUnit, Lighting.VoxelDirectionalTextureUnit);
-			// The directional units (up to three) the volume may use, where the context has them.
-			int directionalUnits = Math.Clamp(GLCapabilities.MaxTextureUnits - Lighting.VoxelDirectionalTextureUnit, 0, 3);
-			GL.BindSampler(Lighting.VoxelTextureUnit, nearestSampler);
-			for (int i = 0; i < directionalUnits; i++)
+			// The voxels and the directional data their mips have (Engine/VoxelRadiance.glsl), all point sampled; the
+			// directional data only where the materials read it too (the context has their texture units).
+			VoxelMipMode mode = Lighting.EffectiveVoxelMips(gi.VoxelVolume, Lighting.VoxelDirectionalTextureUnit);
+			program.SetTexture("VoxelRadiance", volume.RadianceTexture, nearestSampler);
+			program.SetInt("giVoxelMips", (int)mode);
+			if (mode == VoxelMipMode.Anisotropic)
 			{
-				GL.BindSampler(Lighting.VoxelDirectionalTextureUnit + i, nearestSampler);
+				program.SetInt("giVoxelAnisoLevels", volume.AnisoLevels);
 			}
+
+			program.SetTexture("VoxelRadianceAniso", mode == VoxelMipMode.Anisotropic ? volume.AnisoTexture : null, nearestSampler);
+			bool gradients = mode == VoxelMipMode.SphericalHarmonics;
+			program.SetTexture("VoxelRadianceSHX", gradients ? volume.SHTexture(0) : null, nearestSampler);
+			program.SetTexture("VoxelRadianceSHY", gradients ? volume.SHTexture(1) : null, nearestSampler);
+			program.SetTexture("VoxelRadianceSHZ", gradients ? volume.SHTexture(2) : null, nearestSampler);
 
 			context.Fullscreen.Draw();
 
-			GL.BindSampler(Lighting.VoxelTextureUnit, 0);
-			for (int i = 0; i < directionalUnits; i++)
-			{
-				GL.BindSampler(Lighting.VoxelDirectionalTextureUnit + i, 0);
-			}
-			GLState.SetBlend(false);
-			GLState.SetDepth(true, true);
-			GLState.SetCull(true);
+			commands.State.Blend = false;
+			commands.State.SetDepth(true, true);
+			commands.State.Culling = FaceCulling.Back;
 		}
 
 		public override void Dispose()
 		{
 			program?.Delete();
-			if (nearestSampler != 0)
-			{
-				GL.DeleteSampler(nearestSampler);
-				nearestSampler = 0;
-			}
+			nearestSampler = null;
 		}
 
 		#endregion

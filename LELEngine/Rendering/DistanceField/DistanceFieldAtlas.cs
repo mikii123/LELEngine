@@ -116,7 +116,11 @@ namespace LELEngine.Rendering.DistanceField
 		/// </summary>
 		public const long PairsPerFrame = 1L << 27;
 
-		public int Texture { get; private set; }
+		/// <summary>The atlas on the GPU (another texture after it grew).</summary>
+		public GpuTexture AtlasTexture { get; private set; }
+
+		// LEGACY(gl): used by LumenScene.cs
+		public int Texture => AtlasTexture != null ? ((Graphics.OpenGL.GLTexture)AtlasTexture).Handle : 0;
 
 		/// <summary>Slices of the texture now.</summary>
 		public int Depth { get; private set; }
@@ -164,8 +168,8 @@ namespace LELEngine.Rendering.DistanceField
 			public Mesh Mesh;
 			public Vector3i Key;
 			public Vector3i Size;
-			public int Buffer;
-			public IntPtr Sync;
+			public GpuBuffer Buffer;
+			public GpuFence Fence;
 		}
 
 		private readonly List<Readback> readbacks = new List<Readback>();
@@ -176,8 +180,8 @@ namespace LELEngine.Rendering.DistanceField
 		{
 			public MeshDistanceField Field;
 			public Vector3i Key;
-			public int Triangles;
-			public int Partial;
+			public GpuBuffer Triangles;
+			public GpuBuffer Partial;
 			public int TriangleCount;
 			public int ChunkTriangles;
 			public int NextTriangle;
@@ -219,8 +223,8 @@ namespace LELEngine.Rendering.DistanceField
 		public DistanceFieldAtlas(int depth = InitialDepth)
 		{
 			Depth = depth;
-			MaxDepth = Math.Max(depth, Math.Min(GrowLimit, GLCapabilities.Max3DTextureSize));
-			Texture = CreateTexture(depth);
+			MaxDepth = Math.Max(depth, Math.Min(GrowLimit, Gfx.Capabilities.Max3DTextureSize));
+			AtlasTexture = CreateTexture(depth);
 			free.Add((0, depth));
 
 			build = new ComputeShader("Engine/SdfBuild.shader");
@@ -349,20 +353,8 @@ namespace LELEngine.Rendering.DistanceField
 		/// <summary>The texels of a field as half floats, x fastest (build-time baking; waits for the GPU).</summary>
 		public ushort[] Read(MeshDistanceField field)
 		{
-			var atlas = new ushort[AtlasXY * AtlasXY * Depth];
-			GL.BindTexture(TextureTarget.Texture3D, Texture);
-			GL.GetTexImage(TextureTarget.Texture3D, 0, PixelFormat.Red, PixelType.HalfFloat, atlas);
-			GL.BindTexture(TextureTarget.Texture3D, 0);
-
 			var voxels = new ushort[field.Size.X * field.Size.Y * field.Size.Z];
-			for (int z = 0; z < field.Size.Z; z++)
-			{
-				for (int y = 0; y < field.Size.Y; y++)
-				{
-					Array.Copy(atlas, ((field.AtlasZ + z) * AtlasXY + y) * AtlasXY, voxels, (z * field.Size.Y + y) * field.Size.X, field.Size.X);
-				}
-			}
-
+			AtlasTexture.GetData<ushort>(0, 0, 0, field.AtlasZ, field.Size.X, field.Size.Y, field.Size.Z, voxels);
 			return voxels;
 		}
 
@@ -388,17 +380,14 @@ namespace LELEngine.Rendering.DistanceField
 			// The fields still on their way are dropped (their meshes build or load them again when needed).
 			foreach (Readback readback in readbacks)
 			{
-				GL.DeleteSync(readback.Sync);
-				GL.DeleteBuffer(readback.Buffer);
+				readback.Fence.Dispose();
+				readback.Buffer.Dispose();
 			}
 
 			readbacks.Clear();
 			DropBuilds();
-			if (Texture != 0)
-			{
-				GL.DeleteTexture(Texture);
-				Texture = 0;
-			}
+			AtlasTexture?.Dispose();
+			AtlasTexture = null;
 			build.Delete();
 			foreach (MeshDistanceField field in fields.Values)
 			{
@@ -511,11 +500,8 @@ namespace LELEngine.Rendering.DistanceField
 				Texels = texels,
 				FirstFrame = frame,
 				Triangles = UploadTriangles(mesh, shape),
-				Partial = GL.GenBuffer()
+				Partial = Gfx.Device.CreateBuffer(new BufferDescriptor(BufferUsage.Storage, texels * 8, false, "Distance field build: partial results"))
 			};
-			GL.BindBuffer(BufferTarget.ShaderStorageBuffer, job.Partial);
-			GL.BufferData(BufferTarget.ShaderStorageBuffer, (IntPtr)(texels * 8), IntPtr.Zero, BufferUsageHint.StreamCopy);
-			GL.BindBuffer(BufferTarget.ShaderStorageBuffer, 0);
 			pending.Add(job);
 
 			long pairs = job.RemainingPairs;
@@ -601,11 +587,12 @@ namespace LELEngine.Rendering.DistanceField
 			bool last = job.NextTriangle + count >= job.TriangleCount;
 
 			build.Use();
-			// Only this chunk's triangles are bound: a range stays under the smallest storage block GL allows (128 MB)
+			// Only this chunk's triangles are bound: a range stays under the smallest storage block a GPU allows (128 MB)
 			// whatever the mesh (the chunk is at most PairsPerDispatch / the field's 125 texels or more, 51 MB).
-			GL.BindBufferRange(BufferRangeTarget.ShaderStorageBuffer, 0, job.Triangles, (IntPtr)((long)job.NextTriangle * TriangleBytes), Math.Max(count, 1) * TriangleBytes);
-			GL.BindBufferBase(BufferRangeTarget.ShaderStorageBuffer, 1, job.Partial);
-			GL.BindImageTexture(0, Texture, 0, true, 0, TextureAccess.WriteOnly, SizedInternalFormat.R16f);
+			CommandList commands = Gfx.Commands;
+			commands.SetStorageBuffer(0, job.Triangles, (long)job.NextTriangle * TriangleBytes, Math.Max(count, 1) * TriangleBytes);
+			commands.SetStorageBuffer(1, job.Partial);
+			commands.SetImage(0, AtlasTexture, 0, -1, ImageAccess.Write);
 
 			build.Program.SetInt3("atlasOffset", 0, 0, field.AtlasZ);
 			build.Program.SetInt3("sdfSize", field.Size.X, field.Size.Y, field.Size.Z);
@@ -617,11 +604,8 @@ namespace LELEngine.Rendering.DistanceField
 
 			// A work group per texel.
 			build.Dispatch(field.Size.X, field.Size.Y, field.Size.Z);
-			ComputeShader.Barrier(last
-				? MemoryBarrierFlags.ShaderImageAccessBarrierBit | MemoryBarrierFlags.TextureFetchBarrierBit | MemoryBarrierFlags.TextureUpdateBarrierBit
-				: MemoryBarrierFlags.ShaderStorageBarrierBit);
 			// Each chunk goes to the GPU on its own: the driver can schedule other work (the desktop) between them.
-			GL.Flush();
+			Gfx.Device.Flush();
 
 			job.NextTriangle += count;
 			job.Dispatches++;
@@ -640,8 +624,8 @@ namespace LELEngine.Rendering.DistanceField
 			MeshDistanceField field = job.Field;
 			field.IsBuilt = true;
 			pending.Remove(job);
-			GL.DeleteBuffer(job.Triangles);
-			GL.DeleteBuffer(job.Partial);
+			job.Triangles.Dispose();
+			job.Partial.Dispose();
 			if (keep)
 			{
 				KeepOnMesh(field.Mesh, job.Key, field);
@@ -662,8 +646,8 @@ namespace LELEngine.Rendering.DistanceField
 		{
 			MeshDistanceField field = job.Field;
 			pending.Remove(job);
-			GL.DeleteBuffer(job.Triangles);
-			GL.DeleteBuffer(job.Partial);
+			job.Triangles.Dispose();
+			job.Partial.Dispose();
 			fields.Remove((field.Mesh, job.Key));
 			field.IsValid = false;
 			Release(field.AtlasZ, field.Size.Z);
@@ -677,8 +661,8 @@ namespace LELEngine.Rendering.DistanceField
 		{
 			foreach (PendingBuild job in pending)
 			{
-				GL.DeleteBuffer(job.Triangles);
-				GL.DeleteBuffer(job.Partial);
+				job.Triangles.Dispose();
+				job.Partial.Dispose();
 				job.Field.IsValid = false;
 			}
 
@@ -687,11 +671,7 @@ namespace LELEngine.Rendering.DistanceField
 
 		private void UploadVoxels(MeshDistanceField field, ushort[] voxels)
 		{
-			GL.BindTexture(TextureTarget.Texture3D, Texture);
-			GL.PixelStore(PixelStoreParameter.UnpackAlignment, 2);
-			GL.TexSubImage3D(TextureTarget.Texture3D, 0, 0, 0, field.AtlasZ, field.Size.X, field.Size.Y, field.Size.Z, PixelFormat.Red, PixelType.HalfFloat, voxels);
-			GL.PixelStore(PixelStoreParameter.UnpackAlignment, 4);
-			GL.BindTexture(TextureTarget.Texture3D, 0);
+			AtlasTexture.SetData<ushort>(0, 0, 0, field.AtlasZ, field.Size.X, field.Size.Y, field.Size.Z, voxels);
 			field.IsBuilt = true;
 		}
 
@@ -804,10 +784,10 @@ namespace LELEngine.Rendering.DistanceField
 		private void Grow()
 		{
 			int depth = Math.Min(MaxDepth, Depth * 2);
-			int texture = CreateTexture(depth);
-			GL.CopyImageSubData(Texture, ImageTarget.Texture3D, 0, 0, 0, 0, texture, ImageTarget.Texture3D, 0, 0, 0, 0, AtlasXY, AtlasXY, Depth);
-			GL.DeleteTexture(Texture);
-			Texture = texture;
+			GpuTexture texture = CreateTexture(depth);
+			Gfx.Commands.CopyTexture(AtlasTexture, 0, 0, 0, 0, texture, 0, 0, 0, 0, AtlasXY, AtlasXY, Depth);
+			AtlasTexture.Dispose();
+			AtlasTexture = texture;
 			Release(Depth, depth - Depth);
 			Console.WriteLine($"[SDF] Distance field atlas grown to {depth} slices ({AtlasXY * AtlasXY * (long)depth * 2 / (1024 * 1024)} MB)");
 			Depth = depth;
@@ -825,18 +805,11 @@ namespace LELEngine.Rendering.DistanceField
 			Debug.LogWarning($"[SDF] Distance field atlas full: {FieldCount} fields fill {UsedSlices} of {Depth} slices (the deepest atlas here), all used in the last {EvictAfterFrames} frames. '{mesh.name}' ({slices} slices) and the fields asked for after it are left out of the GI's distance field until room frees up (reported once).");
 		}
 
-		private static int CreateTexture(int depth)
+		private static GpuTexture CreateTexture(int depth)
 		{
-			int texture = GL.GenTexture();
-			GL.BindTexture(TextureTarget.Texture3D, texture);
-			GL.TexImage3D(TextureTarget.Texture3D, 0, PixelInternalFormat.R16f, AtlasXY, AtlasXY, depth, 0, PixelFormat.Red, PixelType.Float, IntPtr.Zero);
-			GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Linear);
-			GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Linear);
-			GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureWrapS, (int)TextureWrapMode.ClampToEdge);
-			GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureWrapT, (int)TextureWrapMode.ClampToEdge);
-			GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureWrapR, (int)TextureWrapMode.ClampToEdge);
-			GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureMaxLevel, 0);
-			GL.BindTexture(TextureTarget.Texture3D, 0);
+			GpuTexture texture = Gfx.Device.CreateTexture(TextureDescriptor.Texture3D(TextureFormat.R16F, AtlasXY, AtlasXY, depth, 1, TextureUsage.Sampled | TextureUsage.Storage,
+				"Distance field atlas"));
+			texture.Sampler = Samplers.LinearClamp;
 			return texture;
 		}
 
@@ -855,16 +828,10 @@ namespace LELEngine.Rendering.DistanceField
 			}
 
 			int bytes = field.Size.X * field.Size.Y * field.Size.Z * 2;
-			int buffer = GL.GenBuffer();
-			GL.BindBuffer(BufferTarget.PixelPackBuffer, buffer);
-			GL.BufferData(BufferTarget.PixelPackBuffer, bytes, IntPtr.Zero, BufferUsageHint.StreamRead);
-			GL.PixelStore(PixelStoreParameter.PackAlignment, 2);
-			// With a pack buffer bound the "pixels" pointer is an offset into it.
-			GL.GetTextureSubImage(Texture, 0, 0, 0, field.AtlasZ, field.Size.X, field.Size.Y, field.Size.Z, PixelFormat.Red, PixelType.HalfFloat, bytes, IntPtr.Zero);
-			GL.PixelStore(PixelStoreParameter.PackAlignment, 4);
-			GL.BindBuffer(BufferTarget.PixelPackBuffer, 0);
-			IntPtr sync = GL.FenceSync(SyncCondition.SyncGpuCommandsComplete, WaitSyncFlags.None);
-			readbacks.Add(new Readback { Mesh = mesh, Key = key, Size = field.Size, Buffer = buffer, Sync = sync });
+			GpuBuffer buffer = Gfx.Device.CreateBuffer(new BufferDescriptor(BufferUsage.Readback, bytes, false, "Distance field readback"));
+			Gfx.Commands.CopyTextureToBuffer(AtlasTexture, 0, 0, 0, field.AtlasZ, field.Size.X, field.Size.Y, field.Size.Z, buffer, 0);
+			GpuFence fence = Gfx.Device.CreateFence();
+			readbacks.Add(new Readback { Mesh = mesh, Key = key, Size = field.Size, Buffer = buffer, Fence = fence });
 		}
 
 		/// <summary>
@@ -876,35 +843,32 @@ namespace LELEngine.Rendering.DistanceField
 			for (int i = 0; i < readbacks.Count; i++)
 			{
 				Readback readback = readbacks[i];
-				WaitSyncStatus status = GL.ClientWaitSync(readback.Sync, wait ? ClientWaitSyncFlags.SyncFlushCommandsBit : ClientWaitSyncFlags.None, wait ? 1_000_000_000L : 0L);
-				if (status == WaitSyncStatus.TimeoutExpired)
+				bool done = wait ? readback.Fence.Wait(1_000_000_000L) : readback.Fence.IsSignaled;
+				if (!done)
 				{
 					// In build order: the later ones are not done either.
 					break;
 				}
 
-				GL.DeleteSync(readback.Sync);
-				if (status != WaitSyncStatus.WaitFailed)
+				readback.Fence.Dispose();
+				var voxels = new ushort[readback.Size.X * readback.Size.Y * readback.Size.Z];
+				readback.Buffer.GetData(0, voxels);
+				var kept = new BakedDistanceField { ShapeKey = readback.Key, Size = readback.Size, Voxels = voxels };
+				if (FindBaked(readback.Mesh, readback.Key, readback.Size) == null)
 				{
-					var voxels = new ushort[readback.Size.X * readback.Size.Y * readback.Size.Z];
-					GL.GetNamedBufferSubData(readback.Buffer, IntPtr.Zero, voxels.Length * 2, voxels);
-					var kept = new BakedDistanceField { ShapeKey = readback.Key, Size = readback.Size, Voxels = voxels };
-					if (FindBaked(readback.Mesh, readback.Key, readback.Size) == null)
-					{
-						(readback.Mesh.BakedDistanceFields ??= new List<BakedDistanceField>()).Add(kept);
-					}
-
-					try
-					{
-						Store?.Save(readback.Mesh, kept);
-					}
-					catch (Exception e)
-					{
-						Debug.LogWarning($"[SDF] The distance field of {readback.Mesh.name} could not be stored ({e.Message}).");
-					}
+					(readback.Mesh.BakedDistanceFields ??= new List<BakedDistanceField>()).Add(kept);
 				}
 
-				GL.DeleteBuffer(readback.Buffer);
+				try
+				{
+					Store?.Save(readback.Mesh, kept);
+				}
+				catch (Exception e)
+				{
+					Debug.LogWarning($"[SDF] The distance field of {readback.Mesh.name} could not be stored ({e.Message}).");
+				}
+
+				readback.Buffer.Dispose();
 				readbacks.RemoveAt(i--);
 			}
 		}
@@ -933,15 +897,13 @@ namespace LELEngine.Rendering.DistanceField
 		///     mesh's vertices and indices (not through <see cref="Mesh.GetTrianglePositions" />, which keeps its copy on the
 		///     mesh for good: hundreds of megabytes for a mesh of millions of triangles).
 		/// </summary>
-		private static int UploadTriangles(Mesh mesh, Vector3 shape)
+		private static GpuBuffer UploadTriangles(Mesh mesh, Vector3 shape)
 		{
 			Vertex[] vertices = mesh.Vertices;
 			uint[] indices = mesh.Indices;
 			int count = mesh.TriangleCount * 3;
-			int buffer = GL.GenBuffer();
-			GL.BindBuffer(BufferTarget.ShaderStorageBuffer, buffer);
 			// At least one triangle's room: a chunk binds that much even of a mesh without triangles.
-			GL.BufferData(BufferTarget.ShaderStorageBuffer, (IntPtr)Math.Max((long)count * 16, TriangleBytes), IntPtr.Zero, BufferUsageHint.StaticDraw);
+			GpuBuffer buffer = Gfx.Device.CreateBuffer(new BufferDescriptor(BufferUsage.Storage, Math.Max((long)count * 16, TriangleBytes), false, "Distance field build: triangles"));
 			var block = new Vector4[Math.Max(1, Math.Min(count, UploadBlockVertices))];
 			for (int start = 0; start < count; start += block.Length)
 			{
@@ -951,10 +913,9 @@ namespace LELEngine.Rendering.DistanceField
 					block[i] = new Vector4(vertices[indices[start + i]].position * shape, 0f);
 				}
 
-				GL.BufferSubData(BufferTarget.ShaderStorageBuffer, (IntPtr)((long)start * 16), n * 16, block);
+				buffer.SetSubData((long)start * 16, block, n);
 			}
 
-			GL.BindBuffer(BufferTarget.ShaderStorageBuffer, 0);
 			return buffer;
 		}
 
