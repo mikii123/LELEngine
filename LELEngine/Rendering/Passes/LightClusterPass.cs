@@ -103,10 +103,10 @@ namespace LELEngine.Rendering.Passes
 			program.SetInt("clusterWords", words);
 			program.SetInt("clusterLights", count);
 			program.SetVector4("clusterSlicing", slicing);
-			GL.BindBufferBase(BufferRangeTarget.ShaderStorageBuffer, BuildBinding, clusters.Masks);
+			CommandList commands = Gfx.Commands;
+			commands.SetStorageBuffer(BuildBinding, clusters.Masks);
 			build.Dispatch((cells + GroupSize - 1) / GroupSize, words);
-			GL.BindBufferBase(BufferRangeTarget.ShaderStorageBuffer, BuildBinding, 0);
-			GL.MemoryBarrier(MemoryBarrierFlags.ShaderStorageBarrierBit);
+			commands.SetStorageBuffer(BuildBinding, null);
 			LightBuffer.UseClusters(clusters.Header, clusters.Masks);
 		}
 
@@ -129,50 +129,32 @@ namespace LELEngine.Rendering.Passes
 		/// <summary>A camera's clusters: their header (uniform buffer) and masks (storage buffer, grown as needed).</summary>
 		private sealed class Clusters
 		{
-			public int Header;
-			public int Masks;
+			public GpuBuffer Header;
+			public GpuBuffer Masks;
 			private long maskBytes;
 
 			public void Ensure(long bytes)
 			{
-				if (Header == 0)
-				{
-					Header = GL.GenBuffer();
-					GL.BindBuffer(BufferTarget.UniformBuffer, Header);
-					GL.BufferData(BufferTarget.UniformBuffer, LightBuffer.HeaderBytes, IntPtr.Zero, BufferUsageHint.DynamicDraw);
-					GL.BindBuffer(BufferTarget.UniformBuffer, 0);
-				}
+				Header ??= Gfx.Device.CreateBuffer(new BufferDescriptor(BufferUsage.Uniform, LightBuffer.HeaderBytes, true, "Light clusters header"));
 
-				if (Masks == 0 || bytes > maskBytes)
+				if (Masks == null || bytes > maskBytes)
 				{
-					if (Masks == 0)
-					{
-						Masks = GL.GenBuffer();
-					}
+					// Written by the build only, never from here.
+					Masks ??= Gfx.Device.CreateBuffer(new BufferDescriptor(BufferUsage.Storage, 0, false, "Light clusters masks"));
 
 					// Doubling: more lights or a larger view reallocate rarely.
 					maskBytes = Math.Max(bytes, maskBytes * 2);
-					GL.BindBuffer(BufferTarget.ShaderStorageBuffer, Masks);
-					GL.BufferData(BufferTarget.ShaderStorageBuffer, (IntPtr)maskBytes, IntPtr.Zero, BufferUsageHint.DynamicCopy);
-					GL.BindBuffer(BufferTarget.ShaderStorageBuffer, 0);
+					Masks.Allocate(maskBytes);
 				}
 			}
 
 			public void Delete()
 			{
 				LightBuffer.ForgetClusters(Header, Masks);
-				if (Header != 0)
-				{
-					GL.DeleteBuffer(Header);
-				}
-
-				if (Masks != 0)
-				{
-					GL.DeleteBuffer(Masks);
-				}
-
-				Header = 0;
-				Masks = 0;
+				Header?.Dispose();
+				Masks?.Dispose();
+				Header = null;
+				Masks = null;
 				maskBytes = 0;
 			}
 		}

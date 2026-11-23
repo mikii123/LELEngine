@@ -117,17 +117,27 @@ namespace LELEngine.Rendering
 			cascades.TileCount = count;
 			uniforms.Upload(cascades);
 
-			target.Bind();
-			GLState.SetDepth(true, true);
-			GLState.SetCull(true, TriangleFace.Back);
-			GLState.SetColorWrite(false);
-			GL.Clear(ClearBufferMask.DepthBufferBit);
+			// The transmittance attachment has to be there when the pass begins.
+			bool transparentCasters = TransparentShadows.HasCasters(context);
+			if (transparentCasters)
+			{
+				TransparentShadows.EnsureTransmittance(target);
+			}
+
+			Passes.ShadowPass.PrepareOwnCasters(casters);
+
+			CommandList commands = Gfx.Commands;
+			ref RenderState state = ref commands.State;
+			state.SetDepth(true, true);
+			state.Culling = FaceCulling.Back;
+			state.ColorMask = ColorWriteMask.None;
+			target.Begin(LoadOperation.Load, default, LoadOperation.Clear, 1f);
 
 			ShaderProgram program = context.DepthOnlyProgram;
 			bool frustumCulling = context.Settings == null || context.Settings.FrustumCulling;
 			for (int i = 0; i < count; i++)
 			{
-				GL.Viewport(i * Size, 0, Size, Size);
+				ContinueTile(i);
 				program.Use();
 				program.SetMatrix4("viewMatrix", views[i]);
 				program.SetMatrix4("projectionMatrix", projections[i]);
@@ -146,28 +156,45 @@ namespace LELEngine.Rendering
 				{
 					if (renderer.CastShadows && culling.IsVisible(renderer))
 					{
+						// A material's texture used for the first time is uploaded with its mip levels made, which
+						// ends the pass.
+						ContinueTile(i);
 						own |= renderer.RenderOwnShadowCasters(views[i], projections[i]);
 					}
 				}
 
 				if (own)
 				{
-					GLState.SetCull(true, TriangleFace.Back);
+					commands.State.Culling = FaceCulling.Back;
 				}
 			}
 
-			if (TransparentShadows.HasCasters(context))
+			if (transparentCasters)
 			{
 				for (int i = 0; i < count; i++)
 				{
-					GL.Viewport(i * Size, 0, Size, Size);
+					ContinueTile(i);
 					culling.Begin(views[i] * projections[i], frustumCulling);
 					Transmittance = TransparentShadows.DrawCasters(context, target, views[i], projections[i], i == 0, culling) ?? Transmittance;
 				}
 			}
 
-			GLState.SetColorWrite(true);
-			GL.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
+			commands.State.ColorMask = ColorWriteMask.All;
+			commands.EndRenderPass();
+		}
+
+		/// <summary>
+		///     Gives a program these maps for Engine/Shadows.glsl: their layout to the shadow block's binding (the
+		///     camera's is bound again by the next <see cref="Lighting.SetShadowUniforms" />), the depth and the
+		///     transmittance to its samplers (no texture while no light has a map).
+		/// </summary>
+		public void SetUniforms(ShaderProgram program)
+		{
+			uniforms.Bind();
+			bool enabled = LightCount > 0 && target != null && Lighting.Shadows.Enabled;
+			program.SetInt("shadowsEnabled", enabled ? 1 : 0);
+			program.SetTexture("ShadowMap", enabled ? target.DepthAttachment : null);
+			TransparentShadows.SetUniforms(program, enabled ? Transmittance : null);
 		}
 
 		/// <summary>
@@ -175,6 +202,7 @@ namespace LELEngine.Rendering
 		///     again by the next <see cref="Lighting.SetShadowUniforms" />), the depth on <paramref name="depthUnit" /> and
 		///     the transmittance on <paramref name="transmittanceUnit" /> (units the program does not use otherwise).
 		/// </summary>
+		// LEGACY(gl): used by SurfaceCachePass.cs, VoxelGIPass.cs
 		public void SetUniforms(ShaderProgram program, int depthUnit, int transmittanceUnit)
 		{
 			uniforms.Bind();
@@ -200,6 +228,19 @@ namespace LELEngine.Rendering
 		#endregion
 
 		#region PrivateMethods
+
+		// Goes on drawing into a light's tile: the maps' pass is begun again (keeping what it holds) when something that
+		// is not a draw has ended it.
+		private void ContinueTile(int tile)
+		{
+			CommandList commands = Gfx.Commands;
+			if (!commands.InRenderPass)
+			{
+				target.Begin();
+			}
+
+			commands.SetViewport(tile * Size, 0, Size, Size);
+		}
 
 		private void DeleteTarget()
 		{

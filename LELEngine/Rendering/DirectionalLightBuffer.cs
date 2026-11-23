@@ -37,7 +37,7 @@ namespace LELEngine.Rendering
 		private static readonly List<DirectionalLight> shining = new List<DirectionalLight>();
 		private static readonly List<DirectionalLight> candidates = new List<DirectionalLight>();
 		private static readonly bool[] shadowed = new bool[DirectionalLight.MaxLights];
-		private static int buffer;
+		private static GpuBuffer buffer;
 		private static int giHash;
 		private static bool uploaded;
 
@@ -176,18 +176,10 @@ namespace LELEngine.Rendering
 				GIVersion++;
 			}
 
-			if (buffer == 0)
-			{
-				buffer = GL.GenBuffer();
-				GL.BindBuffer(BufferTarget.UniformBuffer, buffer);
-				GL.BufferData(BufferTarget.UniformBuffer, data.Length * sizeof(float), IntPtr.Zero, BufferUsageHint.DynamicDraw);
-			}
-
-			GL.BindBuffer(BufferTarget.UniformBuffer, buffer);
-			GL.BufferSubData(BufferTarget.UniformBuffer, IntPtr.Zero, data.Length * sizeof(float), data);
-			GL.BindBuffer(BufferTarget.UniformBuffer, 0);
+			buffer ??= CreateBuffer();
+			buffer.SetSubData(0, data);
 			uploaded = true;
-			GL.BindBufferBase(BufferRangeTarget.UniformBuffer, Binding, buffer);
+			Gfx.Commands.SetUniformBuffer(Binding, buffer);
 		}
 
 		/// <summary>
@@ -196,20 +188,14 @@ namespace LELEngine.Rendering
 		/// </summary>
 		public static void EnsureBound()
 		{
-			if (buffer == 0 || !uploaded)
+			if (buffer == null || !uploaded)
 			{
-				if (buffer == 0)
-				{
-					buffer = GL.GenBuffer();
-				}
-
-				GL.BindBuffer(BufferTarget.UniformBuffer, buffer);
-				GL.BufferData(BufferTarget.UniformBuffer, data.Length * sizeof(float), new float[data.Length], BufferUsageHint.DynamicDraw);
-				GL.BindBuffer(BufferTarget.UniformBuffer, 0);
+				buffer ??= CreateBuffer();
+				buffer.SetData(new float[data.Length]);
 				uploaded = true;
 			}
 
-			GL.BindBufferBase(BufferRangeTarget.UniformBuffer, Binding, buffer);
+			Gfx.Commands.SetUniformBuffer(Binding, buffer);
 		}
 
 		/// <summary>
@@ -242,6 +228,12 @@ namespace LELEngine.Rendering
 		#endregion
 
 		#region PrivateMethods
+
+		// The list's buffer, with room for every light (its contents come with the first upload).
+		private static GpuBuffer CreateBuffer()
+		{
+			return Gfx.Device.CreateBuffer(new BufferDescriptor(BufferUsage.Uniform, data.Length * sizeof(float), true, "Directional lights"));
+		}
 
 		// What the lights are ordered by: the luminance of colour x strength.
 		private static float Brightness(DirectionalLight light)

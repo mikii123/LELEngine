@@ -58,16 +58,16 @@ namespace LELEngine.Rendering
 
 		// The list (storage) and the lights it has room for; the lights uploaded into it (Forget takes a light out of
 		// shining at once, the buffer keeps it until the next update).
-		private static int listBuffer;
+		private static GpuBuffer listBuffer;
 		private static int listCapacity;
 		private static int uploaded;
 
 		// The header without clusters, a mask for programs drawn without clusters (their mask block needs a buffer), and
 		// the header and masks bound now (the plain ones, or a camera's clusters').
-		private static int plainHeader;
-		private static int emptyMasks;
-		private static int boundHeader;
-		private static int boundMasks;
+		private static GpuBuffer plainHeader;
+		private static GpuBuffer emptyMasks;
+		private static GpuBuffer boundHeader;
+		private static GpuBuffer boundMasks;
 
 		#endregion
 
@@ -127,20 +127,18 @@ namespace LELEngine.Rendering
 			TrackGIChanges();
 
 			EnsureBuffers();
-			GL.BindBuffer(BufferTarget.ShaderStorageBuffer, listBuffer);
 			if (shining.Count > listCapacity)
 			{
 				// Doubling: a list that keeps changing its size is reallocated rarely.
 				listCapacity = Math.Max(shining.Count, listCapacity * 2);
-				GL.BufferData(BufferTarget.ShaderStorageBuffer, listCapacity * FloatsPerLight * sizeof(float), IntPtr.Zero, BufferUsageHint.DynamicDraw);
+				listBuffer.Allocate((long)listCapacity * FloatsPerLight * sizeof(float));
 			}
 
 			if (floats > 0)
 			{
-				GL.BufferSubData(BufferTarget.ShaderStorageBuffer, IntPtr.Zero, floats * sizeof(float), data);
+				listBuffer.SetSubData(0, data, floats);
 			}
 
-			GL.BindBuffer(BufferTarget.ShaderStorageBuffer, 0);
 			uploaded = shining.Count;
 			WriteHeader(plainHeader, uploaded, 0, 0, 0, 0, Matrix4.Identity, Vector4.Zero, Vector4.Zero);
 			UseNoClusters();
@@ -151,7 +149,7 @@ namespace LELEngine.Rendering
 		///     a cluster, 0: none; tiles; slices), the camera's view-projection, its depth row (a world point's view depth:
 		///     dot((p, 1), depth)) and the slicing (a depth's slice: floor(log(depth) x x + y); z, w: the depths covered).
 		/// </summary>
-		internal static void WriteHeader(int buffer, int count, int words, int tilesX, int tilesY, int slices, Matrix4 viewProjection, Vector4 depth, Vector4 slicing)
+		internal static void WriteHeader(GpuBuffer buffer, int count, int words, int tilesX, int tilesY, int slices, Matrix4 viewProjection, Vector4 depth, Vector4 slicing)
 		{
 			Array.Clear(header, 0, header.Length);
 			header[0] = BitConverter.Int32BitsToSingle(count);
@@ -167,9 +165,7 @@ namespace LELEngine.Rendering
 			WriteVector(viewProjection.Row3, 20);
 			WriteVector(depth, 24);
 			WriteVector(slicing, 28);
-			GL.BindBuffer(BufferTarget.UniformBuffer, buffer);
-			GL.BufferSubData(BufferTarget.UniformBuffer, IntPtr.Zero, HeaderBytes, header);
-			GL.BindBuffer(BufferTarget.UniformBuffer, 0);
+			buffer.SetSubData(0, header);
 		}
 
 		/// <summary>Binds the list with its header without clusters: every light is visited, until a camera's clusters are made.</summary>
@@ -182,7 +178,7 @@ namespace LELEngine.Rendering
 		}
 
 		/// <summary>Binds the list with a camera's clusters (<see cref="Passes.LightClusterPass" />): their header and masks.</summary>
-		internal static void UseClusters(int clusterHeader, int clusterMasks)
+		internal static void UseClusters(GpuBuffer clusterHeader, GpuBuffer clusterMasks)
 		{
 			EnsureBuffers();
 			boundHeader = clusterHeader;
@@ -191,9 +187,9 @@ namespace LELEngine.Rendering
 		}
 
 		/// <summary>Clusters about to be deleted: when they are the ones bound, the list goes back to its header without them.</summary>
-		internal static void ForgetClusters(int clusterHeader, int clusterMasks)
+		internal static void ForgetClusters(GpuBuffer clusterHeader, GpuBuffer clusterMasks)
 		{
-			if (listBuffer != 0 && (boundHeader == clusterHeader || boundMasks == clusterMasks))
+			if (listBuffer != null && (boundHeader == clusterHeader || boundMasks == clusterMasks))
 			{
 				UseNoClusters();
 			}
@@ -202,14 +198,15 @@ namespace LELEngine.Rendering
 		/// <summary>Binds the list, and the header and masks in use (a program reads them there).</summary>
 		public static void Bind()
 		{
-			if (listBuffer == 0)
+			if (listBuffer == null)
 			{
 				return;
 			}
 
-			GL.BindBufferBase(BufferRangeTarget.UniformBuffer, Binding, boundHeader);
-			GL.BindBufferBase(BufferRangeTarget.ShaderStorageBuffer, ListBinding, listBuffer);
-			GL.BindBufferBase(BufferRangeTarget.ShaderStorageBuffer, ClusterBinding, boundMasks);
+			CommandList commands = Gfx.Commands;
+			commands.SetUniformBuffer(Binding, boundHeader);
+			commands.SetStorageBuffer(ListBinding, listBuffer);
+			commands.SetStorageBuffer(ClusterBinding, boundMasks);
 		}
 
 		/// <summary>
@@ -246,23 +243,19 @@ namespace LELEngine.Rendering
 		// The buffers, made empty on first use: the list (room for 16 lights), the header without clusters, the empty mask.
 		private static void EnsureBuffers()
 		{
-			if (listBuffer != 0)
+			if (listBuffer != null)
 			{
 				return;
 			}
 
+			GraphicsDevice device = Gfx.Device;
 			listCapacity = 16;
-			listBuffer = GL.GenBuffer();
-			GL.BindBuffer(BufferTarget.ShaderStorageBuffer, listBuffer);
-			GL.BufferData(BufferTarget.ShaderStorageBuffer, listCapacity * FloatsPerLight * sizeof(float), new float[listCapacity * FloatsPerLight], BufferUsageHint.DynamicDraw);
-			emptyMasks = GL.GenBuffer();
-			GL.BindBuffer(BufferTarget.ShaderStorageBuffer, emptyMasks);
-			GL.BufferData(BufferTarget.ShaderStorageBuffer, 4 * sizeof(uint), new uint[4], BufferUsageHint.StaticDraw);
-			GL.BindBuffer(BufferTarget.ShaderStorageBuffer, 0);
-			plainHeader = GL.GenBuffer();
-			GL.BindBuffer(BufferTarget.UniformBuffer, plainHeader);
-			GL.BufferData(BufferTarget.UniformBuffer, HeaderBytes, new float[HeaderBytes / sizeof(float)], BufferUsageHint.DynamicDraw);
-			GL.BindBuffer(BufferTarget.UniformBuffer, 0);
+			listBuffer = device.CreateBuffer(new BufferDescriptor(BufferUsage.Storage, 0, true, "Light list"));
+			listBuffer.SetData(new float[listCapacity * FloatsPerLight]);
+			emptyMasks = device.CreateBuffer(new BufferDescriptor(BufferUsage.Storage, 0, false, "Light clusters (none)"));
+			emptyMasks.SetData(new uint[4]);
+			plainHeader = device.CreateBuffer(new BufferDescriptor(BufferUsage.Uniform, 0, true, "Light list header"));
+			plainHeader.SetData(new float[HeaderBytes / sizeof(float)]);
 			boundHeader = plainHeader;
 			boundMasks = emptyMasks;
 		}

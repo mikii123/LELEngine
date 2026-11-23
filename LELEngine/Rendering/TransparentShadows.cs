@@ -48,11 +48,27 @@ namespace LELEngine.Rendering
 		}
 
 		/// <summary>
+		///     Gives a shadow map target its transmittance attachment when it has none yet. A pass draws into the
+		///     attachments its target had when it began: called before the shadow map's pass begins, in a frame that
+		///     has casters (<see cref="HasCasters" />).
+		/// </summary>
+		public static void EnsureTransmittance(Framebuffer target)
+		{
+			if (target.ColorAttachments.Count == 0)
+			{
+				// 32-bit: a holds a depth that receivers compare with their own (half floats round it by ~1/2048, more than
+				// the shadow bias: a transparent receiver then shadows itself in bands along the light's depth).
+				target.AddColorAttachment(RenderTextureFormat.RGBA32F);
+				target.Validate();
+			}
+		}
+
+		/// <summary>
 		///     Draws the frame's transparent casters into the transmittance attachment of <paramref name="target" />
-		///     (the bound shadow map, its opaque casters already drawn) within the current viewport (a cascade's tile):
-		///     the attachment is added on first use and cleared when <paramref name="clear" /> is set (the first tile).
-		///     Returns it, or null when nothing was drawn (receivers then ignore it). Leaves the colour writes off, as
-		///     the opaque casters had them.
+		///     (the shadow map whose pass is open, begun after <see cref="EnsureTransmittance" />, its opaque casters
+		///     already drawn) within the current viewport (a cascade's tile): the attachment is cleared when
+		///     <paramref name="clear" /> is set (the first tile). Returns it, or null when nothing was drawn (receivers
+		///     then ignore it). Leaves the colour writes off, as the opaque casters had them.
 		/// </summary>
 		public static RenderTexture Draw(RenderContext context, Framebuffer target, Matrix4 lightView, Matrix4 lightProjection, bool clear = true)
 		{
@@ -74,31 +90,26 @@ namespace LELEngine.Rendering
 
 			if (target.ColorAttachments.Count == 0)
 			{
-				// Binding again resets the viewport to the whole target: the tile's is restored.
-				int[] viewport = new int[4];
-				GL.GetInteger(GetPName.Viewport, viewport);
-				// 32-bit: a holds a depth that receivers compare with their own (half floats round it by ~1/2048, more than
-				// the shadow bias: a transparent receiver then shadows itself in bands along the light's depth).
-				target.AddColorAttachment(RenderTextureFormat.RGBA32F);
-				target.Validate();
-				target.Bind();
-				GL.Viewport(viewport[0], viewport[1], viewport[2], viewport[3]);
-				clear = true;
+				// The open pass has no transmittance attachment to draw into.
+				return null;
 			}
 
+			CommandList commands = Gfx.Commands;
 			RenderTexture transmittance = target.ColorAttachments[0];
-			GLState.SetColorWrite(true);
+			commands.State.ColorMask = ColorWriteMask.All;
 			if (clear)
 			{
-				GL.ClearBuffer(ClearBuffer.Color, 0, new[] { 1f, 1f, 1f, 1f });
+				commands.ClearColor(0, new ClearValue(1f, 1f, 1f, 1f));
 			}
 
 			// Behind an opaque caster the light is gone already: depth tested, not written (casters do not hide each other).
-			GL.DepthMask(false);
-			GL.DepthFunc(DepthFunction.Less);
-			GL.Enable(EnableCap.Blend);
-			GL.BlendEquationSeparate(BlendEquationMode.FuncAdd, BlendEquationMode.Min);
-			GL.BlendFuncSeparate(BlendingFactorSrc.Zero, BlendingFactorDest.SrcColor, BlendingFactorSrc.One, BlendingFactorDest.One);
+			// The colour multiplies what is there; the alpha keeps the smaller depth.
+			ref RenderState state = ref commands.State;
+			state.DepthWrite = false;
+			state.DepthCompare = CompareFunction.Less;
+			state.SetBlend(BlendFactor.Zero, BlendFactor.SrcColor, BlendFactor.One, BlendFactor.One);
+			state.ColorOperation = BlendOperation.Add;
+			state.AlphaOperation = BlendOperation.Min;
 
 			program.Use();
 			program.SetMatrix4("viewMatrix", lightView);
@@ -137,12 +148,24 @@ namespace LELEngine.Rendering
 				}
 			}
 
-			GL.BlendEquation(BlendEquationMode.FuncAdd);
-			GL.Disable(EnableCap.Blend);
-			GL.DepthMask(true);
-			GLState.SetCull(true, TriangleFace.Back);
-			GLState.SetColorWrite(false);
+			ref RenderState after = ref commands.State;
+			after.ColorOperation = BlendOperation.Add;
+			after.AlphaOperation = BlendOperation.Add;
+			after.Blend = false;
+			after.DepthWrite = true;
+			after.Culling = FaceCulling.Back;
+			after.ColorMask = ColorWriteMask.None;
 			return transmittance;
+		}
+
+		/// <summary>
+		///     Gives a program the transmittance map for Engine/Shadows.glsl (null: receivers use the opaque shadow only,
+		///     and the sampler reads no texture).
+		/// </summary>
+		public static void SetUniforms(ShaderProgram program, RenderTexture transmittance)
+		{
+			program.SetInt("shadowTransmittanceEnabled", transmittance != null ? 1 : 0);
+			program.SetTexture("ShadowTransmittance", transmittance);
 		}
 
 		/// <summary>
@@ -151,6 +174,7 @@ namespace LELEngine.Rendering
 		///     the GI then did not run at all (no light went into the voxels or the cards of a frame without transparent
 		///     casters).
 		/// </summary>
+		// LEGACY(gl): used by Lighting.cs
 		public static void SetUniforms(ShaderProgram program, RenderTexture transmittance, int textureUnit)
 		{
 			program.SetInt("shadowTransmittanceEnabled", transmittance != null ? 1 : 0);

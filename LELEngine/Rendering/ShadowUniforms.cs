@@ -28,7 +28,7 @@ namespace LELEngine.Rendering
 		private const int FloatsPerTile = 24;
 
 		private readonly float[] data = new float[HeaderFloats + Lighting.ShadowCascadeData.MaxTiles * FloatsPerTile];
-		private int buffer;
+		private GpuBuffer buffer;
 
 		#endregion
 
@@ -85,21 +85,10 @@ namespace LELEngine.Rendering
 				data[at + 23] = rect.W;
 			}
 
-			bool created = buffer == 0;
-			if (created)
-			{
-				buffer = GL.GenBuffer();
-			}
-
-			GL.BindBuffer(BufferTarget.UniformBuffer, buffer);
-			if (created)
-			{
-				GL.BufferData(BufferTarget.UniformBuffer, data.Length * sizeof(float), IntPtr.Zero, BufferUsageHint.DynamicDraw);
-			}
+			buffer ??= CreateBuffer();
 
 			// Only the header and the tiles in use.
-			GL.BufferSubData(BufferTarget.UniformBuffer, IntPtr.Zero, (HeaderFloats + tiles * FloatsPerTile) * sizeof(float), data);
-			GL.BindBuffer(BufferTarget.UniformBuffer, 0);
+			buffer.SetSubData(0, data, HeaderFloats + tiles * FloatsPerTile);
 		}
 
 		/// <summary>
@@ -108,27 +97,30 @@ namespace LELEngine.Rendering
 		/// </summary>
 		public void Bind()
 		{
-			if (buffer == 0)
+			if (buffer == null)
 			{
-				buffer = GL.GenBuffer();
-				GL.BindBuffer(BufferTarget.UniformBuffer, buffer);
-				GL.BufferData(BufferTarget.UniformBuffer, data.Length * sizeof(float), new float[data.Length], BufferUsageHint.DynamicDraw);
-				GL.BindBuffer(BufferTarget.UniformBuffer, 0);
+				buffer = CreateBuffer();
+				buffer.SetData(new float[data.Length]);
 			}
 
-			// Always bound again: binding points belong to the GL context, and a set drawn with before may be another's.
-			GL.BindBufferBase(BufferRangeTarget.UniformBuffer, Binding, buffer);
+			// Always bound again: the binding is shared, and a set drawn with before may be another's.
+			Gfx.Commands.SetUniformBuffer(Binding, buffer);
 		}
 
 		public void Delete()
 		{
-			if (buffer == 0)
-			{
-				return;
-			}
+			buffer?.Dispose();
+			buffer = null;
+		}
 
-			GL.DeleteBuffer(buffer);
-			buffer = 0;
+		#endregion
+
+		#region PrivateMethods
+
+		// Room for every tile; the contents come with the first upload.
+		private GpuBuffer CreateBuffer()
+		{
+			return Gfx.Device.CreateBuffer(new BufferDescriptor(BufferUsage.Uniform, data.Length * sizeof(float), true, "Shadow maps layout"));
 		}
 
 		#endregion
