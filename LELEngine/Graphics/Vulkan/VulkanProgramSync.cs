@@ -27,6 +27,10 @@ namespace LELEngine.Graphics.Vulkan
 		{
 			public VulkanTexture Texture;
 			public VulkanBuffer Buffer;
+
+			/// <summary>A top level the program traces (ray queries read it and its bottom levels).</summary>
+			public VulkanAccelerationStructure Structure;
+
 			public int Mip;
 			public int Mips;
 			public int Layer;

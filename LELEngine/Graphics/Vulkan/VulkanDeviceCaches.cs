@@ -11,10 +11,10 @@ namespace LELEngine.Graphics.Vulkan
 		/// <summary>The pools the sets of <see cref="DescriptorCache" /> are in (the last one is the current one).</summary>
 		private readonly List<VkDescriptorPool> cachePools = new List<VkDescriptorPool>();
 
-		/// <summary>The keys of the cached sets that name a buffer, an image view or a set layout, by its handle.</summary>
+		/// <summary>The keys of the cached sets that name a buffer, an image view, an acceleration structure or a set layout, by its handle.</summary>
 		private readonly Dictionary<nint, List<DescriptorKey>> keysNaming = new Dictionary<nint, List<DescriptorKey>>();
 
-		/// <summary>The buffers, views and the set layout the key being built names (<see cref="CacheDescriptorSet" />).</summary>
+		/// <summary>The buffers, views, structures and the set layout the key being built names (<see cref="CacheDescriptorSet" />).</summary>
 		internal readonly List<nint> NamedHandles = new List<nint>();
 
 		/// <summary>Keeps a set written for a key (a key of its own, not the program's buffer), noting the objects it names.</summary>
@@ -41,7 +41,7 @@ namespace LELEngine.Graphics.Vulkan
 		/// </summary>
 		private void ForgetDescriptorSetsNaming(RetiredKind kind, nint handle)
 		{
-			if (kind != RetiredKind.Buffer && kind != RetiredKind.ImageView && kind != RetiredKind.SetLayout)
+			if (kind != RetiredKind.Buffer && kind != RetiredKind.ImageView && kind != RetiredKind.SetLayout && kind != RetiredKind.AccelerationStructure)
 			{
 				ForgetDescriptorSets();
 				return;

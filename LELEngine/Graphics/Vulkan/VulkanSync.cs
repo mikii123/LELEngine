@@ -76,6 +76,9 @@ namespace LELEngine.Graphics.Vulkan
 		/// <summary>Arguments of indirect draws and dispatches.</summary>
 		public const VkPipelineStageFlags2 Indirect = VkPipelineStageFlags2.DrawIndirectBit;
 
+		/// <summary>Builds and copies of acceleration structures, and the queries of their compacted sizes.</summary>
+		public const VkPipelineStageFlags2 AccelerationBuild = VkPipelineStageFlags2.AccelerationStructureBuildBitKHR;
+
 		/// <summary>
 		///     Everything a draw reads buffers with: a barrier before a draw makes a write visible to all of it, so the
 		///     draws after it in the same pass read the buffer in other ways without one more.
@@ -128,6 +131,12 @@ namespace LELEngine.Graphics.Vulkan
 				access |= VkAccessFlags2.IndirectCommandReadBit;
 			}
 
+			if ((stages & AccelerationBuild) != 0)
+			{
+				// Build inputs (vertices, indices, instances) are shader reads; structures and build memory are read as structures.
+				access |= VkAccessFlags2.ShaderReadBit | VkAccessFlags2.AccelerationStructureReadBitKHR;
+			}
+
 			return access;
 		}
 
@@ -160,6 +169,11 @@ namespace LELEngine.Graphics.Vulkan
 				access |= VkAccessFlags2.HostWriteBit;
 			}
 
+			if ((stages & AccelerationBuild) != 0)
+			{
+				access |= VkAccessFlags2.AccelerationStructureWriteBitKHR;
+			}
+
 			return access;
 		}
 
@@ -186,10 +200,11 @@ namespace LELEngine.Graphics.Vulkan
 		///     contents the use overwrites whole (<paramref name="discard" />) leaves them behind. True when the state
 		///     changed in a way that may give other uses a barrier to wait for (a write or a layout change).
 		/// </summary>
+		/// <param name="extraRead">Accesses the stages read with besides their usual ones (acceleration structures that shaders trace).</param>
 		public static bool Apply(ref SyncState state, SyncBatch batch, VkImage image, VkImageAspectFlags aspect, int mip, int mips, int layer, int layers, VkImageLayout layout,
-			VkPipelineStageFlags2 stages, bool write, bool discard)
+			VkPipelineStageFlags2 stages, bool write, bool discard, VkAccessFlags2 extraRead = VkAccessFlags2.None)
 		{
-			VkAccessFlags2 access = ReadAccess(stages) | (write ? WriteAccess(stages) : VkAccessFlags2.None);
+			VkAccessFlags2 access = ReadAccess(stages) | extraRead | (write ? WriteAccess(stages) : VkAccessFlags2.None);
 			if (state.Layout != layout)
 			{
 				batch.AddImage(image, aspect, mip, mips, layer, layers, discard ? VkImageLayout.Undefined : state.Layout, layout, state.Writes | state.Reads, state.WriteAccess, stages,
@@ -235,6 +250,32 @@ namespace LELEngine.Graphics.Vulkan
 
 			state.Reads |= stages;
 			return false;
+		}
+	}
+
+	/// <summary>
+	///     A resource of the device's own that commands use (the memory acceleration structure builds work in, a top
+	///     level's instances, an acceleration structure), whose uses are ordered like a buffer's.
+	/// </summary>
+	internal sealed class SyncTarget
+	{
+		public SyncState State;
+
+		/// <summary>The last submission whose stream used it (its barriers then stay in the stream).</summary>
+		public long MainUse;
+
+		/// <summary>An acceleration structure: shaders read it as one (ray queries).</summary>
+		public readonly bool AccelerationStructure;
+
+		public SyncTarget(bool accelerationStructure = false)
+		{
+			AccelerationStructure = accelerationStructure;
+		}
+
+		/// <summary>The resource is new: no use of it waits for anything.</summary>
+		public void Forget()
+		{
+			State = default;
 		}
 	}
 

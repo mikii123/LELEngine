@@ -9,7 +9,8 @@ namespace LELEngine.Graphics.Vulkan
 	///     The commands of acceleration structures: builds (one command of several bottom levels, in batches as large as
 	///     the device's build memory allows), top levels from instances copied into their buffers first, copies and
 	///     compaction, and the top levels bound by number for the programs that trace them. Each command, like a
-	///     dispatch, starts after a barrier and ends the open pass.
+	///     dispatch, ends the open pass and starts after the barriers its uses need (<see cref="Sync" />: structures,
+	///     their triangles and instances, the build memory; a trace waits for its top level's and bottom levels' builds).
 	/// </summary>
 	internal sealed unsafe partial class VulkanCommandList
 	{
@@ -49,6 +50,8 @@ namespace LELEngine.Graphics.Vulkan
 			}
 
 			structure.Use();
+			// Traced by the program's commands: they wait for its build (and its bottom levels').
+			Track(new VulkanProgram.TrackedResource { Structure = structure }, structure.Handle.VkHandle);
 			return structure.Handle;
 		}
 
@@ -113,8 +116,26 @@ namespace LELEngine.Graphics.Vulkan
 				geometryCount += structures[i].Geometries.Length;
 			}
 
-			VkCommandBuffer commands = BeginTransfer();
+			// The build memory first (when it is made anew, nothing used it), then the build's barriers: the structures
+			// are written, their triangles read, the build memory read and written.
 			ulong scratchAddress = device.Scratch(scratch);
+			for (int i = start; i < end; i++)
+			{
+				VulkanAccelerationStructure structure = structures[i];
+				RequireTarget(structure.Storage, Sync.AccelerationBuild, true);
+				foreach (AccelerationStructureTriangles triangles in structure.Geometries)
+				{
+					RequireBuffer((VulkanBuffer)triangles.VertexBuffer, Sync.AccelerationBuild, false);
+					if (triangles.IndexBuffer != null)
+					{
+						RequireBuffer((VulkanBuffer)triangles.IndexBuffer, Sync.AccelerationBuild, false);
+					}
+				}
+			}
+
+			RequireTarget(device.ScratchTarget, Sync.AccelerationBuild, true);
+			ApplyRequirements(false);
+			VkCommandBuffer commands = device.MainCommands;
 			int alignment = device.ScratchAlignment;
 			VkAccelerationStructureBuildGeometryInfoKHR[] infos = new VkAccelerationStructureBuildGeometryInfoKHR[count];
 			VkAccelerationStructureGeometryKHR[] geometries = new VkAccelerationStructureGeometryKHR[geometryCount];
@@ -178,7 +199,6 @@ namespace LELEngine.Graphics.Vulkan
 				throw new ArgumentException($"An update of top level '{structure.Name}' gives the {structure.BuiltInstances} instances of its build, not {count}.");
 			}
 
-			VkCommandBuffer commands = BeginTransfer();
 			VulkanAccelerationStructure[] placed = null;
 			if (count > 0)
 			{
@@ -204,17 +224,33 @@ namespace LELEngine.Graphics.Vulkan
 				placed = new VulkanAccelerationStructure[placedBottomLevels.Count];
 				placedBottomLevels.CopyTo(placed);
 				placedBottomLevels.Clear();
+				RequireTarget(structure.Instances, Sync.Transfer, true);
+				ApplyRequirements(false);
 				VkBufferCopy region = new VkBufferCopy
 				{
 					SrcOffset = (Brutal.ByteSize64)(ulong)sourceOffset,
 					DstOffset = (Brutal.ByteSize64)(ulong)structure.InstanceOffset,
 					Size = (Brutal.ByteSize64)(ulong)((long)count * VulkanAccelerationStructure.InstanceSize)
 				};
-				vk->vkCmdCopyBuffer.Invoke(commands, source, structure.InstanceBuffer, 1, &region);
-				device.GlobalBarrier(commands);
+				vk->vkCmdCopyBuffer.Invoke(device.MainCommands, source, structure.InstanceBuffer, 1, &region);
 			}
 
-			RecordTopLevel(commands, structure, count, update);
+			// The build reads the instances, the bottom levels they place and the build memory, and writes the structure.
+			ulong scratch = device.Scratch(update ? structure.UpdateScratchSize : structure.BuildScratchSize);
+			if (count > 0)
+			{
+				RequireTarget(structure.Instances, Sync.AccelerationBuild, false);
+				foreach (VulkanAccelerationStructure bottom in placed)
+				{
+					RequireTarget(bottom.Storage, Sync.AccelerationBuild, false, false);
+				}
+			}
+
+			RequireTarget(structure.Storage, Sync.AccelerationBuild, true);
+			RequireTarget(device.ScratchTarget, Sync.AccelerationBuild, true);
+			ApplyRequirements(false);
+			VkCommandBuffer commands = device.MainCommands;
+			RecordTopLevel(commands, structure, count, update, scratch);
 			structure.MarkBuilt(count, placed);
 			if (!update)
 			{
@@ -222,20 +258,29 @@ namespace LELEngine.Graphics.Vulkan
 			}
 		}
 
-		/// <summary>Builds an empty top level ahead of the stream (the device's stand-in for bindings given none).</summary>
+		/// <summary>
+		///     Builds an empty top level ahead of the stream (the device's stand-in for bindings given none). The build's
+		///     own barriers come with it, and as a command ahead of the stream outside its order (it may share the build
+		///     memory with builds the stream holds already), the whole stream waits for it.
+		/// </summary>
 		internal void BuildEmptyTopLevel(VulkanAccelerationStructure structure)
 		{
-			RecordTopLevel(device.BeginSetupCommand(), structure, 0, false);
+			ulong scratch = device.Scratch(structure.BuildScratchSize);
+			SyncBatch setup = device.SetupBatch;
+			ApplyTarget(structure.Storage, setup, Sync.AccelerationBuild, true);
+			ApplyTarget(device.ScratchTarget, setup, Sync.AccelerationBuild, true);
+			VkCommandBuffer commands = device.BeginSetupCommand();
+			setup.Record(device, commands);
+			RecordTopLevel(commands, structure, 0, false, scratch);
 			structure.MarkBuilt(0, null);
 		}
 
-		/// <summary>The build command of a top level from the first <paramref name="count" /> instances of its buffer.</summary>
-		private void RecordTopLevel(VkCommandBuffer commands, VulkanAccelerationStructure structure, int count, bool update)
+		/// <summary>The build command of a top level from the first <paramref name="count" /> instances of its buffer, in the build memory at <paramref name="scratch" />.</summary>
+		private void RecordTopLevel(VkCommandBuffer commands, VulkanAccelerationStructure structure, int count, bool update, ulong scratch)
 		{
 			VkAccelerationStructureGeometryKHR geometry = structure.InstanceGeometry(structure.InstanceAddress);
 			VkAccelerationStructureBuildRangeInfoKHR range = new VkAccelerationStructureBuildRangeInfoKHR { PrimitiveCount = count };
 			VkAccelerationStructureBuildRangeInfoKHR* rangeList = &range;
-			ulong scratch = device.Scratch(update ? structure.UpdateScratchSize : structure.BuildScratchSize);
 			VkAccelerationStructureBuildGeometryInfoKHR info = new VkAccelerationStructureBuildGeometryInfoKHR
 			{
 				Type = VkAccelerationStructureTypeKHR.TopLevelKHR,
@@ -271,7 +316,10 @@ namespace LELEngine.Graphics.Vulkan
 				throw new InvalidOperationException($"Acceleration structure '{to.Name}' ({to.Size} bytes) cannot take a copy of '{from.Name}' ({from.Size} bytes).");
 			}
 
-			VkCommandBuffer commands = BeginTransfer();
+			RequireTarget(from.Storage, Sync.AccelerationBuild, false);
+			RequireTarget(to.Storage, Sync.AccelerationBuild, true);
+			ApplyRequirements(false);
+			VkCommandBuffer commands = device.MainCommands;
 			VkCopyAccelerationStructureInfoKHR info = new VkCopyAccelerationStructureInfoKHR
 			{
 				Src = from.Handle,
@@ -284,24 +332,33 @@ namespace LELEngine.Graphics.Vulkan
 		}
 
 		/// <summary>
-		///     After full builds (the barrier first: the queries read the finished structures), the compacted size of each
-		///     structure made with AllowCompaction goes into a query of its own.
+		///     After full builds (their barrier first: the queries read the finished structures), the compacted size of
+		///     each structure made with AllowCompaction goes into a query of its own.
 		/// </summary>
 		private void WriteCompactedSizes(VkCommandBuffer commands, VulkanAccelerationStructure[] structures, int start, int end)
 		{
-			bool barrier = false;
+			bool any = false;
+			for (int i = start; i < end; i++)
+			{
+				if ((structures[i].Flags & AccelerationStructureFlags.AllowCompaction) != 0)
+				{
+					RequireTarget(structures[i].Storage, Sync.AccelerationBuild, false);
+					any = true;
+				}
+			}
+
+			if (!any)
+			{
+				return;
+			}
+
+			ApplyRequirements(false);
 			for (int i = start; i < end; i++)
 			{
 				VulkanAccelerationStructure structure = structures[i];
 				if ((structure.Flags & AccelerationStructureFlags.AllowCompaction) == 0)
 				{
 					continue;
-				}
-
-				if (!barrier)
-				{
-					device.GlobalBarrier(commands);
-					barrier = true;
 				}
 
 				int query = structure.TakeCompactionQuery();

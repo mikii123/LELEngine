@@ -58,6 +58,7 @@ namespace LELEngine.Graphics.Vulkan
 		{
 			public VulkanTexture Texture;
 			public VulkanBuffer Buffer;
+			public SyncTarget Target;
 			public int Mip;
 			public int Mips;
 			public int Layer;
@@ -138,6 +139,42 @@ namespace LELEngine.Graphics.Vulkan
 			buffer.Use();
 		}
 
+		/// <summary>
+		///     Notes a use of a resource of the device's own by the next command, joined with its other uses of it
+		///     (<paramref name="join" />: reads of many structures skip the look, as a read noted twice is harmless).
+		/// </summary>
+		private void RequireTarget(SyncTarget target, VkPipelineStageFlags2 stages, bool write, bool join = true)
+		{
+			for (int i = 0; join && i < requirementCount; i++)
+			{
+				ref Requirement other = ref requirements[i];
+				if (other.Target == target)
+				{
+					other.Stages |= stages;
+					other.Write |= write;
+					return;
+				}
+			}
+
+			ref Requirement added = ref Add();
+			added.Target = target;
+			added.Layout = VkImageLayout.Undefined;
+			added.Stages = stages;
+			added.Write = write;
+			added.Ahead = target.MainUse != device.RecordingSerial;
+			target.MainUse = device.RecordingSerial;
+		}
+
+		/// <summary>Records a use of a resource of the device's own into a batch: the barrier it needs, and the new state.</summary>
+		private void ApplyTarget(SyncTarget target, SyncBatch batch, VkPipelineStageFlags2 stages, bool write)
+		{
+			VkAccessFlags2 extra = target.AccelerationStructure ? VkAccessFlags2.AccelerationStructureReadBitKHR : VkAccessFlags2.None;
+			if (Sync.Apply(ref target.State, batch, default, VkImageAspectFlags.None, 0, 0, 0, 0, VkImageLayout.Undefined, stages, write, false, extra))
+			{
+				device.SyncEpoch++;
+			}
+		}
+
 		private ref Requirement Add()
 		{
 			if (requirementCount == requirements.Length)
@@ -166,7 +203,9 @@ namespace LELEngine.Graphics.Vulkan
 					continue;
 				}
 
-				if (r.Texture != null ? r.Texture.Needs(r.Mip, r.Mips, r.Layer, r.Layers, r.Layout, r.Stages, r.Write) : r.Buffer.Needs(r.Stages, r.Write))
+				bool needs = r.Texture != null ? r.Texture.Needs(r.Mip, r.Mips, r.Layer, r.Layers, r.Layout, r.Stages, r.Write)
+					: r.Buffer != null ? r.Buffer.Needs(r.Stages, r.Write) : Sync.Needs(r.Target.State, VkImageLayout.Undefined, r.Stages, r.Write);
+				if (needs)
 				{
 					return true;
 				}
@@ -198,9 +237,13 @@ namespace LELEngine.Graphics.Vulkan
 				{
 					r.Texture.Require(target, r.Mip, r.Mips, r.Layer, r.Layers, r.Layout, r.Stages, r.Write, r.Discard);
 				}
-				else
+				else if (r.Buffer != null)
 				{
 					r.Buffer.Require(target, r.Stages, r.Write);
+				}
+				else
+				{
+					ApplyTarget(r.Target, target, r.Stages, r.Write);
 				}
 
 				r = default;
@@ -507,6 +550,7 @@ namespace LELEngine.Graphics.Vulkan
 
 			resource.Texture?.Use();
 			resource.Buffer?.Use();
+			resource.Structure?.Use();
 		}
 
 		/// <summary>Notes the uses of the resources the program's descriptor set binds, by the program's stages.</summary>
@@ -519,9 +563,20 @@ namespace LELEngine.Graphics.Vulkan
 				{
 					RequireTexture(entry.Texture, entry.Mip, entry.Mips, entry.Layer, entry.Layers, entry.Layout, stages, entry.Write);
 				}
-				else
+				else if (entry.Buffer != null)
 				{
 					RequireBuffer(entry.Buffer, stages, entry.Write);
+				}
+				else
+				{
+					// A traced top level, and the bottom levels its last build placed (a ray reads them too).
+					VulkanAccelerationStructure structure = entry.Structure;
+					structure.Use();
+					RequireTarget(structure.Storage, stages, false);
+					foreach (VulkanAccelerationStructure bottom in structure.BottomLevels)
+					{
+						RequireTarget(bottom.Storage, stages, false, false);
+					}
 				}
 			}
 		}

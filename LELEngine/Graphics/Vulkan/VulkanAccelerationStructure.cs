@@ -26,6 +26,9 @@ namespace LELEngine.Graphics.Vulkan
 		private VmaAllocation scratchAllocation;
 		private long scratchSize;
 		private ulong scratchAddress;
+
+		/// <summary>What the commands recorded so far do to the build memory (every build reads and writes it).</summary>
+		internal readonly SyncTarget ScratchTarget = new SyncTarget();
 		private readonly List<VkQueryPool> compactionPools = new List<VkQueryPool>();
 		private readonly Stack<int> freeCompactionQueries = new Stack<int>();
 		private readonly List<(int Query, long Serial)> releasedCompactionQueries = new List<(int Query, long Serial)>();
@@ -117,8 +120,8 @@ namespace LELEngine.Graphics.Vulkan
 		/// <summary>
 		///     The address of build memory of at least <paramref name="size" /> bytes, aligned for builds: the device's one
 		///     scratch buffer, made larger when it is too small (the smaller one goes with the commands that used it). Builds
-		///     of one command take parts of it side by side; commands that follow each other are ordered by the barrier each
-		///     build command begins with.
+		///     of one command take parts of it side by side; commands that follow each other are ordered by the barrier
+		///     their uses of it need (<see cref="ScratchTarget" />). Called before the barriers of the build are noted.
 		/// </summary>
 		internal ulong Scratch(long size)
 		{
@@ -136,6 +139,7 @@ namespace LELEngine.Graphics.Vulkan
 				scratchSize = capacity;
 				ulong alignment = (ulong)ScratchAlignment;
 				scratchAddress = (BufferAddress(scratchBuffer) + alignment - 1) / alignment * alignment;
+				ScratchTarget.Forget();
 			}
 
 			return scratchAddress;
@@ -293,6 +297,12 @@ namespace LELEngine.Graphics.Vulkan
 
 		/// <summary>The last submission whose commands used the structure (built it, copied it, traced it).</summary>
 		public long LastUse;
+
+		/// <summary>What the commands recorded so far do to the structure (builds and copies write it; builds, copies, queries and traces read it).</summary>
+		internal readonly SyncTarget Storage = new SyncTarget(true);
+
+		/// <summary>A top level: what they do to its instances buffer (a copy writes it, builds read it).</summary>
+		internal readonly SyncTarget Instances = new SyncTarget();
 
 		public VulkanAccelerationStructure(VulkanDevice device, in AccelerationStructureDescriptor descriptor)
 			: base(descriptor.CompactedFrom != null ? descriptor.CompactedFrom.Level : descriptor.Level, descriptor.CompactedFrom != null ? descriptor.CompactedFrom.Flags : descriptor.Flags,
