@@ -448,21 +448,34 @@ namespace LELEngine
 				return imported;
 			}
 
-			foreach (string assetPath in AssetDatabase.GetAllAssetPaths(Extensions))
+			// The progress bar's task begins with the first model that needs an import (a check alone shows nothing).
+			Progress.Scope progress = null;
+			List<string> paths = AssetDatabase.GetAllAssetPaths(Extensions);
+			try
 			{
-				try
+				for (int i = 0; i < paths.Count; i++)
 				{
-					if (NeedsImport(assetPath, verifyMaterials))
+					string assetPath = paths[i];
+					try
 					{
-						// A fresh import: the cached one may match the file and still miss its material files.
-						LoadData(assetPath, true);
-						imported.Add(assetPath);
+						if (NeedsImport(assetPath, verifyMaterials))
+						{
+							progress ??= Progress.Begin("Importing models");
+							progress.Report(i, paths.Count, assetPath);
+							// A fresh import: the cached one may match the file and still miss its material files.
+							LoadData(assetPath, true);
+							imported.Add(assetPath);
+						}
+					}
+					catch (Exception e)
+					{
+						Debug.LogWarning($"[Model] Cannot import {assetPath}: {e.Message}");
 					}
 				}
-				catch (Exception e)
-				{
-					Debug.LogWarning($"[Model] Cannot import {assetPath}: {e.Message}");
-				}
+			}
+			finally
+			{
+				progress?.Dispose();
 			}
 
 			return imported;

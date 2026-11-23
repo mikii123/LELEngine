@@ -1122,6 +1122,7 @@ namespace LELEngine.Editor
 					scenes.Insert(0, settings.StartScene);
 				}
 
+				using Progress.Scope progress = Progress.Begin("Baking distance fields for the build");
 				DistanceFieldBaker.Collect(project, scenes, Append);
 			}
 			catch (Exception e)

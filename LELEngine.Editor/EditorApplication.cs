@@ -276,6 +276,11 @@ namespace LELEngine.Editor
 		// under their own ImGui names and titles, so they stand where the layout docks them until the real ones take over.
 		private readonly List<(string Name, string Title)> loadingWindows = new List<(string, string)>();
 		private int loadingFramesDrawn;
+
+		// The load's progress bar (Progress): one part per step of OpenProjectSteps (the first step and its seven yields).
+		private Progress.Scope loadProgress;
+		private int loadStep;
+		private const int LoadStepCount = 8;
 		private int loadingUpdatesWithoutFrame;
 
 		// The wait for the first frames is timed as a step of its own (it was counted in the assets' step, which runs after it).
@@ -1053,6 +1058,10 @@ namespace LELEngine.Editor
 			CloseProject();
 
 			projectLoad = OpenProjectSteps(project);
+			// The progress bar over the window while the steps run (one part of the bar each).
+			loadProgress?.Dispose();
+			loadProgress = Progress.Begin("Opening " + project.Name);
+			loadStep = 0;
 			projectLoadStart = System.Diagnostics.Stopwatch.GetTimestamp();
 			projectLoadTimes.Clear();
 			loadingFramesDrawn = 0;
@@ -1279,6 +1288,10 @@ namespace LELEngine.Editor
 
 			loadingStatus = status;
 			loadingStatusSince = now;
+			if (status != null && loadProgress != null)
+			{
+				loadProgress.Report(Math.Min(loadStep++, LoadStepCount - 1), LoadStepCount, status);
+			}
 		}
 
 		// Waits for the asset index read on a worker thread (OpenProjectSteps). With rethrow its error is the load's step's;
@@ -1340,6 +1353,8 @@ namespace LELEngine.Editor
 		{
 			IEnumerator<string> load = projectLoad;
 			projectLoad = null;
+			loadProgress?.Dispose();
+			loadProgress = null;
 			WaitForAssetIndex(false);
 			// A load that ended before its scripts' step: the domain started in its first step loaded nothing (its watcher stops).
 			WaitForScriptsStart(false);
@@ -2135,6 +2150,7 @@ namespace LELEngine.Editor
 			}
 
 			Edits.Commit();
+			using Progress.Scope progress = Progress.Begin("Reloading the scene");
 			byte[] snapshot = SceneSerializer.SaveToBytes(scene);
 			string path = scene.Path;
 			change();
@@ -2379,6 +2395,7 @@ namespace LELEngine.Editor
 			// Loaded as the game loads a scene itself: the prefabs its objects reference are read through and what they will
 			// instantiate (bullets, effects, wrecks: their textures, meshes, programs) is prepared now, on worker threads
 			// where it can be, instead of in the frame of a play session's first shot or kill.
+			using Progress.Scope progress = Progress.Begin("Entering play mode");
 			Scene play;
 			var playAssets = new List<object>();
 			long playLoad = System.Diagnostics.Stopwatch.GetTimestamp();
@@ -2434,6 +2451,7 @@ namespace LELEngine.Editor
 				return;
 			}
 
+			using Progress.Scope progress = Progress.Begin("Leaving play mode");
 			Input.SetCursorLocked(false);
 			// The next play starts the input system again (with the configuration as edited meanwhile).
 			LELEngine.InputSystem.InputManager.Shutdown();
@@ -2816,6 +2834,7 @@ namespace LELEngine.Editor
 				ExitPlayMode();
 			}
 
+			using Progress.Scope progress = Progress.Begin("Opening " + assetPath);
 			try
 			{
 				string file = AssetDatabase.ToAbsolute(assetPath);
@@ -3485,6 +3504,8 @@ namespace LELEngine.Editor
 			}
 
 			assetsChanged = false;
+			// The bar shows when it takes a while (models and images imported again report inside it).
+			using Progress.Scope progress = Progress.Begin("Importing changed files");
 			AssetDatabase.Refresh(true);
 			ImportChangedModels();
 			AssetsVersion++;

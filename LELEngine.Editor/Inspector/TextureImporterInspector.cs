@@ -284,10 +284,23 @@ namespace LELEngine.Editor
 		/// <summary>Writes every working copy into its meta file and reimports the image.</summary>
 		private static void Apply(EditorApplication editor)
 		{
-			Apply(path, working);
-			for (int i = 0; i < otherPaths.Count; i++)
+			// The progress bar (cancelable: the images not reached keep their settings, the working copies stay to Apply again).
+			int count = otherPaths.Count + 1;
+			using (Progress.Scope progress = Progress.Begin(count > 1 ? "Applying import settings to " + count + " images" : "Applying import settings", count > 1))
 			{
-				Apply(otherPaths[i], otherWorking[i]);
+				for (int i = 0; i < count; i++)
+				{
+					if (progress.Canceled)
+					{
+						Debug.Log("[Editor] Apply canceled after " + i + " of " + count + " images");
+						editor.NotifyAssetsChanged();
+						return;
+					}
+
+					string assetPath = i == 0 ? path : otherPaths[i - 1];
+					progress.Report(i, count, assetPath);
+					Apply(assetPath, i == 0 ? working : otherWorking[i - 1]);
+				}
 			}
 
 			dirty = false;

@@ -231,6 +231,8 @@ namespace LELEngine.Editor
 			paths.AddRange(otherPaths);
 			var settings = new List<ModelImporter> { working };
 			settings.AddRange(otherWorking);
+			// The import itself happens as the reloaded scene reads the models.
+			using Progress.Scope progress = Progress.Begin("Importing " + paths.Count + " models");
 			for (int i = 0; i < paths.Count; i++)
 			{
 				AssetMeta meta = AssetDatabase.GetMeta(paths[i]);
@@ -258,6 +260,7 @@ namespace LELEngine.Editor
 
 		private static void Apply(string assetPath, EditorApplication editor)
 		{
+			using Progress.Scope progress = Progress.Begin("Importing " + assetPath);
 			AssetMeta meta = AssetDatabase.GetMeta(assetPath);
 			working.version++;
 			meta.importer = Clone(working);

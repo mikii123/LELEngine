@@ -12,6 +12,7 @@ namespace LELEngine.Editor
 		#region PrivateFields
 
 		private AssetReserializer reserializer;
+		private Progress.Scope reserializeProgress;
 		private bool openReserializePopup;
 
 		#endregion
@@ -90,11 +91,23 @@ namespace LELEngine.Editor
 		/// <summary>A frame's share of the run; at its end the editor takes the files it wrote as its own.</summary>
 		private void UpdateReserialize()
 		{
-			if (reserializer == null || !reserializer.Step())
+			if (reserializer == null)
+			{
+				reserializeProgress?.Dispose();
+				reserializeProgress = null;
+				return;
+			}
+
+			// The progress bar over the frames the run takes.
+			reserializeProgress ??= Progress.Begin("Force Reserialize All Assets");
+			reserializeProgress.Report(reserializer.Total > 0 ? reserializer.Done / (float)reserializer.Total : -1f, reserializer.Status);
+			if (!reserializer.Step())
 			{
 				return;
 			}
 
+			reserializeProgress.Dispose();
+			reserializeProgress = null;
 			AssetReserializer done = reserializer;
 			reserializer = null;
 			LastReserializeReport = done.Report();

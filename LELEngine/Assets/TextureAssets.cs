@@ -613,13 +613,25 @@ namespace LELEngine
 			}
 
 			var changed = new List<string>();
-			foreach (KeyValuePair<string, Entry> entry in loaded)
+			// The progress bar's task begins with the first image imported again.
+			Progress.Scope progress = null;
+			try
 			{
-				if (entry.Value.Sources != null && File.Exists(AssetDatabase.ToAbsolute(entry.Key)) && StampOf(entry.Value.Sources) != entry.Value.Stamp)
+				for (int i = 0; i < loaded.Count; i++)
 				{
-					Reimport(entry.Key);
-					changed.Add(entry.Key);
+					KeyValuePair<string, Entry> entry = loaded[i];
+					if (entry.Value.Sources != null && File.Exists(AssetDatabase.ToAbsolute(entry.Key)) && StampOf(entry.Value.Sources) != entry.Value.Stamp)
+					{
+						progress ??= Progress.Begin("Importing images");
+						progress.Report(i, loaded.Count, entry.Key);
+						Reimport(entry.Key);
+						changed.Add(entry.Key);
+					}
 				}
+			}
+			finally
+			{
+				progress?.Dispose();
 			}
 
 			foreach (KeyValuePair<string, long> entry in ui)

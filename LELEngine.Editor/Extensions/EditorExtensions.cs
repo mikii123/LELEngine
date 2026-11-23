@@ -131,6 +131,8 @@ namespace LELEngine.Editor
 		/// </summary>
 		public void OnDomainUnloading()
 		{
+			// A bar an editor script left shown (it failed before clearing it) goes with its scripts.
+			EditorUtility.ClearProgressBar();
 			if (!windowsCaptured)
 			{
 				CaptureWindowStates();
@@ -1107,6 +1109,8 @@ namespace LELEngine.Editor
 		/// <summary>Logs the exception unless it repeats the previous one (OnGUI runs every frame); returns its message.</summary>
 		private static string Report(Exception exception, string previous)
 		{
+			// A script that failed does not clear its progress bar: it would cover the editor for good.
+			EditorUtility.ClearProgressBar();
 			Exception inner = exception is TargetInvocationException tie && tie.InnerException != null ? tie.InnerException : exception;
 			string message = inner.GetType().Name + ": " + inner.Message;
 			if (message != previous)

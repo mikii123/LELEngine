@@ -228,6 +228,11 @@ namespace LELEngine.Editor
 					Dark();
 					break;
 			}
+
+			// What a modal popup lays over the editor behind it (and the window switcher): black, not ImGui's light grey (the
+			// user's ask, 2026-11-23). A theme may still set its own.
+			style.Colors[(int)ImGuiCol.ModalWindowDimBg] = new NVector4(0f, 0f, 0f, 0.55f);
+			style.Colors[(int)ImGuiCol.NavWindowingDimBg] = new NVector4(0f, 0f, 0f, 0.45f);
 		}
 
 		private static void Dark()

@@ -387,6 +387,39 @@
   the Game view; click the inspector during play and typing works there; undock the Game window and drag over its image
   while playing: it stays in place.
 
+## Progress bar of long tasks (2026-11-23)
+
+- The user's ask: a progress bar for the engine's tasks (applying import settings to many selected images, loading, ...),
+  at the top of the editor's window, not frozen by the work (its own thread), and modal popups' background overlay black
+  instead of white.
+- `LELEngine.Progress` (engine, `Mono/Progress.cs`): `using Progress.Scope p = Progress.Begin(title, cancelable)`,
+  `p.Report(fraction | done, total, what)`, `p.Canceled`; scopes nest (an outer `Report(3, 10)` gives the inner task
+  the 0.3..0.4 of the bar); `Progress.Current` is a thread-safe copy (title of the outermost, info of the innermost,
+  fraction or -1 unknown, seconds, cancel). Games show nothing. Editor scripts: `EditorUtility.DisplayProgressBar` /
+  `DisplayCancelableProgressBar` / `ClearProgressBar` (Unity's); a failing script or a script reload clears its bar.
+- `ProgressOverlay` (editor, Windows): a layered tool window (per-pixel alpha, `UpdateLayeredWindow`, GDI text) run by
+  the "Progress bar" thread, 30 ticks a second: shown over the editor's client area once a task has run 0.3 s, a black
+  dim (alpha 150) that takes the clicks, the panel 10 px from the top (title, percent, elapsed after 3 s, bar or a
+  moving piece while unknown, what it does, Cancel for cancelable tasks). Not owned by the editor's window (an owner
+  across threads joins the threads' input and a busy main thread would hold it): it keeps itself right above the
+  editor's window in the z-order (`GetWindow(GW_HWNDPREV)`), so other applications in front stay in front.
+  `DisableProcessWindowsGhosting` at start: Windows no longer washes a busy editor out white as "Not Responding"
+  (also means a truly hung editor cannot be dragged or closed with X: Task Manager). Test hook `progressshots=folder`
+  writes the painted frames (`progress_NN.png`, twice a second at most).
+- Reported: the project's load (8 steps), opening a scene, reloading it, entering / leaving play mode, Apply of image
+  import settings (per image, cancelable: the rest keep their old settings), of model import settings (and the scene
+  reload), files changed on disk (models imported by `ModelAssets.ImportOutdated`, images by
+  `TextureAssets.ReloadChanged`, each beginning its task with the first file it imports), Force Reserialize All Assets
+  (over frames), the distance-field bake before a build. Not: script builds (a process; the editor stays usable), game
+  builds (their own thread and log window).
+- `EditorStyle`: `ModalWindowDimBg` black 0.55, `NavWindowingDimBg` black 0.45 in every preset (a theme may override).
+- Verified on a scratch project (scratchpad `multi/` of session 4837dc96, `watch.ps1` reading the windows from outside):
+  an 8 s task blocking the main thread: the bar's window visible over exactly the client rect, right above the editor,
+  moving all along (frames at 67 %, "Step 54 of 80"); Windows reported the editor hung after ~4.6 s, no ghost, the
+  screen showed the dim and the panel; Cancel (a click posted to the window) stopped it at step 28; Apply of Max Size
+  512 to twelve loaded 2048 x 2048 images (2.3 s, "Textures/Big06.png (8 / 12)"); the load's steps; the Delete dialog
+  over a black dim. Not checked: another DPI than 100 %, a second monitor, the user's own long tasks on New Frontier.
+
 ## Editor start: the windows first, the project over frames (2026-11-09)
 
 - The user's ask: the editor's own windows show first, as they will be but without what is not loaded yet (an empty

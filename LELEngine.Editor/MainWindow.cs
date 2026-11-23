@@ -65,6 +65,7 @@ namespace LELEngine.Editor
 				else if (name == "screenshotframe") screenshotFrames = Array.ConvertAll(value.Split(',', StringSplitOptions.RemoveEmptyEntries), item => int.TryParse(item, out int at) ? at : -1);
 				else if (name == "exitframe") int.TryParse(value, out exitFrame);
 				else if (name == "loadingshots") loadingShotsFolder = value;
+				else if (name == "progressshots") ProgressOverlay.ShotsFolder = value;
 			}
 		}
 
@@ -106,10 +107,26 @@ namespace LELEngine.Editor
 			bool layoutExisted = File.Exists(layout);
 			imgui = new ImGuiController(this, layout);
 			EditorStyle.Apply();
+			// The progress bar's own thread and window, before the project's load begins (it shows that too).
+			StartProgressBar();
 			editor = new EditorApplication(this, layoutExisted ? layout : null, args);
 			EditorAutomation.Start(editor, args);
 			editorMs = SinceProcessStart();
 		}
+
+		private unsafe void StartProgressBar()
+		{
+			if (OperatingSystem.IsWindows())
+			{
+				// A main thread busy for 5 s would make Windows wash the window out white as "Not Responding" (its ghost
+				// window); the progress bar's black dim and panel show what it is busy with instead.
+				DisableProcessWindowsGhosting();
+				ProgressOverlay.Start(OpenTK.Windowing.GraphicsLibraryFramework.GLFW.GetWin32Window(WindowPtr));
+			}
+		}
+
+		[System.Runtime.InteropServices.DllImport("user32.dll")]
+		private static extern void DisableProcessWindowsGhosting();
 
 		private static double SinceProcessStart()
 		{
@@ -320,6 +337,7 @@ namespace LELEngine.Editor
 
 		protected override void OnUnload()
 		{
+			ProgressOverlay.Stop();
 			EditorAutomation.Shutdown();
 			editor?.Dispose();
 			imgui?.Dispose();
