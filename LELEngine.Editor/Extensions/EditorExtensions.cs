@@ -439,6 +439,12 @@ namespace LELEngine.Editor
 			return created;
 		}
 
+		/// <summary>The editor class is marked [CanEditMultipleObjects]: it draws several selected objects too.</summary>
+		public static bool EditsMultipleObjects(Editor custom)
+		{
+			return custom != null && custom.GetType().IsDefined(typeof(CanEditMultipleObjectsAttribute), false);
+		}
+
 		/// <summary>Draws a custom editor's inspector; true when a value of its target changed.</summary>
 		public bool DrawInspector(Editor custom, InspectorContext context)
 		{

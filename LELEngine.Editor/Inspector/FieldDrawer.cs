@@ -60,9 +60,49 @@ namespace LELEngine.Editor
 		/// <summary>Property path of the field being drawn ("weapon.damage", "drops[2]", "loot{gold}"): kept by the drawers.</summary>
 		public string Path = "";
 
+		/// <summary>
+		///     Several objects edited together (multi-object editing): the others, which an edit of <see cref="UndoTarget" />
+		///     is written into, and that are one undo step with it. Null: one object.
+		/// </summary>
+		public IReadOnlyList<object> UndoGroup;
+
+		/// <summary>Where the values of the objects edited together differ (fields show "—"); null for one object.</summary>
+		public MixedValues Mixed;
+
+		/// <summary>
+		///     Paths of fields set while the objects edited together differed there: they go to all of them even when the
+		///     value set is the one the drawn object had already (a mixed toggle clicked on, an option picked). The caller
+		///     writing the edit into the others takes them (<see cref="MultiEdit.Propagate" />) and clears the list.
+		/// </summary>
+		public readonly List<string> Touched = new List<string>();
+
 		#endregion
 
 		#region PublicMethods
+
+		/// <summary>The field being drawn was set (a widget's edit): with several objects edited together it goes to all of them.</summary>
+		public void Touch()
+		{
+			if (Mixed != null && !string.IsNullOrEmpty(Path) && !Touched.Contains(Path))
+			{
+				Touched.Add(Path);
+			}
+		}
+
+		/// <summary>
+		///     The field being drawn differs between the objects edited together (or a value holding it does); with
+		///     <paramref name="within" /> also when something inside it does.
+		/// </summary>
+		public bool IsMixed(bool within = false)
+		{
+			return Mixed != null && Mixed.IsMixed(Path, within);
+		}
+
+		/// <summary>Which components of the vector or color being drawn differ between the objects edited together; null when none.</summary>
+		public bool[] MixedComponents(int count)
+		{
+			return Mixed?.MixedComponents(Path, count);
+		}
 
 		/// <summary>
 		///     Call right after a widget, before its new value is written: the edit's "before" state is captured on the
@@ -72,7 +112,12 @@ namespace LELEngine.Editor
 		{
 			if (ImGui.IsItemActivated() || changed)
 			{
-				Editor.Edits.Begin(UndoTarget);
+				Editor.Edits.Begin(UndoTarget, UndoGroup);
+			}
+
+			if (changed)
+			{
+				Touch();
 			}
 
 			if (ImGui.IsItemDeactivatedAfterEdit() || (changed && !ImGui.IsItemActive()))
@@ -84,7 +129,7 @@ namespace LELEngine.Editor
 		/// <summary>Before a change that is not a widget's (a button, a drop, a list operation): captures the "before" state.</summary>
 		public void BeginEdit()
 		{
-			Editor?.Edits.Begin(UndoTarget);
+			Editor?.Edits.Begin(UndoTarget, UndoGroup);
 		}
 
 		/// <summary>After such a change: the undo record is committed at the end of the frame.</summary>
@@ -105,6 +150,9 @@ namespace LELEngine.Editor
 			Overrides = null;
 			OverrideTarget = 0;
 			Path = "";
+			UndoGroup = null;
+			Mixed = null;
+			Touched.Clear();
 		}
 
 		/// <summary>
@@ -671,6 +719,10 @@ namespace LELEngine.Editor
 					ImGui.SetNextItemWidth(width);
 					fieldChanged = ObjectField.Draw(type, ref current, context);
 					context.Track(fieldChanged);
+					if (fieldChanged)
+					{
+						context.Touch();
+					}
 				}, null, InlineEditors.Hint(target));
 				if (fieldChanged)
 				{
@@ -693,6 +745,11 @@ namespace LELEngine.Editor
 			RowDecoration row = BeginLine(label, info, context);
 			bool changed = ObjectField.Draw(type, ref value, context);
 			context.Track(changed);
+			if (changed)
+			{
+				context.Touch();
+			}
+
 			EndLine(row);
 			return changed;
 		}
@@ -710,10 +767,14 @@ namespace LELEngine.Editor
 			object previousTarget = context.UndoTarget;
 			PrefabInstanceOverrides previousOverrides = context.Overrides;
 			string previousPath = context.Path;
+			IReadOnlyList<object> previousGroup = context.UndoGroup;
+			MixedValues previousMixed = context.Mixed;
 			context.UndoTarget = asset;
-			// The asset's fields are its own, not the prefab instance's.
+			// The asset's fields are its own, not the prefab instance's (nor of the objects edited together).
 			context.Overrides = null;
 			context.Path = "";
+			context.UndoGroup = null;
+			context.Mixed = null;
 			bool changed;
 			try
 			{
@@ -725,6 +786,8 @@ namespace LELEngine.Editor
 				context.UndoTarget = previousTarget;
 				context.Overrides = previousOverrides;
 				context.Path = previousPath;
+				context.UndoGroup = previousGroup;
+				context.Mixed = previousMixed;
 			}
 
 			if (changed)
@@ -762,6 +825,11 @@ namespace LELEngine.Editor
 						ImGui.SetNextItemWidth(fieldWidth);
 						bool picked = ObjectField.Draw(declaredType, ref current, context);
 						context.Track(picked);
+						if (picked)
+						{
+							context.Touch();
+						}
+
 						changed |= picked;
 					}
 					else
@@ -837,7 +905,7 @@ namespace LELEngine.Editor
 			object dropped = null;
 			bool open = Header(label, info, context, width =>
 			{
-				if (TypeButton(TypeSelector.DisplayName(valueType), width))
+				if (TypeButton(context.IsMixed() ? EditorGui.MixedValue : TypeSelector.DisplayName(valueType), width))
 				{
 					ImGui.OpenPopup(popupId);
 				}
@@ -968,25 +1036,54 @@ namespace LELEngine.Editor
 		{
 			RangeAttribute range = info?.GetCustomAttribute<RangeAttribute>(false);
 			bool changed = false;
+			// Several objects edited together whose values here differ: "—" until it is edited (then all get the new value).
+			bool mixed = context.IsMixed();
 
 			if (type == typeof(bool))
 			{
-				bool b = value is bool flag && flag;
+				// A mixed toggle shows a dash; a click turns them all on (as Unity's).
+				bool b = !mixed && value is bool flag && flag;
+				ImGui.PushItemFlag((ImGuiItemFlags)ImGuiItemFlagsPrivate.MixedValue, mixed);
 				changed = EditorGui.Checkbox("##v", ref b);
+				ImGui.PopItemFlag();
 				context.Track(changed);
-				value = b;
+				value = changed ? b : value;
 			}
 			else if (type == typeof(float) || type == typeof(double))
 			{
 				float f = Convert.ToSingle(value);
-				changed = range != null ? EditorGui.SliderFloat("##v", ref f, range.Min, range.Max) : EditorGui.DragFloat("##v", ref f, DragSpeed(f));
+				if (range != null)
+				{
+					changed = EditorGui.SliderFloat("##v", ref f, range.Min, range.Max);
+					if (mixed && !ImGui.IsItemActive())
+					{
+						EditorGui.MixedOverlay();
+					}
+				}
+				else
+				{
+					changed = EditorGui.DragFloat("##v", ref f, DragSpeed(f), 0f, 0f, mixed ? EditorGui.MixedValue : "%.3f");
+				}
+
 				context.Track(changed);
 				value = type == typeof(float) ? (object)f : (double)f;
 			}
 			else if (type.IsPrimitive && type != typeof(char))
 			{
 				int i = Convert.ToInt32(value);
-				changed = range != null ? EditorGui.SliderInt("##v", ref i, (int)range.Min, (int)range.Max) : EditorGui.DragInt("##v", ref i, 0.2f);
+				if (range != null)
+				{
+					changed = EditorGui.SliderInt("##v", ref i, (int)range.Min, (int)range.Max);
+					if (mixed && !ImGui.IsItemActive())
+					{
+						EditorGui.MixedOverlay();
+					}
+				}
+				else
+				{
+					changed = EditorGui.DragInt("##v", ref i, 0.2f, 0, 0, mixed ? EditorGui.MixedValue : "%d");
+				}
+
 				context.Track(changed);
 				if (changed)
 				{
@@ -995,49 +1092,56 @@ namespace LELEngine.Editor
 			}
 			else if (type == typeof(string) || type == typeof(char))
 			{
-				string s = value?.ToString() ?? "";
-				changed = EditorGui.InputText("##v", ref s, type == typeof(char) ? 2u : 2048u);
+				// Mixed: an empty field with "—" in it; what is typed becomes everyone's.
+				string s = mixed ? "" : value?.ToString() ?? "";
+				changed = mixed
+					? EditorGui.InputTextWithHint("##v", EditorGui.MixedValue, ref s, type == typeof(char) ? 2u : 2048u)
+					: EditorGui.InputText("##v", ref s, type == typeof(char) ? 2u : 2048u);
 				context.Track(changed);
-				value = type == typeof(char) ? (object)(s.Length > 0 ? s[0] : '\0') : s;
+				if (changed || !mixed)
+				{
+					value = type == typeof(char) ? (object)(s.Length > 0 ? s[0] : '\0') : s;
+				}
 			}
 			else if (type.IsEnum)
 			{
-				changed = DrawEnum(type, ref value);
+				changed = DrawEnum(type, ref value, mixed);
 				context.Track(changed);
 			}
 			else if (type == typeof(Vector2))
 			{
 				Vector2 v = (Vector2)value;
-				NVector2 n = new NVector2(v.X, v.Y);
-				changed = EditorGui.DragFloat2("##v", ref n, 0.05f);
+				Span<float> n = stackalloc float[] { v.X, v.Y };
+				changed = EditorGui.DragFloats("##v", n, context.MixedComponents(2), 0.05f);
 				context.Track(changed);
-				value = new Vector2(n.X, n.Y);
+				value = new Vector2(n[0], n[1]);
 			}
 			else if (type == typeof(Vector3))
 			{
 				Vector3 v = (Vector3)value;
-				NVector3 n = new NVector3(v.X, v.Y, v.Z);
-				changed = EditorGui.DragFloat3("##v", ref n, 0.05f);
+				Span<float> n = stackalloc float[] { v.X, v.Y, v.Z };
+				changed = EditorGui.DragFloats("##v", n, context.MixedComponents(3), 0.05f);
 				context.Track(changed);
-				value = new Vector3(n.X, n.Y, n.Z);
+				value = new Vector3(n[0], n[1], n[2]);
 			}
 			else if (type == typeof(Vector4))
 			{
 				Vector4 v = (Vector4)value;
-				NVector4 n = new NVector4(v.X, v.Y, v.Z, v.W);
-				changed = EditorGui.DragFloat4("##v", ref n, 0.05f);
+				Span<float> n = stackalloc float[] { v.X, v.Y, v.Z, v.W };
+				changed = EditorGui.DragFloats("##v", n, context.MixedComponents(4), 0.05f);
 				context.Track(changed);
-				value = new Vector4(n.X, n.Y, n.Z, n.W);
+				value = new Vector4(n[0], n[1], n[2], n[3]);
 			}
 			else if (type == typeof(Quaternion))
 			{
+				// Euler angles; the objects' rotations are compared whole (a quaternion's components are no axes).
 				Vector3 euler = ToEuler((Quaternion)value);
-				NVector3 n = new NVector3(euler.X, euler.Y, euler.Z);
-				changed = EditorGui.DragFloat3("##v", ref n, 0.5f);
+				Span<float> n = stackalloc float[] { euler.X, euler.Y, euler.Z };
+				changed = EditorGui.DragFloats("##v", n, mixed ? new[] { true, true, true } : null, 0.5f);
 				context.Track(changed);
 				if (changed)
 				{
-					value = QuaternionHelper.Euler(n.X, n.Y, n.Z);
+					value = QuaternionHelper.Euler(n[0], n[1], n[2]);
 				}
 			}
 			else if (type == typeof(Color4))
@@ -1045,17 +1149,27 @@ namespace LELEngine.Editor
 				Color4 c = (Color4)value;
 				NVector4 n = new NVector4(c.R, c.G, c.B, c.A);
 				changed = EditorGui.ColorEdit4("##v", ref n, ImGuiColorEditFlags.Float | ImGuiColorEditFlags.Hdr);
+				if (mixed && !ImGui.IsItemActive())
+				{
+					EditorGui.MixedOverlay();
+				}
+
 				context.Track(changed);
 				value = new Color4(n.X, n.Y, n.Z, n.W);
 			}
 			else if (type == typeof(Vector2i) || type == typeof(Vector3i) || type == typeof(Vector4i))
 			{
-				changed = DrawIntVector(type, ref value);
+				changed = DrawIntVector(type, ref value, context);
 				context.Track(changed);
 			}
 			else
 			{
 				ImGui.TextDisabled(type.Name);
+			}
+
+			if (changed && mixed)
+			{
+				context.Touch();
 			}
 
 			return changed;
@@ -1071,11 +1185,11 @@ namespace LELEngine.Editor
 			return type == typeof(byte) || type == typeof(ushort) || type == typeof(uint) || type == typeof(ulong) ? 0 : int.MinValue;
 		}
 
-		private static bool DrawEnum(Type type, ref object value)
+		private static bool DrawEnum(Type type, ref object value, bool mixed)
 		{
 			bool changed = false;
 			bool flags = type.IsDefined(typeof(FlagsAttribute), false);
-			if (EditorGui.BeginCombo("##v", value.ToString()))
+			if (EditorGui.BeginCombo("##v", mixed ? EditorGui.MixedValue : value.ToString()))
 			{
 				long current = Convert.ToInt64(value);
 				foreach (object option in Enum.GetValues(type))
@@ -1101,7 +1215,7 @@ namespace LELEngine.Editor
 		{
 			int mask = ((LayerMask)value).value;
 			bool changed = false;
-			if (EditorGui.BeginCombo("##v", LayerMaskPreview(mask)))
+			if (EditorGui.BeginCombo("##v", context.IsMixed() ? EditorGui.MixedValue : LayerMaskPreview(mask)))
 			{
 				if (EditorGui.Selectable("Nothing", mask == 0))
 				{
@@ -1140,33 +1254,34 @@ namespace LELEngine.Editor
 			if (changed)
 			{
 				value = (LayerMask)mask;
+				context.Touch();
 			}
 
 			return changed;
 		}
 
-		private static bool DrawIntVector(Type type, ref object value)
+		private static bool DrawIntVector(Type type, ref object value, InspectorContext context)
 		{
 			bool changed;
 			if (type == typeof(Vector2i))
 			{
 				Vector2i v = (Vector2i)value;
 				int[] values = { v.X, v.Y };
-				changed = EditorGui.DragInt2("##v", ref values[0], 0.2f);
+				changed = EditorGui.DragInts("##v", values, context.MixedComponents(2), 0.2f);
 				value = new Vector2i(values[0], values[1]);
 			}
 			else if (type == typeof(Vector3i))
 			{
 				Vector3i v = (Vector3i)value;
 				int[] values = { v.X, v.Y, v.Z };
-				changed = EditorGui.DragInt3("##v", ref values[0], 0.2f);
+				changed = EditorGui.DragInts("##v", values, context.MixedComponents(3), 0.2f);
 				value = new Vector3i(values[0], values[1], values[2]);
 			}
 			else
 			{
 				Vector4i v = (Vector4i)value;
 				int[] values = { v.X, v.Y, v.Z, v.W };
-				changed = EditorGui.DragInt4("##v", ref values[0], 0.2f);
+				changed = EditorGui.DragInts("##v", values, context.MixedComponents(4), 0.2f);
 				value = new Vector4i(values[0], values[1], values[2], values[3]);
 			}
 

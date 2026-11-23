@@ -4,10 +4,12 @@ using System.Collections.Generic;
 namespace LELEngine.Editor
 {
 	/// <summary>
-	///     The selection of several GameObjects (Ctrl / Shift clicks in the hierarchy and the scene view). One of them is the
-	///     active object, <see cref="Selected" />: what the inspector shows and the transform gizmo sits on; everything
-	///     written for one selected object goes on working with it. What acts on the whole selection (delete, duplicate,
-	///     re-parent, the gizmo, tools like the Mesh Baker) reads <see cref="SelectedObjects" /> or <see cref="SelectedRoots" />.
+	///     The selection of several GameObjects (Ctrl / Shift clicks and the keys in the hierarchy, clicks in the scene view)
+	///     or of several project files (the project panel). One of them is the active one, <see cref="Selected" /> /
+	///     <see cref="SelectedAsset" />: the transform gizmo sits on it and the inspector draws from it; the inspector edits
+	///     all of them together (multi-object editing, <see cref="MultiEdit" />). What acts on the whole selection (delete,
+	///     duplicate, re-parent, the gizmo, tools like the Mesh Baker) reads <see cref="SelectedObjects" />,
+	///     <see cref="SelectedRoots" /> or <see cref="SelectedAssets" />.
 	/// </summary>
 	internal sealed partial class EditorApplication
 	{
@@ -26,10 +28,17 @@ namespace LELEngine.Editor
 			}
 		}
 
+		/// <summary>
+		///     Every selected project file, the active one (<see cref="SelectedAsset" />) among them (the project panel gives
+		///     them in its rows' order). Empty when GameObjects (or nothing) are selected.
+		/// </summary>
+		public IReadOnlyList<string> SelectedAssets => selectedAssets;
+
 		#endregion
 
 		#region PrivateFields
 
+		private readonly List<string> selectedAssets = new List<string>();
 		private readonly List<GameObject> selection = new List<GameObject>();
 		private readonly HashSet<GameObject> selectionSet = new HashSet<GameObject>(ReferenceEqualityComparer.Instance);
 
@@ -240,6 +249,18 @@ namespace LELEngine.Editor
 			{
 				selected = selection.Count > 0 ? selection[selection.Count - 1] : null;
 			}
+		}
+
+		/// <summary>Files or folders moved: the selected files follow (<paramref name="moved" /> maps a path).</summary>
+		private void MoveSelectedAssets(Func<string, string> moved)
+		{
+			string active = selectedAsset != null ? moved(selectedAsset) : null;
+			for (int i = 0; i < selectedAssets.Count; i++)
+			{
+				selectedAssets[i] = moved(selectedAssets[i]);
+			}
+
+			selectedAsset = active;
 		}
 
 		/// <summary>A GameObject was selected: the project file the inspector showed is not any more (as in Unity).</summary>

@@ -74,6 +74,12 @@ namespace LELEngine.Editor
 			bool add = false;
 			uint headerId = ImGui.GetID("##list_header");
 
+			// Several objects edited together whose lists differ: their elements are edited one by one (each object's
+			// element at that index), but nothing is added, removed or moved: an index means another element in each.
+			bool locked = context.IsMixed(true);
+			bool countsDiffer = locked && context.Mixed.IsMixed(PropertyPath.SizeOf(context.Path), false);
+			const string LockedHint = "The selected objects' lists differ: elements can be edited, not added, removed or moved";
+
 			bool acceptsObjects = AcceptsObjects(element);
 			bool open = FieldDrawer.Header(label, info, context, width =>
 			{
@@ -82,18 +88,24 @@ namespace LELEngine.Editor
 				float countWidth = Math.Min(64f, Math.Max(36f, width - button - ImGui.GetStyle().ItemInnerSpacing.X));
 				float x = ImGui.GetCursorScreenPos().X + width - countWidth - button - ImGui.GetStyle().ItemInnerSpacing.X;
 				ImGui.SetCursorScreenPos(new NVector2(x, ImGui.GetCursorScreenPos().Y));
+				ImGui.BeginDisabled(locked);
 				uint id = ImGui.GetID("##count");
 				int shown = countEditId == id ? countEditValue : count;
 				ImGui.SetNextItemWidth(countWidth);
-				if (EditorGui.InputInt("##count", ref shown, 0, 0))
+				if (countsDiffer)
+				{
+					string text = "";
+					EditorGui.InputTextWithHint("##count", EditorGui.MixedValue, ref text, 8);
+				}
+				else if (EditorGui.InputInt("##count", ref shown, 0, 0))
 				{
 					countEditId = id;
 					countEditValue = Math.Clamp(shown, 0, 100000);
 				}
 
-				if (ImGui.IsItemHovered())
+				if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
 				{
-					ImGui.SetTooltip("Number of elements");
+					ImGui.SetTooltip(locked ? LockedHint : "Number of elements");
 				}
 
 				if (ImGui.IsItemDeactivated() && countEditId == id)
@@ -103,22 +115,25 @@ namespace LELEngine.Editor
 				}
 
 				ImGui.SameLine(0f, ImGui.GetStyle().ItemInnerSpacing.X);
-				if (EditorIcons.Button("add", IconKind.Plus, "Add an element", button))
+				if (EditorIcons.Button("add", IconKind.Plus, locked ? LockedHint : "Add an element", button))
 				{
 					add = true;
 				}
+
+				ImGui.EndDisabled();
 			}, () =>
 			{
-				if (acceptsObjects && DragAndDrop.AcceptValues(element, out List<object> values))
+				if (!locked && acceptsObjects && DragAndDrop.AcceptValues(element, out List<object> values))
 				{
 					dropped = values;
 				}
 			}, (info?.GetCustomAttribute<TooltipAttribute>(false)?.Text != null ? info.GetCustomAttribute<TooltipAttribute>(false).Text + "\n" : "")
-				+ ObjectField.TypeLabel(type.IsArray ? element : type) + (type.IsArray ? "[]" : "<" + ObjectField.TypeLabel(element) + ">") + (acceptsObjects ? "; drop objects here to add them" : ""));
+				+ ObjectField.TypeLabel(type.IsArray ? element : type) + (type.IsArray ? "[]" : "<" + ObjectField.TypeLabel(element) + ">") + (acceptsObjects ? "; drop objects here to add them" : "")
+				+ (locked ? "\n" + LockedHint : ""));
 			uint foldout = FieldDrawer.LastHeaderId;
 
-			// Header actions: one undo step each.
-			if (add || resizeTo >= 0 || dropped != null)
+			// Header actions: one undo step each (none on lists that differ between the objects edited together).
+			if (!locked && (add || resizeTo >= 0 || dropped != null))
 			{
 				context.BeginEdit();
 				list = list ?? (created = CreateList(type, element, 0));
@@ -157,7 +172,7 @@ namespace LELEngine.Editor
 					context.InlineElements = info != null && info.IsDefined(typeof(InlineEditorAttribute), true);
 					try
 					{
-						changed |= DrawRows(ref list, type, element, context, depth, headerId, label);
+						changed |= DrawRows(ref list, type, element, context, depth, headerId, label, locked);
 					}
 					finally
 					{
@@ -254,7 +269,7 @@ namespace LELEngine.Editor
 			return SerializationUtility.IsReferenceType(element) || SerializationUtility.IsAssetType(element) || SerializationUtility.CanHoldReference(element);
 		}
 
-		private static bool DrawRows(ref IList list, Type type, Type element, InspectorContext context, int depth, uint headerId, string label)
+		private static bool DrawRows(ref IList list, Type type, Type element, InspectorContext context, int depth, uint headerId, string label, bool locked)
 		{
 			bool changed = false;
 			int count = list.Count;
@@ -310,28 +325,34 @@ namespace LELEngine.Editor
 				{
 					Prefix = () =>
 					{
+						ImGui.BeginDisabled(locked);
 						DrawGrip(current, index);
 						if (anchorPrefix != null)
 						{
 							TestAnchors.RecordItem(anchorPrefix + index);
 						}
 
-						if (EditorGui.BeginPopupContextItem("##row_menu"))
+						if (!locked && EditorGui.BeginPopupContextItem("##row_menu"))
 						{
 							if (EditorMenu.Item("Duplicate")) duplicateAt = index;
 							if (EditorMenu.Item("Insert Above")) insertAt = index;
 							if (EditorMenu.Item("Remove")) removeAt = index;
 							ImGui.EndPopup();
 						}
+
+						ImGui.EndDisabled();
 					},
 					Label = index.ToString(),
 					LabelWidth = indexWidth,
 					Suffix = () =>
 					{
+						ImGui.BeginDisabled(locked);
 						if (EditorIcons.Button("remove", IconKind.Cross, "Remove element " + index))
 						{
 							removeAt = index;
 						}
+
+						ImGui.EndDisabled();
 					},
 					SuffixWidth = ImGui.GetFrameHeight()
 				};
@@ -389,7 +410,7 @@ namespace LELEngine.Editor
 				ImGui.PopID();
 			}
 
-			if (removeAt >= 0 || duplicateAt >= 0 || insertAt >= 0 || (moveFrom >= 0 && moveTo >= 0 && moveFrom != moveTo && moveFrom != moveTo - 1))
+			if (!locked && (removeAt >= 0 || duplicateAt >= 0 || insertAt >= 0 || (moveFrom >= 0 && moveTo >= 0 && moveFrom != moveTo && moveFrom != moveTo - 1)))
 			{
 				context.BeginEdit();
 				if (removeAt >= 0)

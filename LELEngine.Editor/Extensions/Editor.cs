@@ -30,6 +30,17 @@ namespace LELEngine.Editor
 	}
 
 	/// <summary>
+	///     The <see cref="Editor" /> also draws when several objects with the component are selected (Unity's
+	///     [CanEditMultipleObjects]): <see cref="Editor.target" /> is the active object's component, <see cref="Editor.targets" />
+	///     all of them, and what it changes in <see cref="Editor.target" />'s serialized fields is written into the others'
+	///     too. Without it, several selected objects show their fields as the default inspector draws them.
+	/// </summary>
+	[AttributeUsage(AttributeTargets.Class, Inherited = false)]
+	public sealed class CanEditMultipleObjectsAttribute : Attribute
+	{
+	}
+
+	/// <summary>
 	///     Custom inspector of a component type, drawn with Dear ImGui (Hexa.NET.ImGui) inside the component's section of
 	///     the Inspector panel; the header (name, enabled toggle, context menu) stays the editor's. Mark the class with
 	///     <see cref="CustomEditorAttribute" /> and put it in an Editor folder.
@@ -48,8 +59,20 @@ namespace LELEngine.Editor
 	{
 		#region PublicFields
 
-		/// <summary>The inspected component.</summary>
+		/// <summary>The inspected component (with several objects selected, the active object's).</summary>
 		public Behaviour target { get; internal set; }
+
+		/// <summary>
+		///     Every inspected component, <see cref="target" /> first: one, or with several objects selected and
+		///     <see cref="CanEditMultipleObjectsAttribute" /> on the editor, the component of each of them.
+		/// </summary>
+		public Behaviour[] targets
+		{
+			get => inspectedTargets ?? (target != null ? new[] { target } : Array.Empty<Behaviour>());
+			internal set => inspectedTargets = value;
+		}
+
+		private Behaviour[] inspectedTargets;
 
 		#endregion
 

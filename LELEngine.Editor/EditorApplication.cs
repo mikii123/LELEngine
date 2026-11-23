@@ -55,8 +55,25 @@ namespace LELEngine.Editor
 
 		private GameObject selected;
 
-		/// <summary>Asset path of the project file shown in the inspector (when no GameObject is selected).</summary>
-		public string SelectedAsset { get; private set; }
+		/// <summary>
+		///     Asset path of the project file shown in the inspector (when no GameObject is selected); with several files
+		///     selected (<see cref="SelectedAssets" />) the active one. Setting it selects that file alone.
+		/// </summary>
+		public string SelectedAsset
+		{
+			get => selectedAsset;
+			private set
+			{
+				selectedAsset = value;
+				selectedAssets.Clear();
+				if (value != null)
+				{
+					selectedAssets.Add(value);
+				}
+			}
+		}
+
+		private string selectedAsset;
 
 		/// <summary>The GameObject the inspector shows: the selection, or the object the inspector is locked on.</summary>
 		public GameObject InspectedObject => inspector.Shown ?? Selected;
@@ -1760,7 +1777,7 @@ namespace LELEngine.Editor
 			}
 
 			bool Deleted(string path) => deletedPaths.Exists(deleted => Inside(path, deleted));
-			if (Deleted(SelectedAsset))
+			if (selectedAssets.Exists(Deleted))
 			{
 				ClearSelection();
 			}
@@ -1833,7 +1850,7 @@ namespace LELEngine.Editor
 
 			if (SelectedAsset != null)
 			{
-				SelectedAsset = Moved(SelectedAsset);
+				MoveSelectedAssets(Moved);
 			}
 
 			inspector.AssetMoved(fromPath, toPath);
@@ -1881,7 +1898,7 @@ namespace LELEngine.Editor
 		/// <summary>Shows a project file in the inspector (clears the GameObject selection, as in Unity).</summary>
 		public void SelectAsset(string assetPath)
 		{
-			if (!string.Equals(SelectedAsset, assetPath, StringComparison.OrdinalIgnoreCase))
+			if (!string.Equals(SelectedAsset, assetPath, StringComparison.OrdinalIgnoreCase) || selectedAssets.Count > 1)
 			{
 				Edits.Commit();
 				AssetInspectors.Deselected();
@@ -1889,6 +1906,38 @@ namespace LELEngine.Editor
 
 			Selected = null;
 			SelectedAsset = assetPath;
+		}
+
+		/// <summary>
+		///     Selects several project files (the project panel's Ctrl / Shift clicks): the inspector edits them together
+		///     when they are of one kind. The active one is <paramref name="active" /> when it is among them, else the last.
+		///     Clears the GameObject selection.
+		/// </summary>
+		public void SelectAssets(IEnumerable<string> assetPaths, string active = null)
+		{
+			var chosen = new List<string>();
+			foreach (string path in assetPaths ?? Array.Empty<string>())
+			{
+				if (path != null && !chosen.Exists(p => string.Equals(p, path, StringComparison.OrdinalIgnoreCase)))
+				{
+					chosen.Add(path);
+				}
+			}
+
+			string newActive = chosen.Count == 0 ? null : active != null && chosen.Exists(p => string.Equals(p, active, StringComparison.OrdinalIgnoreCase)) ? active : chosen[chosen.Count - 1];
+			bool same = string.Equals(newActive, SelectedAsset, StringComparison.OrdinalIgnoreCase) && chosen.Count == selectedAssets.Count
+				&& chosen.TrueForAll(p => selectedAssets.Exists(s => string.Equals(s, p, StringComparison.OrdinalIgnoreCase)));
+			if (same)
+			{
+				return;
+			}
+
+			Edits.Commit();
+			AssetInspectors.Deselected();
+			Selected = null;
+			SelectedAsset = newActive;
+			selectedAssets.Clear();
+			selectedAssets.AddRange(chosen);
 		}
 
 		/// <summary>

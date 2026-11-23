@@ -482,6 +482,10 @@ namespace LELEngine.Editor
 		private bool commitRequested;
 		private readonly HashSet<object> savesWaiting = new HashSet<object>();
 
+		// Objects edited together with the target (the inspector's multi-object editing), and their states before.
+		private readonly List<object> group = new List<object>();
+		private readonly List<byte[]> groupBefore = new List<byte[]>();
+
 		#endregion
 
 		#region Constructors
@@ -499,7 +503,16 @@ namespace LELEngine.Editor
 		/// <param name="editName">Undo menu text of a component edit (null: "Edit &lt;Type&gt;").</param>
 		public void Begin(object editTarget, string editName = null)
 		{
-			if (target == editTarget)
+			Begin(editTarget, null, editName);
+		}
+
+		/// <summary>
+		///     Called before the target and <paramref name="others" /> (objects edited together with it: several selected
+		///     objects) change; captures their states once per edit. The edit is one undo step for all of them.
+		/// </summary>
+		public void Begin(object editTarget, IReadOnlyList<object> others, string editName = null)
+		{
+			if (target == editTarget && SameGroup(others))
 			{
 				return;
 			}
@@ -512,6 +525,21 @@ namespace LELEngine.Editor
 			target = editTarget;
 			name = editName;
 			before = Capture(editTarget);
+			group.Clear();
+			groupBefore.Clear();
+			if (others == null || editTarget == null)
+			{
+				return;
+			}
+
+			foreach (object other in others)
+			{
+				if (other != null && other != editTarget && !group.Contains(other))
+				{
+					group.Add(other);
+					groupBefore.Add(Capture(other));
+				}
+			}
 		}
 
 		/// <summary>The edit ends once the current values were written back (see <see cref="Flush" />).</summary>
@@ -537,59 +565,33 @@ namespace LELEngine.Editor
 				return;
 			}
 
-			byte[] after = Capture(target);
-			if (!EditorSerialization.SameState(after, before))
+			var records = new List<UndoRecord>();
+			AddRecord(records, target, before);
+			for (int i = 0; i < group.Count; i++)
 			{
-				switch (target)
+				if (!(group[i] is EngineObject engineObject && engineObject.IsDestroyed))
 				{
-					case Behaviour component:
-						editor.Undo.Push(new ComponentStateRecord { Name = name ?? "Edit " + component.GetType().Name, ComponentId = component.Id, Before = before, After = after });
-						break;
-					case SceneSettings _:
-						editor.Undo.Push(new SettingsRecord { Name = "Edit scene settings", Before = before, After = after });
-						break;
-					case ProjectSettings _:
-						// Saved when the edit ends, like assets.
-						editor.Undo.Push(new ProjectSettingsRecord { Name = "Edit project settings", Before = before, After = after });
-						editor.SaveProjectSettings();
-						break;
-					case Shaders.Material material:
-						// Assets save when the edit ends (Unity writes material changes to disk as they happen).
-						editor.Undo.Push(new AssetStateRecord { Name = "Edit " + material.name, AssetPath = material.AssetPath, Before = before, After = after });
-						SaveAsset(material);
-						break;
-					case PhysicsMaterial2D physicsMaterial:
-						editor.Undo.Push(new AssetStateRecord { Name = "Edit " + physicsMaterial.name, AssetPath = physicsMaterial.AssetPath, Before = before, After = after });
-						SaveAsset(physicsMaterial);
-						break;
-					case ScriptableObject scriptableObject:
-						editor.Undo.Push(new AssetStateRecord { Name = name ?? "Edit " + scriptableObject.name, AssetPath = scriptableObject.AssetPath, Before = before, After = after });
-						SaveAsset(scriptableObject);
-						break;
-					case PrefabPreview preview:
-						// An inline editor's prefab copy: written to the file as one undo step (files and scene before and
-						// after), after the frame, since the scene is loaded again so its instances follow.
-						editor.Defer(() => editor.RecordPrefabFiles(name ?? "Edit " + preview.Name, new[] { preview.AssetPath }, preview.Save));
-						break;
-					case LELEngine.Animation.AnimatorController controller:
-						// Edited in the Animator window (and its inspectors): players rebuild live, the file follows.
-						editor.Undo.Push(new Animation.AnimatorRecord { Name = name ?? "Edit " + controller.name, AssetPath = controller.AssetPath, Before = before, After = after });
-						controller.MarkChanged();
-						SaveAsset(controller);
-						editor.AnimatorWindow?.OnControllerEdited(controller);
-						break;
-					case LELEngine.Animation.AnimationClip clip:
-						editor.Undo.Push(new Animation.AnimationClipRecord { Name = name ?? "Edit " + clip.name, AssetPath = clip.AssetPath, Before = before, After = after });
-						clip.MarkChanged();
-						SaveAsset(clip);
-						editor.AnimationWindow?.OnClipEdited(clip);
-						break;
+					AddRecord(records, group[i], groupBefore[i]);
 				}
+			}
+
+			if (records.Count == 1)
+			{
+				editor.Undo.Push(records[0]);
+			}
+			else if (records.Count > 1)
+			{
+				// One step for all the objects edited together, named after the edit and how many they were.
+				var step = new GroupRecord { Name = (name ?? records[0].Name) + " (" + records.Count + " objects)" };
+				step.Records.AddRange(records);
+				editor.Undo.Push(step);
 			}
 
 			target = null;
 			before = null;
 			name = null;
+			group.Clear();
+			groupBefore.Clear();
 		}
 
 		/// <summary>
@@ -667,11 +669,95 @@ namespace LELEngine.Editor
 			before = null;
 			name = null;
 			commitRequested = false;
+			group.Clear();
+			groupBefore.Clear();
 		}
 
 		#endregion
 
 		#region PrivateMethods
+
+		/// <summary>The edit's group is <paramref name="others" /> (the same objects; none and an empty list alike).</summary>
+		private bool SameGroup(IReadOnlyList<object> others)
+		{
+			int count = 0;
+			if (others != null)
+			{
+				foreach (object other in others)
+				{
+					if (other == null || other == target)
+					{
+						continue;
+					}
+
+					if (count >= group.Count || !ReferenceEquals(group[count], other))
+					{
+						return false;
+					}
+
+					count++;
+				}
+			}
+
+			return count == group.Count;
+		}
+
+		/// <summary>The undo record of one edited object whose state changed (assets are saved, windows told); none when it did not.</summary>
+		private void AddRecord(List<UndoRecord> records, object edited, byte[] stateBefore)
+		{
+			byte[] after = Capture(edited);
+			if (EditorSerialization.SameState(after, stateBefore))
+			{
+				return;
+			}
+
+			switch (edited)
+			{
+				case Behaviour component:
+					records.Add(new ComponentStateRecord { Name = name ?? "Edit " + component.GetType().Name, ComponentId = component.Id, Before = stateBefore, After = after });
+					break;
+				case SceneSettings _:
+					records.Add(new SettingsRecord { Name = "Edit scene settings", Before = stateBefore, After = after });
+					break;
+				case ProjectSettings _:
+					// Saved when the edit ends, like assets.
+					records.Add(new ProjectSettingsRecord { Name = "Edit project settings", Before = stateBefore, After = after });
+					editor.SaveProjectSettings();
+					break;
+				case Shaders.Material material:
+					// Assets save when the edit ends (Unity writes material changes to disk as they happen).
+					records.Add(new AssetStateRecord { Name = name ?? "Edit " + material.name, AssetPath = material.AssetPath, Before = stateBefore, After = after });
+					SaveAsset(material);
+					break;
+				case PhysicsMaterial2D physicsMaterial:
+					records.Add(new AssetStateRecord { Name = name ?? "Edit " + physicsMaterial.name, AssetPath = physicsMaterial.AssetPath, Before = stateBefore, After = after });
+					SaveAsset(physicsMaterial);
+					break;
+				case ScriptableObject scriptableObject:
+					records.Add(new AssetStateRecord { Name = name ?? "Edit " + scriptableObject.name, AssetPath = scriptableObject.AssetPath, Before = stateBefore, After = after });
+					SaveAsset(scriptableObject);
+					break;
+				case PrefabPreview preview:
+					// An inline editor's prefab copy: written to the file as one undo step (files and scene before and
+					// after), after the frame, since the scene is loaded again so its instances follow.
+					string previewName = name ?? "Edit " + preview.Name;
+					editor.Defer(() => editor.RecordPrefabFiles(previewName, new[] { preview.AssetPath }, preview.Save));
+					break;
+				case LELEngine.Animation.AnimatorController controller:
+					// Edited in the Animator window (and its inspectors): players rebuild live, the file follows.
+					records.Add(new Animation.AnimatorRecord { Name = name ?? "Edit " + controller.name, AssetPath = controller.AssetPath, Before = stateBefore, After = after });
+					controller.MarkChanged();
+					SaveAsset(controller);
+					editor.AnimatorWindow?.OnControllerEdited(controller);
+					break;
+				case LELEngine.Animation.AnimationClip clip:
+					records.Add(new Animation.AnimationClipRecord { Name = name ?? "Edit " + clip.name, AssetPath = clip.AssetPath, Before = stateBefore, After = after });
+					clip.MarkChanged();
+					SaveAsset(clip);
+					editor.AnimationWindow?.OnClipEdited(clip);
+					break;
+			}
+		}
 
 		private byte[] Capture(object editTarget)
 		{

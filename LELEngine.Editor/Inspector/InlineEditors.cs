@@ -126,7 +126,12 @@ namespace LELEngine.Editor
 			ulong previousOverrideTarget = context.OverrideTarget;
 			string previousPath = context.Path;
 			Scene previousScene = context.Scene;
+			IReadOnlyList<object> previousGroup = context.UndoGroup;
+			MixedValues previousMixed = context.Mixed;
 			context.Path = "";
+			// The component unfolded here is one object, whatever the inspector edits together.
+			context.UndoGroup = null;
+			context.Mixed = null;
 			if (preview != null)
 			{
 				context.UndoTarget = preview;
@@ -159,6 +164,8 @@ namespace LELEngine.Editor
 				context.OverrideTarget = previousOverrideTarget;
 				context.Path = previousPath;
 				context.Scene = previousScene;
+				context.UndoGroup = previousGroup;
+				context.Mixed = previousMixed;
 			}
 
 			if (changed)

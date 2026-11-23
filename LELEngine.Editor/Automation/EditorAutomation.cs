@@ -515,6 +515,24 @@ namespace LELEngine.Editor
 		}
 
 		/// <summary>
+		///     Selects a project file; with <paramref name="add" /> it joins the files already selected (and becomes the
+		///     active one) instead of replacing them.
+		/// </summary>
+		public static void SelectAsset(string assetPath, bool add)
+		{
+			if (!add)
+			{
+				Editor.SelectAsset(assetPath);
+				return;
+			}
+
+			var paths = new List<string>(Editor.SelectedAssets);
+			paths.RemoveAll(path => string.Equals(path, assetPath, StringComparison.OrdinalIgnoreCase));
+			paths.Add(assetPath);
+			Editor.SelectAssets(paths, assetPath);
+		}
+
+		/// <summary>
 		///     Deletes a project file (with its meta file) or folder, as the project panel's Delete does without its question:
 		///     to the Recycle Bin on Windows. Throws with the reason when it is not deleted (play mode, the open scene, a prefab
 		///     open for editing, a missing path).

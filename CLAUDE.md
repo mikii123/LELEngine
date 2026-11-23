@@ -2051,6 +2051,52 @@ lighting and the engine's other features. Octahedral impostors, baked into atlas
   dictionaries, nested lists, ScriptableObjects, Resources): batch `-executeMethod ProbeTests.Setup` / `Verify`
   (JSON, typeless JSON <-> binary, snapshot, duplicate remap), a game build and the player's log, scripted drags.
 
+## Multi-selection and multi-object editing (2026-11-23)
+
+- The user's ask: proper multi-select and multi-edit, in the inspector, the hierarchy and the project panel (Unity's).
+- Selection: `EditorApplication.SelectedObjects` (as before) and now `SelectedAssets` / `SelectAssets(paths, active)`
+  (the active file is `SelectedAsset`; setting it selects it alone); public `Selection.assetPaths`; CLI `select-asset
+  <path> --add`, `status` lists the files. Hierarchy (focused): Ctrl / Shift clicks as before, Ctrl+A every row shown,
+  Up / Down (Shift: the range from the anchor), Home / End, Right unfolds (unfolded: the first child), Left folds
+  (folded: the parent); the eye of one of several selected rows hides / shows them all. Project panel file list
+  (focused): Ctrl / Shift clicks now select in the editor too (`PushSelection`), Ctrl+A, Up / Down / Shift, Home / End,
+  a right click on one of several selected files keeps them ("Delete 2 Files"). Both windows have `NoNavInputs`: the
+  arrows are the selection's, not ImGui's keyboard navigation.
+- Inspector, several objects (`InspectorPanel.DrawMultiple`): the header's active flag, name, layer and static flag of
+  all ("—" where they differ; a layer / static change asks about children once for all: `RequestLayer(list)`,
+  `SetStatic(list)`); then the components every object has (the k-th of a class with the k-th), drawn from the active
+  object; "Components that are only on some ... are not shown". Remove Component, Reset, the enabled toggle, Add
+  Component act on all (one undo step). Prefab bars, override marks and Apply / Revert are single-object only.
+- How an edit reaches the others (`Inspector/MultiEdit.cs`): the shown component's serialized data before its draw
+  against after (`PrefabOverrides.DiffNode`, the prefab overrides' paths) gives the changed paths; each other object's
+  data gets those values (`GenericValues.Apply`) and is read back (`PrefabUtility.ReadInto`; non-components:
+  `MultiEdit.ReadInto`). A vector's or color's components go one by one (dragging X of objects at different places moves
+  X alone), a quaternion whole. Paths set while they were mixed (`InspectorContext.Touch`, from `Track`) go to all even
+  when the shown object had the value already (a dash toggle clicked, the shown object's option picked). So every
+  drawer, custom inspector and [CanEditMultipleObjects] editor works unchanged; a game `Editor` without the attribute
+  shows the default fields for several objects (`Editor.targets` holds all of them). The Transform has its own rows
+  (per-axis "—", an edited axis set on each, Euler hints kept).
+- Mixed values (`MixedValues`): the data diffed both ways against each other object (cached per component, again when
+  `SceneVersion` changes or after 0.5 s); `InspectorContext.Mixed` / `IsMixed(within)` / `MixedComponents(n)` by
+  `Path`. Shown as "—" (`EditorGui.MixedValue`): number formats, text hint, combo previews, ImGui's MixedValue flag on
+  toggles, `EditorGui.DragFloats` / `DragInts` per component, `EditorGui.MixedOverlay` on colors, sliders, curves,
+  gradients; object fields. A list that differs keeps its structure: elements edited by index, no add / remove / move /
+  resize / drop (`CollectionDrawers`, `locked`); dictionaries are by key and edit normally.
+- Undo: `EditTracker.Begin(target, others)` captures all; one `GroupRecord` "... (N objects)"; assets saved each.
+- Several project files of one kind (`AssetInspectors.Draw(list)`): materials (`MaterialEditor.DrawMultiple`: shader,
+  queue and values by name, removed values too; Reset resets all), images (`TextureImporterInspector`: shared settings,
+  "Apply to N images", no slicing), models (`ModelImporterInspector`: "Apply to N models", one scene reload),
+  physics materials and ScriptableObjects of one class (fields as for components). Other mixes: the count and a folded
+  list of the files.
+- Verified on a scratch project with the GUI editor and the CLI (session 4837dc96, scratchpad `multi/`): three objects
+  with a test component: speed to all, Offset Y alone (X / Z kept per object), a mixed bool and the shown enum value
+  going to all, Transform X alone, undo in one step, layer / rename / Remove Component for all and undone, a differing
+  list locked while its element [0] edits all, an equal list grew on all; hierarchy and project keys; three materials
+  (roughness saved in all files, undo), two images (filter applied to both metas), two ScriptableObjects (axis Y alone).
+  Not run: the GUI by hand (mouse drags of a mixed field), the 2D-physics / custom-inspector buttons with several
+  objects (they act on the shown one). Automation clicks disabled controls (a pre-existing gap): the list lock is also
+  a check in the code.
+
 ## Prefabs (variants, nested prefabs, overrides)
 
 - `.prefab` files are scene documents of kind "Prefab" (one root, no settings): `SceneSerializer` (partials
@@ -3727,8 +3773,9 @@ was made: "static batching has to work in the editor at run time too" and "you c
   transform as before (`Edits`); several: the transforms' states at the drag's start and end as one `GroupRecord`
   ("Move / Rotate / Scale N objects").
 - `DeleteSelected` / `DuplicateSelected` take `SelectedRoots()` ("Delete N objects"; the copies are selected, the active
-  one's copy active). The inspector edits the active object and says "N objects selected: the inspector shows X" under
-  its header. No editing of several objects' fields at once, no rubber band in the scene view, no Ctrl+A.
+  one's copy active). The inspector edited only the active object then; since 2026-11-23 it edits all of them together,
+  and the hierarchy has Ctrl+A and the arrows ("Multi-selection and multi-object editing"). Still no rubber band in the
+  scene view.
 - Editor scripts: `Selection.gameObjects` (get / set), `Selection.topLevelGameObjects`; `activeGameObject` as before.
 - Automation: `EditorAutomation.Select(path, add)`, `SelectObjects(paths)`, `GetSelection()`; CLI `select <object>
   --add`, `status` lists the active object "and N more: ..."; `click <element> --ctrl / --shift` (`UIAutomation.Invoke`

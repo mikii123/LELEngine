@@ -63,6 +63,12 @@ namespace LELEngine.Editor
 				draw.AddText(min + new NVector2(6f, ImGui.GetStyle().FramePadding.Y), ImGui.GetColorU32(ImGuiCol.TextDisabled), "(none: click to edit)");
 			}
 
+			// Several objects edited together with different gradients: "—"; the editor opens this one's, its edits go to all.
+			if (context.IsMixed())
+			{
+				EditorGui.MixedOverlay();
+			}
+
 			draw.AddRect(min, min + size, ImGui.GetColorU32(hovered ? ImGuiCol.ButtonHovered : ImGuiCol.Border));
 			if (hovered)
 			{
