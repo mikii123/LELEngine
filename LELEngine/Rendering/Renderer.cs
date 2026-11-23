@@ -113,6 +113,9 @@ namespace LELEngine.Rendering
 		private readonly Dictionary<(string, int), string> profileNames = new Dictionary<(string, int), string>();
 		private Framebuffer dumpTarget;
 
+		/// <summary>The framebuffer of <see cref="BeginPass" />, while the pass that began it executes.</summary>
+		private static Framebuffer passTarget;
+
 		// The frame being rendered, for LastFrame: its cameras, the renderers in their lists, the GPU-driven instances; and the
 		// frames rendered (RenderFrame calls: FrameIndex leaves out the frames without a camera).
 		private int renderedFrames;
@@ -144,7 +147,7 @@ namespace LELEngine.Rendering
 			LumenScene = new LumenScene();
 			Lighting.GIUsageChanged += ReleaseUnusedGI;
 
-			Console.WriteLine("[Renderer] GL " + GL.GetString(StringName.Version) + " | " + GL.GetString(StringName.Renderer));
+			Console.WriteLine("[Renderer] " + Gfx.Capabilities.ApiVersion + " | " + Gfx.Capabilities.Renderer);
 		}
 
 		#endregion
@@ -346,9 +349,7 @@ namespace LELEngine.Rendering
 			if (camera == null)
 			{
 				// Nothing to render from; present the clear color and the screen-space passes (UI).
-				BindOutput();
-				GL.ClearColor(Settings.ClearColor);
-				GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
+				BeginOutput(LoadOperation.Clear, Settings.ClearColor, LoadOperation.Clear);
 				RenderContext overlayContext = new RenderContext
 				{
 					Renderer = this,
@@ -371,6 +372,8 @@ namespace LELEngine.Rendering
 					if (pass.Enabled && pass.RunsWithoutCamera)
 					{
 						pass.Execute(overlayContext);
+						passTarget = null;
+						// LEGACY(gl): the passes that still give OpenGL commands start from nothing bound
 						GLState.Reset();
 					}
 				}
@@ -429,12 +432,11 @@ namespace LELEngine.Rendering
 				GpuScene.EndFrame();
 			}
 
-			// Clear the scene target once per frame; passes bind it themselves when they need it.
-			SceneTarget.Bind();
-			GLState.SetDepth(true, true);
-			GLState.SetColorWrite(true);
-			GL.ClearColor(Settings.ClearColor);
-			GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
+			// Clear the scene target once per frame; passes begin their own passes into it when they need it.
+			CommandList commands = Gfx.Commands;
+			commands.State.SetDepth(true, true);
+			commands.State.ColorMask = ColorWriteMask.All;
+			SceneTarget.BeginCleared(Settings.ClearColor);
 
 			// Once per frame, seen from the lighting camera: shadow maps, GI volumes (its layers are the world).
 			int executed = 0;
@@ -447,9 +449,8 @@ namespace LELEngine.Rendering
 				RenderContext context = i == lightingIndex ? lightingContext : CreateContext(i, lightingIndex, behaviours, queue);
 				if (i > 0 && stack[i].ClearDepth)
 				{
-					SceneTarget.Bind();
-					GLState.SetDepth(true, true);
-					GL.Clear(ClearBufferMask.DepthBufferBit);
+					commands.State.SetDepth(true, true);
+					SceneTarget.Begin(LoadOperation.Load, default, LoadOperation.Clear);
 				}
 
 				Camera.current = stack[i];
@@ -506,6 +507,7 @@ namespace LELEngine.Rendering
 
 			if (FrameDumper.Active)
 			{
+				// LEGACY(gl): FrameDumper reads the pixels of the framebuffer bound
 				BindOutput();
 				FrameDumper.Capture(Width, Height, OutputTarget != null);
 			}
@@ -513,10 +515,7 @@ namespace LELEngine.Rendering
 			if (dumpOffscreen)
 			{
 				OutputTarget = null;
-				GL.BindFramebuffer(FramebufferTarget.ReadFramebuffer, dumpTarget.Handle);
-				GL.BindFramebuffer(FramebufferTarget.DrawFramebuffer, 0);
-				GL.BlitFramebuffer(0, 0, Width, Height, 0, 0, Width, Height, ClearBufferMask.ColorBufferBit, BlitFramebufferFilter.Nearest);
-				GL.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
+				commands.Blit(dumpTarget.ColorAttachments[0].Gpu, 0, 0, 0, 0, Width, Height, Gfx.Device.Backbuffer, 0, 0, 0, 0, Width, Height, SamplerFilter.Nearest);
 			}
 
 			// Like Unity, the current camera is defined only while a frame renders (and a stale one would keep an
@@ -575,6 +574,8 @@ namespace LELEngine.Rendering
 				pass.Execute(context);
 			}
 
+			passTarget = null;
+			// LEGACY(gl): the passes that still give OpenGL commands start from nothing bound
 			GLState.Reset();
 			Profiler.End();
 			executed++;
@@ -584,7 +585,7 @@ namespace LELEngine.Rendering
 			// after the first pass starts it, flushing after every pass costs more than it gains.
 			if (Settings.FlushBetweenPasses || (Settings.FlushAfterFirstPass && executed == 1))
 			{
-				GL.Flush();
+				Gfx.Device.Flush();
 			}
 
 			return executed;
@@ -815,7 +816,7 @@ namespace LELEngine.Rendering
 					}
 
 					RenderTexture texture = camera.targetTexture;
-					if (texture.Handle == 0 || texture.Width <= 0 || texture.Height <= 0)
+					if (texture.Gpu == null || texture.Width <= 0 || texture.Height <= 0)
 					{
 						continue;
 					}
@@ -928,6 +929,51 @@ namespace LELEngine.Rendering
 			dumpTarget.Validate();
 		}
 
+		/// <summary>
+		///     Begins a render pass into the frame's final destination (<see cref="OutputTarget" />, or the window's back
+		///     buffer with a viewport of the output's size). The colour is loaded or cleared as asked; the depth too when
+		///     the output target has one (the back buffer has none).
+		/// </summary>
+		public void BeginOutput(LoadOperation color = LoadOperation.Load, ClearValue clearColor = default, LoadOperation depth = LoadOperation.Load, float clearDepth = 1f)
+		{
+			if (OutputTarget != null)
+			{
+				OutputTarget.Begin(color, clearColor, depth, clearDepth);
+			}
+			else
+			{
+				CommandList commands = Gfx.Commands;
+				commands.BeginRenderPass(Gfx.Device.Backbuffer, null, color, clearColor);
+				commands.SetViewport(0, 0, Width, Height);
+			}
+		}
+
+		/// <summary>
+		///     Begins a render pass into a framebuffer for draws whose materials may make textures on the way: a texture's
+		///     first use uploads it and generates its mip levels, and that ends the open pass (it is not a draw).
+		///     <see cref="ContinuePass" /> before such a draw begins the pass again when that happened, keeping what the
+		///     target holds. The target is forgotten when the pass of the renderer that began it returns.
+		/// </summary>
+		public static void BeginPass(Framebuffer target, LoadOperation color = LoadOperation.Load, ClearValue clearColor = default, LoadOperation depth = LoadOperation.Load, float clearDepth = 1f)
+		{
+			passTarget = target;
+			target.Begin(color, clearColor, depth, clearDepth);
+		}
+
+		/// <summary>
+		///     The pass begun with <see cref="BeginPass" /> is open for the draw that follows: begun again, loading its
+		///     target, when something given since ended it. Nothing happens while a pass is open or outside
+		///     <see cref="BeginPass" />.
+		/// </summary>
+		public static void ContinuePass()
+		{
+			if (passTarget != null && !Gfx.Commands.InRenderPass)
+			{
+				passTarget.Begin();
+			}
+		}
+
+		// LEGACY(gl): used by UIRenderPass.cs, and here for FrameDumper
 		/// <summary>Binds the frame's final destination (<see cref="OutputTarget" /> or the default framebuffer).</summary>
 		public void BindOutput()
 		{

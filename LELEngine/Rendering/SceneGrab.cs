@@ -84,15 +84,6 @@ namespace LELEngine.Rendering
 	{
 		#region PublicFields
 
-		/// <summary>Texture unit of the grab in the drawing shader: above every unit the engine's lighting uses when the context has it.</summary>
-		public const int PreferredTextureUnit = 21;
-
-		/// <summary>
-		///     The unit the grab binds to: <see cref="PreferredTextureUnit" />, or on a context with fewer units the GI
-		///     resolve's normals unit, which no transparent material samples (they light from the GI volume).
-		/// </summary>
-		public static int TextureUnit => PreferredTextureUnit < GLCapabilities.MaxTextureUnits ? PreferredTextureUnit : Lighting.ResolveNormalTextureUnit;
-
 		/// <summary>Copies made last frame and the pixels they copied (stats).</summary>
 		public int CopyCount { get; private set; }
 
@@ -121,32 +112,33 @@ namespace LELEngine.Rendering
 
 		/// <summary>
 		///     Copies the scene target into the grab inside <paramref name="count" /> rectangles of
-		///     <paramref name="rects" /> from <paramref name="start" />, then binds the scene target again. Leaves blending,
-		///     depth testing and face culling off and another program bound.
+		///     <paramref name="rects" /> from <paramref name="start" />, then begins a pass into the scene target again
+		///     (<see cref="Renderer.BeginPass" />). Leaves blending, depth testing and face culling off and another program
+		///     in use.
 		/// </summary>
 		public void Copy(RenderContext context, List<PixelRect> rects, int start, int count)
 		{
 			EnsureTarget(context.SceneTarget.Width, context.SceneTarget.Height);
 			copyProgram ??= new ShaderProgram("Engine/SceneGrab.shader");
-			target.Bind();
-			GL.Disable(EnableCap.Blend);
-			GL.Disable(EnableCap.DepthTest);
-			GL.Disable(EnableCap.CullFace);
-			GL.Enable(EnableCap.ScissorTest);
+			CommandList commands = Gfx.Commands;
+			target.Begin();
+			commands.State.Blend = false;
+			commands.State.DepthTest = false;
+			commands.State.Culling = FaceCulling.None;
 			copyProgram.Use();
-			copyProgram.SetTexture("SceneColor", TextureTarget.Texture2D, context.SceneColor.Handle, 0);
-			copyProgram.SetTexture("SceneDepth", TextureTarget.Texture2D, context.SceneDepth.Handle, 1);
+			copyProgram.SetTexture("SceneColor", context.SceneColor);
+			copyProgram.SetTexture("SceneDepth", context.SceneDepth);
 			copyProgram.SetVector4("depthParams", DepthParams(context.Projection));
 			for (int i = start; i < start + count; i++)
 			{
 				PixelRect rect = rects[i];
-				GL.Scissor(rect.X0, rect.Y0, rect.X1 - rect.X0, rect.Y1 - rect.Y0);
+				commands.SetScissor(rect.X0, rect.Y0, rect.X1 - rect.X0, rect.Y1 - rect.Y0);
 				context.Fullscreen.Draw();
 				CopiedPixels += rect.Area;
 			}
 
-			GL.Disable(EnableCap.ScissorTest);
-			context.SceneTarget.Bind();
+			commands.DisableScissor();
+			Renderer.BeginPass(context.SceneTarget);
 			CopyCount++;
 		}
 
@@ -165,7 +157,7 @@ namespace LELEngine.Rendering
 			int height = target.Height;
 			float inverseWidth = 1f / width;
 			float inverseHeight = 1f / height;
-			program.SetTexture("lelGrabTexture", TextureTarget.Texture2D, target.ColorAttachments[0].Handle, TextureUnit);
+			program.SetTexture("lelGrabTexture", target.ColorAttachments[0]);
 			program.SetVector4("lelGrabRect", new Vector4((readable.X0 + 0.5f) * inverseWidth, (readable.Y0 + 0.5f) * inverseHeight, (readable.X1 - 0.5f) * inverseWidth, (readable.Y1 - 0.5f) * inverseHeight));
 			program.SetVector4("lelGrabScreen", new Vector4(width, height, inverseWidth, inverseHeight));
 			program.SetVector4("lelGrabDepth", DepthParams(context.Projection));

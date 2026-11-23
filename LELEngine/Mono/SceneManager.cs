@@ -641,10 +641,10 @@ namespace LELEngine
 
 						break;
 					case Texture texture:
-						_ = texture.Handle;
+						_ = texture.Gpu;
 						break;
 					case Sprite sprite:
-						_ = sprite.texture?.Handle;
+						_ = sprite.texture?.Gpu;
 						break;
 					case Mesh mesh:
 						GeometryPool.Prepare(mesh);

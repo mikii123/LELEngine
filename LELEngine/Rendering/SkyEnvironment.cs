@@ -15,7 +15,13 @@ namespace LELEngine.Rendering
 		#region PublicFields
 
 		public static bool Enabled { get; private set; }
-		public static int CubemapHandle { get; private set; }
+
+		/// <summary>The GI's sky cubemap of this frame's skybox (null without one).</summary>
+		public static GpuTexture CubemapTexture { get; private set; }
+
+		// LEGACY(gl): used by Lighting.cs
+		public static int CubemapHandle => CubemapTexture is Graphics.OpenGL.GLTexture texture ? texture.Handle : 0;
+
 		public static Vector4 TintExposure { get; private set; } = Vector4.One;
 		public static Vector2 Rotation { get; private set; } = new Vector2(1f, 0f);
 
@@ -26,8 +32,11 @@ namespace LELEngine.Rendering
 		/// <summary>Texels across a face of the GI's sky cubemap (mip 0).</summary>
 		public const int FaceSize = 128;
 
-		/// <summary>A 1x1 black cubemap bound when no skybox is set (the sampler stays complete).</summary>
-		public static int BlackCubemapHandle => (blackCubemap ??= new Cubemap(1, "black sky", false)).Handle;
+		/// <summary>A 1x1 black cubemap sampled when no skybox is set (the sampler stays complete).</summary>
+		public static GpuTexture BlackCubemapTexture => (blackCubemap ??= new Cubemap(1, "black sky", false)).Gpu;
+
+		// LEGACY(gl): used by Lighting.cs
+		public static int BlackCubemapHandle => BlackCubemapTexture is Graphics.OpenGL.GLTexture texture ? texture.Handle : 0;
 
 		#endregion
 
@@ -35,8 +44,8 @@ namespace LELEngine.Rendering
 
 		private static Cubemap blackCubemap;
 		private static ComputeShader resample;
-		private static int lightingHandle;
-		private static int lightingSource;
+		private static GpuTexture lightingTexture;
+		private static GpuTexture lightingSource;
 		private static int lightingSourceSize;
 		private static Texture2D panoramaSource;
 		private static Cubemap panoramaCubemap;
@@ -80,7 +89,7 @@ namespace LELEngine.Rendering
 				cubemap = PanoramaCubemap(panorama);
 			}
 
-			if (cubemap == null || cubemap.Handle == 0)
+			if (cubemap == null || cubemap.Gpu == null)
 			{
 				return;
 			}
@@ -88,8 +97,8 @@ namespace LELEngine.Rendering
 			Color4 tint = skybox.GetColor("Tint", Color4.White);
 			float exposure = skybox.GetFloat("Exposure", 1f);
 			float rotation = skybox.GetFloat("Rotation", 0f) * (float)(Math.PI / 180.0);
-			CubemapHandle = LightingCubemap(cubemap);
-			if (CubemapHandle == 0)
+			CubemapTexture = LightingCubemap(cubemap);
+			if (CubemapTexture == null)
 			{
 				return;
 			}
@@ -110,13 +119,10 @@ namespace LELEngine.Rendering
 			panoramaCubemap?.Release();
 			panoramaCubemap = null;
 			panoramaSource = null;
-			if (lightingHandle != 0)
-			{
-				GL.DeleteTexture(lightingHandle);
-				lightingHandle = 0;
-			}
-
-			lightingSource = 0;
+			lightingTexture?.Dispose();
+			lightingTexture = null;
+			CubemapTexture = null;
+			lightingSource = null;
 		}
 
 		#endregion
@@ -129,51 +135,43 @@ namespace LELEngine.Rendering
 		///     how the skybox is imported for display: a skybox without mips (or point filtered) read at full
 		///     resolution put a sharp sky into every rough surface's reflection.
 		/// </summary>
-		private static int LightingCubemap(Cubemap source)
+		private static GpuTexture LightingCubemap(Cubemap source)
 		{
-			int sourceHandle = source.Handle;
-			if (lightingHandle != 0 && lightingSource == sourceHandle && lightingSourceSize == source.size)
+			GpuTexture sourceTexture = source.Gpu;
+			if (lightingTexture != null && lightingSource == sourceTexture && lightingSourceSize == source.size)
 			{
-				return lightingHandle;
+				return lightingTexture;
 			}
 
 			resample ??= new ComputeShader("Engine/SkyLighting.shader");
 			if (!resample.Program.IsLinked)
 			{
-				return 0;
+				return null;
 			}
 
-			if (lightingHandle == 0)
+			if (lightingTexture == null)
 			{
-				lightingHandle = GL.GenTexture();
-				GL.BindTexture(TextureTarget.TextureCubeMap, lightingHandle);
 				int levels = (int)MathF.Log2(FaceSize) + 1;
-				GL.TexStorage2D(TextureTarget2d.TextureCubeMap, levels, SizedInternalFormat.Rgba16f, FaceSize, FaceSize);
-				GL.TexParameter(TextureTarget.TextureCubeMap, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.LinearMipmapLinear);
-				GL.TexParameter(TextureTarget.TextureCubeMap, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Linear);
-				GL.TexParameter(TextureTarget.TextureCubeMap, TextureParameterName.TextureWrapS, (int)TextureWrapMode.ClampToEdge);
-				GL.TexParameter(TextureTarget.TextureCubeMap, TextureParameterName.TextureWrapT, (int)TextureWrapMode.ClampToEdge);
-				GL.TexParameter(TextureTarget.TextureCubeMap, TextureParameterName.TextureWrapR, (int)TextureWrapMode.ClampToEdge);
+				lightingTexture = Gfx.Device.CreateTexture(TextureDescriptor.Cube(TextureFormat.RGBA16F, FaceSize, levels, TextureUsage.Sampled | TextureUsage.Storage, "GI sky"));
+				lightingTexture.Sampler = Samplers.TrilinearClamp;
 			}
 
 			// Taps per output texel and axis: one per source texel up to 16 (a 4096 face: 16 x 16 points of 32 x 32).
 			int taps = Math.Clamp(source.size / FaceSize, 1, 16);
 			float sourceLod = source.mipmapEnabled ? Math.Max(0f, MathF.Log2(Math.Max(1f, (float)source.size / (FaceSize * taps)))) : 0f;
 			resample.Use();
-			resample.Program.SetTexture("Source", TextureTarget.TextureCubeMap, sourceHandle, 0);
+			CommandList commands = Gfx.Commands;
+			resample.Program.SetTexture("Source", sourceTexture);
 			resample.Program.SetInt("faceSize", FaceSize);
 			resample.Program.SetInt("taps", taps);
 			resample.Program.SetFloat("sourceLod", sourceLod);
-			GL.BindImageTexture(0, lightingHandle, 0, true, 0, TextureAccess.WriteOnly, SizedInternalFormat.Rgba16f);
+			commands.SetImage(0, lightingTexture, 0, -1, ImageAccess.Write);
 			resample.DispatchThreads(FaceSize, FaceSize, 6, 8, 8, 1);
-			GL.MemoryBarrier(MemoryBarrierFlags.TextureFetchBarrierBit | MemoryBarrierFlags.ShaderImageAccessBarrierBit);
-			GL.BindImageTexture(0, 0, 0, false, 0, TextureAccess.WriteOnly, SizedInternalFormat.Rgba16f);
-			GL.BindTexture(TextureTarget.TextureCubeMap, lightingHandle);
-			GL.GenerateMipmap(GenerateMipmapTarget.TextureCubeMap);
-			GL.BindTexture(TextureTarget.TextureCubeMap, 0);
-			lightingSource = sourceHandle;
+			commands.SetImage(0, null);
+			commands.GenerateMipmaps(lightingTexture);
+			lightingSource = sourceTexture;
 			lightingSourceSize = source.size;
-			return lightingHandle;
+			return lightingTexture;
 		}
 
 		/// <summary>The cubemap of an equirectangular skybox texture (built once per source image).</summary>
