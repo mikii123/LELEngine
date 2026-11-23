@@ -293,6 +293,7 @@ namespace LELEngine.Graphics.Vulkan
 				return;
 			}
 
+			device.BeforeUpload(expected);
 			byte* staging = device.AllocateTransient(expected, 16, out VkBuffer buffer, out long offset);
 			if (packedDepth)
 			{
@@ -461,9 +462,18 @@ namespace LELEngine.Graphics.Vulkan
 				InitialLayout = VkImageLayout.Undefined
 			};
 			VmaAllocationCreateInfo allocationInfo = new VmaAllocationCreateInfo { Usage = VmaMemoryUsage.Auto };
+			// The scratch image lives until the submission has finished: it counts as the uploads' memory does.
+			long scratchBytes = 0;
+			for (int level = 0; level < MipLevels; level++)
+			{
+				scratchBytes += Format.LevelSize(MipWidth(level), MipHeight(level), volume ? MipDepth(level) : 1) * (volume ? 1 : Layers);
+			}
+
+			device.BeforeUpload(scratchBytes);
 			VkImage scratch;
 			VmaAllocation scratchAllocation;
 			VulkanDevice.Check(Vma.PInvoke.vmaCreateImage(device.Allocator, &info, &allocationInfo, &scratch, &scratchAllocation, default), "vmaCreateImage (mip levels of " + Name + ")");
+			device.AddRecordingMemory(scratchBytes);
 			VkImageCopy* regions = stackalloc VkImageCopy[MipLevels];
 			for (int level = 0; level < MipLevels; level++)
 			{
@@ -888,6 +898,7 @@ namespace LELEngine.Graphics.Vulkan
 				return;
 			}
 
+			device.BeforeUpload(size);
 			byte* staging = device.AllocateTransient(size, 16, out VkBuffer source, out long sourceOffset);
 			Buffer.MemoryCopy(data, staging, size, size);
 			VkCommandBuffer commands = device.CommandList.UploadCommands(this);
