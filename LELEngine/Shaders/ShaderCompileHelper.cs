@@ -143,6 +143,13 @@ namespace LELEngine.Shaders
 		/// </summary>
 		internal static Run TryStart(IReadOnlyList<ShaderVariant> variants, bool gpuDriven)
 		{
+			// The helper is for OpenGL drivers that hold a process while one of its contexts compiles: on another API the
+			// device builds its programs beside the frames itself.
+			if (GraphicsDevice.CurrentApi != GraphicsApi.OpenGL)
+			{
+				return null;
+			}
+
 			if (string.IsNullOrEmpty(Executable) || !File.Exists(Executable) || !ProgramBinaryCache.Enabled || variants.Count == 0)
 			{
 				return null;

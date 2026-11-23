@@ -33,25 +33,8 @@ namespace LELEngine
 		{
 			Console.WriteLine("LELEngine\nCopyright LELDev Studio\nInitializing...");
 
-			// Ask for the newest OpenGL version first and step down to the 4.3 minimum when the driver refuses.
-			Version version = Window.PreferredApiVersion;
-			while (true)
-			{
-				try
-				{
-					Mono = new GameHost(options, version);
-					return;
-				}
-				catch (Exception e) when (version > Window.MinimumApiVersion)
-				{
-					Console.WriteLine($"[Window] OpenGL {version} context unavailable ({e.GetType().Name}), trying an older version");
-					version = version.Minor > 0 ? new Version(version.Major, version.Minor - 1) : Window.MinimumApiVersion;
-					if (version < Window.MinimumApiVersion)
-					{
-						version = Window.MinimumApiVersion;
-					}
-				}
-			}
+			// On the graphics API that was asked for (Graphics.GraphicsDevice.RequestedApi) where this machine has it.
+			Mono = Window.Open(version => new GameHost(options, version));
 		}
 
 		#endregion

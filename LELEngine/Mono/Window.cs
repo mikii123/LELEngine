@@ -58,6 +58,48 @@ namespace LELEngine
 		/// </summary>
 		public static double FixedDeltaTime { get; set; }
 
+		/// <summary>
+		///     Opens a window on the graphics API that was asked for (<see cref="GraphicsDevice.RequestedApi" />), as far
+		///     as this machine has it: when the Vulkan device cannot be made the window is made again for OpenGL
+		///     (<see cref="GraphicsDevice.RequestedApi" /> says so after), and OpenGL is asked for at its newest version
+		///     first, stepping down to the oldest the engine runs on while the driver refuses.
+		/// </summary>
+		/// <param name="create">Makes the window; the version is the OpenGL context's (Vulkan windows ignore it).</param>
+		public static T Open<T>(Func<Version, T> create)
+		{
+			if (GraphicsDevice.Current == null && GraphicsDevice.RequestedApi == GraphicsApi.Vulkan)
+			{
+				try
+				{
+					return create(PreferredApiVersion);
+				}
+				catch (GraphicsApiUnavailableException e)
+				{
+					Console.WriteLine($"[Window] {e.Message}; using OpenGL");
+					GraphicsDevice.RequestedApi = GraphicsApi.OpenGL;
+					GraphicsDevice.FellBackFrom = GraphicsApi.Vulkan;
+				}
+			}
+
+			Version version = PreferredApiVersion;
+			while (true)
+			{
+				try
+				{
+					return create(version);
+				}
+				catch (Exception e) when (version > MinimumApiVersion && GraphicsDevice.CurrentApi == GraphicsApi.OpenGL && !(e is GraphicsApiUnavailableException))
+				{
+					Console.WriteLine($"[Window] OpenGL {version} context unavailable ({e.GetType().Name}), trying an older version");
+					version = version.Minor > 0 ? new Version(version.Major, version.Minor - 1) : MinimumApiVersion;
+					if (version < MinimumApiVersion)
+					{
+						version = MinimumApiVersion;
+					}
+				}
+			}
+		}
+
 		public Window(int width, int height, string title)
 			: this(width, height, title, PreferredApiVersion)
 		{ }

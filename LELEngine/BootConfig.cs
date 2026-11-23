@@ -34,6 +34,12 @@ namespace LELEngine
 		/// <summary>The game keeps running while its window is not focused.</summary>
 		public bool RunInBackground { get; set; } = true;
 
+		/// <summary>
+		///     The graphics API the game starts on, "OpenGL" or "Vulkan" (the project's Graphics setting when it was
+		///     built): the window is made before the project settings are read.
+		/// </summary>
+		public string GraphicsApi { get; set; } = "OpenGL";
+
 		/// <summary>What the window shows while the start scene loads (null: black, no minimum duration).</summary>
 		public SplashScreenConfig SplashScreen { get; set; }
 

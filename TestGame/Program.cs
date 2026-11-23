@@ -50,6 +50,7 @@ namespace TestGame
 		///            Ghosting measurements (GhostTest): [emitterstep=frame] [emitteroff=frame]
 		///            [mover=frame] [moverz=path depth] [moveremission=intensity] [regions=x,y,z;x,y,z;...] [regionsize=px] [regionstart=frame] [regionsource=scene|gi]
 		///            [noise=frames] [noisestart=frame]
+		///            [graphics=opengl|vulkan the graphics API] [hidden=1 the window never shows] [fixeddt=seconds every frame advances by]
 		///            Fallback tests: environment LEL_GL_DISABLE=drawparameters,indirectparameters,subgroups
 		///     Loads the GI test room with the FPS controller.
 		/// </summary>
@@ -63,6 +64,20 @@ namespace TestGame
 			Window.StartHidden = GetBool(args, "hidden", false);
 			// fixeddt=0.0166667: every frame advances the game by the same time (frame dumps that repeat).
 			Window.FixedDeltaTime = GetFloat(args, "fixeddt", 0f);
+			// graphics=opengl|vulkan: the graphics API (OpenGL when a Vulkan device cannot be made).
+			string graphics = GetValue(args, "graphics");
+			if (graphics != null)
+			{
+				if (LELEngine.Graphics.GraphicsDevice.TryParseApi(graphics, out LELEngine.Graphics.GraphicsApi api))
+				{
+					LELEngine.Graphics.GraphicsDevice.RequestedApi = api;
+				}
+				else
+				{
+					Console.WriteLine($"[TestGame] Unknown graphics API '{graphics}': OpenGL");
+				}
+			}
+
 			Game.CreateWindow(1280, 720, "LELEngine");
 
 			// outdoor=1: the open-sky yard, with the procedural skybox unless sky=0.

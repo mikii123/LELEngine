@@ -17,6 +17,7 @@ namespace LELEngine.Player
 	///     Command line overrides (testing): data=folder game=assembly.dll scene=assetPath fullscreen=0|1
 	///     screenshot=folder screenshotframe=N exitframe=N focus=0 shadercache=0 (no program binary cache)
 	///     vsync=0|1 (else Project Settings > Graphics > VSync) shaderhelper=0 (no compile helper process)
+	///     graphics=opengl|vulkan (else the API the game was built for: Project Settings > Graphics > Graphics API)
 	///     ssaa=factor ssaafilter=gaussian|area|lanczos ssaasmooth=0..1 (else Project Settings > Graphics > Super Sampling).
 	///     compileshaders=requestFile runs the game as its own shader compile helper (<see cref="Shaders.ShaderCompileHelper" />).
 	///     Linked shader programs are kept as the driver's binaries in the user's local app data
@@ -158,6 +159,18 @@ namespace LELEngine.Player
 			bool full = fullscreen != null ? fullscreen == "1" : savedMode ? PlayerPrefs.GetInt(Screen.FullScreenKey) != 0 : boot.Fullscreen;
 			Log($"Window {width}x{height} {(full ? "full screen" : "windowed")}" + (fullscreen != null ? " (command line)" : savedSize || savedMode ? " (the game's last choice, PlayerPrefs)" : ""));
 
+			// The graphics API the game was built for (Project Settings > Graphics, in boot.json: the window comes before
+			// the project settings are read); graphics=opengl / vulkan wins.
+			string graphics = GetValue(args, "graphics");
+			if (Graphics.GraphicsDevice.TryParseApi(graphics ?? boot.GraphicsApi, out Graphics.GraphicsApi api))
+			{
+				Graphics.GraphicsDevice.RequestedApi = api;
+			}
+			else
+			{
+				Log($"Unknown graphics API '{graphics ?? boot.GraphicsApi}'" + (graphics != null ? " (command line)" : " in " + BootConfig.FileName) + ": OpenGL");
+			}
+
 			// The window opens hidden and at its final size and state; it appears with the splash screen drawn, so its
 			// first image is never blank. The engine's shaders compile later, on the loader thread.
 			Window.StartFocused = GetValue(args, "focus") != "0";
@@ -172,6 +185,8 @@ namespace LELEngine.Player
 				CreateRenderer = false
 			});
 			GameHost host = Game.Mono;
+			Log("Graphics API " + Graphics.GraphicsDevice.CurrentApi + (graphics != null ? " (command line)" : "")
+				+ (Graphics.GraphicsDevice.FellBackFrom.HasValue ? $" ({Graphics.GraphicsDevice.FellBackFrom} is not available on this machine)" : ""));
 
 			// Full screen opens at the display's own mode: a smaller mode the game chose is set again.
 			if (full && savedSize)

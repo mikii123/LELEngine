@@ -48,7 +48,7 @@ namespace LELEngine.Editor
 	///                         baked to KTX, models' GI distance fields next to them (.sdf)
 	///       ProjectSettings.asset  physics and lighting quality (binary)
 	///       Splash.bmp        the splash screen's logo baked over its background color (when it has one)
-	///       boot.json         start scene, window title, splash screen
+	///       boot.json         start scene, window title, graphics API, splash screen
 	///     </code>
 	///     Runs on a background thread; <paramref name="log" /> is called from it.
 	/// </summary>
@@ -373,7 +373,10 @@ namespace LELEngine.Editor
 			// 6. Splash screen: in boot.json and Splash.bmp, so the player shows it before it reads any asset.
 			SplashScreenConfig splash = BakeSplashScreen(project, output, log);
 
-			// 7. Boot configuration.
+			// 7. Boot configuration. The graphics API is in it too: the player opens its window, on that API, before it
+			//    reads the project settings.
+			Graphics.GraphicsApi graphicsApi = (ReadProjectSettings(project).Graphics ?? new GraphicsSettings()).GraphicsApi;
+			log("Graphics API: " + graphicsApi + ".");
 			new BootConfig
 			{
 				DataFolder = "Data",
@@ -382,6 +385,7 @@ namespace LELEngine.Editor
 				ProjectSettings = ProjectSettings.FileName,
 				Title = project.Name,
 				RunInBackground = project.RunInBackground,
+				GraphicsApi = graphicsApi.ToString(),
 				SplashScreen = splash
 			}.Save(Path.Combine(output, BootConfig.FileName));
 
@@ -563,6 +567,18 @@ namespace LELEngine.Editor
 			}
 		}
 
+		/// <summary>The project's settings as saved: the file the build ships (the defaults when the project has none).</summary>
+		private static ProjectSettings ReadProjectSettings(ProjectInfo project)
+		{
+			var projectSettings = new ProjectSettings();
+			if (File.Exists(project.ProjectSettingsFile))
+			{
+				projectSettings = Documents.ReadObject(File.ReadAllBytes(project.ProjectSettingsFile), typeof(ProjectSettings), projectSettings) as ProjectSettings ?? projectSettings;
+			}
+
+			return projectSettings;
+		}
+
 		/// <summary>
 		///     The project's splash screen for boot.json (null when it is off), its logo composited over the background
 		///     color into Splash.bmp. Read from the saved settings file, the one the build ships.
@@ -576,13 +592,7 @@ namespace LELEngine.Editor
 				File.Delete(imageFile);
 			}
 
-			var projectSettings = new ProjectSettings();
-			if (File.Exists(project.ProjectSettingsFile))
-			{
-				projectSettings = Documents.ReadObject(File.ReadAllBytes(project.ProjectSettingsFile), typeof(ProjectSettings), projectSettings) as ProjectSettings ?? projectSettings;
-			}
-
-			SplashScreenSettings splash = projectSettings.SplashScreen ?? new SplashScreenSettings();
+			SplashScreenSettings splash = ReadProjectSettings(project).SplashScreen ?? new SplashScreenSettings();
 			if (!splash.Enabled)
 			{
 				log("Splash screen: off.");

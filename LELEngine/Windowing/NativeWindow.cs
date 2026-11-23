@@ -194,7 +194,21 @@ namespace LELEngine.Windowing
 			{
 				// The graphics device starts with the process's first window that draws; the window's context is
 				// current on this thread from here on.
-				Context = Graphics.GraphicsDevice.CreateContext(this, settings);
+				try
+				{
+					Context = Graphics.GraphicsDevice.CreateContext(this, settings);
+				}
+				catch
+				{
+					// No window is left behind: the caller may make it again for another graphics API.
+					disposed = true;
+					windows.TryRemove(Handle.NativeHandle, out _);
+					Handle.Dispose();
+					Exists = false;
+					GC.SuppressFinalize(this);
+					throw;
+				}
+
 				Context.MakeCurrent();
 			}
 

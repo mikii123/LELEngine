@@ -55,6 +55,13 @@ namespace LELEngine
 		#region PublicFields
 
 		/// <summary>
+		///     The graphics API the game draws with: a build starts on it (boot.json; graphics=opengl / vulkan on the
+		///     player's command line overrides), and the editor runs a project on its API. A machine that cannot make a
+		///     Vulkan device runs the game on OpenGL instead.
+		/// </summary>
+		public Graphics.GraphicsApi GraphicsApi = Graphics.GraphicsApi.OpenGL;
+
+		/// <summary>
 		///     A built game waits for the display's refresh to show a frame (no tearing, frames shown evenly, the game's
 		///     time steps snapped to the refresh). Off: it renders as fast as it can, and a display slower than that shows
 		///     frames at uneven moments. The editor always waits. The player's command line overrides it (vsync=0 / 1).

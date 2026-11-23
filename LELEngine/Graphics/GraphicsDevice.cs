@@ -77,6 +77,12 @@ namespace LELEngine.Graphics
 		/// <summary>The API the device will be made for; changing it after the first window has no effect.</summary>
 		public static GraphicsApi RequestedApi { get; set; } = GraphicsApi.OpenGL;
 
+		/// <summary>
+		///     The API that was asked for and could not be had on this machine, when the device was made for another
+		///     one instead (<see cref="Window.Open{T}" />); null when the device is what was asked for.
+		/// </summary>
+		public static GraphicsApi? FellBackFrom { get; internal set; }
+
 		public static GraphicsDevice Current { get; private set; }
 
 		/// <summary>The device's API, or the requested one while there is no device.</summary>
@@ -142,7 +148,22 @@ namespace LELEngine.Graphics
 		{
 			if (Current == null)
 			{
-				Current = RequestedApi == GraphicsApi.Vulkan ? CreateVulkanDevice(window) : new OpenGL.GLDevice();
+				if (RequestedApi == GraphicsApi.Vulkan)
+				{
+					try
+					{
+						Current = CreateVulkanDevice(window);
+					}
+					catch (Exception e)
+					{
+						// No loader, no driver, or a GPU without what the engine needs: the caller may take another API.
+						throw new GraphicsApiUnavailableException(GraphicsApi.Vulkan, e);
+					}
+				}
+				else
+				{
+					Current = new OpenGL.GLDevice();
+				}
 			}
 
 			return Current.CreateWindowContext(window, settings);
@@ -169,6 +190,22 @@ namespace LELEngine.Graphics
 					api = GraphicsApi.OpenGL;
 					return false;
 			}
+		}
+	}
+
+	/// <summary>
+	///     The device of the API that was asked for cannot be made on this machine (the cause is the inner exception).
+	///     No device exists after it: <see cref="GraphicsDevice.RequestedApi" /> may name another API and the window be
+	///     made again (<see cref="Window.Open{T}" /> does).
+	/// </summary>
+	public sealed class GraphicsApiUnavailableException : Exception
+	{
+		public GraphicsApi Api { get; }
+
+		public GraphicsApiUnavailableException(GraphicsApi api, Exception cause)
+			: base($"{api} is not available: {cause?.Message}", cause)
+		{
+			Api = api;
 		}
 	}
 
