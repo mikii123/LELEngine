@@ -4,9 +4,9 @@ using LELEngine.Graphics;
 namespace LELEngine.Rendering
 {
 	/// <summary>
-	///     GPU time per named section using GL_TIME_ELAPSED queries, plus GL_TIMESTAMP pairs per section and per
-	///     frame that show the frame's GPU timeline: idle before the first section (head), between sections
-	///     (gaps) and after the last one (tail). Results are read back a few frames later so the CPU never
+	///     GPU time per named section from a pair of stamps of the GPU's clock (its start and its end), plus a pair
+	///     per frame; together they show the frame's GPU timeline: idle before the first section (head), between
+	///     sections (gaps) and after the last one (tail). Results are read back a few frames later so the CPU never
 	///     stalls on the GPU; they lag by up to three frames.
 	/// </summary>
 	public sealed class GpuProfiler
@@ -46,7 +46,10 @@ namespace LELEngine.Rendering
 			}
 		}
 
-		/// <summary>Per section: wall time minus our execution time (GPU given to other contexts), in Begin() order.</summary>
+		/// <summary>
+		///     Per section: wall time minus our execution time (GPU given to other contexts), in Begin() order. A
+		///     section's time is the wall time between its stamps, so this is 0.
+		/// </summary>
 		public IReadOnlyList<KeyValuePair<string, double>> Foreign
 		{
 			get
@@ -77,13 +80,12 @@ namespace LELEngine.Rendering
 		public double FrameWallMilliseconds { get; private set; }
 
 		/// <summary>
-		///     Sum over sections of (end stamp - start stamp). Exceeds <see cref="TotalMilliseconds" /> by the time
-		///     the GPU spent inside our sections on something else: other contexts (desktop compositor, other
-		///     applications) or stalls that GL_TIME_ELAPSED does not attribute to us.
+		///     Sum over sections of (end stamp - start stamp): it includes what the GPU spent inside our sections on
+		///     something else (the desktop compositor, other applications).
 		/// </summary>
 		public double SectionWallMilliseconds { get; private set; }
 
-		/// <summary>Sum of the sections' GL_TIME_ELAPSED results from the same frame as the timeline stamps.</summary>
+		/// <summary>Sum of the sections' times from the same frame as the timeline stamps.</summary>
 		public double SectionElapsedMilliseconds { get; private set; }
 
 		/// <summary>GPU time between the frame start stamp and the first section (idle: waiting for commands).</summary>
@@ -109,8 +111,8 @@ namespace LELEngine.Rendering
 		private Entry active;
 		private int frame;
 
-		private readonly int[] frameStartQueries = new int[FramesInFlight];
-		private readonly int[] frameEndQueries = new int[FramesInFlight];
+		private readonly GpuTimestamp[] frameStartQueries = new GpuTimestamp[FramesInFlight];
+		private readonly GpuTimestamp[] frameEndQueries = new GpuTimestamp[FramesInFlight];
 		private readonly bool[] frameIssued = new bool[FramesInFlight];
 		private readonly int[] frameOfSlot = new int[FramesInFlight];
 		private bool frameQueriesCreated;
@@ -130,8 +132,8 @@ namespace LELEngine.Rendering
 
 			if (!frameQueriesCreated)
 			{
-				GL.GenQueries(FramesInFlight, frameStartQueries);
-				GL.GenQueries(FramesInFlight, frameEndQueries);
+				Create(frameStartQueries);
+				Create(frameEndQueries);
 				frameQueriesCreated = true;
 			}
 
@@ -141,7 +143,7 @@ namespace LELEngine.Rendering
 				return;
 			}
 
-			GL.QueryCounter(frameStartQueries[slot], QueryCounterTarget.Timestamp);
+			Gfx.Commands.WriteTimestamp(frameStartQueries[slot]);
 			frameOfSlot[slot] = frame;
 			frameOpen = true;
 		}
@@ -157,9 +159,8 @@ namespace LELEngine.Rendering
 			if (!entries.TryGetValue(name, out entry))
 			{
 				entry = new Entry();
-				GL.GenQueries(FramesInFlight, entry.Queries);
-				GL.GenQueries(FramesInFlight, entry.StartStamps);
-				GL.GenQueries(FramesInFlight, entry.EndStamps);
+				Create(entry.StartStamps);
+				Create(entry.EndStamps);
 				entries[name] = entry;
 				order.Add(name);
 			}
@@ -172,8 +173,7 @@ namespace LELEngine.Rendering
 				return;
 			}
 
-			GL.QueryCounter(entry.StartStamps[slot], QueryCounterTarget.Timestamp);
-			GL.BeginQuery(QueryTarget.TimeElapsed, entry.Queries[slot]);
+			Gfx.Commands.WriteTimestamp(entry.StartStamps[slot]);
 			entry.Issued[slot] = true;
 			entry.StampFrame[slot] = frame;
 			entry.UsedThisFrame = true;
@@ -187,14 +187,13 @@ namespace LELEngine.Rendering
 				return;
 			}
 
-			GL.EndQuery(QueryTarget.TimeElapsed);
-			GL.QueryCounter(active.EndStamps[frame % FramesInFlight], QueryCounterTarget.Timestamp);
+			Gfx.Commands.WriteTimestamp(active.EndStamps[frame % FramesInFlight]);
 			active = null;
 		}
 
 		/// <summary>
 		///     Ends the current section and starts a new one. Lets a pass break its time into sub-sections
-		///     (GL timer queries cannot nest). Does nothing when no section is active.
+		///     (sections do not nest). Does nothing when no section is active.
 		/// </summary>
 		public void Split(string name)
 		{
@@ -215,7 +214,7 @@ namespace LELEngine.Rendering
 			if (frameOpen)
 			{
 				int slot = frame % FramesInFlight;
-				GL.QueryCounter(frameEndQueries[slot], QueryCounterTarget.Timestamp);
+				Gfx.Commands.WriteTimestamp(frameEndQueries[slot]);
 				frameIssued[slot] = true;
 				frameOpen = false;
 			}
@@ -236,23 +235,42 @@ namespace LELEngine.Rendering
 		{
 			foreach (Entry entry in entries.Values)
 			{
-				GL.DeleteQueries(FramesInFlight, entry.Queries);
-				GL.DeleteQueries(FramesInFlight, entry.StartStamps);
-				GL.DeleteQueries(FramesInFlight, entry.EndStamps);
+				Delete(entry.StartStamps);
+				Delete(entry.EndStamps);
 			}
 			entries.Clear();
 			order.Clear();
+			active = null;
 			if (frameQueriesCreated)
 			{
-				GL.DeleteQueries(FramesInFlight, frameStartQueries);
-				GL.DeleteQueries(FramesInFlight, frameEndQueries);
+				Delete(frameStartQueries);
+				Delete(frameEndQueries);
 				frameQueriesCreated = false;
+				System.Array.Clear(frameIssued);
+				frameOpen = false;
 			}
 		}
 
 		#endregion
 
 		#region PrivateMethods
+
+		private static void Create(GpuTimestamp[] stamps)
+		{
+			for (int i = 0; i < stamps.Length; i++)
+			{
+				stamps[i] = Gfx.Device.CreateTimestamp();
+			}
+		}
+
+		private static void Delete(GpuTimestamp[] stamps)
+		{
+			for (int i = 0; i < stamps.Length; i++)
+			{
+				stamps[i]?.Dispose();
+				stamps[i] = null;
+			}
+		}
 
 		private void CollectSections()
 		{
@@ -272,16 +290,14 @@ namespace LELEngine.Rendering
 						continue;
 					}
 
-					int available;
-					GL.GetQueryObject(entry.Queries[slot], GetQueryObjectParam.QueryResultAvailable, out available);
-					if (available == 0)
+					// The end stamp is written after the start stamp: once it is there, both are.
+					if (!entry.EndStamps[slot].IsAvailable)
 					{
 						continue;
 					}
 
-					long nanoseconds;
-					GL.GetQueryObject(entry.Queries[slot], GetQueryObjectParam.QueryResult, out nanoseconds);
-					entry.Milliseconds = nanoseconds / 1_000_000.0;
+					long nanoseconds = entry.EndStamps[slot].Nanoseconds - entry.StartStamps[slot].Nanoseconds;
+					entry.Milliseconds = System.Math.Max(0L, nanoseconds) / 1_000_000.0;
 					entry.Issued[slot] = false;
 				}
 			}
@@ -302,9 +318,7 @@ namespace LELEngine.Rendering
 					continue;
 				}
 
-				int available;
-				GL.GetQueryObject(frameEndQueries[slot], GetQueryObjectParam.QueryResultAvailable, out available);
-				if (available == 0)
+				if (!frameEndQueries[slot].IsAvailable)
 				{
 					continue;
 				}
@@ -319,8 +333,7 @@ namespace LELEngine.Rendering
 					{
 						continue;
 					}
-					GL.GetQueryObject(entry.EndStamps[slot], GetQueryObjectParam.QueryResultAvailable, out available);
-					if (available == 0)
+					if (!entry.EndStamps[slot].IsAvailable)
 					{
 						complete = false;
 						break;
@@ -331,9 +344,8 @@ namespace LELEngine.Rendering
 					continue;
 				}
 
-				long frameStart, frameEnd;
-				GL.GetQueryObject(frameStartQueries[slot], GetQueryObjectParam.QueryResult, out frameStart);
-				GL.GetQueryObject(frameEndQueries[slot], GetQueryObjectParam.QueryResult, out frameEnd);
+				long frameStart = frameStartQueries[slot].Nanoseconds;
+				long frameEnd = frameEndQueries[slot].Nanoseconds;
 				frameIssued[slot] = false;
 
 				long firstStart = -1;
@@ -349,10 +361,9 @@ namespace LELEngine.Rendering
 						continue;
 					}
 
-					long start, end, elapsed;
-					GL.GetQueryObject(entry.StartStamps[slot], GetQueryObjectParam.QueryResult, out start);
-					GL.GetQueryObject(entry.EndStamps[slot], GetQueryObjectParam.QueryResult, out end);
-					GL.GetQueryObject(entry.Queries[slot], GetQueryObjectParam.QueryResult, out elapsed);
+					long start = entry.StartStamps[slot].Nanoseconds;
+					long end = entry.EndStamps[slot].Nanoseconds;
+					long elapsed = System.Math.Max(0L, end - start);
 					if (firstStart < 0)
 					{
 						firstStart = start;
@@ -382,9 +393,8 @@ namespace LELEngine.Rendering
 
 		private sealed class Entry
 		{
-			public readonly int[] Queries = new int[FramesInFlight];
-			public readonly int[] StartStamps = new int[FramesInFlight];
-			public readonly int[] EndStamps = new int[FramesInFlight];
+			public readonly GpuTimestamp[] StartStamps = new GpuTimestamp[FramesInFlight];
+			public readonly GpuTimestamp[] EndStamps = new GpuTimestamp[FramesInFlight];
 			public readonly bool[] Issued = new bool[FramesInFlight];
 			public readonly int[] StampFrame = new int[FramesInFlight];
 			public double Milliseconds;

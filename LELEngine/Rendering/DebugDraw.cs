@@ -196,9 +196,13 @@ void main()
 }
 ";
 
+		/// <summary>A position and a colour: seven floats a vertex.</summary>
+		private static readonly VertexInputLayout layout = new VertexInputLayout(7 * sizeof(float),
+			new VertexAttributeDescriptor(0, VertexFormat.Float3, 0),
+			new VertexAttributeDescriptor(1, VertexFormat.Float4, 3 * sizeof(float)));
+
 		private ShaderProgram program;
-		private int vao;
-		private int vbo;
+		private GpuBuffer vertexBuffer;
 		private int capacity;
 
 		#endregion
@@ -213,15 +217,7 @@ void main()
 			vertex.Delete();
 			fragment.Delete();
 
-			vao = GL.GenVertexArray();
-			vbo = GL.GenBuffer();
-			GL.BindVertexArray(vao);
-			GL.BindBuffer(BufferTarget.ArrayBuffer, vbo);
-			GL.EnableVertexAttribArray(0);
-			GL.VertexAttribPointer(0, 3, VertexAttribPointerType.Float, false, 7 * sizeof(float), 0);
-			GL.EnableVertexAttribArray(1);
-			GL.VertexAttribPointer(1, 4, VertexAttribPointerType.Float, false, 7 * sizeof(float), 3 * sizeof(float));
-			GL.BindVertexArray(0);
+			vertexBuffer = Gfx.Device.CreateBuffer(new BufferDescriptor(BufferUsage.Vertex, 0, true, "Debug draw vertices"));
 		}
 
 		public override void Execute(RenderContext context)
@@ -231,74 +227,58 @@ void main()
 				return;
 			}
 
-			context.SceneTarget.Bind();
-			GLState.SetDepth(true, false, DepthFunction.Lequal);
-			GLState.SetCull(false);
-			GLState.SetBlend(true);
+			CommandList commands = Gfx.Commands;
+			context.SceneTarget.Begin();
+			ref RenderState state = ref commands.State;
+			state.SetDepth(true, false, CompareFunction.LessEqual);
+			state.Culling = FaceCulling.None;
+			state.SetBlend(BlendFactor.SrcAlpha, BlendFactor.OneMinusSrcAlpha);
 			program.Use();
 			program.SetMatrix4("viewProjection", context.ViewProjection);
-			GL.BindVertexArray(vao);
-			GL.BindBuffer(BufferTarget.ArrayBuffer, vbo);
+			commands.SetVertexInput(layout);
 
 			if (DebugDraw.triangles.Count > 0)
 			{
-				GL.Enable(EnableCap.PolygonOffsetFill);
-				GL.PolygonOffset(-1f, -1f);
-				Draw(DebugDraw.triangles, PrimitiveType.Triangles);
-				GL.Disable(EnableCap.PolygonOffsetFill);
+				state.DepthBiasSlope = -1f;
+				state.DepthBiasConstant = -1f;
+				Draw(commands, DebugDraw.triangles, PrimitiveTopology.Triangles);
+				state.DepthBiasSlope = 0f;
+				state.DepthBiasConstant = 0f;
 			}
 
 			if (DebugDraw.lines.Count > 0)
 			{
-				Draw(DebugDraw.lines, PrimitiveType.Lines);
+				Draw(commands, DebugDraw.lines, PrimitiveTopology.Lines);
 			}
 
-			GL.BindVertexArray(0);
-			GLState.SetBlend(false);
-			GLState.SetCull(true);
-			GLState.SetDepth(true, true);
-			GLState.Reset();
+			state.Blend = false;
+			state.Culling = FaceCulling.Back;
+			state.SetDepth(true, true);
 		}
 
 		public override void Dispose()
 		{
 			program?.Delete();
 			program = null;
-			if (vbo != 0)
-			{
-				GL.DeleteBuffer(vbo);
-				vbo = 0;
-			}
-
-			if (vao != 0)
-			{
-				GL.DeleteVertexArray(vao);
-				vao = 0;
-			}
+			vertexBuffer?.Dispose();
+			vertexBuffer = null;
+			capacity = 0;
 		}
 
 		#endregion
 
 		#region PrivateMethods
 
-		private void Draw(List<float> data, PrimitiveType type)
+		private void Draw(CommandList commands, List<float> data, PrimitiveTopology topology)
 		{
 			int bytes = data.Count * sizeof(float);
-			float[] array = System.Runtime.InteropServices.CollectionsMarshal.AsSpan(data).ToArray();
-			if (bytes > capacity)
-			{
-				capacity = Math.Max(bytes, capacity * 2);
-				GL.BufferData(BufferTarget.ArrayBuffer, capacity, IntPtr.Zero, BufferUsageHint.StreamDraw);
-			}
-			else
-			{
-				// Orphan the store so the upload never waits for the previous frame's draw.
-				GL.BufferData(BufferTarget.ArrayBuffer, capacity, IntPtr.Zero, BufferUsageHint.StreamDraw);
-			}
+			capacity = bytes > capacity ? Math.Max(bytes, capacity * 2) : capacity;
 
-			GL.BufferSubData(BufferTarget.ArrayBuffer, IntPtr.Zero, bytes, array);
-			GL.DrawArrays(type, 0, data.Count / 7);
-			DrawStatistics.Draw(type == PrimitiveType.Triangles ? data.Count / 21 : 0);
+			// New storage with every upload, so it never waits for the previous draw.
+			vertexBuffer.SetData<float>(System.Runtime.InteropServices.CollectionsMarshal.AsSpan(data), capacity);
+			commands.SetVertexBuffer(0, vertexBuffer);
+			commands.Draw(data.Count / 7, 0, 1, 0, topology);
+			DrawStatistics.Draw(topology == PrimitiveTopology.Triangles ? data.Count / 21 : 0);
 		}
 
 		#endregion
