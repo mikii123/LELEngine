@@ -46,11 +46,11 @@ namespace LELEngine.Volumetrics
 		public const double WriteDelay = 1.0;
 
 		// What draws (complete textures).
-		public int Density;
-		public int Lit;
-		public int Occupancy;
-		public int LightsA;
-		public int LightsB;
+		public GpuTexture Density;
+		public GpuTexture Lit;
+		public GpuTexture Occupancy;
+		public GpuTexture LightsA;
+		public GpuTexture LightsB;
 		public Vector3i Resolution;
 		public Vector3i Blocks;
 		public Vector3 Size;
@@ -68,14 +68,14 @@ namespace LELEngine.Volumetrics
 		///     their colours, at the transport's resolution (0: none); the lights as it was worked out, and whether any of
 		///     them shines.
 		/// </summary>
-		public int LightsC;
+		public GpuTexture LightsC;
 		public readonly VolumeLightSlot[] BakedSlots = new VolumeLightSlot[VolumetricObjectBase.MaxBakedLights];
 		public int BakedCount;
 		public bool BakedLit;
 
 		/// <summary>The GI the cloud receives (Engine/Volumetrics/VolumetricGI.shader): rgba16f mean radiance + 1, its directional term.</summary>
-		public int GIA;
-		public int GIB;
+		public GpuTexture GIA;
+		public GpuTexture GIB;
 		public Vector3i GIResolution;
 
 		/// <summary>Every cell of the GI grid has been worked out at least once since it was made.</summary>
@@ -106,11 +106,11 @@ namespace LELEngine.Volumetrics
 			public bool NewDensity;
 			public bool Relight;
 			public bool NewLights;
-			public int Density;
-			public int Occupancy;
-			public int Lit;
-			public int LightsA;
-			public int LightsB;
+			public GpuTexture Density;
+			public GpuTexture Occupancy;
+			public GpuTexture Lit;
+			public GpuTexture LightsA;
+			public GpuTexture LightsB;
 			public Vector3i Resolution;
 			public Vector3i Blocks;
 			public Vector3i LightsResolution;
@@ -127,8 +127,8 @@ namespace LELEngine.Volumetrics
 
 			// The baked lights, the pass of sixteen being worked out, and what of the drawn transport stays as it is (only the
 			// other kind of lights changed: a lamp moved among the baked ones leaves the live lights' channels alone).
-			public int LightsC;
-			public readonly VolumeLightSlot[] Baked = new VolumeLightSlot[VolumetricObjectBase.MaxBakedLights];
+			public GpuTexture LightsC;
+			public readonly VolumeLightSlot[] Baked= new VolumeLightSlot[VolumetricObjectBase.MaxBakedLights];
 			public int BakedCount;
 			public int BakedPage;
 			public bool KeepLive;
@@ -151,16 +151,16 @@ namespace LELEngine.Volumetrics
 			public bool Made;
 		}
 
-		// A made cloud read back for its file without stalling (pixel buffers and a fence, mapped a few frames later).
+		// A made cloud read back for its file without stalling (buffers the GPU copies it into and a fence, read a few frames later).
 		private sealed class Readback
 		{
 			public string DensityKey;
 			public string LitKey;
 			public Vector3 Sun;
 			public Vector3i Resolution;
-			public int DensityBuffer;
-			public int LitBuffer;
-			public IntPtr Fence;
+			public GpuBuffer DensityBuffer;
+			public GpuBuffer LitBuffer;
+			public GpuFence Fence;
 		}
 
 		private static readonly Stopwatch Clock = Stopwatch.StartNew();
@@ -201,12 +201,12 @@ namespace LELEngine.Volumetrics
 
 		// A spare pair of transport textures (the ones the last swap replaced): the next whole rework of the lights writes into
 		// them instead of making new ones (a light crossing into a big cloud's reach made and dropped ~25 MB of textures).
-		private int spareLightsA;
-		private int spareLightsB;
+		private GpuTexture spareLightsA;
+		private GpuTexture spareLightsB;
 		private Vector3i spareLightsResolution;
 
 		// The same for the baked lights' texture.
-		private int spareLightsC;
+		private GpuTexture spareLightsC;
 		private Vector3i spareLightsCResolution;
 
 		// The drawn cloud as files know it (VolumeCache).
@@ -339,7 +339,7 @@ namespace LELEngine.Volumetrics
 		/// <summary>The density (0..1) at a local point, trilinear; 0 outside the shape's box or before the cloud is made.</summary>
 		public float DensityAt(Vector3 local)
 		{
-			if (!Ready || Density == 0)
+			if (!Ready || Density == null)
 			{
 				return 0f;
 			}
@@ -348,12 +348,7 @@ namespace LELEngine.Volumetrics
 			{
 				long readStart = Stopwatch.GetTimestamp();
 				cpuDensity = new byte[Resolution.X * Resolution.Y * Resolution.Z];
-				GL.MemoryBarrier(MemoryBarrierFlags.TextureUpdateBarrierBit);
-				GL.BindTexture(TextureTarget.Texture3D, Density);
-				GL.PixelStore(PixelStoreParameter.PackAlignment, 1);
-				GL.GetTexImage(TextureTarget.Texture3D, 0, PixelFormat.Red, PixelType.UnsignedByte, cpuDensity);
-				GL.PixelStore(PixelStoreParameter.PackAlignment, 4);
-				GL.BindTexture(TextureTarget.Texture3D, 0);
+				Density.GetData(0, cpuDensity);
 				if (Profile)
 				{
 					Console.WriteLine($"[Volumetrics] {owner.gameObject?.Name}: density read back for the CPU in {(Stopwatch.GetTimestamp() - readStart) * 1000.0 / Stopwatch.Frequency:0.0} ms ({cpuDensity.Length / 1e6:0.0} MB)");
@@ -395,7 +390,7 @@ namespace LELEngine.Volumetrics
 		/// </summary>
 		public void UpdateGI()
 		{
-			if (!Ready || Density == 0)
+			if (!Ready || Density == null)
 			{
 				return;
 			}
@@ -403,21 +398,15 @@ namespace LELEngine.Volumetrics
 			// Cells of GICellSize voxels, at most 64 a side.
 			int cell = Math.Clamp(owner.GICellSize, 2, 32);
 			var resolution = new Vector3i(Math.Clamp((Resolution.X + cell - 1) / cell, 1, 64), Math.Clamp((Resolution.Y + cell - 1) / cell, 1, 64), Math.Clamp((Resolution.Z + cell - 1) / cell, 1, 64));
-			if (GIA == 0 || resolution != GIResolution)
+			if (GIA == null || resolution != GIResolution)
 			{
 				DeleteTexture(ref GIA);
 				DeleteTexture(ref GIB);
-				GIA = CreateTexture(SizedInternalFormat.Rgba16f, resolution, false, false);
-				GIB = CreateTexture(SizedInternalFormat.Rgba16f, resolution, false, false);
+				GIA = CreateTexture(TextureFormat.RGBA16F, resolution, false, false);
+				GIB = CreateTexture(TextureFormat.RGBA16F, resolution, false, false);
 				// A coarse grid read between its cells: linear, never the cells' blocks.
-				foreach (int texture in new[] { GIA, GIB })
-				{
-					GL.BindTexture(TextureTarget.Texture3D, texture);
-					GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Linear);
-					GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Linear);
-				}
-
-				GL.BindTexture(TextureTarget.Texture3D, 0);
+				GIA.Sampler = Samplers.LinearClamp;
+				GIB.Sampler = Samplers.LinearClamp;
 				GIResolution = resolution;
 				GIValid = false;
 				giSlice = 0;
@@ -427,17 +416,12 @@ namespace LELEngine.Volumetrics
 			slices = Math.Min(slices, resolution.Z - giSlice);
 			ShaderProgram program = VolumetricRuntime.GIShader.Program;
 			program.Use();
-			// The GI's samplers keep units of their own (unused ones too: two sampler types on one unit fail the dispatch).
-			program.SetInt("RadianceCacheSH", Lighting.VolumeProbeSHTextureUnit);
-			program.SetInt("RadianceCacheAtlas", Lighting.VolumeProbeTextureUnit);
-			program.SetInt("GlobalSdfObjectIds", Lighting.GlobalSdfObjectIdTextureUnit);
-			program.SetInt("giSkybox", Lighting.SkyboxTextureUnit);
 			Lighting.SetVolumeGIUniforms(program, true);
 			// What the clouds put into the GI (Lighting.Media) is not read back by them: the light scattered on inside a
 			// cloud is in its own lighting already (multiple scattering, the lights' glow), and through the GI it would
 			// count again, more every frame.
 			Lighting.SetMediaUniforms(program, false);
-			program.SetTexture("Density", TextureTarget.Texture3D, Density, 0);
+			program.SetTexture("Density", Density);
 			program.SetInt3("volResolution", resolution.X, resolution.Y, resolution.Z);
 			program.SetInt("volSliceOffset", giSlice);
 			program.SetVector3("volSize", Size);
@@ -445,12 +429,10 @@ namespace LELEngine.Volumetrics
 			program.SetFloat("volVoxel", Voxel);
 			program.SetFloat("volReach", MathF.Max(owner.ShadowReach, 0.05f) * MathF.Max(owner.NoiseSize, 0.01f));
 			program.SetMatrix4("volLocalToWorld", owner.transform.LocalToWorld);
-			GL.BindImageTexture(0, GIA, 0, true, 0, TextureAccess.WriteOnly, SizedInternalFormat.Rgba16f);
-			GL.BindImageTexture(1, GIB, 0, true, 0, TextureAccess.WriteOnly, SizedInternalFormat.Rgba16f);
-			GL.DispatchCompute((resolution.X + 7) / 8, (resolution.Y + 7) / 8, slices);
-			GL.BindImageTexture(0, 0, 0, true, 0, TextureAccess.WriteOnly, SizedInternalFormat.Rgba16f);
-			GL.BindImageTexture(1, 0, 0, true, 0, TextureAccess.WriteOnly, SizedInternalFormat.Rgba16f);
-			GL.MemoryBarrier(MemoryBarrierFlags.TextureFetchBarrierBit);
+			CommandList commands = Gfx.Commands;
+			commands.SetImage(0, GIA, 0, -1, ImageAccess.Write);
+			commands.SetImage(1, GIB, 0, -1, ImageAccess.Write);
+			commands.Dispatch((resolution.X + 7) / 8, (resolution.Y + 7) / 8, slices);
 			giSlice += slices;
 			if (giSlice >= resolution.Z)
 			{
@@ -479,32 +461,29 @@ namespace LELEngine.Volumetrics
 			}
 
 			// Other passes keep their own storage buffers bound: put theirs back afterwards.
+			// LEGACY(gl): the passes that still bind their storage buffers with OpenGL commands count on them staying bound
 			GL.GetInteger((GetIndexedPName)All.ShaderStorageBufferBinding, 0, out int previous0);
 			GL.GetInteger((GetIndexedPName)All.ShaderStorageBufferBinding, 1, out int previous1);
-			int input = GL.GenBuffer();
-			int output = GL.GenBuffer();
-			GL.BindBuffer(BufferTarget.ShaderStorageBuffer, input);
-			GL.BufferData(BufferTarget.ShaderStorageBuffer, count * 16, points, BufferUsageHint.StreamDraw);
-			GL.BindBuffer(BufferTarget.ShaderStorageBuffer, output);
-			GL.BufferData(BufferTarget.ShaderStorageBuffer, count * 4, IntPtr.Zero, BufferUsageHint.StreamRead);
-			GL.BindBufferBase(BufferRangeTarget.ShaderStorageBuffer, 0, input);
-			GL.BindBufferBase(BufferRangeTarget.ShaderStorageBuffer, 1, output);
+			GpuBuffer input = Gfx.Device.CreateBuffer(new BufferDescriptor(BufferUsage.Storage, 0, true, "Volumetric points"));
+			GpuBuffer output = Gfx.Device.CreateBuffer(new BufferDescriptor(BufferUsage.Storage | BufferUsage.Readback, count * 4, false, "Volumetric point densities"));
+			input.SetData(points);
+			CommandList commands = Gfx.Commands;
+			commands.SetStorageBuffer(0, input);
+			commands.SetStorageBuffer(1, output);
 
 			ShaderProgram program = VolumetricRuntime.GeneratePoints.Program;
 			program.Use();
 			SetNoiseUniforms(program, Resolution, Size, Shape, Voxel);
 			program.SetInt("volPointCount", count);
-			GL.DispatchCompute((count + 63) / 64, 1, 1);
-			GL.MemoryBarrier(MemoryBarrierFlags.BufferUpdateBarrierBit);
+			commands.Dispatch((count + 63) / 64, 1, 1);
 
 			var results = new float[count];
-			GL.BindBuffer(BufferTarget.ShaderStorageBuffer, output);
-			GL.GetBufferSubData(BufferTarget.ShaderStorageBuffer, IntPtr.Zero, count * 4, results);
-			GL.BindBuffer(BufferTarget.ShaderStorageBuffer, 0);
+			output.GetData(0, results);
+			// LEGACY(gl): see above
 			GL.BindBufferBase(BufferRangeTarget.ShaderStorageBuffer, 0, previous0);
 			GL.BindBufferBase(BufferRangeTarget.ShaderStorageBuffer, 1, previous1);
-			GL.DeleteBuffer(input);
-			GL.DeleteBuffer(output);
+			input.Dispose();
+			output.Dispose();
 			results.AsSpan().CopyTo(densities);
 			return true;
 		}
@@ -527,7 +506,7 @@ namespace LELEngine.Volumetrics
 			Abandon();
 
 			// A complete cloud waits for the next object of the same settings (a scene loaded again: play mode).
-			if (ready && Density != 0 && drawnDensityKey != null)
+			if (ready && Density != null && drawnDensityKey != null)
 			{
 				long voxels = (long)Resolution.X * Resolution.Y * Resolution.Z;
 				VolumeCache.Park(new VolumeCache.ParkedCloud
@@ -547,9 +526,9 @@ namespace LELEngine.Volumetrics
 					// Density and lit voxels with their mips (a seventh more), the occupancy.
 					Bytes = voxels * 5 * 8 / 7 + (long)Blocks.X * Blocks.Y * Blocks.Z
 				});
-				Density = 0;
-				Occupancy = 0;
-				Lit = 0;
+				Density = null;
+				Occupancy = null;
+				Lit = null;
 			}
 
 			ready = false;
@@ -606,9 +585,9 @@ namespace LELEngine.Volumetrics
 			};
 			build.DensityKey = owner.DensityKey();
 			build.LitKey = owner.LitKey(build.DensityKey);
-			build.Density = CreateTexture(SizedInternalFormat.R8, resolution, true, true);
-			build.Occupancy = CreateTexture(SizedInternalFormat.R8, build.Blocks, false, false);
-			build.Lit = CreateTexture(SizedInternalFormat.Rgba8, resolution, true, false);
+			build.Density = CreateTexture(TextureFormat.R8, resolution, true, true);
+			build.Occupancy = CreateTexture(TextureFormat.R8, build.Blocks, false, false);
+			build.Lit = CreateTexture(TextureFormat.RGBA8, resolution, true, false);
 			CaptureLights(build);
 		}
 
@@ -632,16 +611,11 @@ namespace LELEngine.Volumetrics
 					Shape = volume.Shape,
 					Voxel = MathF.Max(size.X / resolution.X, MathF.Max(size.Y / resolution.Y, size.Z / resolution.Z))
 				};
-				data.build.Density = CreateTexture(SizedInternalFormat.R8, resolution, true, true);
-				data.DispatchSlices(VolumetricRuntime.Generate, resolution, long.MaxValue, data.SetGenerateUniforms, data.build.Density, SizedInternalFormat.R8, 0, 0);
-				GL.UseProgram(0);
-				GL.MemoryBarrier(MemoryBarrierFlags.AllBarrierBits);
+				data.build.Density = CreateTexture(TextureFormat.R8, resolution, true, true);
+				data.DispatchSlices(VolumetricRuntime.Generate, resolution, long.MaxValue, data.SetGenerateUniforms, data.build.Density, null, 0);
+				Gfx.Commands.SetProgram(null);
 				var density = new byte[(long)resolution.X * resolution.Y * resolution.Z];
-				GL.PixelStore(PixelStoreParameter.PackAlignment, 1);
-				GL.BindTexture(TextureTarget.Texture3D, data.build.Density);
-				GL.GetTexImage(TextureTarget.Texture3D, 0, PixelFormat.Red, PixelType.UnsignedByte, density);
-				GL.BindTexture(TextureTarget.Texture3D, 0);
-				GL.PixelStore(PixelStoreParameter.PackAlignment, 4);
+				data.build.Density.GetData(0, density);
 				return new VolumeFile { DensityKey = volume.DensityKey(), Resolution = resolution, Density = density };
 			}
 			finally
@@ -675,7 +649,7 @@ namespace LELEngine.Volumetrics
 			drawnDensityKey = densityKey;
 			DensityVersion = System.Threading.Interlocked.Increment(ref lastDensityVersion);
 			string litKey = owner.LitKey(densityKey);
-			if (cloud.Lit != 0 && cloud.LitKey == litKey && Vector3.Dot(cloud.Sun, newSun) >= SunTolerance)
+			if (cloud.Lit != null && cloud.LitKey == litKey && Vector3.Dot(cloud.Sun, newSun) >= SunTolerance)
 			{
 				Lit = cloud.Lit;
 				lightHash = newLightHash;
@@ -686,10 +660,7 @@ namespace LELEngine.Volumetrics
 			}
 			else
 			{
-				if (cloud.Lit != 0)
-				{
-					GL.DeleteTexture(cloud.Lit);
-				}
+				cloud.Lit?.Dispose();
 
 				StartRelight(newLightHash, newLightsHash, newSun);
 			}
@@ -756,9 +727,9 @@ namespace LELEngine.Volumetrics
 				UploadLit = lit,
 				Made = !lit
 			};
-			build.Density = CreateTexture(SizedInternalFormat.R8, resolution, true, true);
-			build.Occupancy = CreateTexture(SizedInternalFormat.R8, build.Blocks, false, false);
-			build.Lit = CreateTexture(SizedInternalFormat.Rgba8, resolution, true, false);
+			build.Density = CreateTexture(TextureFormat.R8, resolution, true, true);
+			build.Occupancy = CreateTexture(TextureFormat.R8, build.Blocks, false, false);
+			build.Lit = CreateTexture(TextureFormat.RGBA8, resolution, true, false);
 			CaptureLights(build);
 			return true;
 		}
@@ -771,17 +742,12 @@ namespace LELEngine.Volumetrics
 			long sliceVoxels = (long)r.X * r.Y;
 			int z = build.NextSlice;
 			int count = (int)Math.Clamp(UploadBytesPerFrame / (sliceVoxels * (build.UploadLit ? 5 : 1)), 1, r.Z - z);
-			GL.PixelStore(PixelStoreParameter.UnpackAlignment, 1);
-			GL.BindTexture(TextureTarget.Texture3D, build.Density);
-			GL.TexSubImage3D(TextureTarget.Texture3D, 0, 0, 0, z, r.X, r.Y, count, PixelFormat.Red, PixelType.UnsignedByte, ref file.Density[z * sliceVoxels]);
+			build.Density.SetData(0, 0, 0, z, r.X, r.Y, count, new ReadOnlySpan<byte>(file.Density, (int)(z * sliceVoxels), (int)(count * sliceVoxels)));
 			if (build.UploadLit)
 			{
-				GL.BindTexture(TextureTarget.Texture3D, build.Lit);
-				GL.TexSubImage3D(TextureTarget.Texture3D, 0, 0, 0, z, r.X, r.Y, count, PixelFormat.Rgba, PixelType.UnsignedByte, ref file.Lit[z * sliceVoxels * 4]);
+				build.Lit.SetData(0, 0, 0, z, r.X, r.Y, count, new ReadOnlySpan<byte>(file.Lit, (int)(z * sliceVoxels * 4), (int)(count * sliceVoxels * 4)));
 			}
 
-			GL.BindTexture(TextureTarget.Texture3D, 0);
-			GL.PixelStore(PixelStoreParameter.UnpackAlignment, 4);
 			build.NextSlice += count;
 			// The frame's share is spent: the rest of this frame's budget goes too.
 			return Math.Max(budget, 1);
@@ -815,7 +781,7 @@ namespace LELEngine.Volumetrics
 				LitKey = drawnDensityKey != null ? owner.LitKey(drawnDensityKey) : null,
 				Made = true
 			};
-			build.Lit = CreateTexture(SizedInternalFormat.Rgba8, Resolution, true, false);
+			build.Lit = CreateTexture(TextureFormat.RGBA8, Resolution, true, false);
 			CaptureLights(build);
 		}
 
@@ -884,7 +850,7 @@ namespace LELEngine.Volumetrics
 		// The build's live lights are the drawn transport's, slot by slot.
 		private bool SameLiveLights(Build b)
 		{
-			if (b.LightCount != LightCount || LightCount > 0 && LightsA == 0)
+			if (b.LightCount != LightCount || LightCount > 0 && LightsA == null)
 			{
 				return false;
 			}
@@ -903,7 +869,7 @@ namespace LELEngine.Volumetrics
 		// The build's baked lights are the drawn texture's (the same lights in the same order, where they were, as bright).
 		private bool SameBakedLights(Build b)
 		{
-			if (b.BakedCount != BakedCount || BakedCount > 0 && LightsC == 0)
+			if (b.BakedCount != BakedCount || BakedCount > 0 && LightsC == null)
 			{
 				return false;
 			}
@@ -938,17 +904,16 @@ namespace LELEngine.Volumetrics
 				long profileStart = 0;
 				if (Profile)
 				{
-					GL.Finish();
+					Gfx.Device.Finish();
 					profileStart = Stopwatch.GetTimestamp();
 				}
 
 				switch (build.Phase)
 				{
 					case Phase.Generate:
-						used += DispatchSlices(VolumetricRuntime.Generate, build.Resolution, budget - used, SetGenerateUniforms, build.Density, SizedInternalFormat.R8, 0, 0);
+						used += DispatchSlices(VolumetricRuntime.Generate, build.Resolution, budget - used, SetGenerateUniforms, build.Density, null, 0);
 						if (build.NextSlice >= build.Resolution.Z)
 						{
-							GL.MemoryBarrier(MemoryBarrierFlags.AllBarrierBits);
 							GenerateMipmaps(build.Density);
 							BuildOccupancy();
 							NextPhase(Phase.Light);
@@ -956,10 +921,9 @@ namespace LELEngine.Volumetrics
 
 						break;
 					case Phase.Light:
-						used += DispatchSlices(VolumetricRuntime.Light, build.Resolution, budget - used, SetLightUniforms, build.Lit, SizedInternalFormat.Rgba8, 0, 0);
+						used += DispatchSlices(VolumetricRuntime.Light, build.Resolution, budget - used, SetLightUniforms, build.Lit, null, 0);
 						if (build.NextSlice >= build.Resolution.Z)
 						{
-							GL.MemoryBarrier(MemoryBarrierFlags.AllBarrierBits);
 							GenerateMipmaps(build.Lit);
 							NextPhase(build.NewLights || build.NewDensity ? Phase.Lights : Phase.Idle);
 						}
@@ -973,31 +937,30 @@ namespace LELEngine.Volumetrics
 						}
 
 						// Linear light in half floats: a scene light's falloff spans more than 8 bits hold. The spare pair when it fits.
-						if (build.LightsA == 0)
+						if (build.LightsA == null)
 						{
-							if (spareLightsA != 0 && spareLightsResolution == build.LightsResolution)
+							if (spareLightsA != null && spareLightsResolution == build.LightsResolution)
 							{
 								build.LightsA = spareLightsA;
 								build.LightsB = spareLightsB;
-								spareLightsA = 0;
-								spareLightsB = 0;
+								spareLightsA = null;
+								spareLightsB = null;
 							}
 							else
 							{
 								DeleteTexture(ref spareLightsA);
 								DeleteTexture(ref spareLightsB);
-								build.LightsA = CreateTexture(SizedInternalFormat.Rgba16f, build.LightsResolution, true, false);
-								build.LightsB = CreateTexture(SizedInternalFormat.Rgba16f, build.LightsResolution, true, false);
+								build.LightsA = CreateTexture(TextureFormat.RGBA16F, build.LightsResolution, true, false);
+								build.LightsB = CreateTexture(TextureFormat.RGBA16F, build.LightsResolution, true, false);
 							}
 						}
 
 						// A transport voxel costs about 0.7 of a made voxel per light (measured on a 12.6 M-voxel storm: eight lights
 						// over its 1.6 M transport voxels took 68 ms of the GPU, its 12.6 M voxels made 72-94 ms): counted so, eight
 						// lights spread over frames instead of filling one.
-						used += DispatchSlices(VolumetricRuntime.LightTransport, build.LightsResolution, budget - used, SetLightsUniforms, build.LightsA, SizedInternalFormat.Rgba16f, build.LightsB, 1, 1.0 + TransportCostPerLight * build.LightCount);
+						used += DispatchSlices(VolumetricRuntime.LightTransport, build.LightsResolution, budget - used, SetLightsUniforms, build.LightsA, build.LightsB, 1, 1.0 + TransportCostPerLight * build.LightCount);
 						if (build.NextSlice >= build.LightsResolution.Z)
 						{
-							GL.MemoryBarrier(MemoryBarrierFlags.AllBarrierBits);
 							GenerateMipmaps(build.LightsA);
 							GenerateMipmaps(build.LightsB);
 							NextPhase(Phase.Baked);
@@ -1011,17 +974,17 @@ namespace LELEngine.Volumetrics
 							break;
 						}
 
-						if (build.LightsC == 0)
+						if (build.LightsC == null)
 						{
-							if (spareLightsC != 0 && spareLightsCResolution == build.LightsResolution)
+							if (spareLightsC != null && spareLightsCResolution == build.LightsResolution)
 							{
 								build.LightsC = spareLightsC;
-								spareLightsC = 0;
+								spareLightsC = null;
 							}
 							else
 							{
 								DeleteTexture(ref spareLightsC);
-								build.LightsC = CreateTexture(SizedInternalFormat.Rgba16f, build.LightsResolution, true, false);
+								build.LightsC = CreateTexture(TextureFormat.RGBA16F, build.LightsResolution, true, false);
 							}
 						}
 
@@ -1040,11 +1003,10 @@ namespace LELEngine.Volumetrics
 								reached += Math.Min(1.0, (double)Math.Max(0, hi.X - lo.X) * Math.Max(0, hi.Y - lo.Y) * Math.Max(0, hi.Z - lo.Z) / gridVoxels);
 							}
 
-							used += DispatchSlices(VolumetricRuntime.LightTransportBaked, build.LightsResolution, budget - used, SetBakedBuildUniforms, build.LightsC, SizedInternalFormat.Rgba16f, 0, 0,
-								0.25 + TransportCostPerLight * reached, TextureAccess.ReadWrite);
+							used += DispatchSlices(VolumetricRuntime.LightTransportBaked, build.LightsResolution, budget - used, SetBakedBuildUniforms, build.LightsC, null, 0,
+								0.25 + TransportCostPerLight * reached, ImageAccess.ReadWrite);
 							if (build.NextSlice >= build.LightsResolution.Z)
 							{
-								GL.MemoryBarrier(MemoryBarrierFlags.AllBarrierBits);
 								build.BakedPage++;
 								build.NextSlice = 0;
 								if (build.BakedPage * BakedPageSize >= build.BakedCount)
@@ -1081,7 +1043,7 @@ namespace LELEngine.Volumetrics
 
 				if (Profile && phase != Phase.Idle)
 				{
-					GL.Finish();
+					Gfx.Device.Finish();
 					current.GpuMilliseconds[(int)phase] += (Stopwatch.GetTimestamp() - profileStart) * 1000.0 / Stopwatch.Frequency;
 				}
 			}
@@ -1103,16 +1065,17 @@ namespace LELEngine.Volumetrics
 
 		// Dispatches as many z slices as the budget allows (at least one), each dispatch a short one; a voxel counts cost
 		// voxels of the budget.
-		private long DispatchSlices(ComputeShader shader, Vector3i resolution, long budget, Action<ShaderProgram> setUniforms, int image, SizedInternalFormat format, int secondImage, int secondBinding, double cost = 1.0,
-			TextureAccess access = TextureAccess.WriteOnly)
+		private long DispatchSlices(ComputeShader shader, Vector3i resolution, long budget, Action<ShaderProgram> setUniforms, GpuTexture image, GpuTexture secondImage, int secondBinding, double cost = 1.0,
+			ImageAccess access = ImageAccess.Write)
 		{
 			ShaderProgram program = shader.Program;
 			program.Use();
 			setUniforms(program);
-			GL.BindImageTexture(0, image, 0, true, 0, access, format);
-			if (secondImage != 0)
+			CommandList commands = Gfx.Commands;
+			commands.SetImage(0, image, 0, -1, access);
+			if (secondImage != null)
 			{
-				GL.BindImageTexture(secondBinding, secondImage, 0, true, 0, TextureAccess.WriteOnly, format);
+				commands.SetImage(secondBinding, secondImage, 0, -1, ImageAccess.Write);
 			}
 
 			long perSlice = (long)resolution.X * resolution.Y;
@@ -1123,15 +1086,9 @@ namespace LELEngine.Volumetrics
 			{
 				int slices = (int)Math.Clamp(DispatchVoxels / Math.Max(1, costPerSlice), 1, resolution.Z - build.NextSlice);
 				program.SetInt("volSliceOffset", build.NextSlice);
-				GL.DispatchCompute((resolution.X + 7) / 8, (resolution.Y + 7) / 8, slices);
+				commands.Dispatch((resolution.X + 7) / 8, (resolution.Y + 7) / 8, slices);
 				build.NextSlice += slices;
 				used += slices * costPerSlice;
-			}
-
-			GL.BindImageTexture(0, 0, 0, true, 0, TextureAccess.WriteOnly, format);
-			if (secondImage != 0)
-			{
-				GL.BindImageTexture(secondBinding, 0, 0, true, 0, TextureAccess.WriteOnly, format);
 			}
 
 			return used;
@@ -1182,7 +1139,7 @@ namespace LELEngine.Volumetrics
 		{
 			VolumetricObjectBase o = owner;
 			float noiseSize = MathF.Max(o.NoiseSize, 0.01f);
-			program.SetTexture("Density", TextureTarget.Texture3D, build.Density, 0);
+			program.SetTexture("Density", build.Density);
 			program.SetInt3("volResolution", build.Resolution.X, build.Resolution.Y, build.Resolution.Z);
 			program.SetVector3("volSize", build.Size);
 			program.SetVector3("volSunDirection", build.Sun);
@@ -1198,9 +1155,9 @@ namespace LELEngine.Volumetrics
 		}
 
 		// The light transport kernel's inputs: the density it reads, its grid, the lights' slots and the box it works out.
-		private void SetTransportUniforms(ShaderProgram program, int density, Vector3i resolution, Vector3 size, float voxel, VolumeLightSlot[] slots, int count, Vector3i regionMin, Vector3i regionMax)
+		private void SetTransportUniforms(ShaderProgram program, GpuTexture density, Vector3i resolution, Vector3 size, float voxel, VolumeLightSlot[] slots, int count, Vector3i regionMin, Vector3i regionMax)
 		{
-			program.SetTexture("Density", TextureTarget.Texture3D, density, 0);
+			program.SetTexture("Density", density);
 			program.SetInt3("volResolution", resolution.X, resolution.Y, resolution.Z);
 			program.SetInt3("volRegionMin", regionMin.X, regionMin.Y, regionMin.Z);
 			program.SetInt3("volRegionMax", regionMax.X, regionMax.Y, regionMax.Z);
@@ -1234,10 +1191,10 @@ namespace LELEngine.Volumetrics
 
 		// The baked lights' kernel (VolumetricLightTransport.shader, VOL_BAKED): the density, the grid, up to sixteen of the
 		// lights with their colours, the box worked out, and whether the result is added to what the texture holds.
-		private void SetBakedUniforms(ShaderProgram program, int density, Vector3i resolution, Vector3 size, float voxel, System.Collections.Generic.IReadOnlyList<VolumeLightSlot> lights, int first, int count,
+		private void SetBakedUniforms(ShaderProgram program, GpuTexture density, Vector3i resolution, Vector3 size, float voxel, System.Collections.Generic.IReadOnlyList<VolumeLightSlot> lights, int first, int count,
 			bool accumulate, Vector3i regionMin, Vector3i regionMax)
 		{
-			program.SetTexture("Density", TextureTarget.Texture3D, density, 0);
+			program.SetTexture("Density", density);
 			program.SetInt3("volResolution", resolution.X, resolution.Y, resolution.Z);
 			program.SetInt3("volRegionMin", regionMin.X, regionMin.Y, regionMin.Z);
 			program.SetInt3("volRegionMax", regionMax.X, regionMax.Y, regionMax.Z);
@@ -1293,7 +1250,7 @@ namespace LELEngine.Volumetrics
 			// The baked lights may come and go (a short flash near a big cloud: each of its arrival and its leaving reworked
 			// all of the baked texture, 8 and 2 ms of the GPU in one frame for a storm of 14.4 M voxels); the live ones may
 			// not (they have a channel each: a new one changes the channels).
-			if (count != LightCount || count + bakedCount == 0 || count > 0 && LightsA == 0 || bakedCount > 0 && LightsC == 0)
+			if (count != LightCount || count + bakedCount == 0 || count > 0 && LightsA == null || bakedCount > 0 && LightsC == null)
 			{
 				return false;
 			}
@@ -1407,7 +1364,6 @@ namespace LELEngine.Volumetrics
 					BakeRegion(regionLo, regionHi, resolution);
 				}
 
-				GL.MemoryBarrier(MemoryBarrierFlags.AllBarrierBits);
 				GenerateMipmaps(LightsC);
 				InPlaceUpdates++;
 			}
@@ -1420,12 +1376,10 @@ namespace LELEngine.Volumetrics
 				captureSlots.CopyTo(0, movedSlots, 0, count);
 				SetTransportUniforms(program, Density, resolution, Size, Voxel, movedSlots, count, lo, hi);
 				program.SetInt("volSliceOffset", 0);
-				GL.BindImageTexture(0, LightsA, 0, true, 0, TextureAccess.WriteOnly, SizedInternalFormat.Rgba16f);
-				GL.BindImageTexture(1, LightsB, 0, true, 0, TextureAccess.WriteOnly, SizedInternalFormat.Rgba16f);
-				GL.DispatchCompute((extent.X + 7) / 8, (extent.Y + 7) / 8, extent.Z);
-				GL.BindImageTexture(0, 0, 0, true, 0, TextureAccess.WriteOnly, SizedInternalFormat.Rgba16f);
-				GL.BindImageTexture(1, 0, 0, true, 0, TextureAccess.WriteOnly, SizedInternalFormat.Rgba16f);
-				GL.MemoryBarrier(MemoryBarrierFlags.AllBarrierBits);
+				CommandList commands = Gfx.Commands;
+				commands.SetImage(0, LightsA, 0, -1, ImageAccess.Write);
+				commands.SetImage(1, LightsB, 0, -1, ImageAccess.Write);
+				commands.Dispatch((extent.X + 7) / 8, (extent.Y + 7) / 8, extent.Z);
 				GenerateMipmaps(LightsA);
 				GenerateMipmaps(LightsB);
 				InPlaceUpdates++;
@@ -1499,21 +1453,19 @@ namespace LELEngine.Volumetrics
 			Vector3i extent = hi - lo;
 			ShaderProgram program = VolumetricRuntime.LightTransportBaked.Program;
 			program.Use();
-			GL.BindImageTexture(0, LightsC, 0, true, 0, TextureAccess.ReadWrite, SizedInternalFormat.Rgba16f);
+			CommandList commands = Gfx.Commands;
+			commands.SetImage(0, LightsC, 0, -1, ImageAccess.ReadWrite);
 			int first = 0;
 			do
 			{
 				int count = Math.Min(BakedPageSize, regionLights.Count - first);
 				SetBakedUniforms(program, Density, resolution, Size, Voxel, regionLights, first, count, first > 0, lo, hi);
 				program.SetInt("volSliceOffset", 0);
-				GL.DispatchCompute((extent.X + 7) / 8, (extent.Y + 7) / 8, extent.Z);
 				// The next lights add to what this dispatch wrote.
-				GL.MemoryBarrier(MemoryBarrierFlags.ShaderImageAccessBarrierBit);
+				commands.Dispatch((extent.X + 7) / 8, (extent.Y + 7) / 8, extent.Z);
 				first += BakedPageSize;
 			}
 			while (first < regionLights.Count);
-
-			GL.BindImageTexture(0, 0, 0, true, 0, TextureAccess.ReadWrite, SizedInternalFormat.Rgba16f);
 		}
 
 		/// <summary>Light transport boxes worked out in place since the start (diagnostics: a moving light should use these).</summary>
@@ -1546,13 +1498,12 @@ namespace LELEngine.Volumetrics
 		{
 			ShaderProgram program = VolumetricRuntime.OccupancyShader.Program;
 			program.Use();
-			program.SetTexture("Density", TextureTarget.Texture3D, build.Density, 0);
+			program.SetTexture("Density", build.Density);
 			program.SetInt3("volResolution", build.Resolution.X, build.Resolution.Y, build.Resolution.Z);
 			program.SetInt3("volBlocks", build.Blocks.X, build.Blocks.Y, build.Blocks.Z);
-			GL.BindImageTexture(0, build.Occupancy, 0, true, 0, TextureAccess.WriteOnly, SizedInternalFormat.R8);
-			GL.DispatchCompute((build.Blocks.X + 3) / 4, (build.Blocks.Y + 3) / 4, (build.Blocks.Z + 3) / 4);
-			GL.BindImageTexture(0, 0, 0, true, 0, TextureAccess.WriteOnly, SizedInternalFormat.R8);
-			GL.MemoryBarrier(MemoryBarrierFlags.AllBarrierBits);
+			CommandList commands = Gfx.Commands;
+			commands.SetImage(0, build.Occupancy, 0, -1, ImageAccess.Write);
+			commands.Dispatch((build.Blocks.X + 3) / 4, (build.Blocks.Y + 3) / 4, (build.Blocks.Z + 3) / 4);
 		}
 
 		// The build is complete: its textures replace the drawn ones.
@@ -1648,7 +1599,7 @@ namespace LELEngine.Volumetrics
 
 		/// <summary>
 		///     The editor (VolumeCache.Writable): a cloud the GPU made, still the drawn one WriteDelay later, is read back into
-		///     pixel buffers (no stall) and, once the GPU is done with them, written to its file on a worker thread. Skipped
+		///     buffers (no stall) and, once the GPU is done with them, written to its file on a worker thread. Skipped
 		///     when the cache already holds it.
 		/// </summary>
 		private void UpdateCacheWrite(double now)
@@ -1659,7 +1610,7 @@ namespace LELEngine.Volumetrics
 				return;
 			}
 
-			if (writeDue < 0.0 || now < writeDue || build != null || !ready || Density == 0 || Lit == 0 || drawnDensityKey == null)
+			if (writeDue < 0.0 || now < writeDue || build != null || !ready || Density == null || Lit == null || drawnDensityKey == null)
 			{
 				return;
 			}
@@ -1672,51 +1623,33 @@ namespace LELEngine.Volumetrics
 
 			long voxels = (long)Resolution.X * Resolution.Y * Resolution.Z;
 			readback = new Readback { DensityKey = drawnDensityKey, LitKey = drawnLitKey, Sun = sun, Resolution = Resolution };
-			readback.DensityBuffer = ReadInto(Density, voxels, PixelFormat.Red);
-			readback.LitBuffer = drawnLitKey != null ? ReadInto(Lit, voxels * 4, PixelFormat.Rgba) : 0;
-			readback.Fence = GL.FenceSync(SyncCondition.SyncGpuCommandsComplete, WaitSyncFlags.None);
+			readback.DensityBuffer = ReadInto(Density, voxels);
+			readback.LitBuffer = drawnLitKey != null ? ReadInto(Lit, voxels * 4) : null;
+			readback.Fence = Gfx.Device.CreateFence();
 		}
 
-		// Level 0 of a texture copied into a new pixel buffer by the GPU (asynchronously).
-		private static int ReadInto(int texture, long bytes, PixelFormat format)
+		// Level 0 of a texture (bytes of it) copied into a new buffer by the GPU (asynchronously).
+		private static GpuBuffer ReadInto(GpuTexture texture, long bytes)
 		{
-			int buffer = GL.GenBuffer();
-			GL.BindBuffer(BufferTarget.PixelPackBuffer, buffer);
-			GL.BufferData(BufferTarget.PixelPackBuffer, (IntPtr)bytes, IntPtr.Zero, BufferUsageHint.StreamRead);
-			GL.PixelStore(PixelStoreParameter.PackAlignment, 1);
-			GL.BindTexture(TextureTarget.Texture3D, texture);
-			GL.GetTexImage(TextureTarget.Texture3D, 0, format, PixelType.UnsignedByte, IntPtr.Zero);
-			GL.BindTexture(TextureTarget.Texture3D, 0);
-			GL.PixelStore(PixelStoreParameter.PackAlignment, 4);
-			GL.BindBuffer(BufferTarget.PixelPackBuffer, 0);
+			GpuBuffer buffer = Gfx.Device.CreateBuffer(new BufferDescriptor(BufferUsage.Readback, bytes, false, "Volumetric readback"));
+			Gfx.Commands.CopyTextureToBuffer(texture, 0, 0, 0, 0, texture.Width, texture.Height, texture.Depth, buffer, 0);
 			return buffer;
 		}
 
 		// The readback's buffers once the GPU filled them: copied out, the file written on a worker thread.
 		private void FinishReadback()
 		{
-			WaitSyncStatus status = GL.ClientWaitSync(readback.Fence, ClientWaitSyncFlags.None, 0);
-			if (status == WaitSyncStatus.TimeoutExpired)
+			if (!readback.Fence.IsSignaled)
 			{
 				return;
 			}
 
 			Readback r = readback;
 			readback = null;
-			byte[] density = null;
-			byte[] lit = null;
-			if (status != WaitSyncStatus.WaitFailed)
-			{
-				long voxels = (long)r.Resolution.X * r.Resolution.Y * r.Resolution.Z;
-				density = MapOut(r.DensityBuffer, voxels);
-				lit = r.LitBuffer != 0 ? MapOut(r.LitBuffer, voxels * 4) : null;
-			}
-
+			long voxels = (long)r.Resolution.X * r.Resolution.Y * r.Resolution.Z;
+			byte[] density = CopyOut(r.DensityBuffer, voxels);
+			byte[] lit = r.LitBuffer != null ? CopyOut(r.LitBuffer, voxels * 4) : null;
 			DeleteReadback(r);
-			if (density == null)
-			{
-				return;
-			}
 
 			// Still the drawn cloud: its CPU copy for DensityAt comes free.
 			if (cpuDensity == null && drawnDensityKey == r.DensityKey && Resolution == r.Resolution)
@@ -1727,27 +1660,18 @@ namespace LELEngine.Volumetrics
 			VolumeCache.Write(new VolumeFile { DensityKey = r.DensityKey, LitKey = lit != null ? r.LitKey : null, Sun = r.Sun, Resolution = r.Resolution, Density = density, Lit = lit });
 		}
 
-		private static byte[] MapOut(int buffer, long bytes)
+		private static byte[] CopyOut(GpuBuffer buffer, long bytes)
 		{
-			GL.BindBuffer(BufferTarget.PixelPackBuffer, buffer);
-			IntPtr mapped = GL.MapBufferRange(BufferTarget.PixelPackBuffer, IntPtr.Zero, (IntPtr)bytes, MapBufferAccessMask.MapReadBit);
-			byte[] data = null;
-			if (mapped != IntPtr.Zero)
-			{
-				data = new byte[bytes];
-				System.Runtime.InteropServices.Marshal.Copy(mapped, data, 0, (int)bytes);
-				GL.UnmapBuffer(BufferTarget.PixelPackBuffer);
-			}
-
-			GL.BindBuffer(BufferTarget.PixelPackBuffer, 0);
+			var data = new byte[bytes];
+			buffer.GetData(0, data);
 			return data;
 		}
 
 		private static void DeleteReadback(Readback r)
 		{
-			if (r.DensityBuffer != 0) GL.DeleteBuffer(r.DensityBuffer);
-			if (r.LitBuffer != 0) GL.DeleteBuffer(r.LitBuffer);
-			if (r.Fence != IntPtr.Zero) GL.DeleteSync(r.Fence);
+			r.DensityBuffer?.Dispose();
+			r.LitBuffer?.Dispose();
+			r.Fence?.Dispose();
 		}
 
 		/// <summary>LEL_VOL_DEBUG=1: every completed build logs its grid and how much cloud it holds.</summary>
@@ -1809,18 +1733,18 @@ namespace LELEngine.Volumetrics
 		}
 
 		// A baked lights' texture no longer drawn: kept as the spare when there is none, else deleted.
-		private void KeepSpareBaked(ref int texture, Vector3i resolution)
+		private void KeepSpareBaked(ref GpuTexture texture, Vector3i resolution)
 		{
-			if (texture == 0)
+			if (texture == null)
 			{
 				return;
 			}
 
-			if (spareLightsC == 0)
+			if (spareLightsC == null)
 			{
 				spareLightsC = texture;
 				spareLightsCResolution = resolution;
-				texture = 0;
+				texture = null;
 				return;
 			}
 
@@ -1828,20 +1752,20 @@ namespace LELEngine.Volumetrics
 		}
 
 		// A pair of transport textures no longer drawn: kept as the spare when there is none, else deleted.
-		private void KeepSpareLights(ref int a, ref int b, Vector3i resolution)
+		private void KeepSpareLights(ref GpuTexture a, ref GpuTexture b, Vector3i resolution)
 		{
-			if (a == 0)
+			if (a == null)
 			{
 				return;
 			}
 
-			if (spareLightsA == 0)
+			if (spareLightsA == null)
 			{
 				spareLightsA = a;
 				spareLightsB = b;
 				spareLightsResolution = resolution;
-				a = 0;
-				b = 0;
+				a = null;
+				b = null;
 				return;
 			}
 
@@ -1849,41 +1773,28 @@ namespace LELEngine.Volumetrics
 			DeleteTexture(ref b);
 		}
 
-		internal static int CreateTexture(SizedInternalFormat format, Vector3i size, bool mipmaps, bool zeroBorder)
+		// A volume that compute stages write as an image and shaders sample: with its whole chain of levels read linearly
+		// within and between them, or one level read at its nearest texel; outside it the edge's texels, or zeros.
+		internal static GpuTexture CreateTexture(TextureFormat format, Vector3i size, bool mipmaps, bool zeroBorder)
 		{
 			int levels = mipmaps ? 1 + (int)MathF.Floor(MathF.Log2(Math.Max(size.X, Math.Max(size.Y, size.Z)))) : 1;
-			int texture = GL.GenTexture();
-			GL.BindTexture(TextureTarget.Texture3D, texture);
-			GL.TexStorage3D(TextureTarget3d.Texture3D, levels, format, size.X, size.Y, size.Z);
-			GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureMinFilter, (int)(mipmaps ? TextureMinFilter.LinearMipmapLinear : TextureMinFilter.Nearest));
-			GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureMagFilter, (int)(mipmaps ? TextureMagFilter.Linear : TextureMagFilter.Nearest));
-			var wrap = (int)(zeroBorder ? TextureWrapMode.ClampToBorder : TextureWrapMode.ClampToEdge);
-			GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureWrapS, wrap);
-			GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureWrapT, wrap);
-			GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureWrapR, wrap);
-			if (zeroBorder)
-			{
-				GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureBorderColor, new[] { 0f, 0f, 0f, 0f });
-			}
-
-			GL.TexParameter(TextureTarget.Texture3D, TextureParameterName.TextureMaxLevel, levels - 1);
-			GL.BindTexture(TextureTarget.Texture3D, 0);
+			GpuTexture texture = Gfx.Device.CreateTexture(TextureDescriptor.Texture3D(format, size.X, size.Y, size.Z, levels, TextureUsage.Sampled | TextureUsage.Storage));
+			texture.Sampler = Samplers.Get(mipmaps ? SamplerFilter.Linear : SamplerFilter.Nearest, mipmaps && levels > 1 ? SamplerMipFilter.Linear : SamplerMipFilter.None,
+				zeroBorder ? SamplerAddress.ClampToBorder : SamplerAddress.ClampToEdge);
 			return texture;
 		}
 
-		internal static void GenerateMipmaps(int texture)
+		internal static void GenerateMipmaps(GpuTexture texture)
 		{
-			GL.BindTexture(TextureTarget.Texture3D, texture);
-			GL.GenerateMipmap(GenerateMipmapTarget.Texture3D);
-			GL.BindTexture(TextureTarget.Texture3D, 0);
+			Gfx.Commands.GenerateMipmaps(texture);
 		}
 
-		internal static void DeleteTexture(ref int texture)
+		internal static void DeleteTexture(ref GpuTexture texture)
 		{
-			if (texture != 0)
+			if (texture != null)
 			{
-				GL.DeleteTexture(texture);
-				texture = 0;
+				texture.Dispose();
+				texture = null;
 			}
 		}
 

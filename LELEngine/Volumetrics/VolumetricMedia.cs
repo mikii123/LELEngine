@@ -61,20 +61,20 @@ namespace LELEngine.Volumetrics
 		}
 
 		private readonly List<(VolumetricObjectBase volume, Vector3 min, Vector3 max)> clouds = new List<(VolumetricObjectBase, Vector3, Vector3)>();
-		private int texture;
-		private int sunTexture;
+		private GpuTexture texture;
+		private GpuTexture sunTexture;
 
 		// The light's luminance as the clouds look from the + sides of x, y, z and from the - sides, and in a how much
 		// they cover along x (plus) and along y (minus): only the levels above the finest are written and read (a voxel
 		// of the finest is its cloud at one point).
-		private int facePlusTexture;
-		private int faceMinusTexture;
+		private GpuTexture facePlusTexture;
+		private GpuTexture faceMinusTexture;
 
 		// The columns the levels' looks are the means of (VolumetricMediaColumns.shader), a level's made from the level
 		// below's: the even levels' in one texture, the odd ones' in the other (side x side across, three axes of
 		// side >> level slices along).
-		private int columnsEven;
-		private int columnsOdd;
+		private GpuTexture columnsEven;
+		private GpuTexture columnsOdd;
 		private Vector3i size;
 		private bool logged;
 
@@ -154,7 +154,8 @@ namespace LELEngine.Volumetrics
 			// grid at or below the covered box's corner.
 			int side = PowerOfTwo(Math.Max(Cells(span.X, voxel), Math.Max(Cells(span.Y, voxel), Cells(span.Z, voxel))) + 1);
 			var needed = new Vector3i(side, side, side);
-			if (texture == 0 || needed != size)
+			CommandList commands = Gfx.Commands;
+			if (texture == null || needed != size)
 			{
 				VolumetricData.DeleteTexture(ref texture);
 				VolumetricData.DeleteTexture(ref sunTexture);
@@ -163,13 +164,13 @@ namespace LELEngine.Volumetrics
 				VolumetricData.DeleteTexture(ref columnsEven);
 				VolumetricData.DeleteTexture(ref columnsOdd);
 				// Nothing around the textures (a border of zeros): reads past their faces fade out, never repeat the last voxels.
-				texture = VolumetricData.CreateTexture(SizedInternalFormat.Rgba16f, needed, true, true);
-				sunTexture = VolumetricData.CreateTexture(SizedInternalFormat.Rgba16f, needed, true, true);
-				facePlusTexture = VolumetricData.CreateTexture(SizedInternalFormat.Rgba16f, needed, true, true);
-				faceMinusTexture = VolumetricData.CreateTexture(SizedInternalFormat.Rgba16f, needed, true, true);
+				texture = VolumetricData.CreateTexture(TextureFormat.RGBA16F, needed, true, true);
+				sunTexture = VolumetricData.CreateTexture(TextureFormat.RGBA16F, needed, true, true);
+				facePlusTexture = VolumetricData.CreateTexture(TextureFormat.RGBA16F, needed, true, true);
+				faceMinusTexture = VolumetricData.CreateTexture(TextureFormat.RGBA16F, needed, true, true);
 				// Their finest level is never written: nothing undefined in it (it is not read either).
-				GL.ClearTexImage(facePlusTexture, 0, PixelFormat.Rgba, PixelType.Float, IntPtr.Zero);
-				GL.ClearTexImage(faceMinusTexture, 0, PixelFormat.Rgba, PixelType.Float, IntPtr.Zero);
+				commands.ClearTexture(facePlusTexture, 0, default);
+				commands.ClearTexture(faceMinusTexture, 0, default);
 				columnsEven = CreateColumns(side, FirstColumnsLevel);
 				columnsOdd = CreateColumns(side, FirstColumnsLevel + 1);
 				size = needed;
@@ -190,19 +191,15 @@ namespace LELEngine.Volumetrics
 			Vector3 min3 = usedMin - new Vector3(usedStart.X, usedStart.Y, usedStart.Z) * voxel;
 
 			// Empty, then every cloud added over the voxels its box covers.
-			GL.ClearTexImage(texture, 0, PixelFormat.Rgba, PixelType.Float, IntPtr.Zero);
-			GL.ClearTexImage(sunTexture, 0, PixelFormat.Rgba, PixelType.Float, IntPtr.Zero);
+			commands.ClearTexture(texture, 0, default);
+			commands.ClearTexture(sunTexture, 0, default);
 			shader ??= new ComputeShader("Engine/Volumetrics/VolumetricMedia.shader");
 			ShaderProgram program = shader.Program;
 			shader.Use();
-			// Every sampler on a unit of its own (unused ones too: two sampler types on one unit fail the dispatch).
-			program.SetInt("ShadowMap", Lighting.ShadowMapTextureUnit);
-			program.SetInt("ShadowTransmittance", Lighting.ShadowTransmittanceTextureUnit);
-			program.SetInt("giSkybox", Lighting.SkyboxTextureUnit);
 			program.SetVector3("mediaMin", min3);
 			program.SetFloat("mediaVoxel", voxel);
-			GL.BindImageTexture(0, texture, 0, true, 0, TextureAccess.ReadWrite, SizedInternalFormat.Rgba16f);
-			GL.BindImageTexture(1, sunTexture, 0, true, 0, TextureAccess.ReadWrite, SizedInternalFormat.Rgba16f);
+			commands.SetImage(0, texture, 0, -1, ImageAccess.ReadWrite);
+			commands.SetImage(1, sunTexture, 0, -1, ImageAccess.ReadWrite);
 			int written = 0;
 			foreach ((VolumetricObjectBase volume, Vector3 min, Vector3 max) in clouds)
 			{
@@ -235,25 +232,20 @@ namespace LELEngine.Volumetrics
 				program.SetFloat("volGIContribution", MathF.Max(volume.GIContribution, 0f));
 				program.SetInt3("mediaFirst", first.X, first.Y, first.Z);
 				program.SetInt3("mediaEnd", end.X, end.Y, end.Z);
-				GL.DispatchCompute((end.X - first.X + 3) / 4, (end.Y - first.Y + 3) / 4, (end.Z - first.Z + 3) / 4);
 				// The next cloud adds to what this one wrote.
-				GL.MemoryBarrier(MemoryBarrierFlags.ShaderImageAccessBarrierBit);
+				shader.Dispatch((end.X - first.X + 3) / 4, (end.Y - first.Y + 3) / 4, (end.Z - first.Z + 3) / 4);
 				written++;
 			}
 
-			GL.BindImageTexture(0, 0, 0, true, 0, TextureAccess.ReadWrite, SizedInternalFormat.Rgba16f);
-			GL.BindImageTexture(1, 0, 0, true, 0, TextureAccess.ReadWrite, SizedInternalFormat.Rgba16f);
-			VolumetricRuntime.UnbindCloudTextures();
 			if (written == 0)
 			{
-				GL.UseProgram(0);
+				commands.SetProgram(null);
 				return;
 			}
 
 			// The levels above: each voxel the clouds in it as they look from outside (VolumetricMediaMip.shader), not a
 			// box filter: what a level covers and shows must be what the clouds in it cover and show. From the third
 			// level on the looks are the means of that level's columns (VolumetricMediaColumns.shader), made first.
-			GL.MemoryBarrier(MemoryBarrierFlags.TextureFetchBarrierBit | MemoryBarrierFlags.ShaderImageAccessBarrierBit);
 			context.Renderer.Profiler.Split("VolumeMedia.levels");
 			mipShader ??= new ComputeShader("Engine/Volumetrics/VolumetricMediaMip.shader");
 			columnsShader ??= new ComputeShader("Engine/Volumetrics/VolumetricMediaColumns.shader");
@@ -264,54 +256,42 @@ namespace LELEngine.Volumetrics
 			for (int level = 0; level < levels - 1; level++)
 			{
 				int made = level + 1;
-				int madeColumns = made % 2 == 0 ? columnsEven : columnsOdd;
+				GpuTexture madeColumns = made % 2 == 0 ? columnsEven : columnsOdd;
 				int across = ColumnsAcross(size.X, made);
 				if (made >= FirstColumnsLevel)
 				{
 					columnsShader.Use();
-					columns.SetTexture("Media", TextureTarget.Texture3D, texture, 0);
-					columns.SetTexture("Columns", TextureTarget.Texture3D, made % 2 == 0 ? columnsOdd : columnsEven, 1);
+					columns.SetTexture("Media", texture);
+					columns.SetTexture("Columns", made % 2 == 0 ? columnsOdd : columnsEven);
 					columns.SetInt("level", made);
 					columns.SetInt("firstLevel", FirstColumnsLevel);
 					columns.SetInt("side", size.X);
 					columns.SetInt("across", across);
 					columns.SetInt("acrossBelow", ColumnsAcross(size.X, made - 1));
-					GL.BindImageTexture(0, madeColumns, 0, true, 0, TextureAccess.WriteOnly, SizedInternalFormat.Rgba16f);
-					GL.DispatchCompute((across + 7) / 8, (across + 7) / 8, (size.X >> made) * 3);
-					GL.MemoryBarrier(MemoryBarrierFlags.TextureFetchBarrierBit | MemoryBarrierFlags.ShaderImageAccessBarrierBit);
+					commands.SetImage(0, madeColumns, 0, -1, ImageAccess.Write);
+					columnsShader.Dispatch((across + 7) / 8, (across + 7) / 8, (size.X >> made) * 3);
 				}
 
 				var target = new Vector3i(Math.Max(source.X / 2, 1), Math.Max(source.Y / 2, 1), Math.Max(source.Z / 2, 1));
 				Vector3i columnsSize = ColumnsSize(size.X, made % 2 == 0 ? FirstColumnsLevel : FirstColumnsLevel + 1);
 				mipShader.Use();
-				mips.SetTexture("Media", TextureTarget.Texture3D, texture, 0);
-				mips.SetTexture("MediaSun", TextureTarget.Texture3D, sunTexture, 1);
-				mips.SetTexture("Columns", TextureTarget.Texture3D, madeColumns, 2);
+				mips.SetTexture("Media", texture);
+				mips.SetTexture("MediaSun", sunTexture);
+				mips.SetTexture("Columns", madeColumns);
 				mips.SetInt("sourceLevel", level);
 				mips.SetInt3("sourceSize", source.X, source.Y, source.Z);
 				mips.SetInt("side", size.X);
 				mips.SetInt("columnsPerVoxel", Math.Max(across / Math.Max(size.X >> made, 1), 2));
 				mips.SetVector3("columnsSize", new Vector3(columnsSize.X, columnsSize.Y, columnsSize.Z));
-				GL.BindImageTexture(0, texture, made, true, 0, TextureAccess.WriteOnly, SizedInternalFormat.Rgba16f);
-				GL.BindImageTexture(1, sunTexture, made, true, 0, TextureAccess.WriteOnly, SizedInternalFormat.Rgba16f);
-				GL.BindImageTexture(2, facePlusTexture, made, true, 0, TextureAccess.WriteOnly, SizedInternalFormat.Rgba16f);
-				GL.BindImageTexture(3, faceMinusTexture, made, true, 0, TextureAccess.WriteOnly, SizedInternalFormat.Rgba16f);
-				GL.DispatchCompute((target.X + 3) / 4, (target.Y + 3) / 4, (target.Z + 3) / 4);
-				GL.MemoryBarrier(MemoryBarrierFlags.TextureFetchBarrierBit | MemoryBarrierFlags.ShaderImageAccessBarrierBit);
+				commands.SetImage(0, texture, made, -1, ImageAccess.Write);
+				commands.SetImage(1, sunTexture, made, -1, ImageAccess.Write);
+				commands.SetImage(2, facePlusTexture, made, -1, ImageAccess.Write);
+				commands.SetImage(3, faceMinusTexture, made, -1, ImageAccess.Write);
+				mipShader.Dispatch((target.X + 3) / 4, (target.Y + 3) / 4, (target.Z + 3) / 4);
 				source = target;
 			}
 
-			GL.BindImageTexture(0, 0, 0, true, 0, TextureAccess.WriteOnly, SizedInternalFormat.Rgba16f);
-			GL.BindImageTexture(1, 0, 0, true, 0, TextureAccess.WriteOnly, SizedInternalFormat.Rgba16f);
-			GL.BindImageTexture(2, 0, 0, true, 0, TextureAccess.WriteOnly, SizedInternalFormat.Rgba16f);
-			GL.BindImageTexture(3, 0, 0, true, 0, TextureAccess.WriteOnly, SizedInternalFormat.Rgba16f);
-			GL.ActiveTexture(TextureUnit.Texture2);
-			GL.BindTexture(TextureTarget.Texture3D, 0);
-			GL.ActiveTexture(TextureUnit.Texture1);
-			GL.BindTexture(TextureTarget.Texture3D, 0);
-			GL.ActiveTexture(TextureUnit.Texture0);
-			GL.BindTexture(TextureTarget.Texture3D, 0);
-			GL.UseProgram(0);
+			commands.SetProgram(null);
 
 			Used = used;
 			CloudCount = written;
@@ -319,10 +299,11 @@ namespace LELEngine.Volumetrics
 			Lighting.Media = new Lighting.MediaBinding
 			{
 				Active = true,
-				Texture = texture,
-				SunTexture = sunTexture,
-				FacePlusTexture = facePlusTexture,
-				FaceMinusTexture = faceMinusTexture,
+				// LEGACY(gl): Lighting.MediaBinding holds OpenGL texture names (Lighting.cs binds them to its texture units)
+				Texture = ((Graphics.OpenGL.GLTexture)texture).Handle,
+				SunTexture = ((Graphics.OpenGL.GLTexture)sunTexture).Handle,
+				FacePlusTexture = ((Graphics.OpenGL.GLTexture)facePlusTexture).Handle,
+				FaceMinusTexture = ((Graphics.OpenGL.GLTexture)faceMinusTexture).Handle,
 				Min = min3,
 				Used = usedMin,
 				InvSize = new Vector3(1f / (size.X * voxel), 1f / (size.Y * voxel), 1f / (size.Z * voxel)),
@@ -358,7 +339,7 @@ namespace LELEngine.Volumetrics
 		/// <summary>Frees the volume (the GI no longer reads clouds).</summary>
 		public void Release()
 		{
-			if (texture != 0)
+			if (texture != null)
 			{
 				VolumetricData.DeleteTexture(ref texture);
 				VolumetricData.DeleteTexture(ref sunTexture);
@@ -387,8 +368,7 @@ namespace LELEngine.Volumetrics
 		private void LogTopLooks(int levels)
 		{
 			int n = size.X;
-			var fine = new float[n * n * n * 4];
-			GL.GetTextureImage(texture, 0, PixelFormat.Rgba, PixelType.Float, fine.Length * sizeof(float), fine);
+			float[] fine = TexelConversion.ReadFloats(texture, 0, 0, 0, 0, n, n, n);
 			var truth = new double[6];
 			var covered = new double[3];
 			for (int axis = 0; axis < 3; axis++)
@@ -426,12 +406,9 @@ namespace LELEngine.Volumetrics
 			}
 
 			double faces = n * (double)n;
-			var top = new float[4];
-			var plus = new float[4];
-			var minus = new float[4];
-			GL.GetTextureImage(texture, levels - 1, PixelFormat.Rgba, PixelType.Float, top.Length * sizeof(float), top);
-			GL.GetTextureImage(facePlusTexture, levels - 1, PixelFormat.Rgba, PixelType.Float, plus.Length * sizeof(float), plus);
-			GL.GetTextureImage(faceMinusTexture, levels - 1, PixelFormat.Rgba, PixelType.Float, minus.Length * sizeof(float), minus);
+			float[] top = TexelConversion.ReadFloats(texture, levels - 1, 0, 0, 0, 1, 1);
+			float[] plus = TexelConversion.ReadFloats(facePlusTexture, levels - 1, 0, 0, 0, 1, 1);
+			float[] minus = TexelConversion.ReadFloats(faceMinusTexture, levels - 1, 0, 0, 0, 1, 1);
 			double trueMean = (truth[0] + truth[1] + truth[2] + truth[3] + truth[4] + truth[5]) / 6.0 / faces;
 			double madeMean = (plus[0] + plus[1] + plus[2] + minus[0] + minus[1] + minus[2]) / 6.0;
 			Console.WriteLine(FormattableString.Invariant(
@@ -440,11 +417,10 @@ namespace LELEngine.Volumetrics
 
 		// A texture of columns for the levels firstLevel, firstLevel + 2, ...: sized for the first of them (the later
 		// ones use a corner of it). Its own filter averages four columns a fetch (no levels of its own).
-		private static int CreateColumns(int side, int firstLevel)
+		private static GpuTexture CreateColumns(int side, int firstLevel)
 		{
-			int columns = VolumetricData.CreateTexture(SizedInternalFormat.Rgba16f, ColumnsSize(side, firstLevel), false, false);
-			GL.TextureParameter(columns, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Linear);
-			GL.TextureParameter(columns, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Linear);
+			GpuTexture columns = VolumetricData.CreateTexture(TextureFormat.RGBA16F, ColumnsSize(side, firstLevel), false, false);
+			columns.Sampler = Samplers.LinearClamp;
 			return columns;
 		}
 
