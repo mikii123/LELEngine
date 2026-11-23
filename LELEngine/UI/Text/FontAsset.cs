@@ -323,12 +323,12 @@ namespace LELEngine.UIElements
 			}
 		}
 
-		/// <summary>GL texture of an atlas page, uploading the glyphs added since the last call (GL thread); 0 when the page does not exist.</summary>
-		public int GetPageTexture(int page)
+		/// <summary>Texture of an atlas page, uploading the glyphs added since the last call (GL thread); null when the page does not exist.</summary>
+		public GpuTexture GetPageTexture(int page)
 		{
 			lock (sync)
 			{
-				return page >= 0 && page < pageList.Count ? pageList[page].GetTexture() : 0;
+				return page >= 0 && page < pageList.Count ? pageList[page].GetTexture() : null;
 			}
 		}
 
@@ -344,7 +344,7 @@ namespace LELEngine.UIElements
 			}
 		}
 
-		/// <summary>Releases the GL textures (the glyphs are re-uploaded on next use).</summary>
+		/// <summary>Releases the textures (the glyphs are re-uploaded on next use).</summary>
 		public void Release()
 		{
 			lock (sync)
@@ -603,7 +603,7 @@ namespace LELEngine.UIElements
 			public readonly int size;
 			public readonly ushort[] pixels;
 
-			private int handle;
+			private GpuTexture texture;
 			private int shelfY;
 			private int shelfHeight;
 			private int cursorX;
@@ -653,57 +653,47 @@ namespace LELEngine.UIElements
 			}
 
 			/// <summary>
-			///     GL texture of the page, uploading the pixels changed since the last call. The font's
+			///     Texture of the page, uploading the pixels changed since the last call. The font's
 			///     <see cref="FontAsset.GetPageTexture" /> calls it under the lock that guards the pixels.
 			/// </summary>
-			public int GetTexture()
+			public GpuTexture GetTexture()
 			{
-				if (handle == 0)
+				if (texture == null)
 				{
-					handle = GL.GenTexture();
-					GL.BindTexture(TextureTarget.Texture2D, handle);
-					GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Linear);
-					GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Linear);
-					GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)TextureWrapMode.ClampToEdge);
-					GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)TextureWrapMode.ClampToEdge);
+					texture = Gfx.Device.CreateTexture(TextureDescriptor.Texture2D(TextureFormat.R16, size, size, 1, TextureUsage.Sampled, "Font atlas"));
+					texture.Sampler = Samplers.LinearClamp;
 					uploaded = false;
 				}
 
 				if (!uploaded)
 				{
-					GL.BindTexture(TextureTarget.Texture2D, handle);
-					GL.PixelStore(PixelStoreParameter.UnpackAlignment, 2);
-					GL.TexImage2D(TextureTarget.Texture2D, 0, PixelInternalFormat.R16, size, size, 0, PixelFormat.Red, PixelType.UnsignedShort, pixels);
-					GL.PixelStore(PixelStoreParameter.UnpackAlignment, 4);
+					texture.SetData<ushort>(0, pixels);
 					uploaded = true;
 					ClearDirty();
 				}
 				else if (dirtyMaxX > dirtyMinX)
 				{
-					GL.BindTexture(TextureTarget.Texture2D, handle);
-					GL.PixelStore(PixelStoreParameter.UnpackAlignment, 2);
-					GL.PixelStore(PixelStoreParameter.UnpackRowLength, size);
-					GL.PixelStore(PixelStoreParameter.UnpackSkipPixels, dirtyMinX);
-					GL.PixelStore(PixelStoreParameter.UnpackSkipRows, dirtyMinY);
-					GL.TexSubImage2D(TextureTarget.Texture2D, 0, dirtyMinX, dirtyMinY, dirtyMaxX - dirtyMinX, dirtyMaxY - dirtyMinY, PixelFormat.Red, PixelType.UnsignedShort, pixels);
-					GL.PixelStore(PixelStoreParameter.UnpackRowLength, 0);
-					GL.PixelStore(PixelStoreParameter.UnpackSkipPixels, 0);
-					GL.PixelStore(PixelStoreParameter.UnpackSkipRows, 0);
-					GL.PixelStore(PixelStoreParameter.UnpackAlignment, 4);
+					// The changed rectangle, its rows packed.
+					int width = dirtyMaxX - dirtyMinX;
+					int height = dirtyMaxY - dirtyMinY;
+					ushort[] rows = System.Buffers.ArrayPool<ushort>.Shared.Rent(width * height);
+					for (int row = 0; row < height; row++)
+					{
+						Array.Copy(pixels, (dirtyMinY + row) * size + dirtyMinX, rows, row * width, width);
+					}
+
+					texture.SetData(0, dirtyMinX, dirtyMinY, 0, width, height, 1, new ReadOnlySpan<ushort>(rows, 0, width * height));
+					System.Buffers.ArrayPool<ushort>.Shared.Return(rows);
 					ClearDirty();
 				}
 
-				return handle;
+				return texture;
 			}
 
 			public void Release()
 			{
-				if (handle != 0)
-				{
-					GL.DeleteTexture(handle);
-					handle = 0;
-				}
-
+				texture?.Dispose();
+				texture = null;
 				uploaded = false;
 			}
 

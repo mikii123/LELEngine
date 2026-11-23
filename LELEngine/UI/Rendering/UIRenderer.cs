@@ -71,9 +71,20 @@ namespace LELEngine.UIElements.Rendering
 		private const uint FlagClipToBox = 0x10000u;
 		private const int MaxBatchTextures = 8;
 
+		// A vertex as the vertex stage reads it (UIVertex).
+		private static readonly VertexInputLayout vertexLayout = new VertexInputLayout(UIVertex.Size,
+			new VertexAttributeDescriptor(0, VertexFormat.Float2, 0),
+			new VertexAttributeDescriptor(1, VertexFormat.Float2, 8),
+			new VertexAttributeDescriptor(2, VertexFormat.UByte4Normalized, 16),
+			new VertexAttributeDescriptor(3, VertexFormat.UInt1, 20),
+			new VertexAttributeDescriptor(4, VertexFormat.UInt1, 24),
+			new VertexAttributeDescriptor(5, VertexFormat.Float1, 28));
+
 		private ShaderProgram program;
-		private int vao, vbo, ibo, ssbo, whiteTexture;
+		private GpuBuffer vbo, ibo, ssbo;
+		private GpuTexture whiteTexture;
 		private int vboCapacity, iboCapacity, ssboCapacity;
+		private readonly int[] batchTextureIds = new int[MaxBatchTextures];
 		private bool resourcesReady;
 
 		private UIVertex[] vertices = new UIVertex[4096];
@@ -123,7 +134,7 @@ namespace LELEngine.UIElements.Rendering
 
 		#region PublicMethods
 
-		/// <summary>Draws the panel into the currently bound target of the given pixel size.</summary>
+		/// <summary>Draws the panel into the open render pass, whose target has the given pixel size.</summary>
 		public void Render(BaseVisualElementPanel panel, int targetWidth, int targetHeight)
 		{
 			EnsureResources();
@@ -177,11 +188,12 @@ namespace LELEngine.UIElements.Rendering
 				return;
 			}
 
-			GL.DeleteVertexArray(vao);
-			GL.DeleteBuffer(vbo);
-			GL.DeleteBuffer(ibo);
-			GL.DeleteBuffer(ssbo);
-			GL.DeleteTexture(whiteTexture);
+			vbo.Dispose();
+			ibo.Dispose();
+			ssbo.Dispose();
+			whiteTexture.Dispose();
+			vbo = ibo = ssbo = null;
+			whiteTexture = null;
 			program?.Delete();
 			program = null;
 			resourcesReady = false;
@@ -206,34 +218,14 @@ namespace LELEngine.UIElements.Rendering
 			vertex.Delete();
 			fragment.Delete();
 
-			vao = GL.GenVertexArray();
-			vbo = GL.GenBuffer();
-			ibo = GL.GenBuffer();
-			ssbo = GL.GenBuffer();
+			GraphicsDevice device = Gfx.Device;
+			vbo = device.CreateBuffer(new BufferDescriptor(BufferUsage.Vertex, 0, true, "UI vertices"));
+			ibo = device.CreateBuffer(new BufferDescriptor(BufferUsage.Index, 0, true, "UI indices"));
+			ssbo = device.CreateBuffer(new BufferDescriptor(BufferUsage.Storage, 0, true, "UI elements"));
 
-			GL.BindVertexArray(vao);
-			GL.BindBuffer(BufferTarget.ArrayBuffer, vbo);
-			GL.EnableVertexAttribArray(0);
-			GL.VertexAttribPointer(0, 2, VertexAttribPointerType.Float, false, UIVertex.Size, 0);
-			GL.EnableVertexAttribArray(1);
-			GL.VertexAttribPointer(1, 2, VertexAttribPointerType.Float, false, UIVertex.Size, 8);
-			GL.EnableVertexAttribArray(2);
-			GL.VertexAttribPointer(2, 4, VertexAttribPointerType.UnsignedByte, true, UIVertex.Size, 16);
-			GL.EnableVertexAttribArray(3);
-			GL.VertexAttribIPointer(3, 1, VertexAttribIntegerType.UnsignedInt, UIVertex.Size, (IntPtr)20);
-			GL.EnableVertexAttribArray(4);
-			GL.VertexAttribIPointer(4, 1, VertexAttribIntegerType.UnsignedInt, UIVertex.Size, (IntPtr)24);
-			GL.EnableVertexAttribArray(5);
-			GL.VertexAttribPointer(5, 1, VertexAttribPointerType.Float, false, UIVertex.Size, 28);
-			GL.BindBuffer(BufferTarget.ElementArrayBuffer, ibo);
-			GL.BindVertexArray(0);
-
-			whiteTexture = GL.GenTexture();
-			GL.BindTexture(TextureTarget.Texture2D, whiteTexture);
-			GL.TexImage2D(TextureTarget.Texture2D, 0, PixelInternalFormat.Rgba8, 1, 1, 0, PixelFormat.Rgba, PixelType.UnsignedByte, new byte[] { 255, 255, 255, 255 });
-			GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
-			GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
-			GL.BindTexture(TextureTarget.Texture2D, 0);
+			whiteTexture = device.CreateTexture(TextureDescriptor.Texture2D(TextureFormat.RGBA8, 1, 1, 1, TextureUsage.Sampled, "UI white"));
+			whiteTexture.Sampler = Samplers.PointRepeat;
+			whiteTexture.SetData<byte>(0, new byte[] { 255, 255, 255, 255 });
 
 			resourcesReady = true;
 			vertexBufferReallocated = true;
@@ -363,7 +355,7 @@ namespace LELEngine.UIElements.Rendering
 			{
 				AddBackgroundImage(element, style, backgroundTexture, backgroundTexture.width, backgroundTexture.height, false, w, h);
 			}
-			else if (style.backgroundImage.renderTexture is LELEngine.Rendering.RenderTexture renderTexture && renderTexture.Handle != 0)
+			else if (style.backgroundImage.renderTexture is LELEngine.Rendering.RenderTexture renderTexture && renderTexture.Gpu != null)
 			{
 				// A framebuffer's rows start at the bottom: drawn upside down.
 				AddBackgroundImage(element, style, renderTexture, renderTexture.Width, renderTexture.Height, true, w, h);
@@ -948,17 +940,15 @@ namespace LELEngine.UIElements.Rendering
 					vboCapacity = vertices.Length;
 				}
 
-				GL.BindBuffer(BufferTarget.ArrayBuffer, vbo);
-				GL.BufferData(BufferTarget.ArrayBuffer, vboCapacity * UIVertex.Size, vertices, BufferUsageHint.DynamicDraw);
+				vbo.SetData(vertices, vboCapacity);
 				vertexBufferReallocated = false;
 				vertexDirtyMin = int.MaxValue;
 				vertexDirtyMax = -1;
 			}
 			else if (vertexDirtyMax > vertexDirtyMin)
 			{
-				GL.BindBuffer(BufferTarget.ArrayBuffer, vbo);
 				int count = vertexDirtyMax - vertexDirtyMin;
-				GL.BufferSubData(BufferTarget.ArrayBuffer, (IntPtr)(vertexDirtyMin * UIVertex.Size), count * UIVertex.Size, ref vertices[vertexDirtyMin]);
+				vbo.SetSubData((long)vertexDirtyMin * UIVertex.Size, new ReadOnlySpan<UIVertex>(vertices, vertexDirtyMin, count));
 				vertexDirtyMin = int.MaxValue;
 				vertexDirtyMax = -1;
 			}
@@ -967,17 +957,15 @@ namespace LELEngine.UIElements.Rendering
 			if (elementBufferReallocated || ssboCapacity < elementData.Length)
 			{
 				ssboCapacity = elementData.Length;
-				GL.BindBuffer(BufferTarget.ShaderStorageBuffer, ssbo);
-				GL.BufferData(BufferTarget.ShaderStorageBuffer, ssboCapacity * ElementGpuData.Size, elementData, BufferUsageHint.DynamicDraw);
+				ssbo.SetData(elementData);
 				elementBufferReallocated = false;
 				elementDirtyMin = int.MaxValue;
 				elementDirtyMax = -1;
 			}
 			else if (elementDirtyMax >= elementDirtyMin)
 			{
-				GL.BindBuffer(BufferTarget.ShaderStorageBuffer, ssbo);
 				int count = elementDirtyMax - elementDirtyMin + 1;
-				GL.BufferSubData(BufferTarget.ShaderStorageBuffer, (IntPtr)(elementDirtyMin * ElementGpuData.Size), count * ElementGpuData.Size, ref elementData[elementDirtyMin]);
+				ssbo.SetSubData((long)elementDirtyMin * ElementGpuData.Size, new ReadOnlySpan<ElementGpuData>(elementData, elementDirtyMin, count));
 				elementDirtyMin = int.MaxValue;
 				elementDirtyMax = -1;
 			}
@@ -985,18 +973,14 @@ namespace LELEngine.UIElements.Rendering
 			// Indices (rebuilt whole when the draw list changed)
 			if (indexCount > 0)
 			{
-				GL.BindBuffer(BufferTarget.ElementArrayBuffer, ibo);
 				if (iboCapacity < indexCount)
 				{
 					iboCapacity = Math.Max(indexCount, iboCapacity * 2);
-					GL.BufferData(BufferTarget.ElementArrayBuffer, iboCapacity * sizeof(uint), IntPtr.Zero, BufferUsageHint.DynamicDraw);
+					ibo.Allocate((long)iboCapacity * sizeof(uint));
 				}
 
-				GL.BufferSubData(BufferTarget.ElementArrayBuffer, IntPtr.Zero, indexCount * sizeof(uint), indices);
+				ibo.SetSubData(0, indices, indexCount);
 			}
-
-			GL.BindBuffer(BufferTarget.ArrayBuffer, 0);
-			GL.BindBuffer(BufferTarget.ShaderStorageBuffer, 0);
 		}
 
 		private void Draw(BaseVisualElementPanel panel, int targetWidth, int targetHeight)
@@ -1005,25 +989,22 @@ namespace LELEngine.UIElements.Rendering
 			program.SetVector2("uTargetSize", new Vector2(targetWidth, targetHeight));
 			program.SetFloat("uScale", panel.scale);
 			program.SetFloat("uSdfUnitRange", 2f * FontAsset.SdfSpread / FontAsset.AtlasSize);
-			GL.BindBufferBase(BufferRangeTarget.ShaderStorageBuffer, 0, ssbo);
+			CommandList commands = Gfx.Commands;
+			commands.SetStorageBuffer(0, ssbo);
 
-			GL.Disable(EnableCap.DepthTest);
-			GL.DepthMask(false);
-			GL.Disable(EnableCap.CullFace);
-			GL.Disable(EnableCap.ScissorTest);
-			GL.Enable(EnableCap.Blend);
-			GL.BlendFuncSeparate(BlendingFactorSrc.One, BlendingFactorDest.OneMinusSrcAlpha, BlendingFactorSrc.One, BlendingFactorDest.OneMinusSrcAlpha);
+			commands.State.DepthTest = false;
+			commands.State.DepthWrite = false;
+			commands.State.Culling = FaceCulling.None;
+			commands.DisableScissor();
+			commands.State.SetBlend(BlendFactor.One, BlendFactor.OneMinusSrcAlpha);
 
-			GL.BindVertexArray(vao);
-			GL.BindBuffer(BufferTarget.ElementArrayBuffer, ibo);
-			int[] ids = new int[MaxBatchTextures];
-			int samplerLocation = program.GetUniformLocation("uTextures[0]");
-			int idsLocation = program.GetUniformLocation("uTextureIds[0]");
-			int[] units = { 0, 1, 2, 3, 4, 5, 6, 7 };
-			if (samplerLocation >= 0)
-			{
-				GL.Uniform1(samplerLocation, MaxBatchTextures, units);
-			}
+			commands.SetVertexInput(vertexLayout);
+			commands.SetVertexBuffer(0, vbo);
+			commands.SetIndexBuffer(ibo, IndexFormat.UInt32);
+			GpuProgram gpu = program.Gpu;
+			int[] ids = batchTextureIds;
+			int samplerSlot = program.GetSlot("uTextures[0]");
+			int idsSlot = program.GetSlot("uTextureIds[0]");
 
 			foreach (Batch batch in batches)
 			{
@@ -1031,24 +1012,20 @@ namespace LELEngine.UIElements.Rendering
 				{
 					int id = i < batch.textureCount ? batch.textureIds[i] : -1;
 					ids[i] = id;
-					GL.ActiveTexture(TextureUnit.Texture0 + i);
-					GL.BindTexture(TextureTarget.Texture2D, id >= 0 ? ResolveTexture(id) : whiteTexture);
+					if (samplerSlot >= 0)
+					{
+						gpu.SetTexture(samplerSlot + i, id >= 0 ? ResolveTexture(id) : whiteTexture);
+					}
 				}
 
-				if (idsLocation >= 0)
-				{
-					GL.Uniform1(idsLocation, MaxBatchTextures, ids);
-				}
-
-				GL.DrawElements(PrimitiveType.Triangles, batch.indexCount, DrawElementsType.UnsignedInt, batch.indexStart * sizeof(uint));
+				gpu.SetIntArray(idsSlot, ids);
+				commands.DrawIndexed(batch.indexCount, batch.indexStart);
 				LELEngine.Rendering.DrawStatistics.Draw(batch.indexCount / 3);
 			}
 
-			GL.BindVertexArray(0);
-			GL.ActiveTexture(TextureUnit.Texture0);
-			GL.Disable(EnableCap.Blend);
-			GL.DepthMask(true);
-			GL.Enable(EnableCap.DepthTest);
+			commands.State.Blend = false;
+			commands.State.DepthWrite = true;
+			commands.State.DepthTest = true;
 		}
 
 		// ------------------------------------------------------------------ textures
@@ -1077,7 +1054,7 @@ namespace LELEngine.UIElements.Rendering
 			return id;
 		}
 
-		private int ResolveTexture(int id)
+		private GpuTexture ResolveTexture(int id)
 		{
 			if (id <= 0 || id >= textureKeys.Count)
 			{
@@ -1085,25 +1062,25 @@ namespace LELEngine.UIElements.Rendering
 			}
 
 			object key = textureKeys[id];
+			GpuTexture resolved;
 			switch (key)
 			{
 				case Texture texture:
-				{
-					int handle = texture.Handle;
-					return handle != 0 ? handle : whiteTexture;
-				}
-
+					resolved = texture.Gpu;
+					break;
 				case FontPageKey page:
-				{
-					int handle = page.font.GetPageTexture(page.page);
-					return handle != 0 ? handle : whiteTexture;
-				}
-
+					resolved = page.font.GetPageTexture(page.page);
+					break;
 				case LELEngine.Rendering.RenderTexture renderTexture:
-					return renderTexture.Handle != 0 ? renderTexture.Handle : whiteTexture;
+					resolved = renderTexture.Gpu;
+					break;
 				default:
-					return whiteTexture;
+					resolved = null;
+					break;
 			}
+
+			// The shader's samplers read 2D textures only.
+			return resolved != null && resolved.Kind == TextureKind.Texture2D ? resolved : whiteTexture;
 		}
 
 		// ------------------------------------------------------------------ memory management
