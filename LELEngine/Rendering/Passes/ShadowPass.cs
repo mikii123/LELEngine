@@ -196,7 +196,9 @@ namespace LELEngine.Rendering.Passes
 				{
 					ContinueTile(i);
 					tileCulling.Begin(views[i] * projections[i], culled);
-					transmittance = TransparentShadows.DrawCasters(context, shadowTarget, views[i], projections[i], i == 0, tileCulling) ?? transmittance;
+					Vector3i viewport = viewports[i];
+					transmittance = TransparentShadows.DrawCasters(context, shadowTarget, views[i], projections[i], i == 0, tileCulling,
+						new Box2i(viewport.X, viewport.Y, viewport.X + viewport.Z, viewport.Y + viewport.Z)) ?? transmittance;
 				}
 			}
 

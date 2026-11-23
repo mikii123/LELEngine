@@ -170,7 +170,7 @@ namespace LELEngine.Rendering
 				{
 					ContinueTile(i);
 					culling.Begin(views[i] * projections[i], frustumCulling);
-					Transmittance = TransparentShadows.DrawCasters(context, target, views[i], projections[i], i == 0, culling) ?? Transmittance;
+					Transmittance = TransparentShadows.DrawCasters(context, target, views[i], projections[i], i == 0, culling, new Box2i(i * Size, 0, (i + 1) * Size, Size)) ?? Transmittance;
 				}
 			}
 
