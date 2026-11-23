@@ -154,6 +154,99 @@
   constants (samplers are given textures by name now), `GL.*` calls, `GLCapabilities` (now `GraphicsCapabilities`),
   `Texture.Handle` / `RenderTexture.Handle` (now `.Gpu`), `GLState`, `ShaderType` (now `ShaderStage`).
 
+## Hardware ray tracing for Lumen's rays (acceleration structures, ray queries; 2026-11-23, branch `port-rt`)
+
+- Part of the user's optimization pass "for the new graphics backend, with ray tracing, GI and the other features in
+  mind": Lumen's rays trace the scene's triangles with ray queries on a Vulkan device whose GPU has them, the distance
+  fields everywhere else (OpenGL, GPUs without ray queries, the setting off).
+- API (`LELEngine/Graphics`, nothing of the GI in it): `GpuAccelerationStructure` made by
+  `GraphicsDevice.CreateAccelerationStructure(AccelerationStructureDescriptor)`: a bottom level from
+  `AccelerationStructureTriangles` (vertex buffer range: offset, stride, count, `Float3` / `Float2` positions; index
+  buffer range: offset, `UInt16` / `UInt32`, or none; triangle count; opaque), kept by the structure and read by every
+  build; a top level for at most `MaxInstances`; or `CompactCopyOf(source)` at the source's `CompactedSize`.
+  `AccelerationStructureFlags` AllowUpdate, AllowCompaction, PreferFastTrace, PreferFastBuild. Commands (each ends an
+  open pass like a dispatch): `BuildBottomLevels(span, update)` (one command, refit with `update`), `BuildBottomLevel`,
+  `BuildTopLevel(topLevel, ReadOnlySpan<AccelerationStructureInstance>, update)` (instance: engine `Matrix4` transform,
+  24 bit custom index, mask, `AccelerationStructureInstanceFlags` TwoSided / FlipFacing / ForceOpaque / ForceNotOpaque,
+  the bottom level), `CopyAccelerationStructure` (compacts into a compact copy, clones otherwise),
+  `SetAccelerationStructure(binding, topLevel)` (the shaders' `layout(binding = N) uniform accelerationStructureEXT`, a
+  number space of its own; null: an empty top level). Facing as rasterization takes it: a triangle a ray sees
+  counter-clockwise (cross(v1 - v0, v2 - v0) pointing back at it) is hit on its front. Build inputs need
+  `BufferUsage.AccelerationStructureInput` (devices without ray queries ignore it). `DeviceCapabilities.RayQuery`;
+  OpenGL: false, `CreateAccelerationStructure` and the commands throw `NotSupportedException`.
+- Vulkan (`Graphics/Vulkan/VulkanAccelerationStructure.cs`, `VulkanCommandList.AccelerationStructures.cs`; the device,
+  command list and program classes are partial): the device asks for VK_KHR_acceleration_structure, VK_KHR_ray_query,
+  VK_KHR_deferred_host_operations and the features acceleration structure, ray query, buffer device address when the
+  GPU has all of them, and starts without them otherwise (`LEL_VULKAN_DISABLE=rayqueries` makes it start without them
+  on any GPU); VMA then allocates with device addresses. A structure lives in a buffer of its own (sizes from
+  vkGetAccelerationStructureBuildSizesKHR); builds work in one device scratch buffer (grown as asked; builds of one
+  command side by side, aligned to minAccelerationStructureScratchOffsetAlignment; at most 64 MB a command); a top
+  level's instances go through the frame's memory into its own instance buffer by a copy before each build (at a
+  16-byte aligned place in it: VMA starts such a buffer at any multiple of 4, which the validation layer caught in the
+  scenes, VUID-vkCmdBuildAccelerationStructuresKHR-pInfos-03715); a structure
+  made with AllowCompaction writes its compacted size into a query after every full build (read once the submission
+  has finished: `CompactedSize` never waits); unset bindings trace an empty top level built ahead of the stream.
+  Synchronization is the device's global barrier (all commands, memory read and write) before every build, copy and
+  dispatch; a top level being traced marks its bottom levels used by the submission (their destruction waits for it).
+  SPIR-V reflection: `SpirvResourceKind.AccelerationStructure` (OpTypeAccelerationStructureKHR); programs bind it as
+  VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR; shaderc compiles GL_EXT_ray_query for Vulkan 1.3 as is.
+- Engine: `Rendering/MeshAccelerationStructures` (graphics thread): a bottom level per mesh of the geometry pool, of all
+  its triangles as the pool holds them (the pool's buffers carry `AccelerationStructureInput` on such devices), made the
+  first time it is asked for and built with the others of that frame in one command (`BuildPending`), PreferFastTrace +
+  AllowCompaction, swapped for a compacted copy once the GPU told its size when that saves an eighth or more, made again
+  when the mesh's hidden ranges change, freed with the mesh's ranges (`GeometryPool.Release` / `Clear`) and all of them
+  when Lumen's rays stop tracing triangles. `Rendering/Lumen/SceneRayTracing` (one per `LumenScene`, so per renderer):
+  instance i of the top level = GI object i of this frame (the lighting camera's GI renderers, the objects of the
+  distance field passes), custom index = its row of the object table, its mesh's bottom level placed in the GI's
+  scaled-local space (`CreateScale(o.Scale) * rotation * translation`, as the cards are captured); built again when the
+  instances (count, bottom levels, rows) changed, refitted when only placements did (built again after 60 refits),
+  kept otherwise; plus a table of each object's first index and base vertex in the pool. `LumenScene.Update` builds it
+  after the tables, `LumenScene.SetUniforms` binds it: acceleration structure 0, storage 19 (pool vertices), 20 (pool
+  indices), 21 (the ranges). GPU profiler section `GlobalSDF.rayTracing` (the scene's update with the builds).
+- Shaders: `Engine/SceneRayQuery.glsl` (`TraceSceneRay`: the nearest hit's distance, object and triangle normal facing
+  back along the ray, read from the pool through the object's range and the instance's transform; `SceneRayClear`:
+  shadow rays, first hit ends them; both bounded by the GI volume as the distance field is: a ray from outside it hits
+  nothing, one leaving it ends there; `SampleSurfaceCacheAtSceneHit`: the cards of the known object, no search). The
+  callers have the distance field code unchanged in the `#else` of `#ifdef LEL_RAY_QUERY`: `ProbeTrace.shader` (screen
+  probe rays after the screen trace, near and far), `RadianceCacheTrace.shader`, `CardRadiosityProbes.shader`,
+  `CardLighting.shader` (local lights' GI shadows). The define is a variant the passes ask for
+  (`Lighting.RayTracingDefines`, `ShaderProgram.RayQueryDefine`); the preamble adds `#extension GL_EXT_ray_query :
+  require` with it where `ShaderFeatures.RayQueries` (`GraphicsCapabilities.RayQueries`), and drops it elsewhere.
+  Still on the distance fields: the object at a screen trace's hit (the field's object ids), the radiance cache probes'
+  validity (inside geometry) and the far field's clearance test, the voxel cone tracing's SDF modes, the debug views,
+  effects.
+- Setting: `GlobalIlluminationSettings.HardwareRayTracing` (default on; Project Settings > Lighting, Lumen section,
+  "Ray Tracing"), taken with the method (`Lighting.HardwareRayTracing`, `HardwareRayTracingActive`: fixed while the game
+  runs, the editor switches it in edit mode and the passes make their tracing programs again); the console says which:
+  `[GI] Rays: hardware ray tracing (...)` or `[GI] Rays: distance fields (why)`. TestGame `hwrt=0|1`.
+- Verified on the 780M (Vulkan 1.4.315, driver 2.0.353), scratchpad tools of session 2a1d1c21 (`vktest-rt`, a copy of
+  the device tests of session 9cb23804; `tools/vkrun.ps1`, `gitimes.ps1`, `giparse.ps1`, `regions`): the device tests'
+  `rayQuery` (bottom levels of a 16-bit indexed quad with vertex and index offsets, an unindexed triangle, two
+  geometries of one mesh; a top level placing them translated, scaled, turned; 12 rays: distances, custom and instance
+  indices, primitive and geometry indices, barycentrics, facing, masks, back faces culled, an interval too short; an
+  update of the top level, a refit of a bottom level, a compacted copy, an unset binding, top levels of 1..5 instances
+  side by side) against the same rays traced on the CPU in doubles: 527 equal, 6 known (OpenGL's, as before), 0
+  different, no validation messages (sync validation too); a device started without ray queries refuses them with
+  `NotSupportedException` and compares the same; all 174 engine programs (the 4 ray query variants among them) build
+  on both APIs. TestGame on Vulkan with validation: the GI scenes with `hwrt=1` without messages; `hwrt=0` the 18
+  scenes equal to the frames before within the run-to-run noise (max 0-4, vfx not deterministic); OpenGL's check 0
+  different. Not checked: the setting in the editor by eye and its switch in edit mode, a GPU without ray queries
+  (only the switch above), Linux.
+- What the triangles change in the picture (frame 400, `hwrt=0` -> `hwrt=1`, of 255): mean 0.03-2.3, max 1
+  (volumetrics) to 119 (lights); brighter where the distance field closed gaps and grazed surfaces (under the table and
+  the box, the spheres' lower halves and their shadows: +6 to +7 on the floor under the table in materials and lights,
+  up to +37 on a sphere's underside), changes on the transparent objects (they read the radiance cache, whose probes
+  trace triangles now: up to -52 on the night scene's faceted glass ball) and per facet of the faceted ball (±13: a
+  hit's normal is the triangle's, not the field's gradient). The ray traced frames repeat as the others do (max 1
+  between runs).
+- GPU (1280 x 720, medians of three interleaved runs; the iGPU clocks lower under the heavier sphere tracing, so even
+  sections that trace nothing ran up to 20 % slower with `hwrt=0`): `RadianceCache.trace` 0.74-1.24 -> 0.08-0.15 ms,
+  `ProbeGather.trace` 0.78-2.51 -> 0.65-2.03, `SurfaceCache.radiosity` 0.13-0.90 -> 0.15-0.60, `SurfaceCache.lighting`
+  the same; the GI's sections 3.3-7.5 -> 2.5-5.0 ms, the frame 5.1-11.5 -> 4.5-9.3 ms (lumen 11.49 -> 8.37, outdoor
+  7.09 -> 5.19). Moving objects (lumen `animate=1`): the top level refitted every frame, `GlobalSDF.rayTracing` 0.03
+  ms; the GI 7.95 -> 4.76 ms. Bottom levels: TestGame's meshes 0.02-2.75 MB, a third to a half of it left after
+  compaction.
+
 ## Models and meshes
 
 - Every mesh file is a model (`LELEngine/Model`): `ModelAssets.Load(path)` gives a `Model` (node hierarchy, meshes

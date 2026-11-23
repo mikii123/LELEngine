@@ -28,6 +28,9 @@ namespace LELEngine.Rendering.Passes
 		private ShaderProgram capture;
 		private ComputeShader radiosity;
 		private ComputeShader lighting;
+
+		// The radiosity and lighting programs are the ray query variants (Lighting.HardwareRayTracingActive when they were made).
+		private bool traceRayQueries;
 		private GridShadowMap gridShadow;
 		private int frameIndex;
 
@@ -45,11 +48,22 @@ namespace LELEngine.Rendering.Passes
 				return;
 			}
 
+			if (capture != null && traceRayQueries != Lighting.HardwareRayTracingActive)
+			{
+				// The rays' way changed (the editor, in edit mode): the tracing programs of the other way.
+				radiosity.Delete();
+				lighting.Delete();
+				traceRayQueries = Lighting.HardwareRayTracingActive;
+				radiosity = new ComputeShader("Engine/CardRadiosityProbes.shader", Lighting.RayTracingDefines);
+				lighting = new ComputeShader("Engine/CardLighting.shader", Lighting.RayTracingDefines);
+			}
+
 			if (capture == null)
 			{
+				traceRayQueries = Lighting.HardwareRayTracingActive;
 				capture = new ShaderProgram("Engine/CardCapture.shader");
-				radiosity = new ComputeShader("Engine/CardRadiosityProbes.shader");
-				lighting = new ComputeShader("Engine/CardLighting.shader");
+				radiosity = new ComputeShader("Engine/CardRadiosityProbes.shader", Lighting.RayTracingDefines);
+				lighting = new ComputeShader("Engine/CardLighting.shader", Lighting.RayTracingDefines);
 				gridShadow = new GridShadowMap(gi.GridShadowMapSize);
 			}
 
@@ -256,7 +270,7 @@ namespace LELEngine.Rendering.Passes
 			lighting.Use();
 			scene.SetUniforms(program);
 			Lighting.SetUniforms(program, false, false);
-			// The local lights' shadow rays (GI shadows) trace the global distance field.
+			// The local lights' shadow rays (GI shadows) trace the global distance field (or the scene's triangles).
 			Lighting.SetSdfUniforms(program);
 			gridShadow.SetUniforms(program);
 			program.SetTexture("CardIndex", atlas.CardIndex);

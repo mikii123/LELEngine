@@ -151,6 +151,11 @@ namespace LELEngine.Graphics.OpenGL
 			return new GLTimestamp();
 		}
 
+		public override GpuAccelerationStructure CreateAccelerationStructure(in AccelerationStructureDescriptor descriptor)
+		{
+			throw new NotSupportedException("OpenGL has no acceleration structures (DeviceCapabilities.RayQuery is false).");
+		}
+
 		public override void Flush()
 		{
 			Gl.Flush();

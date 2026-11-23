@@ -310,6 +310,9 @@ namespace LELEngine.Graphics.Vulkan
 							kind = BindingKind.Image;
 							writes |= !resource.NonWritable;
 							break;
+						case SpirvResourceKind.AccelerationStructure when device.HasRayQuery:
+							kind = BindingKind.AccelerationStructure;
+							break;
 						default:
 							throw new NotSupportedException($"'{resource.Name}' ({resource.Kind}, {resource.Dimension}) is a kind of shader resource the device does not bind.");
 					}
@@ -655,6 +658,7 @@ namespace LELEngine.Graphics.Vulkan
 				case BindingKind.UniformBuffer: return VkDescriptorType.UniformBuffer;
 				case BindingKind.StorageBuffer: return VkDescriptorType.StorageBuffer;
 				case BindingKind.Texture: return VkDescriptorType.CombinedImageSampler;
+				case BindingKind.AccelerationStructure: return VkDescriptorType.AccelerationStructureKHR;
 				default: return VkDescriptorType.StorageImage;
 			}
 		}
@@ -1000,6 +1004,13 @@ namespace LELEngine.Graphics.Vulkan
 						}
 
 						break;
+					case BindingKind.AccelerationStructure:
+						for (int i = 0; i < binding.Count; i++)
+						{
+							key[length++] = (ulong)list.ResolveAccelerationStructure(binding.Number + i).VkHandle;
+						}
+
+						break;
 					default:
 						for (int i = 0; i < binding.Count; i++)
 						{
@@ -1063,9 +1074,12 @@ namespace LELEngine.Graphics.Vulkan
 			VkWriteDescriptorSet* writes = stackalloc VkWriteDescriptorSet[bindings.Length];
 			VkDescriptorImageInfo* images = stackalloc VkDescriptorImageInfo[descriptors];
 			VkDescriptorBufferInfo* buffers = stackalloc VkDescriptorBufferInfo[descriptors];
+			VkWriteDescriptorSetAccelerationStructureKHR* structureWrites = stackalloc VkWriteDescriptorSetAccelerationStructureKHR[bindings.Length];
+			VkAccelerationStructureKHR* structures = stackalloc VkAccelerationStructureKHR[descriptors];
 			int position = 1;
 			int image = 0;
 			int buffer = 0;
+			int structure = 0;
 			for (int b = 0; b < bindings.Length; b++)
 			{
 				ref Binding binding = ref bindings[b];
@@ -1100,6 +1114,15 @@ namespace LELEngine.Graphics.Vulkan
 							position += 2;
 						}
 
+						break;
+					case BindingKind.AccelerationStructure:
+						structureWrites[b] = new VkWriteDescriptorSetAccelerationStructureKHR { AccelerationStructureCount = binding.Count, AccelerationStructures = &structures[structure] };
+						for (int i = 0; i < binding.Count; i++)
+						{
+							structures[structure++] = new VkAccelerationStructureKHR((nint)key[position++]);
+						}
+
+						write.Next = &structureWrites[b];
 						break;
 					default:
 						write.ImageInfo = &images[image];
@@ -1388,7 +1411,10 @@ namespace LELEngine.Graphics.Vulkan
 			UniformBuffer,
 			StorageBuffer,
 			Texture,
-			Image
+			Image,
+
+			/// <summary>A top level acceleration structure (CommandList.SetAccelerationStructure).</summary>
+			AccelerationStructure
 		}
 
 		private struct Binding
@@ -1399,7 +1425,7 @@ namespace LELEngine.Graphics.Vulkan
 			public bool IsArray;
 			public VkShaderStageFlags Stages;
 
-			/// <summary>Buffers and images: the binding number of the GLSL source, which is the engine's number of it.</summary>
+			/// <summary>Buffers, images and acceleration structures: the binding number of the GLSL source, which is the engine's number of it.</summary>
 			public int Number;
 
 			public int StageIndex;

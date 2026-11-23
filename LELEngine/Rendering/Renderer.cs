@@ -974,6 +974,13 @@ namespace LELEngine.Rendering
 					ReleaseLumenScene();
 				}
 			}
+
+			// Lumen's rays no longer trace with ray queries: the scene's top level and the meshes' bottom levels go.
+			if (!Lighting.HardwareRayTracingActive)
+			{
+				LumenScene.ReleaseRayTracing();
+				MeshAccelerationStructures.Clear();
+			}
 		}
 
 		/// <summary>Frees the GI's scene (distance fields, surface cache, object tables) once no GI pass reads it.</summary>

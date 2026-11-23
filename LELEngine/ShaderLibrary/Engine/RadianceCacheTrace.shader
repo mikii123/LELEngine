@@ -5,12 +5,16 @@
 #include "Engine/DistanceField.glsl"
 #include "Engine/SceneObjects.glsl"
 #include "Engine/SurfaceCache.glsl"
+#ifdef LEL_RAY_QUERY
+#include "Engine/SceneRayQuery.glsl"
+#endif
 #include "Engine/Sampling.glsl"
 #include "Engine/RadianceCache.glsl"
 
 // Radiance cache probe tracing. Lumen traces its world probes at a higher resolution than it stores them
 // (32x32 rays, 16x16 stored): every probe scheduled this frame gets rcTraceResolution^2 jittered rays over
-// the full sphere, one thread per ray, written to a scratch buffer of per-slot tiles.
+// the full sphere, one thread per ray, written to a scratch buffer of per-slot tiles. The rays sphere trace the global
+// distance field, or in the LEL_RAY_QUERY variant trace the scene's triangles.
 // RadianceCacheResolve.shader then downsamples each tile into the probe's stored map and accumulates it, so
 // every stored texel averages several rays per update instead of one.
 //
@@ -78,6 +82,15 @@ void main()
 	vec3 radiance = SkyRadiance(direction);
 	float depth = sdfGridSize; // misses: further than anything in the field
 	float hitT;
+#ifdef LEL_RAY_QUERY
+	int objectIndex;
+	vec3 normal;
+	if (TraceSceneRay(position, direction, 0.0, sdfGridSize, hitT, objectIndex, normal))
+	{
+		radiance = SampleSurfaceCacheAtSceneHit(objectIndex, position + direction * hitT, normal, FinalLighting);
+		depth = SceneObjectMoved(objectIndex) ? -(hitT + 10.0) : hitT;
+	}
+#else
 	if (TraceSdf(position, direction, sdfGridSize, hitT))
 	{
 		vec3 hit = position + direction * hitT;
@@ -88,6 +101,7 @@ void main()
 		}
 		depth = SceneObjectMoved(objectIndex) ? -(hitT + 10.0) : hitT;
 	}
+#endif
 
 	imageStore(TraceBuffer, bufferTexel, vec4(radiance, depth));
 }

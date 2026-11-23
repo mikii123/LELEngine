@@ -11,7 +11,8 @@ namespace LELEngine.Rendering.Lumen
 	///     The scene as the GI sees it (Lumen's "Lumen Scene"): every renderer that contributes to GI, with its
 	///     mesh distance field and surface cache cards, uploaded once per frame as GPU tables shared by the
 	///     global distance field, the surface cache lighting and the probe gather
-	///     (Engine/SceneObjects.glsl, SSBO bindings 1 and 2).
+	///     (Engine/SceneObjects.glsl, SSBO bindings 1 and 2), and while Lumen's rays trace with ray queries as a top level
+	///     acceleration structure of the same objects (<see cref="RayTracing" />).
 	/// </summary>
 	public sealed class LumenScene
 	{
@@ -24,6 +25,9 @@ namespace LELEngine.Rendering.Lumen
 
 		public GpuBuffer ObjectBuffer { get; private set; }
 		public GpuBuffer CardBuffer { get; private set; }
+
+		/// <summary>The objects as a top level acceleration structure while Lumen's rays trace with ray queries (<see cref="Lighting.HardwareRayTracingActive" />); null otherwise.</summary>
+		public SceneRayTracing RayTracing { get; private set; }
 
 		/// <summary>The GPU resources exist: made by the first <see cref="Update" />, never by a renderer whose GI needs no scene.</summary>
 		public bool Allocated => DistanceFields != null;
@@ -154,6 +158,7 @@ namespace LELEngine.Rendering.Lumen
 			DynamicChanged = DetectDynamicChanges();
 
 			UploadTables();
+			UpdateRayTracing();
 
 			SunChanged = DirectionalLightBuffer.GIVersion != lastSunVersion;
 			lastSunVersion = DirectionalLightBuffer.GIVersion;
@@ -196,6 +201,22 @@ namespace LELEngine.Rendering.Lumen
 				program.SetVector2("surfaceCacheAtlasSize", new Vector2(SurfaceCache.Size, SurfaceCache.Size));
 				program.SetTexture("CardLocalPosition", SurfaceCache.LocalPosition);
 			}
+
+			// The objects' triangles for the programs that trace them (Engine/SceneRayQuery.glsl).
+			RayTracing?.Bind();
+		}
+
+		/// <summary>Frees the objects' top level (Lumen's rays no longer trace with ray queries).</summary>
+		public void ReleaseRayTracing()
+		{
+			if (RayTracing == null)
+			{
+				return;
+			}
+
+			RayTracing.Delete();
+			RayTracing = null;
+			Console.WriteLine("[RayTracing] Scene top level released");
 		}
 
 		/// <summary>Frees Lumen's surface cache (the objects lose their cards); voxel cone tracing keeps the rest of the scene.</summary>
@@ -217,6 +238,8 @@ namespace LELEngine.Rendering.Lumen
 			SurfaceCache?.Delete();
 			ObjectBuffer?.Dispose();
 			CardBuffer?.Dispose();
+			RayTracing?.Delete();
+			RayTracing = null;
 		}
 
 		#endregion
@@ -464,6 +487,22 @@ namespace LELEngine.Rendering.Lumen
 			}
 
 			return new ChangeRegion(min, max);
+		}
+
+		/// <summary>
+		///     The objects' top level for Lumen's rays while they trace with ray queries, built for this frame after the
+		///     tables (it reads the same objects); freed when they stop.
+		/// </summary>
+		private void UpdateRayTracing()
+		{
+			if (!Lighting.HardwareRayTracingActive)
+			{
+				ReleaseRayTracing();
+				return;
+			}
+
+			RayTracing ??= new SceneRayTracing();
+			RayTracing.Update(objects);
 		}
 
 		/// <summary>A dynamic object moved this frame or the one before (the surface cache and the caches lag one frame).</summary>

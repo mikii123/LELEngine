@@ -275,6 +275,7 @@ namespace LELEngine.Rendering
 		/// <summary>Forgets every mesh (the assets were cleared); the buffers are kept for reuse.</summary>
 		public static void Clear()
 		{
+			MeshAccelerationStructures.Clear();
 			generation++;
 			vertexCount = 0;
 			indexCount = 0;
@@ -305,6 +306,7 @@ namespace LELEngine.Rendering
 				return;
 			}
 
+			MeshAccelerationStructures.Release(mesh);
 			mesh.PoolGeneration = 0;
 			Free(freeVertices, ref vertexCount, mesh.PoolBaseVertex, mesh.PoolVertexCount);
 			Free(freeIndices, ref indexCount, mesh.PoolFirstIndex, mesh.PoolIndexCount);
@@ -323,10 +325,12 @@ namespace LELEngine.Rendering
 			}
 
 			GraphicsDevice device = GraphicsDevice.Current;
-			// Effects read meshes' vertices as a storage block too.
-			vertexBuffer = device.CreateBuffer(new BufferDescriptor(BufferUsage.Vertex | BufferUsage.Storage, 64 * 1024 * Vertex.Size, false, "Geometry pool vertices"));
+			// Effects read meshes' vertices as a storage block too, and where shaders trace rays the meshes' bottom levels
+			// are built from them (MeshAccelerationStructures).
+			BufferUsage traced = device.Capabilities.RayQuery ? BufferUsage.AccelerationStructureInput : 0;
+			vertexBuffer = device.CreateBuffer(new BufferDescriptor(BufferUsage.Vertex | BufferUsage.Storage | traced, 64 * 1024 * Vertex.Size, false, "Geometry pool vertices"));
 			vertexCapacity = 64 * 1024;
-			indexBuffer = device.CreateBuffer(new BufferDescriptor(BufferUsage.Index | BufferUsage.Storage, 256 * 1024 * sizeof(uint), false, "Geometry pool indices"));
+			indexBuffer = device.CreateBuffer(new BufferDescriptor(BufferUsage.Index | BufferUsage.Storage | traced, 256 * 1024 * sizeof(uint), false, "Geometry pool indices"));
 			indexCapacity = 256 * 1024;
 			EnsureInstanceIndices(1024);
 		}
@@ -425,6 +429,8 @@ namespace LELEngine.Rendering
 		// triangles without area.
 		private static void WriteIndexRange(Mesh mesh, int first, int count, bool hidden)
 		{
+			// Its bottom level holds the triangles as they were.
+			MeshAccelerationStructures.Invalidate(mesh);
 			uint[] indices = mesh.Indices;
 			long offset = (long)(mesh.PoolFirstIndex + first) * sizeof(uint);
 			if (hidden)

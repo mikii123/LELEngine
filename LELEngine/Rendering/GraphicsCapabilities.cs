@@ -73,6 +73,12 @@ namespace LELEngine.Rendering
 		/// </summary>
 		public static bool ParallelShaderCompile { get; private set; }
 
+		/// <summary>
+		///     Shaders trace rays through acceleration structures the device builds (<see cref="DeviceCapabilities.RayQuery" />):
+		///     the GI traces the scene's triangles where the project asks for it. Fallback: the distance fields.
+		/// </summary>
+		public static bool RayQueries { get; private set; }
+
 		public static bool Initialized { get; private set; }
 
 		#endregion
@@ -122,6 +128,7 @@ namespace LELEngine.Rendering
 			}
 
 			ParallelShaderCompile = capabilities.ParallelShaderCompile;
+			RayQueries = capabilities.RayQuery;
 			ApplyDisabledFeatures(Environment.GetEnvironmentVariable("LEL_GL_DISABLE"));
 			// As many threads as the driver likes (measured on an RTX 5070 Ti: the 13 FORGE3D planet programs 13.8 s one by
 			// one, 2.8 s started together); none when switched off: it compiles on the calling thread (the driver's
@@ -136,7 +143,7 @@ namespace LELEngine.Rendering
 			else
 			{
 				Console.WriteLine($"[Graphics] {capabilities.ApiVersion} | {capabilities.Renderer} | anisotropy {(AnisotropicFiltering ? MaxAnisotropy.ToString("0") + "x" : "no")} | images {MaxImageUnits} | sampled textures {MaxSampledTextures}");
-				Console.WriteLine($"[Graphics] indirect count {Describe(IndirectParameters, "yes")} | compute subgroups {Describe(ComputeSubgroups, "yes")} | parallel shader compile {Describe(ParallelShaderCompile, "yes")} | ray queries {(capabilities.RayQuery ? "yes" : "no")} | storage bindings {MaxShaderStorageBindings}");
+				Console.WriteLine($"[Graphics] indirect count {Describe(IndirectParameters, "yes")} | compute subgroups {Describe(ComputeSubgroups, "yes")} | parallel shader compile {Describe(ParallelShaderCompile, "yes")} | ray queries {(RayQueries ? "yes" : "no")} | storage bindings {MaxShaderStorageBindings}");
 			}
 		}
 

@@ -75,6 +75,9 @@ namespace LELEngine.Rendering.Passes
 		private const int SHLayers = 7;
 
 		private ComputeShader trace;
+
+		// The trace program is the ray query variant (Lighting.HardwareRayTracingActive when it was made).
+		private bool traceRayQueries;
 		private ComputeShader resolve;
 		private ComputeShader sh;
 		private ComputeShader reset;
@@ -160,9 +163,18 @@ namespace LELEngine.Rendering.Passes
 				return;
 			}
 
+			if (trace != null && traceRayQueries != Lighting.HardwareRayTracingActive)
+			{
+				// The rays' way changed (the editor, in edit mode): the trace program of the other way.
+				trace.Delete();
+				traceRayQueries = Lighting.HardwareRayTracingActive;
+				trace = new ComputeShader("Engine/RadianceCacheTrace.shader", Lighting.RayTracingDefines);
+			}
+
 			if (trace == null)
 			{
-				trace = new ComputeShader("Engine/RadianceCacheTrace.shader");
+				traceRayQueries = Lighting.HardwareRayTracingActive;
+				trace = new ComputeShader("Engine/RadianceCacheTrace.shader", Lighting.RayTracingDefines);
 				resolve = new ComputeShader("Engine/RadianceCacheResolve.shader");
 				sh = new ComputeShader("Engine/RadianceCacheSH.shader");
 				reset = new ComputeShader("Engine/RadianceCacheReset.shader");

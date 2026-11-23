@@ -52,6 +52,9 @@ namespace LELEngine.Rendering.Passes
 		private Matrix4 cachedInverseViewProjection = Matrix4.Identity;
 		private ComputeShader importance;
 		private ShaderProgram trace;
+
+		// The trace program is the ray query variant (Lighting.HardwareRayTracingActive when it was made).
+		private bool traceRayQueries;
 		private ComputeShader compose;
 		private ComputeShader filter;
 		private ComputeShader sh;
@@ -122,8 +125,17 @@ namespace LELEngine.Rendering.Passes
 				return;
 			}
 
+			if (anchors != null && traceRayQueries != Lighting.HardwareRayTracingActive)
+			{
+				// The rays' way changed (the editor, in edit mode): the trace program of the other way.
+				trace.Delete();
+				traceRayQueries = Lighting.HardwareRayTracingActive;
+				trace = new ShaderProgram("Engine/ProbeTrace.shader", Lighting.RayTracingDefines);
+			}
+
 			if (anchors == null)
 			{
+				traceRayQueries = Lighting.HardwareRayTracingActive;
 				anchors = new ShaderProgram("Engine/ProbeAnchors.shader");
 				adaptiveClear = new ComputeShader("Engine/ProbeAdaptiveClear.shader");
 				adaptiveSnapshot = new ComputeShader("Engine/ProbeAdaptiveSnapshot.shader");
@@ -131,7 +143,7 @@ namespace LELEngine.Rendering.Passes
 				GraphicsDevice device = Gfx.Device;
 				adaptiveLevelBuffer = device.CreateBuffer(new BufferDescriptor(BufferUsage.Storage, 0, true, "Screen probe adaptive levels"));
 				importance = new ComputeShader("Engine/ProbeImportance.shader");
-				trace = new ShaderProgram("Engine/ProbeTrace.shader");
+				trace = new ShaderProgram("Engine/ProbeTrace.shader", Lighting.RayTracingDefines);
 				compose = new ComputeShader("Engine/ProbeCompose.shader");
 				filter = new ComputeShader("Engine/ProbeFilter.shader");
 				sh = new ComputeShader("Engine/ProbeSH.shader");
