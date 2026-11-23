@@ -101,7 +101,8 @@
 - The API (`GraphicsTypes.cs`, `GpuResources.cs`, `CommandList.cs`, `GraphicsDevice.cs`, `TexelConversion.cs`):
   `Gfx.Device` (`GraphicsDevice.Current`), `Gfx.Commands`, `Gfx.Capabilities` (`DeviceCapabilities`; the engine's
   `GraphicsCapabilities` reads it). Objects: `GpuTexture` / `GpuBuffer` made from descriptors with usages
-  (`TextureDescriptor`, `TextureUsage` Sampled / Storage / Attachment; `BufferDescriptor`, `BufferUsage`), samplers
+  (`TextureDescriptor`, `TextureUsage` Sampled / Storage / Attachment / SliceImages: a 3D texture whose slices are
+  bound as 2D images, below; `BufferDescriptor`, `BufferUsage`), samplers
   apart from textures (`Samplers.LinearClamp` ..., `GetSampler(SamplerDescriptor)`), `GpuProgram` (`ProgramDescriptor`:
   the GLSL stages as the engine writes them, the attribute locations; it holds its uniform values and its samplers'
   textures by slot), `GpuFence`, `GpuTimestamp`. The engine's wrappers keep their names: `Texture.Gpu`,
@@ -153,16 +154,17 @@
   descriptor set, bindings dense over all stages, each stage's loose uniforms (its `gl_DefaultUniformBlock`) a
   dynamic uniform buffer copied into frame memory when a value changed, varyings matched by name, the shaders' per-kind
   `binding = N` of blocks and images mapped to the set; slots in OpenGL's naming (`FlattenMembers`). Pipelines cached
-  per program, render state, vertex layout, topology and attachment formats; descriptor sets per submission. Uploads
-  and `GenerateMipmaps` inside a pass go ahead of the stream into a setup command buffer while nothing recorded used
-  the resource, else the pass is suspended and resumed (~3 us). Unset or disposed bindings get stand-ins (black
-  textures, a zero buffer). Meanings kept equal to the OpenGL device: SRGBA8 textures are UNORM images with an sRGB
-  view for sampling (the OpenGL device never enables `GL_FRAMEBUFFER_SRGB`: draws, blending, clears and blits work on
-  the stored bytes, mips filter in linear light); Depth24 is D32F on AMD (no 24-bit depth), its constant depth bias
-  x4 (OpenGL's unit 2^-22: equal from depth 0.5 on). `Destroy()` releases everything when the device is given up; the
-  constructor throws with the reason when the machine cannot run it (no loader, no 1.3 GPU, a missing feature).
-  Validation: `LEL_VULKAN_VALIDATION=1` with the Khronos layer installed (or found through `VK_LAYER_PATH`),
-  `VK_KHRONOS_VALIDATION_VALIDATE_SYNC=true` for synchronization; `LEL_VULKAN_DISABLE=rayqueries`.
+  per program, render state, vertex layout, topology and attachment formats, and on disk; descriptor sets cached over
+  submissions; commands ordered by the uses of their resources (all three: "The Vulkan device's ordering" below).
+  Uploads and `GenerateMipmaps` inside a pass go ahead of the stream into a setup command buffer while the stream has
+  not used the resource in the submission, else the pass is suspended and resumed (~3 us). Unset or disposed bindings
+  get stand-ins (black textures, a zero buffer). Meanings kept equal to the OpenGL device: SRGBA8 textures are UNORM
+  images with an sRGB view for sampling (the OpenGL device never enables `GL_FRAMEBUFFER_SRGB`: draws, blending,
+  clears and blits work on the stored bytes, mips filter in linear light); Depth24 is D32F on AMD (no 24-bit depth),
+  its constant depth bias x4 (OpenGL's unit 2^-22: equal from depth 0.5 on). `Destroy()` releases everything when the
+  device is given up; the constructor throws with the reason when the machine cannot run it (no loader, no 1.3 GPU, a
+  missing feature). Validation: `LEL_VULKAN_VALIDATION=1` with the Khronos layer installed (or found through
+  `VK_LAYER_PATH`), `VK_KHRONOS_VALIDATION_VALIDATE_SYNC=true` for synchronization; `LEL_VULKAN_DISABLE=rayqueries`.
 - The devices' regression test: a console project in the scratchpad of session 9cb23804 (`vktest`; copies `vktest-rt`,
   `vktest-perf` in session 2a1d1c21's) runs the same device calls on both APIs in two processes and compares what they
   read back (526+ results: clears, passes, every blend pair, formats, samplers, mips, layers, cubes, 3D, BC7, blits,
@@ -227,8 +229,10 @@
   scenes, VUID-vkCmdBuildAccelerationStructuresKHR-pInfos-03715); a structure
   made with AllowCompaction writes its compacted size into a query after every full build (read once the submission
   has finished: `CompactedSize` never waits); unset bindings trace an empty top level built ahead of the stream.
-  Synchronization is the device's global barrier (all commands, memory read and write) before every build, copy and
-  dispatch; a top level being traced marks its bottom levels used by the submission (their destruction waits for it).
+  Builds, copies and size queries are ordered by their uses like every command ("The Vulkan device's ordering" below):
+  the vertex and index inputs and the scratch buffer at the build stage, the instance copy before the top level's
+  build, a build's writes before the rays that trace the structure (compute and fragment shaders) and before its size
+  query; a top level being traced marks its bottom levels used by the submission (their destruction waits for it).
   SPIR-V reflection: `SpirvResourceKind.AccelerationStructure` (OpTypeAccelerationStructureKHR); programs bind it as
   VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR; shaderc compiles GL_EXT_ray_query for Vulkan 1.3 as is.
 - Engine: `Rendering/MeshAccelerationStructures` (graphics thread): a bottom level per mesh of the geometry pool, of all
@@ -287,6 +291,84 @@
   7.09 -> 5.19). Moving objects (lumen `animate=1`): the top level refitted every frame, `GlobalSDF.rayTracing` 0.03
   ms; the GI 7.95 -> 4.76 ms. Bottom levels: TestGame's meshes 0.02-2.75 MB, a third to a half of it left after
   compaction.
+
+## The Vulkan device's ordering, caches and speed (2026-11-23, branch `port-vkperf`)
+
+- The ask: a performance pass of the Vulkan device, at least as fast as OpenGL on every TestGame scene (GPU and CPU),
+  no picture changed. Before it images lived in `GENERAL` and a full barrier (all commands, all memory) stood at each
+  change between passes, dispatches and transfers; descriptor sets were cached for one submission.
+- Ordering by use (`Graphics/Vulkan/VulkanSync.cs`; the device's, command list's, resources' and programs' partial
+  `*Sync.cs` files): a `SyncState` per buffer and per subresource of an image (level x layer; one for the texture
+  while all are alike) holds its layout, the stages and accesses of its last write, the stages that read it since and
+  those the write is visible to. Every command notes its uses (a pass's attachments; what the program's descriptor set
+  binds, by the program's stages: sampled textures, images, uniform and storage blocks, traced acceleration
+  structures; vertex, index and indirect buffers; the sources and destinations of copies, blits, clears, uploads and
+  mip generation; build inputs, scratch and instances), and `Sync.Apply` records only what a use has to wait for, as
+  one `vkCmdPipelineBarrier2` before the command: image barriers where a layout changes, one memory barrier for the
+  rest, with the stages and accesses of both sides. Layouts: attachments `ATTACHMENT_OPTIMAL`, sampled
+  `READ_ONLY_OPTIMAL`, transfers `TRANSFER_SRC` / `DST`, textures shaders write as images `GENERAL` for every use; a
+  use that overwrites a subresource whole (a pass that clears it or does not load it, an upload of a whole level)
+  leaves its contents behind (`UNDEFINED`). A program's next draw skips the look when no state changed since its last
+  (`SyncEpoch`). AMD's GPUs fetch vertices in the vertex shader: vertex and index reads count the pre-rasterization
+  stages too (with the input stages alone the driver let a buffer be rewritten under a draw that had not read it yet).
+- Passes (dynamic rendering): rendering begins with the pass's first draw or clear, after that draw's barriers; a
+  draw that needs a barrier on a resource the stream has used in the submission ends the rendering and begins it
+  again keeping the attachments; a barrier on one it has not used goes ahead of the stream into the setup command
+  buffer and the pass goes on. Clears of whole attachments are load operations (also `ClearTexture` of a texture that
+  can be an attachment). A pass whose draws sample its depth attachment renders it read-only while they do
+  (`READ_ONLY_OPTIMAL`, no depth writes whatever the render state says, store op none).
+  A pass that draws into level k > 0 of a texture its draws sample gives their samplers a view of levels 0..k-1
+  (downsampling chains; a pass that read levels under the one it draws into would see them clamped: the engine has
+  none); one that draws into level 0 of a texture it samples (a feedback loop OpenGL tolerates) takes that texture
+  into `GENERAL` for good (`VulkanTexture.EnterGeneralMode`). A readback of a resource the submission being
+  recorded has not used is copied in a command buffer sent alone (`SubmitAsideAndWait`): the CPU waits for what was
+  sent, not for the frame being recorded. The swapchain image's acquire is waited for at the transfer stage of the
+  blit into it.
+- Caches: descriptor sets are kept over submissions by what they bind (`VulkanDeviceCaches.cs`; up to 16 pools, then
+  the cache starts again); the sets that name a destroyed buffer, view, acceleration structure or set layout are
+  forgotten (VMA hands a freed handle to the next object). A dynamic buffer rewritten while the GPU uses it moves to
+  another storage; small ones (up to 64 KB) keep 16 spare storages (others 4), so they cycle through the same handles
+  and the sets that name them stay cached. A program's loose uniforms are copied into frame memory only when a value
+  changed. The `VkPipelineCache` is kept on disk (`VulkanPipelineCache.cs`:
+  `pipelines.vkcache` in `ProgramBinaryCache.DriverFolder`, read with the first pipeline, written a second after
+  pipelines stop coming and when a window's context goes).
+- Timestamps (`VulkanDeviceTimestamps.cs`): AMD's driver spends 1-2 us in a host reset or a read of one query (per
+  query, also when one call reads a whole pool), and the GPU profiler writes and reads dozens a frame. Queries given
+  back are reset together when the free ones run out (a call per run of neighbours), and the GPU copies a submission's
+  values into mapped memory at its end (`vkCmdCopyQueryPoolResults`), where a stamp reads its value once the
+  submission has finished: a stamp written and read ~1.0 / 1.7 us -> 0.3 / 0.15 us (OpenGL 0.3 / 0.3).
+- `TextureUsage.SliceImages`: an image made with `VK_IMAGE_CREATE_2D_VIEW_COMPATIBLE_BIT_EXT` is laid out slice by
+  slice on AMD and samples ~2x slower (the GI's 3D textures). Only a 3D texture whose slices are bound as 2D images
+  (`SetImage` with a layer) asks for it; both devices throw when a slice of one made without it is bound.
+- `LEL_VULKAN_STATS=1` prints once a second the barriers, renderings ended in a pass, descriptor sets written and
+  descriptor cache restarts per frame. TestGame's scenes: 21-81 barriers a frame (vct 195), 0-4 renderings ended for
+  a barrier, 0-0.9 sets written, no cache restart.
+- Verified (scratchpad tools of session 2a1d1c21: `vktest-final`, the device tests with the ray query ones and new
+  ones for this: a texture through passes, samplers, copies, blits and clears; depth sampled while a pass tests
+  against it; clears as load operations; uploads into an attachment of the open pass; dispatches writing what draws
+  read; transfer chains with readbacks; layers and 3D slices; a slice bound without `SliceImages` refused): 573
+  results, 567 equal to OpenGL's, 6 known, none different, no message of the validation layer with synchronization
+  validation, also with `LEL_VULKAN_DISABLE=rayqueries`. TestGame's 18 scenes on Vulkan with `hwrt=1` and `hwrt=0`
+  against the frames before (max 0-6 of 255, `vfx` not deterministic) without validation messages, synchronization
+  validation on the GI and ray tracing scenes; OpenGL's check 0 different.
+- Speed (780M, TestGame 1280 x 720, Debug builds, 600 frames hidden with a fixed step, the median of three
+  interleaved rounds; `scratchpad/vkperf.ps1`): Vulkan's GPU time a frame before -> after (`hwrt=1`): lumen 7.78 ->
+  6.89 ms, vct 14.90 -> 11.05, gi0 2.53 -> 1.96, materials 7.84 -> 7.08, outdoor 4.51 -> 3.79, nogpudriven 8.20 ->
+  7.25, ssaa 4.26 -> 3.63, vfx 3.68 -> 3.05, impostors 4.11 -> 3.35, nav 1.18 -> 0.84 (OpenGL: 6.60, 9.16, 1.22,
+  6.51, 3.51, 6.60, 1.81, 2.80, 3.16, 0.37); with `hwrt=0` lumen 8.74 -> 7.18, vct 15.09 -> 10.75. The device's
+  pieces (`vktest bench`): a 2048² shadow map with 1024 quads 0.64 -> 0.14 ms (OpenGL 0.11), 100 dependent dispatches
+  0.23 -> 0.17 (0.21), 20 small passes 0.076 -> 0.042 (0.015). The render thread: 0.04-0.17 ms less a frame with the
+  timestamps' change, 0-0.17 ms over OpenGL's after it.
+- Still slower than OpenGL on the GPU in every scene (0.2-0.6 ms in the GI scenes with ray tracing, up to 1.8 ms with
+  super sampling). Most of it: this driver (AMD 2.0.353, 780M) never compresses or fast-clears colour attachments (a
+  1280 x 720 RGBA8 clear 0.041 ms against OpenGL's 0.001, draws into it ~40 % slower), whatever the layouts, with
+  only the attachment usage, in memory of its own, on a device made without any optional feature (scratch
+  experiments); depth is compressed and fast-cleared. So GeometryPrepass (two RGBA16F targets cleared and drawn)
+  takes 0.45-0.60 ms against OpenGL's 0.08-0.10 (1.16 against 0.18 with super sampling), PostProcess about twice
+  OpenGL's, Shadows +0.3 ms (its RGBA32F transmittance target cleared each frame). VCT's bounces 1.53 against 1.14
+  ms (cone tracing through 3D textures: the shaders as compiled for Vulkan or the textures' tiling, not looked into).
+  The bench's CPU per draw: the same draw again 98 -> 161 ns (OpenGL 83), materials 263 -> 376 (353; the ordering's
+  bookkeeping when the textures change), a uniform per draw 266 -> 124 (112).
 
 ## Models and meshes
 
