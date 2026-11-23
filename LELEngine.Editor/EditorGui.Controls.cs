@@ -499,14 +499,16 @@ namespace LELEngine.Editor
 		public static bool ColorEdit3(string label, ref NVector3 color, ImGuiColorEditFlags flags = ImGuiColorEditFlags.None)
 		{
 			string request = ValueRequest(label, out uint id);
-			bool changed = ImGui.ColorEdit3(label, ref color, flags);
+			var color4 = new NVector4(color, 1f);
+			bool changed = ColorPicker.Field(label, ref color4, flags | ImGuiColorEditFlags.NoAlpha, id);
+			color = new NVector3(color4.X, color4.Y, color4.Z);
 			return FinishNumbers("color", label, id, request, MemoryMarshal.CreateSpan(ref Unsafe.As<NVector3, float>(ref color), 3), changed, true);
 		}
 
 		public static bool ColorEdit4(string label, ref NVector4 color, ImGuiColorEditFlags flags = ImGuiColorEditFlags.None)
 		{
 			string request = ValueRequest(label, out uint id);
-			bool changed = ImGui.ColorEdit4(label, ref color, flags);
+			bool changed = ColorPicker.Field(label, ref color, flags, id);
 			return FinishNumbers("color", label, id, request, MemoryMarshal.CreateSpan(ref Unsafe.As<NVector4, float>(ref color), 4), changed, true);
 		}
 
