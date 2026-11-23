@@ -111,7 +111,8 @@
 - Commands (`CommandList`): render passes with load operations (`BeginRenderPass(descriptor)`, the
   `(color, depth, loads)` and `(width, height, samples)` overloads, `EndRenderPass`); draws only inside a pass;
   `State` (`RenderState`: depth test / write / compare, culling, blend factors and operations, colour mask, depth bias,
-  wireframe: part of a pipeline on Vulkan), viewport, scissor, program, vertex input (`VertexInputLayout`), vertex and
+  wireframe, conservative rasterization where `DeviceCapabilities.ConservativeRasterization`: part of a pipeline on
+  Vulkan), viewport, scissor, program, vertex input (`VertexInputLayout`), vertex and
   index buffers, uniform and storage buffers and images by binding number (the shaders' `layout(binding = N)`), draws
   (indexed, instanced, indirect, indirect count, ranges), dispatches (direct, indirect), buffer and texture copies,
   blits, texture clears, mip generation, copies into buffers for readbacks, timestamps. Dispatches, copies, blits,
@@ -164,13 +165,16 @@
   its constant depth bias x4 (OpenGL's unit 2^-22: equal from depth 0.5 on). `Destroy()` releases everything when the
   device is given up; the constructor throws with the reason when the machine cannot run it (no loader, no 1.3 GPU, a
   missing feature). Validation: `LEL_VULKAN_VALIDATION=1` with the Khronos layer installed (or found through
-  `VK_LAYER_PATH`), `VK_KHRONOS_VALIDATION_VALIDATE_SYNC=true` for synchronization; `LEL_VULKAN_DISABLE=rayqueries`.
+  `VK_LAYER_PATH`), `VK_KHRONOS_VALIDATION_VALIDATE_SYNC=true` for synchronization; `LEL_VULKAN_DISABLE=rayqueries`,
+  `conservative` (VK_EXT_conservative_rasterization, asked for where the GPU has it); `LEL_VULKAN_SHADER_INFO` (the
+  driver's statistics and disassembly of every pipeline: "Voxel GI and distance fields on Vulkan" below).
 - The devices' regression test: a console project in the scratchpad of session 9cb23804 (`vktest`; copies `vktest-rt`,
   `vktest-perf` in session 2a1d1c21's) runs the same device calls on both APIs in two processes and compares what they
   read back (526+ results: clears, passes, every blend pair, formats, samplers, mips, layers, cubes, 3D, BC7, blits,
   copies, buffers, uniforms of every type, blocks, images, compute, every draw kind with the draw parameters, points,
   lines, bias, wireframe, passes without attachments, fences, timestamps, hidden windows presented and resized, binary
-  round trips, geometry stages, ray queries, the fallback to OpenGL in one process) and builds every engine shader
+  round trips, geometry stages, ray queries, conservative rasterization, the fallback to OpenGL in one process) and
+  builds every engine shader
   variant on both (170 programs, pipelines on Vulkan). Known faults of AMD's OpenGL driver it shows: the first counted
   indirect draw after a plain indirect draw of an earlier pass draws nothing; a pass without attachments is
   rasterized single-sampled whatever its sample count.
@@ -258,10 +262,11 @@
   (`Lighting.RayTracingDefines`, `ShaderProgram.RayQueryDefine`); the preamble adds `#extension GL_EXT_ray_query :
   require` with it where `ShaderFeatures.RayQueries` (`GraphicsCapabilities.RayQueries`), and drops it elsewhere.
   Still on the distance fields: the object at a screen trace's hit (the field's object ids), the radiance cache probes'
-  validity (inside geometry) and the far field's clearance test, the voxel cone tracing's SDF modes, the debug views,
-  effects.
-- Setting: `GlobalIlluminationSettings.HardwareRayTracing` (default on; Project Settings > Lighting, Lumen section,
-  "Ray Tracing"), taken with the method (`Lighting.HardwareRayTracing`, `HardwareRayTracingActive`: fixed while the game
+  validity (inside geometry) and the far field's clearance test, the debug views, effects. The voxel cone tracing's SDF
+  modes trace the top level too since 2026-11-23 ("Voxel GI and distance fields on Vulkan" below).
+- Setting: `GlobalIlluminationSettings.HardwareRayTracing` (default on; Project Settings > Lighting, "Ray Tracing",
+  shown for both methods since VCT reads it too), taken with the method (`Lighting.HardwareRayTracing`,
+  `HardwareRayTracingActive`: fixed while the game
   runs, the editor switches it in edit mode and the passes make their tracing programs again); the console says which:
   `[GI] Rays: hardware ray tracing (...)` or `[GI] Rays: distance fields (why)`. TestGame `hwrt=0|1`.
 - Verified on the 780M (Vulkan 1.4.315, driver 2.0.353), scratchpad tools of session 2a1d1c21 (`vktest-rt`, a copy of
@@ -369,6 +374,126 @@
   ms (cone tracing through 3D textures: the shaders as compiled for Vulkan or the textures' tiling, not looked into).
   The bench's CPU per draw: the same draw again 98 -> 161 ns (OpenGL 83), materials 263 -> 376 (353; the ordering's
   bookkeeping when the textures change), a uniform per draw 266 -> 124 (112).
+
+## Voxel GI and distance fields on Vulkan: conservative coverage, ray-traced cones (2026-11-23, branch `vk-sdfvct`)
+
+- The ask: VCT was the slowest scene on Vulkan (11.05 ms against OpenGL's 9.16): find where the time goes and fix it;
+  conservative rasterization for the coverage voxelization where the device has it; VCT's distance field parts through
+  the scene's top level where the device has ray queries (no distance fields then, as Lumen under ray tracing); the
+  distance field build for when it is still needed; settings and switches.
+- Conservative rasterization (API): `RenderState.ConservativeRasterization` (part of the pipeline on Vulkan: bit 32 of
+  the pipeline key's state, `VkPipelineRasterizationConservativeStateCreateInfoEXT` overestimating, no extra size) and
+  `DeviceCapabilities.ConservativeRasterization`. Vulkan: VK_EXT_conservative_rasterization where the GPU has it and
+  overestimates by half a pixel at most (`VulkanDeviceConservative.cs`; `LEL_VULKAN_DISABLE=conservative` makes a
+  device without it); a device without it (OpenGL always: its picture stays as it is) ignores the state.
+- Coverage voxelization (`VoxelGIPass.VoxelizeCoverage`, `Engine/VoxelizeCoverage.shader` `LEL_VOXEL_CONSERVATIVE`):
+  where `GlobalIlluminationSettings.ConservativeVoxelization` (default on; Project Settings > Lighting, the voxel cone
+  tracing settings) and the device can, the pass has one sample and rasterizes conservatively: one fragment per voxel
+  column a triangle touches, whose coverage is the exact area of the triangle inside the column (Green's theorem over
+  the three edges clipped to the column, no loops or arrays), and whose depth, texture coordinates and normal are the
+  triangle's at the column centre's clamped barycentric point (flat corners from the geometry stage: the centre of a
+  touched column may lie outside the triangle). Elsewhere 8x multisampling as before (the covered samples / 8). The
+  console's volume line says which (`conservative rasterization` / `8x coverage samples`); TestGame
+  `voxconservative=0|1`.
+- Ray-traced cones (`Lighting.VoxelRayTracingActive` = VCT runs, its trace mode is SDF Detail or SDF Cones, the
+  distance field setting is on, and `Lighting.HardwareRayTracing`: the project's Hardware Ray Tracing, now read by both
+  GI methods, and a device with ray queries). Then `GlobalIlluminationSettings.DistanceFieldActive` is false for VCT: no
+  global distance field, no mesh distance fields (`LumenScene` collects its objects without fields: their own scale,
+  mesh bounds in the table, `LumenScene.ReleaseDistanceFields`), and `GlobalDistanceFieldPass` only updates the scene
+  (objects and top level, profiler section `GlobalSDF.rayTracing`). `Lighting.SceneRayTracingActive` (Lumen's or VCT's
+  rays) is what builds the top level now (`LumenScene.UpdateRayTracing`, `Renderer.ReleaseUnusedGI`). The programs that
+  trace (`GIResolve`, `VoxelBounceCells`, `VoxelInject`) have `LEL_RAY_QUERY` variants
+  (`Engine/VoxelConeTracingCore.glsl` includes `Engine/SceneRayQuery.glsl` with them;
+  `Lighting.SetVoxelRayTracingUniforms`): SDF Detail's near field is a
+  ray (`TraceSceneRay`, the hit's triangle normal where the field's gradient was), an SDF cone's distance to the
+  surfaces is the distance along its axis to the first triangle a ray along the axis meets (`SceneRayHitDistance`: one
+  ray per cone, nothing read of the hit; the floor of each sample's opacity is the field's formula with that distance,
+  the same band and coverage). The material shaders have no such variant: their per-fragment cones (transparent
+  materials, cameras of a stack other than the lighting camera, `resolve=0`) are voxel cones then. The console:
+  `[VoxelGI] Cones: SDF cones through the scene's triangles (...)` or `... through the distance fields (why)`.
+- Where VCT's time went on Vulkan (780M, per pass against OpenGL, TestGame `gi=vct`): the bounce passes (+0.5 ms
+  each), all of it the bounce cells' cone tracing of the anisotropic mips with the distance field's floor (iso mips +
+  SDF: equal to OpenGL; aniso + voxel cones: +30 %; aniso with one slab read instead of up to three: equal): the code
+  AMD's Vulkan compiler makes puts every conditional slab fetch in a branch of its own with its descriptor loaded again
+  before it and a wait after it (VK_AMD_shader_info's disassembly; OpenGL's code cannot be looked at, the same shader
+  runs faster there). Not the 3D textures: none
+  asks for 2D views any more, and the device bench (`VKTEST_VOLUME=1`, cubes and the 384 x 64 x 64 atlas, screen-like
+  and 4^3-block-like reads) samples them as fast as OpenGL. Wave32 for compute (subgroup size control; the driver picks
+  wave64) gained 8 % on that bounce, nothing beyond the run-to-run noise elsewhere: not kept. SPIR-V optimized by
+  shaderc (performance) changed the registers by one or two: not kept. Fixed in the engine: the slab fetches are
+  issued first and weighted after (`SampleAnisoLevel`: the resolve and the transparent materials 2.47 -> 2.25 and
+  1.75 -> 1.58 ms on Vulkan, OpenGL unchanged), the anisotropic mip shader's per-thread axis index (scratch memory on
+  Vulkan) replaced by constant indices per axis, the coverage shader's per-fragment component index the same. The rest
+  of the gap is the colour attachments' missing compression (Shadows +0.3, GeometryPrepass +0.4, filter and post +0.15
+  ms: "The Vulkan device's ordering" above).
+- `LEL_VULKAN_SHADER_INFO=1|folder` (`VulkanDeviceShaderInfo.cs`): with VK_AMD_shader_info, every pipeline made prints
+  its stages' VGPRs, SGPRs, LDS and scratch bytes (compute: the work group), and with a folder writes each stage's
+  disassembly there.
+- The distance fields where they are still built (OpenGL, no ray queries, Hardware Ray Tracing off, Lumen until its
+  rays stop needing them): the global field's compose (`Engine/SdfCompose.shader`, static rebuild, scrolled slabs,
+  dynamic regions) skips an object for a texel when the distance to the object's field box is already no nearer than
+  the texel's nearest so far (`SceneObjectDistance` is never below it outside the box): no atlas read, and the same
+  field (a skipped object could not have lowered the texel's distance; both APIs). The mesh field build: subgroup folds
+  on Vulkan and fewer flushes ("Mesh distance field atlas" above). What could run on an async compute queue (none of it
+  reads the frame's raster work): the mesh field
+  builds, the compose passes, the top level's build; of VCT the region clears and the block compaction (the injection
+  needs the grid shadow maps, the bounce the injection, the resolve the geometry prepass).
+- Tried and dropped: tracing the bounce by compacted lists of the cells with geometry (full work groups instead of a
+  block's 16 of 64): slower on both APIs and both trace paths (Vulkan, block dispatch -> compacted: SDF cones 1.63 ->
+  2.63 ms a bounce, ray traced 0.82 -> 1.06): a compacted group mixes cells of several blocks and surfaces, every slab
+  branch and every cone length is taken. Counting the ray's hit as a thin surface the cone passes (`|hit - distance|`):
+  more light through walls (the day room +0.6 against +0.24 of 255 on average), not kept.
+- Measured (780M, TestGame 1280 x 720 Debug, 900 frames hidden with a fixed step, the base build and this one run in
+  turns three times; other sessions' engine processes shared the GPU, so each run counts its least disturbed second
+  of the third on: scratchpad `sdfvct/passperf.ps1 -Aggregate Min`), GPU ms a frame, Vulkan before -> after (OpenGL
+  after): vct 11.28 -> 9.15 (9.23), voxcoverage=0 10.70 -> 8.83 (8.79), voxmips=iso 7.28 -> 6.62 (6.64), voxmips=sh
+  11.93 -> 10.78 (11.11), trace=voxel 7.36 -> 7.07 (5.97), trace=sdf 7.02 -> 7.25 (5.79), resolve=0 17.27 -> 9.38
+  (15.45), bounce=0 7.59 -> 6.94 (6.54), static=0 12.19 -> 10.13 (9.97), hwrt=0 (the distance fields) 11.55 -> 11.27
+  (9.62); lumen 6.79 -> 6.74, lumen hwrt=0 7.16 -> 7.05, lumen hwrt=0 animate=1 7.38 -> 7.37 (OpenGL unchanged in all,
+  within 0.1-0.3). By pass (vct, Vulkan): a bounce 1.64 -> 0.83 (rays instead of the field's samples), GIResolve 2.30
+  -> 2.70 (seven rays a pixel), Transparent 1.68 -> 0.72 (voxel cones in the materials), mips 0.34 -> 0.33; the field
+  path (hwrt=0): GIResolve 2.34 -> 2.16, Transparent 1.74 -> 1.63, the bounce unchanged (1.64 -> 1.68, OpenGL 1.21).
+  The coverage voxelization of everything every frame (static=0, `VoxelGI.dynamic`): 0.53 -> 0.51 ms (OpenGL 0.44);
+  the same build with `voxconservative=0` 0.52, and the static voxelization every frame (`hwrt=0 staticrebuild=1`,
+  `VoxelGI.static` with its clears) 2.75 multisampled against 2.79 conservative: the same cost. The static field's
+  compose every frame (`staticrebuild=1`, `GlobalSDF.static`, against this build with the compose and build shaders of
+  the commit before): lumen hwrt=0 1.20 -> 0.38 ms on Vulkan (OpenGL 0.42 -> 0.40), vct hwrt=0 1.16 -> 0.38 (0.47 ->
+  0.43). The dynamic objects' compose (lumen hwrt=0 animate=1, `GlobalSDF.dynamic`) 0.09 -> 0.06 (OpenGL 0.07 ->
+  0.05). The first second's field builds and compose (`GlobalSDF`, load): lumen hwrt=0 2.0-2.5 -> 0.10-0.18, vct
+  hwrt=0 3.2-4.8 -> 0.02-0.09 (OpenGL 4.2-5.4 before and after: its flushes leave no gaps in the GPU's time; Vulkan's
+  section had the GPU waiting between the per-chunk submissions). VRAM: VCT under ray tracing
+  builds no global field (128^3 x 2 x (R16F + R16UI): 16 MB) and no mesh field atlas (8 MB at least), and adds the top
+  level and bottom levels (0.01-0.02 MB in TestGame); conservative rasterization changes no memory (the accumulators
+  are the same, the pass has no attachments).
+- What the pictures do (frame 400, against the Vulkan frames of the commit before, of 255): conservative coverage alone
+  (`hwrt=0`, `trace=voxel`): max 11-12, mean 0.06-0.08, nothing over 8 (slightly darker walls, brighter boxes: exact
+  coverage instead of eighths); against OpenGL unchanged (OpenGL's driver ignores the multisampling, a covered column
+  counts an eighth: max 105, mean 13.0 before and after). The ray-traced cones: vct max 50, mean 0.79 (2.5 % over 8),
+  brighter along the room's edges and corners (a cone running beside a wall no longer counts it: the field did), a
+  little darker on the floor under the objects; trace=sdf max 67, mean 0.87; the emitter-lit night room 3.0 darker on
+  average (max 108: the field also counted the emitters a cone passed close by); materials=1 max 207, mean 1.3 (the
+  reflective and transparent balls: their reflections' cones and the glass's own cones, voxel cones in the
+  materials); resolve=0 max 44, mean 3.9 (every material traces voxel cones). OpenGL: every VCT variant and Lumen
+  within max 1 of the frames before (their own run-to-run noise).
+- Verified: the device tests (scratchpad `sdfvct/vktest`, vktest-final with `TestsConservative.cs` and the volume
+  bench): 577 results, 571 equal to OpenGL's, the 6 known, none different, no message of the validation layer with
+  synchronization validation; `conservative` (three triangles and two slivers in a pass without attachments, the
+  fragments counted per pixel against the pixels worked out on the CPU: centres without it, every touched pixel with
+  it; the state on and off in one frame) the same with `LEL_VULKAN_DISABLE=conservative`; every engine shader variant
+  builds on both APIs (183 programs). TestGame on Vulkan with validation and synchronization validation: the 13 VCT
+  variants, lumen, lumen hwrt=0, vct and lumen animate=1, vct staticrebuild=1, vct voxconservative=0, no message of
+  core validation and none of what this work touched; one run of them had none at all, a second (the GPU shared with
+  other sessions' runs) one or two SYNC-HAZARD-WRITE-AFTER-READ in about half the scenes: the back buffer's layout
+  transition at the start of a frame after the present's blit read it (the blit not in the barrier's source), which
+  the build of the commit before shows the same way (gi=0 too). OpenGL's check (`check.ps1`): 0 different. Not
+  checked: the settings in the editor by eye (Hardware Ray Tracing now shown with VCT, Conservative Voxelization), a
+  GPU without ray queries or without conservative rasterization (only the switches above), Linux.
+- Left: VCT's bounce through the distance field on Vulkan (+0.45 ms each against OpenGL: the driver's code for the
+  conditional slab fetches in compute; the ray-traced path does not have it); the ray-traced cones' quality (one ray
+  per cone sees only what lies on the axis: more rays per cone, or the hit's plane, would bring the field's soft
+  occlusion back at their cost); the material shaders' per-fragment cones under ray tracing (a ray query variant of the
+  materials); what still reads the distance fields under VCT with ray tracing has none (VFX collisions, the SDF debug
+  view); the GIResolve's rays (+0.4 ms) could stop where the field's band no longer counts.
 
 ## Models and meshes
 
@@ -1454,7 +1579,11 @@ first `Instantiate`, on the main thread, one file after another, and its program
   fills the GPU; a dispatch takes one chunk of the triangles (`PairsPerDispatch` 2^27 texel x triangle pairs; chunks of
   whole 64s of triangles, 3,072-byte aligned ranges, every bound range under GL's 128 MB storage block minimum), every
   texel's nearest squared distance and winding kept between chunks in a per-build buffer, the last chunk writes the
-  atlas; each dispatch flushed on its own. A frame spends at most `PairsPerFrame` (2^27; its first chunk always runs),
+  atlas; chunks are flushed once `FlushPairs` (2^24) pairs went to the GPU since the last flush (since 2026-11-23: a
+  long chunk on its own, the small fields of a load together with the frame; every chunk was a submission of its own on
+  Vulkan). On Vulkan the work group's lanes fold with subgroup operations (`subgroupMin` / `subgroupAdd`, then the
+  subgroups' results: one barrier instead of five; OpenGL keeps the shared-memory folds). A frame spends at most
+  `PairsPerFrame` (2^27; its first chunk always runs),
   the smallest build first (`BeginFrame` continues them); `GetOrBuild` / `Find` give a field only once `IsBuilt` (the
   renderer keeps its previous field or has none meanwhile, as for a settling shape); a build nobody asked for in
   `EvictAfterFrames` frames is dropped (its slices free); eviction skips builds going on; a build whose field another
@@ -2094,7 +2223,8 @@ lighting and the engine's other features. Octahedral impostors, baked into atlas
 - Every GI pass makes its shaders and textures on its first active frame and frees them when its part is not used:
   `VoxelGIPass` (VCT; only the selected mips' directional textures and shader variants, coverage accumulators only
   with `VoxelCoverage`), `GIResolvePass` (VCT + `ScreenSpaceResolve`, the variant in use), `GlobalDistanceFieldPass`
-  (`DistanceFieldActive`: Lumen, or VCT with an SDF trace mode; `VoxelCones` builds no field and no mesh SDFs),
+  (`DistanceFieldActive`: Lumen, or VCT with an SDF trace mode whose rays do not trace the scene's triangles;
+  `VoxelCones`, and the SDF modes under `Lighting.VoxelRayTracingActive`, build no field and no mesh SDFs),
   `SurfaceCachePass` / `RadianceCachePass` / `ScreenProbeGatherPass` (Lumen), `LumenScene` (made by its first
   `Update`; surface cache only in Lumen; `Renderer.ReleaseLumenScene` when neither needs it), the GI's sky cubemap
   (`SkyEnvironment.Clear` with GI off), debug views (on first show). With GI off nothing is allocated.
@@ -2507,7 +2637,8 @@ lighting and the engine's other features. Octahedral impostors, baked into atlas
 - `VoxelGIPass` lights the volume from scratch every frame, no state carried between frames: 1 +
   `BounceIterations` injection passes ping-pong two volumes, each bounce pass tracing the one before
   (`BounceCells`: the hemisphere cones once per 2x2x2 voxels around their average normal, `VoxelBounceCells.shader`).
-  Coverage voxelization (`VoxelCoverage`): 8x MSAA rasterization splatted over the two nearest voxels along the
+  Coverage voxelization (`VoxelCoverage`): 8x MSAA rasterization (conservative rasterization with the exact covered
+  area where the device has it: "Voxel GI and distance fields on Vulkan") splatted over the two nearest voxels along the
   projection axis into R32UI fixed-point accumulators (`VoxelizeCoverage.shader`, order independent), resolved by
   `VoxelResolveGeometry.shader` (occupancy = 2 x weight). Mips (`VoxelMips`, `VoxelMipMode`): isotropic; anisotropic
   (six views per level side by side along x in one atlas, `VoxelAnisoBase` / `VoxelAnisoMip`, `AnisotropicMipLevels`);
@@ -2530,7 +2661,8 @@ lighting and the engine's other features. Octahedral impostors, baked into atlas
 - Test hooks (TestGame): `furnace=1` (closed box, every wall albedo `furnacealbedo` and emission `furnaceemission`,
   `furnacewall` = half thickness; the expected radiance per bounce count is printed, the walls are logged as
   `[Regions]` of the HDR scene color; Lumen reaches ~98%), `bounces=N`, `bouncecells=0|1`, `bouncecones=6|1`,
-  `voxcoverage=0|1`, `voxmips=iso|aniso|sh`, `anisolevels=N`, `shadowtaps=1|4`, `conejitter=0|1`, `jittercell=m`,
+  `voxcoverage=0|1`, `voxconservative=0|1`, `voxmips=iso|aniso|sh`, `anisolevels=N`, `shadowtaps=1|4`, `conejitter=0|1`,
+  `jittercell=m`, `staticrebuild=1` (the static voxel geometry and global distance field built again every frame),
   `gifilter=N`, `voxels=1 voxelmip=N` (volume view). Scratchpad scripts of 2026-10-20 measured motion with
   `mover=300` (object) and `autocam=1` (camera, mean |second time difference|). There is no fixed capture time step
   (capturefps was removed: it made motion uneven in real time); motion per frame follows the real frame time.
