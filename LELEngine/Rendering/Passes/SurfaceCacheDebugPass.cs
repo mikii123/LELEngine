@@ -49,23 +49,24 @@ namespace LELEngine.Rendering.Passes
 			// Compiled when the view is first shown.
 			program ??= new ShaderProgram("Engine/SurfaceCacheDebug.shader");
 
-			context.SceneTarget.Bind();
-			GLState.SetDepth(false, false);
-			GLState.SetCull(false);
+			CommandList commands = Gfx.Commands;
+			context.SceneTarget.Begin();
+			commands.State.SetDepth(false, false);
+			commands.State.Culling = FaceCulling.None;
 
 			program.Use();
 			scene.SetUniforms(program);
 			Lighting.SetSdfUniforms(program);
-			program.SetTexture("SceneDepth", TextureTarget.Texture2D, context.SceneDepth.Handle, 0);
-			program.SetTexture("NormalRoughness", TextureTarget.Texture2D, context.NormalRoughness.Handle, 1);
-			program.SetTexture("Lighting", TextureTarget.Texture2D, ShowAlbedo ? scene.SurfaceCache.Albedo : scene.SurfaceCache.FinalLightingCurrent, 2);
+			program.SetTexture("SceneDepth", context.SceneDepth);
+			program.SetTexture("NormalRoughness", context.NormalRoughness);
+			program.SetTexture("Lighting", ShowAlbedo ? scene.SurfaceCache.Albedo : scene.SurfaceCache.FinalLightingCurrent);
 			program.SetMatrix4("invViewProjection", Matrix4.Invert(context.ViewProjection));
 			program.SetFloat("searchDistance", gi.SdfVoxelSize * 2f);
 
 			context.Fullscreen.Draw();
 
-			GLState.SetDepth(true, true);
-			GLState.SetCull(true);
+			commands.State.SetDepth(true, true);
+			commands.State.Culling = FaceCulling.Back;
 		}
 
 		public override void Dispose()

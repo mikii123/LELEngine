@@ -101,6 +101,7 @@ namespace LELEngine.Rendering.Passes
 		private void CaptureCards(LumenScene scene)
 		{
 			SurfaceCacheAtlas atlas = scene.SurfaceCache;
+			CommandList commands = Gfx.Commands;
 			bool bound = false;
 
 			foreach (LumenScene.SceneObject o in scene.Objects)
@@ -121,10 +122,10 @@ namespace LELEngine.Rendering.Passes
 
 				if (!bound)
 				{
-					GL.BindFramebuffer(FramebufferTarget.Framebuffer, atlas.CaptureFramebuffer);
-					GLState.SetDepth(true, true, DepthFunction.Less);
-					GLState.SetCull(false);
-					GLState.SetColorWrite(true);
+					atlas.BeginCapture();
+					commands.State.SetDepth(true, true, CompareFunction.Less);
+					commands.State.Culling = FaceCulling.None;
+					commands.State.ColorMask = ColorWriteMask.All;
 					capture.Use();
 					bound = true;
 				}
@@ -134,8 +135,13 @@ namespace LELEngine.Rendering.Passes
 				for (int i = 0; i < o.Cards.Cards.Length; i++)
 				{
 					SurfaceCard card = o.Cards.Cards[i];
+					if (!commands.InRenderPass)
+					{
+						atlas.BeginCapture();
+					}
+
 					atlas.ClearRect(card.X, card.Y, card.Width, card.Height);
-					GL.Viewport(card.X, card.Y, card.Width, card.Height);
+					commands.SetViewport(card.X, card.Y, card.Width, card.Height);
 					capture.SetMatrix4("cardViewProjection", card.ViewProjection);
 					capture.SetInt("cardIndex", o.Cards.FirstCardIndex + i);
 
@@ -150,6 +156,13 @@ namespace LELEngine.Rendering.Passes
 
 						// The same conventional material inputs the voxelizer reads.
 						GISurface.SetUniforms(capture, material);
+						// A map used for the first time is uploaded here, and making its mip levels ends the pass.
+						if (!commands.InRenderPass)
+						{
+							atlas.BeginCapture();
+							commands.SetViewport(card.X, card.Y, card.Width, card.Height);
+						}
+
 						renderer.RenderSubMeshWith(capture, s);
 					}
 				}
@@ -159,8 +172,8 @@ namespace LELEngine.Rendering.Passes
 
 			if (bound)
 			{
-				GL.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
-				GLState.SetCull(true);
+				commands.EndRenderPass();
+				commands.State.Culling = FaceCulling.Back;
 			}
 		}
 
@@ -186,6 +199,7 @@ namespace LELEngine.Rendering.Passes
 		private void LightCards(Renderer renderer, LumenScene scene, GlobalIlluminationSettings gi)
 		{
 			SurfaceCacheAtlas atlas = scene.SurfaceCache;
+			CommandList commands = Gfx.Commands;
 			GpuProfiler profiler = renderer.Profiler;
 
 			// Last frame's final lighting becomes the radiosity input; this frame writes the other buffer.
@@ -216,15 +230,15 @@ namespace LELEngine.Rendering.Passes
 			// Rays read last frame's radiance cache beyond the near distance.
 			if (radianceCache != null && gi.RadianceCacheForRadiosity)
 			{
-				radianceCache.SetUniforms(probes, 5);
+				radianceCache.SetUniforms(probes);
 			}
 			else
 			{
 				probes.SetFloat("rcNearDistance", 0f);
 			}
-			probes.SetTexture("CardIndex", TextureTarget.Texture2D, atlas.CardIndex, 0);
-			probes.SetTexture("CardNormal", TextureTarget.Texture2D, atlas.Normal, 2);
-			probes.SetTexture("FinalLightingPrev", TextureTarget.Texture2D, atlas.FinalLightingPrevious, 4);
+			probes.SetTexture("CardIndex", atlas.CardIndex);
+			probes.SetTexture("CardNormal", atlas.Normal);
+			probes.SetTexture("FinalLightingPrev", atlas.FinalLightingPrevious);
 			Lighting.SetSkyUniforms(probes);
 			// The clouds on the rays' way (the volumetric objects in the GI): surfaces they light pass the light on.
 			Lighting.SetMediaUniforms(probes);
@@ -241,12 +255,11 @@ namespace LELEngine.Rendering.Passes
 			probes.SetFloat("changeFloor", gi.ProbeChangeFloor);
 			probes.SetInt2("probeRegion", atlas.ProbeGridSize, probeRows);
 			probes.SetInt("probeRowStart", rowStart);
-			GL.BindImageTexture(0, atlas.RadiosityProbes, 0, false, 0, TextureAccess.ReadWrite, SizedInternalFormat.Rgba32f);
-			GL.BindImageTexture(1, atlas.RadiosityMeta, 0, false, 0, TextureAccess.ReadWrite, SizedInternalFormat.Rgba32f);
+			commands.SetImage(0, atlas.RadiosityProbes, 0, 0, ImageAccess.ReadWrite);
+			commands.SetImage(1, atlas.RadiosityMeta, 0, 0, ImageAccess.ReadWrite);
 			if (rowCount > 0)
 			{
 				radiosity.Dispatch(atlas.ProbeGridSize, rowCount, 1);
-				ComputeShader.Barrier(MemoryBarrierFlags.ShaderImageAccessBarrierBit | MemoryBarrierFlags.TextureFetchBarrierBit);
 			}
 
 			// ---- per texel: direct sun + interpolated radiosity
@@ -257,16 +270,16 @@ namespace LELEngine.Rendering.Passes
 			Lighting.SetUniforms(program, false, false);
 			// The local lights' shadow rays (GI shadows) trace the global distance field.
 			Lighting.SetSdfUniforms(program);
+			// LEGACY(gl): GridShadowMap.cs binds its maps to texture units given by number
 			gridShadow.SetUniforms(program, Lighting.ShadowMapTextureUnit, 6);
-			program.SetTexture("CardIndex", TextureTarget.Texture2D, atlas.CardIndex, 0);
-			program.SetTexture("CardAlbedo", TextureTarget.Texture2D, atlas.Albedo, 1);
-			program.SetTexture("CardNormal", TextureTarget.Texture2D, atlas.Normal, 2);
-			program.SetTexture("CardEmissive", TextureTarget.Texture2D, atlas.Emissive, 3);
-			program.SetTexture("RadiosityProbes", TextureTarget.Texture2D, atlas.RadiosityProbes, 4);
+			program.SetTexture("CardIndex", atlas.CardIndex);
+			program.SetTexture("CardAlbedo", atlas.Albedo);
+			program.SetTexture("CardNormal", atlas.Normal);
+			program.SetTexture("CardEmissive", atlas.Emissive);
+			program.SetTexture("RadiosityProbes", atlas.RadiosityProbes);
 			program.SetInt2("atlasRegion", atlas.Size, atlas.UsedRows);
-			GL.BindImageTexture(0, atlas.FinalLightingCurrent, 0, false, 0, TextureAccess.WriteOnly, SizedInternalFormat.Rgba16f);
+			commands.SetImage(0, atlas.FinalLightingCurrent, 0, 0, ImageAccess.Write);
 			lighting.DispatchThreads(atlas.Size, atlas.UsedRows, 1, 8, 8, 1);
-			ComputeShader.Barrier(MemoryBarrierFlags.ShaderImageAccessBarrierBit | MemoryBarrierFlags.TextureFetchBarrierBit);
 		}
 
 		#endregion

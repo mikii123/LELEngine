@@ -55,25 +55,24 @@ namespace LELEngine.Rendering.Lumen
 		public const int RadiosityBlock = 4;
 
 		public int Size { get; }
-		public int CardIndex { get; private set; }
-		public int Albedo { get; private set; }
-		public int Normal { get; private set; }
-		public int Emissive { get; private set; }
-		public int LocalPosition { get; private set; }
-		public int IndirectLighting { get; private set; }
+		public GpuTexture CardIndex { get; private set; }
+		public GpuTexture Albedo { get; private set; }
+		public GpuTexture Normal { get; private set; }
+		public GpuTexture Emissive { get; private set; }
+		public GpuTexture LocalPosition { get; private set; }
+		public GpuTexture IndirectLighting { get; private set; }
 
 		/// <summary>Radiosity probe atlas (Size / 4 squared, fp32): rgb irradiance / pi accumulated over frames, a = sample count (0 = none).</summary>
-		public int RadiosityProbes { get; private set; }
+		public GpuTexture RadiosityProbes { get; private set; }
 
 		/// <summary>
 		///     Per radiosity probe (fp32): x = mean squared luminance of its updates (the change test's spread), y = updates
 		///     since a ray hit a moving object, z = the change test's verdict on the previous update (+1 brighter, -1 darker).
 		/// </summary>
-		public int RadiosityMeta { get; private set; }
+		public GpuTexture RadiosityMeta { get; private set; }
 		public int ProbeGridSize => Size / RadiosityBlock;
-		public int FinalLightingCurrent => finalLighting[finalIndex];
-		public int FinalLightingPrevious => finalLighting[1 - finalIndex];
-		public int CaptureFramebuffer { get; private set; }
+		public GpuTexture FinalLightingCurrent => finalLighting[finalIndex];
+		public GpuTexture FinalLightingPrevious => finalLighting[1 - finalIndex];
 
 		/// <summary>Atlas rows in use; compute passes only visit these.</summary>
 		public int UsedRows => Math.Min(Size, shelfY + shelfHeight);
@@ -85,9 +84,12 @@ namespace LELEngine.Rendering.Lumen
 
 		#region PrivateFields
 
-		private readonly int[] finalLighting = new int[2];
+		private readonly GpuTexture[] finalLighting = new GpuTexture[2];
 		private int finalIndex;
-		private int depthRenderbuffer;
+		private GpuTexture captureDepth;
+
+		// The capture's attachments: albedo, normal, emissive, position, card index.
+		private readonly ColorAttachment[] captureColors = new ColorAttachment[5];
 
 		private readonly Dictionary<MeshRenderer, SurfaceCardSet> setsByRenderer = new Dictionary<MeshRenderer, SurfaceCardSet>();
 		private readonly List<SurfaceCardSet> sets = new List<SurfaceCardSet>();
@@ -105,50 +107,25 @@ namespace LELEngine.Rendering.Lumen
 		{
 			Size = size;
 
-			CardIndex = CreateTexture(PixelInternalFormat.R16ui, PixelFormat.RedInteger, PixelType.UnsignedShort);
-			Albedo = CreateTexture(PixelInternalFormat.Rgba8, PixelFormat.Rgba, PixelType.UnsignedByte);
-			Normal = CreateTexture(PixelInternalFormat.Rgba8, PixelFormat.Rgba, PixelType.UnsignedByte);
-			Emissive = CreateTexture(PixelInternalFormat.R11fG11fB10f, PixelFormat.Rgb, PixelType.Float);
-			LocalPosition = CreateTexture(PixelInternalFormat.Rgba16f, PixelFormat.Rgba, PixelType.Float);
-			IndirectLighting = CreateTexture(PixelInternalFormat.Rgba16f, PixelFormat.Rgba, PixelType.Float);
-			finalLighting[0] = CreateTexture(PixelInternalFormat.Rgba16f, PixelFormat.Rgba, PixelType.Float);
-			finalLighting[1] = CreateTexture(PixelInternalFormat.Rgba16f, PixelFormat.Rgba, PixelType.Float);
-			RadiosityProbes = CreateTexture(PixelInternalFormat.Rgba32f, PixelFormat.Rgba, PixelType.Float, Size / RadiosityBlock);
-			RadiosityMeta = CreateTexture(PixelInternalFormat.Rgba32f, PixelFormat.Rgba, PixelType.Float, Size / RadiosityBlock);
-
 			// Lighting atlases are filtered when looked up; attributes are fetched by texel.
-			SetFilter(IndirectLighting, true);
-			SetFilter(finalLighting[0], true);
-			SetFilter(finalLighting[1], true);
-			SetFilter(LocalPosition, true);
-
-			depthRenderbuffer = GL.GenRenderbuffer();
-			GL.BindRenderbuffer(RenderbufferTarget.Renderbuffer, depthRenderbuffer);
-			GL.RenderbufferStorage(RenderbufferTarget.Renderbuffer, RenderbufferStorage.DepthComponent24, size, size);
-			GL.BindRenderbuffer(RenderbufferTarget.Renderbuffer, 0);
-
-			CaptureFramebuffer = GL.GenFramebuffer();
-			GL.BindFramebuffer(FramebufferTarget.Framebuffer, CaptureFramebuffer);
-			GL.FramebufferTexture2D(FramebufferTarget.Framebuffer, FramebufferAttachment.ColorAttachment0, TextureTarget.Texture2D, Albedo, 0);
-			GL.FramebufferTexture2D(FramebufferTarget.Framebuffer, FramebufferAttachment.ColorAttachment1, TextureTarget.Texture2D, Normal, 0);
-			GL.FramebufferTexture2D(FramebufferTarget.Framebuffer, FramebufferAttachment.ColorAttachment2, TextureTarget.Texture2D, Emissive, 0);
-			GL.FramebufferTexture2D(FramebufferTarget.Framebuffer, FramebufferAttachment.ColorAttachment3, TextureTarget.Texture2D, LocalPosition, 0);
-			GL.FramebufferTexture2D(FramebufferTarget.Framebuffer, FramebufferAttachment.ColorAttachment4, TextureTarget.Texture2D, CardIndex, 0);
-			GL.FramebufferRenderbuffer(FramebufferTarget.Framebuffer, FramebufferAttachment.DepthAttachment, RenderbufferTarget.Renderbuffer, depthRenderbuffer);
-			GL.DrawBuffers(5, new[]
-			{
-				DrawBuffersEnum.ColorAttachment0, DrawBuffersEnum.ColorAttachment1, DrawBuffersEnum.ColorAttachment2,
-				DrawBuffersEnum.ColorAttachment3, DrawBuffersEnum.ColorAttachment4
-			});
-			FramebufferErrorCode status = GL.CheckFramebufferStatus(FramebufferTarget.Framebuffer);
-			if (status != FramebufferErrorCode.FramebufferComplete)
-			{
-				Console.WriteLine("[SurfaceCache] Capture framebuffer incomplete: " + status);
-			}
+			const TextureUsage captured = TextureUsage.Sampled | TextureUsage.Attachment;
+			const TextureUsage lit = TextureUsage.Sampled | TextureUsage.Storage;
+			CardIndex = CreateTexture(TextureFormat.R16UI, Size, captured, false, "Surface cache card index");
+			Albedo = CreateTexture(TextureFormat.RGBA8, Size, captured, false, "Surface cache albedo");
+			Normal = CreateTexture(TextureFormat.RGBA8, Size, captured, false, "Surface cache normal");
+			Emissive = CreateTexture(TextureFormat.R11G11B10F, Size, captured, false, "Surface cache emissive");
+			LocalPosition = CreateTexture(TextureFormat.RGBA16F, Size, captured, true, "Surface cache position");
+			IndirectLighting = CreateTexture(TextureFormat.RGBA16F, Size, TextureUsage.Sampled, true, "Surface cache indirect lighting");
+			finalLighting[0] = CreateTexture(TextureFormat.RGBA16F, Size, lit, true, "Surface cache final lighting 0");
+			finalLighting[1] = CreateTexture(TextureFormat.RGBA16F, Size, lit, true, "Surface cache final lighting 1");
+			RadiosityProbes = CreateTexture(TextureFormat.RGBA32F, Size / RadiosityBlock, lit, false, "Surface cache radiosity probes");
+			RadiosityMeta = CreateTexture(TextureFormat.RGBA32F, Size / RadiosityBlock, TextureUsage.Storage, false, "Surface cache radiosity meta");
+			captureDepth = Gfx.Device.CreateTexture(TextureDescriptor.Texture2D(TextureFormat.Depth24, Size, Size, 1, TextureUsage.Attachment, "Surface cache capture depth"));
 
 			// Start empty: no card anywhere, no lighting.
-			ClearRect(0, 0, size, size);
-			GL.BindFramebuffer(FramebufferTarget.Framebuffer, 0);
+			CommandList commands = Gfx.Commands;
+			commands.BeginRenderPass(DescribeCapture(LoadOperation.Clear));
+			commands.EndRenderPass();
 			ClearLighting();
 
 			Console.WriteLine($"[SurfaceCache] Atlas {size}x{size}: albedo, normal, emissive, position, indirect, 2x final (~{size * (long)size * 46 / (1024.0 * 1024.0):0} MB)");
@@ -240,20 +217,26 @@ namespace LELEngine.Rendering.Lumen
 		}
 
 		/// <summary>
-		///     Clears a card rectangle of the capture attachments (requires the capture framebuffer to be bound).
+		///     Begins a render pass into the capture attachments (albedo, normal, emissive, position, card index and the
+		///     capture's depth), keeping their contents.
+		/// </summary>
+		public void BeginCapture()
+		{
+			Gfx.Commands.BeginRenderPass(DescribeCapture(LoadOperation.Load));
+		}
+
+		/// <summary>
+		///     Clears a card rectangle of the capture attachments (inside the capture's pass: <see cref="BeginCapture" />).
 		/// </summary>
 		public void ClearRect(int x, int y, int width, int height)
 		{
-			GL.Enable(EnableCap.ScissorTest);
-			GL.Scissor(x, y, width, height);
-			float[] zero = { 0f, 0f, 0f, 0f };
+			CommandList commands = Gfx.Commands;
 			for (int i = 0; i < 4; i++)
 			{
-				GL.ClearBuffer(ClearBuffer.Color, i, zero);
+				commands.ClearColor(i, ClearValue.Zero, x, y, width, height);
 			}
-			GL.ClearBuffer(ClearBuffer.Color, 4, new uint[] { EmptyCardIndex, 0, 0, 0 });
-			GL.ClearBuffer(ClearBuffer.Depth, 0, new[] { 1f });
-			GL.Disable(EnableCap.ScissorTest);
+			commands.ClearColor(4, ClearValue.Integer(EmptyCardIndex), x, y, width, height);
+			commands.ClearDepth(1f, x, y, width, height);
 		}
 
 		public void SwapFinalLighting()
@@ -263,37 +246,19 @@ namespace LELEngine.Rendering.Lumen
 
 		public void ClearLighting()
 		{
-			if (GLCapabilities.ClearTexture)
+			CommandList commands = Gfx.Commands;
+			foreach (GpuTexture texture in new[] { IndirectLighting, finalLighting[0], finalLighting[1], RadiosityProbes, RadiosityMeta })
 			{
-				foreach (int texture in new[] { IndirectLighting, finalLighting[0], finalLighting[1], RadiosityProbes })
-				{
-					GL.ClearTexImage(texture, 0, PixelFormat.Rgba, PixelType.Float, IntPtr.Zero);
-				}
-				GL.ClearTexImage(RadiosityMeta, 0, PixelFormat.Rgba, PixelType.Float, IntPtr.Zero);
-				return;
+				commands.ClearTexture(texture, 0, ClearValue.Zero);
 			}
-
-			var zeros = new float[Size * Size * 4];
-			foreach (int texture in new[] { IndirectLighting, finalLighting[0], finalLighting[1] })
-			{
-				GL.BindTexture(TextureTarget.Texture2D, texture);
-				GL.TexSubImage2D(TextureTarget.Texture2D, 0, 0, 0, Size, Size, PixelFormat.Rgba, PixelType.Float, zeros);
-			}
-			GL.BindTexture(TextureTarget.Texture2D, RadiosityProbes);
-			GL.TexSubImage2D(TextureTarget.Texture2D, 0, 0, 0, ProbeGridSize, ProbeGridSize, PixelFormat.Rgba, PixelType.Float, zeros);
-			GL.BindTexture(TextureTarget.Texture2D, RadiosityMeta);
-			GL.TexSubImage2D(TextureTarget.Texture2D, 0, 0, 0, ProbeGridSize, ProbeGridSize, PixelFormat.Rgba, PixelType.Float, zeros);
-			GL.BindTexture(TextureTarget.Texture2D, 0);
 		}
 
 		public void Delete()
 		{
-			foreach (int texture in new[] { CardIndex, Albedo, Normal, Emissive, LocalPosition, IndirectLighting, finalLighting[0], finalLighting[1], RadiosityProbes, RadiosityMeta })
+			foreach (GpuTexture texture in new[] { CardIndex, Albedo, Normal, Emissive, LocalPosition, IndirectLighting, finalLighting[0], finalLighting[1], RadiosityProbes, RadiosityMeta, captureDepth })
 			{
-				GL.DeleteTexture(texture);
+				texture?.Dispose();
 			}
-			GL.DeleteRenderbuffer(depthRenderbuffer);
-			GL.DeleteFramebuffer(CaptureFramebuffer);
 			sets.Clear();
 			setsByRenderer.Clear();
 		}
@@ -353,31 +318,26 @@ namespace LELEngine.Rendering.Lumen
 				+ "Raise Surface Cache Atlas Size or lower Surface Cache Texels Per Meter (Project Settings > Lighting), or take objects out of the GI (Contributes To GI).");
 		}
 
-		private int CreateTexture(PixelInternalFormat internalFormat, PixelFormat format, PixelType type)
+		// A square texture of one level, clamped, sampled linearly or by the nearest texel.
+		private static GpuTexture CreateTexture(TextureFormat format, int size, TextureUsage usage, bool linear, string name)
 		{
-			return CreateTexture(internalFormat, format, type, Size);
-		}
-
-		private static int CreateTexture(PixelInternalFormat internalFormat, PixelFormat format, PixelType type, int size)
-		{
-			int texture = GL.GenTexture();
-			GL.BindTexture(TextureTarget.Texture2D, texture);
-			GL.TexImage2D(TextureTarget.Texture2D, 0, internalFormat, size, size, 0, format, type, IntPtr.Zero);
-			GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)TextureMinFilter.Nearest);
-			GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)TextureMagFilter.Nearest);
-			GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapS, (int)TextureWrapMode.ClampToEdge);
-			GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureWrapT, (int)TextureWrapMode.ClampToEdge);
-			GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMaxLevel, 0);
-			GL.BindTexture(TextureTarget.Texture2D, 0);
+			GpuTexture texture = Gfx.Device.CreateTexture(TextureDescriptor.Texture2D(format, size, size, 1, usage, name));
+			texture.Sampler = linear ? Samplers.LinearClamp : Samplers.PointClamp;
 			return texture;
 		}
 
-		private static void SetFilter(int texture, bool linear)
+		// The capture's pass: every attachment kept, or emptied (no card anywhere, the depth far).
+		private RenderPassDescriptor DescribeCapture(LoadOperation load)
 		{
-			GL.BindTexture(TextureTarget.Texture2D, texture);
-			GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMinFilter, (int)(linear ? TextureMinFilter.Linear : TextureMinFilter.Nearest));
-			GL.TexParameter(TextureTarget.Texture2D, TextureParameterName.TextureMagFilter, (int)(linear ? TextureMagFilter.Linear : TextureMagFilter.Nearest));
-			GL.BindTexture(TextureTarget.Texture2D, 0);
+			captureColors[0] = new ColorAttachment(Albedo, load);
+			captureColors[1] = new ColorAttachment(Normal, load);
+			captureColors[2] = new ColorAttachment(Emissive, load);
+			captureColors[3] = new ColorAttachment(LocalPosition, load);
+			captureColors[4] = new ColorAttachment(CardIndex, load, ClearValue.Integer(EmptyCardIndex));
+			RenderPassDescriptor descriptor = default;
+			descriptor.Colors = captureColors;
+			descriptor.Depth = new DepthAttachment(captureDepth, load);
+			return descriptor;
 		}
 
 		private static Vector3 Abs(Vector3 v)

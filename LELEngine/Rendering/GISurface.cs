@@ -22,7 +22,7 @@ namespace LELEngine.Rendering
 
 		#region PublicMethods
 
-		/// <summary>Uploads the material's capture inputs (maps on texture units 0 to 4).</summary>
+		/// <summary>Uploads the material's capture inputs and gives the program its maps.</summary>
 		public static void SetUniforms(ShaderProgram program, Material material)
 		{
 			Read(material, out Inputs inputs);
@@ -30,37 +30,37 @@ namespace LELEngine.Rendering
 			program.SetVector4("voxEmissive", inputs.Emissive);
 			program.SetVector4("voxAlbedoST", inputs.AlbedoScaleOffset);
 			program.SetVector4("voxEmissionST", inputs.EmissionScaleOffset);
-			program.SetInt("voxUseAlbedoMap", inputs.AlbedoMap != 0 ? 1 : 0);
-			if (inputs.AlbedoMap != 0)
+			program.SetInt("voxUseAlbedoMap", inputs.AlbedoMap != null ? 1 : 0);
+			if (inputs.AlbedoMap != null)
 			{
-				program.SetTexture("voxAlbedoMap", TextureTarget.Texture2D, inputs.AlbedoMap, 0);
+				program.SetTexture("voxAlbedoMap", inputs.AlbedoMap);
 			}
 
-			program.SetInt("voxUseEmissionMap", inputs.EmissionMap != 0 ? 1 : 0);
-			if (inputs.EmissionMap != 0)
+			program.SetInt("voxUseEmissionMap", inputs.EmissionMap != null ? 1 : 0);
+			if (inputs.EmissionMap != null)
 			{
-				program.SetTexture("voxEmissionMap", TextureTarget.Texture2D, inputs.EmissionMap, 1);
+				program.SetTexture("voxEmissionMap", inputs.EmissionMap);
 			}
 
 			program.SetInt("voxWorkflow", inputs.Workflow);
 			program.SetVector4("voxSpecular", inputs.Specular);
-			program.SetInt("voxUseMaskMap", inputs.MaskMap != 0 ? 1 : 0);
-			if (inputs.MaskMap != 0)
+			program.SetInt("voxUseMaskMap", inputs.MaskMap != null ? 1 : 0);
+			if (inputs.MaskMap != null)
 			{
-				program.SetTexture("voxMaskMap", TextureTarget.Texture2D, inputs.MaskMap, 2);
+				program.SetTexture("voxMaskMap", inputs.MaskMap);
 			}
 
-			program.SetInt("voxUseSpecularMap", inputs.SpecularMap != 0 ? 1 : 0);
-			if (inputs.SpecularMap != 0)
+			program.SetInt("voxUseSpecularMap", inputs.SpecularMap != null ? 1 : 0);
+			if (inputs.SpecularMap != null)
 			{
-				program.SetTexture("voxSpecularMap", TextureTarget.Texture2D, inputs.SpecularMap, 3);
+				program.SetTexture("voxSpecularMap", inputs.SpecularMap);
 			}
 
-			program.SetInt("voxUseDetailAlbedoMap", inputs.DetailAlbedoMap != 0 ? 1 : 0);
-			if (inputs.DetailAlbedoMap != 0)
+			program.SetInt("voxUseDetailAlbedoMap", inputs.DetailAlbedoMap != null ? 1 : 0);
+			if (inputs.DetailAlbedoMap != null)
 			{
 				program.SetVector4("voxDetailST", inputs.DetailScaleOffset);
-				program.SetTexture("voxDetailAlbedoMap", TextureTarget.Texture2D, inputs.DetailAlbedoMap, 4);
+				program.SetTexture("voxDetailAlbedoMap", inputs.DetailAlbedoMap);
 			}
 		}
 
@@ -80,15 +80,15 @@ namespace LELEngine.Rendering
 				hash = hash * 31 + inputs.Emissive.X.GetHashCode();
 				hash = hash * 31 + inputs.Emissive.Y.GetHashCode();
 				hash = hash * 31 + inputs.Emissive.Z.GetHashCode();
-				hash = hash * 31 + inputs.AlbedoMap;
-				hash = hash * 31 + inputs.EmissionMap;
+				hash = hash * 31 + Id(inputs.AlbedoMap);
+				hash = hash * 31 + Id(inputs.EmissionMap);
 				hash = hash * 31 + inputs.AlbedoScaleOffset.GetHashCode();
 				hash = hash * 31 + inputs.EmissionScaleOffset.GetHashCode();
 				hash = hash * 31 + inputs.Workflow;
 				hash = hash * 31 + inputs.Specular.GetHashCode();
-				hash = hash * 31 + inputs.MaskMap;
-				hash = hash * 31 + inputs.SpecularMap;
-				hash = hash * 31 + inputs.DetailAlbedoMap;
+				hash = hash * 31 + Id(inputs.MaskMap);
+				hash = hash * 31 + Id(inputs.SpecularMap);
+				hash = hash * 31 + Id(inputs.DetailAlbedoMap);
 				hash = hash * 31 + inputs.DetailScaleOffset.GetHashCode();
 				return hash;
 			}
@@ -111,13 +111,13 @@ namespace LELEngine.Rendering
 				inputs.Emissive = Vector4.Zero;
 			}
 
-			inputs.AlbedoMap = material.GetTextureHandle("DiffuseMap");
-			if (inputs.AlbedoMap == 0)
+			inputs.AlbedoMap = Map(material, "DiffuseMap");
+			if (inputs.AlbedoMap == null)
 			{
-				inputs.AlbedoMap = material.GetTextureHandle("AlbedoMap");
+				inputs.AlbedoMap = Map(material, "AlbedoMap");
 			}
 
-			inputs.EmissionMap = material.GetTextureHandle("EmissionMap");
+			inputs.EmissionMap = Map(material, "EmissionMap");
 			inputs.AlbedoScaleOffset = ScaleOffset(material, "DiffuseMap_ST");
 			inputs.EmissionScaleOffset = ScaleOffset(material, "EmissionMap_ST");
 
@@ -141,7 +141,7 @@ namespace LELEngine.Rendering
 
 			if (detailAlbedoMap)
 			{
-				inputs.DetailAlbedoMap = material.GetTextureHandle("DetailAlbedoMap");
+				inputs.DetailAlbedoMap = Map(material, "DetailAlbedoMap");
 				inputs.DetailScaleOffset = ScaleOffset(material, "DetailAlbedoMap_ST");
 			}
 
@@ -149,15 +149,27 @@ namespace LELEngine.Rendering
 			{
 				inputs.Workflow = 1;
 				inputs.Specular = new Vector4(material.GetFloat("Metallic"), 0f, 0f, 0f);
-				inputs.MaskMap = maskMap ? material.GetTextureHandle("MaskMap") : 0;
+				inputs.MaskMap = maskMap ? Map(material, "MaskMap") : null;
 			}
 			else if (specular)
 			{
 				inputs.Workflow = 2;
 				Color4 color = material.GetColor("SpecularColor", new Color4(0.04f, 0.04f, 0.04f, 1f));
 				inputs.Specular = new Vector4(color.R, color.G, color.B, 1f);
-				inputs.SpecularMap = specularMap ? material.GetTextureHandle("SpecularMap") : 0;
+				inputs.SpecularMap = specularMap ? Map(material, "SpecularMap") : null;
 			}
+		}
+
+		// The 2D texture of a material's property on the GPU, or null when the material has no such texture.
+		private static GpuTexture Map(Material material, string name)
+		{
+			return material.GetTexture(name) is Texture2D texture ? texture.Gpu : null;
+		}
+
+		// A number of the texture alone for the capture's key (0: none).
+		private static int Id(GpuTexture texture)
+		{
+			return texture != null ? texture.Id : 0;
 		}
 
 		// A material without the value (older files, other shaders) draws its maps untiled.
@@ -176,13 +188,13 @@ namespace LELEngine.Rendering
 			public Vector4 Emissive;
 			public Vector4 AlbedoScaleOffset;
 			public Vector4 EmissionScaleOffset;
-			public int AlbedoMap;
-			public int EmissionMap;
+			public GpuTexture AlbedoMap;
+			public GpuTexture EmissionMap;
 			public int Workflow;
 			public Vector4 Specular;
-			public int MaskMap;
-			public int SpecularMap;
-			public int DetailAlbedoMap;
+			public GpuTexture MaskMap;
+			public GpuTexture SpecularMap;
+			public GpuTexture DetailAlbedoMap;
 			public Vector4 DetailScaleOffset;
 		}
 
