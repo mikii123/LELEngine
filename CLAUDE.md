@@ -714,11 +714,14 @@
   (formats, blending, colour mask, samples) shared by programs. A new combination of a program with a state, a layout or
   a pass's formats links four parts at its first draw (fast) and a thread of the pool links them again optimized, which
   takes the fast pipeline's place (`PipelineEntry.Pipeline`, read at each bind; the fast one is freed after the next
-  submission). On by default only on NVIDIA's driver (DXVK's default there; not tried); LEL_VULKAN_ENABLE=pipelinelibraries
-  on any GPU that has them, LEL_VULKAN_DISABLE=pipelinelibraries never; LEL_VULKAN_PIPELINE_LIBRARIES=fast keeps the fast
-  pipelines. AMD's driver (2.0.353, 780M) is why not there:
+  submission). Only with LEL_VULKAN_ENABLE=pipelinelibraries (any GPU that has them with fast linking; not by default:
+  the only driver here fails with them, no other could be tried; NVIDIA's, which DXVK uses them on by default, is the
+  one to try next); LEL_VULKAN_PIPELINE_LIBRARIES=fast keeps the fast pipelines. AMD's driver (2.0.353, 780M):
+  - the device tests (596 results) and `gi0`, `ui` run with them and equal the frames without; the other GI scenes
+    lose the device in their first frames (no message of the validation layer, also with the fast pipelines only);
   - it crashes the process (exit 127, in the driver) compiling the parts of some engine shaders it compiles whole
-    without trouble: GIMediaDebug, SdfDebug, SurfaceCacheDebug (`vktest shaders vulkan <file>` per shader file);
+    without trouble: GIMediaDebug, SdfDebug, SurfaceCacheDebug (`vktest shaders vulkan <file>` per shader file of 63;
+    also with the fast pipelines only, so in making the parts);
   - its own on-disk shader cache (`%LOCALAPPDATA%\AMD\VkCache`) keys a shader by its words alone, and what it compiled on
     a device with the extension is not interchangeable with what it compiled without: a compute pipeline found in the
     cache from the other kind of device wrote nothing or lost the device (`vktest`'s `VKTEST_PROBE=push`, alternating

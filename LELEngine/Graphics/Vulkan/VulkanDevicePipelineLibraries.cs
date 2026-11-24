@@ -12,10 +12,10 @@ namespace LELEngine.Graphics.Vulkan
 	///     are a program's, the fragment output parts (formats, blending, samples) the device's, shared by every program.
 	///     The first draw of a combination links the parts as they are (fast linking, which the device has to offer for
 	///     them to be used), and a thread of the pool links them again optimized, which replaces the fast pipeline once
-	///     it is made: the shaders run as a monolithic pipeline's would after that. Used by default where the driver is
-	///     NVIDIA's (<see cref="AskForPipelineLibraries" />); LEL_VULKAN_ENABLE naming "pipelinelibraries" uses them on any
-	///     GPU that has them, LEL_VULKAN_DISABLE naming it never (monolithic pipelines made at the first draw);
-	///     LEL_VULKAN_PIPELINE_LIBRARIES=fast: the fast pipelines stay (to compare).
+	///     it is made: the shaders run as a monolithic pipeline's would after that. Only where LEL_VULKAN_ENABLE names
+	///     "pipelinelibraries" (<see cref="AskForPipelineLibraries" />: why not by default); otherwise, and with
+	///     LEL_VULKAN_DISABLE naming it, monolithic pipelines made at the first draw. LEL_VULKAN_PIPELINE_LIBRARIES=fast:
+	///     the fast pipelines stay (to compare).
 	/// </summary>
 	internal sealed unsafe partial class VulkanDevice
 	{
@@ -29,12 +29,12 @@ namespace LELEngine.Graphics.Vulkan
 		private readonly Dictionary<OutputLibraryKey, VkPipeline> outputLibraries = new Dictionary<OutputLibraryKey, VkPipeline>();
 
 		/// <summary>
-		///     Asks for graphics pipeline libraries when the GPU has them with fast linking (without it a link may cost a
-		///     compilation, and there is nothing to gain) and its driver is one they are used with by default (NVIDIA's:
-		///     what DXVK relies on), or LEL_VULKAN_ENABLE names "pipelinelibraries". Not by default on AMD's driver
-		///     (2.0.353, Radeon 780M): it crashed compiling the fragment part of an engine shader (GIMediaDebug) that it
-		///     compiles whole without trouble; other drivers have not been tried. The feature goes into the chain of
-		///     <paramref name="want" /> (<paramref name="feature" />, the caller's, holds it until the device is made).
+		///     Asks for graphics pipeline libraries when LEL_VULKAN_ENABLE names "pipelinelibraries" and the GPU has them with
+		///     fast linking (without it a link may cost a compilation, and there is nothing to gain). Not by default: on AMD's
+		///     driver (2.0.353, Radeon 780M) the process crashed in the driver compiling the parts of three engine shaders it
+		///     compiles whole without trouble, and TestGame's GI scenes lost the device (no message of the validation
+		///     layer); no other driver could be tried. The feature goes into the chain of <paramref name="want" />
+		///     (<paramref name="feature" />, the caller's, holds it until the device is made).
 		/// </summary>
 		private void AskForPipelineLibraries(PhysicalDevice candidate, HashSet<string> extensions, VkPhysicalDeviceGraphicsPipelineLibraryFeaturesEXT* feature, VkPhysicalDeviceFeatures2* want)
 		{
@@ -50,11 +50,7 @@ namespace LELEngine.Graphics.Vulkan
 				return;
 			}
 
-			VkPhysicalDeviceDriverProperties driver = new VkPhysicalDeviceDriverProperties();
-			VkPhysicalDeviceProperties2 driverProperties = new VkPhysicalDeviceProperties2 { Next = &driver };
-			InstanceVk->vkGetPhysicalDeviceProperties2.Invoke(candidate.Handle, &driverProperties);
-			bool asked = (Environment.GetEnvironmentVariable("LEL_VULKAN_ENABLE") ?? "").IndexOf("pipelinelibraries", StringComparison.OrdinalIgnoreCase) >= 0;
-			if (!asked && driver.DriverID != VkDriverId.NvidiaProprietaryKHR)
+			if ((Environment.GetEnvironmentVariable("LEL_VULKAN_ENABLE") ?? "").IndexOf("pipelinelibraries", StringComparison.OrdinalIgnoreCase) < 0)
 			{
 				return;
 			}
