@@ -359,7 +359,31 @@
   Reflections (on), Reflection Max Roughness (0.4). Lumen's own rays stay `GI.HardwareRayTracing`. Console:
   `[RayTracing] Shadows: local lights traced (up to 8 at once), directional lights by shadow maps, soft by the lights'
   size | reflections: glossy surfaces traced (roughness up to 0.4)` when it changes, or why not. TestGame: `rtshadows`,
-  `rtshadowlights`, `rtsunshadows`, `rtsoft`, `rtreflect`, `rtrough`.
+  `rtshadowlights`, `rtsunshadows`, `rtsoft`, `rtreflect`, `rtrough`, `rtbudget` (bottom level triangles a frame).
+- Verified (780M, Vulkan 1.4.315 / 2.0.353; scratchpad of session 2a1d1c21, `rtlight/`: `vktest` (vktest-final's tests
+  on this worktree, plus `updateSwapped` (a top level updated with other bottom levels, custom indices and masks),
+  `dataAccess`, `positionFetch` (the corners against the CPU's; with `LEL_VULKAN_ENABLE=positionfetch` and no
+  validation: equal), `meshStructures` (the budget: built in the order a | b | c | d e)), `rtdump.ps1`, `rtperf.ps1`,
+  `viz.ps1`): device tests 577 results, 571 equal, 6 known, 0 different, no message of the validation layer with and
+  without sync validation, also with `LEL_VULKAN_DISABLE=rayqueries`; TestGame's 18 scenes on Vulkan with `hwrt=1` and
+  with `hwrt=0 rtshadows=0` under validation without messages; `hwrt=0` within the base build's own run-to-run
+  difference from `dumps/vkC-rt0` (max 1-6, mean <= 0.005, both builds); sync validation on lumen, materials, lights,
+  outdoor, impostors (`hwrt=1`), lumen and lights with `rtsunshadows=1`, gi0 / lights with `hwrt=0` (traced shadows
+  without Lumen's rays): only SYNC-HAZARD-WRITE-AFTER-READ of the back buffer's present blit against a later layout
+  change, which the build before this work shows too (materials, gi0 with lights; it comes and goes with timing);
+  OpenGL's check 0 different, and every scene within OpenGL's own run-to-run difference of the build before (max 0-6);
+  `sdfview=1` under hardware ray tracing (the field asked for and built from the next frame), `cacheview=1` (objects
+  found by rays). Not checked: the settings in the editor by eye, a scene where meshes appear while it plays (the
+  budget through the device tests only), New Frontier.
+- What it changes in the picture (frame 400 against `dumps/vkD-rt1`, of 255): lights mean 4.05 (max 77, 16.6 % of
+  pixels over 8), lumen 2.26, nogpudriven 2.26, materials 2.67 (max 239), refraction 2.09, suns3 1.92, outdoor 0.79,
+  anim 0.50, impostors 0.25 (max 221), volumetrics 0.10, vct / gi0 / the rest 0. Lumen's GI is darker by 1-8 levels,
+  most on floors and in corners (less light leaks): in the lights scene back faces black ~0.9 of the mean, the rays
+  starting just off the surface (not half a voxel) ~1.1, the probes' clearance test 0.3 closer to the field's than
+  none, interpolated normals ±0.4, the rest the field-free probe validity and object lookup. Traced shadows: mean
+  0.45 in lights (the blue spot's light off the bench behind the pillar, soft shadows under the bench), the same as the
+  maps within their penumbrae for the sun (`rtsunshadows=1` against the maps: mean 0.06-0.15). Reflections: the
+  metal spheres of materials and the impostor scene's cars reflect their neighbours sharply (max 239).
 
 ## The Vulkan device's ordering, caches and speed (2026-11-23, branch `port-vkperf`)
 
