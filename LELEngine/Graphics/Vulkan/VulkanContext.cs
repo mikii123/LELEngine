@@ -7,8 +7,8 @@ namespace LELEngine.Graphics.Vulkan
 {
 	/// <summary>
 	///     A window on Vulkan: its surface and swapchain. The window's back buffer is a texture of the device like any
-	///     other (first row lowest, as everywhere in the engine; two of them, a frame each in turn); presenting copies it
-	///     into the swapchain's image turned upside down, which is where the engine's row order meets the screen's.
+	///     other (first row lowest, as everywhere in the engine); presenting copies it into the swapchain's image
+	///     turned upside down, which is where the engine's row order meets the screen's.
 	///     <para>
 	///         Making the context current gives the calling thread the right to give the device commands; there is
 	///         one stream of commands whichever window is current.
@@ -25,11 +25,7 @@ namespace LELEngine.Graphics.Vulkan
 		private int swapWidth;
 		private int swapHeight;
 		private bool swapStale = true;
-
-		/// <summary>The two back buffers, and the one the frame being drawn goes into (<see cref="Backbuffer" />).</summary>
-		private readonly VulkanTexture[] backbuffers = new VulkanTexture[2];
-
-		private int backbufferIndex;
+		private VulkanTexture backbuffer;
 		private int swapInterval;
 		private int width;
 		private int height;
@@ -56,19 +52,12 @@ namespace LELEngine.Graphics.Vulkan
 			}
 		}
 
-		/// <summary>
-		///     The texture the frame being drawn goes into: one of two, which take turns frame by frame. The present's blit
-		///     reads the one just drawn once the swapchain gives an image (its wait is the presentation engine's), while the
-		///     next frame draws into the other one: with one texture the next frame's first draw into it waited for that
-		///     blit, and so for the display.
-		/// </summary>
 		public override GpuTexture Backbuffer
 		{
 			get
 			{
 				int w = Math.Max(1, width);
 				int h = Math.Max(1, height);
-				ref VulkanTexture backbuffer = ref backbuffers[backbufferIndex];
 				if (backbuffer == null || backbuffer.Width != w || backbuffer.Height != h)
 				{
 					backbuffer?.Dispose();
@@ -118,8 +107,7 @@ namespace LELEngine.Graphics.Vulkan
 				return;
 			}
 
-			VulkanTexture drawn = backbuffers[backbufferIndex];
-			VulkanTexture source = drawn != null && !drawn.IsDisposed ? drawn : null;
+			VulkanTexture source = backbuffer != null && !backbuffer.IsDisposed ? backbuffer : null;
 			VkCommandBuffer commands = list.PresentCommands(source);
 			VkImage image = swapImages[index];
 			Transition(commands, image, VkImageLayout.Undefined, VkImageLayout.TransferDstOptimal);
@@ -135,14 +123,13 @@ namespace LELEngine.Graphics.Vulkan
 				from[1] = new VkOffset3D { X = source.Width, Y = 0, Z = 1 };
 				to[1] = new VkOffset3D { X = swapWidth, Y = swapHeight, Z = 1 };
 				device.Vk->vkCmdBlitImage.Invoke(commands, source.Image, source.CopySourceLayout, image, VkImageLayout.TransferDstOptimal, 1, &blit, VkFilter.Nearest);
+				list.AfterPresent(source);
 			}
 
 			Transition(commands, image, VkImageLayout.TransferDstOptimal, VkImageLayout.PresentSrcKHR);
 			VkSemaphore rendered = presentSemaphores[index];
-			// Only the blit into the window's image waits for the image: the frame's other commands need not. The next
-			// frame draws into the other back buffer.
+			// Only the blit into the window's image waits for the image: the frame's other commands need not.
 			device.Submit(acquired, rendered, Sync.Transfer);
-			backbufferIndex ^= 1;
 			device.CountFrame();
 			device.SavePipelineCacheWhenQuiet();
 			VkSwapchainKHR chain = swapchain;
@@ -199,7 +186,8 @@ namespace LELEngine.Graphics.Vulkan
 			// The presentation engine lets go of the semaphores of the last presents (the queue's operations).
 			device.Vk->vkQueueWaitIdle.Invoke(device.Queue);
 			device.SavePipelineCache();
-			DisposeBackbuffers();
+			backbuffer?.Dispose();
+			backbuffer = null;
 			DestroySwapchain(true);
 			device.InstanceVk->vkDestroySurfaceKHR.Invoke(device.InstanceHandle, surface, null);
 			device.Register(this, false);
@@ -217,7 +205,8 @@ namespace LELEngine.Graphics.Vulkan
 				nativeWindow.FramebufferResize -= OnResize;
 			}
 
-			DisposeBackbuffers();
+			backbuffer?.Dispose();
+			backbuffer = null;
 			foreach (VkSemaphore semaphore in presentSemaphores)
 			{
 				device.Vk->vkDestroySemaphore.Invoke(device.Handle, semaphore, null);
@@ -234,15 +223,6 @@ namespace LELEngine.Graphics.Vulkan
 			if (VulkanDevice.ContextOfThread == this)
 			{
 				MakeNoneCurrent();
-			}
-		}
-
-		private void DisposeBackbuffers()
-		{
-			for (int i = 0; i < backbuffers.Length; i++)
-			{
-				backbuffers[i]?.Dispose();
-				backbuffers[i] = null;
 			}
 		}
 

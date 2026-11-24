@@ -393,7 +393,10 @@
   `RenderSettings.AsyncCompute` (default on; LEL_ASYNC_COMPUTE=0 off for every renderer of a run), the renderer
   brackets such a pass (its profiler sections too: they time the compute queue's work). LEL_ASYNC_PASSES=name,name
   picks the passes by name instead of their declarations (to measure which gain). Declared: `SurfaceCachePass`,
-  `RadianceCachePass`.
+  `RadianceCachePass`. Not declared, though free of the frame's raster work ("Voxel GI and distance fields on Vulkan"):
+  the mesh field builds, the global field's compose, the top level's build, VCT's region clears and block compaction;
+  they are parts of passes whose other parts read raster work, so they would take `BeginAsyncCompute` /
+  `EndAsyncCompute` around those parts rather than a pass's declaration (the device orders whatever is put there).
 - Vulkan (`Graphics/Vulkan/VulkanDeviceQueues.cs`, `VulkanCommandListQueues.cs`): a queue of a compute family apart
   from the graphics family (AMD: its asynchronous compute engines; family 1 on the 780M) with timeline semaphores, made
   only when asked for (`GraphicsDevice.RequestAsyncCompute` before the first window, LEL_ASYNC_COMPUTE=1; off by
@@ -427,13 +430,18 @@
     synchronization validation with it.
 - Frames in flight (`VulkanContext.SwapBuffers`): the CPU records at most one frame ahead, counted by frames (it waits
   for the frame before's present) instead of by submissions: a frame takes more of them now (the queues' waits).
-- Two back buffers taking turns (`VulkanContext.Backbuffer`): the present's blit reads the one just drawn only once the
-  swapchain's image is free (its wait is the presentation engine's), and with one back buffer the next frame's first
-  draw into it waited for that blit, so for the display. Synchronization validation also reported that wait, now and
-  then (SYNC-HAZARD-WRITE-AFTER-READ on the back buffer's layout change after the present's blit read it, also on the
-  engine before this work), although the barrier before that layout change had the blit's stage (traced: Transfer ->
-  colour output, every frame); why the layer lost that order was not found. Now a back buffer is drawn again two frames
-  later, after the CPU has waited for its present. One more RGBA8 window-sized texture (3.7 MB at 1280 x 720).
+- The back buffer after presenting (`VulkanCommandList.AfterPresent`, called by `VulkanContext.SwapBuffers`): right
+  after the blit that reads it, in the same command buffer, the back buffer goes back to the layout it is drawn in.
+  When that layout change came with the next frame's first draw, in a later submission than the blit's (which waits
+  for the swapchain's image), synchronization validation reported now and then a SYNC-HAZARD-WRITE-AFTER-READ on it
+  (in a third to a half of the scenes of a run, gi0 too, the engine before this work the same), although its barrier
+  had the blit's stage (traced: Transfer -> colour output, every frame); why the layer lost that order was not found.
+  In the blit's command buffer the order is plain to it. The blit also waits there for every earlier write
+  (`PresentCommands`: a memory barrier from all commands), also when the back buffer's state needs none: after a
+  readback of the back buffer right before the present (the device tests' `present`, `secondWindow`), which the CPU
+  waited for, the layer checked the blit against the layout change of the present before, overtaken by two in between
+  (traced: the device's barriers were right). No message since in either. Two back buffers taking turns, tried first,
+  did not end the messages and showed no gain: not kept.
 - Fewer clears:
   - Transparent shadows (`TransparentShadows.DrawCasters`, the tile given by `ShadowPass` and `GridShadowMap`): a
     transmittance map is no longer cleared whole each frame (a 2048² RGBA32F map: 64 MB of writes on a driver without
@@ -589,7 +597,8 @@
   core validation and none of what this work touched; one run of them had none at all, a second (the GPU shared with
   other sessions' runs) one or two SYNC-HAZARD-WRITE-AFTER-READ in about half the scenes: the back buffer's layout
   transition at the start of a frame after the present's blit read it (the blit not in the barrier's source), which
-  the build of the commit before shows the same way (gi=0 too). OpenGL's check (`check.ps1`): 0 different. Not
+  the build of the commit before shows the same way (gi=0 too); gone since ("The Vulkan device's queues, submissions
+  and clears": the layout changes back in the present's command buffer). OpenGL's check (`check.ps1`): 0 different. Not
   checked: the settings in the editor by eye (Hardware Ray Tracing now shown with VCT, Conservative Voxelization), a
   GPU without ray queries or without conservative rasterization (only the switches above), Linux.
 - Left: VCT's bounce through the distance field on Vulkan (+0.45 ms each against OpenGL: the driver's code for the

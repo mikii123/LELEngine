@@ -804,7 +804,13 @@ namespace LELEngine.Graphics.Vulkan
 			endBatch.Record(device, commands);
 		}
 
-		/// <summary>The stream's command buffer for presenting: the back buffer is read by the blit into the window's image.</summary>
+		/// <summary>
+		///     The stream's command buffer for presenting: the back buffer is read by the blit into the window's image.
+		///     The blit waits for every earlier write in its own command buffer, also when the back buffer's state needs no
+		///     barrier (a readback of it right before): synchronization validation checked such a blit against a use of
+		///     the back buffer older than its last one (after the CPU had waited for the readback), the order through the
+		///     submissions in between lost to it.
+		/// </summary>
 		internal VkCommandBuffer PresentCommands(VulkanTexture backbuffer)
 		{
 			UseGraphicsQueue();
@@ -812,10 +818,23 @@ namespace LELEngine.Graphics.Vulkan
 			if (backbuffer != null)
 			{
 				RequireTexture(backbuffer, 0, 1, 0, 1, backbuffer.CopySourceLayout, Sync.Transfer, false);
+				streamBatch.AddMemory(VkPipelineStageFlags2.AllCommandsBit, VkAccessFlags2.MemoryWriteBit, Sync.Transfer, VkAccessFlags2.TransferReadBit);
 			}
 
 			ApplyRequirements(false);
 			return device.MainCommands;
+		}
+
+		/// <summary>
+		///     After the present's blit, in its command buffer: the back buffer goes back to the layout it is drawn in,
+		///     ordered right after the blit's read. The next frame's first draw into it then needs no layout transition: one
+		///     made there, in a later submission than the blit's (which waits for the swapchain's image), was reported by
+		///     sync validation as racing the blit's read.
+		/// </summary>
+		internal void AfterPresent(VulkanTexture backbuffer)
+		{
+			RequireTexture(backbuffer, 0, 1, 0, 1, backbuffer.AttachmentLayout, Sync.ColorOutput, false);
+			ApplyRequirements(false);
 		}
 
 		/// <summary>
