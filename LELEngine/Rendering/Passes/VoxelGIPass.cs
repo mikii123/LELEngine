@@ -963,27 +963,9 @@ namespace LELEngine.Rendering.Passes
 		private ComputeShader Variant(ComputeShader[] variants, string path)
 		{
 			int index = (int)mipMode + (rayScene != null ? 3 : 0);
-			// Through the distance field on Vulkan the anisotropic slabs are fetched without a branch each
-			// (Engine/VoxelRadiance.glsl, LEL_ANISO_ALL_SLABS): the cells of a work group trace their cones every way. The
-			// ray query variants keep the branches (the driver's code for them is not slower there).
-			string slabs = AnisoSlabsWithoutBranches && Gfx.Device.Api == GraphicsApi.Vulkan && mipMode == VoxelMipMode.Anisotropic ? AllSlabsDefine : null;
 			return variants[index] ??= rayScene != null
 				? new ComputeShader(path, MipModeDefines[(int)mipMode], ShaderProgram.RayQueryDefine)
-				: new ComputeShader(path, Defines(MipModeDefines[(int)mipMode], slabs));
-		}
-
-		// Define of the anisotropic slab fetches without branches (Engine/VoxelRadiance.glsl).
-		private const string AllSlabsDefine = "LEL_ANISO_ALL_SLABS";
-
-		/// <summary>
-		///     The bounce's programs fetch the anisotropic slabs without a branch each on Vulkan (true), or as the other
-		///     passes do (false). Read when the programs are made; a measurement switch (TestGame voxallslabs=).
-		/// </summary>
-		public static bool AnisoSlabsWithoutBranches = true;
-
-		private static string[] Defines(params string[] defines)
-		{
-			return Array.FindAll(defines, define => define != null);
+				: new ComputeShader(path, MipModeDefines[(int)mipMode]);
 		}
 
 		// Says once how the cones see the scene's geometry, and again when that changes (the editor's settings).
@@ -998,9 +980,10 @@ namespace LELEngine.Rendering.Passes
 			{
 				int rays = Math.Clamp(Lighting.RayTracing.ConeRays, 1, RayTracingSettings.MaxConeRays);
 				string materials = Lighting.MaterialConeRays ? "the materials' own cones too" : "the materials' own cones are voxel cones";
+				string distance = Lighting.ConeHitPlane ? "the distance to the axis hit's plane" : "the distance along the axis";
 				cones = gi.TraceMode == GITraceMode.SdfDetail
 					? $"SDF detail through the scene's triangles (a ray query for every cone's near field; no distance fields; {materials})"
-					: $"SDF cones through the scene's triangles ({rays} ray quer{(rays == 1 ? "y" : "ies")} a cone, the distance to the axis hit's plane; no distance fields; {materials})";
+					: $"SDF cones through the scene's triangles ({rays} ray quer{(rays == 1 ? "y" : "ies")} a cone, {distance}; no distance fields; {materials})";
 			}
 			else if (gi.DistanceFieldEnabled)
 			{

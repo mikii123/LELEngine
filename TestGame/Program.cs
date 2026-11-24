@@ -255,8 +255,6 @@ namespace TestGame
 			// rtconereach=0 / rtconeplane=0: voxel cone tracing's rays over the whole cone / their distance along the axis (A/B).
 			Lighting.ConeRayReach = GetFloat(args, "rtconereach", Lighting.ConeRayReach);
 			Lighting.ConeHitPlane = GetBool(args, "rtconeplane", Lighting.ConeHitPlane);
-			// voxallslabs=0: the voxel bounce's anisotropic slabs fetched in branches as before (A/B, Vulkan).
-			LELEngine.Rendering.Passes.VoxelGIPass.AnisoSlabsWithoutBranches = GetBool(args, "voxallslabs", true);
 			// rttiles=0: traced reflections over the whole resolve instead of the tiles with glossy pixels (A/B).
 			LELEngine.Rendering.Passes.RayTracedReflectionPass.TileClassification = GetBool(args, "rttiles", true);
 			// rtbudget=N: triangles of bottom levels a frame builds after the load's (the spreading over frames, tested small).

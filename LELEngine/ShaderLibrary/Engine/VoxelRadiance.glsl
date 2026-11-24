@@ -71,14 +71,6 @@ vec4 SampleAnisoLevel(VoxelCone cone, vec3 uvw, float lod)
 {
 	float texels = max(1.0, float(voxelResolution / 2) * exp2(-ceil(lod)));
 	float x = clamp(uvw.x, 0.5 / texels, 1.0 - 0.5 / texels) / 6.0;
-#ifdef LEL_ANISO_ALL_SLABS
-	// Every slab fetched, the skipped ones weighted 0 (the same sum): no branch around a fetch. A pass whose neighbouring
-	// threads trace cones every way (the bounce: a work group is a block of cells with their own normals) asks for it on
-	// Vulkan, where AMD's compiler puts each conditional fetch in a branch of its own with a wait after it.
-	vec4 sx = textureLod(VoxelRadianceAniso, vec3(x + cone.slabs.x / 6.0, uvw.yz), lod);
-	vec4 sy = textureLod(VoxelRadianceAniso, vec3(x + cone.slabs.y / 6.0, uvw.yz), lod);
-	vec4 sz = textureLod(VoxelRadianceAniso, vec3(x + cone.slabs.z / 6.0, uvw.yz), lod);
-#else
 	// The slabs a cone reads are fetched first and weighted after: compilers that wait for each fetch inside its branch
 	// (Vulkan's on AMD) then overlap the fetches. A skipped slab adds nothing (weight 0 times 0).
 	vec4 sx = vec4(0.0);
@@ -87,7 +79,6 @@ vec4 SampleAnisoLevel(VoxelCone cone, vec3 uvw, float lod)
 	if (cone.weights.x > 0.0) sx = textureLod(VoxelRadianceAniso, vec3(x + cone.slabs.x / 6.0, uvw.yz), lod);
 	if (cone.weights.y > 0.0) sy = textureLod(VoxelRadianceAniso, vec3(x + cone.slabs.y / 6.0, uvw.yz), lod);
 	if (cone.weights.z > 0.0) sz = textureLod(VoxelRadianceAniso, vec3(x + cone.slabs.z / 6.0, uvw.yz), lod);
-#endif
 	return cone.weights.x * sx + cone.weights.y * sy + cone.weights.z * sz;
 }
 

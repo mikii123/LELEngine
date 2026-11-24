@@ -952,22 +952,23 @@
   and clears": the layout changes back in the present's command buffer). OpenGL's check (`check.ps1`): 0 different. Not
   checked: the settings in the editor by eye (Hardware Ray Tracing now shown with VCT, Conservative Voxelization), a
   GPU without ray queries or without conservative rasterization (only the switches above), Linux.
-- Left then, done since ("Ray tracing and GI, third round" below, 2026-11-24): VCT's bounce through the distance field
-  on Vulkan (the slabs fetched without branches), the ray-traced cones' quality (the axis hit's plane, more rays a cone
-  as a setting), the material shaders' per-fragment cones under ray tracing (their ray query variants), VFX collisions
-  without the fields (rays), the GIResolve's rays (they stop where the field's term no longer counts). Still left: the
-  SDF debug view builds the field under ray tracing (it shows the field).
+- Left then, done since ("Ray tracing and GI, third round" below, 2026-11-24): the ray-traced cones' quality (the axis
+  hit's plane, more rays a cone as a setting), the material shaders' per-fragment cones under ray tracing (their ray
+  query variants), VFX collisions without the fields (rays), the GIResolve's rays (they stop where the field's term no
+  longer counts). Still left: VCT's bounce through the distance field on Vulkan (the slabs fetched without branches was
+  tried there: slower, not kept); the SDF debug view builds the field under ray tracing (it shows the field).
 
-## Ray tracing and GI, third round: traced shadows everywhere, fewer maps, smaller histories, VCT and VFX on rays (2026-11-24, branch `vk-rtgi`)
+## Ray tracing and GI, third round: shadows traced everywhere, VCT and VFX on rays (2026-11-24, branch `vk-rtgi`)
 
 - The ask (the third round of the Vulkan work: finish what was left open, a discrete GPU the primary target): the open
   items of the ray traced lighting and the voxel GI under ray tracing, each measured (per scene and pass, memory) and
   its picture compared with the Vulkan frames of the commit before (`brutal-port` 3290518).
 - Material shaders with ray queries (`ShaderRenderState.RayQueries`, the Properties line `RayQueries On`;
   `ShaderProgram.GetRayQueryVariant`, a partial file `ShaderProgram.RayQueries.cs`): the shader's variant compiled with
-  `LEL_RAY_QUERY` as well (its keywords and instanced define kept), made on first use. `Lighting.RayQueryProgram(program,
-  transparent)` gives it to the passes that draw materials (`TransparentPass.DrawMaterialEntry`, `OpaquePass` GPU-driven
-  buckets and per-shader parts; the per-object queue keeps the plain programs) while what the draw lights per fragment
+  `LEL_RAY_QUERY` as well (its keywords and instanced define kept), made on first use.
+  `Lighting.RayQueryProgram(program, transparent)` gives it to the passes that draw materials
+  (`TransparentPass.DrawMaterialEntry`, `OpaquePass` GPU-driven buckets and per-shader parts; the per-object queue keeps
+  the plain programs) while what the draw lights per fragment
   traces rays: a transparent surface's shadows (`Lighting.TransparentShadowRays` while this frame's mask was traced),
   or voxel cones traced per fragment under VCT on rays (`Lighting.VoxelRayTracingActive` with `Lighting.VoxelRayScene`,
   the scene the voxel GI pass publishes): transparent surfaces, the other cameras of a stack, no screen-space resolve.
@@ -1035,11 +1036,13 @@
   to the points further rays met, spread at half the cone's opening around the axis and turned by the cone's jitter
   (default 1). The rays stop where the field's term could no longer count: where the cone is four times wider than the
   band the field vouches for (coverage 1/4, at most a sixteenth of a sample's opacity; `Lighting.ConeRayReach`, TestGame
-  `rtconereach=0` for the whole cone). The bounce through the distance field on Vulkan fetches the anisotropic slabs
-  without a branch each (`LEL_ANISO_ALL_SLABS` in `VoxelGIPass.Variant`, not the ray query variants: the cells of a work
-  group trace their cones every way; the sum is the same; `VoxelGIPass.AnisoSlabsWithoutBranches`, TestGame
-  `voxallslabs=0`). While VCT's SDF modes read the distance field (no ray tracing for its rays) transparent surfaces keep
-  their plain programs (a ray query variant's cones would trace the triangles): no traced shadows on them there.
+  `rtconereach=0` for the whole cone). While VCT's SDF modes read the distance field (no ray tracing for its rays)
+  transparent surfaces keep their plain programs (a ray query variant's cones would trace the triangles): no traced
+  shadows on them there.
+- Tried for the bounce's code, not kept: the anisotropic slabs fetched without a branch each (all three always, the
+  skipped ones weighted 0; for AMD's compiler, which waits after each conditional fetch). On the 780M each bounce took
+  0.17 ms more with it, through the field (1.64 against 1.45 ms, `gi=vct hwrt=0`) and through the rays alike; the
+  fetches stay as they were (fetched first, weighted after).
 - VFX on rays: a system that reads the scene's surfaces (`Collide With Global SDF`, `Conform To Global SDF`, `Sample
   Global SDF`, code calling them) gets its initialize and update kernels compiled with `LEL_RAY_QUERY` too where the
   device has ray queries (`VfxProgramSet.SystemPrograms.InitializeRays` / `UpdateRays`); while the GI's rays trace the
@@ -1052,15 +1055,94 @@
   `vfx=1 vfxsdf=1` (the cube rain collides with the scene), `vfxrays=0` (the field asked for as before).
 - Settings (Project Settings > Lighting > Ray Tracing, `RayTracingSettings`): Directional Light Shadows (off),
   Directional Light Shadows On Discrete GPUs (on), Skip Unneeded Shadow Maps (on), Transparent Shadows (on), Surface
-  Cache Shadows (on), Cone Rays (1), Material Cone Rays (Discrete GPUs), besides the earlier ones. Console: `[RayTracing] Shadows: local lights traced (up to
-  8 at once), directional lights traced on opaque surfaces (a discrete GPU), their maps only for what still reads them,
-  soft by the lights' size, transparent surfaces trace theirs (hard), surface cache's directional shadows traced |
-  reflections: ... | voxel cones: 1 ray each through the triangles, the materials' own as voxel cones`, `[RayTracing]
-  Directional shadow maps: ...`, `[VoxelGI] Cones: SDF cones through the scene's triangles (1 ray query a cone, the
-  distance to the axis hit's plane; no distance fields; the materials' own cones are voxel cones)`, `[Vulkan] Ray
-  tracing position fetch left out under the validation layer (...)`. TestGame: `rtsundiscrete`, `rtskipmaps`,
-  `rttransparent`, `rtcardsun`, `rtconerays`, `rtmatcones=0|1|2`, `rttiles`, `rtconereach`, `rtconeplane`,
-  `voxallslabs`, `vfxsdf`, `vfxrays`; `LEL_CACHE_ALBEDO=1` with `cacheview=1` shows the cards' albedo.
+  Cache Shadows (on), Cone Rays (1), Material Cone Rays (Discrete GPUs), besides the earlier ones. Console:
+  `[RayTracing] Shadows: local lights traced (up to 8 at once), directional lights traced on opaque surfaces (a discrete
+  GPU), their maps only for what still reads them, soft by the lights' size, transparent surfaces trace theirs (hard),
+  surface cache's directional shadows traced | reflections: ... | voxel cones: 1 ray each through the triangles, the
+  materials' own as voxel cones`, `[RayTracing] Directional shadow maps: ...`, `[VoxelGI] Cones: SDF cones through the
+  scene's triangles (1 ray query a cone, the distance to the axis hit's plane; no distance fields; the materials' own
+  cones are voxel cones)`, `[Vulkan] Ray tracing position fetch left out under the validation layer (...)`. TestGame:
+  `rtsundiscrete`, `rtskipmaps`, `rttransparent`, `rtcardsun`, `rtconerays`, `rtmatcones=0|1|2`, `rttiles`,
+  `rtconereach`, `rtconeplane`, `vfxsdf`, `vfxrays`; `LEL_CACHE_ALBEDO=1` with `cacheview=1` shows the cards' albedo.
+- The frame graph (merged from `brutal-port` effa08e before the checks): none of these passes' targets is a frame's
+  scratch it could share. The traced shadows' mask is a 2D array the materials read up to the transparent pass
+  (published outside the graph: exported, it would share nothing), the accumulations, metas, reflection histories and
+  tile flags are histories, the tile list is a buffer. `RayTracedShadowPass` and `RayTracedReflectionPass` declare
+  their read of the motion vectors (`Setup`). Lumen's passes that trace from the scene depth stay on graphics.
+- Pictures (Vulkan, TestGame's frame 400, validation on, so without position fetch; against the build of `brutal-port`
+  effa08e, whose frames equal 3290518's within the run-to-run noise: max 0-5 but anim 19 and vfx): `hwrt=1`: lights max
+  111, mean 0.027, 0.25 % over 8 (the glass ball's facets and the glass table's edge in the lamps' shadows: transparent
+  shadows; `rttransparent=0` gives the same); lightsday, lightssun, lumensun, materialssun max 37-40, mean 0.07-0.22, at
+  most 0.15 % over 8 (the glass under the sun traced, with the maps' tint of the transparent casters); lumen,
+  nogpudriven, materials, outdoor(sun), suns3, refraction max 2-14, mean 0.09-0.17, none over 8 (the cards' sun traced:
+  the GI a little brighter or darker over the whole frame; `rtcardsun=0` gives the same); impostors, implights max
+  44-46, mean 0.02, 0.06 % over 8 (on the models, the GI's light from the cards' traced sun); the VCT scenes (vct,
+  vctlights, vctmat, vctnight, vctrefr) max 22-95, mean 0.35-0.51, 0.2-1.3 % over 8 (the cones' distance to the hit's
+  plane; `rtconeplane=0` gives max 32, mean 0.43, 1.38 % against it), vctres0 max 7; gi0lights max 29, mean 0.004, one
+  pixel over 8 (the shadows' 8-bit accumulation in the lamps' soft shadows); volumetrics, vollamps max 1; gi0, nav,
+  physics, ssaa, trails, ui, vctsdf equal; anim 28 and vfx their noise. `hwrt=0` (traced local shadows still on):
+  lights max 100, mean 0.021, 0.15 % over 8 (the glass again), the rest within the noise; `hwrt=0 rtshadows=0`: within
+  the noise of effa08e's and 3290518's frames (max 0-7, mean <= 0.005). Position fetch (before the merge, without the
+  layer): materials max 62, mean 0.28, 0.12 % over 8, vct max 31, the rest max 1-7: the hit triangles' corners read
+  from the structures instead of the pool, and two runs of materials with it differ a little too. Tiles: materials max
+  93, mean 0.011, 127 pixels over 8 (the glossy balls' reflections near their outlines and grain on the table: history
+  taps and filter neighbours in tiles that were not traced no longer count), impostors 16, lumen 2.
+- Measured (Radeon 780M, 1280 x 720, the GPU and CPU shared with other sessions' work: per run the least disturbed
+  2-second window, the least of 3 rounds; the frame's GPU ms, effa08e's build -> this one on the merged tree):
+  - Whole frames (`hwrt=1`): lumen 5.97 -> 5.71, materials 6.32 -> 6.07, refraction 7.35 -> 7.10, lights 7.85 -> 7.53,
+    outdoor 3.58 -> 3.39, impostors 3.48 -> 3.24, implights 3.94 -> 3.60, vollamps 4.69 -> 4.43, gi0lights 2.45 ->
+    2.36, vct 7.90 -> 8.08, vctnight 7.17 -> 7.23.
+  - Reflections' trace + filter 0.28-0.46 -> 0.01-0.22 ms (only materials has many glossy tiles). The classification
+    (~0.08 ms) runs beside the probe gather's integrate, which nothing orders it after, and shows in that span
+    (`ProbeGather.integrate` 0.98 -> 1.07 in every Lumen scene; 1.02 -> 1.11 with `rttiles=0` against the default).
+  - Traced shadows' trace + filter (RGBA8 / R32UI histories): lights 0.93 -> 0.78, gi0lights 0.92 -> 0.81, implights
+    0.38 -> 0.27, vollamps 0.28 -> 0.20 ms. Transparent shadows: `Transparent.Draw` +0.00-0.07 ms (lights 0.49 / 0.50,
+    lightsday 0.58 / 0.51, lightssun 0.52 / 0.48 with `rttransparent=0`). The cards' traced sun: the grid maps' 0.13 ms
+    gone in impostors and implights (0.02-0.03 elsewhere), the card lighting +0.00-0.01, radiosity +0.04 there.
+  - VCT on rays: the hit's plane 0.1-0.2 ms (vct 8.18 / 7.98 with `rtconeplane=0`, vctnight 7.32 / 7.14), the reach
+    saves 0.04, Cone Rays 4 cost 4.3 (vct 12.48); the materials' cones on rays (`rtmatcones=2`) +1.2 ms (vct 9.37),
+    +1.1 (vctnight 8.46), +7.9 (vctres0 16.11: every pixel's cones per fragment): off on integrated GPUs by default.
+  - The sun (maps / traced, the maps skipped / traced with every map): outdoor 3.31 / 3.89 / 3.96, lumen 5.66 / 6.31
+    / 6.29, materials 6.04 / 6.80 / 6.79, lumen without glass 4.88 / 5.42 / 5.43. The rays 0.51-0.80 ms (trace
+    0.38-0.65, filter 0.12-0.15); the maps' pass 0.18-0.45, all of it skipped where nothing reads the maps (outdoor,
+    no glass: `Shadows` 0.18-0.19 -> 0), 0.06-0.09 of it where transparent casters keep them (lumen, materials 0.41 /
+    0.45 -> 0.35 / 0.36: the cascades' clears and the culling stay).
+  - Position fetch: the same within 0.04 ms (lumen 5.71 / 5.67 without, lights 7.57 / 7.55, materials 6.10 / 6.09,
+    vct 8.10 / 8.14, outdoor 3.35 / 3.34). VFX on rays: `vfx=1 vfxsdf=1` 2.77 against 2.75 ms with the field.
+  - Memory (allocated, LEL_VULKAN_STATS): lights 311.7 -> 290.8 MB (traced shadows 32 -> 18, reflections 28 -> 21),
+    lightssun 430.0 -> 402.0 (shadows of two layers 49 -> 28), materials 331.4 -> 325.6, `vfx=1 vfxsdf=1` 263.5 with
+    the field -> 239.5 on rays (no global field, no atlas).
+  - The render thread's CPU: 0.85-1.35 ms in both builds in most scenes; a run here and there reads up to 1.5 ms more in
+    either (lights 1.14 / 1.92, vctnight 1.33 / 2.85, then 2.31 / 2.36 in the next series): nothing read from it.
+  - OpenGL (nothing of this traces there; 2 rounds, GPU / CPU ms): lumen 5.94 / 0.78 -> 5.86 / 0.70, lights 6.90 /
+    0.71 -> 6.79 / 0.69, materials 6.00 / 0.95 -> 5.94 / 0.99, vct 8.49 / 0.77 -> 8.54 / 0.81: the same.
+- Traced sun on discrete GPUs by default, how decided (no discrete GPU here: reasoned from the 780M's numbers, not
+  measured on one): on the 780M the rays cost 0.5-0.8 ms at 1280 x 720 and save 0.06-0.19 ms of maps, so integrated
+  GPUs keep the maps. The rays cost a ray and a filter a pixel and light whatever the casters; a discrete GPU has 3-8
+  times the 780M's compute units with their ray hardware (NVIDIA's also walks the structures in hardware), so about
+  0.3-1 ms at 2560 x 1440, while the maps cost with the casters, four cascades of draws on the CPU too. What it buys
+  (soft by the light's size, no cascades, no acne or peter-panning, the same shadows as the GI's cards) is what such a
+  GPU's time is for. Skipping the maps no one reads is on for every GPU (it only saves). Measure on a discrete GPU
+  (`rtsundiscrete=0` against the default) before relying on it.
+- Verified on the merged tree: the build without warnings; the device tests (the copy with `rayQueryMirrored`,
+  `rayQueryFragment`): 599 results, 593 equal to OpenGL's, the 6 known, 0 different with validation, without, with
+  LEL_ASYNC_GUARD=0, with synchronization validation (binary waits), with one queue (synchronization validation: only
+  the known WRITE-AFTER-WRITE of copies in `asyncAcrossFrames`, 7), without ray queries; 210 programs build on both
+  APIs. TestGame on Vulkan: the 32 scenes with validation (`hwrt=1`; the 18 with `hwrt=0`), 10 with the async guard
+  off, 6 VCT scenes with `rtmatcones=2`; synchronization validation with binary waits on lumen, lights, materials,
+  lightssun, lumensun, outdoorsun, vct, vctres0, impostors, implights (5 of them with the guard off too), vct, vctmat,
+  vctlights with `rtmatcones=2`, vfx with `vfxsdf=1`, lights, gi0 and lumen with `hwrt=0`: no message of the layer, no
+  exception. OpenGL's check: 0 different. The slab fetches taken out after these runs: the VCT scenes dumped again
+  (`hwrt=0` max 1 against effa08e's, vctlights 9 from the lamps' 8-bit shadow history; `hwrt=1` with validation equal
+  to the runs above, max 1-5), the
+  shader sweep (210) and OpenGL's check (0 different) again.
+- Left: measuring on a discrete GPU (the two discrete defaults: the traced sun, the materials' cones on rays); the
+  ray query variants are made at their first draw (not in the load's compile, not in `ShaderVariantList`); with
+  transparent casters in view the maps' pass still clears its cascades and culls (0.35 ms in lumen) for those few
+  casters; lit particle outputs and VCT's injection keep their maps; the SDF debug view builds the field; position
+  fetch changes materials' picture a little and two of its runs differ (not found why); VFX's Conform To / Sample
+  Global SDF on rays are not run in TestGame (collisions are); the settings in the editor not seen by eye; mirrored
+  objects only in TestGame's `mirror=1`; Linux.
 
 ## Models and meshes
 
