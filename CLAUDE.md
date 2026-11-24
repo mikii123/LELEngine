@@ -381,7 +381,8 @@
   difference from `dumps/vkC-rt0` (max 1-6, mean <= 0.005, both builds); sync validation on lumen, materials, lights,
   outdoor, impostors (`hwrt=1`), lumen and lights with `rtsunshadows=1`, gi0 / lights with `hwrt=0` (traced shadows
   without Lumen's rays): only SYNC-HAZARD-WRITE-AFTER-READ of the back buffer's present blit against a later layout
-  change, which the build before this work shows too (materials, gi0 with lights; it comes and goes with timing);
+  change, which the build before this work shows too (materials, gi0 with lights; it comes and goes with timing; gone
+  since: "The Vulkan device's queues, submissions and clears");
   OpenGL's check 0 different, and every scene within OpenGL's own run-to-run difference of the build before (max 0-6);
   `sdfview=1` under hardware ray tracing (the field asked for and built from the next frame), `cacheview=1` (objects
   found by rays). Not checked: the settings in the editor by eye, a scene where meshes appear while it plays (the
@@ -533,6 +534,10 @@
   the mesh field builds, the global field's compose, the top level's build, VCT's region clears and block compaction;
   they are parts of passes whose other parts read raster work, so they would take `BeginAsyncCompute` /
   `EndAsyncCompute` around those parts rather than a pass's declaration (the device orders whatever is put there).
+  The ray traced lighting's passes stay on the graphics queue (`RayTracedShadowPass`, `RayTracedReflectionPass`): their
+  traces read the prepass's depth (a depth texture: the graphics queue's on this device) and the opaque pass reads
+  what they make right after, so the compute queue would only add waits between the queues; only the shadow casters'
+  top level build could go there, which is small.
 - Vulkan (`Graphics/Vulkan/VulkanDeviceQueues.cs`, `VulkanCommandListQueues.cs`): a queue of a compute family apart
   from the graphics family (AMD: its asynchronous compute engines; family 1 on the 780M) with timeline semaphores, made
   only when asked for (`GraphicsDevice.RequestAsyncCompute` before the first window, LEL_ASYNC_COMPUTE=1; off by
@@ -609,9 +614,21 @@
     lights 4, lumen 2, materials 3, suns3 1 of 255, as two runs of it differ); under synchronization validation, which
     slows the queues apart, the GI's readbacks land in other frames and lights / materials / suns3 converge elsewhere
     (mean up to 3.6) without a message of the layer.
+  - All of it on the tree with the voxel GI and ray traced lighting merged, against that tree's own build (each run
+    alone on the machine, 600 frames, the last [Stats] line; scratchpad `submit/perf.ps1`), GPU ms a frame, Vulkan
+    (OpenGL): gi0 2.20 -> 1.24 (1.33 -> 0.83), lumen 6.69 -> 5.85 (6.41 -> 5.86), vct 8.89 -> 8.14 (9.11 -> 8.49),
+    materials 7.18 -> 6.13 (6.48 -> 6.08), refraction 7.99 -> 7.25 (7.83 -> 7.32), suns3 7.70 -> 6.05 (7.10 -> 6.20:
+    three transmittance maps), nogpudriven 6.57 -> 5.79 (7.08 -> 6.11), ssaa 3.46 -> 2.56 (1.72 -> 1.35), outdoor 3.82
+    -> 3.60 (3.36 -> 3.33), trails 1.04 -> 0.84, ui 0.96 -> 0.82, nav 0.90 -> 0.81, volumetrics 4.56 -> 4.36, lights
+    7.95 -> 7.87, impostors 3.55 -> 3.49, anim, physics, vfx and OpenGL's other scenes within 0.05-0.17 either way.
+    By pass on Vulkan: Shadows 0.90-1.04 -> 0.41-0.55 (suns3 1.44 -> 0.49), SurfaceCache.shadow / VoxelGI.shadow
+    0.16-0.18 -> 0.02-0.04 (suns3 0.43 -> 0.05), GeometryPrepass 0.31-0.60 -> 0.21-0.40 in every scene (ssaa 1.11 ->
+    0.70); on OpenGL Shadows 0.68-1.02 -> 0.28-0.39. The render thread's CPU time unchanged within its noise (0.2-1.3
+    ms, anim 3.8-4.0).
 - Memory (lumen, LEL_VULKAN_MEMORY=1): 336 MB allocated in 412 MB of blocks; textures 313 MB: render targets 223 MB
   (the shadow map's transmittance 64 MB, the grid shadow map's 16, the shadow depth 16, nine 1280 x 720 RGBA16F targets
-  of 7 MB), storage images 82 MB, sampled only 8 MB. Aliasing transient targets was not done: most full-screen targets
+  of 7 MB), storage images 82 MB, sampled only 8 MB (331 MB with the ray traced lighting merged: the reflections'
+  28 MB of history in, the global distance field out). Aliasing transient targets was not done: most full-screen targets
   are histories kept over frames, the transmittance maps now keep their contents (they are cleared only where drawn),
   and what is transient within a frame (the G-buffer's motion, a few GI intermediates: 14-28 MB, 4-8 %) would need the
   passes to say when their targets live (a frame graph), not the device.
@@ -620,6 +637,16 @@
   wrote, draws inside asynchronous work, a dispatch sampling a depth texture, readbacks in the submission and sent
   before, copies / clears / uploads / a buffer resized there, timestamps on both queues, frames presented with a buffer
   made and freed each frame) on both APIs; TestGame's 18 scenes on Vulkan against the frames before; OpenGL's check.
+  On the tree with the voxel GI and ray traced lighting merged (`brutal-port` 1f59038): device tests 596 results, 590
+  equal to OpenGL's, the 6 known, 0 different, with one queue, with the compute queue (timelines; binary waits), without
+  ray queries; no message of the layer except, with one queue under synchronization validation, WRITE-AFTER-WRITE of
+  copies in `asyncAcrossFrames` (a buffer made and freed every frame: 1-9 a run, 5 on the engine before this work too;
+  none with the buffers kept or the GPU idle each frame), so taken for the layer's reuse of freed memory; 207 shader
+  programs build on both APIs. TestGame's 18 scenes on Vulkan (`hwrt=1` and `0`, and with the compute queue) against
+  that tree's own build: max 0-6 (mean <= 0.006) but anim (max 19-28, mean <= 0.004: its run-to-run difference) and vfx
+  (never repeats); core validation without messages; synchronization validation without messages (gi0, ssaa, ui,
+  lumen, outdoor, trails three times; with the compute queue and binary waits: gi0, lumen, vct, materials); OpenGL's
+  check 0 different.
 - Not done: command buffers recorded on several threads (the render thread's CPU time is ~1 ms against 6-11 ms of GPU
   in the GI scenes), pools reset per frame, push constants (a uniform per draw costs 124 ns against OpenGL's 112).
 
