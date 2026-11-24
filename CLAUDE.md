@@ -736,6 +736,9 @@
     keep them apart; a note in the module does (`SpirvModule.AddProcessedNote`, OpModuleProcessed: every module of a
     device with libraries carries `VulkanDevice.LibrariesNote`). Machines that ran the engine both ways before this note
     may hold such entries for modules without it: the note makes the libraries' side new, the other side keeps its own.
+    The cache is the executable's: `vktest` here (which ran the libraries before the note) loses the device in the
+    `images` test with LEL_VULKAN_DISABLE=pushconstants (its modules then have the words of before) and passes with
+    LEL_VULKAN_SHADER_NOTE set; the base build's `vktest`, never run with libraries, passes the same tests.
   - LEL_VULKAN_SHADER_NOTE=text adds a note to every module: nothing comes from the driver's cache (to measure a first
     run's pipeline compiles).
 - `asyncAcrossFrames` (the device tests' WRITE-AFTER-WRITE under synchronization validation with one queue, 4-8 a run):
