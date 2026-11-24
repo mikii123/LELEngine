@@ -153,7 +153,8 @@
   target, relaxed rules, auto bind / map, macros `LEL_VULKAN`, `gl_VertexID`, `gl_InstanceID` without the base
   instance, `gl_PointCoord` turned to the engine's rows), reflected with `SpirvModule` and linked by the device: one
   descriptor set, bindings dense over all stages, each stage's loose uniforms (its `gl_DefaultUniformBlock`) a
-  dynamic uniform buffer copied into frame memory when a value changed, varyings matched by name, the shaders' per-kind
+  dynamic uniform buffer copied into frame memory when a value changed (or push constants: "The Vulkan device's CPU
+  path" below), varyings matched by name, the shaders' per-kind
   `binding = N` of blocks and images mapped to the set; slots in OpenGL's naming (`FlattenMembers`). Pipelines cached
   per program, render state, vertex layout, topology and attachment formats, and on disk; descriptor sets cached over
   submissions; commands ordered by the uses of their resources (all three: "The Vulkan device's ordering" below).
@@ -451,7 +452,8 @@
   `READ_ONLY_OPTIMAL`, transfers `TRANSFER_SRC` / `DST`, textures shaders write as images `GENERAL` for every use; a
   use that overwrites a subresource whole (a pass that clears it or does not load it, an upload of a whole level)
   leaves its contents behind (`UNDEFINED`). A program's next draw skips the look when no state changed since its last
-  (`SyncEpoch`). AMD's GPUs fetch vertices in the vertex shader: vertex and index reads count the pre-rasterization
+  (`SyncEpoch`), and a read another command ordered in the same epoch is not looked at again ("The Vulkan device's CPU
+  path" below). AMD's GPUs fetch vertices in the vertex shader: vertex and index reads count the pre-rasterization
   stages too (with the input stages alone the driver let a buffer be rewritten under a draw that had not read it yet).
 - Passes (dynamic rendering): rendering begins with the pass's first draw or clear, after that draw's barriers; a
   draw that needs a barrier on a resource the stream has used in the submission ends the rendering and begins it
@@ -543,7 +545,8 @@
   only when asked for (`GraphicsDevice.RequestAsyncCompute` before the first window, LEL_ASYNC_COMPUTE=1; off by
   default: the measurements below) and the GPU has one (LEL_VULKAN_DISABLE=asynccompute: never). Without it the device
   is the one queue device it was (no timelines, every resource exclusive). A `VulkanStream` per queue holds its command buffers
-  (its own pool), setup batch, host reads, written timestamps and its timeline (each submission signals the next
+  (from pools of the submission, and its recording thread: "The Vulkan device's CPU path"), setup batch, host reads,
+  written timestamps and its timeline (each submission signals the next
   value). Resources the compute queue may use are shared by both families (`VK_SHARING_MODE_CONCURRENT`: no ownership
   transfers); depth textures and the window's back buffer stay exclusive to the graphics family (their compression),
   and a command that touches one runs on the graphics queue (`VulkanTexture.Concurrent`).
@@ -641,14 +644,99 @@
   equal to OpenGL's, the 6 known, 0 different, with one queue, with the compute queue (timelines; binary waits), without
   ray queries; no message of the layer except, with one queue under synchronization validation, WRITE-AFTER-WRITE of
   copies in `asyncAcrossFrames` (a buffer made and freed every frame: 1-9 a run, 5 on the engine before this work too;
-  none with the buffers kept or the GPU idle each frame), so taken for the layer's reuse of freed memory; 207 shader
+  none with the buffers kept or the GPU idle each frame), so taken for the layer's reuse of freed memory (confirmed:
+  "The Vulkan device's CPU path" below); 207 shader
   programs build on both APIs. TestGame's 18 scenes on Vulkan (`hwrt=1` and `0`, and with the compute queue) against
   that tree's own build: max 0-6 (mean <= 0.006) but anim (max 19-28, mean <= 0.004: its run-to-run difference) and vfx
   (never repeats); core validation without messages; synchronization validation without messages (gi0, ssaa, ui,
   lumen, outdoor, trails three times; with the compute queue and binary waits: gi0, lumen, vct, materials); OpenGL's
   check 0 different.
-- Not done: command buffers recorded on several threads (the render thread's CPU time is ~1 ms against 6-11 ms of GPU
-  in the GI scenes), pools reset per frame, push constants (a uniform per draw costs 124 ns against OpenGL's 112).
+- Command buffers recorded on threads of their own, pools reset per submission and push constants: "The Vulkan
+  device's CPU path" below.
+
+## The Vulkan device's CPU path: per-draw cost, a recording thread, push constants, pipeline libraries (2026-11-24, branch `vk-cpu`)
+
+- The ask: the CPU cost of a draw on Vulkan at least OpenGL's (the device's bench: the same draw again, a uniform per
+  draw, a mix of materials), command pools reset per frame, recording on several threads where the renderer allows,
+  pipelines without hitches (asynchronous creation or graphics pipeline libraries), and the `asyncAcrossFrames`
+  synchronization-validation message explained or fixed. The primary target is a discrete GPU, where the CPU is more
+  often the limit; measured on the 780M.
+- Where a draw's time went (the bench, Release, steady state): AMD's driver itself takes ~30-40 ns for `vkCmdDraw` and
+  ~50 ns for a push and a draw (`vkCmdSetDepthTestEnable` ~2 ns: the GC transition of a call is not the cost); the
+  device's own bookkeeping was 25-60 ns, and the descriptor set's look-up and the ordering's look at every sampled
+  texture again after a texture changed ~200 ns more in the material mix. OpenGL's driver records on a thread of its own:
+  its calls only queue the work.
+- Per draw (`VulkanProgram`, `VulkanCommandListSync.cs`, `VulkanResourcesSync.cs`):
+  - A texture and sampler given to a sampler again (a material set for each of its draws) keep the descriptor set
+    (`SetTexture` counts a change only when the texture, the sampler or the texture's own sampler changed).
+  - A read ordered by an earlier command in the same `SyncEpoch` is not looked at again (`IsReadyFor` / `MarkReady` on
+    textures and buffers): no write or layout change happened anywhere since, so it needs nothing; the resource is only
+    marked as used. A command with nothing to order records nothing (`ApplyRequirements` returns at once).
+  - The objects a cached descriptor set names (for forgetting it when one is destroyed) are worked out from the key
+    when a set is written, not for every look-up.
+- Push constants (`VulkanProgramPush.cs`, `SpirvPushConstants.cs`): loose uniforms a draw reads from push constants
+  instead of its stage's block in frame memory, so a change costs one `vkCmdPushConstants` before the next draw (in the
+  command buffer), not a copy of the whole block and a new binding of the descriptor set with its offsets. Moved: every
+  loose uniform of a program whose loose uniforms (numbers, vectors, matrices, arrays of them; no structures or 64-bit
+  types) all fit in 256 bytes (the device's limit if lower), else those the descriptor names as set for nearly every
+  draw (`ProgramDescriptor.PerDrawUniforms`, the API's hint: the engine's `ShaderProgram` names `modelMatrix` and
+  `previousModelMatrix`; OpenGL ignores it, its loose uniforms are set one by one already) as far as they fit. A name
+  two stages read is one value at one offset (std430 alignment, 16 bytes for vectors of three or four, matrices and
+  arrays). The SPIR-V of each stage that reads one gets a push constant block of its own with the moved members at
+  their offsets, and every access chain into such a member reads it (its pointer types those of push constants); the
+  stage's uniform block keeps its layout (the moved members' bytes stay, unread), and loses its binding when nothing
+  else of it is read. Compute programs too. A stage whose code reaches a moved member in a way not followed (anything
+  but loading through it or reaching further in) keeps all its uniforms where they were. The command list pushes a
+  program's values when they changed (`PushVersion`) or the command buffer last had another program's, per bind point.
+  LEL_VULKAN_DISABLE=pushconstants: none (for comparisons).
+- A recording thread per queue (`VulkanRecorder.cs`, `VulkanRecorderCommands.cs`, `VulkanDeviceRecording.cs`): the
+  command list decides everything on the thread that gives the commands (ordering and barriers, pipelines, descriptor
+  sets, push constants) and writes each Vulkan command into memory of its own (blocks of 256 KB); the thread records
+  them, in batches of 48 commands (and at the end of every render pass), into the submission's command buffers while
+  the commands after them are being given. A submission's command buffers of a stream are a sequence of segments: the
+  thread's, and the device's own (`VulkanDevice.MainCommands`, recorded where they are given: acceleration structure
+  builds, uploads into what the stream used, readbacks, the present's blit, the timestamps' copies). A segment ends where
+  the other kind begins: the command list binds everything anew in the next (`ForgetBindings`), rendering is suspended
+  first, barriers go where the commands go now. At a submission the giving thread waits for the thread to end its
+  segments and sends them in order (`EndStreamCommands`). The thread spins for 1 ms for more (the gaps between a
+  frame's passes; woken from sleep it starts tens to hundreds of microseconds late, which a submission would wait for)
+  and then sleeps; it runs above normal priority. Beyond 48 segments in a submission commands are recorded where
+  they are given. LEL_VULKAN_RECORDING_THREAD=0: always where they are given (written and recorded at once).
+  LEL_VULKAN_STATS=1 adds the command buffers per frame, the thread's recording time and the giving thread's wait for it.
+- Command pools (`VulkanDeviceCommandPools.cs`): a submission's command buffers come from pools of its own, one per queue
+  and per thread that records (transient, no reset of single buffers), reset whole with `vkResetCommandPool` when the
+  GPU has run the submission; their buffers stay with the pool and are begun again. Before, one pool per queue whose
+  buffers each reset in `vkBeginCommandBuffer`.
+- Graphics pipeline libraries (`VulkanDevicePipelineLibraries.cs`, `VulkanProgramLibraries.cs`; VK_EXT_graphics_pipeline_library
+  with fast linking): a program compiles its shaders' parts while it is built, on the thread that builds it
+  (pre-rasterization for filled triangles, fragment for one sample; wireframe, conservative and other sample counts at
+  their first draw), its vertex input parts per vertex layout and kind of primitive, the device the fragment output parts
+  (formats, blending, colour mask, samples) shared by programs. A new combination of a program with a state, a layout or
+  a pass's formats links four parts at its first draw (fast) and a thread of the pool links them again optimized, which
+  takes the fast pipeline's place (`PipelineEntry.Pipeline`, read at each bind; the fast one is freed after the next
+  submission). On by default only on NVIDIA's driver (DXVK's default there; not tried); LEL_VULKAN_ENABLE=pipelinelibraries
+  on any GPU that has them, LEL_VULKAN_DISABLE=pipelinelibraries never; LEL_VULKAN_PIPELINE_LIBRARIES=fast keeps the fast
+  pipelines. AMD's driver (2.0.353, 780M) is why not there:
+  - it crashes the process (exit 127, in the driver) compiling the parts of some engine shaders it compiles whole
+    without trouble: GIMediaDebug, SdfDebug, SurfaceCacheDebug (`vktest shaders vulkan <file>` per shader file);
+  - its own on-disk shader cache (`%LOCALAPPDATA%\AMD\VkCache`) keys a shader by its words alone, and what it compiled on
+    a device with the extension is not interchangeable with what it compiled without: a compute pipeline found in the
+    cache from the other kind of device wrote nothing or lost the device (`vktest`'s `VKTEST_PROBE=push`, alternating
+    the two with fresh shaders: wrong every time the other had compiled first). A creation flag of the pipeline did not
+    keep them apart; a note in the module does (`SpirvModule.AddProcessedNote`, OpModuleProcessed: every module of a
+    device with libraries carries `VulkanDevice.LibrariesNote`). Machines that ran the engine both ways before this note
+    may hold such entries for modules without it: the note makes the libraries' side new, the other side keeps its own.
+  - LEL_VULKAN_SHADER_NOTE=text adds a note to every module: nothing comes from the driver's cache (to measure a first
+    run's pipeline compiles).
+- `asyncAcrossFrames` (the device tests' WRITE-AFTER-WRITE under synchronization validation with one queue, 4-8 a run):
+  confirmed as the layer's. The scratch buffer of a frame is freed once its submission's fence has signalled (the CPU
+  waited for it) and the next buffer gets the same memory; the layer reports the new upload's copy against the copy into
+  the freed buffer two submissions before. The same test without presenting (`VKTEST_NOPRESENT=1`: a flush and a fence
+  wait per frame, the memory reused in the same pattern) gives none, and neither waiting for every fence with
+  `vkWaitForFences` (also with an infinite timeout right before its reset) nor `vkGetFenceStatus` changes it: the old
+  access comes back through the swapchain image's acquire, from the batch that presented that image before (the layer
+  carries that batch's accesses with the present and does not drop them when the fence wait retires the batch).
+- Measured: see the numbers below (filled in after the measurements).
 
 ## Voxel GI and distance fields on Vulkan: conservative coverage, ray-traced cones (2026-11-23, branch `vk-sdfvct`)
 

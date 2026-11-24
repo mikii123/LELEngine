@@ -93,19 +93,22 @@ namespace LELEngine.Graphics.Vulkan
 			}
 		}
 
-		/// <summary>The compute pipeline, descriptor set and offsets a queue's command buffer has bound.</summary>
+		/// <summary>The compute pipeline, descriptor set, offsets and push constants a queue's command buffer has bound.</summary>
 		private sealed class ComputeBindings
 		{
 			public VkPipeline Pipeline;
 			public VkDescriptorSet Set;
 			public VulkanProgram Program;
 			public readonly int[] Offsets = new int[8];
+			public VulkanProgram PushedProgram;
+			public int PushedVersion;
 
 			public void Forget()
 			{
 				Pipeline = default;
 				Set = default;
 				Program = null;
+				PushedProgram = null;
 			}
 		}
 	}

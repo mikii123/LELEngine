@@ -25,6 +25,40 @@ namespace LELEngine.Graphics.Vulkan
 
 		private bool generalMode;
 
+		// A read of levels and layers in a layout by stages that needed nothing more, and the device's SyncEpoch then:
+		// while the epoch stands still no write or layout change happened anywhere, so the same read again needs no look.
+		private int readyEpoch = -1;
+		private int readyMip;
+		private int readyMips;
+		private int readyLayer;
+		private int readyLayers;
+		private VkImageLayout readyLayout;
+		private VkPipelineStageFlags2 readyStages;
+
+		/// <summary>Whether a read of the range in the layout by the stages was ordered already in this sync epoch (nothing to note again).</summary>
+		internal bool IsReadyFor(int epoch, int mip, int mips, int layer, int layers, VkImageLayout layout, VkPipelineStageFlags2 stages)
+		{
+			return readyEpoch == epoch && readyLayout == layout && (stages & ~readyStages) == 0 && mip == readyMip && mips == readyMips && layer == readyLayer && layers == readyLayers;
+		}
+
+		/// <summary>A read of the range was ordered (its barrier recorded) and the epoch is <paramref name="epoch" /> after it.</summary>
+		internal void MarkReady(int epoch, int mip, int mips, int layer, int layers, VkImageLayout layout, VkPipelineStageFlags2 stages)
+		{
+			if (readyEpoch == epoch && readyLayout == layout && mip == readyMip && mips == readyMips && layer == readyLayer && layers == readyLayers)
+			{
+				readyStages |= stages;
+				return;
+			}
+
+			readyEpoch = epoch;
+			readyMip = mip;
+			readyMips = mips;
+			readyLayer = layer;
+			readyLayers = layers;
+			readyLayout = layout;
+			readyStages = stages;
+		}
+
 		/// <summary>The last pass (<see cref="VulkanCommandList" />'s serial) that drew into the texture, and the lowest level it drew into.</summary>
 		internal long ColorPass = -1;
 
@@ -286,6 +320,23 @@ namespace LELEngine.Graphics.Vulkan
 		/// <summary>Where the two queues last read and wrote the storage.</summary>
 		private QueueUses queueUses;
 
+		// A read by stages that needed nothing more, and the device's SyncEpoch then (as the texture's).
+		private int readyEpoch = -1;
+		private VkPipelineStageFlags2 readyStages;
+
+		/// <summary>Whether a read by the stages was ordered already in this sync epoch (nothing to note again).</summary>
+		internal bool IsReadyFor(int epoch, VkPipelineStageFlags2 stages)
+		{
+			return readyEpoch == epoch && (stages & ~readyStages) == 0;
+		}
+
+		/// <summary>A read by the stages was ordered (its barrier recorded) and the epoch is <paramref name="epoch" /> after it.</summary>
+		internal void MarkReady(int epoch, VkPipelineStageFlags2 stages)
+		{
+			readyStages = readyEpoch == epoch ? readyStages | stages : stages;
+			readyEpoch = epoch;
+		}
+
 		/// <summary>The buffer lives in memory the CPU maps.</summary>
 		internal bool IsHostVisible => hostVisible;
 
@@ -325,6 +376,7 @@ namespace LELEngine.Graphics.Vulkan
 			state = default;
 			computeState = default;
 			queueUses = default;
+			readyEpoch = -1;
 		}
 
 		/// <summary>

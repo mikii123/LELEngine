@@ -311,6 +311,8 @@ namespace LELEngine.Graphics.Vulkan
 				HasRayQuery = AskForRayQueries(physicalDevice, deviceExtensions, &rayQueries, &want, &want12);
 				AskForConservativeRasterization(physicalDevice, deviceExtensions);
 				AskForShaderInfo(physicalDevice, deviceExtensions);
+				VkPhysicalDeviceGraphicsPipelineLibraryFeaturesEXT libraryFeature = new VkPhysicalDeviceGraphicsPipelineLibraryFeaturesEXT();
+				AskForPipelineLibraries(physicalDevice, deviceExtensions, &libraryFeature, &want);
 
 				// The graphics queue, and an asynchronous compute queue of a family of its own where the GPU has one
 				// (VulkanDeviceQueues.cs); the device's timeline semaphores order the two.
@@ -473,6 +475,8 @@ namespace LELEngine.Graphics.Vulkan
 			if (device != null)
 			{
 				Vk->vkDeviceWaitIdle.Invoke(Handle);
+				// The recording threads end first (after what they were given): nothing they record into may go before.
+				ReleaseRecorders();
 				while (pending.Count > 0)
 				{
 					Complete(pending.Dequeue());
@@ -526,6 +530,7 @@ namespace LELEngine.Graphics.Vulkan
 				attributeDefaults?.Dispose();
 				attributeDefaults = null;
 				ReleaseRayQueries();
+				ReleasePipelineLibraries();
 				DestroyAllRetired();
 				foreach (VulkanSampler sampler in samplers.Values)
 				{
@@ -562,6 +567,7 @@ namespace LELEngine.Graphics.Vulkan
 				queryPools.Clear();
 				freeQueries.Clear();
 				ReleaseQueryValues();
+				ReleaseCommandPools();
 				ReleaseQueues();
 
 				if (!pipelineCache.IsNull())
@@ -758,21 +764,11 @@ namespace LELEngine.Graphics.Vulkan
 		/// <summary>The submission a fence made now waits for.</summary>
 		internal long FenceSerial => HasRecorded ? RecordingSerial : RecordingSerial - 1;
 
-		/// <summary>The command buffer of the stream of the queue being recorded for; begun on first use.</summary>
-		internal VkCommandBuffer MainCommands
-		{
-			get
-			{
-				VulkanStream stream = recordingStream;
-				if (!stream.MainBegun)
-				{
-					stream.Main = BeginCommandBuffer(stream);
-					stream.MainBegun = true;
-				}
-
-				return stream.Main;
-			}
-		}
+		/// <summary>
+		///     The command buffer of the stream of the queue being recorded for that the device records into where the
+		///     commands are given (after the recording thread's segment before it: VulkanDeviceRecording.cs); begun on first use.
+		/// </summary>
+		internal VkCommandBuffer MainCommands => DirectCommands(recordingStream);
 
 		/// <summary>
 		///     The command buffer that runs before the stream's, for a command recorded outside the tracking of uses: what
@@ -821,20 +817,10 @@ namespace LELEngine.Graphics.Vulkan
 			Vk->vkCmdPipelineBarrier2.Invoke(commands, &dependency);
 		}
 
-		/// <summary>A command buffer of a stream's pool, begun.</summary>
+		/// <summary>A command buffer of the submission being recorded for a stream (VulkanDeviceCommandPools.cs), begun.</summary>
 		private VkCommandBuffer BeginCommandBuffer(VulkanStream stream)
 		{
-			VkCommandBuffer commands;
-			if (stream.Free.Count > 0)
-			{
-				commands = stream.Free.Pop();
-			}
-			else
-			{
-				commands = Brutal.VulkanApi.Abstractions.DeviceExtensions.AllocateCommandBuffer(device, new VkCommandBufferAllocateInfo { CommandPool = stream.Pool, Level = VkCommandBufferLevel.Primary })
-					.Handle;
-			}
-
+			VkCommandBuffer commands = TakeSubmissionCommandBuffer(stream);
 			VkCommandBufferBeginInfo begin = new VkCommandBufferBeginInfo { Flags = VkCommandBufferUsageFlags.OneTimeSubmitBit };
 			Check(Vk->vkBeginCommandBuffer.Invoke(commands, &begin), "vkBeginCommandBuffer");
 			return commands;
@@ -859,7 +845,7 @@ namespace LELEngine.Graphics.Vulkan
 			VulkanStream before = recordingStream;
 			recordingStream = stream;
 			CommandList.BeforeSubmit(stream);
-			VkCommandBufferSubmitInfo* buffers = stackalloc VkCommandBufferSubmitInfo[2];
+			VkCommandBufferSubmitInfo* buffers = stackalloc VkCommandBufferSubmitInfo[VulkanRecorder.MaxSubmitBuffers];
 			int count = EndCommandBuffers(stream, buffers, recording.Commands);
 			// Waits: the swapchain's image (the stages given), the compute queue's work this submission needs. Signals:
 			// the present's semaphore, the graphics queue's timeline (the compute queue waits for its values).
@@ -1006,16 +992,7 @@ namespace LELEngine.Graphics.Vulkan
 			VkFence fence = submission.Fence;
 			Vk->vkResetFences.Invoke(Handle, 1, &fence);
 			freeFences.Push(fence);
-			foreach (VkCommandBuffer commands in submission.Commands)
-			{
-				graphicsStream.Free.Push(commands);
-			}
-
-			foreach (VkCommandBuffer commands in submission.ComputeCommands)
-			{
-				computeStream.Free.Push(commands);
-			}
-
+			ResetCommandPools(submission);
 			foreach (Chunk chunk in submission.Chunks)
 			{
 				if (--chunk.Users > 0)
@@ -1695,6 +1672,10 @@ namespace LELEngine.Graphics.Vulkan
 			public readonly List<VkSemaphore> BinaryWaited = new List<VkSemaphore>();
 
 			public readonly List<VkFence> ComputeFences = new List<VkFence>();
+
+			/// <summary>The pools its command buffers (of both queues) came from: reset once it has run.</summary>
+			public readonly List<VulkanCommandPool> CommandPools = new List<VulkanCommandPool>();
+
 			public readonly List<Chunk> Chunks = new List<Chunk>();
 			public readonly List<VkDescriptorPool> Pools = new List<VkDescriptorPool>();
 			public readonly List<int> Queries = new List<int>();

@@ -17,15 +17,16 @@ namespace LELEngine.Graphics.Vulkan
 
 		public readonly VkQueue Queue;
 		public readonly int Family;
-		public readonly VkCommandPool Pool;
 
-		/// <summary>Command buffers of the pool whose submissions have finished.</summary>
-		public readonly Stack<VkCommandBuffer> Free = new Stack<VkCommandBuffer>();
-
+		/// <summary>The stream's own command buffer of the moment (between the recording thread's segments: VulkanRecorder.cs).</summary>
 		public VkCommandBuffer Main;
+
 		public VkCommandBuffer Setup;
 		public bool MainBegun;
 		public bool SetupBegun;
+
+		/// <summary>Records the stream's commands on a thread of its own (VulkanRecorder.cs).</summary>
+		public VulkanRecorder Recorder;
 
 		/// <summary>A command was recorded ahead of the stream outside the tracking of uses: the setup buffer ends with a barrier of everything.</summary>
 		public bool SetupUntracked;
@@ -57,18 +58,17 @@ namespace LELEngine.Graphics.Vulkan
 		/// <summary>The highest value of the other queue's timeline a submission of this queue (sent or being recorded) waits for.</summary>
 		public long WaitedValue;
 
-		public VulkanStream(int index, VkQueue queue, int family, VkCommandPool pool)
+		public VulkanStream(int index, VkQueue queue, int family)
 		{
 			Index = index;
 			Queue = queue;
 			Family = family;
-			Pool = pool;
 		}
 
 		/// <summary>The value the submission being recorded will signal.</summary>
 		public long RecordingValue => SubmittedValue + 1;
 
-		public bool HasRecorded => MainBegun || SetupBegun;
+		public bool HasRecorded => MainBegun || SetupBegun || Recorder.SegmentCount > 0;
 
 		public bool IsCompute => Index == 1;
 	}
@@ -307,7 +307,8 @@ namespace LELEngine.Graphics.Vulkan
 		/// <summary>The streams of the queues, once the logical device is made (the compute family -1: the graphics queue only).</summary>
 		private void CreateStreams(int computeFamily)
 		{
-			graphicsStream = new VulkanStream(0, Queue, QueueFamily, CreateCommandPool(QueueFamily));
+			graphicsStream = new VulkanStream(0, Queue, QueueFamily);
+			graphicsStream.Recorder = new VulkanRecorder(this, graphicsStream);
 			recordingStream = graphicsStream;
 			if (computeFamily < 0)
 			{
@@ -316,19 +317,12 @@ namespace LELEngine.Graphics.Vulkan
 
 			VkQueue queue;
 			Vk->vkGetDeviceQueue.Invoke(Handle, computeFamily, 0, &queue);
-			computeStream = new VulkanStream(1, queue, computeFamily, CreateCommandPool(computeFamily));
+			computeStream = new VulkanStream(1, queue, computeFamily);
+			computeStream.Recorder = new VulkanRecorder(this, computeStream);
 			graphicsStream.Timeline = CreateTimeline();
 			computeStream.Timeline = CreateTimeline();
 			sharedFamilies[0] = QueueFamily;
 			sharedFamilies[1] = computeFamily;
-		}
-
-		private VkCommandPool CreateCommandPool(int family)
-		{
-			VkCommandPoolCreateInfo info = new VkCommandPoolCreateInfo { Flags = VkCommandPoolCreateFlags.ResetCommandBufferBit, QueueFamilyIndex = family };
-			VkCommandPool pool;
-			Check(Vk->vkCreateCommandPool.Invoke(Handle, &info, null, &pool), "vkCreateCommandPool");
-			return pool;
 		}
 
 		private VkSemaphore CreateTimeline()
@@ -505,7 +499,7 @@ namespace LELEngine.Graphics.Vulkan
 			VulkanStream before = recordingStream;
 			recordingStream = stream;
 			CommandList.BeforeSubmit(stream);
-			VkCommandBufferSubmitInfo* buffers = stackalloc VkCommandBufferSubmitInfo[2];
+			VkCommandBufferSubmitInfo* buffers = stackalloc VkCommandBufferSubmitInfo[VulkanRecorder.MaxSubmitBuffers];
 			int count = EndCommandBuffers(stream, buffers, recording.ComputeCommands);
 			AddQueueSemaphores(stream);
 			VkFence fence = default;
@@ -546,16 +540,11 @@ namespace LELEngine.Graphics.Vulkan
 				owner.Add(stream.Setup);
 			}
 
-			if (stream.MainBegun)
-			{
-				Check(Vk->vkEndCommandBuffer.Invoke(stream.Main), "vkEndCommandBuffer");
-				buffers[count++] = new VkCommandBufferSubmitInfo { CommandBuffer = stream.Main };
-				owner.Add(stream.Main);
-			}
-
-			stream.MainBegun = false;
+			// The stream's own command buffers and its recording thread's, in order (VulkanDeviceRecording.cs).
+			count += EndStreamCommands(stream, buffers + count, owner);
 			stream.SetupBegun = false;
 			stream.SetupUntracked = false;
+			HandOverCommandPools(stream, recording);
 			return count;
 		}
 
@@ -605,19 +594,12 @@ namespace LELEngine.Graphics.Vulkan
 					continue;
 				}
 
-				stream.Free.Clear();
 				foreach ((long _, VkSemaphore semaphore) in stream.BinarySignals)
 				{
 					Vk->vkDestroySemaphore.Invoke(Handle, semaphore, null);
 				}
 
 				stream.BinarySignals.Clear();
-				if (!stream.Pool.IsNull())
-				{
-					// Frees the command buffers with it.
-					Vk->vkDestroyCommandPool.Invoke(Handle, stream.Pool, null);
-				}
-
 				if (!stream.Timeline.IsNull())
 				{
 					Vk->vkDestroySemaphore.Invoke(Handle, stream.Timeline, null);

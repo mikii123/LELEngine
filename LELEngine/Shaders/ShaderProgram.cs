@@ -1110,6 +1110,10 @@ namespace LELEngine.Shaders
 
 			// Fixed attribute slots: a mesh's buffers are laid out once for every shader.
 			VertexLayout.AddStandardLocations(descriptor);
+
+			// Set for every object drawn (Transform.SetModelMatrix, the geometry prepass's motion).
+			descriptor.PerDrawUniforms.Add("modelMatrix");
+			descriptor.PerDrawUniforms.Add("previousModelMatrix");
 			return descriptor;
 		}
 

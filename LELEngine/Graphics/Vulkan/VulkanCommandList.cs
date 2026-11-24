@@ -75,8 +75,7 @@ namespace LELEngine.Graphics.Vulkan
 		private VertexInputLayout pipelineLayout;
 		private int pipelineGeneration = -1;
 		private int pipelineTopologyClass = -1;
-		private VkPipeline pipeline;
-		private int pipelineDefaults = -1;
+		private VulkanProgram.PipelineEntry pipelineEntry;
 		private bool dynamicValid;
 		private RenderState appliedState;
 		private bool appliedBias;
@@ -91,6 +90,10 @@ namespace LELEngine.Graphics.Vulkan
 		private VkDescriptorSet boundSet;
 		private VulkanProgram boundSetProgram;
 		private readonly int[] boundOffsets = new int[8];
+
+		// The program whose push constants the graphics bind point has, and the count of their changes then.
+		private VulkanProgram pushedProgram;
+		private int pushedVersion;
 
 		public VulkanCommandList(VulkanDevice device)
 		{
@@ -208,6 +211,12 @@ namespace LELEngine.Graphics.Vulkan
 			}
 
 			SuspendRendering();
+			if (passOpen)
+			{
+				// The pass's commands go to the recording thread now, not with the next batch.
+				device.GraphicsStream.Recorder.Publish();
+			}
+
 			passOpen = false;
 		}
 
@@ -288,7 +297,7 @@ namespace LELEngine.Graphics.Vulkan
 				BaseArrayLayer = 0,
 				LayerCount = 1
 			};
-			vk->vkCmdClearAttachments.Invoke(device.MainCommands, 1, &clear, 1, &rect);
+			device.GraphicsStream.Recorder.ClearAttachment(clear, rect);
 		}
 
 		private static void WriteClearValue(VkClearValue* target, in ClearValue value, TextureFormat format)
@@ -338,9 +347,15 @@ namespace LELEngine.Graphics.Vulkan
 		{
 			if (rendering)
 			{
-				vk->vkCmdEndRendering.Invoke(device.GraphicsStream.Main);
+				device.GraphicsStream.Recorder.EndRendering();
 				rendering = false;
 			}
+		}
+
+		/// <summary>The graphics queue's segment of the recording thread ends (the device records the next commands itself): rendering ends in it.</summary>
+		internal void SuspendRenderingForSegment()
+		{
+			SuspendRendering();
 		}
 
 		#endregion
@@ -368,6 +383,12 @@ namespace LELEngine.Graphics.Vulkan
 		{
 			// Every program notes its resources' uses again in the new submission (which marks them as used by it).
 			device.SyncEpoch++;
+			ForgetBindings(stream);
+		}
+
+		/// <summary>The queue's commands go into another command buffer from now on: everything is bound anew there.</summary>
+		internal void ForgetBindings(VulkanStream stream)
+		{
 			computeBindings[stream.Index].Forget();
 			if (stream.Index != 0)
 			{
@@ -383,6 +404,7 @@ namespace LELEngine.Graphics.Vulkan
 			boundIndexBuffer = 0;
 			boundSet = default;
 			boundSetProgram = null;
+			pushedProgram = null;
 		}
 
 		/// <summary>
@@ -466,7 +488,7 @@ namespace LELEngine.Graphics.Vulkan
 			}
 
 			buffer = bound.Handle;
-			Track(new VulkanProgram.TrackedResource { Buffer = bound, Write = storage && Resolving != null && Resolving.WritesBuffer(number) }, buffer.VkHandle);
+			Track(new VulkanProgram.TrackedResource { Buffer = bound, Write = storage && Resolving != null && Resolving.WritesBuffer(number) });
 		}
 
 		/// <summary>The view behind an image of a program: of the texture set for its number, or of a stand-in of the kind the shader expects.</summary>
@@ -478,7 +500,7 @@ namespace LELEngine.Graphics.Vulkan
 			{
 				texture = device.DummyTexture(expected, type, false, imageFormat);
 				VkImageView standIn = texture.SampledView;
-				Track(new VulkanProgram.TrackedResource { Texture = texture, Mips = 1, Layers = texture.Layers, Layout = VkImageLayout.General, Write = true }, standIn.VkHandle);
+				Track(new VulkanProgram.TrackedResource { Texture = texture, Mips = 1, Layers = texture.Layers, Layout = VkImageLayout.General, Write = true });
 				return standIn;
 			}
 
@@ -550,7 +572,7 @@ namespace LELEngine.Graphics.Vulkan
 				Layers = allLayers ? texture.Layers : 1,
 				Layout = VkImageLayout.General,
 				Write = Resolving == null || Resolving.WritesImage(number)
-			}, view.VkHandle);
+			});
 			return view;
 		}
 
@@ -670,7 +692,7 @@ namespace LELEngine.Graphics.Vulkan
 				return;
 			}
 
-			vk->vkCmdDraw.Invoke(device.MainCommands, vertexCount, instanceCount, firstVertex, firstInstance);
+			device.Recorder.Draw(vertexCount, instanceCount, firstVertex, firstInstance);
 		}
 
 		public override void DrawIndexed(int indexCount, int firstIndex = 0, int baseVertex = 0, int instanceCount = 1, int firstInstance = 0,
@@ -681,7 +703,7 @@ namespace LELEngine.Graphics.Vulkan
 				return;
 			}
 
-			vk->vkCmdDrawIndexed.Invoke(device.MainCommands, indexCount, instanceCount, firstIndex, baseVertex, firstInstance);
+			device.Recorder.DrawIndexed(indexCount, instanceCount, firstIndex, baseVertex, firstInstance);
 		}
 
 		public override void DrawIndexedRanges(ReadOnlySpan<int> indexCounts, ReadOnlySpan<int> firstIndices, ReadOnlySpan<int> baseVertices, PrimitiveTopology topology = PrimitiveTopology.Triangles)
@@ -714,7 +736,7 @@ namespace LELEngine.Graphics.Vulkan
 				arguments[i * 5 + 4] = 0;
 			}
 
-			vk->vkCmdDrawIndexedIndirect.Invoke(device.MainCommands, buffer, (Brutal.ByteSize64)(ulong)offset, count, 20);
+			device.Recorder.DrawIndirect(true, buffer, offset, count, 20);
 		}
 
 		public override void DrawIndirect(GpuBuffer arguments, long offset, int drawCount = 1, int stride = 16, PrimitiveTopology topology = PrimitiveTopology.Triangles)
@@ -730,16 +752,21 @@ namespace LELEngine.Graphics.Vulkan
 				return;
 			}
 
+			RecordIndirect(false, buffer, offset, drawCount, stride);
+		}
+
+		/// <summary>Indirect draws: one command, or one per draw on a device without multiple draws per command.</summary>
+		private void RecordIndirect(bool indexed, VulkanBuffer buffer, long offset, int drawCount, int stride)
+		{
 			if (device.HasMultiDrawIndirect || drawCount == 1)
 			{
-				vk->vkCmdDrawIndirect.Invoke(device.MainCommands, buffer.Handle, (Brutal.ByteSize64)(ulong)offset, drawCount, stride);
+				device.Recorder.DrawIndirect(indexed, buffer.Handle, offset, drawCount, stride);
+				return;
 			}
-			else
+
+			for (int i = 0; i < drawCount; i++)
 			{
-				for (int i = 0; i < drawCount; i++)
-				{
-					vk->vkCmdDrawIndirect.Invoke(device.MainCommands, buffer.Handle, (Brutal.ByteSize64)(ulong)(offset + (long)i * stride), 1, stride);
-				}
+				device.Recorder.DrawIndirect(indexed, buffer.Handle, offset + (long)i * stride, 1, stride);
 			}
 		}
 
@@ -756,17 +783,7 @@ namespace LELEngine.Graphics.Vulkan
 				return;
 			}
 
-			if (device.HasMultiDrawIndirect || drawCount == 1)
-			{
-				vk->vkCmdDrawIndexedIndirect.Invoke(device.MainCommands, buffer.Handle, (Brutal.ByteSize64)(ulong)offset, drawCount, stride);
-			}
-			else
-			{
-				for (int i = 0; i < drawCount; i++)
-				{
-					vk->vkCmdDrawIndexedIndirect.Invoke(device.MainCommands, buffer.Handle, (Brutal.ByteSize64)(ulong)(offset + (long)i * stride), 1, stride);
-				}
-			}
+			RecordIndirect(true, buffer, offset, drawCount, stride);
 		}
 
 		public override void DrawIndexedIndirectCount(GpuBuffer arguments, long offset, GpuBuffer count, long countOffset, int maxDrawCount, int stride = 20,
@@ -789,8 +806,7 @@ namespace LELEngine.Graphics.Vulkan
 				return;
 			}
 
-			vk->vkCmdDrawIndexedIndirectCount.Invoke(device.MainCommands, buffer.Handle, (Brutal.ByteSize64)(ulong)offset, counts.Handle, (Brutal.ByteSize64)(ulong)countOffset, maxDrawCount,
-				stride);
+			device.Recorder.DrawIndexedIndirectCount(buffer.Handle, offset, counts.Handle, countOffset, maxDrawCount, stride);
 		}
 
 		/// <summary>The buffer of an indirect command's arguments (or count), checked.</summary>
@@ -840,7 +856,9 @@ namespace LELEngine.Graphics.Vulkan
 			int* offsets = stackalloc int[Math.Max(1, current.BlockCount)];
 			VkDescriptorSet set = current.PrepareDescriptors(this, offsets);
 			set = NoteDraw(current, set, offsets, indexed, arguments, counts);
-			VkCommandBuffer commands = device.MainCommands;
+			// The command buffer the draw goes into is settled before what it has bound is looked at.
+			VulkanRecorder recorder = device.Recorder;
+			recorder.Prepare();
 			int topologyClass = topology == PrimitiveTopology.Points ? 2 : topology == PrimitiveTopology.Lines || topology == PrimitiveTopology.LineStrip ? 1 : 0;
 			if (stateChanged || pipelineProgram != current || pipelineLayout != layout || pipelineGeneration != passGeneration || pipelineTopologyClass != topologyClass)
 			{
@@ -863,42 +881,51 @@ namespace LELEngine.Graphics.Vulkan
 						| (ulong)state.ColorOperation << 24 | (ulong)state.AlphaOperation << 28;
 				}
 
-				pipeline = current.GetPipeline(key, layout, state, passColorFormats, passColorCount, passDepthTexture != null ? passDepthTexture.Format : TextureFormat.None, out pipelineDefaults);
+				pipelineEntry = current.GetPipeline(key, layout, state, passColorFormats, passColorCount, passDepthTexture != null ? passDepthTexture.Format : TextureFormat.None);
 				pipelineProgram = current;
 				pipelineLayout = layout;
 				pipelineGeneration = passGeneration;
 				pipelineTopologyClass = topologyClass;
 			}
 
+			// A linked pipeline is replaced by its optimized link when a thread has made it.
+			VkPipeline pipeline = pipelineEntry.Pipeline;
 			if (boundPipeline.VkHandle != pipeline.VkHandle)
 			{
-				vk->vkCmdBindPipeline.Invoke(commands, VkPipelineBindPoint.Graphics, pipeline);
+				recorder.BindPipeline(VkPipelineBindPoint.Graphics, pipeline);
 				boundPipeline = pipeline;
+			}
+
+			if (current.PushSize > 0 && (pushedProgram != current || pushedVersion != current.PushVersion))
+			{
+				// The program's push constants: changed, or the command buffer last had another program's.
+				recorder.PushConstants(current.PipelineLayout, current.PushStages, current.PushSize, current.PushBlock);
+				pushedProgram = current;
+				pushedVersion = current.PushVersion;
 			}
 
 			if (stateChanged || !dynamicValid || appliedBiasScale != passBiasScale)
 			{
-				ApplyDynamicState(commands);
+				ApplyDynamicState(recorder);
 				stateChanged = false;
 			}
 
 			int vulkanTopology = Topology(topology);
 			if (appliedTopology != vulkanTopology)
 			{
-				vk->vkCmdSetPrimitiveTopology.Invoke(commands, (VkPrimitiveTopology)vulkanTopology);
+				recorder.SetState(VulkanRecorder.StateKind.Topology, vulkanTopology);
 				appliedTopology = vulkanTopology;
 			}
 
 			if (!viewportApplied)
 			{
-				VkViewport viewport = new VkViewport { X = viewportX, Y = viewportY, Width = Math.Max(1, viewportWidth), Height = Math.Max(1, viewportHeight), MinDepth = 0f, MaxDepth = 1f };
-				vk->vkCmdSetViewportWithCount.Invoke(commands, 1, &viewport);
+				recorder.SetViewport(new VkViewport { X = viewportX, Y = viewportY, Width = Math.Max(1, viewportWidth), Height = Math.Max(1, viewportHeight), MinDepth = 0f, MaxDepth = 1f });
 				viewportApplied = true;
 			}
 
 			if (!scissorApplied)
 			{
-				ApplyScissor(commands);
+				ApplyScissor(recorder);
 			}
 
 			VertexBufferDescriptor[] buffers = layout.Buffers;
@@ -911,14 +938,14 @@ namespace LELEngine.Graphics.Vulkan
 				}
 
 				buffer.Use();
-				BindVertexBuffer(commands, i, buffer.Handle, vertexOffsets[i]);
+				BindVertexBuffer(recorder, i, buffer.Handle, vertexOffsets[i]);
 			}
 
-			if (pipelineDefaults >= 0)
+			if (pipelineEntry.DefaultsBinding >= 0)
 			{
 				VulkanBuffer defaults = device.AttributeDefaults;
 				defaults.Use();
-				BindVertexBuffer(commands, pipelineDefaults, defaults.Handle, 0);
+				BindVertexBuffer(recorder, pipelineEntry.DefaultsBinding, defaults.Handle, 0);
 			}
 
 			if (indexed)
@@ -927,7 +954,7 @@ namespace LELEngine.Graphics.Vulkan
 				nint handle = indexBuffer.Handle.VkHandle;
 				if (boundIndexBuffer != handle || boundIndexFormat != indexFormat)
 				{
-					vk->vkCmdBindIndexBuffer.Invoke(commands, indexBuffer.Handle, default, indexFormat == IndexFormat.UInt16 ? VkIndexType.UInt16 : VkIndexType.UInt32);
+					recorder.BindIndexBuffer(indexBuffer.Handle, indexFormat == IndexFormat.UInt16 ? VkIndexType.UInt16 : VkIndexType.UInt32);
 					boundIndexBuffer = handle;
 					boundIndexFormat = indexFormat;
 				}
@@ -942,7 +969,7 @@ namespace LELEngine.Graphics.Vulkan
 
 			if (bind)
 			{
-				vk->vkCmdBindDescriptorSets.Invoke(commands, VkPipelineBindPoint.Graphics, current.PipelineLayout, 0, 1, &set, blocks, offsets);
+				recorder.BindDescriptorSet(VkPipelineBindPoint.Graphics, current.PipelineLayout, set, blocks, offsets);
 				boundSet = set;
 				boundSetProgram = current;
 				for (int i = 0; i < blocks; i++)
@@ -954,48 +981,48 @@ namespace LELEngine.Graphics.Vulkan
 			return true;
 		}
 
-		private void BindVertexBuffer(VkCommandBuffer commands, int index, VkBuffer buffer, long offset)
+		private void BindVertexBuffer(VulkanRecorder recorder, int index, VkBuffer buffer, long offset)
 		{
 			if (boundVertexBuffers[index] != buffer.VkHandle || boundVertexOffsets[index] != offset)
 			{
-				Brutal.ByteSize64 start = (Brutal.ByteSize64)(ulong)offset;
-				vk->vkCmdBindVertexBuffers.Invoke(commands, index, 1, &buffer, &start);
+				recorder.BindVertexBuffer(index, buffer, offset);
 				boundVertexBuffers[index] = buffer.VkHandle;
 				boundVertexOffsets[index] = offset;
 			}
 		}
 
-		private void ApplyDynamicState(VkCommandBuffer commands)
+		private void ApplyDynamicState(VulkanRecorder recorder)
 		{
 			bool all = !dynamicValid;
 			if (all || appliedState.Culling != state.Culling)
 			{
-				vk->vkCmdSetCullMode.Invoke(commands, state.Culling == FaceCulling.Back ? VkCullModeFlags.BackBit : state.Culling == FaceCulling.Front ? VkCullModeFlags.FrontBit : VkCullModeFlags.None);
+				VkCullModeFlags cull = state.Culling == FaceCulling.Back ? VkCullModeFlags.BackBit : state.Culling == FaceCulling.Front ? VkCullModeFlags.FrontBit : VkCullModeFlags.None;
+				recorder.SetState(VulkanRecorder.StateKind.CullMode, (int)cull);
 			}
 
 			if (all || appliedState.DepthTest != state.DepthTest)
 			{
-				vk->vkCmdSetDepthTestEnable.Invoke(commands, state.DepthTest);
+				recorder.SetState(VulkanRecorder.StateKind.DepthTest, state.DepthTest ? 1 : 0);
 			}
 
 			// A depth attachment that renders read-only is never written.
 			bool depthWrite = state.DepthWrite && !depthReadOnly;
 			if (all || appliedDepthWrite != depthWrite)
 			{
-				vk->vkCmdSetDepthWriteEnable.Invoke(commands, depthWrite);
+				recorder.SetState(VulkanRecorder.StateKind.DepthWrite, depthWrite ? 1 : 0);
 				appliedDepthWrite = depthWrite;
 			}
 
 			if (all || appliedState.DepthCompare != state.DepthCompare)
 			{
-				vk->vkCmdSetDepthCompareOp.Invoke(commands, (VkCompareOp)(int)state.DepthCompare);
+				recorder.SetState(VulkanRecorder.StateKind.DepthCompare, (int)state.DepthCompare);
 			}
 
 			// OpenGL's polygon offset of filled triangles: none for triangles drawn as lines.
 			bool bias = (state.DepthBiasSlope != 0f || state.DepthBiasConstant != 0f) && !state.Wireframe;
 			if (all || appliedBias != bias)
 			{
-				vk->vkCmdSetDepthBiasEnable.Invoke(commands, bias);
+				recorder.SetState(VulkanRecorder.StateKind.DepthBiasEnable, bias ? 1 : 0);
 			}
 
 			if (all)
@@ -1007,7 +1034,7 @@ namespace LELEngine.Graphics.Vulkan
 			float constant = state.DepthBiasConstant * passBiasScale;
 			if (bias && (!biasValuesSent || sentBiasConstant != constant || sentBiasSlope != state.DepthBiasSlope))
 			{
-				vk->vkCmdSetDepthBias.Invoke(commands, constant, 0f, state.DepthBiasSlope);
+				recorder.SetState(VulkanRecorder.StateKind.DepthBias, 0, constant, state.DepthBiasSlope);
 				sentBiasConstant = constant;
 				sentBiasSlope = state.DepthBiasSlope;
 				biasValuesSent = true;
@@ -1019,7 +1046,7 @@ namespace LELEngine.Graphics.Vulkan
 			dynamicValid = true;
 		}
 
-		private void ApplyScissor(VkCommandBuffer commands)
+		private void ApplyScissor(VulkanRecorder recorder)
 		{
 			int x0 = 0;
 			int y0 = 0;
@@ -1040,7 +1067,7 @@ namespace LELEngine.Graphics.Vulkan
 
 			VkRect2D rect = new VkRect2D { Offset = new VkOffset2D { X = x0, Y = y0 }, Extent = new VkExtent2D { Width = Math.Max(0, x1 - x0), Height = Math.Max(0, y1 - y0) } };
 			appliedScissor = rect;
-			vk->vkCmdSetScissorWithCount.Invoke(commands, 1, &rect);
+			recorder.SetScissor(rect);
 			scissorApplied = true;
 		}
 
@@ -1064,7 +1091,7 @@ namespace LELEngine.Graphics.Vulkan
 		{
 			if (PrepareDispatch(null))
 			{
-				vk->vkCmdDispatch.Invoke(device.MainCommands, groupsX, groupsY, groupsZ);
+				device.Recorder.Dispatch(groupsX, groupsY, groupsZ);
 			}
 		}
 
@@ -1073,7 +1100,7 @@ namespace LELEngine.Graphics.Vulkan
 			VulkanBuffer buffer = RequireIndirect(arguments);
 			if (PrepareDispatch(buffer))
 			{
-				vk->vkCmdDispatchIndirect.Invoke(device.MainCommands, buffer.Handle, (Brutal.ByteSize64)(ulong)offset);
+				device.Recorder.DispatchIndirect(buffer.Handle, offset);
 			}
 		}
 
@@ -1097,12 +1124,21 @@ namespace LELEngine.Graphics.Vulkan
 			}
 
 			NoteDispatch(current, arguments);
-			VkCommandBuffer commands = device.MainCommands;
+			// The command buffer the dispatch goes into is settled before what it has bound is looked at.
+			VulkanRecorder recorder = device.Recorder;
+			recorder.Prepare();
 			ComputeBindings bound = computeBindings[device.Recording.Index];
 			if (bound.Pipeline.VkHandle != current.ComputePipeline.VkHandle)
 			{
-				vk->vkCmdBindPipeline.Invoke(commands, VkPipelineBindPoint.Compute, current.ComputePipeline);
+				recorder.BindPipeline(VkPipelineBindPoint.Compute, current.ComputePipeline);
 				bound.Pipeline = current.ComputePipeline;
+			}
+
+			if (current.PushSize > 0 && (bound.PushedProgram != current || bound.PushedVersion != current.PushVersion))
+			{
+				recorder.PushConstants(current.PipelineLayout, current.PushStages, current.PushSize, current.PushBlock);
+				bound.PushedProgram = current;
+				bound.PushedVersion = current.PushVersion;
 			}
 
 			int blocks = current.BlockCount;
@@ -1114,7 +1150,7 @@ namespace LELEngine.Graphics.Vulkan
 
 			if (bind)
 			{
-				vk->vkCmdBindDescriptorSets.Invoke(commands, VkPipelineBindPoint.Compute, current.PipelineLayout, 0, 1, &set, blocks, offsets);
+				recorder.BindDescriptorSet(VkPipelineBindPoint.Compute, current.PipelineLayout, set, blocks, offsets);
 				bound.Set = set;
 				bound.Program = current;
 				for (int i = 0; i < blocks; i++)
@@ -1149,14 +1185,13 @@ namespace LELEngine.Graphics.Vulkan
 			RequireBuffer(from, Sync.Transfer, false);
 			RequireBuffer(to, Sync.Transfer, true);
 			ApplyRequirements(false);
-			VkCommandBuffer commands = device.MainCommands;
 			VkBufferCopy region = new VkBufferCopy
 			{
 				SrcOffset = (Brutal.ByteSize64)(ulong)sourceOffset,
 				DstOffset = (Brutal.ByteSize64)(ulong)destinationOffset,
 				Size = (Brutal.ByteSize64)(ulong)size
 			};
-			vk->vkCmdCopyBuffer.Invoke(commands, from.Handle, to.Handle, 1, &region);
+			device.Recorder.CopyBuffer(from.Handle, to.Handle, region);
 		}
 
 		public override void CopyTexture(GpuTexture source, int sourceMip, int sourceX, int sourceY, int sourceZ, GpuTexture destination, int destinationMip, int destinationX,
@@ -1180,7 +1215,6 @@ namespace LELEngine.Graphics.Vulkan
 			RequireTexture(to, destinationMip, 1, toLayer, toLayers, toLayout, Sync.Transfer, true,
 				!within && to.Covers(destinationMip, destinationX, destinationY, destinationZ, width, height, depth));
 			ApplyRequirements(false);
-			VkCommandBuffer commands = device.MainCommands;
 			VkImageCopy region = new VkImageCopy
 			{
 				SrcSubresource = new VkImageSubresourceLayers { AspectMask = from.Aspect, MipLevel = sourceMip, BaseArrayLayer = fromVolume ? 0 : sourceZ, LayerCount = fromVolume ? 1 : depth },
@@ -1190,7 +1224,7 @@ namespace LELEngine.Graphics.Vulkan
 				// Between slices and layers the box's depth counts both.
 				Extent = new VkExtent3D { Width = width, Height = height, Depth = fromVolume || toVolume ? depth : 1 }
 			};
-			vk->vkCmdCopyImage.Invoke(commands, from.Image, fromLayout, to.Image, toLayout, 1, &region);
+			device.Recorder.CopyImage(from.Image, fromLayout, to.Image, toLayout, region);
 		}
 
 		public override void Blit(GpuTexture source, int sourceMip, int sourceLayer, int sourceX0, int sourceY0, int sourceX1, int sourceY1, GpuTexture destination,
@@ -1234,7 +1268,6 @@ namespace LELEngine.Graphics.Vulkan
 			RequireTexture(from, sourceMip, 1, fromLayer, 1, fromLayout, Sync.Transfer, false);
 			RequireTexture(to, destinationMip, 1, toLayer, 1, toLayout, Sync.Transfer, true, covers);
 			ApplyRequirements(false);
-			VkCommandBuffer commands = device.MainCommands;
 			VkImageBlit blit = default;
 			blit.SrcSubresource = new VkImageSubresourceLayers { AspectMask = from.Aspect, MipLevel = sourceMip, BaseArrayLayer = fromVolume ? 0 : sourceLayer, LayerCount = 1 };
 			blit.DstSubresource = new VkImageSubresourceLayers { AspectMask = to.Aspect, MipLevel = destinationMip, BaseArrayLayer = toVolume ? 0 : destinationLayer, LayerCount = 1 };
@@ -1247,7 +1280,7 @@ namespace LELEngine.Graphics.Vulkan
 			destinationOffsets[0] = new VkOffset3D { X = destinationX0, Y = destinationY0, Z = destinationZ };
 			destinationOffsets[1] = new VkOffset3D { X = destinationX1, Y = destinationY1, Z = destinationZ + 1 };
 			bool linear = filter == SamplerFilter.Linear && !depth && from.Filters && !from.Format.IsInteger();
-			vk->vkCmdBlitImage.Invoke(commands, from.Image, fromLayout, to.Image, toLayout, 1, &blit, linear ? VkFilter.Linear : VkFilter.Nearest);
+			device.Recorder.BlitImage(from.Image, fromLayout, to.Image, toLayout, blit, linear ? VkFilter.Linear : VkFilter.Nearest);
 		}
 
 		public override void ClearTexture(GpuTexture texture, int mip, in ClearValue value)
@@ -1258,18 +1291,16 @@ namespace LELEngine.Graphics.Vulkan
 			UseComputeQueue(target.Concurrent);
 			RequireTexture(target, mip, 1, 0, target.Layers, layout, Sync.Transfer, true, true);
 			ApplyRequirements(false);
-			VkCommandBuffer commands = device.MainCommands;
 			VkImageSubresourceRange range = new VkImageSubresourceRange { AspectMask = target.Aspect, BaseMipLevel = mip, LevelCount = 1, BaseArrayLayer = 0, LayerCount = target.Layers };
 			if (target.Format.IsDepth())
 			{
-				VkClearDepthStencilValue depth = new VkClearDepthStencilValue { Depth = value.R };
-				vk->vkCmdClearDepthStencilImage.Invoke(commands, target.Image, layout, &depth, 1, &range);
+				device.Recorder.ClearDepthImage(target.Image, layout, new VkClearDepthStencilValue { Depth = value.R }, range);
 			}
 			else
 			{
 				VkClearValue color = default;
 				WriteClearValue(&color, value, target.Format);
-				vk->vkCmdClearColorImage.Invoke(commands, target.Image, layout, (VkClearColorValue*)&color, 1, &range);
+				device.Recorder.ClearColorImage(target.Image, layout, *(VkClearColorValue*)&color, range);
 			}
 		}
 
@@ -1305,9 +1336,7 @@ namespace LELEngine.Graphics.Vulkan
 			RequireTexture(from, mip, 1, volume ? 0 : z, volume ? 1 : depth, from.CopySourceLayout, Sync.Transfer, false);
 			RequireBuffer(buffer, Sync.Transfer, true);
 			ApplyRequirements(false);
-			VkCommandBuffer commands = device.MainCommands;
-			VkBufferImageCopy region = from.Region(mip, x, y, z, width, height, depth, destinationOffset);
-			vk->vkCmdCopyImageToBuffer.Invoke(commands, from.Image, from.CopySourceLayout, buffer.Handle, 1, &region);
+			device.Recorder.CopyImageToBuffer(from.Image, from.CopySourceLayout, buffer.Handle, from.Region(mip, x, y, z, width, height, depth, destinationOffset));
 		}
 
 		#endregion
@@ -1319,9 +1348,8 @@ namespace LELEngine.Graphics.Vulkan
 			VulkanTimestamp stamp = (VulkanTimestamp)timestamp;
 			// In asynchronous compute work, the compute queue's clock: a section times that queue's work.
 			UseComputeQueue(true);
-			VkCommandBuffer commands = device.MainCommands;
 			VkQueryPool pool = device.QueryPool(stamp.Begin(), out int index);
-			vk->vkCmdWriteTimestamp2.Invoke(commands, VkPipelineStageFlags2.AllCommandsBit, pool, index);
+			device.Recorder.WriteTimestamp(VkPipelineStageFlags2.AllCommandsBit, pool, index);
 		}
 
 		#endregion

@@ -251,6 +251,11 @@ namespace LELEngine.Graphics.Vulkan
 			}
 
 			SyncBatch setup = device.SetupBatch;
+			if (requirementCount == 0 && streamBatch.IsEmpty && setup.IsEmpty)
+			{
+				return;
+			}
+
 			for (int i = 0; i < requirementCount; i++)
 			{
 				ref Requirement r = ref requirements[i];
@@ -267,6 +272,25 @@ namespace LELEngine.Graphics.Vulkan
 				{
 					ApplyTarget(r.Target, target, r.Stages, r.Write);
 				}
+			}
+
+			// The reads are ordered now, in the epoch the command's changes leave: the same reads again need no look
+			// until something is written or changes layout.
+			int epoch = device.SyncEpoch;
+			for (int i = 0; i < requirementCount; i++)
+			{
+				ref Requirement r = ref requirements[i];
+				if (!r.Write)
+				{
+					if (r.Texture != null)
+					{
+						r.Texture.MarkReady(epoch, r.Mip, r.Mips, r.Layer, r.Layers, r.Layout, r.Stages);
+					}
+					else if (r.Buffer != null)
+					{
+						r.Buffer.MarkReady(epoch, r.Stages);
+					}
+				}
 
 				r = default;
 			}
@@ -279,7 +303,24 @@ namespace LELEngine.Graphics.Vulkan
 
 			if (!streamBatch.IsEmpty)
 			{
-				streamBatch.Record(device, device.MainCommands);
+				RecordStreamBarriers(streamBatch);
+			}
+		}
+
+		/// <summary>
+		///     Records barriers into the stream where its commands go now: the device's own command buffer while one is
+		///     open, else the recording thread's segment (barriers need nothing bound: no new segment for them).
+		/// </summary>
+		private void RecordStreamBarriers(SyncBatch batch)
+		{
+			VulkanStream stream = device.Recording;
+			if (stream.MainBegun)
+			{
+				batch.Record(device, stream.Main);
+			}
+			else
+			{
+				batch.Record(device, stream.Recorder);
 			}
 		}
 
@@ -385,7 +426,6 @@ namespace LELEngine.Graphics.Vulkan
 			}
 
 			ApplyRequirements(false);
-			VkCommandBuffer commands = device.MainCommands;
 			VkRenderingAttachmentInfo* colors = stackalloc VkRenderingAttachmentInfo[Math.Max(1, passColorCount)];
 			for (int i = 0; i < passColorCount; i++)
 			{
@@ -434,7 +474,7 @@ namespace LELEngine.Graphics.Vulkan
 				ColorAttachments = colors,
 				DepthAttachment = depthTexture != null ? &depth : null
 			};
-			vk->vkCmdBeginRendering.Invoke(commands, &info);
+			device.GraphicsStream.Recorder.BeginRendering(&info);
 			rendering = true;
 			passStarted = true;
 		}
@@ -560,15 +600,14 @@ namespace LELEngine.Graphics.Vulkan
 		}
 
 		/// <summary>
-		///     Notes a resource the descriptor set being written binds (by its buffer or view: <paramref name="handle" />),
-		///     for the program's draws and the descriptor cache; marks it as used when no program's set is being written.
+		///     Notes a resource the descriptor set being written binds, for the program's draws; marks it as used when no
+		///     program's set is being written.
 		/// </summary>
-		private void Track(in VulkanProgram.TrackedResource resource, nint handle)
+		private void Track(in VulkanProgram.TrackedResource resource)
 		{
 			if (Resolving != null)
 			{
 				Resolving.Track(resource);
-				device.NamedHandles.Add(handle);
 				return;
 			}
 
@@ -577,18 +616,36 @@ namespace LELEngine.Graphics.Vulkan
 			resource.Structure?.Use();
 		}
 
-		/// <summary>Notes the uses of the resources the program's descriptor set binds, by the program's stages.</summary>
+		/// <summary>
+		///     Notes the uses of the resources the program's descriptor set binds, by the program's stages. A read that an
+		///     earlier command ordered in the same sync epoch is only marked as used: nothing was written or changed layout
+		///     since, so it needs nothing.
+		/// </summary>
 		private void NoteProgram(VulkanProgram current, VkPipelineStageFlags2 stages)
 		{
+			int epoch = device.SyncEpoch;
 			for (int i = 0; i < current.TrackedCount; i++)
 			{
 				ref VulkanProgram.TrackedResource entry = ref current.Tracked[i];
 				if (entry.Texture != null)
 				{
-					RequireTexture(entry.Texture, entry.Mip, entry.Mips, entry.Layer, entry.Layers, entry.Layout, stages, entry.Write);
+					VulkanTexture texture = entry.Texture;
+					if (!entry.Write && texture.IsReadyFor(epoch, entry.Mip, entry.Mips, entry.Layer, entry.Layers, entry.Layout, stages))
+					{
+						texture.Use();
+						continue;
+					}
+
+					RequireTexture(texture, entry.Mip, entry.Mips, entry.Layer, entry.Layers, entry.Layout, stages, entry.Write);
 				}
 				else if (entry.Buffer != null)
 				{
+					if (!entry.Write && entry.Buffer.IsReadyFor(epoch, stages))
+					{
+						entry.Buffer.Use();
+						continue;
+					}
+
 					RequireBuffer(entry.Buffer, stages, entry.Write);
 				}
 				else
@@ -648,9 +705,7 @@ namespace LELEngine.Graphics.Vulkan
 			}
 
 			owner.TrackTexture(unit, texture, mips, texture.SampledLayout);
-			VkImageView view = texture.SampledLevels(mips);
-			device.NamedHandles.Add(view.VkHandle);
-			return view;
+			return texture.SampledLevels(mips);
 		}
 
 		#endregion

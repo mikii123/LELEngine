@@ -320,7 +320,7 @@ namespace LELEngine.Graphics.Vulkan
 	///     its default). The lists are in the order the module declares the variables, which for glslang is the order
 	///     the code first names them in, the unused ones last.
 	/// </remarks>
-	internal sealed class SpirvModule
+	internal sealed partial class SpirvModule
 	{
 		private const uint Magic = 0x07230203;
 		private const uint SwappedMagic = 0x03022307;
@@ -331,7 +331,9 @@ namespace LELEngine.Graphics.Vulkan
 
 		private readonly uint version;
 		private readonly uint generator;
-		private readonly uint bound;
+
+		/// <summary>One more than the highest id: what a new declaration takes (SpirvPushConstants.cs).</summary>
+		private uint bound;
 		private readonly uint schema;
 
 		/// <summary>The instructions before the first function, each with its words: what is read and rewritten.</summary>
@@ -341,7 +343,7 @@ namespace LELEngine.Graphics.Vulkan
 		private readonly uint[] functions;
 
 		/// <summary>Where the annotations (decorations) start in <see cref="instructions" />.</summary>
-		private readonly int annotationStart;
+		private int annotationStart;
 
 		/// <summary>Where they end, which is where a new decoration goes.</summary>
 		private int annotationEnd;

@@ -456,6 +456,14 @@ namespace LELEngine.Graphics
 		/// <summary>Locations of vertex attributes by name, for attributes whose source gives none.</summary>
 		public readonly List<KeyValuePair<string, int>> AttributeLocations = new List<KeyValuePair<string, int>>();
 
+		/// <summary>
+		///     Uniforms (loose ones, by name) the caller sets for nearly every draw, such as an object's world matrix: a device
+		///     keeps them where a change between draws costs least (Vulkan: push constants, as many as fit; a program whose
+		///     loose uniforms all fit is given them all without being asked). OpenGL sets every loose uniform as such already.
+		///     What a draw reads is the same either way.
+		/// </summary>
+		public readonly List<string> PerDrawUniforms = new List<string>();
+
 		/// <summary>The device may compile on other threads: the program is ready when <see cref="GpuProgram.IsReady" /> says so.</summary>
 		public bool Asynchronous = true;
 	}

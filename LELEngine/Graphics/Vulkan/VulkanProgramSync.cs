@@ -50,8 +50,6 @@ namespace LELEngine.Graphics.Vulkan
 			TrackedEpoch = -1;
 			DepthCheckPass = -1;
 			list.Resolving = this;
-			device.NamedHandles.Clear();
-			device.NamedHandles.Add(setLayout.VkHandle);
 			if (textureLayouts.Length != Textures.Length)
 			{
 				textureLayouts = new VkImageLayout[Textures.Length];

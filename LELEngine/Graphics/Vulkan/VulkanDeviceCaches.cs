@@ -177,7 +177,7 @@ namespace LELEngine.Graphics.Vulkan
 			Check(Vk->vkWaitForFences.Invoke(Handle, 1, &fence, true, nint.MaxValue), "vkWaitForFences");
 			Vk->vkResetFences.Invoke(Handle, 1, &fence);
 			freeFences.Push(fence);
-			graphicsStream.Free.Push(commands);
+			// The command buffer is of the pool of the submission being recorded: reset with it.
 			Poll();
 		}
 	}

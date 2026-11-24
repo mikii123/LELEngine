@@ -90,6 +90,9 @@ namespace LELEngine.Graphics.Vulkan
 		private long statsResets;
 		private long statsWaits;
 		private long statsComputeSubmissions;
+		private long statsRecording;
+		private long statsRecorderWait;
+		private long statsBuffers;
 
 		/// <summary>A frame was presented: with LEL_VULKAN_STATS=1 the counts of the last second are printed once a second.</summary>
 		internal void CountFrame()
@@ -114,8 +117,14 @@ namespace LELEngine.Graphics.Vulkan
 
 			Brutal.VulkanApi.Vma.VmaTotalStatistics memory;
 			Brutal.VulkanApi.Vma.Vma.PInvoke.vmaCalculateStatistics(Allocator, &memory);
+			long recordingTicks = graphicsStream.Recorder.RecordingTicks + (computeStream?.Recorder.RecordingTicks ?? 0);
+			long recorderWaitTicks = graphicsStream.Recorder.WaitTicks + (computeStream?.Recorder.WaitTicks ?? 0);
+			double perFrameMs = 1000.0 / System.Diagnostics.Stopwatch.Frequency / statsFrames;
 			Console.WriteLine(
-				$"[Vulkan stats] per frame: barriers {(BarriersRecorded - statsBarriers) / (double)statsFrames:0.0}, renderings suspended for a barrier {(RenderingSuspensions - statsSuspensions) / (double)statsFrames:0.0}, descriptor sets written {(DescriptorSetsWritten - statsSets) / (double)statsFrames:0.0}, descriptor cache restarts {(DescriptorCacheResets - statsResets) / (double)statsFrames:0.00}, compute queue submissions {(ComputeSubmissions - statsComputeSubmissions) / (double)statsFrames:0.0}, waits between the queues {(CrossQueueWaits - statsWaits) / (double)statsFrames:0.0} | memory: {(double)(ulong)memory.Total.Statistics.AllocationBytes / (1 << 20):0.0} MB in {memory.Total.Statistics.AllocationCount} allocations, {(double)(ulong)memory.Total.Statistics.BlockBytes / (1 << 20):0.0} MB of blocks");
+				$"[Vulkan stats] per frame: barriers {(BarriersRecorded - statsBarriers) / (double)statsFrames:0.0}, renderings suspended for a barrier {(RenderingSuspensions - statsSuspensions) / (double)statsFrames:0.0}, descriptor sets written {(DescriptorSetsWritten - statsSets) / (double)statsFrames:0.0}, descriptor cache restarts {(DescriptorCacheResets - statsResets) / (double)statsFrames:0.00}, compute queue submissions {(ComputeSubmissions - statsComputeSubmissions) / (double)statsFrames:0.0}, waits between the queues {(CrossQueueWaits - statsWaits) / (double)statsFrames:0.0}, command buffers {(CommandBuffersSent - statsBuffers) / (double)statsFrames:0.0}, recording thread {(recordingTicks - statsRecording) * perFrameMs:0.000} ms (waited for {(recorderWaitTicks - statsRecorderWait) * perFrameMs:0.000} ms) | memory: {(double)(ulong)memory.Total.Statistics.AllocationBytes / (1 << 20):0.0} MB in {memory.Total.Statistics.AllocationCount} allocations, {(double)(ulong)memory.Total.Statistics.BlockBytes / (1 << 20):0.0} MB of blocks");
+			statsRecording = recordingTicks;
+			statsRecorderWait = recorderWaitTicks;
+			statsBuffers = CommandBuffersSent;
 			if (printMemory && ++memoryReports == 5)
 			{
 				PrintTextures();

@@ -51,7 +51,7 @@ namespace LELEngine.Graphics.Vulkan
 
 			structure.Use();
 			// Traced by the program's commands: they wait for its build (and its bottom levels').
-			Track(new VulkanProgram.TrackedResource { Structure = structure }, structure.Handle.VkHandle);
+			Track(new VulkanProgram.TrackedResource { Structure = structure });
 			return structure.Handle;
 		}
 

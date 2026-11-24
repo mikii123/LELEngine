@@ -395,6 +395,24 @@ namespace LELEngine.Graphics.Vulkan
 			Clear();
 		}
 
+		/// <summary>Writes the barriers into a stream's recorder (nothing when there are none) and empties the batch.</summary>
+		public void Record(VulkanDevice device, VulkanRecorder recorder)
+		{
+			if (IsEmpty)
+			{
+				return;
+			}
+
+			VkMemoryBarrier2 global = memory;
+			fixed (VkImageMemoryBarrier2* barriers = images)
+			{
+				recorder.PipelineBarrier(hasMemory ? &global : null, barriers, imageCount);
+			}
+
+			device.BarriersRecorded++;
+			Clear();
+		}
+
 		public void Clear()
 		{
 			imageCount = 0;

@@ -27,6 +27,12 @@ namespace LELEngine.Graphics.Vulkan
 
 		private static readonly Regex boolUniform = new Regex(@"\buniform\s+(?:bool|bvec[234])\s+(\w+)", RegexOptions.Compiled);
 
+		/// <summary>
+		///     LEL_VULKAN_SHADER_NOTE=text: a note every shader module carries, which a driver's own cache of compiled
+		///     shaders does not know: every pipeline is compiled anew (to measure what a first run on a machine costs).
+		/// </summary>
+		private static readonly string shaderNote = Environment.GetEnvironmentVariable("LEL_VULKAN_SHADER_NOTE");
+
 		[ThreadStatic]
 		private static Compiler compiler;
 
@@ -60,7 +66,10 @@ namespace LELEngine.Graphics.Vulkan
 
 		public VulkanSampler[] Samplers = Array.Empty<VulkanSampler>();
 
-		/// <summary>Counts the textures given to the samplers.</summary>
+		/// <summary>The sampler each texture had of its own (<see cref="GpuTexture.Sampler" />) when it was given, by unit.</summary>
+		private GpuSampler[] ownSamplers = Array.Empty<GpuSampler>();
+
+		/// <summary>Counts the changes of the textures and samplers given to the samplers.</summary>
 		public int TextureVersion;
 
 		/// <summary>A stage writes images or storage blocks: what it wrote has to be made visible to the draws that follow.</summary>
@@ -87,6 +96,7 @@ namespace LELEngine.Graphics.Vulkan
 			// The descriptor is the caller's to change once this returns.
 			List<KeyValuePair<ShaderStage, string>> sources = new List<KeyValuePair<ShaderStage, string>>(descriptor.Stages);
 			List<KeyValuePair<string, int>> locations = new List<KeyValuePair<string, int>>(descriptor.AttributeLocations);
+			perDrawUniforms = descriptor.PerDrawUniforms.Count > 0 ? new HashSet<string>(descriptor.PerDrawUniforms, StringComparer.Ordinal) : null;
 			if (descriptor.Asynchronous && !VulkanDevice.CompileOnCallingThread)
 			{
 				build = Task.Run(() => Build(sources, locations, compiled));
@@ -245,6 +255,10 @@ namespace LELEngine.Graphics.Vulkan
 				made[i] = new Stage { Kind = compiled[i].Key, Unlinked = compiled[i].Value, Flag = Flag(compiled[i].Key) };
 			}
 
+			// Loose uniforms a draw reads from push constants (VulkanProgramPush.cs): out of the stages' blocks, which
+			// lose their binding when nothing else of them is read.
+			SpirvResource[] defaultBlocks = MoveToPushConstants(modules, made);
+
 			// Bindings: the blocks of loose uniforms first (their dynamic offsets come in this order), then every
 			// other resource a stage uses, one binding per name and kind over all stages.
 			List<Binding> layout = new List<Binding>();
@@ -378,12 +392,12 @@ namespace LELEngine.Graphics.Vulkan
 			Dictionary<string, int> entryByName = new Dictionary<string, int>(StringComparer.Ordinal);
 			for (int i = 0; i < count; i++)
 			{
-				if (made[i].Resource == null)
+				if (defaultBlocks[i] == null)
 				{
 					continue;
 				}
 
-				foreach (SpirvBlockMember member in made[i].Resource.FlattenMembers())
+				foreach (SpirvBlockMember member in defaultBlocks[i].FlattenMembers())
 				{
 					SpirvBaseType type = member.Type.BaseType;
 					if (member.Name.Contains("/*", StringComparison.Ordinal) || (type != SpirvBaseType.Float && type != SpirvBaseType.Int && type != SpirvBaseType.UInt && type != SpirvBaseType.Bool))
@@ -412,7 +426,20 @@ namespace LELEngine.Graphics.Vulkan
 					}
 
 					int stride = member.ArrayStride > 0 ? member.ArrayStride : 0;
-					uniformEntries[index].Targets.Add(new UniformTarget { Stage = i, Offset = member.Offset, Stride = stride, MatrixStride = member.MatrixStride > 0 ? member.MatrixStride : 16 });
+					int matrixStride = member.MatrixStride > 0 ? member.MatrixStride : 16;
+					if (pushOffsets != null && pushOffsets.TryGetValue(member.Name, out int pushOffset))
+					{
+						// Read from the push constants, by every stage that reads it: one copy of its values.
+						if (!uniformEntries[index].Pushed)
+						{
+							uniformEntries[index].Pushed = true;
+							uniformEntries[index].Targets.Add(new UniformTarget { Stage = PushTarget, Offset = pushOffset, Stride = stride, MatrixStride = matrixStride });
+						}
+					}
+					else if (made[i].Resource != null)
+					{
+						uniformEntries[index].Targets.Add(new UniformTarget { Stage = i, Offset = member.Offset, Stride = stride, MatrixStride = matrixStride });
+					}
 				}
 			}
 
@@ -436,6 +463,16 @@ namespace LELEngine.Graphics.Vulkan
 			// The device's objects.
 			for (int i = 0; i < count; i++)
 			{
+				if (device.HasPipelineLibraries)
+				{
+					modules[i].AddProcessedNote(VulkanDevice.LibrariesNote);
+				}
+
+				if (shaderNote != null)
+				{
+					modules[i].AddProcessedNote(shaderNote);
+				}
+
 				byte[] linked = modules[i].ToBytes();
 				fixed (byte* code = linked)
 				{
@@ -455,7 +492,14 @@ namespace LELEngine.Graphics.Vulkan
 			VkDescriptorSetLayoutCreateInfo layoutInfo = new VkDescriptorSetLayoutCreateInfo { BindingCount = layout.Count, Bindings = layoutBindings };
 			VkDescriptorSetLayout descriptorLayout;
 			VulkanDevice.Check(device.Vk->vkCreateDescriptorSetLayout.Invoke(device.Handle, &layoutInfo, null, &descriptorLayout), "vkCreateDescriptorSetLayout (" + Name + ")");
-			VkPipelineLayoutCreateInfo pipelineLayoutInfo = new VkPipelineLayoutCreateInfo { SetLayoutCount = 1, SetLayouts = &descriptorLayout };
+			VkPushConstantRange pushRange = new VkPushConstantRange { StageFlags = PushStages, Offset = (Brutal.ByteSize32)0u, Size = (Brutal.ByteSize32)(uint)PushSize };
+			VkPipelineLayoutCreateInfo pipelineLayoutInfo = new VkPipelineLayoutCreateInfo
+			{
+				SetLayoutCount = 1,
+				SetLayouts = &descriptorLayout,
+				PushConstantRangeCount = PushSize > 0 ? 1 : 0,
+				PushConstantRanges = &pushRange
+			};
 			VkPipelineLayout madeLayout;
 			VulkanDevice.Check(device.Vk->vkCreatePipelineLayout.Invoke(device.Handle, &pipelineLayoutInfo, null, &madeLayout), "vkCreatePipelineLayout (" + Name + ")");
 
@@ -465,6 +509,7 @@ namespace LELEngine.Graphics.Vulkan
 			slots = uniformSlots.ToArray();
 			Textures = new VulkanTexture[units];
 			Samplers = new VulkanSampler[units];
+			ownSamplers = new GpuSampler[units];
 			setLayout = descriptorLayout;
 			pipelineLayout = madeLayout;
 			int keyLength = 2;
@@ -489,6 +534,11 @@ namespace LELEngine.Graphics.Vulkan
 					device.ReportShaderInfo(pipeline, VkShaderStageFlags.ComputeBit, Name, "");
 					computePipeline = pipeline;
 				}
+			}
+			else if (device.HasPipelineLibraries)
+			{
+				// The shaders compiled now, on the thread that builds the program, not at its first draw.
+				MakeShaderLibraries();
 			}
 		}
 
@@ -836,13 +886,15 @@ namespace LELEngine.Graphics.Vulkan
 
 			int first = slots[slot].Element;
 			count = Math.Min(count, entry.Length - first);
-			foreach (UniformTarget target in entry.Targets)
+			List<UniformTarget> targets = entry.Targets;
+			for (int t = 0; t < targets.Count; t++)
 			{
-				Stage stage = stages[target.Stage];
+				UniformTarget target = targets[t];
+				byte* block = target.Stage == PushTarget ? pushBlock : stages[target.Stage].Block;
 				bool changed = false;
 				for (int i = 0; i < count; i++)
 				{
-					byte* destination = stage.Block + target.Offset + (long)(first + i) * target.Stride;
+					byte* destination = block + target.Offset + (long)(first + i) * target.Stride;
 					float* source = values + i * 16;
 					if (target.MatrixStride == 16)
 					{
@@ -857,7 +909,23 @@ namespace LELEngine.Graphics.Vulkan
 					}
 				}
 
-				stage.Dirty |= changed;
+				MarkChanged(target.Stage, changed);
+			}
+		}
+
+		/// <summary>Values of a stage's block (or of the push constants) changed: they reach the GPU with the next draw.</summary>
+		private void MarkChanged(int stage, bool changed)
+		{
+			if (stage == PushTarget)
+			{
+				if (changed)
+				{
+					PushVersion++;
+				}
+			}
+			else
+			{
+				stages[stage].Dirty |= changed;
 			}
 		}
 
@@ -881,10 +949,21 @@ namespace LELEngine.Graphics.Vulkan
 			}
 
 			int unit = slots[slot].Unit;
-			if (unit >= 0)
+			if (unit < 0)
 			{
-				Textures[unit] = (VulkanTexture)texture;
-				Samplers[unit] = (VulkanSampler)sampler;
+				return;
+			}
+
+			// The same texture and sampler again (a material set for each of its draws) keeps the descriptor set; a
+			// texture whose own sampler changed since it was given counts as new, as it did when every call counted.
+			VulkanTexture given = (VulkanTexture)texture;
+			VulkanSampler how = (VulkanSampler)sampler;
+			GpuSampler own = given?.Sampler;
+			if (Textures[unit] != given || Samplers[unit] != how || ownSamplers[unit] != own)
+			{
+				Textures[unit] = given;
+				Samplers[unit] = how;
+				ownSamplers[unit] = own;
 				TextureVersion++;
 			}
 		}
@@ -927,13 +1006,15 @@ namespace LELEngine.Graphics.Vulkan
 			int first = slots[slot].Element;
 			count = Math.Min(count, entry.Length - first);
 			int bytes = components * 4;
-			foreach (UniformTarget target in entry.Targets)
+			List<UniformTarget> targets = entry.Targets;
+			for (int t = 0; t < targets.Count; t++)
 			{
-				Stage stage = stages[target.Stage];
+				UniformTarget target = targets[t];
+				byte* block = target.Stage == PushTarget ? pushBlock : stages[target.Stage].Block;
 				bool changed = false;
 				for (int i = 0; i < count; i++)
 				{
-					byte* destination = stage.Block + target.Offset + (long)(first + i) * target.Stride;
+					byte* destination = block + target.Offset + (long)(first + i) * target.Stride;
 					byte* source = (byte*)values + (long)i * bytes;
 					if (convert)
 					{
@@ -951,7 +1032,7 @@ namespace LELEngine.Graphics.Vulkan
 				}
 
 				// A block whose values stay the same keeps its copy in the frame's memory: no new offset, no new binding.
-				stage.Dirty |= changed;
+				MarkChanged(target.Stage, changed);
 			}
 		}
 
@@ -1048,6 +1129,7 @@ namespace LELEngine.Graphics.Vulkan
 			if (!device.DescriptorCache.TryGetValue(lookup, out VkDescriptorSet set))
 			{
 				set = WriteSet(length);
+				NameHandles(device.NamedHandles);
 				device.CacheDescriptorSet(lookup.Copy(), set);
 			}
 
@@ -1076,6 +1158,47 @@ namespace LELEngine.Graphics.Vulkan
 			}
 
 			sampler = chosen.Handle;
+		}
+
+		/// <summary>
+		///     The objects the key just built names, whose destruction the cached set has to be forgotten with: the set
+		///     layout, the buffers bound by number, the views of textures and images, the acceleration structures (not the
+		///     frame's uniform memory, offsets, ranges or samplers).
+		/// </summary>
+		private void NameHandles(List<nint> named)
+		{
+			named.Clear();
+			named.Add(setLayout.VkHandle);
+			int position = 1;
+			foreach (Binding binding in bindings)
+			{
+				switch (binding.Kind)
+				{
+					case BindingKind.Block:
+						position++;
+						break;
+					case BindingKind.UniformBuffer:
+					case BindingKind.StorageBuffer:
+						named.Add((nint)key[position]);
+						position += 3;
+						break;
+					case BindingKind.Texture:
+						for (int i = 0; i < binding.Count; i++)
+						{
+							named.Add((nint)key[position]);
+							position += 2;
+						}
+
+						break;
+					default:
+						for (int i = 0; i < binding.Count; i++)
+						{
+							named.Add((nint)key[position++]);
+						}
+
+						break;
+				}
+			}
 		}
 
 		/// <summary>A new descriptor set written from the key just built.</summary>
@@ -1169,20 +1292,29 @@ namespace LELEngine.Graphics.Vulkan
 
 		/// <summary>
 		///     The pipeline for a state, a vertex layout, a kind of primitive and a pass's formats; made the first time
-		///     they come together. <paramref name="defaultsBinding" /> is the vertex buffer binding that takes the
-		///     device's default attribute values (-1: the layout gives every attribute the vertex stage reads).
+		///     they come together: linked from the program's and the device's libraries where the device has them
+		///     (VulkanProgramLibraries.cs), else compiled whole.
 		/// </summary>
-		internal VkPipeline GetPipeline(in PipelineKey pipelineKey, VertexInputLayout layout, in RenderState state, TextureFormat[] colorFormats, int colorCount, TextureFormat depthFormat,
-			out int defaultsBinding)
+		internal PipelineEntry GetPipeline(in PipelineKey pipelineKey, VertexInputLayout layout, in RenderState state, TextureFormat[] colorFormats, int colorCount, TextureFormat depthFormat)
 		{
 			if (!pipelines.TryGetValue(pipelineKey, out PipelineEntry entry))
 			{
-				entry = CreatePipeline(pipelineKey, layout, state, colorFormats, colorCount, depthFormat);
+				long started = FrameProfiler.Timestamp;
+				if (shaderLibraries != null)
+				{
+					entry = LinkPipeline(pipelineKey, layout, state, colorFormats, colorCount, depthFormat);
+					FrameProfiler.EventSince(started, "pipeline", Name, "graphics pipeline linked from libraries at its first draw");
+				}
+				else
+				{
+					entry = CreatePipeline(pipelineKey, layout, state, colorFormats, colorCount, depthFormat);
+					FrameProfiler.EventSince(started, "pipeline", Name, "graphics pipeline made at its first draw");
+				}
+
 				pipelines.Add(pipelineKey, entry);
 			}
 
-			defaultsBinding = entry.DefaultsBinding;
-			return entry.Pipeline;
+			return entry;
 		}
 
 		private PipelineEntry CreatePipeline(in PipelineKey pipelineKey, VertexInputLayout layout, in RenderState state, TextureFormat[] colorFormats, int colorCount, TextureFormat depthFormat)
@@ -1198,73 +1330,9 @@ namespace LELEngine.Graphics.Vulkan
 					tessellated |= stages[i].Kind == ShaderStage.TessControl;
 				}
 
-				// Vertex input: the layout's attributes the vertex stage reads, and for what it reads beyond them the
-				// device's defaults (OpenGL's value of an attribute without an array).
-				int bufferCount = layout.Buffers.Length;
-				VkVertexInputBindingDescription* inputBindings = stackalloc VkVertexInputBindingDescription[bufferCount + 1];
-				for (int i = 0; i < bufferCount; i++)
-				{
-					inputBindings[i] = new VkVertexInputBindingDescription
-					{
-						Binding = i,
-						Stride = (Brutal.ByteSize32)(uint)layout.Buffers[i].Stride,
-						InputRate = layout.Buffers[i].PerInstance ? VkVertexInputRate.Instance : VkVertexInputRate.Vertex
-					};
-				}
-
+				VkVertexInputBindingDescription* inputBindings = stackalloc VkVertexInputBindingDescription[layout.Buffers.Length + 1];
 				VkVertexInputAttributeDescription* inputAttributes = stackalloc VkVertexInputAttributeDescription[layout.Attributes.Length + vertexInputs.Count];
-				int attributeCount = 0;
-				foreach (VertexAttributeDescriptor attribute in layout.Attributes)
-				{
-					bool read = false;
-					foreach (VertexInput input in vertexInputs)
-					{
-						read |= input.Location == attribute.Location;
-					}
-
-					if (read)
-					{
-						inputAttributes[attributeCount++] = new VkVertexInputAttributeDescription
-						{
-							Location = attribute.Location,
-							Binding = attribute.Buffer,
-							Format = AttributeFormat(attribute.Format),
-							Offset = (Brutal.ByteSize32)(uint)attribute.Offset
-						};
-					}
-				}
-
-				foreach (VertexInput input in vertexInputs)
-				{
-					bool given = false;
-					foreach (VertexAttributeDescriptor attribute in layout.Attributes)
-					{
-						given |= attribute.Location == input.Location;
-					}
-
-					if (given)
-					{
-						continue;
-					}
-
-					if (entry.DefaultsBinding < 0)
-					{
-						entry.DefaultsBinding = bufferCount;
-						inputBindings[bufferCount] = new VkVertexInputBindingDescription { Binding = bufferCount, Stride = (Brutal.ByteSize32)0u, InputRate = VkVertexInputRate.Instance };
-						bufferCount++;
-					}
-
-					// R32G32B32A32 as floats (109), signed (108) or unsigned (107) integers.
-					int format = input.Type == SpirvBaseType.Int ? 108 : input.Type == SpirvBaseType.UInt ? 107 : 109;
-					inputAttributes[attributeCount++] = new VkVertexInputAttributeDescription
-					{
-						Location = input.Location,
-						Binding = entry.DefaultsBinding,
-						Format = (VkFormat)format,
-						Offset = (Brutal.ByteSize32)(format == 109 ? 0u : 16u)
-					};
-				}
-
+				entry.DefaultsBinding = DescribeVertexInput(layout, inputBindings, inputAttributes, out int bufferCount, out int attributeCount);
 				VkPipelineVertexInputStateCreateInfo vertexInput = new VkPipelineVertexInputStateCreateInfo
 				{
 					VertexBindingDescriptionCount = bufferCount,
@@ -1302,20 +1370,8 @@ namespace LELEngine.Graphics.Vulkan
 				VkFormat* formats = stackalloc VkFormat[Math.Max(1, colorCount)];
 				for (int i = 0; i < colorCount; i++)
 				{
-					FormatInfo format = device.Format(colorFormats[i]);
-					formats[i] = format.Format;
-					bool blend = state.Blend && (format.Features & VkFormatFeatureFlags.ColorAttachmentBlendBit) != 0;
-					blends[i] = new VkPipelineColorBlendAttachmentState
-					{
-						BlendEnable = blend,
-						SrcColorBlendFactor = blend ? Factor(state.SourceColor) : VkBlendFactor.One,
-						DstColorBlendFactor = blend ? Factor(state.DestinationColor) : VkBlendFactor.Zero,
-						ColorBlendOp = blend ? (VkBlendOp)(int)state.ColorOperation : VkBlendOp.Add,
-						SrcAlphaBlendFactor = blend ? Factor(state.SourceAlpha) : VkBlendFactor.One,
-						DstAlphaBlendFactor = blend ? Factor(state.DestinationAlpha) : VkBlendFactor.Zero,
-						AlphaBlendOp = blend ? (VkBlendOp)(int)state.AlphaOperation : VkBlendOp.Add,
-						ColorWriteMask = (VkColorComponentFlags)(int)state.ColorMask
-					};
+					formats[i] = device.Format(colorFormats[i]).Format;
+					blends[i] = BlendAttachment(device, colorFormats[i], state);
 				}
 
 				VkPipelineColorBlendStateCreateInfo colorBlend = new VkPipelineColorBlendStateCreateInfo { AttachmentCount = colorCount, Attachments = blends };
@@ -1364,6 +1420,98 @@ namespace LELEngine.Graphics.Vulkan
 			}
 
 			return entry;
+		}
+
+		/// <summary>
+		///     The vertex input of pipelines of a layout: the layout's buffers and the attributes the vertex stage reads, and
+		///     for what it reads beyond them the device's defaults (OpenGL's value of an attribute without an array) from
+		///     one more binding. Returns that binding (-1: none needed).
+		/// </summary>
+		private int DescribeVertexInput(VertexInputLayout layout, VkVertexInputBindingDescription* inputBindings, VkVertexInputAttributeDescription* inputAttributes, out int bufferCount,
+			out int attributeCount)
+		{
+			int defaultsBinding = -1;
+			bufferCount = layout.Buffers.Length;
+			for (int i = 0; i < bufferCount; i++)
+			{
+				inputBindings[i] = new VkVertexInputBindingDescription
+				{
+					Binding = i,
+					Stride = (Brutal.ByteSize32)(uint)layout.Buffers[i].Stride,
+					InputRate = layout.Buffers[i].PerInstance ? VkVertexInputRate.Instance : VkVertexInputRate.Vertex
+				};
+			}
+
+			attributeCount = 0;
+			foreach (VertexAttributeDescriptor attribute in layout.Attributes)
+			{
+				bool read = false;
+				foreach (VertexInput input in vertexInputs)
+				{
+					read |= input.Location == attribute.Location;
+				}
+
+				if (read)
+				{
+					inputAttributes[attributeCount++] = new VkVertexInputAttributeDescription
+					{
+						Location = attribute.Location,
+						Binding = attribute.Buffer,
+						Format = AttributeFormat(attribute.Format),
+						Offset = (Brutal.ByteSize32)(uint)attribute.Offset
+					};
+				}
+			}
+
+			foreach (VertexInput input in vertexInputs)
+			{
+				bool given = false;
+				foreach (VertexAttributeDescriptor attribute in layout.Attributes)
+				{
+					given |= attribute.Location == input.Location;
+				}
+
+				if (given)
+				{
+					continue;
+				}
+
+				if (defaultsBinding < 0)
+				{
+					defaultsBinding = bufferCount;
+					inputBindings[bufferCount] = new VkVertexInputBindingDescription { Binding = bufferCount, Stride = (Brutal.ByteSize32)0u, InputRate = VkVertexInputRate.Instance };
+					bufferCount++;
+				}
+
+				// R32G32B32A32 as floats (109), signed (108) or unsigned (107) integers.
+				int format = input.Type == SpirvBaseType.Int ? 108 : input.Type == SpirvBaseType.UInt ? 107 : 109;
+				inputAttributes[attributeCount++] = new VkVertexInputAttributeDescription
+				{
+					Location = input.Location,
+					Binding = defaultsBinding,
+					Format = (VkFormat)format,
+					Offset = (Brutal.ByteSize32)(format == 109 ? 0u : 16u)
+				};
+			}
+
+			return defaultsBinding;
+		}
+
+		/// <summary>How a colour attachment of a format blends with a render state (formats the device does not blend are written as they come).</summary>
+		internal static VkPipelineColorBlendAttachmentState BlendAttachment(VulkanDevice device, TextureFormat format, in RenderState state)
+		{
+			bool blend = state.Blend && (device.Format(format).Features & VkFormatFeatureFlags.ColorAttachmentBlendBit) != 0;
+			return new VkPipelineColorBlendAttachmentState
+			{
+				BlendEnable = blend,
+				SrcColorBlendFactor = blend ? Factor(state.SourceColor) : VkBlendFactor.One,
+				DstColorBlendFactor = blend ? Factor(state.DestinationColor) : VkBlendFactor.Zero,
+				ColorBlendOp = blend ? (VkBlendOp)(int)state.ColorOperation : VkBlendOp.Add,
+				SrcAlphaBlendFactor = blend ? Factor(state.SourceAlpha) : VkBlendFactor.One,
+				DstAlphaBlendFactor = blend ? Factor(state.DestinationAlpha) : VkBlendFactor.Zero,
+				AlphaBlendOp = blend ? (VkBlendOp)(int)state.AlphaOperation : VkBlendOp.Add,
+				ColorWriteMask = (VkColorComponentFlags)(int)state.ColorMask
+			};
 		}
 
 		private static VkFormat AttributeFormat(VertexFormat format)
@@ -1422,11 +1570,7 @@ namespace LELEngine.Graphics.Vulkan
 			build.ContinueWith(_ =>
 			{
 				long serial = Math.Max(LastUse, device.RecordingSerial);
-				foreach (PipelineEntry entry in pipelines.Values)
-				{
-					device.Retire(RetiredKind.Pipeline, entry.Pipeline.VkHandle, 0, serial);
-				}
-
+				ReleaseLibraries(serial);
 				device.Retire(RetiredKind.Pipeline, computePipeline.VkHandle, 0, serial);
 				foreach (Stage stage in stages)
 				{
@@ -1437,6 +1581,8 @@ namespace LELEngine.Graphics.Vulkan
 						stage.Block = null;
 					}
 				}
+
+				ReleasePushBlock();
 
 				device.Retire(RetiredKind.PipelineLayout, pipelineLayout.VkHandle, 0, serial);
 				device.Retire(RetiredKind.SetLayout, setLayout.VkHandle, 0, serial);
@@ -1512,10 +1658,14 @@ namespace LELEngine.Graphics.Vulkan
 			public int Length;
 			public int FirstSlot;
 			public List<UniformTarget> Targets;
+
+			/// <summary>Draws read it from the push constants (its one target there).</summary>
+			public bool Pushed;
 		}
 
 		private struct UniformTarget
 		{
+			/// <summary>The stage whose block holds the values, or <see cref="PushTarget" />: the push constants.</summary>
 			public int Stage;
 			public int Offset;
 			public int Stride;
@@ -1535,10 +1685,19 @@ namespace LELEngine.Graphics.Vulkan
 			public SpirvBaseType Type;
 		}
 
-		private sealed class PipelineEntry
+		/// <summary>A pipeline of the program, and the vertex buffer binding that takes the device's default attribute values (-1: the layout gives every attribute the vertex stage reads).</summary>
+		internal sealed class PipelineEntry
 		{
-			public VkPipeline Pipeline;
+			private nint pipeline;
+
 			public int DefaultsBinding;
+
+			/// <summary>The pipeline draws bind: a linked one is replaced by its optimized link once a thread has made it.</summary>
+			public VkPipeline Pipeline
+			{
+				get => new VkPipeline(System.Threading.Volatile.Read(ref pipeline));
+				set => System.Threading.Volatile.Write(ref pipeline, value.VkHandle);
+			}
 		}
 	}
 
