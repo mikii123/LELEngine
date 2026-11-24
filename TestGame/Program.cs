@@ -14,7 +14,7 @@ namespace TestGame
 		///     Usage: TestGame [gi=lumen|vct|0] [voxels=0|1] [sdfview=0|1] [cacheview=0|1] [probeview=0|1] [emitters=0|1] [animate=0|1]
 		///            [stats=0|1] [autocam=0|1] [dump=N] [dumpdir=path] [vsync=0|1 paced by the display] [jitter=0|1] [resolve=0|1] [static=0|1]
 		///            [bounce=0|1] [trace=voxel|sdf] [voxres=64|128|256] [sdfres=64|128|256]
-		///            Voxel GI: [bounces=N in-frame bounce iterations] [shadowtaps=1|4] [voxcoverage=0|1] [voxmips=iso|aniso|sh] [anisolevels=N] [bouncecells=0|1]
+		///            Voxel GI: [bounces=N in-frame bounce iterations] [shadowtaps=1|4] [voxcoverage=0|1] [voxconservative=0|1 conservative rasterization where the device has it] [voxmips=iso|aniso|sh] [anisolevels=N] [bouncecells=0|1]
 		///            [conejitter=0|1 world-anchored cone rotation + step jitter] [jittercell=meters] [gifilter=N a-trous passes over the resolve]
 		///            [occscale=1|2 coverage occupancy scale] [splat=2|3 tent or B-spline coverage splat]
 		///            [bouncecones=6|1] [furnace=1 closed box test] [furnacealbedo=0..1] [furnaceemission=radiance] [furnacewall=half thickness]
@@ -51,7 +51,8 @@ namespace TestGame
 		///            [mover=frame] [moverz=path depth] [moveremission=intensity] [regions=x,y,z;x,y,z;...] [regionsize=px] [regionstart=frame] [regionsource=scene|gi]
 		///            [noise=frames] [noisestart=frame]
 		///            [graphics=opengl|vulkan the graphics API] [hidden=1 the window never shows] [fixeddt=seconds every frame advances by]
-		///            [hwrt=0|1 Lumen's rays through the triangles with ray queries where the device has them (1, the default) or the distance fields]
+		///            [hwrt=0|1 the GI's rays (Lumen's, voxel cone tracing's SDF modes) through the triangles with ray queries where the device has them (1, the default) or the distance fields]
+		///            [staticrebuild=1 the GI's static caches (voxel geometry, global distance field) built again every frame]
 		///            Fallback tests: environment LEL_GL_DISABLE=drawparameters,indirectparameters,subgroups
 		///     Loads the GI test room with the FPS controller.
 		/// </summary>
@@ -118,6 +119,7 @@ namespace TestGame
 				ResolveFilterPasses = GetInt(args, "gifilter", 4),
 				InjectShadowTaps = GetInt(args, "shadowtaps", 4),
 				VoxelCoverage = GetBool(args, "voxcoverage", true),
+				ConservativeVoxelization = GetBool(args, "voxconservative", true),
 				VoxelMips = ParseVoxelMips(GetValue(args, "voxmips")),
 				AnisotropicMipLevels = GetInt(args, "anisolevels", 16),
 				TraceMode = ParseTraceMode(GetValue(args, "trace")),
@@ -399,6 +401,13 @@ namespace TestGame
 			if (GetBool(args, "sdfatlas", false))
 			{
 				scene.CreateGameObject("SdfAtlasProbe").AddComponent<SdfAtlasProbe>();
+			}
+
+			// staticrebuild=1: the GI's static caches (the voxel geometry, the global distance field) are built again every
+			// frame, so their passes' cost shows in every frame's profile.
+			if (GetBool(args, "staticrebuild", false))
+			{
+				Game.Mono.UpdateFrame += _ => Lighting.GI.InvalidateStatic();
 			}
 
 			// exitframe=N closes the window after N frames (automated runs).

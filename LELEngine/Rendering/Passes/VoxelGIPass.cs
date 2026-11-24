@@ -117,15 +117,25 @@ namespace LELEngine.Rendering.Passes
 		private int coverageSamples;
 		private ShaderProgram voxelize;
 		private ShaderProgram voxelizeCoverage;
+
+		// The coverage voxelization rasterizing conservatively (LEL_VOXEL_CONSERVATIVE), where the device can.
+		private ShaderProgram voxelizeConservative;
 		private ComputeShader clearGeometry;
 		private ComputeShader clearAccumulators;
 		private ComputeShader resolveGeometry;
 		private ComputeShader clearRadiance;
 		private ComputeShader compactBlocks;
-		// Variants by the mips the bounce reads, indexed by VoxelMipMode (compiled in, see Engine/VoxelRadiance.glsl).
+		// Variants by the mips the bounce reads, indexed by VoxelMipMode (compiled in, see Engine/VoxelRadiance.glsl); the
+		// last three trace the scene's triangles where the first read the distance field (Lighting.VoxelRayTracingActive).
 		private static readonly string[] MipModeDefines = { "LEL_VOXEL_ISO", "LEL_VOXEL_ANISO", "LEL_VOXEL_SH" };
-		private readonly ComputeShader[] inject = new ComputeShader[3];
-		private readonly ComputeShader[] bounce = new ComputeShader[3];
+		private readonly ComputeShader[] inject = new ComputeShader[6];
+		private readonly ComputeShader[] bounce = new ComputeShader[6];
+
+		// The scene whose triangles the bounce's cones trace this frame (the renderer's, while Lighting.VoxelRayTracingActive).
+		private Lumen.LumenScene rayScene;
+
+		// How the cones see the scene's geometry, as last said in the console.
+		private string reportedCones;
 		private ComputeShader mip;
 		private ComputeShader mipBlocks;
 		private ComputeShader anisoBase;
@@ -148,6 +158,7 @@ namespace LELEngine.Rendering.Passes
 		private float lastGridSize;
 		private int lastStaticCount = -1;
 		private bool lastCoverage;
+		private bool lastConservative;
 		private float lastOccupancyScale;
 		private int lastSplatWidth;
 		private VoxelMipMode lastMipMode;
@@ -192,6 +203,8 @@ namespace LELEngine.Rendering.Passes
 			gi.UpdateGridPlacement(context.CameraPosition, context.CameraForward);
 			PartitionRenderers(context.GIRenderers ?? context.Renderers);
 			DetectGeometryChanges(gi);
+			rayScene = Lighting.VoxelRayTracingActive ? context.Renderer.LumenScene : null;
+			ReportCones(gi);
 
 			frameIndex++;
 			bool dynamicDue = gi.DynamicUpdateInterval <= 1 || frameIndex % gi.DynamicUpdateInterval == 0;
@@ -316,6 +329,7 @@ namespace LELEngine.Rendering.Passes
 			gridShadow = null;
 			voxelize?.Delete();
 			voxelizeCoverage?.Delete();
+			voxelizeConservative?.Delete();
 			clearGeometry?.Delete();
 			clearAccumulators?.Delete();
 			resolveGeometry?.Delete();
@@ -323,6 +337,7 @@ namespace LELEngine.Rendering.Passes
 			compactBlocks?.Delete();
 			voxelize = null;
 			voxelizeCoverage = null;
+			voxelizeConservative = null;
 			clearGeometry = null;
 			clearAccumulators = null;
 			resolveGeometry = null;
@@ -352,6 +367,8 @@ namespace LELEngine.Rendering.Passes
 			lastStaticCount = -1;
 			previousRegions.Clear();
 			currentRegions.Clear();
+			rayScene = null;
+			reportedCones = null;
 			Console.WriteLine("[VoxelGI] Volume released");
 		}
 
@@ -429,7 +446,8 @@ namespace LELEngine.Rendering.Passes
 			int directionalTextures = mode == VoxelMipMode.Anisotropic ? 6 : mode == VoxelMipMode.SphericalHarmonics ? 3 : 0;
 			string directional = mode == VoxelMipMode.Anisotropic ? $" + anisotropic {anisoLevels} levels" : mode == VoxelMipMode.SphericalHarmonics ? $" + SH gradients {shLevels} levels" : "";
 			double megabytes = (voxels * 4 * 6 + voxels * 8 * 2 * 8 / 7.0 + voxels / 8 * directionalTextures * 8 * 2 * 8 / 7.0) / (1024.0 * 1024.0);
-			Console.WriteLine($"[VoxelGI] Volume {resolution}^3: geometry 2x(RGBA8+RGBA8+R11G11B10F), radiance 2xRGBA16F {mipLevels} mips{directional}, {blockResolution}^3 blocks, ~{megabytes:0} MB (+{voxels * 20 / (1024 * 1024)} MB coverage accumulators when used), {coverageSamples}x coverage samples");
+			string coverage = ConservativeVoxelization(Lighting.GI) ? "conservative rasterization" : $"{coverageSamples}x coverage samples";
+			Console.WriteLine($"[VoxelGI] Volume {resolution}^3: geometry 2x(RGBA8+RGBA8+R11G11B10F), radiance 2xRGBA16F {mipLevels} mips{directional}, {blockResolution}^3 blocks, ~{megabytes:0} MB (+{voxels * 20 / (1024 * 1024)} MB coverage accumulators when used), {coverage}");
 		}
 
 		private void DeleteVolumes()
@@ -510,6 +528,7 @@ namespace LELEngine.Rendering.Passes
 				|| Math.Abs(gi.GridSize - lastGridSize) > 1e-5f
 				|| staticRenderers.Count != lastStaticCount
 				|| gi.VoxelCoverage != lastCoverage
+				|| ConservativeVoxelization(gi) != lastConservative
 				|| gi.CoverageOccupancyScale != lastOccupancyScale
 				|| gi.CoverageSplatWidth != lastSplatWidth
 				|| mode != lastMipMode;
@@ -521,6 +540,7 @@ namespace LELEngine.Rendering.Passes
 				lastGridSize = gi.GridSize;
 				lastStaticCount = staticRenderers.Count;
 				lastCoverage = gi.VoxelCoverage;
+				lastConservative = ConservativeVoxelization(gi);
 				lastOccupancyScale = gi.CoverageOccupancyScale;
 				lastSplatWidth = gi.CoverageSplatWidth;
 				lastMipMode = mode;
@@ -809,33 +829,41 @@ namespace LELEngine.Rendering.Passes
 			{
 				accumulators = AccumulatorVolume.Create(currentResolution);
 			}
-			if (voxelizeCoverage == null)
+			if (clearAccumulators == null)
 			{
-				voxelizeCoverage = new ShaderProgram("Engine/VoxelizeCoverage.shader");
 				clearAccumulators = new ComputeShader("Engine/VoxelClearAccumulators.shader");
 				resolveGeometry = new ComputeShader("Engine/VoxelResolveGeometry.shader");
 			}
+
+			// Conservative rasterization where the device has it (one fragment per touched column, the exact covered
+			// area), else multisampling (the covered samples).
+			bool conservative = ConservativeVoxelization(gi);
+			ShaderProgram program = conservative
+				? voxelizeConservative ??= new ShaderProgram("Engine/VoxelizeCoverage.shader", new[] { "LEL_VOXEL_CONSERVATIVE" })
+				: voxelizeCoverage ??= new ShaderProgram("Engine/VoxelizeCoverage.shader");
 
 			CommandList commands = Gfx.Commands;
 			clearAccumulators.Use();
 			accumulators.BindImages(0, ImageAccess.Write);
 			DispatchRegions(clearAccumulators, regions);
 
-			commands.BeginRenderPass(currentResolution, currentResolution, coverageSamples);
+			commands.BeginRenderPass(currentResolution, currentResolution, conservative ? 1 : coverageSamples);
 			commands.State.DepthTest = false;
 			commands.State.Culling = FaceCulling.None;
 			commands.State.DepthWrite = false;
+			commands.State.ConservativeRasterization = conservative;
 
-			voxelizeCoverage.Use();
-			voxelizeCoverage.SetVector3("voxelGridMin", gi.GridMin);
-			voxelizeCoverage.SetFloat("voxelGridSize", gi.GridSize);
-			voxelizeCoverage.SetInt("voxelResolution", currentResolution);
-			voxelizeCoverage.SetInt("voxSamples", coverageSamples);
-			voxelizeCoverage.SetInt("voxSplatWidth", gi.CoverageSplatWidth);
+			program.Use();
+			program.SetVector3("voxelGridMin", gi.GridMin);
+			program.SetFloat("voxelGridSize", gi.GridSize);
+			program.SetInt("voxelResolution", currentResolution);
+			program.SetInt("voxSamples", coverageSamples);
+			program.SetInt("voxSplatWidth", gi.CoverageSplatWidth);
 			accumulators.BindImages(0, ImageAccess.ReadWrite);
 			commands.SetImage(5, target.Blocks, 0, -1, ImageAccess.Write);
-			DrawRenderers(voxelizeCoverage, renderers);
+			DrawRenderers(program, renderers);
 
+			commands.State.ConservativeRasterization = false;
 			commands.State.DepthWrite = true;
 			commands.State.DepthTest = true;
 			commands.State.Culling = FaceCulling.Back;
@@ -843,14 +871,20 @@ namespace LELEngine.Rendering.Passes
 
 			resolveGeometry.Use();
 			target.BindImages(0, ImageAccess.Write, false);
-			ShaderProgram program = resolveGeometry.Program;
-			program.SetTexture("AccAlbedoRG", accumulators.AlbedoRG);
-			program.SetTexture("AccAlbedoBW", accumulators.AlbedoBW);
-			program.SetTexture("AccNormalXY", accumulators.NormalXY);
-			program.SetTexture("AccNormalZ", accumulators.NormalZ);
-			program.SetTexture("AccEmission", accumulators.Emission);
-			program.SetFloat("occupancyScale", gi.CoverageOccupancyScale);
+			ShaderProgram resolve = resolveGeometry.Program;
+			resolve.SetTexture("AccAlbedoRG", accumulators.AlbedoRG);
+			resolve.SetTexture("AccAlbedoBW", accumulators.AlbedoBW);
+			resolve.SetTexture("AccNormalXY", accumulators.NormalXY);
+			resolve.SetTexture("AccNormalZ", accumulators.NormalZ);
+			resolve.SetTexture("AccEmission", accumulators.Emission);
+			resolve.SetFloat("occupancyScale", gi.CoverageOccupancyScale);
 			DispatchRegions(resolveGeometry, regions);
+		}
+
+		// The coverage voxelization rasterizes conservatively: the setting asks and the device can.
+		private static bool ConservativeVoxelization(GlobalIlluminationSettings gi)
+		{
+			return gi.ConservativeVoxelization && Gfx.Capabilities.ConservativeRasterization;
 		}
 
 		private void DispatchRegions(ComputeShader shader, List<VoxelRegion> regions)
@@ -906,7 +940,7 @@ namespace LELEngine.Rendering.Passes
 		// The bounce of the next injection pass per 2x2x2 voxels, traced from radiance[current] (the previous pass).
 		private void TraceBounceCells(GlobalIlluminationSettings gi)
 		{
-			ComputeShader shader = bounce[(int)mipMode] ??= new ComputeShader("Engine/VoxelBounceCells.shader", MipModeDefines[(int)mipMode]);
+			ComputeShader shader = Variant(bounce, "Engine/VoxelBounceCells.shader");
 			shader.Use();
 			ShaderProgram program = shader.Program;
 			SetTraceUniforms(program, gi);
@@ -919,6 +953,47 @@ namespace LELEngine.Rendering.Passes
 
 			commands.SetStorageBuffer(0, blockList);
 			shader.DispatchIndirect(blockList, 0);
+		}
+
+		// The program of a set of variants for the volume's mips, tracing the scene's triangles (ray queries) or the
+		// distance field (made when first asked for).
+		private ComputeShader Variant(ComputeShader[] variants, string path)
+		{
+			int index = (int)mipMode + (rayScene != null ? 3 : 0);
+			return variants[index] ??= rayScene != null
+				? new ComputeShader(path, MipModeDefines[(int)mipMode], ShaderProgram.RayQueryDefine)
+				: new ComputeShader(path, MipModeDefines[(int)mipMode]);
+		}
+
+		// Says once how the cones see the scene's geometry, and again when that changes (the editor's settings).
+		private void ReportCones(GlobalIlluminationSettings gi)
+		{
+			string cones;
+			if (gi.TraceMode == GITraceMode.VoxelCones)
+			{
+				cones = "voxel cones (occlusion from the voxels)";
+			}
+			else if (rayScene != null)
+			{
+				cones = gi.TraceMode == GITraceMode.SdfDetail
+					? "SDF detail through the scene's triangles (a ray query for every cone's near field; no distance fields)"
+					: "SDF cones through the scene's triangles (a ray query along every cone's axis; no distance fields)";
+			}
+			else if (gi.DistanceFieldEnabled)
+			{
+				string why = !Lighting.HardwareRayTracing ? (gi.HardwareRayTracing ? "the graphics device has no ray queries" : "Hardware Ray Tracing is off") : "";
+				cones = (gi.TraceMode == GITraceMode.SdfDetail ? "SDF detail through the distance fields" : "SDF cones through the distance fields") + (why.Length > 0 ? " (" + why + ")" : "");
+			}
+			else
+			{
+				cones = "voxel cones (the distance field is off)";
+			}
+
+			if (cones != reportedCones)
+			{
+				reportedCones = cones;
+				Console.WriteLine("[VoxelGI] Cones: " + cones);
+			}
 		}
 
 		// Grid and cone parameters of the volume's own traces (bounce cells, per-voxel bounce): the previous pass's
@@ -935,12 +1010,20 @@ namespace LELEngine.Rendering.Passes
 			SetRadianceUniforms(program, current);
 			// The bounce traces like the materials: with SDF cones walls stop it, voxel cones would bring the light
 			// from outside in through them. The SDF detail trace is not used here (binary, too sharp per voxel).
-			bool sdf = gi.DistanceFieldEnabled && gi.GlobalSdf != null;
-			int traceMode = Lighting.TraceModeUniform(sdf) == 2 ? 2 : 0;
-			program.SetInt("giTraceMode", traceMode);
-			if (traceMode == 2)
+			if (rayScene != null)
 			{
-				Lighting.SetSdfUniforms(program);
+				// SDF cones through the scene's triangles (the programs are the ray query variants).
+				Lighting.SetVoxelRayTracingUniforms(program, rayScene, gi.TraceMode == GITraceMode.SdfCones ? 2 : 0);
+			}
+			else
+			{
+				bool sdf = gi.DistanceFieldEnabled && gi.GlobalSdf != null;
+				int traceMode = Lighting.TraceModeUniform(sdf) == 2 ? 2 : 0;
+				program.SetInt("giTraceMode", traceMode);
+				if (traceMode == 2)
+				{
+					Lighting.SetSdfUniforms(program);
+				}
 			}
 
 			Lighting.SetSkyUniforms(program);
@@ -952,7 +1035,7 @@ namespace LELEngine.Rendering.Passes
 		// through the bounce cells or by tracing from every voxel.
 		private void InjectLighting(int target, GlobalIlluminationSettings gi, bool bounce, bool cells)
 		{
-			ComputeShader shader = inject[(int)mipMode] ??= new ComputeShader("Engine/VoxelInject.shader", MipModeDefines[(int)mipMode]);
+			ComputeShader shader = Variant(inject, "Engine/VoxelInject.shader");
 			ShaderProgram program = shader.Program;
 
 			shader.Use();

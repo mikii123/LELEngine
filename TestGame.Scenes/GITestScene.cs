@@ -111,6 +111,9 @@ namespace TestGame.Scenes
 			/// <summary>Coverage-weighted, order-independent voxelization (off = one sample per voxel, last writer wins).</summary>
 			public bool VoxelCoverage = true;
 
+			/// <summary>The coverage voxelization rasterizes conservatively where the device can (GlobalIlluminationSettings.ConservativeVoxelization).</summary>
+			public bool ConservativeVoxelization = true;
+
 			/// <summary>What the voxel radiance mips keep of direction.</summary>
 			public VoxelMipMode VoxelMips = VoxelMipMode.Anisotropic;
 
@@ -710,6 +713,7 @@ namespace TestGame.Scenes
 			Lighting.GI.CoverageSplatWidth = options.CoverageSplatWidth;			Lighting.GI.ResolveFilterPasses = options.ResolveFilterPasses;
 			Lighting.GI.InjectShadowTaps = options.InjectShadowTaps;
 			Lighting.GI.VoxelCoverage = options.VoxelCoverage;
+			Lighting.GI.ConservativeVoxelization = options.ConservativeVoxelization;
 			Lighting.GI.VoxelMips = options.VoxelMips;
 			Lighting.GI.AnisotropicMipLevels = options.AnisotropicMipLevels;
 

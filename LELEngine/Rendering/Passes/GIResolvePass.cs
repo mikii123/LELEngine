@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using LELEngine.Shaders;
 using LELEngine.Graphics;
 using LELEngine.Mathematics;
@@ -45,9 +46,10 @@ namespace LELEngine.Rendering.Passes
 		// Variants by the voxel mips the cones read, indexed by VoxelMipMode (compiled in, see Engine/VoxelRadiance.glsl).
 		// The second three: the same with GI_MEDIA, the cones reading the clouds on their way (Engine/GIMedia.glsl), used
 		// while a volumetric object contributes to the GI and the project asks for the accurate gather
-		// (GlobalIlluminationSettings.VolumesInGI).
+		// (GlobalIlluminationSettings.VolumesInGI). The last six: the same tracing the scene's triangles with ray queries
+		// where the others read the distance field (Lighting.VoxelRayTracingActive).
 		private static readonly string[] VariantDefines = { "LEL_VOXEL_ISO", "LEL_VOXEL_ANISO", "LEL_VOXEL_SH" };
-		private readonly ShaderProgram[] programs = new ShaderProgram[6];
+		private readonly ShaderProgram[] programs = new ShaderProgram[12];
 		private ShaderProgram filter;
 
 		#endregion
@@ -86,19 +88,23 @@ namespace LELEngine.Rendering.Passes
 
 			// The variant of the mips the volume has (compiled when first needed).
 			int variant = (int)Lighting.EffectiveVoxelMips(gi.VoxelVolume);
+			bool rays = Lighting.VoxelRayTracingActive;
 			if (Lighting.MediaAlongConesExpected)
 			{
 				// Started ahead: no compile in the frame the first cloud's light arrives.
-				programs[variant + 3] ??= new ShaderProgram("Engine/GIResolve.shader", new[] { VariantDefines[variant], "GI_MEDIA" });
+				Program(variant, true, rays);
 			}
 
-			ShaderProgram program = Lighting.MediaAlongCones
-				? programs[variant + 3] ??= new ShaderProgram("Engine/GIResolve.shader", new[] { VariantDefines[variant], "GI_MEDIA" })
-				: programs[variant] ??= new ShaderProgram("Engine/GIResolve.shader", new[] { VariantDefines[variant] });
+			ShaderProgram program = Program(variant, Lighting.MediaAlongCones, rays);
 			program.Use();
 			// The resolve itself always traces; make sure it does not try to read its own output.
 			gi.ResolveActive = false;
 			Lighting.SetGIUniforms(program, true);
+			if (rays)
+			{
+				// The SDF modes through the scene's triangles (the material shaders, without the field, trace voxel cones).
+				Lighting.SetVoxelRayTracingUniforms(program, context.Renderer.LumenScene, Lighting.VoxelRayTraceMode);
+			}
 			program.SetTexture("SceneDepth", context.SceneDepth);
 			program.SetTexture("NormalRoughness", context.NormalRoughness);
 			program.SetMatrix4("invViewProjection", invViewProjection);
@@ -191,6 +197,30 @@ namespace LELEngine.Rendering.Passes
 			}
 			filter?.Delete();
 			filter = null;
+		}
+
+		// The resolve's program for the volume's mips, with the clouds read along the cones or not, tracing the scene's
+		// triangles or the distance field (made when first asked for).
+		private ShaderProgram Program(int variant, bool media, bool rays)
+		{
+			int index = variant + (media ? 3 : 0) + (rays ? 6 : 0);
+			if (programs[index] == null)
+			{
+				List<string> defines = new List<string> { VariantDefines[variant] };
+				if (media)
+				{
+					defines.Add("GI_MEDIA");
+				}
+
+				if (rays)
+				{
+					defines.Add(ShaderProgram.RayQueryDefine);
+				}
+
+				programs[index] = new ShaderProgram("Engine/GIResolve.shader", defines.ToArray());
+			}
+
+			return programs[index];
 		}
 
 		// From the camera to the far plane through screen point (x, y) in pixels from the bottom left.

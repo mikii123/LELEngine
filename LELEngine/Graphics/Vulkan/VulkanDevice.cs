@@ -309,6 +309,8 @@ namespace LELEngine.Graphics.Vulkan
 				// Ray queries where the GPU has them (VulkanAccelerationStructure.cs); the device is made without them otherwise.
 				RayQueryFeatures rayQueries = new RayQueryFeatures();
 				HasRayQuery = AskForRayQueries(physicalDevice, deviceExtensions, &rayQueries, &want, &want12);
+				AskForConservativeRasterization(physicalDevice, deviceExtensions);
+				AskForShaderInfo(physicalDevice, deviceExtensions);
 
 				// The graphics queue, and an asynchronous compute queue of a family of its own where the GPU has one
 				// (VulkanDeviceQueues.cs); the device's timeline semaphores order the two.
@@ -1662,6 +1664,7 @@ namespace LELEngine.Graphics.Vulkan
 			caps.ParallelShaderCompile = true;
 			caps.ProgramBinaries = true;
 			caps.RayQuery = HasRayQuery;
+			caps.ConservativeRasterization = HasConservativeRasterization;
 			caps.CompilesBlockEveryThread = false;
 			caps.AsyncCompute = computeStream != null;
 			// Measured on the Radeon 780M (driver 2.0.353): colour attachments are never compressed, a clear writes every texel.
