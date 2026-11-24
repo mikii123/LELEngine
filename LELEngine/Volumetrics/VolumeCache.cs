@@ -184,6 +184,12 @@ namespace LELEngine.Volumetrics
 			}
 
 			string path = Path.Combine(folder, VolumeFile.FileName(file.DensityKey));
+			if (file.IsEmpty)
+			{
+				Console.WriteLine("[Volumetrics] " + path + ": the cloud read back is empty (every voxel 0); not written");
+				return;
+			}
+
 			lock (sync)
 			{
 				if (!writing.Add(path))
@@ -346,6 +352,25 @@ namespace LELEngine.Volumetrics
 		private static VolumeFile ReadFile(string path, string densityKey)
 		{
 			VolumeFile file = VolumeFile.Read(path, densityKey);
+			if (file != null && file.IsEmpty)
+			{
+				// Written from a readback that failed: the cloud is made instead (and the editor writes it again).
+				Console.WriteLine("[Volumetrics] " + path + " holds an empty cloud (every voxel 0): not used" + (Writable ? ", deleted" : ""));
+				if (Writable)
+				{
+					try
+					{
+						File.Delete(path);
+					}
+					catch (Exception e) when (e is IOException || e is UnauthorizedAccessException)
+					{
+						// In use elsewhere: it is not read all the same.
+					}
+				}
+
+				return null;
+			}
+
 			if (file != null)
 			{
 				System.Threading.Interlocked.Increment(ref filesRead);

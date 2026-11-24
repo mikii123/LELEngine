@@ -44,6 +44,9 @@ namespace LELEngine
 		private float[] floatPixels;
 		private PendingTextureImport pendingImport;
 
+		// The image asset the editor baked the KTX data from (SetBaked): CPU pixels are read from it.
+		private string bakedFrom;
+
 		#endregion
 
 		#region Constructors
@@ -211,14 +214,19 @@ namespace LELEngine
 			Release();
 		}
 
-		/// <summary>Fills this texture from a build's baked KTX file (rows bottom up; CPU pixels only when asked for and uncompressed).</summary>
-		internal void SetBaked(KtxFile ktx, bool mipmaps)
+		/// <summary>
+		///     Fills this texture from a baked KTX file (rows bottom up; CPU pixels only when asked for and uncompressed):
+		///     a build's, or the editor's bake of the image asset <paramref name="source" />, whose pixels are read from
+		///     the image when asked for (<see cref="GetPixel" />, <see cref="GetRawPixels" />).
+		/// </summary>
+		internal void SetBaked(KtxFile ktx, bool mipmaps, string source = null)
 		{
 			pixels = null;
 			floatPixels = null;
 			sRGB = ktx.IsSrgb;
 			bottomUp = true;
 			pendingImport = null;
+			bakedFrom = source;
 			SetKtx(ktx, mipmaps);
 		}
 
@@ -247,15 +255,30 @@ namespace LELEngine
 		}
 
 		/// <summary>
-		///     The CPU pixels of a baked texture, from its uncompressed first level (it then uploads from them; compressed
-		///     data stays without CPU pixels). A pending import completes first.
+		///     The CPU pixels of a baked texture, from its uncompressed first level (it then uploads from them; a build's
+		///     compressed data stays without CPU pixels, the editor's reads its image). A pending import completes first.
 		/// </summary>
 		private void EnsureCpuPixels()
 		{
 			pendingImport?.Complete();
 			KtxFile ktx = Ktx;
-			if (ktx == null || ktx.IsCompressed || pixels != null || floatPixels != null)
+			if (ktx == null || pixels != null || floatPixels != null)
 			{
+				return;
+			}
+
+			if (ktx.IsCompressed)
+			{
+				if (bakedFrom != null)
+				{
+					// The editor's bake: the image as imported, as it was before the bake (it uploads from these pixels now).
+					ImportedTexture imported = TextureAssets.Import(bakedFrom, TextureAssets.GetImporter(bakedFrom));
+					if (imported?.Image != null)
+					{
+						SetImage(imported.Image, imported.Srgb, true, imported.Mipmaps);
+					}
+				}
+
 				return;
 			}
 

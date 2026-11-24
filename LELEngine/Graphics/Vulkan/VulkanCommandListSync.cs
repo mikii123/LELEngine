@@ -215,6 +215,41 @@ namespace LELEngine.Graphics.Vulkan
 		}
 
 		/// <summary>Whether a noted use has to wait for a command of the stream: a barrier in the stream before the next command.</summary>
+		/// <summary>What the next command waits for (LEL_VULKAN_STATS=2): the first use that needs a barrier.</summary>
+		private string WaitingFor()
+		{
+			if (untracked)
+			{
+				return "a transfer recorded outside the tracking of uses";
+			}
+
+			for (int i = 0; i < requirementCount; i++)
+			{
+				ref Requirement r = ref requirements[i];
+				if (r.Ahead)
+				{
+					continue;
+				}
+
+				if (r.Texture != null && r.Texture.Needs(r.Mip, r.Mips, r.Layer, r.Layers, r.Layout, r.Stages, r.Write))
+				{
+					return $"texture '{r.Texture.Name}' ({r.Layout}{(r.Write ? ", written" : "")})";
+				}
+
+				if (r.Buffer != null && r.Buffer.Needs(r.Stages, r.Write))
+				{
+					return $"buffer '{r.Buffer.Name}' ({r.Stages}{(r.Write ? ", written" : "")})";
+				}
+
+				if (r.Texture == null && r.Buffer == null && Sync.Needs(r.Target.State, VkImageLayout.Undefined, r.Stages, r.Write))
+				{
+					return "an acceleration structure";
+				}
+			}
+
+			return "nothing";
+		}
+
 		private bool RequirementsWait()
 		{
 			if (untracked)
@@ -569,6 +604,10 @@ namespace LELEngine.Graphics.Vulkan
 			{
 				SuspendRendering();
 				device.RenderingSuspensions++;
+				if (VulkanDevice.TraceSuspensions)
+				{
+					device.NoteSuspension(current.Name + " <- " + WaitingFor());
+				}
 			}
 
 			if (rendering)

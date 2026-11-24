@@ -1,6 +1,8 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
+using System.Threading.Tasks;
 using System.Security.Cryptography;
 using System.Text;
 using BCnEncoder.Encoder;
@@ -26,6 +28,9 @@ namespace LELEngine.Editor
 
 		private static readonly float[] SrgbToLinear = BuildSrgbTable();
 
+		// One lock per cache file: an asset is baked once however many threads ask (the editor's loads, a build).
+		private static readonly ConcurrentDictionary<string, object> Locks = new ConcurrentDictionary<string, object>(StringComparer.OrdinalIgnoreCase);
+
 		#endregion
 
 		#region PublicMethods
@@ -33,25 +38,48 @@ namespace LELEngine.Editor
 		/// <summary>The baked KTX file of an image asset; <paramref name="fromCache" /> when an earlier bake was still valid.</summary>
 		public static byte[] Bake(ProjectInfo project, string assetPath, out bool fromCache)
 		{
-			string absolute = AssetDatabase.ToAbsolute(assetPath);
-			string guid = AssetDatabase.GetGuid(assetPath) ?? Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(assetPath)))[..32];
-			string cacheFile = Path.Combine(project.LibraryPath, "TextureCache", guid + ".ktx");
-			string stampFile = cacheFile + ".stamp";
-			string stamp = Stamp(absolute);
-			if (File.Exists(cacheFile) && File.Exists(stampFile) && File.ReadAllText(stampFile) == stamp)
-			{
-				fromCache = true;
-				return File.ReadAllBytes(cacheFile);
-			}
+			return File.ReadAllBytes(BakeFile(project, assetPath, TextureAssets.GetImporter(assetPath), out fromCache));
+		}
 
-			fromCache = false;
-			TextureImporter importer = TextureAssets.GetImporter(assetPath);
-			ImportedTexture imported = TextureAssets.Import(assetPath, importer) ?? throw new InvalidDataException("the image does not fit its import settings");
-			byte[] ktx = Encode(imported, importer.compression);
-			Directory.CreateDirectory(Path.GetDirectoryName(cacheFile));
-			File.WriteAllBytes(cacheFile, ktx);
-			File.WriteAllText(stampFile, stamp);
-			return ktx;
+		/// <summary>
+		///     The cache file of the image asset's current bake, baked now when there is none (<paramref name="importer" />:
+		///     its import settings, as its meta file holds them). Any thread; one bake of an asset at a time.
+		/// </summary>
+		public static string BakeFile(ProjectInfo project, string assetPath, TextureImporter importer, out bool fromCache)
+		{
+			string cacheFile = CacheFile(project, assetPath);
+			lock (Lock(cacheFile))
+			{
+				if (IsCurrent(assetPath, cacheFile))
+				{
+					fromCache = true;
+					return cacheFile;
+				}
+
+				fromCache = false;
+				// Taken before the image is read: an image changed during the bake leaves a stale stamp, not a stale bake.
+				string stamp = Stamp(assetPath);
+				string quick = QuickKey(assetPath);
+				ImportedTexture imported = TextureAssets.Import(assetPath, importer) ?? throw new InvalidDataException("the image does not fit its import settings");
+				byte[] ktx = Encode(imported, importer.compression);
+				Directory.CreateDirectory(Path.GetDirectoryName(cacheFile));
+				WriteReplacing(cacheFile, ktx);
+				WriteReplacing(cacheFile + ".stamp", Encoding.UTF8.GetBytes(stamp + "\n" + quick));
+				return cacheFile;
+			}
+		}
+
+		/// <summary>
+		///     The cache file of the image asset's bake when it is current (its images, meta file and this baker's version
+		///     are those it was baked from), else null; no bake is made. Any thread.
+		/// </summary>
+		public static string CurrentBake(ProjectInfo project, string assetPath)
+		{
+			string cacheFile = CacheFile(project, assetPath);
+			lock (Lock(cacheFile))
+			{
+				return IsCurrent(assetPath, cacheFile) ? cacheFile : null;
+			}
 		}
 
 		/// <summary>"BC7 sRGB 2048x2048, 12 levels" (for the build log).</summary>
@@ -74,16 +102,99 @@ namespace LELEngine.Editor
 
 		#region PrivateMethods
 
-		/// <summary>
-		///     What the bake depends on: the image's content, its meta file (import settings) and this baker. Contents, not
-		///     file times: a fresh checkout (CI) gives every file a new time, which made every cached bake stale.
-		/// </summary>
-		private static string Stamp(string absolute)
+		private static string CacheFile(ProjectInfo project, string assetPath)
 		{
+			string guid = AssetDatabase.GetGuid(assetPath) ?? Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(assetPath)))[..32];
+			return Path.Combine(project.LibraryPath, "TextureCache", guid + ".ktx");
+		}
+
+		private static object Lock(string cacheFile)
+		{
+			return Locks.GetOrAdd(cacheFile, _ => new object());
+		}
+
+		/// <summary>
+		///     The bake in the cache file is current. Its stamp file holds the stamp of the contents it was baked from and,
+		///     on a second line, the sizes and times of those files then: while they are the same the contents are not
+		///     read again; when only the times changed (a checkout) the contents decide, and the times are noted anew.
+		/// </summary>
+		private static bool IsCurrent(string assetPath, string cacheFile)
+		{
+			string stampFile = cacheFile + ".stamp";
+			if (!File.Exists(cacheFile) || !File.Exists(stampFile))
+			{
+				return false;
+			}
+
+			string[] lines = File.ReadAllText(stampFile).Split('\n');
+			string quick = QuickKey(assetPath);
+			if (lines.Length > 1 && lines[1] == quick)
+			{
+				return true;
+			}
+
+			if (lines[0] != Stamp(assetPath))
+			{
+				return false;
+			}
+
+			WriteReplacing(stampFile, Encoding.UTF8.GetBytes(lines[0] + "\n" + quick));
+			return true;
+		}
+
+		/// <summary>
+		///     What the bake depends on: the image's content, its meta file (import settings) and this baker, and the other
+		///     images of a six-file cubemap or a numbered volume. Contents, not file times: a fresh checkout (CI) gives every
+		///     file a new time, which made every cached bake stale.
+		/// </summary>
+		private static string Stamp(string assetPath)
+		{
+			string absolute = AssetDatabase.ToAbsolute(assetPath);
 			string meta = absolute + AssetDatabase.MetaExtension;
 			string metaHash = File.Exists(meta) ? Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(meta))) : "";
-			using FileStream image = File.OpenRead(absolute);
-			return $"{Version}|{image.Length}|{Convert.ToHexString(SHA256.HashData(image))}|{metaHash}";
+			var stamp = new StringBuilder();
+			using (FileStream image = File.OpenRead(absolute))
+			{
+				stamp.Append($"{Version}|{image.Length}|{Convert.ToHexString(SHA256.HashData(image))}|{metaHash}");
+			}
+
+			List<string> sources = TextureAssets.GetSourceFiles(assetPath);
+			for (int i = 1; i < sources.Count; i++)
+			{
+				using FileStream other = File.OpenRead(AssetDatabase.ToAbsolute(sources[i]));
+				stamp.Append($"|{other.Length}|{Convert.ToHexString(SHA256.HashData(other))}");
+			}
+
+			return stamp.ToString();
+		}
+
+		/// <summary>The sizes and last write times of the files <see cref="Stamp" /> reads.</summary>
+		private static string QuickKey(string assetPath)
+		{
+			string absolute = AssetDatabase.ToAbsolute(assetPath);
+			var key = new StringBuilder();
+			key.Append(Version);
+			foreach (string file in TextureAssets.GetSourceFiles(assetPath))
+			{
+				Append(AssetDatabase.ToAbsolute(file));
+			}
+
+			Append(absolute + AssetDatabase.MetaExtension);
+			return key.ToString();
+
+			void Append(string file)
+			{
+				var info = new FileInfo(file);
+				key.Append('|').Append(info.Exists ? info.Length : -1).Append(':').Append(info.Exists ? info.LastWriteTimeUtc.Ticks : 0);
+			}
+		}
+
+		/// <summary>Writes a file whole or not at all: a reader on another thread never sees a part of it.</summary>
+		private static void WriteReplacing(string file, byte[] bytes)
+		{
+			string temporary = file + "." + Environment.CurrentManagedThreadId + ".tmp";
+			File.WriteAllBytes(temporary, bytes);
+			File.Move(temporary, file, true);
 		}
 
 		private static byte[] Encode(ImportedTexture imported, TextureCompression compression)
@@ -170,19 +281,22 @@ namespace LELEngine.Editor
 		{
 			int w = Math.Max(1, width / 2);
 			int h = Math.Max(1, height / 2);
+			int sourceWidth = width;
+			int sourceHeight = height;
 			var result = new byte[w * h * 4];
-			for (int y = 0; y < h; y++)
+			// Rows apart (a 4096 x 4096 sRGB level converts 12 M values to and from linear light).
+			Parallel.For(0, h, y =>
 			{
-				int y0 = Math.Min(y * 2, height - 1);
-				int y1 = Math.Min(y * 2 + 1, height - 1);
+				int y0 = Math.Min(y * 2, sourceHeight - 1);
+				int y1 = Math.Min(y * 2 + 1, sourceHeight - 1);
 				for (int x = 0; x < w; x++)
 				{
-					int x0 = Math.Min(x * 2, width - 1);
-					int x1 = Math.Min(x * 2 + 1, width - 1);
-					int a = (y0 * width + x0) * 4;
-					int b = (y0 * width + x1) * 4;
-					int c = (y1 * width + x0) * 4;
-					int d = (y1 * width + x1) * 4;
+					int x0 = Math.Min(x * 2, sourceWidth - 1);
+					int x1 = Math.Min(x * 2 + 1, sourceWidth - 1);
+					int a = (y0 * sourceWidth + x0) * 4;
+					int b = (y0 * sourceWidth + x1) * 4;
+					int c = (y1 * sourceWidth + x0) * 4;
+					int d = (y1 * sourceWidth + x1) * 4;
 					int target = (y * w + x) * 4;
 					for (int channel = 0; channel < 3; channel++)
 					{
@@ -199,7 +313,7 @@ namespace LELEngine.Editor
 
 					result[target + 3] = (byte)((pixels[a + 3] + pixels[b + 3] + pixels[c + 3] + pixels[d + 3] + 2) / 4);
 				}
-			}
+			});
 
 			width = w;
 			height = h;

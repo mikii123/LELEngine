@@ -28,6 +28,22 @@ namespace LELEngine.Graphics.Vulkan
 		/// <summary>Bytes of a block of the memory commands take for a frame (uniform values, texels on their way to a texture).</summary>
 		private const long ChunkSize = 1 << 20;
 
+		/// <summary>
+		///     Frame memory and scratch images the submission being recorded may hold before an upload sends it to the GPU:
+		///     a load that uploads a scene's textures in one frame would otherwise keep a copy of every texel (and the
+		///     scratch levels of sRGB mip chains) until the frame ends, more than an integrated GPU's whole budget.
+		/// </summary>
+		private const long RecordingMemoryLimit = 128L << 20;
+
+		/// <summary>The same held by the submissions the GPU has not finished: an upload waits for the oldest above it.</summary>
+		private const long PendingMemoryLimit = 256L << 20;
+
+		/// <summary>Bytes of blocks larger than <see cref="ChunkSize" /> kept for the next uploads once their submission finished.</summary>
+		private const long KeptLargeChunks = 256L << 20;
+
+		/// <summary>Submissions after the last use of a large block before the kept ones are freed (a load is over).</summary>
+		private const long LargeChunkIdleSubmissions = 300;
+
 		private const int QueriesPerPool = 1024;
 
 		[ThreadStatic]
@@ -59,6 +75,14 @@ namespace LELEngine.Graphics.Vulkan
 		private readonly Stack<VkSemaphore> freeSemaphores = new Stack<VkSemaphore>();
 		private Chunk currentChunk;
 		private VkDescriptorPool currentPool;
+
+		// Memory of uploads in flight (RecordingMemoryLimit).
+		private long recordingMemory;
+		private long pendingMemory;
+		private readonly List<Chunk> freeLargeChunks = new List<Chunk>();
+		private long freeLargeBytes;
+		private long lastLargeChunkSerial;
+		private readonly int memoryHeapCount;
 
 		// Timestamps.
 		private readonly List<VkQueryPool> queryPools = new List<VkQueryPool>();
@@ -373,6 +397,9 @@ namespace LELEngine.Graphics.Vulkan
 				InstanceVk->vkGetPhysicalDeviceProperties2.Invoke(PhysicalHandle, &properties);
 				Limits = properties.Properties.Limits;
 				TimestampPeriod = Limits.TimestampPeriod;
+				VkPhysicalDeviceMemoryProperties memoryProperties;
+				InstanceVk->vkGetPhysicalDeviceMemoryProperties.Invoke(PhysicalHandle, &memoryProperties);
+				memoryHeapCount = (int)memoryProperties.MemoryHeapCount;
 
 				formats = new FormatInfo[(int)TextureFormat.BC7SRGB + 1];
 				for (TextureFormat format = TextureFormat.R8; format <= TextureFormat.BC7SRGB; format++)
@@ -567,6 +594,8 @@ namespace LELEngine.Graphics.Vulkan
 					Chunk chunk = freeChunks.Pop();
 					Vma.PInvoke.vmaDestroyBuffer(Allocator, chunk.Buffer, chunk.Allocation);
 				}
+
+				FreeLargeChunks();
 
 				while (freePools.Count > 0)
 				{
@@ -896,6 +925,9 @@ namespace LELEngine.Graphics.Vulkan
 			recording.Serial = RecordingSerial;
 			recording.Fence = fence;
 			recording.WaitSemaphore = wait;
+			recording.Memory = recordingMemory;
+			pendingMemory += recordingMemory;
+			recordingMemory = 0;
 			pending.Enqueue(recording);
 			recording = freeSubmissions.Count > 0 ? freeSubmissions.Pop() : new Submission();
 			RecordingSerial++;
@@ -1025,15 +1057,28 @@ namespace LELEngine.Graphics.Vulkan
 					continue;
 				}
 
+				chunk.Used = 0;
 				if (chunk.Size == ChunkSize)
 				{
-					chunk.Used = 0;
 					freeChunks.Push(chunk);
+				}
+				else if (freeLargeBytes + chunk.Size <= KeptLargeChunks)
+				{
+					// For the next large upload: a load uploads many textures of the same few sizes.
+					freeLargeChunks.Add(chunk);
+					freeLargeBytes += chunk.Size;
 				}
 				else
 				{
 					Vma.PInvoke.vmaDestroyBuffer(Allocator, chunk.Buffer, chunk.Allocation);
 				}
+			}
+
+			pendingMemory -= submission.Memory;
+			submission.Memory = 0;
+			if (freeLargeBytes > 0 && submission.Serial - lastLargeChunkSerial > LargeChunkIdleSubmissions)
+			{
+				FreeLargeChunks();
 			}
 
 			foreach (VkDescriptorPool pool in submission.Pools)
@@ -1090,10 +1135,11 @@ namespace LELEngine.Graphics.Vulkan
 			{
 				if (size > ChunkSize)
 				{
-					// A block of its own, freed with the submission.
-					chunk = CreateChunk(size);
+					// A block of its own, taken back with the submission.
+					chunk = TakeLargeChunk(size);
 					chunk.Users = 1;
 					recording.Chunks.Add(chunk);
+					recordingMemory += chunk.Size;
 					buffer = chunk.Buffer;
 					offset = 0;
 					return chunk.Mapped;
@@ -1102,6 +1148,7 @@ namespace LELEngine.Graphics.Vulkan
 				chunk = freeChunks.Count > 0 ? freeChunks.Pop() : CreateChunk(ChunkSize);
 				chunk.Users = 1;
 				recording.Chunks.Add(chunk);
+				recordingMemory += ChunkSize;
 				currentChunk = chunk;
 				start = 0;
 			}
@@ -1110,6 +1157,70 @@ namespace LELEngine.Graphics.Vulkan
 			buffer = chunk.Buffer;
 			offset = start;
 			return chunk.Mapped + start;
+		}
+
+		/// <summary>
+		///     An upload of <paramref name="bytes" /> of frame memory or scratch images is about to be recorded (between two
+		///     commands): the submission being recorded is sent first when it would hold more than
+		///     <see cref="RecordingMemoryLimit" />, and the CPU waits while the submissions in flight hold more than
+		///     <see cref="PendingMemoryLimit" />. Uploads of a whole scene in one frame then reuse the same memory instead
+		///     of keeping a copy of every texel until the frame is presented.
+		/// </summary>
+		internal void BeforeUpload(long bytes)
+		{
+			if (recordingMemory > 0 && recordingMemory + bytes > RecordingMemoryLimit)
+			{
+				Submit();
+			}
+
+			while (pendingMemory > PendingMemoryLimit && pending.Count > 0)
+			{
+				WaitForOldest();
+			}
+		}
+
+		/// <summary>Device memory the submission being recorded frees when it has finished (a scratch image of its own).</summary>
+		internal void AddRecordingMemory(long bytes)
+		{
+			recordingMemory += bytes;
+		}
+
+		/// <summary>A block of frame memory of at least <paramref name="size" /> bytes: one kept from an earlier upload, else a new one.</summary>
+		private Chunk TakeLargeChunk(long size)
+		{
+			lastLargeChunkSerial = RecordingSerial;
+			int best = -1;
+			for (int i = 0; i < freeLargeChunks.Count; i++)
+			{
+				long candidate = freeLargeChunks[i].Size;
+				// Not one much larger than asked for: it would hold memory a larger upload may need.
+				if (candidate >= size && candidate <= size * 2 && (best < 0 || candidate < freeLargeChunks[best].Size))
+				{
+					best = i;
+				}
+			}
+
+			if (best >= 0)
+			{
+				Chunk kept = freeLargeChunks[best];
+				freeLargeChunks.RemoveAt(best);
+				freeLargeBytes -= kept.Size;
+				return kept;
+			}
+
+			// Rounded up to a whole MB, so blocks of near sizes serve each other.
+			return CreateChunk((size + ChunkSize - 1) / ChunkSize * ChunkSize);
+		}
+
+		private void FreeLargeChunks()
+		{
+			foreach (Chunk chunk in freeLargeChunks)
+			{
+				Vma.PInvoke.vmaDestroyBuffer(Allocator, chunk.Buffer, chunk.Allocation);
+			}
+
+			freeLargeChunks.Clear();
+			freeLargeBytes = 0;
 		}
 
 		private Chunk CreateChunk(long size)
@@ -1687,6 +1798,9 @@ namespace LELEngine.Graphics.Vulkan
 			public long Serial;
 			public VkFence Fence;
 			public VkSemaphore WaitSemaphore;
+
+			/// <summary>Bytes of frame memory and scratch images it holds (<see cref="RecordingMemoryLimit" />).</summary>
+			public long Memory;
 
 			/// <summary>The graphics queue's command buffers.</summary>
 			public readonly List<VkCommandBuffer> Commands = new List<VkCommandBuffer>();

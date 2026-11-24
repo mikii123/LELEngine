@@ -297,6 +297,9 @@ namespace LELEngine.Editor
 		// The scripts' domain while its start (the build, when the scripts changed) runs on a worker thread from the load's
 		// first step; handed over to Scripts at the scripts' step. The build's own time, for the load's summary.
 		private ScriptDomain startupScripts;
+
+		// Texture assets load from the bakes builds ship (Library/TextureCache), made as they are first needed.
+		private EditorTextureBakes textureBakes;
 		private System.Threading.Tasks.Task<bool> startupScriptsStart;
 		private double startupBuildMs = -1;
 
@@ -505,6 +508,8 @@ namespace LELEngine.Editor
 			}
 
 			UpdateImportsPaused();
+			// Textures whose bake the background finished load from it now.
+			textureBakes?.Update();
 			// Force Reserialize All Assets writes files over frames: what it writes is read once it is done.
 			UpdateReserialize();
 			if (!ImportsPaused && reserializer == null)
@@ -1124,6 +1129,9 @@ namespace LELEngine.Editor
 			// The static batches' meshes (play mode's, a build's) are files of the Library, read by their asset paths.
 			AssetDatabase.StaticBatchFolder = StaticBatchCache.FolderOf(project);
 			AssetThumbnails.CacheFolder = project.ThumbnailCachePath;
+			// Textures as a build bakes them (BC7, their levels made; Library/TextureCache): the memory and the texels of the game.
+			textureBakes = new EditorTextureBakes(project);
+			TextureAssets.BakeSource = textureBakes;
 			// Made clouds (Library/VolumeCache): read instead of made again, written after the editor made one. Before the scene
 			// is read: its volumetric objects start reading their files as they are read.
 			LELEngine.Volumetrics.VolumeCache.Writable = true;
@@ -1530,6 +1538,9 @@ namespace LELEngine.Editor
 			ModelAssets.CacheFolder = null;
 			AssetDatabase.StaticBatchFolder = null;
 			AssetThumbnails.CacheFolder = null;
+			textureBakes?.Close();
+			textureBakes = null;
+			TextureAssets.BakeSource = null;
 			LELEngine.Volumetrics.VolumeCache.Folder = null;
 			LELEngine.Volumetrics.VolumeCache.Clear();
 			LELEngine.Rendering.DistanceField.DistanceFieldAtlas.Store = null;

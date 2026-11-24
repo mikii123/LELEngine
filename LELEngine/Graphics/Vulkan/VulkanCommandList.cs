@@ -1203,6 +1203,12 @@ namespace LELEngine.Graphics.Vulkan
 			VulkanTexture to = (VulkanTexture)destination;
 			bool fromVolume = from.Kind == TextureKind.Texture3D;
 			bool toVolume = to.Kind == TextureKind.Texture3D;
+			if (toVolume && !from.PackedDepth)
+			{
+				CopyVolumeThroughBuffer(from, sourceMip, sourceX, sourceY, sourceZ, to, destinationMip, destinationX, destinationY, destinationZ, width, height, depth);
+				return;
+			}
+
 			int fromLayer = fromVolume ? 0 : sourceZ;
 			int fromLayers = fromVolume ? 1 : depth;
 			int toLayer = toVolume ? 0 : destinationZ;
@@ -1226,6 +1232,46 @@ namespace LELEngine.Graphics.Vulkan
 				Extent = new VkExtent3D { Width = width, Height = height, Depth = fromVolume || toVolume ? depth : 1 }
 			};
 			device.Recorder.CopyImage(from.Image, fromLayout, to.Image, toLayout, region);
+		}
+
+		/// <summary>
+		///     A copy into a 3D texture, through frame memory: the texels into a buffer, then from it into the
+		///     destination, so a 3D image is only ever written by uploads, shaders and draws. NVIDIA's driver (RTX 5070 Ti,
+		///     617.14, 621.01 and 621.24, two machines) loses the device when a 3D image deeper than 2048 slices (the device's
+		///     <c>maxImageArrayLayers</c>, which 3D images are not bound by) and written by an image-to-image transfer
+		///     (<c>vkCmdCopyImage</c> or <c>vkCmdBlitImage</c>, even of one slice) later takes an upload
+		///     (<c>vkCmdCopyBufferToImage</c>) into any slice: the distance field atlas grown to 4096 slices. 2048 slices,
+		///     or no copy, work. The copied texels are right, the commands valid (no message of the validation layers,
+		///     synchronization and GPU-assisted validation included); dedicated memory and binding everything again after
+		///     the copy change nothing. A standalone reproduction without the engine shows the same.
+		/// </summary>
+		private void CopyVolumeThroughBuffer(VulkanTexture from, int sourceMip, int sourceX, int sourceY, int sourceZ, VulkanTexture to, int destinationMip, int destinationX,
+			int destinationY, int destinationZ, int width, int height, int depth)
+		{
+			long bytes = from.Format.LevelSize(width, height, depth);
+			if (bytes <= 0)
+			{
+				return;
+			}
+
+			// The texels pass through frame memory, which counts as an upload's.
+			device.BeforeUpload(bytes);
+			device.AllocateTransient(bytes, 16, out VkBuffer buffer, out long offset);
+
+			bool fromVolume = from.Kind == TextureKind.Texture3D;
+			RequireTexture(from, sourceMip, 1, fromVolume ? 0 : sourceZ, fromVolume ? 1 : depth, from.CopySourceLayout, Sync.Transfer, false);
+			ApplyRequirements(false);
+			VkBufferImageCopy read = from.Region(sourceMip, sourceX, sourceY, sourceZ, width, height, depth, offset);
+			vk->vkCmdCopyImageToBuffer.Invoke(device.MainCommands, from.Image, from.CopySourceLayout, buffer, 1, &read);
+
+			// Frame memory is not tracked: the read's writes into it come before the write's reads by a barrier of their own.
+			streamBatch.AddMemory(Sync.Transfer, VkAccessFlags2.TransferWriteBit, Sync.Transfer, VkAccessFlags2.TransferReadBit);
+			bool toVolume = to.Kind == TextureKind.Texture3D;
+			RequireTexture(to, destinationMip, 1, toVolume ? 0 : destinationZ, toVolume ? 1 : depth, to.CopyDestinationLayout, Sync.Transfer, true,
+				to.Covers(destinationMip, destinationX, destinationY, destinationZ, width, height, depth));
+			ApplyRequirements(false);
+			VkBufferImageCopy write = to.Region(destinationMip, destinationX, destinationY, destinationZ, width, height, depth, offset);
+			vk->vkCmdCopyBufferToImage.Invoke(device.MainCommands, buffer, to.Image, to.CopyDestinationLayout, 1, &write);
 		}
 
 		public override void Blit(GpuTexture source, int sourceMip, int sourceLayer, int sourceX0, int sourceY0, int sourceX1, int sourceY1, GpuTexture destination,
