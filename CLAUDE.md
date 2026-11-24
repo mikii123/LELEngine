@@ -386,6 +386,13 @@
   `sdfview=1` under hardware ray tracing (the field asked for and built from the next frame), `cacheview=1` (objects
   found by rays). Not checked: the settings in the editor by eye, a scene where meshes appear while it plays (the
   budget through the device tests only), New Frontier.
+- Again with the voxel GI work merged (`brutal-port` 71d1cf1; one rule for the fields, above): the 206 shader programs
+  build on both APIs; TestGame's 18 scenes on Vulkan under validation without messages, `hwrt=1` within max 1-8
+  (mean <= 0.005) of the tree before the merge except vct (the merged voxel GI's own change), `hwrt=0 rtshadows=0`
+  within max 1-5 of `dumps/vkC-rt0` except vct (max 11, mean 0.06: the conservative voxelization); the voxel GI's
+  scenes (`sdfvct/vct-scenes.txt`: voxel and SDF modes, `hwrt=0|1`, night, materials, statics) within max 1-2 of
+  that work's own `final-vulkan` dumps; sync validation on lights, vct, materials without messages; OpenGL's check
+  0 different; the device tests 577 results, 571 equal, 6 known, 0 different, no validation message.
 - What it changes in the picture (frame 400 against `dumps/vkD-rt1`, of 255): lights mean 4.05 (max 77, 16.6 % of
   pixels over 8), lumen 2.26, nogpudriven 2.26, materials 2.67 (max 239), refraction 2.09, suns3 1.92, outdoor 0.79,
   anim 0.50, impostors 0.25 (max 221), volumetrics 0.10, vct / gi0 / the rest 0. Lumen's GI is darker by 1-8 levels,
@@ -395,6 +402,36 @@
   0.45 in lights (the blue spot's light off the bench behind the pillar, soft shadows under the bench), the same as the
   maps within their penumbrae for the sun (`rtsunshadows=1` against the maps: mean 0.06-0.15). Reflections: the
   metal spheres of materials and the impostor scene's cars reflect their neighbours sharply (max 239).
+- What it costs (780M, 1280 x 720, frame-on-GPU / CPU render ms; the GPU shared with two other sessions, so each figure
+  is the least of 2-s `[Stats]` windows over three rounds, `rtperf.ps1 -Shared`; columns: the build before / this
+  work / with `rtsunshadows=1` / with `rtshadows=0 rtreflect=0`): lumen 7.00 / 6.93 / 7.70 / 6.51, materials 6.77 /
+  6.96 / 8.02 / 6.67, refraction 8.22 / 8.22 / 9.15 / 8.07, lights (night) 7.24 / 8.23 / 8.46 / 7.26, lights by day
+  8.59 / 9.59 / 10.02 / 8.33, suns3 7.63 / 7.76 / 8.74 / 7.40, outdoor 3.76 / 4.09 / 4.69 / 3.72, impostors 3.34 /
+  3.59 / 4.10 / 3.17, impostors with lights 3.31 / 4.09 / 4.38 / 3.38, volumetrics 4.41 / 4.60 / 5.15 / 4.50,
+  volumetrics with 4 lamps 4.46 / 4.97 / 5.36 / 4.29, `gi=0` with lights 1.63 / 2.62 / 2.87 / 1.73. CPU render 0.6-3.1
+  ms, within its noise. Per pass: `ProbeGather.trace` 1.60 -> 1.29 (lumen), 1.69 -> 1.41 (materials), 1.88 -> 1.57
+  (lights), 0.66 -> 0.57 (volumetrics): no field to sphere trace before the triangles, the radiance cache and surface
+  cache unchanged within 0.02; `RayTracedShadows.trace` + `.filter` 0.73 + 0.21 with the four lights of the lights
+  scene (night or day, also without Lumen), 0.18-0.24 + 0.12-0.13 with the lamps of vollamps / implights;
+  `RayTracedReflections.trace` + `.filter` 0.18-0.31 + 0.10-0.13 (0.30 together even where few pixels are glossy:
+  a pass over the screen); the traced sun 0.48-1.10 + 0.20-0.40 on top of shadow maps of 0.9-1.45 ms. So: Lumen with
+  traced shadows and reflections costs about what Lumen cost with fields (+0.1..+1.0 ms where there are lights to
+  trace), and pays the shadows of local lights, which had none.
+- Directional lights stay on shadow maps by default (`DirectionalLightShadows` off): traced they cost 0.7-1.5 ms more on
+  the 780M and the maps cannot go (transparent surfaces, particles, clouds and tinted shadows read them), and the
+  picture differs from the maps only at the penumbrae (mean 0.06-0.15). Worth it where the maps are poor (a sun over a
+  wide view with fine shadows) or when transparent receivers move to rays too.
+- Memory (1280 x 720): freed the global field's 16 MB (4 levels of 128^3 half floats) and the mesh field atlas (8 MB
+  at first, up to 32 as it grows); added the traced shadows' mask and history, 32 MB a layer of four lights (51 MB with
+  the sun's layer), and the reflections' history, 28 MB (both RGBA16F accumulation, two frames, plus their metadata;
+  they scale with the screen). The mask is made once a light is traced; the reflections' history whenever they are on
+  (released when they go off).
+- Left: transparent surfaces keep unshadowed local lights (they are not in the prepass's depth); the surface cache's
+  directional shadows still come from the maps; the shadow maps could be skipped when the sun is traced and nothing
+  transparent receives it; mirrored objects in Lumen's field-less rows take the absolute scale; the reflection pass's
+  ~0.3 ms where little is glossy (skipping tiles without glossy pixels) and the history's formats (RGBA16F metadata
+  where two channels would do); position fetch waits for a validation layer that knows its capability; the settings
+  not seen in the editor, New Frontier not run on this branch.
 
 ## The Vulkan device's ordering, caches and speed (2026-11-23, branch `port-vkperf`)
 
