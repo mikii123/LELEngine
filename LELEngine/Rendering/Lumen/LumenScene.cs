@@ -30,7 +30,7 @@ namespace LELEngine.Rendering.Lumen
 		public GpuBuffer ObjectBuffer { get; private set; }
 		public GpuBuffer CardBuffer { get; private set; }
 
-		/// <summary>The objects as a top level acceleration structure while Lumen's rays trace with ray queries (<see cref="Lighting.HardwareRayTracingActive" />); null otherwise.</summary>
+		/// <summary>The objects as a top level acceleration structure while the GI's rays trace with ray queries (<see cref="Lighting.SceneRayTracingActive" />); null otherwise.</summary>
 		public SceneRayTracing RayTracing { get; private set; }
 
 		/// <summary>The GPU resources exist: made by the first <see cref="Update" />, never by a renderer whose GI needs no scene.</summary>
@@ -142,22 +142,18 @@ namespace LELEngine.Rendering.Lumen
 				CardBuffer = Gfx.Device.CreateBuffer(new BufferDescriptor(BufferUsage.Storage, 0, true, "Lumen scene cards"));
 			}
 
-			// With Lumen's rays on the triangles the meshes' fields exist only while the global field is built; else their
-			// atlas goes.
-			rayTracing = Lighting.HardwareRayTracingActive;
+			// With the GI's rays on the triangles (Lumen's or voxel cone tracing's) the meshes' fields exist only while the
+			// global field is built (GlobalIlluminationSettings.DistanceFieldActive); else their atlas goes.
+			rayTracing = Lighting.SceneRayTracingActive;
 			fieldsNeeded = !rayTracing || gi.DistanceFieldActive;
 			if (fieldsNeeded)
 			{
 				DistanceFields ??= new DistanceFieldAtlas();
-
 				DistanceFields.BeginFrame(frame);
 			}
-			else if (DistanceFields != null)
+			else
 			{
-				DistanceFields.Delete();
-				DistanceFields = null;
-				fieldStates.Clear();
-				Console.WriteLine("[SDF] Mesh distance fields released (nothing traces them)");
+				ReleaseDistanceFields();
 			}
 
 			if (!gi.LumenActive)
@@ -218,7 +214,7 @@ namespace LELEngine.Rendering.Lumen
 			commands.SetStorageBuffer(1, ObjectBuffer);
 			commands.SetStorageBuffer(2, CardBuffer);
 			program.SetInt("sceneObjectCount", objects.Count);
-			// Without the meshes' fields (Lumen's rays on the triangles) nothing samples the atlas: a stand-in is bound.
+			// Without the meshes' fields (the GI's rays on the triangles) nothing samples the atlas: a stand-in is bound.
 			program.SetTexture("SdfAtlas", DistanceFields?.AtlasTexture);
 			program.SetVector3("sdfAtlasTexels", DistanceFields?.TexelCount ?? Vector3.One);
 			if (SurfaceCache != null)
@@ -242,6 +238,20 @@ namespace LELEngine.Rendering.Lumen
 			RayTracing.Delete();
 			RayTracing = null;
 			Console.WriteLine("[RayTracing] Scene top level released");
+		}
+
+		/// <summary>Frees the objects' distance fields (the GI's rays trace the scene's triangles; the objects stay, without fields).</summary>
+		public void ReleaseDistanceFields()
+		{
+			if (DistanceFields == null)
+			{
+				return;
+			}
+
+			DistanceFields.Delete();
+			DistanceFields = null;
+			fieldStates.Clear();
+			Console.WriteLine("[SDF] Mesh distance fields released (the GI's rays trace the scene's triangles)");
 		}
 
 		/// <summary>Frees Lumen's surface cache (the objects lose their cards); voxel cone tracing keeps the rest of the scene.</summary>
@@ -538,12 +548,12 @@ namespace LELEngine.Rendering.Lumen
 		}
 
 		/// <summary>
-		///     The objects' top level for Lumen's rays while they trace with ray queries, built for this frame after the
-		///     tables (it reads the same objects); freed when they stop.
+		///     The objects' top level while the GI's rays trace with ray queries (Lumen's, or voxel cone tracing's), built for
+		///     this frame after the tables (it reads the same objects); freed when they stop.
 		/// </summary>
 		private void UpdateRayTracing()
 		{
-			if (!Lighting.HardwareRayTracingActive)
+			if (!Lighting.SceneRayTracingActive)
 			{
 				ReleaseRayTracing();
 				return;
@@ -637,7 +647,7 @@ namespace LELEngine.Rendering.Lumen
 				else
 				{
 					// No field (the rays trace the triangles): a field box far from everything, so a global field composed
-					// meanwhile (Engine/SdfCompose.shader) finds every voxel beyond the band and leaves the object out.
+					// meanwhile (Engine/SdfCompose.shader: out of reach) and a search of the objects by distance leave it out.
 					objectRows[o.Index] = new SceneObjectData
 					{
 						WorldToLocal = Matrix4.Invert(localToWorld),

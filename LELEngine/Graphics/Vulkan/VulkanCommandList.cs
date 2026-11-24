@@ -842,7 +842,7 @@ namespace LELEngine.Graphics.Vulkan
 					key.Colors |= (ulong)(byte)passColorFormats[i] << (i * 8);
 				}
 
-				key.State = (ulong)state.ColorMask;
+				key.State = (ulong)state.ColorMask | (state.ConservativeRasterization && device.HasConservativeRasterization ? 1UL << 32 : 0);
 				if (state.Blend)
 				{
 					key.State |= 16 | (ulong)state.SourceColor << 8 | (ulong)state.DestinationColor << 12 | (ulong)state.SourceAlpha << 16 | (ulong)state.DestinationAlpha << 20

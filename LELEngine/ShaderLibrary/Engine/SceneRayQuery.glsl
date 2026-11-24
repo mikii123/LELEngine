@@ -156,6 +156,18 @@ bool TraceSceneRay(vec3 origin, vec3 direction, float tMin, float tMax, out Scen
 	return true;
 }
 
+// The same, as the distance, the object and the normal of the hit (front or back: voxel cone tracing's SDF detail reads
+// the surface it meets either way).
+bool TraceSceneRay(vec3 origin, vec3 direction, float tMin, float tMax, out float hitT, out int objectIndex, out vec3 normal)
+{
+	SceneHit hit;
+	bool found = TraceSceneRay(origin, direction, tMin, tMax, hit);
+	hitT = hit.t;
+	objectIndex = hit.objectIndex;
+	normal = hit.normal;
+	return found;
+}
+
 // Whether nothing of the scene lies along a ray between tMin and tMax (inside the GI volume; a ray from outside it is
 // clear): shadow rays, which end at the first surface they meet, front or back.
 bool SceneRayClear(vec3 origin, vec3 direction, float tMin, float tMax)

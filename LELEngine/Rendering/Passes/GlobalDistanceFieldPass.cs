@@ -81,9 +81,16 @@ namespace LELEngine.Rendering.Passes
 				Release();
 				gi.GlobalSdf = null;
 				gi.GlobalSdfObjectIds = null;
-				// Lumen without the distance field still has its surface cache in the scene.
-				if (!gi.LumenActive)
+				if (Lighting.VoxelRayTracingActive)
 				{
+					// Voxel cone tracing's rays trace the scene's triangles: its objects and top level, without fields.
+					gi.UpdateGridPlacement(context.CameraPosition, context.CameraForward);
+					context.Renderer.Profiler.Split("GlobalSDF.rayTracing");
+					context.Renderer.LumenScene.Update(context.Renderer.FrameIndex, context.GIRenderers ?? context.Renderers, gi);
+				}
+				else if (!gi.LumenActive)
+				{
+					// Lumen without the distance field still has its surface cache in the scene.
 					context.Renderer.ReleaseLumenScene();
 				}
 				return;

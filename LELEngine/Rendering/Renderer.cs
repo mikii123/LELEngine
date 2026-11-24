@@ -975,15 +975,21 @@ namespace LELEngine.Rendering
 			if (!gi.LumenActive)
 			{
 				LumenScene.ReleaseSurfaceCache();
-				if (!gi.DistanceFieldActive)
+				if (!gi.DistanceFieldActive && !Lighting.VoxelRayTracingActive)
 				{
 					ReleaseLumenScene();
 				}
 			}
 
-			// Lumen's rays no longer trace with ray queries: the scene's top level goes, and the meshes' bottom levels when
+			// The rays trace the triangles and nothing builds the global field: the objects keep no fields.
+			if (Lighting.SceneRayTracingActive && !gi.DistanceFieldActive)
+			{
+				LumenScene.ReleaseDistanceFields();
+			}
+
+			// The GI's rays no longer trace with ray queries: the scene's top level goes, and the meshes' bottom levels when
 			// no traced shadows use them either.
-			if (!Lighting.HardwareRayTracingActive)
+			if (!Lighting.SceneRayTracingActive)
 			{
 				LumenScene.ReleaseRayTracing();
 				if (!Lighting.RayTracedLocalShadows && !Lighting.RayTracedDirectionalShadows)

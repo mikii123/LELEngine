@@ -585,6 +585,14 @@ namespace LELEngine.Graphics
 		/// <summary>Depth offset in the depth buffer's smallest steps (glPolygonOffset's units).</summary>
 		public float DepthBiasConstant;
 
+		/// <summary>
+		///     Triangles cover every pixel they touch, however little of it (conservative rasterization, overestimating):
+		///     one fragment per touched pixel, at its centre, which may lie outside the triangle (attributes are then
+		///     extrapolated). Only where <see cref="DeviceCapabilities.ConservativeRasterization" />; a device without it
+		///     rasterizes as usual.
+		/// </summary>
+		public bool ConservativeRasterization;
+
 		/// <summary>Depth tested and written with Less, back faces culled, no blending, every channel written.</summary>
 		public static RenderState Default => new RenderState
 		{
@@ -643,7 +651,7 @@ namespace LELEngine.Graphics
 			return DepthTest == other.DepthTest && DepthWrite == other.DepthWrite && DepthCompare == other.DepthCompare && Culling == other.Culling && Wireframe == other.Wireframe
 				&& Blend == other.Blend && SourceColor == other.SourceColor && DestinationColor == other.DestinationColor && SourceAlpha == other.SourceAlpha
 				&& DestinationAlpha == other.DestinationAlpha && ColorOperation == other.ColorOperation && AlphaOperation == other.AlphaOperation && ColorMask == other.ColorMask
-				&& DepthBiasSlope == other.DepthBiasSlope && DepthBiasConstant == other.DepthBiasConstant;
+				&& DepthBiasSlope == other.DepthBiasSlope && DepthBiasConstant == other.DepthBiasConstant && ConservativeRasterization == other.ConservativeRasterization;
 		}
 
 		public override bool Equals(object obj)
@@ -654,7 +662,8 @@ namespace LELEngine.Graphics
 		public override int GetHashCode()
 		{
 			HashCode hash = new HashCode();
-			hash.Add((DepthTest ? 1 : 0) | (DepthWrite ? 2 : 0) | (Wireframe ? 4 : 0) | (Blend ? 8 : 0) | (int)DepthCompare << 4 | (int)Culling << 8 | (int)ColorMask << 12);
+			hash.Add((DepthTest ? 1 : 0) | (DepthWrite ? 2 : 0) | (Wireframe ? 4 : 0) | (Blend ? 8 : 0) | (int)DepthCompare << 4 | (int)Culling << 8 | (int)ColorMask << 12
+				| (ConservativeRasterization ? 1 << 16 : 0));
 			hash.Add((int)SourceColor | (int)DestinationColor << 4 | (int)SourceAlpha << 8 | (int)DestinationAlpha << 12 | (int)ColorOperation << 16 | (int)AlphaOperation << 20);
 			hash.Add(DepthBiasSlope);
 			hash.Add(DepthBiasConstant);

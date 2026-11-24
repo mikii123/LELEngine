@@ -91,19 +91,29 @@ namespace LELEngine
 		public static string[] RayTracingDefines => HardwareRayTracingActive ? rayQueryDefines : Array.Empty<string>();
 
 		/// <summary>
+		///     Voxel cone tracing runs in a mode that traces the scene's geometry (<see cref="GITraceMode.SdfDetail" />,
+		///     <see cref="GITraceMode.SdfCones" />) with ray queries through its triangles (<see cref="HardwareRayTracing" />):
+		///     the near field and the cones' visibility come from the scene's top level, and no distance field is built.
+		/// </summary>
+		public static bool VoxelRayTracingActive => GI.VoxelConeTracingActive && GI.DistanceFieldEnabled && GI.TraceMode != GITraceMode.VoxelCones && HardwareRayTracing;
+
+		/// <summary>The scene's top level is built: one of the GI methods traces its rays with ray queries.</summary>
+		public static bool SceneRayTracingActive => HardwareRayTracingActive || VoxelRayTracingActive;
+
+		/// <summary>
 		///     Lumen's rays have what they trace this frame: the scene's triangles (<see cref="HardwareRayTracingActive" />)
 		///     or the global distance field.
 		/// </summary>
 		public static bool LumenTracingReady => HardwareRayTracingActive || GI.GlobalSdf != null;
 
 		/// <summary>
-		///     Frames a request keeps the global distance field built (<see cref="RequestDistanceField" />) while Lumen's rays
+		///     Frames a request keeps the global distance field built (<see cref="RequestDistanceField" />) while the GI's rays
 		///     trace the triangles: an effect that reads it now and then does not make and free it in turns.
 		/// </summary>
 		public const int DistanceFieldRequestFrames = 300;
 
 		/// <summary>
-		///     Something other than Lumen's rays read the global distance field in the last
+		///     Something other than the GI's rays read the global distance field in the last
 		///     <see cref="DistanceFieldRequestFrames" /> frames (<see cref="RequestDistanceField" />): it is built also while
 		///     those rays trace the triangles (<see cref="GlobalIlluminationSettings.DistanceFieldActive" />).
 		/// </summary>
@@ -111,15 +121,15 @@ namespace LELEngine
 
 		/// <summary>
 		///     Asks for the global distance field from now on (call it every frame it is read): effects that collide with it
-		///     or conform to it, the distance field and surface cache debug views. Without Lumen's rays on the triangles it is
-		///     built anyway; with them it is made on the next frame (the reader sees none until then) and freed
+		///     or conform to it, the distance field debug view. Without the GI's rays on the triangles it is built anyway (in
+		///     a method that uses it); with them it is made on the next frame (the reader sees none until then) and freed
 		///     <see cref="DistanceFieldRequestFrames" /> frames after the last request.
 		/// </summary>
 		public static void RequestDistanceField()
 		{
-			if (!DistanceFieldRequested && GI.LumenActive && HardwareRayTracing)
+			if (!DistanceFieldRequested && SceneRayTracingActive)
 			{
-				Console.WriteLine("[SDF] The global distance field is asked for while Lumen's rays trace the triangles: built for its readers");
+				Console.WriteLine("[SDF] The global distance field is asked for while the GI's rays trace the triangles: built for its readers");
 			}
 
 			distanceFieldRequestFrame = Time.frameCount;
@@ -274,7 +284,7 @@ namespace LELEngine
 			Environment.ApplyTo(settings);
 			UpdateGIMethod();
 			ReportRayTracing();
-			(GIMode, bool, bool, bool, bool) usage = (GIMethod, GI.Enabled, GI.DistanceFieldActive, GI.VoxelConeTracingActive && GI.ScreenSpaceResolve, HardwareRayTracingActive);
+			(GIMode, bool, bool, bool, bool) usage = (GIMethod, GI.Enabled, GI.DistanceFieldActive, GI.VoxelConeTracingActive && GI.ScreenSpaceResolve, SceneRayTracingActive);
 			if (usage != giUsage)
 			{
 				giUsage = usage;
@@ -655,6 +665,26 @@ namespace LELEngine
 				default: return 0;
 			}
 		}
+
+		/// <summary>
+		///     What the ray query variants of voxel cone tracing's programs trace (<see cref="VoxelRayTracingActive" />,
+		///     Engine/VoxelConeTracingCore.glsl): the trace mode (<paramref name="traceMode" />, giTraceMode), the GI volume
+		///     the rays keep to and the band a cone's visibility counts surfaces within (the distance field's, which is not
+		///     built), and the scene's objects with their top level.
+		/// </summary>
+		public static void SetVoxelRayTracingUniforms(ShaderProgram program, Rendering.Lumen.LumenScene scene, int traceMode)
+		{
+			program.SetInt("giTraceMode", traceMode);
+			program.SetFloat("giSdfDetailDistance", GI.SdfDetailDistance);
+			program.SetVector3("sdfGridMin", GI.GridMin);
+			program.SetFloat("sdfGridSize", GI.GridSize);
+			program.SetInt("sdfResolution", GI.SdfResolution);
+			program.SetFloat("sdfMaxDistance", GI.SdfBandVoxels * GI.SdfVoxelSize);
+			scene.SetUniforms(program);
+		}
+
+		/// <summary>giTraceMode of voxel cone tracing's ray query variants: the project's trace mode (1 SDF detail, 2 SDF cones).</summary>
+		public static int VoxelRayTraceMode => GI.TraceMode == GITraceMode.SdfDetail ? 1 : 2;
 
 		/// <summary>
 		///     Global distance field parameters for Engine/DistanceField.glsl. Shares the GI grid placement.
@@ -1227,6 +1257,16 @@ namespace LELEngine
 		[GIMethod(GIMode.VoxelConeTracing)] public int CoverageSplatWidth = 2;
 
 		/// <summary>
+		///     <see cref="VoxelCoverage" /> where the graphics device rasterizes conservatively
+		///     (<see cref="Graphics.DeviceCapabilities.ConservativeRasterization" />: Vulkan on most GPUs): one fragment per
+		///     voxel column a triangle touches, its coverage the exact area of the triangle inside the column, instead of
+		///     eight samples per column (a sliver between the samples counted nothing, every column's coverage a multiple
+		///     of an eighth). Off, or elsewhere: multisampled.
+		/// </summary>
+		[Tooltip("Coverage voxelization with conservative rasterization where the graphics device has it (Vulkan on most GPUs): every voxel column a triangle touches counts the exact area of the triangle in it, where multisampling counts eight points per column. Elsewhere, or off: multisampled")]
+		[GIMethod(GIMode.VoxelConeTracing)] public bool ConservativeVoxelization = true;
+
+		/// <summary>
 		///     What the voxel radiance mips keep of direction (see <see cref="VoxelMipMode" />). Isotropic mips average
 		///     both sides of a wall thinner than a cell: a cone sees half the light of a lit interior wall, and the light
 		///     of a sunlit exterior leaks in.
@@ -1267,25 +1307,30 @@ namespace LELEngine
 		public bool LumenActive => Enabled && Lighting.GIMethod == GIMode.Lumen;
 
 		/// <summary>
-		///     The global distance field is built (and with it the meshes' fields): Lumen traces it unless its rays trace the
-		///     triangles (<see cref="Lighting.HardwareRayTracing" />: then only while something else asks for it,
-		///     <see cref="Lighting.DistanceFieldRequested" />: effects that collide with it, its debug views), voxel cone
-		///     tracing only in an SDF trace mode (<see cref="TraceMode" />; <see cref="GITraceMode.VoxelCones" /> never reads
-		///     it). The one place that decides it: the distance field passes and the GI's scene read this.
+		///     The global distance field is built (and with it the meshes' fields): by a method that traces it, Lumen or voxel
+		///     cone tracing in an SDF trace mode (<see cref="TraceMode" />; <see cref="GITraceMode.VoxelCones" /> never reads
+		///     it), unless that method's rays trace the scene's triangles (<see cref="Lighting.HardwareRayTracing" />:
+		///     <see cref="Lighting.HardwareRayTracingActive" />, <see cref="Lighting.VoxelRayTracingActive" />); then only
+		///     while something else asks for it (<see cref="Lighting.DistanceFieldRequested" />: effects that collide with
+		///     it, its debug view). The one place that decides it: the distance field passes, the GI's scene (whether objects
+		///     keep fields) and the renderer's releases read this.
 		/// </summary>
 		public bool DistanceFieldActive => Enabled && DistanceFieldEnabled
-			&& (Lighting.GIMethod == GIMode.Lumen ? !Lighting.HardwareRayTracing || Lighting.DistanceFieldRequested : TraceMode != GITraceMode.VoxelCones);
+			&& (Lighting.GIMethod == GIMode.Lumen || TraceMode != GITraceMode.VoxelCones)
+			&& (!Lighting.HardwareRayTracing || Lighting.DistanceFieldRequested);
 
 		// ---- Lumen's rays (Engine/SceneRayQuery.glsl, SceneRayTracing) ----
 
 		/// <summary>
-		///     Lumen's rays (screen probes, radiance cache probes, surface cache radiosity, the local lights' GI shadows)
-		///     trace the scene's triangles with ray queries where the graphics device has them; elsewhere, or off, they
-		///     sphere trace the distance fields. Read once with the method (<see cref="Lighting.HardwareRayTracing" />).
+		///     Lumen's rays (screen probes, radiance cache probes, surface cache radiosity, the local lights' GI shadows) and
+		///     voxel cone tracing's distance field parts (<see cref="GITraceMode.SdfDetail" />'s near field,
+		///     <see cref="GITraceMode.SdfCones" />' visibility) trace the scene's triangles with ray queries where the graphics
+		///     device has them; elsewhere, or off, they trace the distance fields. Read once with the method
+		///     (<see cref="Lighting.HardwareRayTracing" />).
 		/// </summary>
 		[Header("Ray Tracing")]
-		[Tooltip("Lumen's rays (screen probes, radiance cache probes, surface cache radiosity, the local lights' GI shadows) trace the scene's triangles with the GPU's ray tracing where the graphics device has it (Vulkan on a GPU with ray queries); elsewhere, or off, they sphere trace the distance fields. What a ray hits is lit from the surface cache either way. Taken when the GI first runs, like the method: it does not change while the game runs")]
-		[GIMethod(GIMode.Lumen)] public bool HardwareRayTracing = true;
+		[Tooltip("The GI's rays trace the scene's triangles with the GPU's ray tracing where the graphics device has it (Vulkan on a GPU with ray queries); elsewhere, or off, they trace the distance fields. Lumen: the screen probes', radiance cache probes', surface cache radiosity's rays and the local lights' GI shadows; what a ray hits is lit from the surface cache either way. Voxel cone tracing (SDF Detail, SDF Cones): the near field and the cones' visibility, from a ray along each cone; no distance field is built then. Taken when the GI first runs, like the method: it does not change while the game runs")]
+		public bool HardwareRayTracing = true;
 
 		// ---- Lumen surface cache (SurfaceCachePass) ----
 

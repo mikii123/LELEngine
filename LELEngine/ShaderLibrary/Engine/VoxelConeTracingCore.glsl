@@ -15,9 +15,37 @@
 //   2  SDF cones:   the whole cone's visibility comes from the global distance field (distance field AO):
 //                   continuous, it only decreases (no cone sees through a wall), and where it decreases the
 //                   cone takes the radiance of the surfaces there from the voxel volume.
+//
+// The LEL_RAY_QUERY variants (voxel cone tracing's own programs while Lighting.VoxelRayTracingActive: the scene's
+// triangles traced with ray queries, no distance field built) trace rays where the others read the field: the SDF
+// detail's near field is a ray, and an SDF cone's distance to the surfaces is the distance along its axis to the first
+// triangle a ray along the axis meets. The material shaders, which have no such variant, trace voxel cones then.
 
 #include "Engine/DistanceField.glsl"
 #include "Engine/VoxelRadiance.glsl"
+#ifdef LEL_RAY_QUERY
+#include "Engine/SceneObjects.glsl"
+#include "Engine/SurfaceCache.glsl"
+#include "Engine/SceneRayQuery.glsl"
+
+// How far along a ray the nearest triangle of the scene is (inside the GI volume), 1e30 where it meets none: a cone's
+// visibility needs nothing else of the hit (no triangle read from the geometry pool).
+float SceneRayHitDistance(vec3 origin, vec3 direction, float tMin, float tMax)
+{
+	if (!GISceneRayInterval(origin, direction, tMin, tMax))
+	{
+		return 1e30;
+	}
+
+	rayQueryEXT query;
+	rayQueryInitializeEXT(query, GIScene, gl_RayFlagsOpaqueEXT, 0xFFu, origin, tMin, direction, tMax);
+	while (rayQueryProceedEXT(query))
+	{
+	}
+
+	return rayQueryGetIntersectionTypeEXT(query, true) == gl_RayQueryCommittedIntersectionTriangleEXT ? rayQueryGetIntersectionTEXT(query, true) : 1e30;
+}
+#endif
 
 uniform vec3 voxelGridMin;
 uniform float voxelGridSize;
@@ -48,20 +76,26 @@ float ConeMaxDistance()
 	return giConeMaxDistance > 0.0 ? giConeMaxDistance : voxelGridSize;
 }
 
-// Radiance of the surface at an SDF hit, read from the voxel volume just outside the wall.
-vec4 SdfHitRadiance(vec3 hit, vec3 direction, float aperture, float hitT)
+// Radiance of the surface at a hit (hitNormal: the surface's, facing the side the cone came from), read from the voxel
+// volume just outside the wall.
+vec4 SurfaceHitRadiance(vec3 hit, vec3 hitNormal, vec3 direction, float aperture, float hitT)
 {
 	float voxelSize = VoxelSize();
 
-	// Offset along the SDF normal so the footprint sits on the lit surface voxels; keep it small,
+	// Offset along the surface's normal so the footprint sits on the lit surface voxels; keep it small,
 	// coarse mips mix in too much empty space and amplify noise once un-premultiplied.
-	vec3 hitNormal = SdfNormal(hit);
 	vec3 samplePos = hit + hitNormal * voxelSize * 0.75;
 	float diameter = max(voxelSize, 2.0 * aperture * hitT);
 	float mip = clamp(log2(diameter / voxelSize), 0.0, 2.0);
 	vec4 s = SampleVoxelRadiance((samplePos - voxelGridMin) / voxelGridSize, mip, direction);
 
 	return vec4(s.rgb / max(s.a, 0.25), 1.0);
+}
+
+// The same at an SDF hit, with the field's normal there.
+vec4 SdfHitRadiance(vec3 hit, vec3 direction, float aperture, float hitT)
+{
+	return SurfaceHitRadiance(hit, SdfNormal(hit), direction, aperture, hitT);
 }
 
 // ---- The clouds on the cones' way (GI_MEDIA) ----
@@ -169,9 +203,18 @@ vec4 TraceConeSdfDetail(vec3 origin, vec3 direction, float aperture, float maxDi
 {
 	float detail = min(giSdfDetailDistance, maxDistance);
 	float hitT;
+#ifdef LEL_RAY_QUERY
+	// The near field through the scene's triangles (the field's trace starts half a voxel out as well).
+	int hitObject;
+	vec3 hitNormal;
+	if (TraceSceneRay(origin, direction, SdfVoxelSize() * 0.5, detail, hitT, hitObject, hitNormal))
+	{
+		vec4 hit = SurfaceHitRadiance(origin + direction * hitT, hitNormal, direction, aperture, hitT);
+#else
 	if (TraceSdf(origin, direction, detail, hitT))
 	{
 		vec4 hit = SdfHitRadiance(origin + direction * hitT, direction, aperture, hitT);
+#endif
 #ifdef GI_MEDIA
 		// The clouds between the surface and what it sees this near.
 		vec4 m = GIMediaRange(origin, direction, aperture, 0.0, hitT, stepJitter);
@@ -209,6 +252,11 @@ vec4 TraceConeSdf(vec3 origin, vec3 direction, float aperture, float maxDistance
 #ifdef GI_MEDIA
 	ConeClouds clouds = ConeClouds(0.0, GIMediaNoPhase, stepJitter);
 #endif
+#ifdef LEL_RAY_QUERY
+	// The scene's triangles in place of the field: one ray along the cone's axis, its first surface the one every
+	// sample's distance is taken to, along the axis (a surface beside the axis does not count).
+	float axisHit = SceneRayHitDistance(origin, direction, sdfVoxel * 0.5, maxDistance);
+#endif
 	while (dist < maxDistance && alpha < 0.98)
 	{
 		vec3 p = origin + direction * dist;
@@ -231,7 +279,14 @@ vec4 TraceConeSdf(vec3 origin, vec3 direction, float aperture, float maxDistance
 			float coneRadius = max(occlusionAperture * dist, sdfVoxel * 0.5);
 			float radius = min(coneRadius, maxRadius);
 			float coverage = radius / coneRadius;
-			fieldAlpha = coverage * coverage * (1.0 - clamp(SampleSdf(p) / radius, 0.0, 1.0));
+#ifdef LEL_RAY_QUERY
+			// Up to the hit, and 0 past it: what the ray hit counts as solid (a thin surface the cone passes would let
+			// light through walls the field stops).
+			float surfaceDistance = max(axisHit - dist, 0.0);
+#else
+			float surfaceDistance = SampleSdf(p);
+#endif
+			fieldAlpha = coverage * coverage * (1.0 - clamp(surfaceDistance / radius, 0.0, 1.0));
 		}
 
 		// The field alone near the origin, the larger of both further out (the voxels also see what lies beyond the

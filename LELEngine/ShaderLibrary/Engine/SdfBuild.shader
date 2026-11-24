@@ -106,6 +106,32 @@ void main()
 		winding += SolidAngle(a - p, b - p, c - p);
 	}
 
+#if defined(LEL_VULKAN) && defined(LEL_SUBGROUPS)
+	// Vulkan: each subgroup folds its lanes at once (one subgroup for the whole group in 64-wide waves), then the first
+	// lane the subgroups' results: one barrier instead of five. The same field every time on a GPU (the subgroups' order
+	// of addition is the hardware's own, fixed).
+	float subgroupNearest = subgroupMin(bestSq);
+	float subgroupWinding = subgroupAdd(winding);
+	if (subgroupElect())
+	{
+		nearestShared[gl_SubgroupID] = subgroupNearest;
+		windingShared[gl_SubgroupID] = subgroupWinding;
+	}
+
+	barrier();
+	if (lane != 0u)
+	{
+		return;
+	}
+
+	bestSq = nearestShared[0];
+	winding = windingShared[0];
+	for (uint s = 1u; s < gl_NumSubgroups; s++)
+	{
+		bestSq = min(bestSq, nearestShared[s]);
+		winding += windingShared[s];
+	}
+#else
 	// The lanes folded together in a fixed order (the same field every time), unrolled: a barrier inside a loop makes
 	// Intel's compiler warn.
 	nearestShared[lane] = bestSq;
@@ -128,6 +154,7 @@ void main()
 
 	bestSq = min(nearestShared[0], nearestShared[1]);
 	winding = windingShared[0] + windingShared[1];
+#endif
 	int index = (id.z * sdfSize.y + id.y) * sdfSize.x + id.x;
 	if (firstChunk == 0)
 	{

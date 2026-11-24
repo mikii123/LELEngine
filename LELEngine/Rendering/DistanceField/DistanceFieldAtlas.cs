@@ -116,6 +116,12 @@ namespace LELEngine.Rendering.DistanceField
 		/// </summary>
 		public const long PairsPerFrame = 1L << 27;
 
+		/// <summary>
+		///     Texel x triangle pairs of build chunks after which they are sent to the GPU (<see cref="GraphicsDevice.Flush" />):
+		///     a long chunk goes on its own, short ones go together with the frame.
+		/// </summary>
+		public const long FlushPairs = 1L << 24;
+
 		/// <summary>The atlas on the GPU (another texture after it grew).</summary>
 		public GpuTexture AtlasTexture { get; private set; }
 
@@ -200,6 +206,9 @@ namespace LELEngine.Rendering.DistanceField
 
 		private readonly List<PendingBuild> pending = new List<PendingBuild>();
 		private long spentThisFrame;
+
+		// Pairs of the chunks dispatched since the last flush.
+		private long unflushedPairs;
 
 		private readonly Dictionary<(Mesh, Vector3i), MeshDistanceField> fields = new Dictionary<(Mesh, Vector3i), MeshDistanceField>();
 
@@ -601,8 +610,16 @@ namespace LELEngine.Rendering.DistanceField
 
 			// A work group per texel.
 			build.Dispatch(field.Size.X, field.Size.Y, field.Size.Z);
-			// Each chunk goes to the GPU on its own: the driver can schedule other work (the desktop) between them.
-			Gfx.Device.Flush();
+			// The long chunks go to the GPU on their own: the driver can schedule other work (the desktop) between them.
+			// Short ones (small meshes: a field at load is a few thousand pairs) go with the frame, a submission each
+			// costs a Vulkan device more than the chunk.
+			long pairs = Math.Max(count, 1) * job.Texels;
+			unflushedPairs += pairs;
+			if (unflushedPairs >= FlushPairs)
+			{
+				Gfx.Device.Flush();
+				unflushedPairs = 0;
+			}
 
 			job.NextTriangle += count;
 			job.Dispatches++;
@@ -611,7 +628,7 @@ namespace LELEngine.Rendering.DistanceField
 				EndBuild(job, KeepsFields);
 			}
 
-			return Math.Max(count, 1) * job.Texels;
+			return pairs;
 		}
 
 		// The build is done: its field is handed out from now on (and read back to be kept, when asked). Source: where the

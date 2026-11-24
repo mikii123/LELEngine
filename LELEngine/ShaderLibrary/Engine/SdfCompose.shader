@@ -45,6 +45,15 @@ void main()
 	{
 		SceneObject o = sceneObjects[objectStart + i];
 		vec3 localPos = (o.worldToLocal * vec4(p, 1.0)).xyz;
+		// An object is never nearer than its field's box (SceneObjectDistance is at least the distance to it outside):
+		// one that far or farther than the nearest so far changes nothing, and its field is not read. Exact: the same
+		// field as testing every object.
+		float boxDistance = length(localPos - clamp(localPos, o.boundsMin.xyz, o.boundsMax.xyz));
+		if (boxDistance > 0.0 && boxDistance >= d)
+		{
+			continue;
+		}
+
 		float distance = SceneObjectDistance(o, localPos);
 		if (distance < d)
 		{
