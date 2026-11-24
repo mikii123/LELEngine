@@ -794,8 +794,10 @@
     7.41, refraction 8.04 / 8.21, lights 8.95 / 8.75, outdoor 4.41 / 4.21, nogpudriven 6.68 / 6.73, ssaa 2.94 / 2.71,
     trails 0.98 / 0.95, vfx 3.48 / 3.44, volumetrics 8.62 / 8.54, impostors 4.19 / 4.13, ui 1.03 / 1.03, nav 0.89 /
     0.81); the render thread's CPU time within its noise (0.4-7.4 ms either way); the frame graph's planning 0.21 ms in
-    a first frame (the hitch profiler's `Frame graph` scope; a frame that keeps the plan allocates nothing but its
-    passes' declarations).
+    a first frame (the hitch profiler's `Frame graph` scope; a frame that keeps the plan allocates nothing). OpenGL the
+    same within the spread (GPU sections: lumen 6.52 / 6.20, vct 9.61 / 9.21, materials 5.88 / 5.71, lights 8.59 /
+    8.10, suns3 7.18 / 7.14, ssaa 1.53 / 1.44, impostors 3.11 / 3.18, ui 0.45 / 0.45; frame walls moving 10 % either way
+    with the other sessions' load, vfx 3.20 / 3.97 in one run and 5.58 / 4.64 in the next).
   - Memory (LEL_VULKAN_STATS=1, the allocator's total): vct 313.9 -> 306.9 MB (the motion vectors share 7 MB with the
     resolve's targets: `[FrameGraph] 6 transient textures: 8.8 MB of memory (15.8 MB each in its own)`), ssaa 160.7 ->
     150.1 (the motion vectors and the super sampling's intermediate: 15.8 MB for 26.4); the other scenes the same (the
