@@ -51,6 +51,7 @@ namespace TestGame
 		///            [mover=frame] [moverz=path depth] [moveremission=intensity] [regions=x,y,z;x,y,z;...] [regionsize=px] [regionstart=frame] [regionsource=scene|gi]
 		///            [noise=frames] [noisestart=frame]
 		///            [graphics=opengl|vulkan the graphics API] [hidden=1 the window never shows] [fixeddt=seconds every frame advances by]
+		///            [framesinflight=1|2 frames the CPU records ahead of the GPU on Vulkan (default: 2 on a GPU of its own, 1 integrated)]
 		///            [hwrt=0|1 the GI's rays (Lumen's, voxel cone tracing's SDF modes) through the triangles with ray queries where the device has them (1, the default) or the distance fields]
 		///            [staticrebuild=1 the GI's static caches (voxel geometry, global distance field) built again every frame]
 		///            Ray tracing besides (Project Settings > Lighting > Ray Tracing; devices with ray queries): [rtshadows=0|1 local lights' shadows traced (1)]
@@ -84,6 +85,8 @@ namespace TestGame
 				}
 			}
 
+			// framesinflight=1|2: frames the CPU may record ahead of the GPU on Vulkan (default: by the GPU's kind).
+			LELEngine.Graphics.GraphicsDevice.FramesInFlight = GetInt(args, "framesinflight", LELEngine.Graphics.GraphicsDevice.FramesInFlight);
 			Game.CreateWindow(1280, 720, "LELEngine");
 
 			// outdoor=1: the open-sky yard, with the procedural skybox unless sky=0.

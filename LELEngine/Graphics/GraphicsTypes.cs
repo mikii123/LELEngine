@@ -83,7 +83,16 @@ namespace LELEngine.Graphics
 		///     (<see cref="CommandList.SetImage" /> with a layer). Some GPUs lay out a 3D texture made for this slice by slice,
 		///     which samples it slower: only textures that need it ask for it.
 		/// </summary>
-		SliceImages = 8
+		SliceImages = 8,
+
+		/// <summary>
+		///     With <see cref="Attachment" />: asynchronous compute work (<see cref="CommandList.BeginAsyncCompute" />) reads
+		///     or writes the render target too, so it is shared with the compute queue. A colour attachment made without it
+		///     stays the graphics queue's own (some GPUs compress only those), and compute work that uses it runs on the
+		///     graphics queue. Textures that are not attachments (and depth textures never) are shared whenever the device has
+		///     a compute queue.
+		/// </summary>
+		AsyncCompute = 16
 	}
 
 	public struct TextureDescriptor

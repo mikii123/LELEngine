@@ -58,6 +58,16 @@ namespace LELEngine.Rendering
 		public virtual void Initialize(Renderer renderer)
 		{ }
 
+		/// <summary>
+		///     Declares what the pass makes and uses in the frame about to execute (<see cref="FrameGraph" />): the transient
+		///     textures it makes (<see cref="FrameGraph.CreateTexture" />), those of earlier passes it reads or writes, what is
+		///     read outside the graph (<see cref="FrameGraph.Export" />). Called every frame before any pass executes, in the
+		///     order they will, with the context they will execute with; <see cref="Execute" /> then gets the textures by name
+		///     (<see cref="RenderContext.Frame" />). A pass that declares nothing (the default) keeps its own targets.
+		/// </summary>
+		public virtual void Setup(FrameGraph frame, RenderContext context)
+		{ }
+
 		public abstract void Execute(RenderContext context);
 
 		/// <summary>

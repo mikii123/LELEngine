@@ -120,7 +120,7 @@ namespace LELEngine.Graphics.Vulkan
 			added.Stages = stages;
 			added.Write = write;
 			added.Discard = discard;
-			added.Ahead = texture.MainUse != device.RecordingSerial;
+			added.Ahead = texture.StreamUnused;
 			texture.Use();
 		}
 
@@ -187,7 +187,7 @@ namespace LELEngine.Graphics.Vulkan
 			if (device.HasAsyncCompute && !device.AsideRecording)
 			{
 				// The other queue's state keeps its own uses: its next use waits for this one by the timeline.
-				device.OrderAcrossQueues(ref target.Queues, write);
+				device.OrderAcrossQueues(ref target.Queues, write, target.AccelerationStructure ? "an acceleration structure" : "the device's build memory or instances");
 				compute = device.RecordingCompute;
 			}
 
@@ -668,7 +668,7 @@ namespace LELEngine.Graphics.Vulkan
 			// Given in asynchronous compute work, it goes to the compute queue when the texture is shared with it and no
 			// open pass draws into it.
 			UseComputeQueue(texture.Concurrent && !IsPassAttachment(texture));
-			return TransferCommands(texture, texture.MainUse != device.RecordingSerial, mip, mips, layer, layers, texture.CopyDestinationLayout, true, discard);
+			return TransferCommands(texture, texture.StreamUnused, mip, mips, layer, layers, texture.CopyDestinationLayout, true, discard);
 		}
 
 		/// <summary>

@@ -91,6 +91,21 @@ namespace LELEngine.Graphics
 		///     graphics work around it. False: everything runs in the order given, on one queue.
 		/// </summary>
 		public bool AsyncCompute { get; internal set; }
+
+		/// <summary>
+		///     The GPU is part of the processor and shares its memory and power (false for a GPU of its own, and where the
+		///     API does not tell).
+		/// </summary>
+		public bool IntegratedGpu { get; internal set; }
+
+		/// <summary>The frames the CPU records ahead of the GPU now (<see cref="GraphicsDevice.FramesInFlight" /> as the device takes it; 0: the driver's).</summary>
+		public int FramesInFlight { get; internal set; }
+
+		/// <summary>
+		///     Textures made by <see cref="GraphicsDevice.CreateTransientTextures" /> whose lifetimes do not overlap share
+		///     memory. False: each has memory of its own.
+		/// </summary>
+		public bool TextureAliasing { get; internal set; }
 	}
 
 	/// <summary>
@@ -109,11 +124,21 @@ namespace LELEngine.Graphics
 
 		/// <summary>
 		///     The device is made with a queue for asynchronous compute where the GPU has one
-		///     (<see cref="DeviceCapabilities.AsyncCompute" />); set before the first window (default: LEL_ASYNC_COMPUTE=1).
-		///     Off by default: on the Radeon 780M the compute queue gained at most 2 % of a frame and lost several times
-		///     that when another program used the GPU at the same time (the compute queue then waits behind it).
+		///     (<see cref="DeviceCapabilities.AsyncCompute" />); set before the first window (default on; LEL_ASYNC_COMPUTE=0
+		///     off). The renderer gives it the work that asks for it while that pays, measured on its frames (another program
+		///     taking the GPU can hold the compute queue back; on an integrated GPU the queues mostly share the same few
+		///     units): Rendering.AsyncComputeGuard.
 		/// </summary>
-		public static bool RequestAsyncCompute { get; set; } = Environment.GetEnvironmentVariable("LEL_ASYNC_COMPUTE") == "1";
+		public static bool RequestAsyncCompute { get; set; } = Environment.GetEnvironmentVariable("LEL_ASYNC_COMPUTE") != "0";
+
+		/// <summary>
+		///     Frames the CPU may record ahead of the GPU on a device that orders that itself (Vulkan): 1 records the next frame
+		///     while the GPU runs the last one (the least latency), 2 lets the GPU queue two frames, which keeps it busy over a
+		///     CPU frame that takes longer than the others (one frame more between input and screen). 0 (the default): 2 on a
+		///     GPU of its own, 1 on one that shares the CPU's memory and power, whose CPU and GPU slow each other down. Read
+		///     at every present. OpenGL's driver decides for itself.
+		/// </summary>
+		public static int FramesInFlight { get; set; } = int.TryParse(Environment.GetEnvironmentVariable("LEL_FRAMES_IN_FLIGHT"), out int frames) ? frames : 0;
 
 		/// <summary>
 		///     The API that was asked for and could not be had on this machine, when the device was made for another
@@ -141,6 +166,35 @@ namespace LELEngine.Graphics
 		public abstract bool HasCurrentContext { get; }
 
 		public abstract GpuTexture CreateTexture(in TextureDescriptor descriptor);
+
+		/// <summary>
+		///     Textures for targets that live within a frame: each from the first to the last step of the frame
+		///     <paramref name="lifetimes" /> gives it (the caller numbers the steps: the passes of a frame, say). Textures whose
+		///     steps do not overlap may share memory, on a device that can (<see cref="DeviceCapabilities.TextureAliasing" />):
+		///     the contents of such a texture are undefined at its first use in a frame (write it whole before reading it), and
+		///     the device orders that use after the uses of the others in its memory, whatever the queue. Without sharing
+		///     (OpenGL) each is a texture of its own, as <see cref="CreateTexture" /> makes it. Each is disposed by itself, the
+		///     memory with the last. <paramref name="bytes" />: the memory they take; <paramref name="unsharedBytes" />: what
+		///     they would take each in its own.
+		/// </summary>
+		public virtual GpuTexture[] CreateTransientTextures(ReadOnlySpan<TextureDescriptor> descriptors, ReadOnlySpan<(int First, int Last)> lifetimes, out long bytes,
+			out long unsharedBytes)
+		{
+			GpuTexture[] textures = new GpuTexture[descriptors.Length];
+			bytes = 0;
+			for (int i = 0; i < textures.Length; i++)
+			{
+				textures[i] = CreateTexture(descriptors[i]);
+				for (int mip = 0; mip < textures[i].MipLevels; mip++)
+				{
+					bytes += textures[i].MipDataSize(mip);
+				}
+			}
+
+			unsharedBytes = bytes;
+			return textures;
+		}
+
 		public abstract GpuBuffer CreateBuffer(in BufferDescriptor descriptor);
 
 		/// <summary>The sampler of a description (one object per description, kept for the device's life).</summary>

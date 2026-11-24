@@ -41,14 +41,15 @@ namespace LELEngine.Rendering
 		#region PublicMethods
 
 		/// <param name="storage">Shaders also read or write the attachment as an image.</param>
-		public RenderTexture AddColorAttachment(RenderTextureFormat format, bool linearFilter = true, bool storage = false)
+		/// <param name="asyncCompute">Asynchronous compute work reads or writes it too (<see cref="TextureUsage.AsyncCompute" />).</param>
+		public RenderTexture AddColorAttachment(RenderTextureFormat format, bool linearFilter = true, bool storage = false, bool asyncCompute = false)
 		{
 			if (format == RenderTextureFormat.Depth24 || format == RenderTextureFormat.Depth32F)
 			{
 				throw new ArgumentException("Use AddDepthAttachment for depth formats.", nameof(format));
 			}
 
-			RenderTexture texture = new RenderTexture(Width, Height, format, linearFilter, SamplerAddress.ClampToEdge, storage);
+			RenderTexture texture = new RenderTexture(Width, Height, format, linearFilter, SamplerAddress.ClampToEdge, storage, asyncCompute);
 			colorAttachments.Add(texture);
 			return texture;
 		}

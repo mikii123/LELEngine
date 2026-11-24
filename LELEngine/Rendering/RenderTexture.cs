@@ -25,6 +25,11 @@ namespace LELEngine.Rendering
 		private readonly bool linearFilter;
 		private readonly SamplerAddress wrap;
 		private readonly bool storage;
+		private readonly bool asyncCompute;
+
+		/// <summary>The texture is another's (a frame graph's): never resized or disposed here.</summary>
+		private readonly bool borrowed;
+
 		private bool shadowCompare;
 		private SamplerBorder border = SamplerBorder.TransparentBlack;
 
@@ -33,13 +38,33 @@ namespace LELEngine.Rendering
 		#region Constructors
 
 		/// <param name="storage">Shaders also read or write it as an image (<see cref="CommandList.SetImage" />).</param>
-		public RenderTexture(int width, int height, RenderTextureFormat format, bool linearFilter = true, SamplerAddress wrap = SamplerAddress.ClampToEdge, bool storage = false)
+		/// <param name="asyncCompute">Asynchronous compute work reads or writes it too (<see cref="TextureUsage.AsyncCompute" />).</param>
+		public RenderTexture(int width, int height, RenderTextureFormat format, bool linearFilter = true, SamplerAddress wrap = SamplerAddress.ClampToEdge, bool storage = false,
+			bool asyncCompute = false)
 		{
 			Format = format;
 			this.linearFilter = linearFilter;
 			this.wrap = wrap;
 			this.storage = storage;
+			this.asyncCompute = asyncCompute;
 			Resize(width, height);
+		}
+
+		/// <summary>
+		///     A render texture over a texture made elsewhere (a frame's transient texture: <see cref="FrameGraph" />), sampled
+		///     as the other arguments say. It neither resizes nor deletes the texture.
+		/// </summary>
+		internal RenderTexture(GpuTexture texture, RenderTextureFormat format, bool linearFilter, SamplerAddress wrap, bool storage)
+		{
+			Format = format;
+			this.linearFilter = linearFilter;
+			this.wrap = wrap;
+			this.storage = storage;
+			borrowed = true;
+			Gpu = texture;
+			Width = texture.Width;
+			Height = texture.Height;
+			Gpu.Sampler = CreateSampler();
 		}
 
 		#endregion
@@ -51,10 +76,15 @@ namespace LELEngine.Rendering
 		/// </summary>
 		public void Resize(int width, int height)
 		{
+			if (borrowed)
+			{
+				throw new InvalidOperationException("A frame's transient texture is sized by its frame graph.");
+			}
+
 			Width = Math.Max(1, width);
 			Height = Math.Max(1, height);
 			Gpu?.Dispose();
-			TextureUsage usage = TextureUsage.Sampled | TextureUsage.Attachment | (storage ? TextureUsage.Storage : 0);
+			TextureUsage usage = TextureUsage.Sampled | TextureUsage.Attachment | (storage ? TextureUsage.Storage : 0) | (asyncCompute ? TextureUsage.AsyncCompute : 0);
 			Gpu = GraphicsDevice.Current.CreateTexture(TextureDescriptor.Texture2D(TextureFormatOf(Format), Width, Height, 1, usage));
 			Gpu.Sampler = CreateSampler();
 		}
@@ -89,7 +119,11 @@ namespace LELEngine.Rendering
 
 		public void Delete()
 		{
-			Gpu?.Dispose();
+			if (!borrowed)
+			{
+				Gpu?.Dispose();
+			}
+
 			Gpu = null;
 		}
 

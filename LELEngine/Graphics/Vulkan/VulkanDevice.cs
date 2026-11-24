@@ -319,11 +319,34 @@ namespace LELEngine.Graphics.Vulkan
 				VkDeviceQueueCreateInfo* queueInfos = stackalloc VkDeviceQueueCreateInfo[2];
 				queueInfos[0] = new VkDeviceQueueCreateInfo { QueueFamilyIndex = QueueFamily, QueueCount = 1, QueuePriorities = &priority };
 				queueInfos[1] = new VkDeviceQueueCreateInfo { QueueFamilyIndex = computeFamily, QueueCount = 1, QueuePriorities = &priority };
+				// The queues' standing against other programs' work on the GPU (VulkanDeviceQueues.cs).
+				VkDeviceQueueGlobalPriorityCreateInfo* globalPriorities = stackalloc VkDeviceQueueGlobalPriorityCreateInfo[2];
+				string priorityExtension = AskForQueuePriorities(physicalDevice, QueueFamily, computeFamily, globalPriorities);
+				if (priorityExtension != null)
+				{
+					deviceExtensions.Add(priorityExtension);
+					queueInfos[0].Next = globalPriorities[0].GlobalPriority != 0 ? &globalPriorities[0] : null;
+					queueInfos[1].Next = globalPriorities[1].GlobalPriority != 0 ? &globalPriorities[1] : null;
+				}
+
 				BrutalDevice.CreateInfo deviceInfo = new BrutalDevice.CreateInfo();
 				deviceInfo.Extensions = deviceExtensions;
 				deviceInfo.QueueCreateInfos = new ReadOnlySpan<VkDeviceQueueCreateInfo>(queueInfos, computeFamily >= 0 ? 2 : 1);
 				deviceInfo.Next = &want;
-				device = physicalDevice.CreateDevice(deviceInfo);
+				try
+				{
+					device = physicalDevice.CreateDevice(deviceInfo);
+				}
+				catch (Exception e) when (priorityExtension != null)
+				{
+					// A priority this process may not take (VK_ERROR_NOT_PERMITTED): the queues as every program's.
+					Console.WriteLine("[Vulkan] Queues without global priorities: " + e.Message);
+					deviceExtensions.Remove(priorityExtension);
+					queueInfos[0].Next = null;
+					queueInfos[1].Next = null;
+					QueuePriorities = "default";
+					device = physicalDevice.CreateDevice(deviceInfo);
+				}
 				Handle = device.Handle;
 				Vk = (VkDevice.FunctionTable*)Unsafe.AsPointer(ref device.PInvoke);
 				VkQueue queue;
@@ -1372,6 +1395,9 @@ namespace LELEngine.Graphics.Vulkan
 				case RetiredKind.AccelerationStructure:
 					Vk->vkDestroyAccelerationStructureKHR.Invoke(Handle, new VkAccelerationStructureKHR(item.Handle), null);
 					break;
+				case RetiredKind.Memory:
+					Vma.PInvoke.vmaFreeMemory(Allocator, new VmaAllocation(item.Allocation));
+					break;
 			}
 		}
 
@@ -1668,6 +1694,9 @@ namespace LELEngine.Graphics.Vulkan
 			caps.ConservativeRasterization = HasConservativeRasterization;
 			caps.CompilesBlockEveryThread = false;
 			caps.AsyncCompute = computeStream != null;
+			caps.IntegratedGpu = properties.DeviceType == VkPhysicalDeviceType.IntegratedGpu;
+			caps.TextureAliasing = true;
+			caps.FramesInFlight = FramesAhead;
 			// Measured on the Radeon 780M (driver 2.0.353): colour attachments are never compressed, a clear writes every texel.
 			caps.FastColorClears = !(properties.VendorID == 0x1002 && properties.DeviceType == VkPhysicalDeviceType.IntegratedGpu);
 		}
@@ -1733,7 +1762,10 @@ namespace LELEngine.Graphics.Vulkan
 		PipelineLayout,
 		Swapchain,
 		Semaphore,
-		AccelerationStructure
+		AccelerationStructure,
+
+		/// <summary>A block of memory textures were placed in (VulkanDeviceAliasing.cs).</summary>
+		Memory
 	}
 
 	/// <summary>Vulkan's format behind a texel format, and what the device does with it.</summary>

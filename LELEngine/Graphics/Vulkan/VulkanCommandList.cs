@@ -1094,6 +1094,7 @@ namespace LELEngine.Graphics.Vulkan
 			if (compute && !ComputeCanBind(current))
 			{
 				UseGraphicsQueue();
+				NoteComputeFallback(current);
 			}
 
 			NoteDispatch(current, arguments);

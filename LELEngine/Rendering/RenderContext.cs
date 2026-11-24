@@ -16,6 +16,12 @@ namespace LELEngine.Rendering
 		public Renderer Renderer;
 		public RenderSettings Settings;
 
+		/// <summary>The frame's declared resources: the transient textures a pass declared in its setup (<see cref="RenderPass.Setup" />).</summary>
+		public FrameGraph Frame;
+
+		/// <summary>The camera's place in the frame's stack (its frame textures' names are its own).</summary>
+		public int CameraIndex;
+
 		public Camera Camera;
 
 		/// <summary>The layers the camera draws (bit n = layer n): <see cref="Renderers" /> are filtered by it, the GPU culling tests it.</summary>
@@ -84,6 +90,25 @@ namespace LELEngine.Rendering
 		public bool Hides(GameObject go)
 		{
 			return HiddenObjects != null && go != null && HiddenObjects(go);
+		}
+
+		/// <summary>
+		///     The compute work of the pass that follows (dispatches, copies, uploads, acceleration structure builds) may run
+		///     beside the graphics work around it, on the GPU's asynchronous compute queue when the renderer uses it this frame
+		///     (<see cref="Renderer.AsyncCompute" />): for the part of a pass whose other parts draw, or whose inputs the
+		///     passes just before it make. Draws and what reads depth textures stay on the graphics queue; the device orders
+		///     every use after the other queue's, so the result is the same either way. Profiler sections split after it time
+		///     the compute queue's work. Ends with <see cref="EndAsyncCompute" /> or the pass. True when the part runs there.
+		/// </summary>
+		public bool BeginAsyncCompute()
+		{
+			return Renderer != null && Renderer.BeginAsyncPart();
+		}
+
+		/// <summary>Ends the part begun by <see cref="BeginAsyncCompute" />: what follows is the graphics queue's (split a profiler section after it).</summary>
+		public void EndAsyncCompute()
+		{
+			Renderer?.EndAsyncPart();
 		}
 
 		/// <summary>HDR color + depth the scene is rendered into before post-processing.</summary>
