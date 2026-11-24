@@ -411,7 +411,8 @@ namespace LELEngine.Rendering.Passes
 			TrailRenderer trail = entry.Trail;
 			Behaviour custom = entry.Custom;
 			Material material = entry.Material;
-			ShaderProgram program = material.Program;
+			// The shader's ray query variant while what it lights per fragment traces rays (its shadows, voxel cones).
+			ShaderProgram program = Lighting.RayQueryProgram(material.Program, true);
 			bool entryShadows = trail != null ? trail.receiveShadows : custom == null && renderer.ReceiveShadows;
 			bool entryGI = trail != null ? trail.receiveGI : custom == null && renderer.ReceiveGI;
 			bool copied = false;

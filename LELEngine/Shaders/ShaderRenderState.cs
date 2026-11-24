@@ -88,6 +88,7 @@ namespace LELEngine.Shaders
 	///     SceneDepth On                               // On / Off: the shader reads the opaque scene's depth (Unity's _CameraDepthTexture, soft particles)
 	///     LowResolution On                            // On / Off: the material's objects draw at half the view's resolution (large soft blended surfaces)
 	///     Batching Off                                // On / Off: the material's objects are never merged into a static batch (Unity's DisableBatching tag)
+	///     RayQueries On                               // On / Off: the shader has a LEL_RAY_QUERY variant that traces the lighting's rays per fragment
 	///     </code>
 	///     A shader that blends or grabs without naming a queue goes to the Transparent queue. Blending, depth writes and
 	///     the depth test apply in the transparent pass (the opaque passes draw with their own depth state and no
@@ -122,6 +123,10 @@ namespace LELEngine.Shaders
 	///     Batching Off: a game build's static batching (<see cref="StaticBatch" />) moves the meshes it merges into one
 	///     space, so a shader that works from its object's own space (a billboard built around the object's origin, an
 	///     effect measured from its pivot or along its axes) would draw wrong in a batch: its objects stay as they are.
+	///     RayQueries On: the shader's variant compiled with LEL_RAY_QUERY (<see cref="ShaderProgram.GetRayQueryVariant" />,
+	///     the preamble enables GL_EXT_ray_query with it) traces rays per fragment: the transparent pass draws with it while
+	///     transparent surfaces trace their shadows, and the passes that draw per-fragment voxel cones while those trace the
+	///     scene's triangles (<see cref="Lighting.RayQueryProgram" />). Only on a device with ray queries.
 	/// </summary>
 	public sealed class ShaderRenderState
 	{
@@ -195,6 +200,9 @@ namespace LELEngine.Shaders
 		/// </summary>
 		public bool Batching = true;
 
+		/// <summary>RayQueries On: the shader has a variant that traces rays per fragment (<see cref="ShaderProgram.GetRayQueryVariant" />).</summary>
+		public bool RayQueries;
+
 		#endregion
 
 		#region PublicMethods
@@ -222,6 +230,7 @@ namespace LELEngine.Shaders
 				case "scenedepth":
 				case "lowresolution":
 				case "batching":
+				case "rayqueries":
 					return true;
 				default:
 					return false;
@@ -259,6 +268,8 @@ namespace LELEngine.Shaders
 					return ParseSwitch(rest, out LowResolution, out error);
 				case "batching":
 					return ParseSwitch(rest, out Batching, out error);
+				case "rayqueries":
+					return ParseSwitch(rest, out RayQueries, out error);
 				case "queue":
 				{
 					int? queue = MaterialQueue.Parse(rest);
@@ -352,6 +363,7 @@ namespace LELEngine.Shaders
 			LowResolution = other.LowResolution;
 			QueueDeclared = other.QueueDeclared;
 			Batching = other.Batching;
+			RayQueries = other.RayQueries;
 		}
 
 		/// <summary>

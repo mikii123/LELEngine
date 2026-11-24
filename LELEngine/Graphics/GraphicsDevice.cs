@@ -69,6 +69,12 @@ namespace LELEngine.Graphics
 		public bool RayTracingPositionFetch { get; internal set; }
 
 		/// <summary>
+		///     The GPU is a discrete one (memory of its own, not shared with the CPU: Vulkan's device type). False where the
+		///     API does not say (OpenGL).
+		/// </summary>
+		public bool DiscreteGpu { get; internal set; }
+
+		/// <summary>
 		///     Draws rasterize conservatively when their render state asks (<see cref="RenderState.ConservativeRasterization" />):
 		///     every pixel a triangle touches gets a fragment.
 		/// </summary>

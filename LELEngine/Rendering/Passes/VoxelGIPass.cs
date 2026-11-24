@@ -184,6 +184,7 @@ namespace LELEngine.Rendering.Passes
 				Release();
 				gi.VoxelTexture = null;
 				gi.VoxelVolume = default;
+				Lighting.VoxelRayScene = null;
 				return;
 			}
 
@@ -204,6 +205,8 @@ namespace LELEngine.Rendering.Passes
 			PartitionRenderers(context.GIRenderers ?? context.Renderers);
 			DetectGeometryChanges(gi);
 			rayScene = Lighting.VoxelRayTracingActive ? context.Renderer.LumenScene : null;
+			// The materials that trace their own cones (Lighting.RayQueryProgram) trace the same scene.
+			Lighting.VoxelRayScene = rayScene;
 			ReportCones(gi);
 
 			frameIndex++;
@@ -975,9 +978,12 @@ namespace LELEngine.Rendering.Passes
 			}
 			else if (rayScene != null)
 			{
+				int rays = Math.Clamp(Lighting.RayTracing.ConeRays, 1, RayTracingSettings.MaxConeRays);
+				string materials = Lighting.MaterialConeRays ? "the materials' own cones too" : "the materials' own cones are voxel cones";
+				string distance = Lighting.ConeHitPlane ? "the distance to the axis hit's plane" : "the distance along the axis";
 				cones = gi.TraceMode == GITraceMode.SdfDetail
-					? "SDF detail through the scene's triangles (a ray query for every cone's near field; no distance fields)"
-					: "SDF cones through the scene's triangles (a ray query along every cone's axis; no distance fields)";
+					? $"SDF detail through the scene's triangles (a ray query for every cone's near field; no distance fields; {materials})"
+					: $"SDF cones through the scene's triangles ({rays} ray quer{(rays == 1 ? "y" : "ies")} a cone, {distance}; no distance fields; {materials})";
 			}
 			else if (gi.DistanceFieldEnabled)
 			{

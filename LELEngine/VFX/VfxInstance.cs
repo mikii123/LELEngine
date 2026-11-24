@@ -275,6 +275,9 @@ namespace LELEngine.VFX
 		/// <summary>Some output casts shadows.</summary>
 		public bool HasShadowCasters { get; private set; }
 
+		/// <summary>Some lit output receives the directional lights' shadows (it reads their maps).</summary>
+		public bool ReadsShadowMaps { get; private set; }
+
 		/// <summary>The compiled programs in use (null until the first simulation, or when the graph does not compile).</summary>
 		public VfxProgramSet Programs => programs;
 
@@ -986,6 +989,7 @@ namespace LELEngine.VFX
 			Capacity = 0;
 			NeedsDepth = false;
 			HasShadowCasters = false;
+			ReadsShadowMaps = false;
 			for (int i = 0; i < set.Compiled.Systems.Count; i++)
 			{
 				VfxSystemDescription description = set.Compiled.Systems[i];
@@ -1011,6 +1015,7 @@ namespace LELEngine.VFX
 				{
 					NeedsDepth |= description.Outputs[o].SoftParticles;
 					HasShadowCasters |= description.Outputs[o].CastShadows && state.Programs.Outputs[o].Shadow != null;
+					ReadsShadowMaps |= description.Outputs[o].Lighting != VfxLightingMode.Unlit && description.Outputs[o].ReceiveShadows;
 				}
 
 				systems.Add(state);
@@ -1292,8 +1297,25 @@ namespace LELEngine.VFX
 		private static void SetSdfUniforms(ShaderProgram program)
 		{
 			GlobalIlluminationSettings gi = Lighting.GI;
-			// The system collides with the field (or conforms to it): built for it also while Lumen's rays trace the triangles.
-			Lighting.RequestDistanceField();
+			Rendering.Lumen.LumenScene rays = VfxRuntime.SceneRays;
+			if (program.TracesRays && rays != null && gi.Enabled)
+			{
+				// The kernel's ray query variant (Engine/VFX/VfxSdf.glsl): the GI's scene and the volume the field would cover.
+				program.SetVector3("sdfGridMin", gi.GridMin);
+				program.SetFloat("sdfGridSize", gi.GridSize);
+				program.SetInt("sdfResolution", gi.SdfResolution);
+				program.SetFloat("sdfMaxDistance", gi.SdfBandVoxels * gi.SdfVoxelSize);
+				rays.RayTracing.Bind();
+				return;
+			}
+
+			// The system collides with the field (or conforms to it): asked for while the GI's rays trace the triangles
+			// only where its kernels do not trace them (the ray query variants above do).
+			if (!Lighting.SceneRayTracingActive || !VfxRuntime.TraceScene)
+			{
+				Lighting.RequestDistanceField();
+			}
+
 			bool available = gi.DistanceFieldEnabled && gi.GlobalSdf != null && gi.Enabled;
 			if (available)
 			{

@@ -19,7 +19,8 @@ layout(local_size_x = 8, local_size_y = 8) in;
 #include "Engine/DirectionalLights.glsl"
 
 // Surface cache lighting, Lumen style, one thread per atlas texel:
-//   direct   = the directional lights that go into the GI, each with its shadows at the captured surface point, and
+//   direct   = the directional lights that go into the GI, each with its shadows at the captured surface point (its grid
+//              shadow map, or in the LEL_RAY_QUERY variant a ray towards it through the scene's triangles), and
 //              the local lights that go into the GI, blocked by the global distance field (or the scene's triangles,
 //              LEL_RAY_QUERY) towards them when they ask (recomputed every frame)
 //   indirect = radiosity interpolated from the card's probes (CardRadiosityProbes.shader: one probe per 4x4
@@ -35,6 +36,9 @@ uniform sampler2D RadiosityProbes;
 layout(binding = 0, rgba16f) uniform writeonly image2D FinalLighting;
 
 uniform ivec2 atlasRegion;        // texels to process (x = width, y = used rows)
+#ifdef LEL_RAY_QUERY
+uniform int cardTracedDirectional; // bit i: directional light i's shadow is traced (its grid map holds the transparent casters only)
+#endif
 
 // Bilinear interpolation of the radiosity probes around a texel, restricted to the probes of its own card
 // (cards are aligned to the 4x4 probe blocks, so no probe mixes two cards). Edge texels extrapolate from
@@ -100,6 +104,21 @@ float CardLightVisibility(vec3 position, vec3 localPos, vec3 N, vec3 lightPositi
 #endif
 }
 
+// How much of directional light i reaches a texel, per colour channel: its grid shadow map, or in the LEL_RAY_QUERY
+// variant for a traced light a ray from just off the card's point towards it through the scene's triangles (a surface
+// on the way blocks it; leaving the GI volume, the light gets through), tinted by the transparent casters of its map.
+vec3 CardDirectionalShadow(int i, vec3 position, vec3 localPos, vec3 N, vec3 L)
+{
+#ifdef LEL_RAY_QUERY
+	if ((cardTracedDirectional & (1 << i)) != 0)
+	{
+		vec3 origin = SceneRayOrigin(position, N, CardRayBias(localPos));
+		return SceneRayClear(origin, L, 0.0, 1e30) ? SampleLightTransmittanceRGB(i, position, N, L) : vec3(0.0);
+	}
+#endif
+	return SampleLightShadowRGB(i, position, N, L);
+}
+
 void main()
 {
 	// Whether the texel holds a point of a card, worked out without returning: the work group finds the local lights
@@ -139,7 +158,7 @@ void main()
 		if (giStrength > 0.0 && ndl > 0.0)
 		{
 			// Per channel: light through tinted transparent casters keeps their colour in the bounce.
-			direct += LelDirectionalRadiance(i) * (giStrength * ndl) * SampleLightShadowRGB(i, position, N, L);
+			direct += LelDirectionalRadiance(i) * (giStrength * ndl) * CardDirectionalShadow(i, position, localPos.xyz, N, L);
 		}
 	}
 

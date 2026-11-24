@@ -312,7 +312,8 @@ namespace LELEngine.Rendering.Lumen
 				if (rayTracing)
 				{
 					// The rays trace the triangles: the object is its renderer's own size (unmirrored, as the cards are
-					// captured), with or without a field (one still being built goes into the triangles only).
+					// captured; a mirror is the row's placement, SceneObject.Mirrored), with or without a field (one still
+					// being built goes into the triangles only).
 					giScale = new Vector3(Math.Abs(scale.X), Math.Abs(scale.Y), Math.Abs(scale.Z));
 					if (!(giScale.X > 0f && giScale.Y > 0f && giScale.Z > 0f))
 					{
@@ -350,6 +351,12 @@ namespace LELEngine.Rendering.Lumen
 				o.Field = field;
 				o.Uniform = uniform;
 				o.Scale = giScale;
+				o.Mirrored = scale.X < 0f || scale.Y < 0f || scale.Z < 0f;
+				if (o.Mirrored)
+				{
+					o.Placement = MirroredPlacement(renderer.transform.LocalToWorld);
+				}
+
 				o.Cards = cards;
 				o.IsStatic = wantStatic;
 				objects.Add(o);
@@ -527,11 +534,25 @@ namespace LELEngine.Rendering.Lumen
 			return changed;
 		}
 
-		/// <summary>The object's world-space bounding box (its scaled mesh bounds through its rotation and position).</summary>
+		/// <summary>
+		///     The placement of a renderer whose scale has a negative component: its local-to-world matrix with each axis made
+		///     unit (the scale goes to the scaled-local space), the mirror kept in the axes' directions.
+		/// </summary>
+		private static Matrix4 MirroredPlacement(Matrix4 localToWorld)
+		{
+			Vector3 x = localToWorld.Row0.Xyz;
+			Vector3 y = localToWorld.Row1.Xyz;
+			Vector3 z = localToWorld.Row2.Xyz;
+			x = x.LengthSquared > 1e-24f ? x.Normalized() : Vector3.UnitX;
+			y = y.LengthSquared > 1e-24f ? y.Normalized() : Vector3.UnitY;
+			z = z.LengthSquared > 1e-24f ? z.Normalized() : Vector3.UnitZ;
+			return new Matrix4(new Vector4(x, 0f), new Vector4(y, 0f), new Vector4(z, 0f), new Vector4(localToWorld.Row3.Xyz, 1f));
+		}
+
+		/// <summary>The object's world-space bounding box (its scaled mesh bounds through its placement).</summary>
 		private static ChangeRegion WorldBounds(SceneObject o)
 		{
-			Transform t = o.Renderer.transform;
-			Matrix4 localToWorld = Matrix4.CreateFromQuaternion(t.rotation) * Matrix4.CreateTranslation(t.position);
+			Matrix4 localToWorld = o.LocalToWorld();
 			Vector3 bmin = o.Renderer.Mesh.BoundsMin * o.Scale;
 			Vector3 bmax = o.Renderer.Mesh.BoundsMax * o.Scale;
 			Vector3 min = new Vector3(float.MaxValue);
@@ -596,8 +617,7 @@ namespace LELEngine.Rendering.Lumen
 
 			foreach (SceneObject o in objects)
 			{
-				Transform t = o.Renderer.transform;
-				Matrix4 localToWorld = Matrix4.CreateFromQuaternion(t.rotation) * Matrix4.CreateTranslation(t.position);
+				Matrix4 localToWorld = o.LocalToWorld();
 				Vector3 scale = o.Scale;
 				float uniform = o.Uniform;
 
@@ -731,8 +751,32 @@ namespace LELEngine.Rendering.Lumen
 			/// <summary>The scale the GI sees the object at (scaled-local space): the field's shape times <see cref="Uniform" />.</summary>
 			public Vector3 Scale;
 
+			/// <summary>
+			///     A component of the renderer's scale is negative (it, or a parent, mirrors or turns by a negative scale): the
+			///     scaled-local space is the unmirrored mesh's at its size (its field, its cards), and <see cref="Placement" />,
+			///     taken from the renderer's own matrix, carries the mirror and the turns, so the GI's object (the rows'
+			///     matrices, its instance in the top level) lies where the renderer draws it. A rotation and a position would
+			///     place it unmirrored, and the children of a mirrored parent turned the other way.
+			/// </summary>
+			public bool Mirrored;
+
+			/// <summary>With <see cref="Mirrored" />: scaled-local space to the world (the matrix's axes made unit, its position).</summary>
+			public Matrix4 Placement;
+
 			public SurfaceCardSet Cards;
 			public bool IsStatic;
+
+			/// <summary>Scaled-local space to the world: the renderer's rotation and position, or its <see cref="Placement" />.</summary>
+			public Matrix4 LocalToWorld()
+			{
+				if (Mirrored)
+				{
+					return Placement;
+				}
+
+				Transform t = Renderer.transform;
+				return Matrix4.CreateFromQuaternion(t.rotation) * Matrix4.CreateTranslation(t.position);
+			}
 		}
 
 		// A renderer's shape (the key of its scale), whether it held long enough to get its own field, and its field.

@@ -16,6 +16,14 @@ namespace LELEngine.VFX
 		{
 			public ComputeShader Initialize;
 			public ComputeShader Update;
+
+			/// <summary>
+			///     The kernels compiled with the ray query define (a system that reads the scene's distance field, on a device
+			///     with ray queries): they trace the scene's triangles instead while the GI's rays do; null otherwise.
+			/// </summary>
+			public ComputeShader InitializeRays;
+
+			public ComputeShader UpdateRays;
 			public readonly List<OutputPrograms> Outputs = new List<OutputPrograms>();
 		}
 
@@ -51,6 +59,8 @@ namespace LELEngine.VFX
 			{
 				system.Initialize?.Delete();
 				system.Update?.Delete();
+				system.InitializeRays?.Delete();
+				system.UpdateRays?.Delete();
 				foreach (OutputPrograms output in system.Outputs)
 				{
 					output.Draw?.Delete();
@@ -1124,7 +1134,8 @@ namespace LELEngine.VFX
 						continue;
 					}
 
-					ShaderProgram program = state.Programs.Initialize.Program;
+					ComputeShader initialize = Kernel(state, false);
+					ShaderProgram program = initialize.Program;
 					if (program != current)
 					{
 						program.Use();
@@ -1132,7 +1143,7 @@ namespace LELEngine.VFX
 					}
 
 					state.Instance.BindForKernel(state, program, false);
-					state.Programs.Initialize.DispatchIndirect(counterBuffer, (state.CounterBase + VfxCodegen.CounterInitDispatch) * sizeof(uint));
+					initialize.DispatchIndirect(counterBuffer, (state.CounterBase + VfxCodegen.CounterInitDispatch) * sizeof(uint));
 					stats.Dispatches++;
 					anyInit = true;
 				}
@@ -1145,7 +1156,8 @@ namespace LELEngine.VFX
 				current = null;
 				foreach (VfxSystemState state in layerScratch)
 				{
-					ShaderProgram program = state.Programs.Update.Program;
+					ComputeShader update = Kernel(state, true);
+					ShaderProgram program = update.Program;
 					if (program != current)
 					{
 						program.Use();
@@ -1155,11 +1167,11 @@ namespace LELEngine.VFX
 					state.Instance.BindForKernel(state, program, true);
 					if (state.Dense)
 					{
-						state.Programs.Update.Dispatch((state.Description.Capacity + VfxCodegen.GroupSize - 1) / VfxCodegen.GroupSize);
+						update.Dispatch((state.Description.Capacity + VfxCodegen.GroupSize - 1) / VfxCodegen.GroupSize);
 					}
 					else
 					{
-						state.Programs.Update.DispatchIndirect(counterBuffer, (state.CounterBase + VfxCodegen.CounterUpdateDispatch) * sizeof(uint));
+						update.DispatchIndirect(counterBuffer, (state.CounterBase + VfxCodegen.CounterUpdateDispatch) * sizeof(uint));
 					}
 					stats.Dispatches++;
 				}
@@ -1177,6 +1189,31 @@ namespace LELEngine.VFX
 		{
 			return a.ProgramOrder.CompareTo(b.ProgramOrder);
 		}
+
+		/// <summary>
+		///     A system's initialize or update kernel for this frame: the ray query variant of a system that reads the scene's
+		///     distance field (collisions, conforming, its samples) while the GI's rays trace the scene's triangles
+		///     (<see cref="SceneRays" />: no distance field is built then), the plain one otherwise.
+		/// </summary>
+		private static ComputeShader Kernel(VfxSystemState state, bool update)
+		{
+			VfxProgramSet.SystemPrograms kernels = state.Programs;
+			ComputeShader rays = update ? kernels.UpdateRays : kernels.InitializeRays;
+			return rays != null && SceneRays != null && TraceScene ? rays : update ? kernels.Update : kernels.Initialize;
+		}
+
+		/// <summary>
+		///     The effects that read the scene's surfaces trace its triangles while the GI's rays do (true), or ask for the
+		///     global distance field as they did before (false: a measurement switch, TestGame vfxrays=0).
+		/// </summary>
+		public static bool TraceScene = true;
+
+		/// <summary>
+		///     The scene whose triangles the effects that read the scene's surfaces trace this frame: the renderer's GI scene
+		///     while the GI's rays trace with ray queries and its top level exists (set by the simulation pass); null
+		///     otherwise (they read the global distance field, asking for it).
+		/// </summary>
+		internal static Rendering.Lumen.LumenScene SceneRays;
 
 		/// <summary>
 		///     A phase's dispatches are given: the next phase reads what they wrote (the device makes it visible), so its
@@ -1560,6 +1597,12 @@ namespace LELEngine.VFX
 				var programsOfSystem = new VfxProgramSet.SystemPrograms();
 				programsOfSystem.Initialize = Compute(set, system.Name + ".Initialize", system.InitSource, () => programsOfSystem.Initialize = null);
 				programsOfSystem.Update = Compute(set, system.Name + ".Update", system.UpdateSource, () => programsOfSystem.Update = null);
+				if (system.UsesSdf && GraphicsCapabilities.RayQueries)
+				{
+					// The kernels that trace the scene's triangles where the GI's rays do (no distance field then).
+					programsOfSystem.InitializeRays = Compute(set, system.Name + ".Initialize.Rays", system.InitSource, () => programsOfSystem.InitializeRays = null, ShaderProgram.RayQueryDefine);
+					programsOfSystem.UpdateRays = Compute(set, system.Name + ".Update.Rays", system.UpdateSource, () => programsOfSystem.UpdateRays = null, ShaderProgram.RayQueryDefine);
+				}
 				foreach (VfxOutputDescription output in system.Outputs)
 				{
 					var outputPrograms = new VfxProgramSet.OutputPrograms();
@@ -1642,9 +1685,9 @@ namespace LELEngine.VFX
 			}
 		}
 
-		private static ComputeShader Compute(VfxProgramSet set, string name, string source, Action drop)
+		private static ComputeShader Compute(VfxProgramSet set, string name, string source, Action drop, params string[] defines)
 		{
-			ShaderProgram program = ShaderProgram.StartFromSources("VFX/" + name, new[] { new KeyValuePair<ShaderStage, string>(ShaderStage.Compute, source) });
+			ShaderProgram program = ShaderProgram.StartFromSources("VFX/" + name, new[] { new KeyValuePair<ShaderStage, string>(ShaderStage.Compute, source) }, defines);
 			set.Started.Add((name, program, drop));
 			return ComputeShader.FromProgram(program);
 		}

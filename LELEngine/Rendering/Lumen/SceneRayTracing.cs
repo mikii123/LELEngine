@@ -89,8 +89,9 @@ namespace LELEngine.Rendering.Lumen
 				GeometryPool.GetRange(mesh, out int baseVertex, out _, out int firstIndex, out _);
 				ranges[i * 2] = (uint)firstIndex;
 				ranges[i * 2 + 1] = (uint)baseVertex;
-				Transform t = o.Renderer.transform;
-				topLevel.Add(bottom, Matrix4.CreateScale(o.Scale) * Matrix4.CreateFromQuaternion(t.rotation) * Matrix4.CreateTranslation(t.position), o.Index);
+				// A mirroring placement needs no flag: the rays tell a triangle's front in the mesh's own space, where the
+				// instance's mirror does not turn its winding.
+				topLevel.Add(bottom, Matrix4.CreateScale(o.Scale) * o.LocalToWorld(), o.Index);
 			}
 
 			topLevel.Build();

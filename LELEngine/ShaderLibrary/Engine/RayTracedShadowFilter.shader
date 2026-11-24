@@ -3,6 +3,7 @@
 #version 430
 
 #include "Engine/Sampling.glsl"
+#include "Engine/HistoryMeta.glsl"
 
 // Traced shadows (Rendering.Passes.RayTracedShadowPass), step 2: the frames' accumulation (Engine/RayTracedShadowTrace.shader)
 // smoothed over the neighbouring pixels of the same surface (a Gaussian of radius pixels, weighted by how well their
@@ -12,8 +13,11 @@
 // as it is, so only penumbrae pay for the filter.
 layout(local_size_x = 8, local_size_y = 8) in;
 
+// The meta's normal bits per axis (Engine/RayTracedShadowTrace.shader).
+const uint MetaNormalBits = 6u;
+
 uniform sampler2DArray AccumulatedMask;
-uniform sampler2D Meta;     // x: linear view depth (0: sky), zw: octahedral normal
+uniform usampler2D Meta;    // Engine/HistoryMeta.glsl: linear view depth (0: no surface the mask is read for), normal
 uniform ivec2 screenSize;
 uniform int layers;
 uniform int radius;         // pixels (0: a copy)
@@ -29,8 +33,9 @@ void main()
 	}
 
 	// A pixel the trace left (no traced light reaches it): nothing reads the mask there.
-	vec4 center = texelFetch(Meta, pixel, 0);
-	if (center.y < 0.5)
+	uint centerMeta = texelFetch(Meta, pixel, 0).r;
+	float centerDepth = HistoryMetaDepth(centerMeta);
+	if (centerDepth <= 0.0)
 	{
 		return;
 	}
@@ -53,8 +58,8 @@ void main()
 		return;
 	}
 
-	vec3 normal = OctahedralToDirection(center.zw);
-	float tolerance = 0.02 * center.x + 0.02;
+	vec3 normal = HistoryMetaNormal(centerMeta, MetaNormalBits);
+	float tolerance = 0.02 * centerDepth + 0.02;
 	float sigma2 = float(radius * radius) * 0.5 + 0.25;
 	vec4 sum[3] = vec4[3](vec4(0.0), vec4(0.0), vec4(0.0));
 	float weightSum = 0.0;
@@ -68,18 +73,19 @@ void main()
 				continue;
 			}
 
-			vec4 meta = texelFetch(Meta, tap, 0);
-			if (meta.y < 0.5)
+			uint meta = texelFetch(Meta, tap, 0).r;
+			float depth = HistoryMetaDepth(meta);
+			if (depth <= 0.0)
 			{
 				continue;
 			}
 
 			// The normals' agreement to the 8th power, by squaring.
-			float facing = max(dot(OctahedralToDirection(meta.zw), normal), 0.0);
+			float facing = max(dot(HistoryMetaNormal(meta, MetaNormalBits), normal), 0.0);
 			facing *= facing;
 			facing *= facing;
 			float w = exp(-float(dx * dx + dy * dy) / sigma2)
-				* clamp(1.0 - abs(meta.x - center.x) / tolerance, 0.0, 1.0)
+				* clamp(1.0 - abs(depth - centerDepth) / tolerance, 0.0, 1.0)
 				* facing * facing;
 			if (w <= 0.0)
 			{

@@ -65,14 +65,20 @@ namespace LELEngine.Rendering.Passes
 			IReadOnlyList<DirectionalLight> lights = DirectionalLightBuffer.Shining;
 			cascades.Clear();
 			TileCount = 0;
+			Lighting.DirectionalShadowMapsHoldRest = false;
 
-			if (!settings.Enabled || context.Camera == null || DirectionalLightBuffer.ShadowedCount == 0)
+			// While the shadows are traced the maps may hold only what the rays do not see, or nothing (nothing reads them).
+			DirectionalShadowMaps holds = settings.Enabled && context.Camera != null && DirectionalLightBuffer.ShadowedCount > 0 ? DirectionalShadowMapReaders.Decide(context) : DirectionalShadowMaps.All;
+			if (!settings.Enabled || context.Camera == null || DirectionalLightBuffer.ShadowedCount == 0 || holds == DirectionalShadowMaps.None)
 			{
 				Lighting.ShadowMap = null;
 				Lighting.ShadowTransmittance = null;
 				Lighting.CameraShadows.Upload(cascades);
 				return;
 			}
+
+			bool opaqueCasters = holds == DirectionalShadowMaps.All;
+			Lighting.DirectionalShadowMapsHoldRest = !opaqueCasters;
 
 			// The first shadowed light's map as it always was; the other lights' maps in a column beside it.
 			Layout(settings.Cascades, settings.MapSize, out int mainCount, out int mainColumns, out int mainRows, out int mainTile);
@@ -138,7 +144,8 @@ namespace LELEngine.Rendering.Passes
 				// caster the camera does not see still throws its shadow into the picture.
 				Matrix4 tileViewProjection = views[i] * projections[i];
 				tileCulling.Begin(tileViewProjection, culled);
-				if (gpuDriven)
+				// Without the opaque casters only the buckets that draw their own shadow read the culling.
+				if (gpuDriven && (opaqueCasters || gpu.FirstOwnPassBucket < gpu.Buckets.Count))
 				{
 					// The culling dispatch binds its own program: the depth program is bound after it. The casters are
 					// the lighting camera's layers (the tables hold every camera's renderers).
@@ -158,14 +165,20 @@ namespace LELEngine.Rendering.Passes
 
 				if (gpuDriven)
 				{
-					gpu.DrawShadowCasters();
+					// Without the opaque casters (traced) the plain buckets are left out; the casters that draw their own
+					// shadow follow as always.
+					if (opaqueCasters)
+					{
+						gpu.DrawShadowCasters();
+					}
+
 					DrawOwnPassCasters(gpu, context, i);
 				}
 				else
 				{
 					foreach (MeshRenderer renderer in context.Renderers)
 					{
-						if (renderer.CastShadows && tileCulling.IsVisible(renderer))
+						if (opaqueCasters && renderer.CastShadows && tileCulling.IsVisible(renderer))
 						{
 							renderer.RenderShadowCastersWith(context.DepthOnlyProgram);
 						}

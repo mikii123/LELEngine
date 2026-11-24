@@ -88,8 +88,9 @@ namespace LELEngine.Rendering.Passes
 			profiler.Split("SurfaceCache.capture");
 			CaptureCards(scene);
 
+			// With the directional lights' shadows traced on the cards the grid maps hold only the transparent casters.
 			profiler.Split("SurfaceCache.shadow");
-			gridShadow.Render(context, context.GIRenderers ?? context.Renderers, gi);
+			gridShadow.Render(context, context.GIRenderers ?? context.Renderers, gi, !TracesDirectionalShadows);
 
 			// The radiosity reads what is ready by now (the cards, last frame's light): beside the graphics work after it.
 			context.BeginAsyncCompute();
@@ -112,6 +113,10 @@ namespace LELEngine.Rendering.Passes
 		#endregion
 
 		#region PrivateMethods
+
+		// The cards' directional shadows come from rays this frame: the lighting programs are the ray query variants and
+		// the project asks for it (Lighting.SurfaceCacheTracedShadows).
+		private bool TracesDirectionalShadows => traceRayQueries && Lighting.SurfaceCacheTracedShadows;
 
 		private void Release()
 		{
@@ -176,9 +181,11 @@ namespace LELEngine.Rendering.Passes
 							continue;
 						}
 
-						// The same conventional material inputs the voxelizer reads.
+						// The same conventional material inputs the voxelizer reads. The mesh as it is, in the object's
+						// unmirrored scaled-local space (a mirroring renderer's mirrored twin would show only back faces
+						// here, and the cards' normals would point inwards).
 						GISurface.SetUniforms(capture, material);
-						renderer.RenderSubMeshWith(capture, s);
+						GeometryPool.DrawSubMesh(renderer.Mesh, s);
 					}
 				}
 
@@ -287,6 +294,7 @@ namespace LELEngine.Rendering.Passes
 			// The local lights' shadow rays (GI shadows) trace the global distance field (or the scene's triangles).
 			Lighting.SetSdfUniforms(program);
 			gridShadow.SetUniforms(program);
+			program.SetInt("cardTracedDirectional", TracesDirectionalShadows ? DirectionalLightBuffer.ShadowedMask : 0);
 			program.SetTexture("CardIndex", atlas.CardIndex);
 			program.SetTexture("CardAlbedo", atlas.Albedo);
 			program.SetTexture("CardNormal", atlas.Normal);

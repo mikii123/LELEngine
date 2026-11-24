@@ -11,6 +11,7 @@ layout(local_size_x = 8, local_size_y = 8) in;
 #include "Engine/SurfaceCache.glsl"
 #include "Engine/SceneRayQuery.glsl"
 #include "Engine/Sampling.glsl"
+#include "Engine/HistoryMeta.glsl"
 #include "Engine/Sky.glsl"
 
 // Traced reflections of glossy surfaces (Rendering.Passes.RayTracedReflectionPass, after the screen probe gather; only in
@@ -23,13 +24,20 @@ layout(local_size_x = 8, local_size_y = 8) in;
 // (fewer frames the smoother the surface: a mirror's reflection moves with the view); Engine/RayTracedReflectionFilter.shader
 // then smooths it over the neighbours of the same surface (wider the rougher) and blends it into the screen probes'
 // reflection over the last quarter of the roughness range, so rougher surfaces keep theirs.
+// With LEL_REFLECTION_TILES the work groups are the 8 x 8 tiles Engine/RayTracedReflectionTiles.shader listed (those
+// with a glossy pixel), dispatched indirectly; a tile left out writes nothing, so history and neighbours are only taken
+// from tiles flagged in their frame. Without it every texel of the resolve runs.
+// History: rgb the accumulated reflection, a the frames it holds; meta: Engine/HistoryMeta.glsl (view depth, the normal in
+// 8 bits an axis; 0: not traced, the history there is not this frame's).
+
+const uint MetaNormalBits = 8u;
 
 uniform sampler2D NormalRoughness;
 uniform sampler2D Motion;              // world-space motion since the previous frame (xyz), w = 1 where the surface moved
 uniform sampler2D ProbeSpecular;       // the screen probes' reflection (rgb), a linear view depth
 uniform sampler2D FinalLighting;       // the surface cache's lighting
-uniform sampler2D HistoryReflection;   // the previous frame's traced reflection (rgb)
-uniform sampler2D HistoryMeta;         // x linear view depth (0: none), y frames, zw octahedral normal
+uniform sampler2D HistoryReflection;   // the previous frame's traced reflection (rgb), a its frames
+uniform usampler2D HistoryMeta;        // the previous frame's meta (0: none)
 uniform sampler2D SceneDepth;
 
 uniform mat4 invViewProjection;
@@ -45,7 +53,20 @@ uniform int frameIndex;
 uniform int historyValid;
 
 layout(binding = 1, rgba16f) uniform writeonly image2D OutHistory;
-layout(binding = 2, rgba16f) uniform writeonly image2D OutMeta;
+layout(binding = 2, r32ui) uniform writeonly uimage2D OutMeta;
+
+#ifdef LEL_REFLECTION_TILES
+layout(std430, binding = 0) readonly buffer TileList
+{
+	uint numGroupsX;
+	uint numGroupsY;
+	uint numGroupsZ;
+	uint padding;
+	uint tiles[];
+};
+
+uniform usampler2D PreviousTileFlags;  // the previous frame's flags: which tiles it traced
+#endif
 
 // A sample at most this many times the probes' reflection there (luminance, plus one unit of radiance).
 const float SampleClamp = 4.0;
@@ -67,22 +88,37 @@ vec3 SampleGGXVisibleNormal(vec3 Ve, float alpha, vec2 u)
 	return normalize(vec3(alpha * Nh.x, alpha * Nh.y, max(Nh.z, 0.0)));
 }
 
+// The previous frame traced this texel (its tile was listed then).
+bool TracedLastFrame(ivec2 tap)
+{
+#ifdef LEL_REFLECTION_TILES
+	return texelFetch(PreviousTileFlags, tap >> 3, 0).r != 0u;
+#else
+	return true;
+#endif
+}
+
 void main()
 {
+#ifdef LEL_REFLECTION_TILES
+	uint packedTile = tiles[gl_WorkGroupID.x];
+	ivec2 texel = ivec2(int(packedTile & 0xFFFFu), int(packedTile >> 16)) * 8 + ivec2(gl_LocalInvocationID.xy);
+#else
 	ivec2 texel = ivec2(gl_GlobalInvocationID.xy);
+#endif
 	if (any(greaterThanEqual(texel, outputSize)))
 	{
 		return;
 	}
 
-	// Nothing else is read or written for a surface too rough to trace (most pixels): its meta says so.
+	// Nothing else is read or written for a surface too rough to trace: its meta says so.
 	ivec2 pixel = min(ivec2((vec2(texel) + 0.5) * vec2(screenSize) / vec2(outputSize)), screenSize - 1);
 	vec4 nr = texelFetch(NormalRoughness, pixel, 0);
 	float roughness = nr.w > 0.0 ? nr.w : 0.6;
 	float depth = roughness < maxRoughness ? texelFetch(SceneDepth, pixel, 0).r : 1.0;
 	if (depth >= 1.0)
 	{
-		imageStore(OutMeta, texel, vec4(0.0));
+		imageStore(OutMeta, texel, uvec4(0u));
 		return;
 	}
 
@@ -145,28 +181,30 @@ void main()
 			{
 				ivec2 offset = ivec2(k & 1, k >> 1);
 				ivec2 tap = base + offset;
-				if (any(lessThan(tap, ivec2(0))) || any(greaterThanEqual(tap, outputSize)))
+				if (any(lessThan(tap, ivec2(0))) || any(greaterThanEqual(tap, outputSize)) || !TracedLastFrame(tap))
 				{
 					continue;
 				}
 
-				vec4 meta = texelFetch(HistoryMeta, tap, 0);
-				if (meta.y < 0.5)
+				uint meta = texelFetch(HistoryMeta, tap, 0).r;
+				if (meta == 0u)
 				{
 					continue;
 				}
+
+				vec4 previous = texelFetch(HistoryReflection, tap, 0);
 
 				float w = (offset.x == 1 ? f.x : 1.0 - f.x) * (offset.y == 1 ? f.y : 1.0 - f.y)
-					* clamp(1.0 - abs(meta.x - expectedDepth) / tolerance, 0.0, 1.0)
-					* smoothstep(0.9, 0.98, dot(OctahedralToDirection(meta.zw), N));
+					* clamp(1.0 - abs(HistoryMetaDepth(meta) - expectedDepth) / tolerance, 0.0, 1.0)
+					* smoothstep(0.9, 0.98, dot(HistoryMetaNormal(meta, MetaNormalBits), N));
 				if (w <= 0.0)
 				{
 					continue;
 				}
 
-				sum += texelFetch(HistoryReflection, tap, 0).rgb * w;
+				sum += previous.rgb * w;
 				weightSum += w;
-				framesSum += meta.y * w;
+				framesSum += previous.a * w;
 			}
 
 			if (weightSum > 0.05)
@@ -178,9 +216,9 @@ void main()
 		}
 	}
 
-	// a: the roughness, for the filter's width.
-	imageStore(OutHistory, texel, vec4(traced, roughness));
-	imageStore(OutMeta, texel, vec4(viewDepth, frames, DirectionToOctahedral(N)));
+	// a: the frames accumulated (the filter reads the roughness from the normals).
+	imageStore(OutHistory, texel, vec4(traced, frames));
+	imageStore(OutMeta, texel, uvec4(PackHistoryMeta(viewDepth, N, MetaNormalBits, 0u)));
 }
 #else
 void main()

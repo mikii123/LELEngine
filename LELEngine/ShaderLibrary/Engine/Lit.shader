@@ -4,6 +4,9 @@ Color ("Color", Color) = (1, 1, 1, 1)
 Roughness ("Roughness", Range(0, 1)) = 0.6
 // The LEL_SURFACE_CAPTURE variant writes the surface instead of lighting it (impostor bakes).
 SurfaceCapture On
+// The LEL_RAY_QUERY variant traces its voxel cones' rays per fragment where voxel cone tracing's rays trace the scene's
+// triangles and the view has no screen-space resolve (the other cameras of a stack).
+RayQueries On
 /////Properties
 
 //Vertex

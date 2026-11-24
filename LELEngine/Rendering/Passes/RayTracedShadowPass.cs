@@ -199,7 +199,8 @@ namespace LELEngine.Rendering.Passes
 				Mask = published,
 				LocalSlots = slots,
 				DirectionalLights = directional,
-				DirectionalLayer = Math.Max(directionalLayer, 0)
+				DirectionalLayer = Math.Max(directionalLayer, 0),
+				TopLevel = scene.TopLevel
 			};
 			Lighting.RayShadowBinding.EverPublished = true;
 
@@ -336,11 +337,13 @@ namespace LELEngine.Rendering.Passes
 			historyValid = false;
 			GraphicsDevice device = Gfx.Device;
 			const TextureUsage written = TextureUsage.Sampled | TextureUsage.Storage;
+			// The accumulation in RGBA8 (rounded at random, Engine/RayTracedShadowTrace.shader), the surface it belongs to in
+			// one 32-bit word a pixel (Engine/HistoryMeta.glsl).
 			for (int i = 0; i < 2; i++)
 			{
-				accumulated[i] = device.CreateTexture(TextureDescriptor.Texture2DArray(TextureFormat.RGBA16F, width, height, layers, 1, written, "Traced shadows accumulated " + i));
+				accumulated[i] = device.CreateTexture(TextureDescriptor.Texture2DArray(TextureFormat.RGBA8, width, height, layers, 1, written, "Traced shadows accumulated " + i));
 				accumulated[i].Sampler = Samplers.PointClamp;
-				meta[i] = device.CreateTexture(TextureDescriptor.Texture2D(TextureFormat.RGBA16F, width, height, 1, written, "Traced shadows history " + i));
+				meta[i] = device.CreateTexture(TextureDescriptor.Texture2D(TextureFormat.R32UI, width, height, 1, written, "Traced shadows history " + i));
 				meta[i].Sampler = Samplers.PointClamp;
 			}
 
@@ -353,7 +356,7 @@ namespace LELEngine.Rendering.Passes
 			commands.ClearTexture(accumulated[0], 0, lit);
 			commands.ClearTexture(accumulated[1], 0, lit);
 			commands.ClearTexture(mask, 0, lit);
-			long bytes = (long)width * height * (layers * (8 * 2 + 4) + 8 * 2);
+			long bytes = (long)width * height * (layers * (4 * 2 + 4) + 4 * 2);
 			Console.WriteLine($"[RayTracing] Traced shadows' mask {width}x{height}, {layers} layer{(layers == 1 ? "" : "s")} (~{bytes / 1048576.0:0} MB with their history)");
 		}
 
