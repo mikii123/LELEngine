@@ -21,6 +21,8 @@ namespace LELEngine.Rendering.Passes
 
 		public override RenderPassScope Scope => RenderPassScope.Frame;
 
+		public override bool AsyncCompute => true;
+
 		#endregion
 
 		#region PrivateFields

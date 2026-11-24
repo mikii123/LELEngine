@@ -36,6 +36,8 @@ namespace LELEngine.Rendering.Passes
 
 		public override RenderPassScope Scope => RenderPassScope.Frame;
 
+		public override bool AsyncCompute => true;
+
 		/// <summary>Octahedral radiance maps of the probes (null while the cache does not run).</summary>
 		public GpuTexture Atlas => atlas;
 

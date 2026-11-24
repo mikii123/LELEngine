@@ -282,5 +282,29 @@ namespace LELEngine.Graphics
 		public abstract void WriteTimestamp(GpuTimestamp timestamp);
 
 		#endregion
+
+		#region Queues
+
+		/// <summary>
+		///     Starts work that may run beside the graphics work around it (<see cref="DeviceCapabilities.AsyncCompute" />):
+		///     until <see cref="EndAsyncCompute" />, the device gives dispatches, buffer and texture copies, colour texture
+		///     clears, uploads, acceleration structure builds and timestamps to the GPU's compute queue, which runs them while
+		///     the graphics queue runs what was given before and after them. What comes out is what the order given makes:
+		///     a command on either queue waits for the commands of the other whose resources it uses (a read for the writes
+		///     before it, a write for the reads and writes before it). Render passes, draws, blits, mip generation and what
+		///     uses depth textures stay on the graphics queue. A device without such a queue (OpenGL) runs everything in
+		///     order. Not nested.
+		/// </summary>
+		public virtual void BeginAsyncCompute()
+		{ }
+
+		/// <summary>Ends the work begun by <see cref="BeginAsyncCompute" />: it is sent to the GPU now, and what follows goes to the graphics queue.</summary>
+		public virtual void EndAsyncCompute()
+		{ }
+
+		/// <summary>Commands are given between <see cref="BeginAsyncCompute" /> and <see cref="EndAsyncCompute" />.</summary>
+		public virtual bool InAsyncCompute => false;
+
+		#endregion
 	}
 }

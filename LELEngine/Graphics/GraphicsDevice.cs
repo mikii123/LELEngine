@@ -64,6 +64,21 @@ namespace LELEngine.Graphics
 
 		/// <summary>The driver holds every thread of the process while one compiles a program (compiling in another process helps).</summary>
 		public bool CompilesBlockEveryThread { get; internal set; }
+
+		/// <summary>
+		///     Clearing a whole colour attachment costs next to nothing (the driver clears its compression, not the texels):
+		///     a pass may clear what it will mostly draw over anyway. False where a clear was measured to write every texel
+		///     (AMD's Vulkan driver on its integrated GPUs: a 1280 x 720 RGBA16F clear ~0.08 ms on the Radeon 780M against
+		///     ~0 on OpenGL): passes that can avoid such a clear do.
+		/// </summary>
+		public bool FastColorClears { get; internal set; } = true;
+
+		/// <summary>
+		///     The GPU runs compute work on a queue of its own beside the graphics queue: what is given between
+		///     <see cref="CommandList.BeginAsyncCompute" /> and <see cref="CommandList.EndAsyncCompute" /> may overlap the
+		///     graphics work around it. False: everything runs in the order given, on one queue.
+		/// </summary>
+		public bool AsyncCompute { get; internal set; }
 	}
 
 	/// <summary>
@@ -79,6 +94,14 @@ namespace LELEngine.Graphics
 	{
 		/// <summary>The API the device will be made for; changing it after the first window has no effect.</summary>
 		public static GraphicsApi RequestedApi { get; set; } = GraphicsApi.OpenGL;
+
+		/// <summary>
+		///     The device is made with a queue for asynchronous compute where the GPU has one
+		///     (<see cref="DeviceCapabilities.AsyncCompute" />); set before the first window (default: LEL_ASYNC_COMPUTE=1).
+		///     Off by default: on the Radeon 780M the compute queue gained at most 2 % of a frame and lost several times
+		///     that when another program used the GPU at the same time (the compute queue then waits behind it).
+		/// </summary>
+		public static bool RequestAsyncCompute { get; set; } = Environment.GetEnvironmentVariable("LEL_ASYNC_COMPUTE") == "1";
 
 		/// <summary>
 		///     The API that was asked for and could not be had on this machine, when the device was made for another

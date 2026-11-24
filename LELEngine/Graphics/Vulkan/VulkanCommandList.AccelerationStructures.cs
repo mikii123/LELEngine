@@ -65,6 +65,8 @@ namespace LELEngine.Graphics.Vulkan
 				return;
 			}
 
+			UseComputeQueue(true);
+
 			VulkanAccelerationStructure[] structures = new VulkanAccelerationStructure[count];
 			for (int i = 0; i < count; i++)
 			{
@@ -186,6 +188,7 @@ namespace LELEngine.Graphics.Vulkan
 		{
 			RequireRayQueries();
 			EndRenderPass();
+			UseComputeQueue(true);
 			VulkanAccelerationStructure structure = (VulkanAccelerationStructure)topLevel;
 			RequireBuildable(structure, AccelerationStructureLevel.Top, update);
 			int count = instances.Length;
@@ -265,6 +268,11 @@ namespace LELEngine.Graphics.Vulkan
 		/// </summary>
 		internal void BuildEmptyTopLevel(VulkanAccelerationStructure structure)
 		{
+			OnGraphicsQueue(() => RecordEmptyTopLevel(structure));
+		}
+
+		private void RecordEmptyTopLevel(VulkanAccelerationStructure structure)
+		{
 			ulong scratch = device.Scratch(structure.BuildScratchSize);
 			SyncBatch setup = device.SetupBatch;
 			ApplyTarget(structure.Storage, setup, Sync.AccelerationBuild, true);
@@ -299,6 +307,7 @@ namespace LELEngine.Graphics.Vulkan
 		{
 			RequireRayQueries();
 			EndRenderPass();
+			UseComputeQueue(true);
 			VulkanAccelerationStructure from = (VulkanAccelerationStructure)source;
 			VulkanAccelerationStructure to = (VulkanAccelerationStructure)destination;
 			if (from == null || to == null || from.IsDisposed || to.IsDisposed || from == to)

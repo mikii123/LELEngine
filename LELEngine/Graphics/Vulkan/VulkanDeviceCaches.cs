@@ -112,15 +112,56 @@ namespace LELEngine.Graphics.Vulkan
 		/// </summary>
 		internal VkCommandBuffer BeginAside()
 		{
-			return BeginCommandBuffer();
+			return BeginCommandBuffer(graphicsStream);
 		}
 
-		/// <summary>Sends a command buffer of <see cref="BeginAside" /> and waits until the GPU has executed it, and with it everything sent before.</summary>
+		/// <summary>
+		///     Sends a command buffer of <see cref="BeginAside" /> to the graphics queue and waits until the GPU has executed
+		///     it, and with it everything sent before (the compute queue's work sent before included: the copy waits for it).
+		/// </summary>
 		internal void SubmitAsideAndWait(VkCommandBuffer commands)
 		{
 			Check(Vk->vkEndCommandBuffer.Invoke(commands), "vkEndCommandBuffer");
 			VkCommandBufferSubmitInfo buffer = new VkCommandBufferSubmitInfo { CommandBuffer = commands };
 			VkSubmitInfo2 submit = new VkSubmitInfo2 { CommandBufferInfoCount = 1, CommandBufferInfos = &buffer };
+			List<VkSemaphore> waited = null;
+			if (computeStream != null && computeStream.SubmittedValue > 0)
+			{
+				// After the compute queue's work sent before, also when the CPU knows it has run (the device's order).
+				submitWaits.Add(new VkSemaphoreSubmitInfo { Semaphore = computeStream.Timeline, Value = (nint)computeStream.SubmittedValue, StageMask = VkPipelineStageFlags2.AllCommandsBit });
+				waited = new List<VkSemaphore>();
+				foreach ((long _, VkSemaphore semaphore) in computeStream.BinarySignals)
+				{
+					submitWaits.Add(new VkSemaphoreSubmitInfo { Semaphore = semaphore, StageMask = VkPipelineStageFlags2.AllCommandsBit });
+					waited.Add(semaphore);
+				}
+
+				computeStream.BinarySignals.Clear();
+				graphicsStream.WaitedValue = System.Math.Max(graphicsStream.WaitedValue, computeStream.SubmittedValue);
+				semaphoreInfos = semaphoreInfos.Length >= submitWaits.Count ? semaphoreInfos : new VkSemaphoreSubmitInfo[submitWaits.Count * 2];
+				submitWaits.CopyTo(semaphoreInfos, 0);
+				submit.WaitSemaphoreInfoCount = submitWaits.Count;
+				submitWaits.Clear();
+			}
+
+			fixed (VkSemaphoreSubmitInfo* waits = semaphoreInfos)
+			{
+				submit.WaitSemaphoreInfos = waits;
+				SubmitAside(&submit, commands);
+			}
+
+			if (waited != null)
+			{
+				foreach (VkSemaphore semaphore in waited)
+				{
+					ReturnSemaphore(semaphore);
+				}
+			}
+		}
+
+		/// <summary>Sends an aside submission and waits for it (<see cref="SubmitAsideAndWait" />).</summary>
+		private void SubmitAside(VkSubmitInfo2* submit, VkCommandBuffer commands)
+		{
 			VkFence fence;
 			if (freeFences.Count > 0)
 			{
@@ -132,11 +173,11 @@ namespace LELEngine.Graphics.Vulkan
 				Check(Vk->vkCreateFence.Invoke(Handle, &fenceInfo, null, &fence), "vkCreateFence");
 			}
 
-			Check(Vk->vkQueueSubmit2.Invoke(Queue, 1, &submit, fence), "vkQueueSubmit2");
+			Check(Vk->vkQueueSubmit2.Invoke(Queue, 1, submit, fence), "vkQueueSubmit2");
 			Check(Vk->vkWaitForFences.Invoke(Handle, 1, &fence, true, nint.MaxValue), "vkWaitForFences");
 			Vk->vkResetFences.Invoke(Handle, 1, &fence);
 			freeFences.Push(fence);
-			freeCommandBuffers.Push(commands);
+			graphicsStream.Free.Push(commands);
 			Poll();
 		}
 	}

@@ -40,6 +40,14 @@ namespace LELEngine.Rendering
 		/// <summary>When the pass runs in a camera stack (once, for the lighting camera, by default).</summary>
 		public virtual RenderPassScope Scope => RenderPassScope.LightingCamera;
 
+		/// <summary>
+		///     The pass's compute work may run beside the graphics work before and after it, on a GPU with a queue of its
+		///     own for compute (<see cref="CommandList.BeginAsyncCompute" />; <see cref="RenderSettings.AsyncCompute" />):
+		///     for passes whose dispatches do not need what the passes just before them draw. The order of what they
+		///     read and write is kept whatever the queue.
+		/// </summary>
+		public virtual bool AsyncCompute => false;
+
 		#endregion
 
 		#region PublicMethods

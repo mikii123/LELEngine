@@ -94,6 +94,15 @@ namespace LELEngine.Rendering
 		/// <summary>GPU time between the last section's end and the frame end stamp (idle: presentation back-pressure).</summary>
 		public double TailMilliseconds { get; private set; }
 
+		/// <summary>
+		///     Per section of the frame the timeline was last collected from (in Begin() order): its start and end in
+		///     milliseconds from the frame start stamp. Sections of work on an asynchronous compute queue
+		///     (<see cref="LELEngine.Graphics.CommandList.BeginAsyncCompute" />) overlap the others where the queues ran side by side.
+		/// </summary>
+		public IReadOnlyList<(string Name, double Start, double End)> Timeline => timeline;
+
+		private readonly List<(string Name, double Start, double End)> timeline = new List<(string Name, double Start, double End)>();
+
 		#endregion
 
 		#region PrivateFields
@@ -352,6 +361,7 @@ namespace LELEngine.Rendering
 				long previousEnd = -1;
 				double sectionWall = 0;
 				double sectionElapsed = 0;
+				timeline.Clear();
 				foreach (string name in order)
 				{
 					Entry entry = entries[name];
@@ -363,6 +373,7 @@ namespace LELEngine.Rendering
 
 					long start = entry.StartStamps[slot].Nanoseconds;
 					long end = entry.EndStamps[slot].Nanoseconds;
+					timeline.Add((name, (start - frameStart) / 1_000_000.0, (end - frameStart) / 1_000_000.0));
 					long elapsed = System.Math.Max(0L, end - start);
 					if (firstStart < 0)
 					{

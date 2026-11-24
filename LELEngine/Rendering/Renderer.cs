@@ -50,6 +50,69 @@ namespace LELEngine.Rendering
 		/// </summary>
 		public static readonly bool PassStatistics = Environment.GetEnvironmentVariable("LEL_PASS_STATS") == "1";
 
+		/// <summary>
+		///     LEL_GPU_TIMELINE=1: every renderer logs, every 120th frame of its own, where each GPU section started and ended
+		///     in the frame (`[GpuTimeline] ...`, milliseconds from the frame's start): the overlap of the asynchronous
+		///     compute queue's sections with the graphics queue's.
+		/// </summary>
+		public static readonly bool GpuTimeline = Environment.GetEnvironmentVariable("LEL_GPU_TIMELINE") == "1";
+
+		/// <summary>
+		///     LEL_ASYNC_PASSES=name,name: the passes (by <see cref="RenderPass.Name" />) whose compute work goes to the
+		///     asynchronous compute queue, in place of those that say so (<see cref="RenderPass.AsyncCompute" />): to measure
+		///     which passes gain from it. Empty: none.
+		/// </summary>
+		private static readonly string[] asyncPasses = Environment.GetEnvironmentVariable("LEL_ASYNC_PASSES")?.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+		/// <summary>
+		///     A measurement in one run, robust to what else the machine does: LEL_AB=async (the asynchronous compute queue),
+		///     LEL_AB=prepass (the geometry prepass's background drawn instead of a clear) or LEL_AB=transmittance (the
+		///     transparent shadows' maps cleared only where casters drew) is switched off for every other block of
+		///     LEL_AB_FRAMES frames (default 30; the pictures of such a run are not to be compared), and every 600 frames the
+		///     renderer logs the median frame time (wall clock from one frame's start to the next: the GPU's throughput when
+		///     it is the bottleneck) and GPU frame wall of both, leaving out the first frames of each block (`[AB] ...`).
+		/// </summary>
+		public static readonly string ABExperiment = Environment.GetEnvironmentVariable("LEL_AB");
+
+		private static readonly int abFrames = int.TryParse(Environment.GetEnvironmentVariable("LEL_AB_FRAMES"), out int frames) && frames > 4 ? frames : 30;
+
+		/// <summary>The frame being rendered is in a block with <see cref="ABExperiment" /> switched off.</summary>
+		public bool ABOff { get; private set; }
+
+		private long abLastStart;
+		private bool abLastOff;
+		private readonly List<double>[] abIntervals = { new List<double>(), new List<double>() };
+		private readonly List<double>[] abWalls = { new List<double>(), new List<double>() };
+
+		/// <summary>Notes the frame time of the frame before (by its block) and picks this frame's block.</summary>
+		private void NoteABFrame()
+		{
+			long now = System.Diagnostics.Stopwatch.GetTimestamp();
+			int inBlock = renderedFrames % abFrames;
+			if (abLastStart != 0 && inBlock > 3)
+			{
+				// The first frames of a block still have the other block's work in flight: left out.
+				int side = abLastOff ? 1 : 0;
+				abIntervals[side].Add((now - abLastStart) * 1000.0 / System.Diagnostics.Stopwatch.Frequency);
+				abWalls[side].Add(Profiler.FrameWallMilliseconds);
+			}
+
+			abLastStart = now;
+			ABOff = renderedFrames / abFrames % 2 == 1;
+			abLastOff = ABOff;
+			if (renderedFrames > 0 && renderedFrames % 600 == 0 && abIntervals[0].Count > 0 && abIntervals[1].Count > 0)
+			{
+				Console.WriteLine($"[AB] {ABExperiment} on: frame {Median(abIntervals[0]):0.000} ms, GPU wall {Median(abWalls[0]):0.000} ms ({abIntervals[0].Count} frames) | off: frame {Median(abIntervals[1]):0.000} ms, GPU wall {Median(abWalls[1]):0.000} ms ({abIntervals[1].Count} frames)");
+			}
+		}
+
+		private static double Median(List<double> values)
+		{
+			List<double> sorted = new List<double>(values);
+			sorted.Sort();
+			return sorted[sorted.Count / 2];
+		}
+
 		public Framebuffer SceneTarget { get; private set; }
 		public RenderTexture SceneColor => SceneTarget.ColorAttachments[0];
 		public RenderTexture SceneDepth => SceneTarget.DepthAttachment;
@@ -286,6 +349,11 @@ namespace LELEngine.Rendering
 		public void RenderFrame(Camera camera, IReadOnlyList<MeshRenderer> renderers, IReadOnlyList<Behaviour> behaviours, RenderQueue queue)
 		{
 			long started = System.Diagnostics.Stopwatch.GetTimestamp();
+			if (ABExperiment != null && !isTargetRenderer)
+			{
+				NoteABFrame();
+			}
+
 			long drawCalls = DrawStatistics.DrawCalls;
 			long triangles = DrawStatistics.Triangles;
 			long indirect = DrawStatistics.IndirectDrawCalls;
@@ -494,6 +562,19 @@ namespace LELEngine.Rendering
 				Console.WriteLine(line.ToString());
 			}
 
+			if (GpuTimeline && FrameIndex % 120 == 0)
+			{
+				// LEL_GPU_TIMELINE=1: where each section ran in the frame, both queues (an asynchronous compute section
+				// overlaps the graphics sections it ran beside).
+				var line = new System.Text.StringBuilder($"[GpuTimeline] frame {FrameIndex}: wall {Profiler.FrameWallMilliseconds:0.00} ms |");
+				foreach ((string name, double start, double end) in Profiler.Timeline)
+				{
+					line.Append($" {name} {start:0.00}-{end:0.00}");
+				}
+
+				Console.WriteLine(line.ToString());
+			}
+
 			if (Statistics.Active)
 			{
 				Statistics.Capture(this);
@@ -560,6 +641,16 @@ namespace LELEngine.Rendering
 
 		private int Execute(RenderPass pass, RenderContext context, string profileName, int executed)
 		{
+			// A pass whose compute work may overlap the graphics work around it gives it to the compute queue (its
+			// timestamps too: its sections time that queue's work).
+			bool async = (asyncPasses != null ? Array.IndexOf(asyncPasses, pass.Name) >= 0 : pass.AsyncCompute) && Settings.AsyncCompute && Gfx.Capabilities.AsyncCompute
+				&& !(ABOff && ABExperiment == "async");
+			CommandList commands = Gfx.Commands;
+			if (async)
+			{
+				commands.BeginAsyncCompute();
+			}
+
 			Profiler.Begin(profileName);
 			using (FrameProfiler.Begin(profileName))
 			{
@@ -567,6 +658,11 @@ namespace LELEngine.Rendering
 			}
 
 			Profiler.End();
+			if (async)
+			{
+				commands.EndAsyncCompute();
+			}
+
 			executed++;
 
 			// Hand work to the GPU early. The driver otherwise queues the frame's first commands until its

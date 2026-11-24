@@ -34,14 +34,22 @@ namespace LELEngine.Graphics.Vulkan
 		/// <summary>Numbers the passes: a texture remembers the last one that drew into it.</summary>
 		private long passSerial;
 
-		/// <summary>A command was recorded outside the tracking of uses (<see cref="BeginTransfer" />): the next tracked one waits for everything.</summary>
-		private bool untracked;
+		/// <summary>
+		///     Per queue (<see cref="VulkanStream.Index" />): a command was recorded outside the tracking of uses
+		///     (<see cref="BeginTransfer" />), and the next tracked one waits for everything.
+		/// </summary>
+		private readonly bool[] untrackedStreams = new bool[2];
+
+		private ref bool untracked => ref untrackedStreams[device.Recording.Index];
 
 		private Requirement[] requirements = new Requirement[32];
 		private int requirementCount;
 
 		/// <summary>The barriers before the next command of the stream.</summary>
 		private readonly SyncBatch streamBatch = new SyncBatch();
+
+		/// <summary>The barriers at the end of a submission (its timestamps' copies, the host's reads): apart from <see cref="streamBatch" />, which a submission in the middle of a command may leave filled.</summary>
+		private readonly SyncBatch endBatch = new SyncBatch();
 
 		// The vertex and index buffers the last draw looked at, and the epoch it looked in.
 		private readonly VulkanBuffer[] checkedVertexBuffers = new VulkanBuffer[MaxVertexBuffers];
@@ -162,14 +170,28 @@ namespace LELEngine.Graphics.Vulkan
 			added.Stages = stages;
 			added.Write = write;
 			added.Ahead = target.MainUse != device.RecordingSerial;
-			target.MainUse = device.RecordingSerial;
+			if (!device.RecordingCompute)
+			{
+				target.MainUse = device.RecordingSerial;
+			}
 		}
 
-		/// <summary>Records a use of a resource of the device's own into a batch: the barrier it needs, and the new state.</summary>
+		/// <summary>
+		///     Records a use of a resource of the device's own into a batch: the barrier it needs, and the new state (on a
+		///     device with two queues, after the other queue's conflicting uses, in the state of the queue being recorded for).
+		/// </summary>
 		private void ApplyTarget(SyncTarget target, SyncBatch batch, VkPipelineStageFlags2 stages, bool write)
 		{
 			VkAccessFlags2 extra = target.AccelerationStructure ? VkAccessFlags2.AccelerationStructureReadBitKHR : VkAccessFlags2.None;
-			if (Sync.Apply(ref target.State, batch, default, VkImageAspectFlags.None, 0, 0, 0, 0, VkImageLayout.Undefined, stages, write, false, extra))
+			bool compute = false;
+			if (device.HasAsyncCompute && !device.AsideRecording)
+			{
+				// The other queue's state keeps its own uses: its next use waits for this one by the timeline.
+				device.OrderAcrossQueues(ref target.Queues, write);
+				compute = device.RecordingCompute;
+			}
+
+			if (Sync.Apply(ref compute ? ref target.ComputeState : ref target.State, batch, default, VkImageAspectFlags.None, 0, 0, 0, 0, VkImageLayout.Undefined, stages, write, false, extra))
 			{
 				device.SyncEpoch++;
 			}
@@ -501,8 +523,10 @@ namespace LELEngine.Graphics.Vulkan
 			{
 				ApplyRequirements(true);
 			}
-			else
+
+			if (!rendering)
 			{
+				// Also after a use that waited for the compute queue: the submission was sent, rendering goes on in the next.
 				StartRendering();
 			}
 
@@ -641,6 +665,9 @@ namespace LELEngine.Graphics.Vulkan
 		/// </summary>
 		internal VkCommandBuffer UploadCommands(VulkanTexture texture, int mip, int mips, int layer, int layers, bool discard)
 		{
+			// Given in asynchronous compute work, it goes to the compute queue when the texture is shared with it and no
+			// open pass draws into it.
+			UseComputeQueue(texture.Concurrent && !IsPassAttachment(texture));
 			return TransferCommands(texture, texture.MainUse != device.RecordingSerial, mip, mips, layer, layers, texture.CopyDestinationLayout, true, discard);
 		}
 
@@ -651,6 +678,14 @@ namespace LELEngine.Graphics.Vulkan
 		/// </summary>
 		internal VkCommandBuffer TransferCommands(VulkanTexture texture, bool ahead, int mip, int mips, int layer, int layers, VkImageLayout layout, bool write, bool discard)
 		{
+			if (device.RecordingCompute)
+			{
+				// The compute queue's commands go in order (nothing of its own ahead): no pass to keep going there.
+				RequireTexture(texture, mip, mips, layer, layers, layout, Sync.Transfer, write, discard);
+				ApplyRequirements(false);
+				return device.MainCommands;
+			}
+
 			if (ahead)
 			{
 				SyncBatch setup = device.SetupBatch;
@@ -704,6 +739,13 @@ namespace LELEngine.Graphics.Vulkan
 		/// <summary>The command buffer a write of a buffer's bytes goes into, after the barrier it needs (as <see cref="UploadCommands(VulkanTexture, int, int, int, int, bool)" />).</summary>
 		internal VkCommandBuffer UploadCommands(VulkanBuffer buffer)
 		{
+			if (UseComputeQueue(true))
+			{
+				RequireBuffer(buffer, Sync.Transfer, true);
+				ApplyRequirements(false);
+				return device.MainCommands;
+			}
+
 			if (buffer.MainUse != device.RecordingSerial)
 			{
 				SyncBatch setup = device.SetupBatch;
@@ -737,7 +779,9 @@ namespace LELEngine.Graphics.Vulkan
 		internal VkCommandBuffer AsideCommands(VulkanTexture texture, int mip, int mips, int layer, int layers)
 		{
 			VkCommandBuffer commands = device.BeginAside();
+			device.AsideRecording = true;
 			texture.Require(device.AsideBatch, mip, mips, layer, layers, texture.CopySourceLayout, Sync.Transfer, false, false);
+			device.AsideRecording = false;
 			device.AsideBatch.Record(device, commands);
 			return commands;
 		}
@@ -746,7 +790,9 @@ namespace LELEngine.Graphics.Vulkan
 		internal VkCommandBuffer AsideCommands(VulkanBuffer buffer)
 		{
 			VkCommandBuffer commands = device.BeginAside();
+			device.AsideRecording = true;
 			buffer.Require(device.AsideBatch, Sync.Transfer, false);
+			device.AsideRecording = false;
 			device.AsideBatch.Record(device, commands);
 			return commands;
 		}
@@ -754,13 +800,14 @@ namespace LELEngine.Graphics.Vulkan
 		/// <summary>Makes what the transfers recorded so far wrote visible to the CPU (a readback's copy, before the CPU reads it).</summary>
 		internal void TransfersToHost(VkCommandBuffer commands)
 		{
-			streamBatch.AddMemory(Sync.Transfer, VkAccessFlags2.TransferWriteBit, Sync.Host, VkAccessFlags2.HostReadBit);
-			streamBatch.Record(device, commands);
+			endBatch.AddMemory(Sync.Transfer, VkAccessFlags2.TransferWriteBit, Sync.Host, VkAccessFlags2.HostReadBit);
+			endBatch.Record(device, commands);
 		}
 
 		/// <summary>The stream's command buffer for presenting: the back buffer is read by the blit into the window's image.</summary>
 		internal VkCommandBuffer PresentCommands(VulkanTexture backbuffer)
 		{
+			UseGraphicsQueue();
 			SuspendRendering();
 			if (backbuffer != null)
 			{
@@ -783,8 +830,8 @@ namespace LELEngine.Graphics.Vulkan
 			}
 
 			VkCommandBuffer commands = device.MainCommands;
-			streamBatch.AddMemory(VkPipelineStageFlags2.AllCommandsBit, VkAccessFlags2.TransferWriteBit, Sync.Transfer, VkAccessFlags2.TransferWriteBit);
-			streamBatch.Record(device, commands);
+			endBatch.AddMemory(VkPipelineStageFlags2.AllCommandsBit, VkAccessFlags2.TransferWriteBit, Sync.Transfer, VkAccessFlags2.TransferWriteBit);
+			endBatch.Record(device, commands);
 			device.CopyQueryResults(commands);
 			device.HostReads |= Sync.Transfer;
 		}
@@ -797,8 +844,8 @@ namespace LELEngine.Graphics.Vulkan
 				return;
 			}
 
-			streamBatch.AddMemory(device.HostReads, Sync.WriteAccess(device.HostReads), Sync.Host, VkAccessFlags2.HostReadBit);
-			streamBatch.Record(device, device.MainCommands);
+			endBatch.AddMemory(device.HostReads, Sync.WriteAccess(device.HostReads), Sync.Host, VkAccessFlags2.HostReadBit);
+			endBatch.Record(device, device.MainCommands);
 			device.HostReads = VkPipelineStageFlags2.None;
 		}
 

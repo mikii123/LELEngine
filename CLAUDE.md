@@ -364,11 +364,115 @@
   1280 x 720 RGBA8 clear 0.041 ms against OpenGL's 0.001, draws into it ~40 % slower), whatever the layouts, with
   only the attachment usage, in memory of its own, on a device made without any optional feature (scratch
   experiments); depth is compressed and fast-cleared. So GeometryPrepass (two RGBA16F targets cleared and drawn)
-  takes 0.45-0.60 ms against OpenGL's 0.08-0.10 (1.16 against 0.18 with super sampling), PostProcess about twice
-  OpenGL's, Shadows +0.3 ms (its RGBA32F transmittance target cleared each frame). VCT's bounces 1.53 against 1.14
+  took 0.45-0.60 ms against OpenGL's 0.08-0.10 (1.16 against 0.18 with super sampling), PostProcess about twice
+  OpenGL's, Shadows +0.3 ms (its RGBA32F transmittance target cleared each frame); both clears are gone since
+  ("The Vulkan device's queues, submissions and clears"). VCT's bounces 1.53 against 1.14
   ms (cone tracing through 3D textures: the shaders as compiled for Vulkan or the textures' tiling, not looked into).
   The bench's CPU per draw: the same draw again 98 -> 161 ns (OpenGL 83), materials 263 -> 376 (353; the ordering's
   bookkeeping when the textures change), a uniform per draw 266 -> 124 (112).
+
+## The Vulkan device's queues, submissions and clears (2026-11-24, branch `vk-submit`)
+
+- The ask: lower-level control over how work reaches the GPU and the savings Vulkan allows over OpenGL: an
+  asynchronous compute queue beside the graphics queue, submissions split where they help, frames in flight, memory
+  aliasing of transient targets, fewer full-target clears (this driver writes every texel of a colour clear: above),
+  measured per scene, per pass and per queue.
+- API (`LELEngine/Graphics`): `CommandList.BeginAsyncCompute()` / `EndAsyncCompute()` / `InAsyncCompute`,
+  `DeviceCapabilities.AsyncCompute`. Between the two, dispatches, buffer and texture copies, colour texture clears,
+  uploads, acceleration structure builds and timestamps go to the GPU's compute queue; render passes, draws, blits, mip
+  generation and whatever uses a depth texture stay on the graphics queue. What comes out is what the order given makes
+  (the device orders every use after the other queue's conflicting ones). OpenGL (and a Vulkan device without such a
+  queue) runs everything in order: the calls do nothing there. Not nested; `EndAsyncCompute` sends the compute work at
+  once.
+- Renderer: `RenderPass.AsyncCompute` (a pass says its compute work may overlap the graphics work around it),
+  `RenderSettings.AsyncCompute` (default on; LEL_ASYNC_COMPUTE=0 off for every renderer of a run), the renderer
+  brackets such a pass (its profiler sections too: they time the compute queue's work). LEL_ASYNC_PASSES=name,name
+  picks the passes by name instead of their declarations (to measure which gain). Declared: `SurfaceCachePass`,
+  `RadianceCachePass`.
+- Vulkan (`Graphics/Vulkan/VulkanDeviceQueues.cs`, `VulkanCommandListQueues.cs`): a queue of a compute family apart
+  from the graphics family (AMD: its asynchronous compute engines; family 1 on the 780M) with timeline semaphores, made
+  only when asked for (`GraphicsDevice.RequestAsyncCompute` before the first window, LEL_ASYNC_COMPUTE=1; off by
+  default: the measurements below) and the GPU has one (LEL_VULKAN_DISABLE=asynccompute: never). Without it the device
+  is the one queue device it was (no timelines, every resource exclusive). A `VulkanStream` per queue holds its command buffers
+  (its own pool), setup batch, host reads, written timestamps and its timeline (each submission signals the next
+  value). Resources the compute queue may use are shared by both families (`VK_SHARING_MODE_CONCURRENT`: no ownership
+  transfers); depth textures and the window's back buffer stay exclusive to the graphics family (their compression),
+  and a command that touches one runs on the graphics queue (`VulkanTexture.Concurrent`).
+  - An asynchronous region starts after the graphics work sent before it (`VulkanDevice.ForkCompute`): without that the
+    compute queue ran a frame ahead, beside the previous frame's heaviest graphics-queue compute, and both slowed down
+    several times over (RadianceCache.trace 15 ms instead of 0.14, frame wall 23-37 ms instead of 6).
+  - Ordering between the queues: every buffer, texture and device target keeps `QueueUses` (the timeline values of each
+    queue's last read and write) and a `SyncState` per queue of that queue's own uses (the barriers within the queue);
+    an image's layout is the image's, set in both states by the queue that changes it. A use that conflicts with the
+    other queue's (a read after its write, a write or a layout change after its read or write) makes this queue's next
+    submission wait for that value (`VulkanDevice.OrderAcrossQueues`): the other queue's recording is sent first when it
+    holds the use, this queue's recording before the wait (what it recorded before does not wait too). Reads on both
+    queues run side by side. A split in the middle of a command keeps the frame's memory the command took until the next
+    submission has run too (`Chunk.Users`).
+  - Lifetimes stay the graphics queue's serials: what the compute queue records while a graphics submission is
+    recorded is sent before it, and that serial is finished when its fence has signalled and the compute timeline has
+    reached its value (`Submission.ComputeValue`). Readbacks sent alone wait for the compute queue's work sent before.
+  - LEL_VULKAN_STATS=1 prints the compute queue's submissions and the waits between the queues per frame, and the
+    allocator's memory; LEL_VULKAN_MEMORY=1 with it the textures alive by size (once, after five seconds);
+    LEL_VULKAN_TRACE_QUEUES=1 every submission of both queues with its waits and signals.
+  - Validation: the installed layer (1.3.290, Steam's) does not follow timeline semaphores between queues in its
+    synchronization validation (it reports every wait of one queue for the other as a race). LEL_VULKAN_QUEUE_SEMAPHORES
+    =binary makes every wait between the queues by binary semaphores too (each submission signals one, a wait takes
+    those of the other queue up to its value) and gives the compute submissions fences: what that layer follows. Run
+    synchronization validation with it.
+- Frames in flight (`VulkanContext.SwapBuffers`): the CPU records at most one frame ahead, counted by frames (it waits
+  for the frame before's present) instead of by submissions: a frame takes more of them now (the queues' waits).
+- Two back buffers taking turns (`VulkanContext.Backbuffer`): the present's blit reads the one just drawn only once the
+  swapchain's image is free (its wait is the presentation engine's), and with one back buffer the next frame's first
+  draw into it waited for that blit, so for the display. Synchronization validation also reported that wait, now and
+  then (SYNC-HAZARD-WRITE-AFTER-READ on the back buffer's layout change after the present's blit read it, also on the
+  engine before this work), although the barrier before that layout change had the blit's stage (traced: Transfer ->
+  colour output, every frame); why the layer lost that order was not found. Now a back buffer is drawn again two frames
+  later, after the CPU has waited for its present. One more RGBA8 window-sized texture (3.7 MB at 1280 x 720).
+- Fewer clears:
+  - Transparent shadows (`TransparentShadows.DrawCasters`, the tile given by `ShadowPass` and `GridShadowMap`): a
+    transmittance map is no longer cleared whole each frame (a 2048² RGBA32F map: 64 MB of writes on a driver without
+    fast colour clears). The first tile clears the rectangles the casters drew the frame before, each tile the
+    rectangle its casters' world bounds project to (2 pixels wider), and the casters draw within it under a scissor;
+    everywhere else the map holds the clear value from before. A map made anew is cleared whole once.
+  - Geometry prepass (`GeometryPrepass`, `Engine/GBufferBackground.shader`), on a device whose colour clears write every
+    texel (`DeviceCapabilities.FastColorClears` false: AMD's Vulkan driver on its integrated GPUs, as measured on the
+    780M): for the base camera the normal and motion targets are not cleared; after the geometry a full-screen triangle
+    at the far plane, depth test Equal, writes the zeros the clear gave where the depth still holds its clear value
+    (nothing drawn there). An overlay lighting camera (its depth may hold the cameras' before it) still clears, and so
+    does OpenGL, whose clears are fast (the triangle cost it 0.05 ms in gi0).
+- Measuring on a machine other programs use: LEL_AB=async|prepass|transmittance switches the one change off for every
+  other block of LEL_AB_FRAMES frames (default 30) in one run, and the renderer logs both sides' median frame time and
+  GPU frame wall (`[AB] ...`; the first frames of a block left out): both sides share whatever else runs. LEL_GPU_TIMELINE
+  =1 logs every 120th frame where each section started and ended (both queues: their stamps share the GPU's clock).
+- Measured (780M, TestGame 1280 x 720 Debug, `hwrt=1`; the in-run A/B, 1800 frames, GPU frame wall in ms, change on /
+  off), while two other engine processes used the GPU now and then:
+  - Transmittance: Vulkan gi0 1.30 / 1.89, lumen 6.04 / 6.80, materials 6.09 / 6.81; OpenGL gi0 0.84 / 1.24, lumen
+    6.25 / 6.78, materials 6.20 / 6.76. Per pass (single runs): Shadows on Vulkan 1.03 -> 0.42 ms (gi0, lumen),
+    SurfaceCache.shadow 0.17 -> 0.03; on OpenGL 0.77 -> 0.29 (its RGBA32F clear was not free either).
+  - Prepass background (Vulkan): gi0 1.36 / 1.55, lumen 6.07 / 6.26, outdoor 3.61 / 3.73 (GeometryPrepass 0.48-0.54
+    -> ~0.37 in single runs).
+  - Asynchronous compute (SurfaceCache and RadianceCache on the compute queue): alone on the machine, lumen's frame wall
+    6.22 -> 6.10 ms and its frame time 6.47 -> 6.43 (the radiosity ran beside Shadows, the radiance cache beside the
+    prepass, both a little slower there; ProbeGather joins them). With other programs using the GPU at the same time
+    the compute queue waits behind them: lumen 14.5-26.3 ms on against 5.9-6.0 off, frame time 16-33 against 6.7-7.5.
+    Hence off by default; the passes keep their declarations. Its pictures are the frames before's (LEL_ASYNC_COMPUTE=1:
+    lights 4, lumen 2, materials 3, suns3 1 of 255, as two runs of it differ); under synchronization validation, which
+    slows the queues apart, the GI's readbacks land in other frames and lights / materials / suns3 converge elsewhere
+    (mean up to 3.6) without a message of the layer.
+- Memory (lumen, LEL_VULKAN_MEMORY=1): 336 MB allocated in 412 MB of blocks; textures 313 MB: render targets 223 MB
+  (the shadow map's transmittance 64 MB, the grid shadow map's 16, the shadow depth 16, nine 1280 x 720 RGBA16F targets
+  of 7 MB), storage images 82 MB, sampled only 8 MB. Aliasing transient targets was not done: most full-screen targets
+  are histories kept over frames, the transmittance maps now keep their contents (they are cleared only where drawn),
+  and what is transient within a frame (the G-buffer's motion, a few GI intermediates: 14-28 MB, 4-8 %) would need the
+  passes to say when their targets live (a frame graph), not the device.
+- Verified: the device tests (`scratchpad/submit/vktest` of session 2a1d1c21: the tests of vktest-final and
+  `Tests7.cs`: rounds through both queues with dispatches reading what draws drew and draws reading what dispatches
+  wrote, draws inside asynchronous work, a dispatch sampling a depth texture, readbacks in the submission and sent
+  before, copies / clears / uploads / a buffer resized there, timestamps on both queues, frames presented with a buffer
+  made and freed each frame) on both APIs; TestGame's 18 scenes on Vulkan against the frames before; OpenGL's check.
+- Not done: command buffers recorded on several threads (the render thread's CPU time is ~1 ms against 6-11 ms of GPU
+  in the GI scenes), pools reset per frame, push constants (a uniform per draw costs 124 ns against OpenGL's 112).
 
 ## Models and meshes
 

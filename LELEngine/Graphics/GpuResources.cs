@@ -76,6 +76,24 @@ namespace LELEngine.Graphics
 			}
 		}
 
+		/// <summary>The textures alive now (for reports of what the GPU's memory holds).</summary>
+		internal static List<GpuTexture> Alive()
+		{
+			List<GpuTexture> alive = new List<GpuTexture>();
+			lock (idSync)
+			{
+				foreach (WeakReference<GpuTexture> reference in byId.Values)
+				{
+					if (reference.TryGetTarget(out GpuTexture texture) && !texture.IsDisposed)
+					{
+						alive.Add(texture);
+					}
+				}
+			}
+
+			return alive;
+		}
+
 		/// <summary>
 		///     Writes texels of the texture's own format (rows packed, no padding) into a box of a mip level;
 		///     <paramref name="z" /> and <paramref name="depth" /> are slices of a 3D texture, layers of an array or

@@ -47,6 +47,15 @@ namespace LELEngine.Rendering
 		/// <summary>glFlush once after the first pass so the GPU starts the frame while the rest is submitted.</summary>
 		public bool FlushAfterFirstPass = true;
 
+		/// <summary>
+		///     The passes that say so (<see cref="RenderPass.AsyncCompute" />) give their compute work to the GPU's compute
+		///     queue where the device has one (<see cref="LELEngine.Graphics.DeviceCapabilities.AsyncCompute" />: made only
+		///     when asked for, <see cref="LELEngine.Graphics.GraphicsDevice.RequestAsyncCompute" />), beside the graphics
+		///     work. Off (LEL_ASYNC_COMPUTE=0 for every renderer of a run) everything runs on the graphics queue in the
+		///     passes' order. The picture is the same either way.
+		/// </summary>
+		public bool AsyncCompute = System.Environment.GetEnvironmentVariable("LEL_ASYNC_COMPUTE") != "0";
+
 		/// <summary>Draw the <see cref="DebugDraw" /> primitives (editor scene view; games use DebugDraw.VisibleInGame).</summary>
 		public bool DebugPrimitives;
 

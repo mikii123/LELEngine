@@ -210,6 +210,15 @@ namespace LELEngine.Graphics.Vulkan
 				SharingMode = VkSharingMode.Exclusive,
 				InitialLayout = VkImageLayout.Undefined
 			};
+
+			// Shared with the compute queue, but for depth textures (their compression is the graphics queue's) and the
+			// window's back buffer: the commands that use those stay on the graphics queue.
+			int* families = stackalloc int[2];
+			Concurrent = device.HasAsyncCompute && !depth && !backbuffer;
+			if (Concurrent)
+			{
+				device.ShareImage(ref info, families);
+			}
 			VmaAllocationCreateInfo allocationInfo = new VmaAllocationCreateInfo { Usage = VmaMemoryUsage.Auto };
 			VkImage image;
 			VmaAllocation handle;
@@ -220,6 +229,9 @@ namespace LELEngine.Graphics.Vulkan
 		}
 
 		public override bool IsBackbuffer => backbuffer;
+
+		/// <summary>The compute queue may use the texture too (shared by both queues' families).</summary>
+		public readonly bool Concurrent;
 
 		/// <summary>The device filters the format's texels (integer formats are only read one by one).</summary>
 		public bool Filters => (Features & VkFormatFeatureFlags.SampledImageFilterLinearBit) != 0;
@@ -238,10 +250,14 @@ namespace LELEngine.Graphics.Vulkan
 			}
 		}
 
-		/// <summary>A command of the stream uses the texture.</summary>
+		/// <summary>A command of the stream uses the texture (<see cref="MainUse" />: the graphics queue's stream).</summary>
 		public void Use()
 		{
-			LastUse = MainUse = device.RecordingSerial;
+			LastUse = device.RecordingSerial;
+			if (!device.RecordingCompute)
+			{
+				MainUse = LastUse;
+			}
 		}
 
 		/// <summary>The whole texture, as samplers read it (decoding sRGB).</summary>
@@ -329,6 +345,7 @@ namespace LELEngine.Graphics.Vulkan
 
 			VulkanCommandList list = device.CommandList;
 			list.EndRenderPass();
+			list.UseGraphicsQueue();
 			VkBufferCreateInfo info = new VkBufferCreateInfo { Size = (Brutal.ByteSize64)(ulong)expected, Usage = VkBufferUsageFlags.TransferDstBit };
 			VmaAllocationCreateInfo allocationInfo = new VmaAllocationCreateInfo
 			{
@@ -390,6 +407,8 @@ namespace LELEngine.Graphics.Vulkan
 				return;
 			}
 
+			// Blits are the graphics queue's.
+			device.CommandList.UseGraphicsQueue();
 			VkFilter filter = Filters && !Format.IsInteger() && !Format.IsDepth() ? VkFilter.Linear : VkFilter.Nearest;
 			if (SampledFormat != VkFormat)
 			{
@@ -577,10 +596,14 @@ namespace LELEngine.Graphics.Vulkan
 		/// <summary>The buffer's storage now (null before the first data).</summary>
 		public VkBuffer Handle => storage.Buffer;
 
-		/// <summary>A command of the stream uses the buffer.</summary>
+		/// <summary>A command of the stream uses the buffer (<see cref="MainUse" />: the graphics queue's stream).</summary>
 		public void Use()
 		{
-			LastUse = MainUse = device.RecordingSerial;
+			LastUse = device.RecordingSerial;
+			if (!device.RecordingCompute)
+			{
+				MainUse = LastUse;
+			}
 		}
 
 		private bool Busy
@@ -650,6 +673,8 @@ namespace LELEngine.Graphics.Vulkan
 			}
 
 			long copied = Math.Min(Math.Min(keep, Size), size);
+			// The copy into the new storage is the graphics queue's (ordered after the compute queue's uses of the old one).
+			device.CommandList.UseGraphicsQueue();
 			Storage old = storage;
 			long oldLastUse = LastUse;
 			long oldMainUse = MainUse;
@@ -706,6 +731,7 @@ namespace LELEngine.Graphics.Vulkan
 
 			VulkanCommandList list = device.CommandList;
 			list.EndRenderPass();
+			list.UseGraphicsQueue();
 			if (storage.Mapped != null)
 			{
 				if (LastUse > device.CompletedSerial)
@@ -865,6 +891,8 @@ namespace LELEngine.Graphics.Vulkan
 			}
 
 			VkBufferCreateInfo info = new VkBufferCreateInfo { Size = (Brutal.ByteSize64)(ulong)size, Usage = usage };
+			int* families = stackalloc int[2];
+			device.ShareBuffer(ref info, families);
 			VmaAllocationCreateInfo allocationInfo = new VmaAllocationCreateInfo { Usage = VmaMemoryUsage.Auto };
 			if (hostVisible)
 			{

@@ -69,9 +69,8 @@ namespace LELEngine.Graphics.Vulkan
 		private int scissorHeight;
 		private bool stateChanged = true;
 
-		// What the command buffer was last told.
+		// What the graphics queue's command buffer was last told (the compute bindings: computeBindings).
 		private VkPipeline boundPipeline;
-		private VkPipeline boundComputePipeline;
 		private VulkanProgram pipelineProgram;
 		private VertexInputLayout pipelineLayout;
 		private int pipelineGeneration = -1;
@@ -91,10 +90,7 @@ namespace LELEngine.Graphics.Vulkan
 		private IndexFormat boundIndexFormat;
 		private VkDescriptorSet boundSet;
 		private VulkanProgram boundSetProgram;
-		private VkDescriptorSet boundComputeSet;
-		private VulkanProgram boundComputeProgram;
 		private readonly int[] boundOffsets = new int[8];
-		private readonly int[] boundComputeOffsets = new int[8];
 
 		public VulkanCommandList(VulkanDevice device)
 		{
@@ -117,6 +113,7 @@ namespace LELEngine.Graphics.Vulkan
 		public override void BeginRenderPass(in RenderPassDescriptor descriptor)
 		{
 			EndRenderPass();
+			UseGraphicsQueue();
 			OpenPass();
 			int colorCount = descriptor.Colors.Length;
 			if (colorCount > MaxColors)
@@ -205,7 +202,8 @@ namespace LELEngine.Graphics.Vulkan
 		{
 			if (passOpen && !passStarted && PassClears())
 			{
-				// A pass that only clears: its rendering begins and ends here.
+				// A pass that only clears: its rendering begins and ends here, on the graphics queue.
+				UseGraphicsQueue();
 				StartRendering();
 			}
 
@@ -216,6 +214,7 @@ namespace LELEngine.Graphics.Vulkan
 		public override void ClearColor(int attachment, in ClearValue value, int x = 0, int y = 0, int width = -1, int height = -1)
 		{
 			RequirePass("ClearColor");
+			UseGraphicsQueue();
 			if (attachment < 0 || attachment >= passColorCount)
 			{
 				return;
@@ -237,6 +236,7 @@ namespace LELEngine.Graphics.Vulkan
 		public override void ClearDepth(float depth = 1f, int x = 0, int y = 0, int width = -1, int height = -1)
 		{
 			RequirePass("ClearDepth");
+			UseGraphicsQueue();
 			if (passDepthTexture == null)
 			{
 				return;
@@ -333,12 +333,12 @@ namespace LELEngine.Graphics.Vulkan
 			}
 		}
 
-		/// <summary>Ends rendering in the command buffer; the pass stays open for the caller.</summary>
+		/// <summary>Ends rendering in the graphics queue's command buffer; the pass stays open for the caller.</summary>
 		private void SuspendRendering()
 		{
 			if (rendering)
 			{
-				vk->vkCmdEndRendering.Invoke(device.MainCommands);
+				vk->vkCmdEndRendering.Invoke(device.GraphicsStream.Main);
 				rendering = false;
 			}
 		}
@@ -348,23 +348,33 @@ namespace LELEngine.Graphics.Vulkan
 		#region For the device
 
 		/// <summary>
-		///     The command buffer is about to be sent: rendering ends in it, its timestamps are copied where the CPU reads
-		///     them, and what the CPU will read is made visible to it.
+		///     A queue's command buffers are about to be sent (the device records for that queue now): rendering ends in
+		///     the graphics queue's, the timestamps are copied where the CPU reads them, and what the CPU will read is made
+		///     visible to it.
 		/// </summary>
-		internal void BeforeSubmit()
+		internal void BeforeSubmit(VulkanStream stream)
 		{
-			SuspendRendering();
+			if (stream.Index == 0)
+			{
+				SuspendRendering();
+			}
+
 			CopyTimestamps();
 			FinishForHost();
 		}
 
-		/// <summary>A new command buffer follows: it knows nothing of what the last one was told.</summary>
-		internal void AfterSubmit()
+		/// <summary>A new command buffer of the queue follows: it knows nothing of what the last one was told.</summary>
+		internal void AfterSubmit(VulkanStream stream)
 		{
 			// Every program notes its resources' uses again in the new submission (which marks them as used by it).
 			device.SyncEpoch++;
+			computeBindings[stream.Index].Forget();
+			if (stream.Index != 0)
+			{
+				return;
+			}
+
 			boundPipeline = default;
-			boundComputePipeline = default;
 			dynamicValid = false;
 			appliedTopology = -1;
 			viewportApplied = false;
@@ -373,8 +383,6 @@ namespace LELEngine.Graphics.Vulkan
 			boundIndexBuffer = 0;
 			boundSet = default;
 			boundSetProgram = null;
-			boundComputeSet = default;
-			boundComputeProgram = null;
 		}
 
 		/// <summary>
@@ -397,8 +405,13 @@ namespace LELEngine.Graphics.Vulkan
 			return BeginTransfer();
 		}
 
-		/// <summary>Fills a stand-in texture with zeros, ahead of the stream.</summary>
+		/// <summary>Fills a stand-in texture with zeros, ahead of the graphics queue's stream (a depth texture's clear is the graphics queue's).</summary>
 		internal void ClearDummy(VulkanTexture texture)
+		{
+			OnGraphicsQueue(() => RecordDummyClear(texture));
+		}
+
+		private void RecordDummyClear(VulkanTexture texture)
 		{
 			VkImageLayout layout = texture.CopyDestinationLayout;
 			VkCommandBuffer commands = TransferCommands(texture, true, 0, 1, 0, texture.Layers, layout, true, true);
@@ -810,6 +823,7 @@ namespace LELEngine.Graphics.Vulkan
 		private bool PrepareDraw(bool indexed, PrimitiveTopology topology, VulkanBuffer arguments = null, VulkanBuffer counts = null)
 		{
 			RequirePass("A draw");
+			UseGraphicsQueue();
 			VulkanProgram current = program;
 			if (current == null || !current.IsUsable || current.IsCompute)
 			{
@@ -1073,31 +1087,39 @@ namespace LELEngine.Graphics.Vulkan
 				return false;
 			}
 
+			// The compute queue's in asynchronous compute work, unless the program binds what only the graphics queue uses.
+			bool compute = UseComputeQueue(true);
 			int* offsets = stackalloc int[Math.Max(1, current.BlockCount)];
 			VkDescriptorSet set = current.PrepareDescriptors(this, offsets);
+			if (compute && !ComputeCanBind(current))
+			{
+				UseGraphicsQueue();
+			}
+
 			NoteDispatch(current, arguments);
 			VkCommandBuffer commands = device.MainCommands;
-			if (boundComputePipeline.VkHandle != current.ComputePipeline.VkHandle)
+			ComputeBindings bound = computeBindings[device.Recording.Index];
+			if (bound.Pipeline.VkHandle != current.ComputePipeline.VkHandle)
 			{
 				vk->vkCmdBindPipeline.Invoke(commands, VkPipelineBindPoint.Compute, current.ComputePipeline);
-				boundComputePipeline = current.ComputePipeline;
+				bound.Pipeline = current.ComputePipeline;
 			}
 
 			int blocks = current.BlockCount;
-			bool bind = boundComputeSet.VkHandle != set.VkHandle || boundComputeProgram != current;
+			bool bind = bound.Set.VkHandle != set.VkHandle || bound.Program != current;
 			for (int i = 0; i < blocks && !bind; i++)
 			{
-				bind = boundComputeOffsets[i] != offsets[i];
+				bind = bound.Offsets[i] != offsets[i];
 			}
 
 			if (bind)
 			{
 				vk->vkCmdBindDescriptorSets.Invoke(commands, VkPipelineBindPoint.Compute, current.PipelineLayout, 0, 1, &set, blocks, offsets);
-				boundComputeSet = set;
-				boundComputeProgram = current;
+				bound.Set = set;
+				bound.Program = current;
 				for (int i = 0; i < blocks; i++)
 				{
-					boundComputeOffsets[i] = offsets[i];
+					bound.Offsets[i] = offsets[i];
 				}
 			}
 
@@ -1123,6 +1145,7 @@ namespace LELEngine.Graphics.Vulkan
 				throw new ArgumentException($"A copy of {size} bytes from {sourceOffset} of buffer '{from.Name}' ({from.Size}) to {destinationOffset} of '{to.Name}' ({to.Size}) is outside one of them.");
 			}
 
+			UseComputeQueue(true);
 			RequireBuffer(from, Sync.Transfer, false);
 			RequireBuffer(to, Sync.Transfer, true);
 			ApplyRequirements(false);
@@ -1152,6 +1175,7 @@ namespace LELEngine.Graphics.Vulkan
 			bool within = from == to && sourceMip == destinationMip && fromLayer < toLayer + toLayers && toLayer < fromLayer + fromLayers;
 			VkImageLayout fromLayout = within ? VkImageLayout.General : from.CopySourceLayout;
 			VkImageLayout toLayout = within ? VkImageLayout.General : to.CopyDestinationLayout;
+			UseComputeQueue(from.Concurrent && to.Concurrent);
 			RequireTexture(from, sourceMip, 1, fromLayer, fromLayers, fromLayout, Sync.Transfer, false);
 			RequireTexture(to, destinationMip, 1, toLayer, toLayers, toLayout, Sync.Transfer, true,
 				!within && to.Covers(destinationMip, destinationX, destinationY, destinationZ, width, height, depth));
@@ -1205,6 +1229,8 @@ namespace LELEngine.Graphics.Vulkan
 			VkImageLayout toLayout = within ? VkImageLayout.General : to.CopyDestinationLayout;
 			bool covers = !within && Math.Min(destinationX0, destinationX1) <= 0 && Math.Min(destinationY0, destinationY1) <= 0 && Math.Max(destinationX0, destinationX1) >= to.MipWidth(destinationMip)
 				&& Math.Max(destinationY0, destinationY1) >= to.MipHeight(destinationMip) && (!toVolume || to.MipDepth(destinationMip) == 1);
+			// Blits are the graphics queue's.
+			UseGraphicsQueue();
 			RequireTexture(from, sourceMip, 1, fromLayer, 1, fromLayout, Sync.Transfer, false);
 			RequireTexture(to, destinationMip, 1, toLayer, 1, toLayout, Sync.Transfer, true, covers);
 			ApplyRequirements(false);
@@ -1229,6 +1255,7 @@ namespace LELEngine.Graphics.Vulkan
 			EndRenderPass();
 			VulkanTexture target = (VulkanTexture)texture;
 			VkImageLayout layout = target.CopyDestinationLayout;
+			UseComputeQueue(target.Concurrent);
 			RequireTexture(target, mip, 1, 0, target.Layers, layout, Sync.Transfer, true, true);
 			ApplyRequirements(false);
 			VkCommandBuffer commands = device.MainCommands;
@@ -1274,6 +1301,7 @@ namespace LELEngine.Graphics.Vulkan
 			}
 
 			bool volume = from.Kind == TextureKind.Texture3D;
+			UseComputeQueue(from.Concurrent);
 			RequireTexture(from, mip, 1, volume ? 0 : z, volume ? 1 : depth, from.CopySourceLayout, Sync.Transfer, false);
 			RequireBuffer(buffer, Sync.Transfer, true);
 			ApplyRequirements(false);
@@ -1289,6 +1317,8 @@ namespace LELEngine.Graphics.Vulkan
 		public override void WriteTimestamp(GpuTimestamp timestamp)
 		{
 			VulkanTimestamp stamp = (VulkanTimestamp)timestamp;
+			// In asynchronous compute work, the compute queue's clock: a section times that queue's work.
+			UseComputeQueue(true);
 			VkCommandBuffer commands = device.MainCommands;
 			VkQueryPool pool = device.QueryPool(stamp.Begin(), out int index);
 			vk->vkCmdWriteTimestamp2.Invoke(commands, VkPipelineStageFlags2.AllCommandsBit, pool, index);

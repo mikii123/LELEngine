@@ -105,7 +105,7 @@ namespace LELEngine.Rendering
 			CommandList commands = Gfx.Commands;
 			RenderTexture transmittance = target.ColorAttachments[0];
 			commands.State.ColorMask = ColorWriteMask.All;
-			bool tiled = tile.Size.X > 0 && tile.Size.Y > 0 && transmittance.Gpu != null;
+			bool tiled = tile.Size.X > 0 && tile.Size.Y > 0 && transmittance.Gpu != null && !(context.Renderer != null && context.Renderer.ABOff && Renderer.ABExperiment == "transmittance");
 			Coverage cover = tiled ? coverage.GetValue(transmittance.Gpu, _ => new Coverage()) : null;
 			if (clear)
 			{

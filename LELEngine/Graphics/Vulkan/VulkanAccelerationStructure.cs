@@ -149,6 +149,8 @@ namespace LELEngine.Graphics.Vulkan
 		internal void CreateDeviceBuffer(long size, VkBufferUsageFlags usage, string what, out VkBuffer buffer, out VmaAllocation allocation)
 		{
 			VkBufferCreateInfo info = new VkBufferCreateInfo { Size = (Brutal.ByteSize64)(ulong)size, Usage = usage };
+			int* families = stackalloc int[2];
+			ShareBuffer(ref info, families);
 			VmaAllocationCreateInfo allocationInfo = new VmaAllocationCreateInfo { Usage = VmaMemoryUsage.Auto };
 			VkBuffer made;
 			VmaAllocation handle;

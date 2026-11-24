@@ -259,7 +259,14 @@ namespace LELEngine.Graphics.Vulkan
 	/// </summary>
 	internal sealed class SyncTarget
 	{
+		/// <summary>What the graphics queue's commands do to it.</summary>
 		public SyncState State;
+
+		/// <summary>What the compute queue's commands do to it.</summary>
+		public SyncState ComputeState;
+
+		/// <summary>The submissions of either queue that use it last.</summary>
+		public QueueUses Queues;
 
 		/// <summary>The last submission whose stream used it (its barriers then stay in the stream).</summary>
 		public long MainUse;
@@ -276,7 +283,24 @@ namespace LELEngine.Graphics.Vulkan
 		public void Forget()
 		{
 			State = default;
+			ComputeState = default;
+			Queues = default;
 		}
+	}
+
+	/// <summary>
+	///     Where the two queues of a device with an asynchronous compute queue (<see cref="VulkanStream" />) last used a
+	///     resource: the values of their timelines (a submission's number on its queue) of the last read and the last
+	///     write (or layout change) of each. A use on one queue waits for the other's submission of a use it conflicts
+	///     with (<see cref="VulkanDevice.OrderAcrossQueues" />): a read for the last write, a write for the last read and
+	///     write. Reads on both queues run side by side.
+	/// </summary>
+	internal struct QueueUses
+	{
+		public long GraphicsRead;
+		public long GraphicsWrite;
+		public long ComputeRead;
+		public long ComputeWrite;
 	}
 
 	/// <summary>

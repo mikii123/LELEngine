@@ -55,6 +55,9 @@ namespace LELEngine.Rendering.Passes
 		private ShaderProgram program;
 		private ShaderProgram instancedProgram;
 
+		/// <summary>Draws the G-buffer's values where no geometry is (Engine/GBufferBackground.shader).</summary>
+		private ShaderProgram backgroundProgram;
+
 		// The variants per map bits (index = bits), made on first use; the base program owns and deletes them.
 		private readonly ShaderProgram[] mapPrograms = new ShaderProgram[8];
 		private readonly ShaderProgram[] mapInstancedPrograms = new ShaderProgram[8];
@@ -100,6 +103,7 @@ namespace LELEngine.Rendering.Passes
 		{
 			program = new ShaderProgram("Engine/GBuffer.shader");
 			instancedProgram = program.GetInstancedVariant();
+			backgroundProgram = new ShaderProgram("Engine/GBufferBackground.shader");
 
 			gbuffer = new Framebuffer(renderer.RenderWidth, renderer.RenderHeight);
 			normalRoughness = gbuffer.AddColorAttachment(RenderTextureFormat.RGBA16F, false);
@@ -131,9 +135,15 @@ namespace LELEngine.Rendering.Passes
 				gpu.EnsureCameraCulled(context.ViewProjection, context.CullingMask);
 			}
 
-			// Depth was already cleared with the scene target (shared texture); clear only our color (no motion, no normal).
+			// Depth was already cleared with the scene target (shared texture). Where no geometry is, the G-buffer holds
+			// zeros (no normal, no motion). On a device whose colour clears write every texel (FastColorClears false), for
+			// the base camera, whose depth holds nothing but that clear yet, the colour is not cleared but the background
+			// drawn after the geometry where the depth is still at the far plane: the same values without writing the
+			// covered texels twice. Elsewhere (an overlay camera's depth may hold the cameras' before it) it is cleared.
 			CommandList commands = Gfx.Commands;
-			gbuffer.Begin(LoadOperation.Clear, ClearValue.Zero);
+			bool background = !Gfx.Capabilities.FastColorClears && context.IsBaseCamera && backgroundProgram != null && backgroundProgram.IsLinked
+				&& !(context.Renderer.ABOff && Renderer.ABExperiment == "prepass");
+			gbuffer.Begin(background ? LoadOperation.DontCare : LoadOperation.Clear, ClearValue.Zero);
 
 			commands.State.SetDepth(true, true, CompareFunction.Less);
 			commands.State.Culling = FaceCulling.Back;
@@ -252,6 +262,18 @@ namespace LELEngine.Rendering.Passes
 				}
 			}
 
+			if (background)
+			{
+				ref RenderState state = ref commands.State;
+				state.SetDepth(true, false, CompareFunction.Equal);
+				state.Culling = FaceCulling.None;
+				state.Blend = false;
+				backgroundProgram.Use();
+				context.Fullscreen.Draw();
+				commands.State.SetDepth(true, true, CompareFunction.Less);
+				commands.State.Culling = FaceCulling.Back;
+			}
+
 			context.DepthPrepassDone = true;
 			context.NormalRoughness = normalRoughness;
 			context.Motion = motion;
@@ -264,6 +286,8 @@ namespace LELEngine.Rendering.Passes
 			// Deletes the instanced variant and the map variants too.
 			program?.Delete();
 			program = null;
+			backgroundProgram?.Delete();
+			backgroundProgram = null;
 			instancedProgram = null;
 			Array.Clear(mapPrograms);
 			Array.Clear(mapInstancedPrograms);

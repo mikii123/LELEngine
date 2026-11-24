@@ -17,9 +17,6 @@ namespace LELEngine.Graphics.Vulkan
 		/// <summary>Queries given back whose last write has run, not reset yet (<see cref="ResetReleasedQueries" />).</summary>
 		private readonly List<int> releasedQueries = new List<int>();
 
-		/// <summary>The queries the submission being recorded writes: copied at its end (<see cref="CopyQueryResults" />).</summary>
-		private readonly List<int> writtenQueries = new List<int>();
-
 		/// <summary>The submission (serial) that writes each query, since it was last taken.</summary>
 		private long[] queryWrites = Array.Empty<long>();
 
@@ -33,8 +30,8 @@ namespace LELEngine.Graphics.Vulkan
 			public ulong* Values;
 		}
 
-		/// <summary>The submission being recorded wrote timestamps: their values are copied at its end.</summary>
-		internal bool HasWrittenQueries => writtenQueries.Count > 0;
+		/// <summary>The submission being recorded for the queue being recorded for wrote timestamps: their values are copied at its end.</summary>
+		internal bool HasWrittenQueries => recordingStream.WrittenQueries.Count > 0;
 
 		/// <summary>The nanoseconds a query holds from the write of a submission that has finished (0 when it never ran).</summary>
 		internal long ReadQuery(int query, long serial)
@@ -48,11 +45,12 @@ namespace LELEngine.Graphics.Vulkan
 		}
 
 		/// <summary>
-		///     Records the copies of the values of the queries the submission wrote into their pools' memory, a copy per
-		///     run of neighbours (outside rendering, at the submission's end).
+		///     Records the copies of the values of the queries the submission of the queue being recorded for wrote into
+		///     their pools' memory, a copy per run of neighbours (outside rendering, at the submission's end).
 		/// </summary>
 		internal void CopyQueryResults(VkCommandBuffer commands)
 		{
+			List<int> writtenQueries = recordingStream.WrittenQueries;
 			writtenQueries.Sort();
 			int start = 0;
 			for (int i = 1; i <= writtenQueries.Count; i++)
@@ -76,6 +74,8 @@ namespace LELEngine.Graphics.Vulkan
 		private void AddQueryValues()
 		{
 			VkBufferCreateInfo info = new VkBufferCreateInfo { Size = (Brutal.ByteSize64)(ulong)(QueriesPerPool * sizeof(ulong)), Usage = VkBufferUsageFlags.TransferDstBit };
+			int* families = stackalloc int[2];
+			ShareBuffer(ref info, families);
 			VmaAllocationCreateInfo allocationInfo = new VmaAllocationCreateInfo
 			{
 				Usage = VmaMemoryUsage.Auto,
@@ -126,7 +126,8 @@ namespace LELEngine.Graphics.Vulkan
 
 			queryValues.Clear();
 			releasedQueries.Clear();
-			writtenQueries.Clear();
+			graphicsStream?.WrittenQueries.Clear();
+			computeStream?.WrittenQueries.Clear();
 		}
 	}
 }
