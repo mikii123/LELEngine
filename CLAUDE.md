@@ -416,6 +416,49 @@
   its full size, a background BC7HighQuality bake (the game's only such image besides sprites is a cube: minutes of
   every core once), Vulkan's synchronization validation (no Khronos layer on that machine).
 
+## 3D texture copies on Vulkan go through a buffer (2026-11-24)
+
+- The user's report: the editor on Vulkan crashed opening two scenes (RTX 5070 Ti, driver 621.01), every time a few
+  seconds after the open: `vkQueueSubmit2 failed with ErrorDeviceLost`, at whatever submit came next (an upload's
+  flush, the renderer's flush, a pass), sometimes an access violation in the driver first. System log `nvlddmkm` 153
+  and WER `LiveKernelEvent` 141 (a TDR). Both scenes hold hundreds of meshes, so the distance field atlas grows in the
+  first frame (1024 -> 2048 -> 4096 slices) and fills.
+- Found by bisecting in a hidden editor (`hidden=1 graphics=vulkan`, the CLI's `scene open`): the scenes run with the
+  distance field off, with the atlas made at 4096 slices from the start, and with `Grow` leaving out its copy; they
+  crash with the copy of a single slice, and with the old atlas never disposed. The copy itself finishes (the GPU
+  waited for before and after it), the device is lost later; `VK_EXT_device_fault` reports a write at address 0. The
+  Khronos validation layer (nightly from KhronosGroup/Vulkan-ValidationLayers; core, synchronization and GPU-assisted
+  validation) reports nothing before the loss. The 128^3 volume copies of the static distance field worked all along.
+- The trigger, pinned down after the user asked for the proper fix (the same hidden editor, probes behind environment
+  variables, then removed): the copied texels are right (read back: 0 of 8 MB differ); binding everything again after
+  the copy, and dedicated memory for 3D images, change nothing; a 1:1 `vkCmdBlitImage` crashes as the copy does; the
+  copy waited for, then one texel uploaded (`vkCmdCopyBufferToImage`) into the last slice: fine in the 2048-slice
+  atlas (slice 2047), the device lost in the 4096-slice one (slice 4095). Uploads into the same slices of an atlas
+  never copied into work. Then a standalone reproduction (plain Vulkan through `vulkan-1.dll`, no engine: kept by the
+  user outside the engine, with a README for NVIDIA) on driver 621.24 too: an image deeper than 2048 slices (2049
+  already; the device's `maxImageArrayLayers` is 2048, its `maxImageDimension3D` 16384) written by `vkCmdCopyImage` or
+  `vkCmdBlitImage`, even of one slice, loses the device at the `vkQueueSubmit` of a later `vkCmdCopyBufferToImage`
+  into any of its slices; 2048 slices, or no copy, work; the validation layer silent. Valid Vulkan; the driver's.
+  The same reproduction on a second machine (RTX 5070 Ti, driver 617.14, another Windows build) gave the same table
+  row for row: not one machine's, not a 621 regression. On the AMD Radeon 780M (driver 2.0.353) every variant of it
+  passes, the same binary. Not known: other NVIDIA architectures. No such report found
+  on NVIDIA's developer forums (2026-11-24); related there, both without an answer from NVIDIA: `vkCmdClearColorImage`
+  clearing only ~1025 slices of a 2048-slice 3D image (drivers 580-610), and a device lost on the RTX 5070 Ti with
+  621.01 with the same fault signature (WRITE_INVALID at address 0, DMA page fault) but another trigger.
+- `VulkanCommandList.CopyTexture`: a copy into a 3D texture (`CopyVolumeThroughBuffer`) goes through frame memory:
+  `vkCmdCopyImageToBuffer`, a transfer barrier on that memory (not tracked), `vkCmdCopyBufferToImage`; it counts as an
+  upload (`BeforeUpload`). So 3D images are written only by uploads, shaders and draws. Copies into 2D textures and
+  layers (from 3D ones too) still use `vkCmdCopyImage`. Cost: only the atlas growing (8 / 16 MB, at most twice per
+  renderer) and the static field's rebuild (2 x 4 MB) take this path, about a millisecond each through host memory;
+  nothing per frame. Still blitted into 3D images: their own mip levels (`GenerateMipmaps`), never seen to fail (no
+  upload follows them into deep slices).
+- Verified: both scenes open and run (30 s, scene view rendered, the atlas grown twice per renderer), so do two
+  other scenes of the project (one with the static field's 128^3 copies); the first one under the validation layer
+  with synchronization validation: no message. Not checked: OpenGL (untouched), other GPUs, the tests.
+- Seen on the way: once `vkQueueSubmit2` throws, `Submit` has ended its command buffers but not cleared
+  `mainBegun` / `setupBegun`, so the next submits end and send the same buffers again (validation: "not in a
+  recording state", "submitted 2 times"). Only after the device is lost already; not changed.
+
 ## Models and meshes
 
 - Every mesh file is a model (`LELEngine/Model`): `ModelAssets.Load(path)` gives a `Model` (node hierarchy, meshes
