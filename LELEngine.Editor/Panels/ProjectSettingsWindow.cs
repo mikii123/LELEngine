@@ -993,6 +993,41 @@ namespace LELEngine.Editor
 			return $"{SuperSamplingSettings.Label(factor)}  ({width} x {height} at 1080p{dl})";
 		}
 
+		/// <summary>Labels of Frames In Flight's choices (0: Auto).</summary>
+		private static readonly string[] FramesInFlightLabels = { "Auto (2 on a GPU of its own, 1 integrated)", "1 (least latency)", "2 (smoother when the CPU varies)" };
+
+		private bool DrawFramesInFlight(GraphicsSettings content)
+		{
+			bool changed = false;
+			int current = Math.Clamp(content.FramesInFlight, 0, 2);
+			FieldDrawer.Label("Frames In Flight", null, context);
+			ImGui.SetNextItemWidth(-1f);
+			if (EditorGui.BeginCombo("##framesinflight", FramesInFlightLabels[current]))
+			{
+				for (int i = 0; i < FramesInFlightLabels.Length; i++)
+				{
+					bool selected = i == current;
+					if (EditorGui.Selectable(FramesInFlightLabels[i], selected) && !selected)
+					{
+						context.BeginEdit();
+						content.FramesInFlight = i;
+						context.EndEdit();
+						changed = true;
+					}
+				}
+
+				EditorGui.EndCombo();
+			}
+
+			Tooltip("Frames a built game's CPU may prepare ahead of the GPU on Vulkan (OpenGL's driver decides for itself).\n" +
+				"1: the next frame is recorded while the GPU draws the last one: the least latency between input and screen.\n" +
+				"2: the GPU queues two frames, so a CPU frame that takes longer than the others does not leave it waiting:\n" +
+				"smoother on a GPU of its own, one frame more of latency. Auto: 2 on a GPU of its own, 1 on an integrated one\n" +
+				"(it shares memory and power with the CPU). The editor keeps its own (Auto). The player's command line\n" +
+				"overrides it: framesinflight=1 or 2.");
+			return changed;
+		}
+
 		private bool DrawGraphics(GraphicsSettings content)
 		{
 			bool changed = DrawGraphicsApi(content);
@@ -1011,6 +1046,7 @@ namespace LELEngine.Editor
 				changed = true;
 			}
 
+			changed |= DrawFramesInFlight(content);
 			ImGui.Spacing();
 			changed |= DrawSuperSampling(content.SuperSampling ??= new SuperSamplingSettings());
 

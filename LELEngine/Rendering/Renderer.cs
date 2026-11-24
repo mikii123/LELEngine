@@ -15,7 +15,7 @@ namespace LELEngine.Rendering
 	///     layers and by their materials' queues: the opaque sub-meshes feed every geometry pass, the transparent ones
 	///     (<see cref="MeshRenderer.HasTransparentParts" />) only the transparent pass.
 	/// </summary>
-	public sealed class Renderer
+	public sealed partial class Renderer
 	{
 		#region PublicFields
 
@@ -474,11 +474,19 @@ namespace LELEngine.Rendering
 				Partition(renderers, lods, lightingIndex);
 			}
 
-			RenderContext lightingContext = CreateContext(lightingIndex, lightingIndex, behaviours, queue);
+			// Every camera's context, made before the frame executes: the passes declare what they make with them.
+			contexts.Clear();
+			for (int i = 0; i < stack.Count; i++)
+			{
+				contexts.Add(CreateContext(i, lightingIndex, behaviours, queue));
+			}
+
+			RenderContext lightingContext = contexts[lightingIndex];
 
 			Profiler.BeginFrame();
 			FrameIndex++;
 			Motion.BeginFrame();
+			DecideAsyncCompute();
 
 			// GPU-driven geometry: the instance and material tables for this frame's culling and indirect draws (every
 			// camera of the stack culls the same tables with its own frustum and layers).
@@ -502,6 +510,12 @@ namespace LELEngine.Rendering
 			commands.State.ColorMask = ColorWriteMask.All;
 			SceneTarget.BeginCleared(Settings.ClearColor);
 
+			// What every pass of the frame makes and uses: the frame's transient textures.
+			using (FrameProfiler.Begin("Frame graph"))
+			{
+				PlanFrame(lightingIndex);
+			}
+
 			// Once per frame, seen from the lighting camera: shadow maps, GI volumes (its layers are the world).
 			int executed = 0;
 			Camera.current = stack[lightingIndex];
@@ -512,7 +526,7 @@ namespace LELEngine.Rendering
 
 			for (int i = 0; i < stack.Count; i++)
 			{
-				RenderContext context = i == lightingIndex ? lightingContext : CreateContext(i, lightingIndex, behaviours, queue);
+				RenderContext context = contexts[i];
 				if (i > 0 && stack[i].ClearDepth)
 				{
 					commands.State.SetDepth(true, true);
@@ -529,6 +543,7 @@ namespace LELEngine.Rendering
 			Camera.current = stack[lightingIndex];
 			Lighting.ScreenGIView = true;
 			RunScope(RenderPassScope.Final, lightingContext, executed);
+			Frame.EndFrame();
 
 			Profiler.EndFrame();
 			if (FrameProfiler.Enabled && !isTargetRenderer)
@@ -600,6 +615,7 @@ namespace LELEngine.Rendering
 			Camera.current = null;
 			GpuScene.EndFrame();
 			ClearLists();
+			contexts.Clear();
 		}
 
 		/// <summary>The passes of one scope (frame, final) in list order.</summary>
@@ -645,22 +661,32 @@ namespace LELEngine.Rendering
 
 		private int Execute(RenderPass pass, RenderContext context, string profileName, int executed)
 		{
+			if (context.Frame != null && Frame.EnterStep(pass))
+			{
+				// Nothing reads what the pass makes this frame.
+				return executed;
+			}
+
 			// A pass whose compute work may overlap the graphics work around it gives it to the compute queue (its
 			// timestamps too: its sections time that queue's work).
-			bool async = (asyncPasses != null ? Array.IndexOf(asyncPasses, pass.Name) >= 0 : pass.AsyncCompute) && Settings.AsyncCompute && Gfx.Capabilities.AsyncCompute
-				&& !(ABOff && ABExperiment == "async");
+			string[] chosen = ChosenAsyncPasses;
+			bool async = asyncFrame && (chosen != null ? Array.IndexOf(chosen, pass.Name) >= 0 : pass.AsyncCompute);
 			CommandList commands = Gfx.Commands;
 			if (async)
 			{
 				commands.BeginAsyncCompute();
 			}
 
+			executing = pass;
 			Profiler.Begin(profileName);
 			using (FrameProfiler.Begin(profileName))
 			{
 				pass.Execute(context);
 			}
 
+			// A part of the pass the pass gave to the compute queue ends with it (RenderContext.BeginAsyncCompute).
+			EndAsyncPart();
+			executing = null;
 			Profiler.End();
 			if (async)
 			{
@@ -705,6 +731,8 @@ namespace LELEngine.Rendering
 			{
 				Renderer = this,
 				Settings = Settings,
+				Frame = Frame,
+				CameraIndex = index,
 				Camera = camera,
 				CullingMask = lists.Mask,
 				IsLightingCamera = index == lightingIndex,
@@ -1118,6 +1146,7 @@ namespace LELEngine.Rendering
 			GpuScene.Dispose();
 			VFX.VfxRuntime.ReleaseRenderer(this);
 
+			Frame.Release();
 			SceneTarget?.Delete();
 			dumpTarget?.Delete();
 			DepthOnlyProgram?.Delete();

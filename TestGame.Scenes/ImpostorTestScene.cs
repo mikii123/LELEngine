@@ -624,12 +624,18 @@ namespace TestGame.Scenes
 
 		public override void Update()
 		{
+			var prepass = Game.Mono.Renderer.GetPass<LELEngine.Rendering.Passes.GeometryPrepass>();
+			if (prepass != null)
+			{
+				// Read after the frame: its memory is not given to the frame's later textures.
+				prepass.KeepMotion = true;
+			}
+
 			if (++frame != Frame)
 			{
 				return;
 			}
 
-			var prepass = Game.Mono.Renderer.GetPass<LELEngine.Rendering.Passes.GeometryPrepass>();
 			LELEngine.Rendering.RenderTexture motion = prepass?.Motion;
 			if (motion == null)
 			{

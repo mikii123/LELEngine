@@ -27,7 +27,19 @@ namespace LELEngine.Rendering.Passes
 
 		public override string Name => "GeometryPrepass";
 		public RenderTexture NormalRoughness => normalRoughness;
+
+		/// <summary>
+		///     The motion vectors of the last camera the prepass drew for: a frame texture (<see cref="FrameGraph" />), which
+		///     after the passes that read it may hold another texture of the frame, unless <see cref="KeepMotion" /> keeps it
+		///     to the frame's end.
+		/// </summary>
 		public RenderTexture Motion => motion;
+
+		/// <summary>The motion vectors are read after the frame (measurements: the frame's statistics, probes): they keep their memory to its end.</summary>
+		public bool KeepMotion;
+
+		/// <summary>The frame texture of the motion vectors, read by the passes that reproject their histories with them.</summary>
+		public const string MotionTexture = "GBuffer.motion";
 
 		/// <summary>G-buffer map bits of a material's variant (<see cref="MapsOf" />).</summary>
 		public const int NormalMapBit = 1;
@@ -105,27 +117,53 @@ namespace LELEngine.Rendering.Passes
 			instancedProgram = program.GetInstancedVariant();
 			backgroundProgram = new ShaderProgram("Engine/GBufferBackground.shader");
 
-			gbuffer = new Framebuffer(renderer.RenderWidth, renderer.RenderHeight);
-			normalRoughness = gbuffer.AddColorAttachment(RenderTextureFormat.RGBA16F, false);
-			motion = gbuffer.AddColorAttachment(RenderTextureFormat.RGBA16F, false);
-			gbuffer.AttachSharedDepth(renderer.SceneDepth);
-			gbuffer.Validate();
+			normalRoughness = new RenderTexture(renderer.RenderWidth, renderer.RenderHeight, RenderTextureFormat.RGBA16F, false);
 		}
 
 		public override void Resize(int width, int height)
 		{
-			// The shared depth is resized by the renderer; only the normal target is ours.
-			gbuffer.Resize(width, height);
+			// The shared depth is resized by the renderer, the motion by the frame graph; only the normal target is ours.
+			normalRoughness.Resize(width, height);
+			gbuffer = null;
+		}
+
+		public override void Setup(FrameGraph frame, RenderContext context)
+		{
+			if (!context.Settings.DepthPrepass)
+			{
+				return;
+			}
+
+			// The depth and the normals are the frame's for everyone: never skipped.
+			frame.SideEffects();
+			frame.CreateTexture(MotionTexture, new FrameTextureDescription(context.Width, context.Height, RenderTextureFormat.RGBA16F, false));
+			FrameStatistics statistics = context.Renderer.Statistics;
+			if (KeepMotion || (statistics.Active && statistics.ReadSource == FrameStatistics.Source.Motion))
+			{
+				frame.Export(MotionTexture);
+			}
 		}
 
 		public override void Execute(RenderContext context)
 		{
-			if (!context.Settings.DepthPrepass)
+			RenderTexture frameMotion = context.Frame != null && context.Frame.Has(MotionTexture) ? context.Frame.Texture(MotionTexture) : null;
+			if (!context.Settings.DepthPrepass || frameMotion == null)
 			{
 				context.DepthPrepassDone = false;
 				context.NormalRoughness = null;
 				context.Motion = null;
 				return;
+			}
+
+			if (gbuffer == null || motion != frameMotion)
+			{
+				// The normals, the frame's motion texture (the same while the frame graph's plan is), the scene's depth.
+				motion = frameMotion;
+				gbuffer = new Framebuffer(normalRoughness.Width, normalRoughness.Height);
+				gbuffer.AttachColor(normalRoughness);
+				gbuffer.AttachColor(motion);
+				gbuffer.AttachSharedDepth(context.SceneDepth);
+				gbuffer.Validate();
 			}
 
 			GpuScene gpu = context.Renderer.GpuScene;
@@ -281,8 +319,11 @@ namespace LELEngine.Rendering.Passes
 
 		public override void Dispose()
 		{
-			gbuffer?.Delete();
+			// The normals are ours; the motion is the frame graph's, the depth the scene's.
+			normalRoughness?.Delete();
+			normalRoughness = null;
 			gbuffer = null;
+			motion = null;
 			// Deletes the instanced variant and the map variants too.
 			program?.Delete();
 			program = null;

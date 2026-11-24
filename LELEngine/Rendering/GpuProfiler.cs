@@ -191,6 +191,7 @@ namespace LELEngine.Rendering
 
 		public void End()
 		{
+			paused = false;
 			if (active == null)
 			{
 				return;
@@ -202,11 +203,11 @@ namespace LELEngine.Rendering
 
 		/// <summary>
 		///     Ends the current section and starts a new one. Lets a pass break its time into sub-sections
-		///     (sections do not nest). Does nothing when no section is active.
+		///     (sections do not nest). Does nothing when no section is active, unless it was paused.
 		/// </summary>
 		public void Split(string name)
 		{
-			if (active == null)
+			if (active == null && !paused)
 			{
 				return;
 			}
@@ -214,6 +215,24 @@ namespace LELEngine.Rendering
 			End();
 			Begin(name);
 		}
+
+		/// <summary>
+		///     Ends the current section where the work moves to another queue (a section's two stamps are written on one):
+		///     the next <see cref="Split" /> begins its section all the same. Does nothing when no section is active.
+		/// </summary>
+		public void Pause()
+		{
+			if (active == null)
+			{
+				return;
+			}
+
+			End();
+			paused = true;
+		}
+
+		/// <summary>The current section ended for a change of queue (<see cref="Pause" />): the next split begins one.</summary>
+		private bool paused;
 
 		/// <summary>
 		///     Collects finished queries. Call once per frame after all sections ended.

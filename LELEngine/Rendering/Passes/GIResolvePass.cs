@@ -34,7 +34,12 @@ namespace LELEngine.Rendering.Passes
 		private const float FilterPlaneTolerance = 0.03f;
 
 		// The trace writes diffuse, specular and the filter's guide (normal, depth); the filter passes alternate between
-		// two diffuse-only targets.
+		// two diffuse-only targets. All of them are frame textures (FrameGraph): the last diffuse and the specular are read
+		// by the materials of the passes after this one.
+		private const string DiffuseName = "GIResolve.diffuse";
+		private const string SpecularName = "GIResolve.specular";
+		private const string GuideName = "GIResolve.guide";
+		private static readonly string[] FilteredNames = { "GIResolve.filtered0", "GIResolve.filtered1" };
 		private Framebuffer traceTarget;
 		private RenderTexture diffuse;
 		private RenderTexture specular;
@@ -56,11 +61,35 @@ namespace LELEngine.Rendering.Passes
 
 		#region PublicMethods
 
+		public override void Setup(FrameGraph frame, RenderContext context)
+		{
+			GlobalIlluminationSettings gi = Lighting.GI;
+			if (!(gi.VoxelConeTracingActive && gi.ScreenSpaceResolve && context.Settings.DepthPrepass))
+			{
+				return;
+			}
+
+			// It publishes the resolve to the materials (Lighting.GI): never skipped.
+			frame.SideEffects();
+			(int width, int height) = ResolveSize(context, gi);
+			frame.CreateTexture(DiffuseName, new FrameTextureDescription(width, height, RenderTextureFormat.RGBA16F));
+			frame.CreateTexture(SpecularName, new FrameTextureDescription(width, height, RenderTextureFormat.RGBA16F));
+			frame.CreateTexture(GuideName, new FrameTextureDescription(width, height, RenderTextureFormat.RGBA16F, false));
+			for (int i = 0; i < FilteredNames.Length; i++)
+			{
+				frame.CreateTexture(FilteredNames[i], new FrameTextureDescription(width, height, RenderTextureFormat.RGBA16F));
+			}
+
+			// The materials of the later passes (and the frame's statistics) read the specular and the last diffuse.
+			frame.Export(SpecularName);
+			frame.Export(gi.ResolveFilterPasses > 0 ? FilteredNames[(gi.ResolveFilterPasses - 1) & 1] : DiffuseName);
+		}
+
 		public override void Execute(RenderContext context)
 		{
 			GlobalIlluminationSettings gi = Lighting.GI;
 			bool used = gi.VoxelConeTracingActive && gi.ScreenSpaceResolve;
-			bool active = used && gi.VoxelTexture != null && context.DepthPrepassDone && context.NormalRoughness != null;
+			bool active = used && gi.VoxelTexture != null && context.DepthPrepassDone && context.NormalRoughness != null && context.Frame != null && context.Frame.Has(DiffuseName);
 			if (!active)
 			{
 				gi.ResolveActive = false;
@@ -73,10 +102,8 @@ namespace LELEngine.Rendering.Passes
 			}
 
 			// Super sampled: resolved at the window's density (soft light needs no more pixels; the upsampling fills the scene's).
-			float resolveScale = gi.ResolveScale / Math.Max(1f, context.SuperSampling);
-			int width = Math.Max(1, (int)Math.Ceiling(context.Width * resolveScale));
-			int height = Math.Max(1, (int)Math.Ceiling(context.Height * resolveScale));
-			EnsureTargets(width, height);
+			(int width, int height) = ResolveSize(context, gi);
+			FrameTargets(context.Frame);
 			Matrix4 invViewProjection = Matrix4.Invert(context.ViewProjection);
 			Vector3 cameraForward = context.Camera.transform.forward;
 
@@ -178,7 +205,7 @@ namespace LELEngine.Rendering.Passes
 
 		private void Release()
 		{
-			traceTarget?.Delete();
+			// The targets are the frame graph's.
 			traceTarget = null;
 			diffuse = null;
 			specular = null;
@@ -186,7 +213,6 @@ namespace LELEngine.Rendering.Passes
 			final = null;
 			for (int i = 0; i < filterTargets.Length; i++)
 			{
-				filterTargets[i]?.Delete();
 				filterTargets[i] = null;
 				filtered[i] = null;
 			}
@@ -230,26 +256,24 @@ namespace LELEngine.Rendering.Passes
 			return far.Xyz / far.W - cameraPosition;
 		}
 
-		private void EnsureTargets(int width, int height)
+		/// <summary>The resolve's size: the scene's times the resolve scale (super sampled: at the window's density).</summary>
+		private static (int Width, int Height) ResolveSize(RenderContext context, GlobalIlluminationSettings gi)
 		{
-			if (traceTarget != null && traceTarget.Width == width && traceTarget.Height == height)
-			{
-				return;
-			}
+			float resolveScale = gi.ResolveScale / Math.Max(1f, context.SuperSampling);
+			return (Math.Max(1, (int)Math.Ceiling(context.Width * resolveScale)), Math.Max(1, (int)Math.Ceiling(context.Height * resolveScale)));
+		}
 
-			traceTarget?.Delete();
-			traceTarget = new Framebuffer(width, height);
-			diffuse = traceTarget.AddColorAttachment(RenderTextureFormat.RGBA16F);
-			specular = traceTarget.AddColorAttachment(RenderTextureFormat.RGBA16F);
-			guide = traceTarget.AddColorAttachment(RenderTextureFormat.RGBA16F, false);
-			traceTarget.Validate();
-
+		/// <summary>The trace's and the filter's targets: the frame's textures declared in <see cref="Setup" />.</summary>
+		private void FrameTargets(FrameGraph frame)
+		{
+			traceTarget = frame.Target(DiffuseName, SpecularName, GuideName);
+			diffuse = traceTarget.ColorAttachments[0];
+			specular = traceTarget.ColorAttachments[1];
+			guide = traceTarget.ColorAttachments[2];
 			for (int i = 0; i < filterTargets.Length; i++)
 			{
-				filterTargets[i]?.Delete();
-				filterTargets[i] = new Framebuffer(width, height);
-				filtered[i] = filterTargets[i].AddColorAttachment(RenderTextureFormat.RGBA16F);
-				filterTargets[i].Validate();
+				filterTargets[i] = frame.Target(FilteredNames[i]);
+				filtered[i] = filterTargets[i].ColorAttachments[0];
 			}
 		}
 

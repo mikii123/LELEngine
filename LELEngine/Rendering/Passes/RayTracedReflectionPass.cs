@@ -64,6 +64,15 @@ namespace LELEngine.Rendering.Passes
 
 		#region PublicMethods
 
+		public override void Setup(FrameGraph frame, RenderContext context)
+		{
+			// The reflections' history is reprojected with the prepass's motion vectors.
+			if (Lighting.RayTracedReflections)
+			{
+				frame.Read(GeometryPrepass.MotionTexture);
+			}
+		}
+
 		public override void Execute(RenderContext context)
 		{
 			GlobalIlluminationSettings gi = Lighting.GI;

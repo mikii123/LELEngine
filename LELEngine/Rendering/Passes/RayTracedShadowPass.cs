@@ -75,6 +75,15 @@ namespace LELEngine.Rendering.Passes
 
 		#region PublicMethods
 
+		public override void Setup(FrameGraph frame, RenderContext context)
+		{
+			// The shadows' history is reprojected with the prepass's motion vectors (with lights to trace).
+			if ((Lighting.RayTracedLocalShadows && LightBuffer.ShadowSlotCount > 0) || Lighting.RayTracedDirectionalShadows)
+			{
+				frame.Read(GeometryPrepass.MotionTexture);
+			}
+		}
+
 		public override void Execute(RenderContext context)
 		{
 			Lighting.RayShadows = default;

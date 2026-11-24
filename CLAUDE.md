@@ -102,7 +102,9 @@
   `Gfx.Device` (`GraphicsDevice.Current`), `Gfx.Commands`, `Gfx.Capabilities` (`DeviceCapabilities`; the engine's
   `GraphicsCapabilities` reads it). Objects: `GpuTexture` / `GpuBuffer` made from descriptors with usages
   (`TextureDescriptor`, `TextureUsage` Sampled / Storage / Attachment / SliceImages: a 3D texture whose slices are
-  bound as 2D images, below; `BufferDescriptor`, `BufferUsage`), samplers
+  bound as 2D images, below / AsyncCompute: a render target the compute queue shares, "The frame's structure";
+  `BufferDescriptor`, `BufferUsage`), transient textures that share memory
+  (`CreateTransientTextures`, the frame graph's), samplers
   apart from textures (`Samplers.LinearClamp` ..., `GetSampler(SamplerDescriptor)`), `GpuProgram` (`ProgramDescriptor`:
   the GLSL stages as the engine writes them, the attribute locations; it holds its uniform values and its samplers'
   textures by slot), `GpuFence`, `GpuTimestamp`. The engine's wrappers keep their names: `Texture.Gpu`,
@@ -536,23 +538,26 @@
   `RenderSettings.AsyncCompute` (default on; LEL_ASYNC_COMPUTE=0 off for every renderer of a run), the renderer
   brackets such a pass (its profiler sections too: they time the compute queue's work). LEL_ASYNC_PASSES=name,name
   picks the passes by name instead of their declarations (to measure which gain). Declared: `SurfaceCachePass`,
-  `RadianceCachePass`. Not declared, though free of the frame's raster work ("Voxel GI and distance fields on Vulkan"):
-  the mesh field builds, the global field's compose, the top level's build, VCT's region clears and block compaction;
-  they are parts of passes whose other parts read raster work, so they would take `BeginAsyncCompute` /
-  `EndAsyncCompute` around those parts rather than a pass's declaration (the device orders whatever is put there).
+  `RadianceCachePass` (since 2026-11-24 the surface cache gives parts of itself, `RenderContext.BeginAsyncCompute`, and
+  the renderer stops using the queue while it does not pay: "The frame's structure" below). Not declared, though free
+  of the frame's raster work ("Voxel GI and distance fields on Vulkan"): the mesh field builds, the global field's
+  compose, the top level's build, VCT's region clears and block compaction; they are parts of passes whose other parts
+  read raster work, so they would take `BeginAsyncCompute` / `EndAsyncCompute` around those parts rather than a pass's
+  declaration (the device orders whatever is put there).
   The ray traced lighting's passes stay on the graphics queue (`RayTracedShadowPass`, `RayTracedReflectionPass`): their
   traces read the prepass's depth (a depth texture: the graphics queue's on this device) and the opaque pass reads
   what they make right after, so the compute queue would only add waits between the queues; only the shadow casters'
   top level build could go there, which is small.
 - Vulkan (`Graphics/Vulkan/VulkanDeviceQueues.cs`, `VulkanCommandListQueues.cs`): a queue of a compute family apart
   from the graphics family (AMD: its asynchronous compute engines; family 1 on the 780M) with timeline semaphores, made
-  only when asked for (`GraphicsDevice.RequestAsyncCompute` before the first window, LEL_ASYNC_COMPUTE=1; off by
-  default: the measurements below) and the GPU has one (LEL_VULKAN_DISABLE=asynccompute: never). Without it the device
+  when the GPU has one (`GraphicsDevice.RequestAsyncCompute` before the first window: on by default since 2026-11-24,
+  LEL_ASYNC_COMPUTE=0 off; LEL_VULKAN_DISABLE=asynccompute: never). Without it the device
   is the one queue device it was (no timelines, every resource exclusive). A `VulkanStream` per queue holds its command buffers
   (its own pool), setup batch, host reads, written timestamps and its timeline (each submission signals the next
   value). Resources the compute queue may use are shared by both families (`VK_SHARING_MODE_CONCURRENT`: no ownership
-  transfers); depth textures and the window's back buffer stay exclusive to the graphics family (their compression),
-  and a command that touches one runs on the graphics queue (`VulkanTexture.Concurrent`).
+  transfers); depth textures, the window's back buffer and (since 2026-11-24) colour attachments made without
+  `TextureUsage.AsyncCompute` or `Storage` stay exclusive to the graphics family (their compression), and a command that
+  touches one runs on the graphics queue (`VulkanTexture.Concurrent`).
   - An asynchronous region starts after the graphics work sent before it (`VulkanDevice.ForkCompute`): without that the
     compute queue ran a frame ahead, beside the previous frame's heaviest graphics-queue compute, and both slowed down
     several times over (RadianceCache.trace 15 ms instead of 0.14, frame wall 23-37 ms instead of 6).
@@ -576,7 +581,8 @@
     those of the other queue up to its value) and gives the compute submissions fences: what that layer follows. Run
     synchronization validation with it.
 - Frames in flight (`VulkanContext.SwapBuffers`): the CPU records at most one frame ahead, counted by frames (it waits
-  for the frame before's present) instead of by submissions: a frame takes more of them now (the queues' waits).
+  for the frame before's present) instead of by submissions: a frame takes more of them now (the queues' waits). Since
+  2026-11-24 a setting (`GraphicsDevice.FramesInFlight`: "The frame's structure" below).
 - The back buffer after presenting (`VulkanCommandList.AfterPresent`, called by `VulkanContext.SwapBuffers`): right
   after the blit that reads it, in the same command buffer, the back buffer goes back to the layout it is drawn in.
   When that layout change came with the next frame's first draw, in a later submission than the blit's (which waits
@@ -616,7 +622,8 @@
     6.22 -> 6.10 ms and its frame time 6.47 -> 6.43 (the radiosity ran beside Shadows, the radiance cache beside the
     prepass, both a little slower there; ProbeGather joins them). With other programs using the GPU at the same time
     the compute queue waits behind them: lumen 14.5-26.3 ms on against 5.9-6.0 off, frame time 16-33 against 6.7-7.5.
-    Hence off by default; the passes keep their declarations. Its pictures are the frames before's (LEL_ASYNC_COMPUTE=1:
+    Hence off by default (on since 2026-11-24, with a guard: "The frame's structure" below); the passes keep their
+    declarations. Its pictures are the frames before's (LEL_ASYNC_COMPUTE=1:
     lights 4, lumen 2, materials 3, suns3 1 of 255, as two runs of it differ); under synchronization validation, which
     slows the queues apart, the GI's readbacks land in other frames and lights / materials / suns3 converge elsewhere
     (mean up to 3.6) without a message of the layer.
@@ -634,10 +641,10 @@
 - Memory (lumen, LEL_VULKAN_MEMORY=1): 336 MB allocated in 412 MB of blocks; textures 313 MB: render targets 223 MB
   (the shadow map's transmittance 64 MB, the grid shadow map's 16, the shadow depth 16, nine 1280 x 720 RGBA16F targets
   of 7 MB), storage images 82 MB, sampled only 8 MB (331 MB with the ray traced lighting merged: the reflections'
-  28 MB of history in, the global distance field out). Aliasing transient targets was not done: most full-screen targets
-  are histories kept over frames, the transmittance maps now keep their contents (they are cleared only where drawn),
-  and what is transient within a frame (the G-buffer's motion, a few GI intermediates: 14-28 MB, 4-8 %) would need the
-  passes to say when their targets live (a frame graph), not the device.
+  28 MB of history in, the global distance field out). Aliasing transient targets was not done here: most full-screen
+  targets are histories kept over frames, the transmittance maps now keep their contents (they are cleared only where
+  drawn), and what is transient within a frame (the G-buffer's motion, a few GI intermediates: 14-28 MB, 4-8 %) needs
+  the passes to say when their targets live: the frame graph since 2026-11-24 ("The frame's structure" below).
 - Verified: the device tests (`scratchpad/submit/vktest` of session 2a1d1c21: the tests of vktest-final and
   `Tests7.cs`: rounds through both queues with dispatches reading what draws drew and draws reading what dispatches
   wrote, draws inside asynchronous work, a dispatch sampling a depth texture, readbacks in the submission and sent
@@ -655,6 +662,179 @@
   check 0 different.
 - Not done: command buffers recorded on several threads (the render thread's CPU time is ~1 ms against 6-11 ms of GPU
   in the GI scenes), pools reset per frame, push constants (a uniform per draw costs 124 ns against OpenGL's 112).
+
+## The frame's structure: async compute by default, the frame graph, frames in flight (2026-11-24, branch `vk-frame`)
+
+- The ask (the third round of the Vulkan work, a GPU of its own the primary target): the asynchronous compute queue on
+  by default and worth it (priorities, more work on it where its inputs allow, fewer waits between the queues, a guard
+  for machines where it hurts); a frame graph through which passes declare their resources so transient targets share
+  memory, adopted pass by pass; frames in flight for GPUs of their own as a setting; measured.
+- Asynchronous compute, the device (`Graphics/Vulkan/VulkanDeviceQueues.cs`):
+  - On by default (`GraphicsDevice.RequestAsyncCompute`; LEL_ASYNC_COMPUTE=0 makes the one queue device).
+  - Global priorities (`AskForQueuePriorities`): with VK_KHR_global_priority (or VK_EXT_global_priority and its query)
+    a queue can be made with HIGH where its family offers it (the 780M's do): LEL_VULKAN_QUEUE_PRIORITY=compute (the
+    compute queue) | high (both) | default (neither: the default). Made so that other programs' work would not hold
+    back what the graphics queue waits for; measured, a high compute queue made it worse (lumen with another engine
+    process on the GPU, in-run A/B: frames 27.0 ms with the compute queue against 14.0 without at HIGH, 17.0 against
+    12.5 at the default priority), so it is not asked for. A device the driver refuses with it (VK_ERROR_NOT_PERMITTED)
+    is made again without. The console says `[Vulkan] Asynchronous compute queue: family 1, global priorities: ...`.
+  - Sharing: colour attachments are exclusive to the graphics family unless made with `TextureUsage.AsyncCompute` (or
+    `Storage`): drivers may compress only render targets one family owns (AMD's DCC); a dispatch given in asynchronous
+    work that binds one runs on the graphics queue (counted: `async dispatches on the graphics queue` in
+    LEL_VULKAN_STATS, the texture named by LEL_VULKAN_TRACE_QUEUES). `RenderTexture` and
+    `Framebuffer.AddColorAttachment` take `asyncCompute`. The surface cache's captured cards ask for it. Depth textures
+    stay the graphics queue's: tried shared (the grid shadow map read by the surface cache's lighting on the compute
+    queue), AMD's driver gave wrong depths (the refraction scene's GI black, mean 85 of 255; no message of the
+    validation layer), most likely as a compressed depth image's layout change on a queue without the depth hardware
+    does not decompress it.
+  - LEL_VULKAN_TRACE_QUEUES=1 now names the resource behind every wait between the queues (`graphics reads texture
+    'Radiance cache atlas' (1278x1260x1 RGBA16F), last written by the other queue's 591`): how the waits were found.
+- Asynchronous compute, the renderer (`Rendering/RendererQueues.cs`, `AsyncComputeGuard.cs`):
+  - A pass gives a part of itself to the compute queue: `RenderContext.BeginAsyncCompute()` / `EndAsyncCompute()` (true
+    when the frame uses the queue; LEL_ASYNC_PASSES gates parts by pass name too). The profiler's section open then ends
+    (`GpuProfiler.Pause`: a section's two stamps are written on one queue) and the next split begins one on the other
+    queue: split right after it. Whole passes still say `RenderPass.AsyncCompute`.
+  - `SurfaceCachePass`: the scene's tables and top level (uploads, builds) are a part, the capture and the grid's shadow
+    map the graphics queue's, the radiosity a part, the cards' lighting the graphics queue's (it samples the grid's
+    depth). Before, the whole pass was declared: its lighting dispatch fell back to the graphics queue (the depth) with
+    its profiler section's stamps on the compute queue, and the grid map's layout buffer was uploaded on the compute
+    queue for the graphics queue to read. Now each part is on the queue it runs on, and the frame (lumen) waits three
+    times, each where it needs the other queue's result: the lighting for the radiosity's probes, the radiance cache
+    (`RadianceCachePass`, declared whole) for this frame's card lighting, the probe gather for the radiance cache.
+  - Tried and not declared (LEL_ASYNC_PASSES with the traced waits): `VfxSimulate` (the shadow pass right after reads
+    its particles: no overlap, 2 more waits), `Volumetrics` (read by `VolumeMedia` right after the shadows: 2 more
+    waits), `VolumeMedia` (samples the shadow maps: depth), `LightClusters` (~0.01 ms, read by the first lit draw: a
+    wait for nothing), `GlobalSDF` with the fields (one more wait), `VoxelGI` whole (four waits: voxelization,
+    injection, mips, bounces and the resolve are one chain on the frame's critical path), the traced shadows and
+    reflections (they read the prepass's depth). In this pass order the work that can overlap the graphics queue is
+    Lumen's caches; more needs passes reordered (the shadow maps after the prepass beside the probe gather, say), which
+    changes what the frame reads.
+  - The guard (`AsyncComputeGuard`, `Renderer.AsyncGuard`, `Renderer.AsyncCompute`; `RenderSettings.AsyncComputeGuard`,
+    LEL_ASYNC_GUARD=0: the compute queue in every frame): every 300 frames a block of 12 frames runs the other way,
+    compared (the median frame time, from one frame's start to the next; the first 2 frames of a block and after it left
+    out) with the 16 frames before and after it (a drift cancels). Off when the frames without are 20 % faster in one
+    block, 8 % in two in a row (the second 60 frames after the first), or 3 % on average over the last four; then a
+    block with it after 600 frames, doubled after each block that finds it still slower (to 9600), on again when 3 %
+    faster. At once, not at the next 300th frame, when the frames grow by half. It starts on for a GPU of its own and
+    off for an integrated one (`Start`; the 780M's measurements below: there the queues side by side only share the
+    same few units). `[AsyncCompute] Off: ...` / `On again: ...` in the console. The picture is the same either way.
+    The frame time, not the GPU's frame wall: with another program on the GPU the frames take far longer than the
+    graphics queue's frame stamps show (lumen: frame 14.1 ms on against 7.0 off, GPU frame wall 6.7 against 6.0; the
+    CPU's frame throttle waits for both queues' work of the frame before). LEL_AB=async switches it off for its own
+    blocks; LEL_ASYNC_PASSES_OFF with LEL_AB=async compares two choices of passes ("default": the declarations).
+- The frame graph (`Rendering/FrameGraph.cs`, `RendererFrame.cs`; `Renderer.Frame`, `RenderContext.Frame`):
+  - Before a frame executes, every pass that runs in it is asked what it makes and uses (`RenderPass.Setup(FrameGraph,
+    RenderContext)`), in the order and with the contexts the frame will run them (frame passes, each camera's, final).
+    `CreateTexture(name, FrameTextureDescription)` (made by the declaring pass, contents undefined when it begins),
+    `Read` / `Write(name)` (a texture an earlier pass made; nothing when none did), `Export(name)` (read outside the
+    graph after its last declared reader: lives to the frame's end), `SideEffects()` (never skipped). Names are per
+    camera (`RenderContext.CameraIndex`; frame and final passes the lighting camera's). The graph runs the passes in the
+    list's order; a declared pass with writes and no side effects whose writes nothing later reads or exports is
+    skipped. In `Execute` a pass gets its textures by name: `context.Frame.Texture(name)` (a `RenderTexture` over the
+    graph's texture) or `Target(color, color2, color3, depth)` (a `Framebuffer`), the same objects while the plan is.
+  - Plan: a texture lives from the first to the last pass that declares it; the device places those that never live at
+    the same time in the same memory (`GraphicsDevice.CreateTransientTextures(descriptors, lifetimes, out bytes, out
+    unsharedBytes)`). A frame that declares the same names, sizes and overlaps in time as the last keeps its textures;
+    otherwise they are made anew and the old ones retired (`[FrameGraph] N transient textures: X MB of memory (Y MB each
+    in its own) | name size passes first-last ...`). LEL_FRAME_GRAPH=0: no sharing (to compare). OpenGL: each a texture
+    of its own (`DeviceCapabilities.TextureAliasing` false), so its picture cannot change.
+  - Vulkan (`Graphics/Vulkan/VulkanDeviceAliasing.cs`): the images are made without memory, their requirements packed
+    per memory type, largest first, each at the lowest aligned offset where it meets no texture placed before that
+    lives at the same time; one dedicated VMA block (`VulkanHeap`) per type, freed with its last texture
+    (`RetiredKind.Memory`). Each texture keeps the others its memory overlaps (`VulkanTexture.Aliases`). Its first use
+    after one of them was used takes the memory over (`TakeMemory`, from `Require`): its layout is undefined, its states
+    on both queues become the last uses of the others and its own (their stages and writes in the use's image barrier,
+    plus a memory barrier: `SyncState.AliasedMemory`), its queue uses the latest of theirs (so the use waits for the
+    other queue's submissions of them). Such a use never goes ahead of the stream (`StreamUnused`, `TakesMemory`): the
+    setup command buffer would run before the others' uses in the stream. Its own last uses are gathered too:
+    synchronization validation reported WRITE-AFTER-WRITE without them (the others' barriers order them only over the
+    memory each covers).
+  - Adopted: `GeometryPrepass` makes the motion vectors (`GBuffer.motion`, `GeometryPrepass.MotionTexture`; the normals
+    stay its own, the G-buffer target is made over the frame's texture), read by `RayTracedShadowPass`,
+    `ScreenProbeGatherPass` and `RayTracedReflectionPass` (their `Setup` declares the read when they will trace),
+    exported while the frame's statistics read motion or `GeometryPrepass.KeepMotion` (the impostor test's probe) asks;
+    `GIResolvePass` makes its five targets (the last diffuse and the specular exported: the materials read them);
+    `PostProcessPass` makes the super sampling's intermediate (`PostProcess.across`).
+  - How a pass adopts (for passes with targets that live within a frame): in `Setup`, declare what `Execute` will make,
+    with the size `Execute` will use (the same condition: a texture declared and not used costs only memory; one used
+    and not declared is missing), `SideEffects()` when the pass publishes anything outside the graph, `Export` what
+    later passes read without declaring; readers declare `Read` when they will read. In `Execute`, take the textures from
+    `context.Frame` instead of making them, write them whole before reading (the memory held another texture), and do
+    not keep them past the frame. Histories (read the next frame) stay the pass's own.
+- Frames in flight (`VulkanContext.SwapBuffers`): `GraphicsDevice.FramesInFlight` (read at every present; 0, the
+  default: 2 on a GPU of its own, 1 on an integrated one, `DeviceCapabilities.IntegratedGpu`; LEL_FRAMES_IN_FLIGHT),
+  `DeviceCapabilities.FramesInFlight` the value taken: the CPU waits for the present `FramesInFlight` frames back; the
+  swapchain has frames in flight + 2 images. Project Settings > Graphics > Display > Frames In Flight
+  (`GraphicsSettings.FramesInFlight`: built games; the player's `framesinflight=1|2` overrides, Player.log says which);
+  TestGame `framesinflight=`. OpenGL's driver keeps its own.
+- Measured (780M, TestGame 1280 x 720 Debug, `hwrt=1`; two to six other sessions' engine processes used the GPU through
+  nearly every run, so the in-run A/B (LEL_AB=async, 1800 frames in blocks of 30: median frame time and GPU frame wall,
+  compute queue on / off; scratchpad `vk-frame/ab.ps1`) is what compares; the numbers drift between runs with the
+  load):
+  - The compute queue (the passes' declarations, the guard off): alone, lumen 6.84 / 6.68 ms (GPU wall 6.59 / 6.29);
+    with one other process outdoor 4.72 / 4.41, nogpudriven 6.83 / 6.76, volumetrics 9.01 / 8.81; with two to four
+    materials 16.9 / 11.8, refraction 9.46 / 9.57, lights 20.9 / 16.8, suns3 10.3 / 7.26, impostors 12.6 / 12.9, vfx
+    20.2 / 16.8, anim 10.3 / 8.9 (these with the compute queue at HIGH); the final build: lumen 19.4 / 11.8, lights
+    40.1 / 33.2, materials 14.9 / 8.4, outdoor 8.1 / 5.6. With TestGame's vct scene running uncapped beside it: lumen
+    27.0 / 14.0 at HIGH, 17.0 / 12.5 at the default priority; lights 37.1 / 28.3, materials 26.4 / 19.3 at HIGH. On this
+    integrated GPU the compute queue does not pay (the engine before this work measured lumen 6.10 / 6.22 alone, within
+    what these runs drift), and costs much more while other programs use the GPU: hence the guard, and off at the start
+    on integrated GPUs. A GPU of its own (more units idle during the shadow maps and the prepass) is where it should
+    gain; not measured here.
+  - The surface cache in parts against the whole pass on the compute queue (LEL_ASYNC_PASSES=SurfaceCache,RadianceCache
+    on, LEL_ASYNC_PASSES_OFF=default off; four or five other processes): lumen 15.4 / 16.0 ms (GPU wall 7.36 / 8.68),
+    lights 20.9 / 23.5 (11.7 / 12.7), materials 15.8 / 15.3 (7.57 / 8.39), outdoor 19.4 / 16.3 (10.5 / 6.14).
+  - The guard (lumen, 2400 frames, TestGame vct uncapped beside it, the guard starting on: LEL_ASYNC_GUARD_START=on;
+    scratchpad `vk-frame/guard.ps1`): each run turned the queue off at its first block (`Off: frames without the compute
+    queue 12.56 ms against 32.81 ms with it`, 12.84 against 35.52; without the extra process 8.69 against 19.47). Median
+    frame time of the run, guard / without the queue / the queue always: 15.7 / 15.0 / 26.0 ms, without the extra
+    process 10.7 / 9.5 / 14.1 (a round whose load rose for minutes from the start gave 30.9 / 12.8 / 31.7: the other
+    sessions' load changes more between runs than these differ). With its margins at 35 % / 10 % (an earlier build) it
+    took several blocks, turned the queue on again when the load dropped and off when it rose.
+  - Frames in flight (scratchpad `vk-frame/fif.ps1`, 1800 frames, frame trace of the last 1200, three to four other
+    processes): lumen frame interval median 12.3 / 15.2 ms with one, 9.6 / 12.3 with two; anim (16 ms of CPU work a
+    frame) 21.0 / 21.9 against 19.3 / 19.7; ui 2.14 / 1.84 against 2.90 / 2.16. The GPU's frame wall the same.
+  - Every scene against the starting commit's build (scratchpad `vk-frame/perf2.ps1`: 1200 frames, the builds in turns
+    twice, each run's least disturbed [Stats] window; Vulkan's default here starts without the compute queue): GPU frame
+    wall the same within the runs' spread (gi0 1.86 / 1.51 ms, lumen 5.88 / 5.69, vct 9.05 / 8.46, materials 7.20 /
+    7.41, refraction 8.04 / 8.21, lights 8.95 / 8.75, outdoor 4.41 / 4.21, nogpudriven 6.68 / 6.73, ssaa 2.94 / 2.71,
+    trails 0.98 / 0.95, vfx 3.48 / 3.44, volumetrics 8.62 / 8.54, impostors 4.19 / 4.13, ui 1.03 / 1.03, nav 0.89 /
+    0.81); the render thread's CPU time within its noise (0.4-7.4 ms either way); the frame graph's planning 0.21 ms in
+    a first frame (the hitch profiler's `Frame graph` scope; a frame that keeps the plan allocates nothing). OpenGL the
+    same within the spread (GPU sections: lumen 6.52 / 6.20, vct 9.61 / 9.21, materials 5.88 / 5.71, lights 8.59 /
+    8.10, suns3 7.18 / 7.14, ssaa 1.53 / 1.44, impostors 3.11 / 3.18, ui 0.45 / 0.45; frame walls moving 10 % either way
+    with the other sessions' load, vfx 3.20 / 3.97 in one run and 5.58 / 4.64 in the next).
+  - Memory (LEL_VULKAN_STATS=1, the allocator's total): vct 313.9 -> 306.9 MB (the motion vectors share 7 MB with the
+    resolve's targets: `[FrameGraph] 6 transient textures: 8.8 MB of memory (15.8 MB each in its own)`), ssaa 160.7 ->
+    150.1 (the motion vectors and the super sampling's intermediate: 15.8 MB for 26.4); the other scenes the same (the
+    motion vectors alone among the frame's textures). With the scene at 2560 x 1440 (`ssaa=4`; TestGame caps the factor
+    there): lumen 419.5 -> 405.4 MB (28.1 MB for 42.2), vct 402.7 -> 379.8 (28.1 for 51.0). The histories (most of the
+    full-screen targets) do not share.
+- Verified (scratchpad `vk-frame/`: `vktest`, the device tests of `submit/vktest` with `TestsFrame.cs`: render targets
+  shared with the compute queue and not, transient textures over one another drawn, dispatched and read through three
+  frames, on both queues in turn, made and disposed while in use, frames presented with two in flight; `verify1.ps1`,
+  `verify2.ps1`, `snapdump.ps1`): device tests 609 results, 603 equal to OpenGL's, the 6 known, 0 different, with the
+  compute queue, one queue, without ray queries; no message of the layer but, with one queue under synchronization
+  validation, the known WRITE-AFTER-WRITE of `asyncAcrossFrames` (9); with the compute queue and binary waits none.
+  (The transient tests found two things: a texture's own last uses belong in its take-over, and a test that read a
+  transient after its declared lifetime read another texture's texels on one queue: as designed.) TestGame's 18
+  scenes on Vulkan against the starting commit's frames (`dumps/base-rt1`, `base-rt0`): `hwrt=1`, `hwrt=0`, the compute
+  queue every frame (LEL_ASYNC_GUARD=0), two frames in flight, without the compute queue, without sharing memory: max
+  0-9 (mean <= 0.007) but anim (max 26-30, mean <= 0.004) and vfx (never repeats), as two runs of the starting commit
+  differ (max 0-6, anim 28); super sampled lumen and vct (the post process's intermediate over the motion vectors)
+  shared against not: max 2 / 1. Core validation (the compute queue every frame): `hwrt=1` and `0`, two in flight: no
+  message but `UNASSIGNED-VkSemaphore-state-timeout` (7, the layer: "most likely a validation bug", from
+  `vkGetSemaphoreCounterValue` on the compute timeline in the lights scene's first frames, 3 of 4 runs; 0 in 3 runs of
+  the starting commit with LEL_ASYNC_COMPUTE=1; the GPU shared with other sessions' runs throughout). Synchronization
+  validation with binary waits on gi0, lumen, vct, materials, refraction, lights, outdoor, volumetrics and the super
+  sampled lumen and vct: no message. OpenGL's check: 0 different.
+- Left: the compute queue on a GPU of its own measured (the default there; the guard turns it off where it does not
+  pay); more overlap needs the pass order changed (the shadow maps beside the probe gather); the 780M's frames with
+  the compute queue lose 2-7 % alone: not looked into (the surface cache's parts made it better than the whole pass);
+  the frame graph's adoption by the other passes with targets that live within a frame (the transparent pass's scene
+  grab and half resolution layer, the probe gather's ray atlas and filter scratch: they decide during `Execute` what
+  they need, so their `Setup` needs that decision first), passes reordered by their declarations (the graph runs the
+  list's order); the layer's timeline timeout above.
 
 ## Voxel GI and distance fields on Vulkan: conservative coverage, ray-traced cones (2026-11-23, branch `vk-sdfvct`)
 

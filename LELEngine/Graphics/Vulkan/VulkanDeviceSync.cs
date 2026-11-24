@@ -115,7 +115,7 @@ namespace LELEngine.Graphics.Vulkan
 			Brutal.VulkanApi.Vma.VmaTotalStatistics memory;
 			Brutal.VulkanApi.Vma.Vma.PInvoke.vmaCalculateStatistics(Allocator, &memory);
 			Console.WriteLine(
-				$"[Vulkan stats] per frame: barriers {(BarriersRecorded - statsBarriers) / (double)statsFrames:0.0}, renderings suspended for a barrier {(RenderingSuspensions - statsSuspensions) / (double)statsFrames:0.0}, descriptor sets written {(DescriptorSetsWritten - statsSets) / (double)statsFrames:0.0}, descriptor cache restarts {(DescriptorCacheResets - statsResets) / (double)statsFrames:0.00}, compute queue submissions {(ComputeSubmissions - statsComputeSubmissions) / (double)statsFrames:0.0}, waits between the queues {(CrossQueueWaits - statsWaits) / (double)statsFrames:0.0} | memory: {(double)(ulong)memory.Total.Statistics.AllocationBytes / (1 << 20):0.0} MB in {memory.Total.Statistics.AllocationCount} allocations, {(double)(ulong)memory.Total.Statistics.BlockBytes / (1 << 20):0.0} MB of blocks");
+				$"[Vulkan stats] per frame: barriers {(BarriersRecorded - statsBarriers) / (double)statsFrames:0.0}, renderings suspended for a barrier {(RenderingSuspensions - statsSuspensions) / (double)statsFrames:0.0}, descriptor sets written {(DescriptorSetsWritten - statsSets) / (double)statsFrames:0.0}, descriptor cache restarts {(DescriptorCacheResets - statsResets) / (double)statsFrames:0.00}, compute queue submissions {(ComputeSubmissions - statsComputeSubmissions) / (double)statsFrames:0.0}, waits between the queues {(CrossQueueWaits - statsWaits) / (double)statsFrames:0.0}, async dispatches on the graphics queue {(ComputeFallbacks - statsFallbacks) / (double)statsFrames:0.0} | memory: {(double)(ulong)memory.Total.Statistics.AllocationBytes / (1 << 20):0.0} MB in {memory.Total.Statistics.AllocationCount} allocations, {(double)(ulong)memory.Total.Statistics.BlockBytes / (1 << 20):0.0} MB of blocks");
 			if (printMemory && ++memoryReports == 5)
 			{
 				PrintTextures();
@@ -129,6 +129,9 @@ namespace LELEngine.Graphics.Vulkan
 			statsResets = DescriptorCacheResets;
 			statsWaits = CrossQueueWaits;
 			statsComputeSubmissions = ComputeSubmissions;
+			statsFallbacks = ComputeFallbacks;
 		}
+
+		private long statsFallbacks;
 	}
 }
