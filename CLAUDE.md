@@ -684,7 +684,9 @@
     (`SetTexture` counts a change only when the texture, the sampler or the texture's own sampler changed).
   - A read ordered by an earlier command in the same `SyncEpoch` is not looked at again (`IsReadyFor` / `MarkReady` on
     textures and buffers): no write or layout change happened anywhere since, so it needs nothing; the resource is only
-    marked as used. A command with nothing to order records nothing (`ApplyRequirements` returns at once).
+    marked as used. A command with nothing to order records nothing (`ApplyRequirements` returns at once). The same for
+    a traced top level with every bottom level it holds (`VulkanAccelerationStructure.IsReadyFor`): a draw of a ray
+    query variant of a material looked at all of them for every draw.
   - The objects a cached descriptor set names (for forgetting it when one is destroyed) are worked out from the key
     when a set is written, not for every look-up.
 - Push constants (`VulkanProgramPush.cs`, `SpirvPushConstants.cs`): loose uniforms a draw reads from push constants
@@ -747,7 +749,7 @@
     LEL_VULKAN_SHADER_NOTE set; the base build's `vktest`, never run with libraries, passes the same tests.
   - LEL_VULKAN_SHADER_NOTE=text adds a note to every module: nothing comes from the driver's cache (to measure a first
     run's pipeline compiles).
-- `asyncAcrossFrames` (the device tests' WRITE-AFTER-WRITE under synchronization validation with one queue, 4-8 a run):
+- `asyncAcrossFrames` (the device tests' WRITE-AFTER-WRITE under synchronization validation with one queue, 4-9 a run):
   confirmed as the layer's. The scratch buffer of a frame is freed once its submission's fence has signalled (the CPU
   waited for it) and the next buffer gets the same memory; the layer reports the new upload's copy against the copy into
   the freed buffer two submissions before. The same test without presenting (`VKTEST_NOPRESENT=1`: a flush and a fence
@@ -755,7 +757,41 @@
   `vkWaitForFences` (also with an infinite timeout right before its reset) nor `vkGetFenceStatus` changes it: the old
   access comes back through the swapchain image's acquire, from the batch that presented that image before (the layer
   carries that batch's accesses with the present and does not drop them when the fence wait retires the batch).
-- Measured: see the numbers below (filled in after the measurements).
+- Measured (780M, Release, hidden, against the build of brutal-port 6c19832 this branch was merged with; session
+  2a1d1c21's scratchpad `vkcpu/bench.ps1`, `perfcpu.ps1`, `hitch.sh`):
+  - The device bench, ns a draw on the giving thread, Vulkan before -> after (OpenGL): the same draw 60-64 -> 41-45
+    (43-96); a uniform per draw 99-102 -> 71-75 (58-61); materials 365-380 -> 152-164 (135-171); a matrix per draw
+    among 1.5 KB of uniforms, indexed 145-171 -> 94-104 (71-126: OpenGL varies between runs). Without the recording
+    thread 72-74 / 122-123 / 260-264 / 162-170, without push constants 42-44 / 100-102 / 175-179 / 118. The bench's GPU
+    times unchanged.
+  - TestGame, CPU render ms a frame (3 rounds, the median of the last 5 stats lines of 900 frames), Vulkan before ->
+    after (OpenGL after): `stress=3000 gpudriven=0 gi=0` 6.88 -> 5.80 (5.76), its frame 6.77 -> 5.66 ms; `gpudriven=0`
+    0.73 -> 0.51 (0.43); `gi=vct rtmatcones=2 gpudriven=0` (ray query variants drawn per object) 1.45 -> 1.19 (0.86);
+    `volumetrics=1 vollamps=64` 0.97 -> 0.88 (0.64); `impostors=1 impostorfield=60` 10.92 -> 10.75 (10.71);
+    `stress=3000 gi=0` (GPU-driven) 1.51 -> 1.70 (1.30; its rounds overlap); gi0, lumen, materials within their noise.
+    GPU time of every pass the same within 0.05 ms, both APIs; OpenGL's CPU time unchanged.
+  - The recording thread (LEL_VULKAN_STATS=1): stress 2.29 ms a frame on it, the giving thread waiting 0.001-0.003 ms
+    for it; lumen 0.13-0.14 ms (0.005-0.019), with the compute queue every frame 0.15-0.19 ms, 22 command buffers.
+  - First use (frame trace): warm, frame 1 (the load) 217-494 ms either build and no frame over 25 ms after the third,
+    the scene's pipelines made at their first draws 12-15 ms together (largest 3.6-5 ms). Cold (a new shader note):
+    14-22 pipelines 2.0-4.5 s together, up to 0.88 s each, in the load's frames; with pipeline libraries (gi0, ui) 21-28
+    ms together, gi0's frame 1 1928 -> 1203 ms.
+- Verified on the tree merged with brutal-port 6c19832, against that commit's build: the device tests (the copy in
+  session 2a1d1c21's scratchpad `vkcpu/vktest`; `Tests8.cs` for this: push constants beside a block and shared by two
+  stages, all of a small program's, compute, programs switched between draws, 60 uploads between one pass's draws,
+  reads of textures, buffers and a top level within an epoch with writes and a refit between, a texture's own sampler
+  changed) 604 results, 598 equal to OpenGL's, the 6 known, 0 different, also without the recording thread and
+  without push constants; no message of the layer; synchronization validation with the compute queue and binary waits
+  none, with one queue `asyncAcrossFrames` only. Every engine shader built (210 programs). TestGame's 18 scenes,
+  `hwrt=1`, `hwrt=0`, the compute queue every frame, two frames in flight, the ray query variants (`rtmatcones=2`):
+  within the base build's own run-to-run differences (materials with `hwrt=1` max 47-144, as between the base's own
+  runs; anim max 15-32; vfx never repeats). Core validation on all, synchronization validation on 9 scenes with the
+  compute queue every frame: no message. OpenGL's check 0 different.
+- Left: a uniform set for every draw costs more than on OpenGL (~71 against ~59 ns); passes recorded on several threads
+  by the renderer (the command list and its ordering are single-threaded); pipelines are still made at their first
+  draws (in the load's frames: milliseconds warm, seconds cold) unless libraries are asked for, which AMD's driver
+  fails; compiling the passes' known states ahead on threads is the next step; the GPU-driven stress scene's +0.1-0.2 ms.
+  Code that records into `VulkanDevice.MainCommands` takes it once per command: it ends the recording thread's segment.
 
 ## The frame's structure: async compute by default, the frame graph, frames in flight (2026-11-24, branch `vk-frame`)
 
