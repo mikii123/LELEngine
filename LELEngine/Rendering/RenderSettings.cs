@@ -56,6 +56,13 @@ namespace LELEngine.Rendering
 		/// </summary>
 		public bool AsyncCompute = System.Environment.GetEnvironmentVariable("LEL_ASYNC_COMPUTE") != "0";
 
+		/// <summary>
+		///     The renderer stops giving work to the compute queue while that does not pay (<see cref="AsyncComputeGuard" />:
+		///     frames without it are tried now and then, and compared). Off (LEL_ASYNC_GUARD=0) the compute queue is used
+		///     whenever <see cref="AsyncCompute" /> says so: to measure it.
+		/// </summary>
+		public bool AsyncComputeGuard = System.Environment.GetEnvironmentVariable("LEL_ASYNC_GUARD") != "0";
+
 		/// <summary>Draw the <see cref="DebugDraw" /> primitives (editor scene view; games use DebugDraw.VisibleInGame).</summary>
 		public bool DebugPrimitives;
 

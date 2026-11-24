@@ -21,8 +21,6 @@ namespace LELEngine.Rendering.Passes
 
 		public override RenderPassScope Scope => RenderPassScope.Frame;
 
-		public override bool AsyncCompute => true;
-
 		#endregion
 
 		#region PrivateFields
@@ -72,6 +70,9 @@ namespace LELEngine.Rendering.Passes
 			LumenScene scene = context.Renderer.LumenScene;
 			frameIndex++;
 			GpuProfiler profiler = context.Renderer.Profiler;
+			// The scene's tables and acceleration structures (uploads and builds) beside the graphics work around them, on
+			// the queue that reads them first (the cards' light below).
+			context.BeginAsyncCompute();
 			if (Lighting.HardwareRayTracingActive && !gi.DistanceFieldActive)
 			{
 				// No distance field pass placed the GI volume and updated the scene this frame (Lumen's rays trace the
@@ -81,6 +82,7 @@ namespace LELEngine.Rendering.Passes
 			}
 
 			scene.Update(context.Renderer.FrameIndex, context.GIRenderers ?? context.Renderers, gi);
+			context.EndAsyncCompute();
 			gridShadow.EnsureSize(gi.GridShadowMapSize);
 
 			profiler.Split("SurfaceCache.capture");
@@ -89,6 +91,8 @@ namespace LELEngine.Rendering.Passes
 			profiler.Split("SurfaceCache.shadow");
 			gridShadow.Render(context, context.GIRenderers ?? context.Renderers, gi);
 
+			// The radiosity reads what is ready by now (the cards, last frame's light): beside the graphics work after it.
+			context.BeginAsyncCompute();
 			LightCards(context.Renderer, scene, gi);
 		}
 
@@ -273,7 +277,8 @@ namespace LELEngine.Rendering.Passes
 				radiosity.Dispatch(atlas.ProbeGridSize, rowCount, 1);
 			}
 
-			// ---- per texel: direct sun + interpolated radiosity
+			// ---- per texel: direct sun + interpolated radiosity (the grid's shadow map is a depth texture: the graphics queue's)
+			renderer.EndAsyncPart();
 			profiler.Split("SurfaceCache.lighting");
 			ShaderProgram program = lighting.Program;
 			lighting.Use();

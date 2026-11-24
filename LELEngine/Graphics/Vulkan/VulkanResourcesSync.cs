@@ -103,6 +103,12 @@ namespace LELEngine.Graphics.Vulkan
 		/// </summary>
 		internal void Require(SyncBatch batch, int mip, int mips, int layer, int layers, VkImageLayout layout, VkPipelineStageFlags2 stages, bool write, bool discard)
 		{
+			if (TakesMemory)
+			{
+				// Another texture placed over this one was used since: its memory comes back here (VulkanDeviceAliasing.cs).
+				TakeMemory();
+			}
+
 			if (!device.HasAsyncCompute || device.AsideRecording)
 			{
 				if (Apply(ref wholeState, ref subresourceStates, batch, mip, mips, layer, layers, layout, stages, write, discard))
@@ -116,7 +122,7 @@ namespace LELEngine.Graphics.Vulkan
 			// Two queues: after the other queue's conflicting uses (a layout change counts as a write), in this queue's
 			// own state; a write leaves the other queue nothing to wait for in its state but the timeline.
 			bool changes = write || LayoutDiffers(mip, mips, layer, layers, layout);
-			device.OrderAcrossQueues(ref queueUses, changes);
+			device.OrderAcrossQueues(ref queueUses, changes, this);
 			bool changed;
 			if (device.RecordingCompute)
 			{
@@ -350,7 +356,7 @@ namespace LELEngine.Graphics.Vulkan
 			if (device.HasAsyncCompute && !device.AsideRecording)
 			{
 				// The other queue's state keeps its own uses: its next use waits for this one by the timeline.
-				device.OrderAcrossQueues(ref queueUses, write);
+				device.OrderAcrossQueues(ref queueUses, write, this);
 				compute = device.RecordingCompute;
 			}
 

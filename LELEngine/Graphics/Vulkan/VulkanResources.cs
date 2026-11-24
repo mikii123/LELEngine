@@ -110,7 +110,11 @@ namespace LELEngine.Graphics.Vulkan
 		///     A format of Vulkan's the texture has instead of its texel format's (0: none): the device's stand-ins for
 		///     unset images come in formats the engine has no name for.
 		/// </param>
-		public VulkanTexture(VulkanDevice device, in TextureDescriptor descriptor, bool backbuffer, int rawFormat = 0)
+		/// <param name="placed">
+		///     The image is made without memory: the device binds it into memory it shares with others
+		///     (<see cref="VulkanDevice.CreateTransientTextures" />) before anything uses it.
+		/// </param>
+		public VulkanTexture(VulkanDevice device, in TextureDescriptor descriptor, bool backbuffer, int rawFormat = 0, bool placed = false)
 			: base(descriptor)
 		{
 			this.device = device;
@@ -211,16 +215,27 @@ namespace LELEngine.Graphics.Vulkan
 				InitialLayout = VkImageLayout.Undefined
 			};
 
-			// Shared with the compute queue, but for depth textures (their compression is the graphics queue's) and the
-			// window's back buffer: the commands that use those stay on the graphics queue.
+			// Shared with the compute queue, but for depth textures, the window's back buffer and colour attachments that do
+			// not ask for it (TextureUsage.AsyncCompute; or written as images): some GPUs compress only render targets one
+			// queue family owns, and a depth image's layout changes (its decompression) are the graphics queue's (read on the
+			// compute queue, AMD's driver gave wrong depths). The commands that use those stay on the graphics queue.
 			int* families = stackalloc int[2];
-			Concurrent = device.HasAsyncCompute && !depth && !backbuffer;
+			bool graphicsTarget = (Usage & TextureUsage.Attachment) != 0 && (Usage & (TextureUsage.Storage | TextureUsage.AsyncCompute)) == 0;
+			Concurrent = device.HasAsyncCompute && !depth && !backbuffer && !graphicsTarget;
 			if (Concurrent)
 			{
 				device.ShareImage(ref info, families);
 			}
-			VmaAllocationCreateInfo allocationInfo = new VmaAllocationCreateInfo { Usage = VmaMemoryUsage.Auto };
 			VkImage image;
+			if (placed)
+			{
+				// Memory comes from the device's shared block (BindPlaced).
+				VulkanDevice.Check(device.Vk->vkCreateImage.Invoke(device.Handle, &info, null, &image), "vkCreateImage (" + Name + ", " + Format + ")");
+				Image = image;
+				return;
+			}
+
+			VmaAllocationCreateInfo allocationInfo = new VmaAllocationCreateInfo { Usage = VmaMemoryUsage.Auto };
 			VmaAllocation handle;
 			VulkanDevice.Check(Vma.PInvoke.vmaCreateImage(device.Allocator, &info, &allocationInfo, &image, &handle, default), "vmaCreateImage (" + Name + ", " + Format + ")");
 			Image = image;
@@ -361,7 +376,7 @@ namespace LELEngine.Graphics.Vulkan
 			int layer = volume ? 0 : z;
 			int layers = volume ? 1 : depth;
 			// What is being recorded does not use the texture: the copy goes alone, and only what was sent before is waited for.
-			bool aside = LastUse < device.RecordingSerial;
+			bool aside = LastUse < device.RecordingSerial && !TakesMemory;
 			VkCommandBuffer commands = aside ? list.AsideCommands(this, mip, 1, layer, layers) : list.TransferCommands(this, false, mip, 1, layer, layers, CopySourceLayout, false, false);
 			device.Vk->vkCmdCopyImageToBuffer.Invoke(commands, Image, CopySourceLayout, buffer, 1, &region);
 			list.TransfersToHost(commands);
@@ -396,7 +411,7 @@ namespace LELEngine.Graphics.Vulkan
 			}
 
 			// As an upload: ahead of the stream when the stream has not used the texture in this submission.
-			RecordMipmaps(MainUse != device.RecordingSerial);
+			RecordMipmaps(StreamUnused);
 		}
 
 		/// <summary>Records the blits that fill each level from the one above: ahead of the stream (<paramref name="ahead" />) or in it.</summary>
@@ -528,7 +543,9 @@ namespace LELEngine.Graphics.Vulkan
 			}
 
 			views.Clear();
+			// A placed texture's memory is its heap's (no allocation of its own): freed with the heap's last texture.
 			device.Retire(RetiredKind.Image, Image.VkHandle, allocation.VkHandle, LastUse);
+			ReleasePlacement();
 		}
 
 		/// <summary>The region of a copy between a buffer and a box of a level (z: slice, layer or face).</summary>

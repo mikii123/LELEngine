@@ -26,9 +26,17 @@ namespace LELEngine.Graphics.Vulkan
 		/// <summary>The stages the last write is visible to: reads in them need no barrier.</summary>
 		public VkPipelineStageFlags2 Visible;
 
+		/// <summary>
+		///     The memory was another texture's (placed over this one: VulkanDeviceAliasing.cs), whose last uses are
+		///     <see cref="Writes" />: the next use's barrier makes them done and their writes available to all memory, not
+		///     only to this image's.
+		/// </summary>
+		public bool AliasedMemory;
+
 		public bool Equals(SyncState other)
 		{
-			return Layout == other.Layout && Writes == other.Writes && WriteAccess == other.WriteAccess && Reads == other.Reads && Visible == other.Visible;
+			return Layout == other.Layout && Writes == other.Writes && WriteAccess == other.WriteAccess && Reads == other.Reads && Visible == other.Visible
+				&& AliasedMemory == other.AliasedMemory;
 		}
 
 		public override bool Equals(object obj)
@@ -209,6 +217,12 @@ namespace LELEngine.Graphics.Vulkan
 			{
 				batch.AddImage(image, aspect, mip, mips, layer, layers, discard ? VkImageLayout.Undefined : state.Layout, layout, state.Writes | state.Reads, state.WriteAccess, stages,
 					access);
+				if (state.AliasedMemory)
+				{
+					batch.AddMemory(state.Writes | state.Reads, state.WriteAccess, stages, access);
+					state.AliasedMemory = false;
+				}
+
 				state.Layout = layout;
 				state.Writes = stages;
 				if (write)

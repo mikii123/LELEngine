@@ -25,8 +25,8 @@ namespace LELEngine.Rendering.Passes
 		private ShaderProgram superSampleAcross;
 		private ShaderProgram superSampleDown;
 
-		/// <summary>The scene tonemapped and filtered across: the window's width, the scene's height.</summary>
-		private Framebuffer across;
+		/// <summary>The scene tonemapped and filtered across (a frame texture: the window's width, the scene's height).</summary>
+		private const string Across = "PostProcess.across";
 
 		#endregion
 
@@ -35,6 +35,17 @@ namespace LELEngine.Rendering.Passes
 		public override void Initialize(Renderer renderer)
 		{
 			tonemap = BuiltinShaders.CreateTonemap();
+		}
+
+		public override void Setup(FrameGraph frame, RenderContext context)
+		{
+			// The pass writes the output: never skipped.
+			frame.SideEffects();
+			if (context.Width != context.OutputWidth || context.Height != context.OutputHeight)
+			{
+				// Written whole by the first filter, read by the second.
+				frame.CreateTexture(Across, new FrameTextureDescription(context.OutputWidth, context.Height, RenderTextureFormat.RGBA16F, false));
+			}
 		}
 
 		public override void Execute(RenderContext context)
@@ -49,9 +60,6 @@ namespace LELEngine.Rendering.Passes
 			}
 			else
 			{
-				// Super sampling off: its target goes.
-				across?.Delete();
-				across = null;
 				context.Renderer.BeginOutput();
 				tonemap.Use();
 				tonemap.SetTexture("SceneColor", context.SceneColor);
@@ -73,8 +81,6 @@ namespace LELEngine.Rendering.Passes
 			superSampleAcross = null;
 			superSampleDown?.Delete();
 			superSampleDown = null;
-			across?.Delete();
-			across = null;
 		}
 
 		#endregion
@@ -86,16 +92,7 @@ namespace LELEngine.Rendering.Passes
 		{
 			superSampleAcross ??= new ShaderProgram("Engine/SuperSampling.shader", new[] { "SS_HORIZONTAL" });
 			superSampleDown ??= new ShaderProgram("Engine/SuperSampling.shader");
-			if (across == null)
-			{
-				across = new Framebuffer(context.OutputWidth, context.Height);
-				across.AddColorAttachment(RenderTextureFormat.RGBA16F, false);
-				across.Validate();
-			}
-			else if (across.Width != context.OutputWidth || across.Height != context.Height)
-			{
-				across.Resize(context.OutputWidth, context.Height);
-			}
+			Framebuffer across = context.Frame.Target(Across);
 
 			SuperSamplingSettings settings = context.Settings.SuperSampling;
 			int filter = (int)(settings?.Filter ?? SuperSamplingFilter.Gaussian);

@@ -69,6 +69,14 @@ namespace LELEngine
 		public bool VSync = true;
 
 		/// <summary>
+		///     Frames the CPU may prepare ahead of the GPU (Vulkan; OpenGL's driver decides for itself): 1 the least latency
+		///     (the next frame is recorded while the GPU draws the last one), 2 keeps the GPU busy over a CPU frame that takes
+		///     longer than the others, at a frame more between input and screen. 0 (Auto): 2 on a GPU of its own, 1 on an
+		///     integrated one. The player's command line overrides it (framesinflight=1 / 2).
+		/// </summary>
+		public int FramesInFlight;
+
+		/// <summary>
 		///     Super sampling anti-aliasing of the game's image (the player and the editor's Game view; the Scene view never):
 		///     the factor (NVIDIA DSR's), the filter down to the window and its smoothness. Games change it at run time through
 		///     <see cref="QualitySettings.superSampling" />.

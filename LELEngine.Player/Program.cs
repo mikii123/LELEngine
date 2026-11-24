@@ -17,6 +17,7 @@ namespace LELEngine.Player
 	///     Command line overrides (testing): data=folder game=assembly.dll scene=assetPath fullscreen=0|1
 	///     screenshot=folder screenshotframe=N exitframe=N focus=0 shadercache=0 (no program binary cache)
 	///     vsync=0|1 (else Project Settings > Graphics > VSync) shaderhelper=0 (no compile helper process)
+	///     framesinflight=1|2 (else Project Settings > Graphics > Frames In Flight)
 	///     graphics=opengl|vulkan (else the API the game was built for: Project Settings > Graphics > Graphics API)
 	///     ssaa=factor ssaafilter=gaussian|area|lanczos ssaasmooth=0..1 (else Project Settings > Graphics > Super Sampling).
 	///     compileshaders=requestFile runs the game as its own shader compile helper (<see cref="Shaders.ShaderCompileHelper" />).
@@ -246,6 +247,10 @@ namespace LELEngine.Player
 			bool waitForDisplay = vsync != null ? vsync != "0" : ProjectSettings.Current.Graphics?.VSync ?? true;
 			host.VSync = waitForDisplay ? LELEngine.Windowing.VSyncMode.On : LELEngine.Windowing.VSyncMode.Off;
 			Log("VSync " + (waitForDisplay ? "on" : "off") + (vsync != null ? " (command line)" : ""));
+			// Frames the CPU may prepare ahead of the GPU (Vulkan): the project's choice, framesinflight=1 / 2 wins.
+			string framesInFlight = GetValue(args, "framesinflight");
+			LELEngine.Graphics.GraphicsDevice.FramesInFlight = int.TryParse(framesInFlight, out int frames) ? frames : ProjectSettings.Current.Graphics?.FramesInFlight ?? 0;
+			Log("Frames in flight " + (LELEngine.Graphics.GraphicsDevice.FramesInFlight > 0 ? LELEngine.Graphics.GraphicsDevice.FramesInFlight.ToString() : "auto") + (framesInFlight != null ? " (command line)" : ""));
 			bool first = true;
 			host.RenderFrame += _ =>
 			{

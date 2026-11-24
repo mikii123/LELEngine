@@ -112,6 +112,15 @@ namespace LELEngine.Graphics.Vulkan
 
 		internal long ComputeSubmissions;
 
+		/// <summary>Dispatches given in asynchronous compute work that ran on the graphics queue (their programs bind what only it uses).</summary>
+		internal long ComputeFallbacks;
+
+		/// <summary>
+		///     The frames the CPU may record ahead of the GPU (<see cref="GraphicsDevice.FramesInFlight" />, 1 to 3; by default 2
+		///     on a GPU of its own, 1 on an integrated one).
+		/// </summary>
+		internal int FramesAhead => FramesInFlight > 0 ? Math.Min(FramesInFlight, 3) : Capabilities.IntegratedGpu ? 1 : 2;
+
 		/// <summary>The queue the commands are recorded for now.</summary>
 		internal VulkanStream Recording => recordingStream;
 
@@ -124,6 +133,8 @@ namespace LELEngine.Graphics.Vulkan
 
 		/// <summary>LEL_VULKAN_TRACE_QUEUES=1: every submission of either queue and every wait between them is printed.</summary>
 		private static readonly bool traceQueues = Environment.GetEnvironmentVariable("LEL_VULKAN_TRACE_QUEUES") == "1";
+
+		internal static bool TraceQueues => traceQueues;
 
 		/// <summary>
 		///     LEL_VULKAN_QUEUE_SEMAPHORES=binary: each wait between the queues is made by binary semaphores too (each
@@ -304,6 +315,100 @@ namespace LELEngine.Graphics.Vulkan
 			return -1;
 		}
 
+		/// <summary>
+		///     The global priorities the queues were made with: "default" (every program's), or which queue was raised above
+		///     the default ("compute high", "graphics high, compute high").
+		/// </summary>
+		internal string QueuePriorities { get; private set; } = "default";
+
+		/// <summary>
+		///     LEL_VULKAN_QUEUE_PRIORITY: which queues ask for a high global priority where the GPU offers one: "compute" (the
+		///     asynchronous compute queue, whose work the graphics queue waits for), "high" (both queues), "default" (neither:
+		///     the default). Measured on the Radeon 780M with another program on the GPU, a high compute queue made the frames
+		///     with it slower still (lumen: 27.0 ms against 14.0 without the compute queue, 17.0 against 12.5 at the default
+		///     priority), and alone it gained nothing.
+		/// </summary>
+		private static readonly string queuePriorityChoice = (Environment.GetEnvironmentVariable("LEL_VULKAN_QUEUE_PRIORITY") ?? "default").Trim().ToLowerInvariant();
+
+		/// <summary>
+		///     The global priorities to make the queues with (VK_KHR_global_priority, or VK_EXT_global_priority with its query):
+		///     high for the queues <see cref="queuePriorityChoice" /> names where the queue's family offers it, else none (0).
+		///     Returns the extension to enable, or null when no queue asks for one. A device that refuses the priority
+		///     (VK_ERROR_NOT_PERMITTED) is made again without.
+		/// </summary>
+		private string AskForQueuePriorities(PhysicalDevice physical, int graphicsFamily, int computeFamily, VkDeviceQueueGlobalPriorityCreateInfo* priorities)
+		{
+			priorities[0] = new VkDeviceQueueGlobalPriorityCreateInfo();
+			priorities[1] = new VkDeviceQueueGlobalPriorityCreateInfo();
+			bool graphicsHigh = queuePriorityChoice == "high";
+			bool computeHigh = computeFamily >= 0 && (queuePriorityChoice == "high" || queuePriorityChoice == "compute");
+			if (!graphicsHigh && !computeHigh)
+			{
+				return null;
+			}
+
+			string extension = physical.SupportsExtension("VK_KHR_global_priority") ? "VK_KHR_global_priority"
+				: physical.SupportsExtension("VK_EXT_global_priority") && physical.SupportsExtension("VK_EXT_global_priority_query") ? "VK_EXT_global_priority" : null;
+			if (extension == null)
+			{
+				return null;
+			}
+
+			// What each family offers.
+			int count = 0;
+			InstanceVk->vkGetPhysicalDeviceQueueFamilyProperties2.Invoke(physical.Handle, &count, null);
+			VkQueueFamilyGlobalPriorityProperties* offered = stackalloc VkQueueFamilyGlobalPriorityProperties[Math.Max(1, count)];
+			VkQueueFamilyProperties2* families = stackalloc VkQueueFamilyProperties2[Math.Max(1, count)];
+			for (int i = 0; i < count; i++)
+			{
+				offered[i] = new VkQueueFamilyGlobalPriorityProperties();
+				families[i] = new VkQueueFamilyProperties2 { Next = &offered[i] };
+			}
+
+			InstanceVk->vkGetPhysicalDeviceQueueFamilyProperties2.Invoke(physical.Handle, &count, families);
+			string taken = "";
+			if (graphicsHigh && Offers(offered, count, graphicsFamily, VkQueueGlobalPriority.High))
+			{
+				priorities[0].GlobalPriority = VkQueueGlobalPriority.High;
+				taken = "graphics high";
+			}
+
+			if (computeHigh && Offers(offered, count, computeFamily, VkQueueGlobalPriority.High))
+			{
+				priorities[1].GlobalPriority = VkQueueGlobalPriority.High;
+				taken += (taken.Length > 0 ? ", " : "") + "compute high";
+			}
+
+			if (taken.Length == 0)
+			{
+				return null;
+			}
+
+			QueuePriorities = taken;
+			return extension;
+		}
+
+		/// <summary>Whether a queue family offers a global priority.</summary>
+		private static bool Offers(VkQueueFamilyGlobalPriorityProperties* offered, int count, int family, VkQueueGlobalPriority priority)
+		{
+			if (family < 0 || family >= count)
+			{
+				return false;
+			}
+
+			// The sixteen priorities lie one after the other from the first.
+			VkQueueGlobalPriority* listed = &offered[family].Priorities.Items;
+			for (int i = 0; i < offered[family].PriorityCount && i < 16; i++)
+			{
+				if (listed[i] == priority)
+				{
+					return true;
+				}
+			}
+
+			return false;
+		}
+
 		/// <summary>The streams of the queues, once the logical device is made (the compute family -1: the graphics queue only).</summary>
 		private void CreateStreams(int computeFamily)
 		{
@@ -314,6 +419,8 @@ namespace LELEngine.Graphics.Vulkan
 			{
 				return;
 			}
+
+			Console.WriteLine($"[Vulkan] Asynchronous compute queue: family {computeFamily}, global priorities: {QueuePriorities}");
 
 			VkQueue queue;
 			Vk->vkGetDeviceQueue.Invoke(Handle, computeFamily, 0, &queue);
@@ -375,7 +482,8 @@ namespace LELEngine.Graphics.Vulkan
 		///     (<paramref name="write" />: a write or a layout change, after the other's reads and writes; else a read,
 		///     after the other's writes), and notes it. The wait splits submissions: see the class's notes.
 		/// </summary>
-		internal void OrderAcrossQueues(ref QueueUses uses, bool write)
+		/// <param name="user">The resource (its name is printed with LEL_VULKAN_TRACE_QUEUES=1).</param>
+		internal void OrderAcrossQueues(ref QueueUses uses, bool write, object user = null)
 		{
 			if (computeStream == null || AsideRecording)
 			{
@@ -389,6 +497,13 @@ namespace LELEngine.Graphics.Vulkan
 			long need = write ? Math.Max(otherWrite, otherRead) : otherWrite;
 			if (need > stream.WaitedValue)
 			{
+				if (traceQueues)
+				{
+					string name = user is GpuTexture texture ? $"texture '{texture.Name}' ({texture.Width}x{texture.Height}x{texture.Depth} {texture.Format})"
+						: user is GpuBuffer buffer ? $"buffer '{buffer.Name}' ({buffer.Size} bytes)" : user != null ? user.ToString() : "?";
+					Console.WriteLine($"[queues] {(graphics ? "graphics" : "compute")} {(write ? "writes" : "reads")} {name}, last {(write && otherRead > otherWrite ? "read" : "written")} by the other queue's {need}");
+				}
+
 				WaitForOtherQueue(stream, need);
 			}
 

@@ -107,8 +107,9 @@ namespace LELEngine.Rendering.Lumen
 		{
 			Size = size;
 
-			// Lighting atlases are filtered when looked up; attributes are fetched by texel.
-			const TextureUsage captured = TextureUsage.Sampled | TextureUsage.Attachment;
+			// Lighting atlases are filtered when looked up; attributes are fetched by texel. The cards are captured by draws
+			// and read by the lighting's dispatches, which may run on the asynchronous compute queue.
+			const TextureUsage captured = TextureUsage.Sampled | TextureUsage.Attachment | TextureUsage.AsyncCompute;
 			const TextureUsage lit = TextureUsage.Sampled | TextureUsage.Storage;
 			CardIndex = CreateTexture(TextureFormat.R16UI, Size, captured, false, "Surface cache card index");
 			Albedo = CreateTexture(TextureFormat.RGBA8, Size, captured, false, "Surface cache albedo");

@@ -78,6 +78,29 @@ namespace LELEngine.Graphics.Vulkan
 			return true;
 		}
 
+		/// <summary>
+		///     A dispatch given in asynchronous compute work runs on the graphics queue (its program binds a texture only that
+		///     queue uses): counted for LEL_VULKAN_STATS=1, and with LEL_VULKAN_TRACE_QUEUES=1 printed with the texture.
+		/// </summary>
+		private void NoteComputeFallback(VulkanProgram program)
+		{
+			device.ComputeFallbacks++;
+			if (!VulkanDevice.TraceQueues)
+			{
+				return;
+			}
+
+			for (int i = 0; i < program.TrackedCount; i++)
+			{
+				VulkanTexture texture = program.Tracked[i].Texture;
+				if (texture != null && !texture.Concurrent)
+				{
+					Console.WriteLine($"[queues] a dispatch of asynchronous compute work runs on the graphics queue: it binds texture '{texture.Name}' ({texture.Format}, {texture.Usage})");
+					return;
+				}
+			}
+		}
+
 		/// <summary>Runs a command of the device's own (a stand-in's clear, an empty top level's build) on the graphics queue, whatever queue is being recorded for.</summary>
 		private void OnGraphicsQueue(Action record)
 		{

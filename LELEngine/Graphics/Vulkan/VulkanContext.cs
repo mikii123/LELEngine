@@ -27,6 +27,10 @@ namespace LELEngine.Graphics.Vulkan
 		private bool swapStale = true;
 		private VulkanTexture backbuffer;
 		private int swapInterval;
+
+		/// <summary>The frames ahead the swapchain's images were counted for.</summary>
+		private int swapFramesAhead;
+
 		private int width;
 		private int height;
 
@@ -144,19 +148,20 @@ namespace LELEngine.Graphics.Vulkan
 				VulkanDevice.Check(result, "vkQueuePresentKHR");
 			}
 
-			// The CPU records at most one frame ahead of the GPU: the frame before this one has to have run (counted by
-			// frames, whatever the number of submissions a frame takes: flushes, the queues' waits for each other).
-			long presented = device.RecordingSerial - 1;
-			if (previousPresent > 0)
+			// The CPU records at most FramesAhead frames ahead of the GPU: with one, the frame before this one has to have
+			// run (counted by frames, whatever the number of submissions a frame takes: flushes, the queues' waits for each
+			// other); with two, the one before that.
+			presents.Enqueue(device.RecordingSerial - 1);
+			int ahead = device.FramesAhead;
+			device.Capabilities.FramesInFlight = ahead;
+			while (presents.Count > ahead)
 			{
-				device.WaitFor(previousPresent, long.MaxValue);
+				device.WaitFor(presents.Dequeue(), long.MaxValue);
 			}
-
-			previousPresent = presented;
 		}
 
-		/// <summary>The submission that presented the frame before (0: none yet).</summary>
-		private long previousPresent;
+		/// <summary>The submissions that presented the frames the GPU may not have finished yet, oldest first.</summary>
+		private readonly System.Collections.Generic.Queue<long> presents = new System.Collections.Generic.Queue<long>();
 
 		public override void Dispose()
 		{
@@ -239,7 +244,7 @@ namespace LELEngine.Graphics.Vulkan
 			acquired = default;
 			for (int attempt = 0; attempt < 2; attempt++)
 			{
-				if (swapchain.IsNull() || swapStale || w != swapWidth || h != swapHeight)
+				if (swapchain.IsNull() || swapStale || w != swapWidth || h != swapHeight || swapFramesAhead < device.FramesAhead)
 				{
 					if (!CreateSwapchain(w, h))
 					{
@@ -325,7 +330,9 @@ namespace LELEngine.Graphics.Vulkan
 				mode = immediate ? VkPresentModeKHR.ImmediateKHR : mailbox ? VkPresentModeKHR.MailboxKHR : VkPresentModeKHR.FifoKHR;
 			}
 
-			int imageCount = Math.Max(capabilities.MinImageCount + 1, 3);
+			// One image shown, one per frame the GPU may have queued, one to draw into.
+			swapFramesAhead = device.FramesAhead;
+			int imageCount = Math.Max(capabilities.MinImageCount + 1, swapFramesAhead + 2);
 			if (capabilities.MaxImageCount > 0)
 			{
 				imageCount = Math.Min(imageCount, capabilities.MaxImageCount);
