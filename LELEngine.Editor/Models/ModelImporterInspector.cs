@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using Hexa.NET.ImGui;
 using LELEngine.Serialization;
@@ -19,9 +20,63 @@ namespace LELEngine.Editor
 		private static ModelImporter working;
 		private static bool dirty;
 
+		// Several models edited together: the others' paths and working copies (the shown one is path / working).
+		private static readonly List<string> otherPaths = new List<string>();
+		private static readonly List<ModelImporter> otherWorking = new List<ModelImporter>();
+
 		#endregion
 
 		#region PublicMethods
+
+		/// <summary>
+		///     The import settings of several models edited together: the shared settings, "—" where they differ; an edit
+		///     sets that setting on all, Apply writes each one's meta file and imports them again, Revert discards it all.
+		/// </summary>
+		public static void Draw(IReadOnlyList<string> assetPaths, InspectorContext context)
+		{
+			if (assetPaths.Count == 1)
+			{
+				Draw(assetPaths[0], context);
+				return;
+			}
+
+			if (!IsLoaded(assetPaths))
+			{
+				Load(assetPaths);
+			}
+
+			context.UndoTarget = null;
+			ImGui.SeparatorText("Import Settings");
+			SerializedNode before = MultiEdit.NodeOf(working, new SerializationContext());
+			context.Mixed = MixedValues.Compare(working, otherWorking, new SerializationContext());
+			try
+			{
+				dirty |= FieldDrawer.DrawFields(working, context);
+			}
+			finally
+			{
+				context.Mixed = null;
+			}
+
+			dirty |= MultiEdit.Propagate(working, before, otherWorking, () => new SerializationContext(), null, context.Touched) > 0;
+			context.Touched.Clear();
+
+			ImGui.Spacing();
+			float width = (ImGui.GetContentRegionAvail().X - ImGui.GetStyle().ItemSpacing.X) * 0.5f;
+			ImGui.BeginDisabled(!dirty);
+			if (EditorGui.Button("Revert", new NVector2(width, 0)))
+			{
+				Load(assetPaths);
+			}
+
+			ImGui.SameLine();
+			if (EditorGui.Button("Apply to " + assetPaths.Count + " models##apply", new NVector2(width, 0)))
+			{
+				ApplyAll(context.Editor);
+			}
+
+			ImGui.EndDisabled();
+		}
 
 		public static void Draw(string assetPath, InspectorContext context)
 		{
@@ -31,7 +86,7 @@ namespace LELEngine.Editor
 				return;
 			}
 
-			if (!string.Equals(path, assetPath, StringComparison.OrdinalIgnoreCase) || working == null)
+			if (!string.Equals(path, assetPath, StringComparison.OrdinalIgnoreCase) || working == null || otherPaths.Count > 0)
 			{
 				Load(assetPath);
 			}
@@ -85,6 +140,8 @@ namespace LELEngine.Editor
 			path = null;
 			working = null;
 			dirty = false;
+			otherPaths.Clear();
+			otherWorking.Clear();
 		}
 
 		#endregion
@@ -134,7 +191,66 @@ namespace LELEngine.Editor
 		{
 			path = assetPath;
 			working = Clone(AssetDatabase.GetImporter<ModelImporter>(assetPath));
+			otherPaths.Clear();
+			otherWorking.Clear();
 			dirty = false;
+		}
+
+		private static void Load(IReadOnlyList<string> assetPaths)
+		{
+			Load(assetPaths[0]);
+			for (int i = 1; i < assetPaths.Count; i++)
+			{
+				otherPaths.Add(assetPaths[i]);
+				otherWorking.Add(Clone(AssetDatabase.GetImporter<ModelImporter>(assetPaths[i])));
+			}
+		}
+
+		private static bool IsLoaded(IReadOnlyList<string> assetPaths)
+		{
+			if (working == null || !string.Equals(path, assetPaths[0], StringComparison.OrdinalIgnoreCase) || otherPaths.Count != assetPaths.Count - 1)
+			{
+				return false;
+			}
+
+			for (int i = 1; i < assetPaths.Count; i++)
+			{
+				if (!string.Equals(otherPaths[i - 1], assetPaths[i], StringComparison.OrdinalIgnoreCase))
+				{
+					return false;
+				}
+			}
+
+			return true;
+		}
+
+		/// <summary>Every model's settings into its meta file, then one scene reload for all of them.</summary>
+		private static void ApplyAll(EditorApplication editor)
+		{
+			var paths = new List<string> { path };
+			paths.AddRange(otherPaths);
+			var settings = new List<ModelImporter> { working };
+			settings.AddRange(otherWorking);
+			// The import itself happens as the reloaded scene reads the models.
+			using Progress.Scope progress = Progress.Begin("Importing " + paths.Count + " models");
+			for (int i = 0; i < paths.Count; i++)
+			{
+				AssetMeta meta = AssetDatabase.GetMeta(paths[i]);
+				settings[i].version++;
+				meta.importer = Clone(settings[i]);
+				AssetDatabase.SaveMeta(paths[i], meta);
+			}
+
+			dirty = false;
+			editor.ReloadScene(() =>
+			{
+				foreach (string model in paths)
+				{
+					ModelAssets.Unload(model);
+				}
+			});
+			editor.NotifyAssetsChanged();
+			Lighting.GI.InvalidateStatic();
 		}
 
 		private static ModelImporter Clone(ModelImporter importer)
@@ -144,6 +260,7 @@ namespace LELEngine.Editor
 
 		private static void Apply(string assetPath, EditorApplication editor)
 		{
+			using Progress.Scope progress = Progress.Begin("Importing " + assetPath);
 			AssetMeta meta = AssetDatabase.GetMeta(assetPath);
 			working.version++;
 			meta.importer = Clone(working);

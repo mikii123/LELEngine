@@ -63,6 +63,7 @@ namespace LELEngine.Editor
 		private readonly InspectorContext context;
 		private Tab? requestedTab;
 		private bool focus;
+		private string addShaderSearch = "";
 
 		// ---- build
 		private Task<bool> buildTask;
@@ -1664,28 +1665,24 @@ namespace LELEngine.Editor
 			}
 
 			ImGui.SetNextItemWidth(-1);
-			if (EditorGui.BeginCombo("##addshader", "Add Shader..."))
+			if (EditorGui.BeginCombo("##addshader", "Add Shader...", ImGuiComboFlags.HeightLarge))
 			{
-				bool any = false;
-				foreach (string path in AssetDatabase.GetAllAssetPaths(ShaderExtension))
-				{
-					if (content.IncludesShader(path))
-					{
-						continue;
-					}
-
-					any = true;
-					if (EditorGui.Selectable(path))
-					{
-						context.BeginEdit();
-						changed |= content.AddShader(path);
-						context.EndEdit();
-					}
-				}
-
-				if (!any)
+				var available = AssetDatabase.GetAllAssetPaths(ShaderExtension).FindAll(path => !content.IncludesShader(path));
+				if (available.Count == 0)
 				{
 					Hint("Every shader of the project is on the list.");
+				}
+				else
+				{
+					// By folder (levels), a search's matches flat.
+					LevelList.SearchField("##addshader_search", ref addShaderSearch);
+					int chosen = LevelList.OfPaths(available).Draw(addShaderSearch);
+					if (chosen >= 0)
+					{
+						context.BeginEdit();
+						changed |= content.AddShader(available[chosen]);
+						context.EndEdit();
+					}
 				}
 
 				EditorGui.EndCombo();
@@ -1750,6 +1747,7 @@ namespace LELEngine.Editor
 					scenes.Insert(0, settings.StartScene);
 				}
 
+				using Progress.Scope progress = Progress.Begin("Baking distance fields for the build");
 				DistanceFieldBaker.Collect(project, scenes, Append);
 			}
 			catch (Exception e)

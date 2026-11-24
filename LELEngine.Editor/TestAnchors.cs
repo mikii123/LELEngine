@@ -207,6 +207,22 @@ namespace LELEngine.Editor
 			}
 		}
 
+		/// <summary>
+		///     Holds back the line's label while elements of something else are drawn before the line's widget records itself
+		///     (a popup drawn inside the widget: <see cref="ColorPicker" />); <see cref="RestoreLineLabel" /> gives it back.
+		/// </summary>
+		public static (uint Window, float Y, string Text) TakeLineLabel()
+		{
+			(uint Window, float Y, string Text) taken = lineLabel;
+			lineLabel = default;
+			return taken;
+		}
+
+		public static void RestoreLineLabel((uint Window, float Y, string Text) taken)
+		{
+			lineLabel = taken;
+		}
+
 		/// <summary>The widget drawn next on this line with a hidden label is named <paramref name="text" /> (a cell without a label column).</summary>
 		public static void NameNextElement(string text)
 		{

@@ -44,7 +44,15 @@ namespace LELEngine.Editor
 			draw.AddRectFilled(start, start + new NVector2(boxWidth, height), ImGui.GetColorU32(hovered ? ImGuiCol.FrameBgHovered : ImGuiCol.FrameBg), ImGui.GetStyle().FrameRounding);
 
 			bool missing = value is EngineObject engineObject && engineObject.IsDestroyed;
-			DrawContent(draw, start, boxWidth, height, declaredType, value, missing);
+			if (context != null && context.IsMixed())
+			{
+				// Several objects edited together reference different things here: "—" until one is dropped or picked.
+				draw.AddText(start + new NVector2(5f, (height - ImGui.GetTextLineHeight()) * 0.5f), ImGui.GetColorU32(ImGuiCol.Text), EditorGui.MixedValue);
+			}
+			else
+			{
+				DrawContent(draw, start, boxWidth, height, declaredType, value, missing);
+			}
 
 			if (hovered && !missing)
 			{

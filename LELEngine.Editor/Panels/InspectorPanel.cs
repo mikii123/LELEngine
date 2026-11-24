@@ -30,17 +30,28 @@ namespace LELEngine.Editor
 		private bool readOnly;
 		private string componentFilter = "";
 		private List<Type> componentTypes;
+		private LevelList componentLevels;
 		private int componentTypesVersion = -1;
 
 		// Euler angles last shown per transform: re-deriving them from the quaternion every frame flips between
 		// equivalent angle sets while dragging.
 		private readonly Dictionary<Transform, (Quaternion rotation, Vector3 euler)> eulerHints = new Dictionary<Transform, (Quaternion, Vector3)>();
 
-		// The lock (as in Unity): the inspector keeps showing this object (by id: it survives scene reloads) or asset
-		// while other things are selected, e.g. to drag several selected assets on to one of its lists.
+		// The lock (as in Unity): the inspector keeps showing these objects (by id: they survive scene reloads; the first
+		// is the active one) or assets while other things are selected, e.g. to drag several selected assets on to one of
+		// its lists.
 		private bool locked;
-		private ulong lockedObjectId;
-		private string lockedAsset;
+		private readonly List<ulong> lockedObjectIds = new List<ulong>();
+		private readonly List<string> lockedAssets = new List<string>();
+
+		// Several objects edited together: where their components' values differ, by the shown component's id, worked
+		// out again when the scene changed or a moment passed (play mode changes values without telling), and for the
+		// header (name, active, layer, static).
+		private readonly Dictionary<ulong, (MixedValues values, int version, double time)> mixedCache = new Dictionary<ulong, (MixedValues, int, double)>();
+		private string mixedSelection = "";
+
+		// The objects the inspector shows (several: edited together), the active one first.
+		private readonly List<GameObject> shownObjects = new List<GameObject>();
 
 		// Components whose header is folded, by id (they survive scene reloads): the scene view asks before drawing their gizmos.
 		private readonly HashSet<ulong> collapsed = new HashSet<ulong>();
@@ -148,26 +159,60 @@ namespace LELEngine.Editor
 			ImGui.End();
 		}
 
-		/// <summary>An asset file or folder moved: a lock on an asset follows it.</summary>
+		/// <summary>An asset file or folder moved: a lock on assets follows them.</summary>
 		public void AssetMoved(string fromPath, string toPath)
 		{
-			lockedAsset = AssetDatabase.MovedPath(lockedAsset, fromPath, toPath) ?? lockedAsset;
+			for (int i = 0; i < lockedAssets.Count; i++)
+			{
+				lockedAssets[i] = AssetDatabase.MovedPath(lockedAssets[i], fromPath, toPath) ?? lockedAssets[i];
+			}
 		}
 
-		/// <summary>The inspector keeps showing what it shows now (or follows the selection again).</summary>
+		/// <summary>The inspector keeps showing what it shows now, one object or asset or several (or follows the selection again).</summary>
 		public void Lock(bool value)
 		{
 			locked = value && (editor.Selected != null || editor.SelectedAsset != null || Shown != null);
+			lockedObjectIds.Clear();
+			lockedAssets.Clear();
 			if (!locked)
 			{
-				lockedObjectId = 0;
-				lockedAsset = null;
 				return;
 			}
 
-			GameObject target = Shown ?? editor.Selected;
-			lockedObjectId = target?.Id ?? 0;
-			lockedAsset = target == null ? editor.SelectedAsset : null;
+			if (Shown != null && shownObjects.Count > 0)
+			{
+				foreach (GameObject shown in shownObjects)
+				{
+					lockedObjectIds.Add(shown.Id);
+				}
+
+				return;
+			}
+
+			GameObject target = editor.Selected;
+			if (target != null)
+			{
+				lockedObjectIds.Add(target.Id);
+				foreach (GameObject other in editor.SelectedObjects)
+				{
+					if (other != target)
+					{
+						lockedObjectIds.Add(other.Id);
+					}
+				}
+
+				return;
+			}
+
+			// The active asset first.
+			lockedAssets.Add(editor.SelectedAsset);
+			foreach (string asset in editor.SelectedAssets)
+			{
+				if (!string.Equals(asset, editor.SelectedAsset, StringComparison.OrdinalIgnoreCase))
+				{
+					lockedAssets.Add(asset);
+				}
+			}
 		}
 
 		#endregion
@@ -183,36 +228,68 @@ namespace LELEngine.Editor
 				return;
 			}
 
-			GameObject go = editor.Selected;
-			string asset = editor.SelectedAsset;
+			// What is shown, the active one first: the selected objects, or the selected project files.
+			var objects = new List<GameObject>();
+			var assets = new List<string>();
 			if (locked)
 			{
-				// The locked object of the current scene (found again after reloads), else the locked asset; gone: unlocked.
-				GameObject lockedObject = lockedObjectId != 0 ? editor.Scene?.FindObjectById(lockedObjectId) : null;
-				if (lockedObject != null)
+				// The locked objects of the current scene (found again after reloads), else the locked assets; gone: unlocked.
+				foreach (ulong id in lockedObjectIds)
 				{
-					go = lockedObject;
-					asset = null;
+					GameObject lockedObject = editor.Scene?.FindObjectById(id);
+					if (lockedObject != null && !lockedObject.dead)
+					{
+						objects.Add(lockedObject);
+					}
 				}
-				else if (lockedAsset != null && System.IO.File.Exists(AssetDatabase.ToAbsolute(lockedAsset)))
+
+				if (objects.Count == 0)
 				{
-					go = null;
-					asset = lockedAsset;
-				}
-				else
-				{
-					Lock(false);
+					assets.AddRange(lockedAssets.FindAll(path => path != null && System.IO.File.Exists(AssetDatabase.ToAbsolute(path))));
+					if (assets.Count == 0)
+					{
+						Lock(false);
+					}
 				}
 			}
 
+			if (!locked)
+			{
+				GameObject active = editor.Selected;
+				if (active != null)
+				{
+					objects.Add(active);
+					foreach (GameObject other in editor.SelectedObjects)
+					{
+						if (other != active && other.scene == active.scene)
+						{
+							objects.Add(other);
+						}
+					}
+				}
+				else if (editor.SelectedAsset != null)
+				{
+					assets.Add(editor.SelectedAsset);
+					foreach (string other in editor.SelectedAssets)
+					{
+						if (!string.Equals(other, editor.SelectedAsset, StringComparison.OrdinalIgnoreCase))
+						{
+							assets.Add(other);
+						}
+					}
+				}
+			}
+
+			GameObject go = objects.Count > 0 ? objects[0] : null;
 			if (go == null || go.scene != editor.Scene)
 			{
-				if (asset != null)
+				shownObjects.Clear();
+				if (assets.Count > 0)
 				{
 					context.Scene = editor.Scene;
 					context.LabelWidth = Math.Max(110f, ImGui.GetContentRegionAvail().X * 0.38f);
-					ImGui.PushID(asset);
-					AssetInspectors.Draw(asset, context);
+					ImGui.PushID(assets[0]);
+					AssetInspectors.Draw(assets, context);
 					ImGui.PopID();
 					return;
 				}
@@ -222,9 +299,18 @@ namespace LELEngine.Editor
 			}
 
 			Shown = go;
+			shownObjects.Clear();
+			shownObjects.AddRange(objects);
 
 			context.Scene = editor.Scene;
 			context.LabelWidth = Math.Max(110f, ImGui.GetContentRegionAvail().X * 0.38f);
+			if (objects.Count > 1)
+			{
+				// Several objects: edited together (Unity's multi-object editing).
+				DrawMultiple(objects);
+				return;
+			}
+
 			// A prefab instance's object: its overrides are marked (bold, the bar) and can be applied or reverted.
 			context.Overrides = PrefabInspector.OverridesOf(go.prefabInstance, editor.SceneVersion);
 			// A read-only object (HideFlags.NotEditable) is shown as it is: its values disabled, its headers still fold.
@@ -232,12 +318,6 @@ namespace LELEngine.Editor
 			ImGui.BeginDisabled(readOnly);
 			DrawObjectHeader(go);
 			ImGui.EndDisabled();
-			// Several objects selected: the inspector edits the active one (the others take part in what acts on a
-			// selection: delete, duplicate, move, tools).
-			if (go == editor.Selected && editor.SelectedObjects.Count > 1)
-			{
-				ImGui.TextDisabled(editor.SelectedObjects.Count + " objects selected: the inspector shows " + go.Name);
-			}
 
 			string temporary = TempObjects.Describe(go);
 			if (temporary != null)
@@ -276,8 +356,15 @@ namespace LELEngine.Editor
 		/// </summary>
 		private void DrawRendererMaterials(GameObject go)
 		{
+			DrawRendererMaterials(new List<GameObject> { go });
+		}
+
+		/// <summary>The materials of several objects' renderers, each once (at most <see cref="MaxMaterials" />).</summary>
+		private void DrawRendererMaterials(List<GameObject> objects)
+		{
 			var materials = new List<Material>();
-			foreach (Behaviour component in go.Components)
+			int more = 0;
+			foreach (Behaviour component in Components(objects))
 			{
 				IReadOnlyList<Material> slots = component switch
 				{
@@ -296,7 +383,14 @@ namespace LELEngine.Editor
 				{
 					if (material != null && !materials.Contains(material))
 					{
-						materials.Add(material);
+						if (materials.Count < MaxMaterials)
+						{
+							materials.Add(material);
+						}
+						else
+						{
+							more++;
+						}
 					}
 				}
 			}
@@ -324,6 +418,25 @@ namespace LELEngine.Editor
 				TestAnchors.PopScope();
 				ImGui.PopID();
 				ImGui.Dummy(new NVector2(0f, 4f));
+			}
+
+			if (more > 0)
+			{
+				ImGui.TextDisabled(more + " more material" + (more == 1 ? "" : "s") + " (select fewer objects to see them)");
+			}
+		}
+
+		// Several selected objects can use many materials: a full editor each is drawn for the first ones only.
+		private const int MaxMaterials = 16;
+
+		private static IEnumerable<Behaviour> Components(List<GameObject> objects)
+		{
+			foreach (GameObject go in objects)
+			{
+				foreach (Behaviour component in go.Components)
+				{
+					yield return component;
+				}
 			}
 		}
 
@@ -412,17 +525,25 @@ namespace LELEngine.Editor
 			PrefabInspector.MarkHeaderProperty(context, go, LELEngine.Serialization.PropertyModification.StaticProperty);
 		}
 
-		private void DrawComponent(GameObject go, Behaviour component)
+		/// <summary>
+		///     A component's header and body. With <paramref name="others" /> (the same component of the other objects edited
+		///     together, as many as them) the header's toggle and menu act on all of them, and the body's edits are written
+		///     into theirs too.
+		/// </summary>
+		private void DrawComponent(GameObject go, Behaviour component, IReadOnlyList<Behaviour> others = null)
 		{
 			context.UndoTarget = component;
-			// Overrides of this component (its id in the prefab); none for components added to the instance.
-			context.OverrideTarget = component.prefabInstance != null ? component.prefabSourceId : 0;
+			context.UndoGroup = others;
+			context.Mixed = others != null ? MixedOf(component, others) : null;
+			// Overrides of this component (its id in the prefab); none for components added to the instance, nor for
+			// several objects edited together (their overrides are each object's own).
+			context.OverrideTarget = others == null && component.prefabInstance != null ? component.prefabSourceId : 0;
 			context.Path = "";
 			Type type = component.GetType();
 			string title = ComponentTitle(component);
 
-			bool added = PrefabUtility.IsAddedComponent(component);
-			bool overridden = added || HasOverrides(component);
+			bool added = others == null && PrefabUtility.IsAddedComponent(component);
+			bool overridden = others == null && (added || HasOverrides(component));
 			// [InspectorColor] components (the engine's by kind, scripts as they choose): a bar on the left and a light tint
 			// of the header, quieter than a material's framed section.
 			NVector4? kind = ComponentColor(component);
@@ -468,7 +589,10 @@ namespace LELEngine.Editor
 			}
 
 			TestAnchors.RecordItem("component:" + type.Name);
-			PrefabInspector.DecorateComponentHeader(editor, component, context);
+			if (others == null)
+			{
+				PrefabInspector.DecorateComponentHeader(editor, component, context);
+			}
 
 			// The header drags this very component on to object fields (of its type, its GameObject's or an interface it implements).
 			if (!(component is MissingComponent) && ImGui.BeginDragDropSource())
@@ -477,21 +601,38 @@ namespace LELEngine.Editor
 				ImGui.EndDragDropSource();
 			}
 
+			// The header's actions take the component of every object edited together.
+			var all = new List<Behaviour> { component };
+			if (others != null)
+			{
+				all.AddRange(others);
+			}
+
 			if (!readOnly && EditorGui.BeginPopupContextItem("##component_context"))
 			{
 				if (!(component is Transform) && EditorMenu.Item("Remove Component"))
 				{
-					editor.RecordStructural("Remove " + type.Name, () => GameObject.DestroyImmediate(component));
+					editor.RecordStructural("Remove " + type.Name + (all.Count > 1 ? " from " + all.Count + " objects" : ""), () =>
+					{
+						foreach (Behaviour removed in all)
+						{
+							GameObject.DestroyImmediate(removed);
+						}
+					});
 					ImGui.EndPopup();
 					return;
 				}
 
 				if (!(component is Transform) && !(component is MissingComponent) && EditorMenu.Item("Reset"))
 				{
-					editor.Edits.Begin(component);
-					ResetFields(component);
+					editor.Edits.Begin(component, others);
+					foreach (Behaviour reset in all)
+					{
+						ResetFields(reset);
+						editor.NotifyChanged(reset.gameObject);
+					}
+
 					editor.Edits.RequestCommit();
-					editor.NotifyChanged(go);
 				}
 
 				// The transform's parts (local values, as Unity's Reset): one undo step each.
@@ -499,23 +640,23 @@ namespace LELEngine.Editor
 				{
 					if (EditorMenu.Item("Reset Position"))
 					{
-						ResetTransform(go, transformComponent, true, false, false);
+						ResetTransform(all, true, false, false);
 					}
 
 					if (EditorMenu.Item("Reset Rotation"))
 					{
-						ResetTransform(go, transformComponent, false, true, false);
+						ResetTransform(all, false, true, false);
 					}
 
 					if (EditorMenu.Item("Reset Scale"))
 					{
-						ResetTransform(go, transformComponent, false, false, true);
+						ResetTransform(all, false, false, true);
 					}
 
 					ImGui.Separator();
 					if (EditorMenu.Item("Reset All"))
 					{
-						ResetTransform(go, transformComponent, true, true, true);
+						ResetTransform(all, true, true, true);
 					}
 				}
 
@@ -535,28 +676,40 @@ namespace LELEngine.Editor
 					}
 				}
 
-				PrefabInspector.DrawComponentMenu(editor, component, context);
+				if (others == null)
+				{
+					PrefabInspector.DrawComponentMenu(editor, component, context);
+				}
+
 				ImGui.EndPopup();
 			}
 
 			if (!(component is Transform) && !(component is MissingComponent))
 			{
 				ImGui.SameLine(ImGui.GetWindowWidth() - 34f);
-				bool enabled = component.enabled;
+				// Several objects: a dash when some are enabled and some not; a click enables them all.
+				bool mixedEnabled = all.Exists(c => c.enabled != component.enabled);
+				bool enabled = !mixedEnabled && component.enabled;
 				ImGui.BeginDisabled(readOnly);
+				ImGui.PushItemFlag((ImGuiItemFlags)ImGuiItemFlagsPrivate.MixedValue, mixedEnabled);
 				bool toggled = EditorGui.Checkbox("##enabled", ref enabled);
+				ImGui.PopItemFlag();
 				ImGui.EndDisabled();
 				if (toggled)
 				{
-					editor.Edits.Begin(component);
-					component.enabled = enabled;
+					editor.Edits.Begin(component, others);
+					foreach (Behaviour toggledComponent in all)
+					{
+						toggledComponent.enabled = enabled;
+						editor.NotifyChanged(toggledComponent.gameObject);
+					}
+
 					editor.Edits.RequestCommit();
-					editor.NotifyChanged(go);
 				}
 
 				if (ImGui.IsItemHovered())
 				{
-					EditorGui.SetTooltip("Enabled");
+					EditorGui.SetTooltip(mixedEnabled ? "Enabled on some of the selected objects" : "Enabled");
 				}
 			}
 
@@ -567,7 +720,7 @@ namespace LELEngine.Editor
 
 			if (!kind.HasValue)
 			{
-				DrawComponentBody(go, component);
+				DrawComponentBody(go, component, others);
 				return;
 			}
 
@@ -580,7 +733,7 @@ namespace LELEngine.Editor
 			draw.ChannelsSetCurrent(1);
 			try
 			{
-				DrawComponentBody(go, component);
+				DrawComponentBody(go, component, others);
 			}
 			finally
 			{
@@ -591,12 +744,12 @@ namespace LELEngine.Editor
 			}
 		}
 
-		private void DrawComponentBody(GameObject go, Behaviour component)
+		private void DrawComponentBody(GameObject go, Behaviour component, IReadOnlyList<Behaviour> others)
 		{
 			ImGui.BeginDisabled(readOnly);
 			try
 			{
-				DrawComponentFields(go, component);
+				DrawComponentFields(go, component, others);
 			}
 			finally
 			{
@@ -604,13 +757,18 @@ namespace LELEngine.Editor
 			}
 		}
 
-		private void DrawComponentFields(GameObject go, Behaviour component)
+		private void DrawComponentFields(GameObject go, Behaviour component, IReadOnlyList<Behaviour> others)
 		{
 			ImGui.Indent(4);
+			// Several objects edited together: what this draw changes in the shown component is written into the others'
+			// (its data before the draw against after it).
+			SerializedNode before = others != null && !(component is Transform) && !(component is MissingComponent)
+				? MultiEdit.NodeOf(component, new SerializationContext { Scene = editor.Scene })
+				: null;
 			bool changed;
 			if (component is Transform transform)
 			{
-				changed = DrawTransform(transform);
+				changed = DrawTransform(transform, others);
 			}
 			else if (component is MissingComponent missingComponent)
 			{
@@ -618,13 +776,20 @@ namespace LELEngine.Editor
 				ImGui.TextDisabled("Its data is kept and saved with the scene.");
 				changed = false;
 			}
-			else if (editor.Extensions.GetEditor(component) is Editor custom)
+			else if (editor.Extensions.GetEditor(component) is Editor custom && (others == null || EditorExtensions.EditsMultipleObjects(custom)))
 			{
-				// [CustomEditor] of the project's editor scripts: it draws the whole body.
+				// [CustomEditor] of the project's editor scripts: it draws the whole body (with several objects only one
+				// marked [CanEditMultipleObjects]; its targets are all of them).
+				custom.targets = others == null ? new[] { component } : Targets(component, others);
 				changed = editor.Extensions.DrawInspector(custom, context);
 			}
 			else
 			{
+				if (others != null && editor.Extensions.GetEditor(component) is Editor single)
+				{
+					ImGui.TextDisabled(single.GetType().Name + " edits one object: its fields are shown");
+				}
+
 				changed = FieldDrawer.DrawFields(component, context);
 				changed |= CustomInspectors.Draw(component, context);
 			}
@@ -635,8 +800,44 @@ namespace LELEngine.Editor
 				editor.Scene.Validate(component);
 			}
 
+			if (before != null)
+			{
+				MultiEdit.Propagate(component, before, others, () => EditorSerialization.ContextFor(editor.Scene), other =>
+				{
+					var otherComponent = (Behaviour)other;
+					editor.NotifyChanged(otherComponent.gameObject);
+				}, context.Touched);
+			}
+
 			ImGui.Unindent(4);
 			ImGui.Spacing();
+		}
+
+		private static Behaviour[] Targets(Behaviour component, IReadOnlyList<Behaviour> others)
+		{
+			var targets = new Behaviour[others.Count + 1];
+			targets[0] = component;
+			for (int i = 0; i < others.Count; i++)
+			{
+				targets[i + 1] = others[i];
+			}
+
+			return targets;
+		}
+
+		/// <summary>Where the values of the component and the others' differ (worked out again when the scene changed or half a second passed).</summary>
+		private MixedValues MixedOf(Behaviour component, IReadOnlyList<Behaviour> others)
+		{
+			double now = ImGui.GetTime();
+			if (mixedCache.TryGetValue(component.Id, out (MixedValues values, int version, double time) cached)
+				&& cached.version == editor.SceneVersion && now - cached.time < 0.5)
+			{
+				return cached.values;
+			}
+
+			MixedValues values = MixedValues.Compare(component, others, new SerializationContext { Scene = editor.Scene });
+			mixedCache[component.Id] = (values, editor.SceneVersion, now);
+			return values;
 		}
 
 		/// <summary>The component's header title: its class name spaced out ("Mesh Renderer"), or the missing script's.</summary>
@@ -672,95 +873,379 @@ namespace LELEngine.Editor
 			});
 		}
 
-		/// <summary>Sets the transform's local position to zero, rotation to none and / or scale to one, as one undo step.</summary>
-		private void ResetTransform(GameObject go, Transform transform, bool position, bool rotation, bool scale)
+		/// <summary>Sets the transforms' local position to zero, rotation to none and / or scale to one, as one undo step.</summary>
+		private void ResetTransform(List<Behaviour> transforms, bool position, bool rotation, bool scale)
 		{
-			editor.Edits.Begin(transform);
-			if (position)
+			editor.Edits.Begin(transforms[0], transforms.Count > 1 ? transforms.GetRange(1, transforms.Count - 1) : null);
+			foreach (Behaviour component in transforms)
 			{
-				transform.localPosition = Vector3.Zero;
-			}
+				var transform = (Transform)component;
+				if (position)
+				{
+					transform.localPosition = Vector3.Zero;
+				}
 
-			if (rotation)
-			{
-				transform.localRotation = Quaternion.Identity;
-				eulerHints.Remove(transform);
-			}
+				if (rotation)
+				{
+					transform.localRotation = Quaternion.Identity;
+					eulerHints.Remove(transform);
+				}
 
-			if (scale)
-			{
-				transform.localScale = Vector3.One;
+				if (scale)
+				{
+					transform.localScale = Vector3.One;
+				}
+
+				editor.NotifyChanged(transform.gameObject);
 			}
 
 			editor.Edits.RequestCommit();
-			editor.NotifyChanged(go);
 		}
 
-		private bool DrawTransform(Transform transform)
+		/// <summary>The Euler angles shown for a transform: the ones last shown while its rotation is unchanged (no flipping between equivalent sets).</summary>
+		private Vector3 EulerOf(Transform transform)
 		{
-			bool changedAny = false;
-
-			Vector3 position = transform.localPosition;
-			NVector3 p = new NVector3(position.X, position.Y, position.Z);
-			// The serialized fields' paths: prefab overrides of the transform are marked like other fields.
-			context.Path = "m_LocalPosition";
-			FieldDrawer.Label("Position", null, context);
-			bool changed = EditorGui.DragFloat3("##position", ref p, 0.05f);
-			context.Track(changed);
-			if (changed)
-			{
-				transform.localPosition = new Vector3(p.X, p.Y, p.Z);
-				changedAny = true;
-			}
-
 			Quaternion rotation = transform.localRotation;
-			Vector3 euler;
-			(Quaternion rotation, Vector3 euler) hint;
-			if (eulerHints.TryGetValue(transform, out hint) && hint.rotation == rotation)
+			return eulerHints.TryGetValue(transform, out (Quaternion rotation, Vector3 euler) hint) && hint.rotation == rotation ? hint.euler : FieldDrawer.ToEuler(rotation);
+		}
+
+		/// <summary>
+		///     Position, rotation (Euler angles) and scale. With <paramref name="others" /> (the other selected objects'
+		///     transforms) an axis whose value differs between them shows "—", and an edit of one axis sets that axis alone on
+		///     all of them: each keeps its other axes.
+		/// </summary>
+		private bool DrawTransform(Transform transform, IReadOnlyList<Behaviour> others = null)
+		{
+			var all = new List<Transform> { transform };
+			if (others != null)
 			{
-				euler = hint.euler;
-			}
-			else
-			{
-				euler = FieldDrawer.ToEuler(rotation);
+				foreach (Behaviour other in others)
+				{
+					all.Add((Transform)other);
+				}
 			}
 
-			NVector3 r = new NVector3(euler.X, euler.Y, euler.Z);
-			context.Path = "m_LocalRotation";
-			FieldDrawer.Label("Rotation", null, context);
-			changed = EditorGui.DragFloat3("##rotation", ref r, 0.5f);
-			context.Track(changed);
-			if (changed)
+			// The serialized fields' paths: prefab overrides of the transform are marked like other fields.
+			bool changedAny = DrawTransformRow(all, "Position", "##position", "m_LocalPosition", 0.05f, t => t.localPosition, (t, v) => t.localPosition = v);
+			changedAny |= DrawTransformRow(all, "Rotation", "##rotation", "m_LocalRotation", 0.5f, EulerOf, (t, euler) =>
 			{
-				euler = new Vector3(r.X, r.Y, r.Z);
-				transform.localRotation = QuaternionHelper.Euler(euler.X, euler.Y, euler.Z);
-				changedAny = true;
+				t.localRotation = QuaternionHelper.Euler(euler.X, euler.Y, euler.Z);
+				eulerHints[t] = (t.localRotation, euler);
+			});
+			foreach (Transform shown in all)
+			{
+				eulerHints[shown] = (shown.localRotation, EulerOf(shown));
 			}
 
-			eulerHints[transform] = (transform.localRotation, euler);
+			changedAny |= DrawTransformRow(all, "Scale", "##scale", "m_LocalScale", 0.02f, t => t.localScale, (t, v) => t.localScale = v);
 			context.Path = "";
-
-			Vector3 scale = transform.localScale;
-			NVector3 s = new NVector3(scale.X, scale.Y, scale.Z);
-			context.Path = "m_LocalScale";
-			FieldDrawer.Label("Scale", null, context);
-			changed = EditorGui.DragFloat3("##scale", ref s, 0.02f);
-			context.Track(changed);
-			if (changed)
-			{
-				transform.localScale = new Vector3(s.X, s.Y, s.Z);
-				changedAny = true;
-			}
-
 			if (eulerHints.Count > 4096)
 			{
 				eulerHints.Clear();
 			}
 
+			if (changedAny)
+			{
+				for (int i = 1; i < all.Count; i++)
+				{
+					editor.NotifyChanged(all[i].gameObject);
+				}
+			}
+
 			return changedAny;
 		}
 
+		/// <summary>One vector row of the transform for every shown transform: the axes that differ show "—", an edited axis is set on all.</summary>
+		private bool DrawTransformRow(List<Transform> all, string label, string id, string path, float speed, Func<Transform, Vector3> get, Action<Transform, Vector3> set)
+		{
+			Vector3 value = get(all[0]);
+			bool[] mixed = null;
+			for (int i = 1; i < all.Count; i++)
+			{
+				Vector3 other = get(all[i]);
+				for (int axis = 0; axis < 3; axis++)
+				{
+					if (!other[axis].Equals(value[axis]))
+					{
+						mixed ??= new bool[3];
+						mixed[axis] = true;
+					}
+				}
+			}
+
+			Span<float> values = stackalloc float[] { value.X, value.Y, value.Z };
+			context.Path = path;
+			FieldDrawer.Label(label, null, context);
+			bool changed = EditorGui.DragFloats(id, values, mixed, speed);
+			context.Track(changed);
+			if (!changed)
+			{
+				return false;
+			}
+
+			for (int axis = 0; axis < 3; axis++)
+			{
+				if (values[axis].Equals(value[axis]))
+				{
+					continue;
+				}
+
+				// The edited axis on every transform; each keeps its other axes.
+				foreach (Transform transform in all)
+				{
+					Vector3 current = get(transform);
+					current[axis] = values[axis];
+					set(transform, current);
+				}
+			}
+
+			return true;
+		}
+
+		/// <summary>
+		///     Several objects edited together (Unity's multi-object editing): the header's name, active flag, layer and
+		///     static flag of all of them, then the components every one of them has (of a class several times on an object:
+		///     the first with the first, and so on), drawn from the active object with "—" where the values differ; an edit
+		///     goes to all of them as one undo step. Add Component adds to each; the materials of all their renderers follow.
+		/// </summary>
+		private void DrawMultiple(List<GameObject> objects)
+		{
+			GameObject go = objects[0];
+			string selectionKey = string.Join(",", objects.ConvertAll(o => o.Id.ToString()));
+			if (selectionKey != mixedSelection)
+			{
+				mixedSelection = selectionKey;
+				mixedCache.Clear();
+			}
+
+			context.Overrides = null;
+			context.OverrideTarget = 0;
+			readOnly = objects.Exists(TempObjects.IsReadOnly);
+			ImGui.BeginDisabled(readOnly);
+			DrawMultipleHeader(objects);
+			ImGui.EndDisabled();
+			ImGui.TextDisabled(objects.Count + " objects selected, edited together" + (readOnly ? " (some are read-only: nothing is changed)" : ""));
+			ImGui.Separator();
+
+			// The components every object has: the k-th of a class on the active object with the k-th of that class on each other.
+			bool someLeftOut = false;
+			var shownCounts = new Dictionary<Type, int>();
+			foreach (Behaviour component in new List<Behaviour>(go.Components))
+			{
+				Type type = component.GetType();
+				shownCounts.TryGetValue(type, out int occurrence);
+				shownCounts[type] = occurrence + 1;
+				if (component is MissingComponent)
+				{
+					someLeftOut = true;
+					continue;
+				}
+
+				var others = new List<Behaviour>(objects.Count - 1);
+				for (int i = 1; i < objects.Count; i++)
+				{
+					Behaviour match = NthOfType(objects[i], type, occurrence);
+					if (match == null)
+					{
+						break;
+					}
+
+					others.Add(match);
+				}
+
+				if (others.Count != objects.Count - 1)
+				{
+					someLeftOut = true;
+					continue;
+				}
+
+				ImGui.PushID(component.Id.ToString());
+				TestAnchors.PushScope(ComponentTitle(component));
+				DrawComponent(go, component, others);
+				TestAnchors.PopScope();
+				ImGui.PopID();
+			}
+
+			context.UndoGroup = null;
+			context.Mixed = null;
+
+			// Components only some of the objects have (or more of them than the active object has) are not shown.
+			for (int i = 1; i < objects.Count && !someLeftOut; i++)
+			{
+				var counts = new Dictionary<Type, int>();
+				foreach (Behaviour component in objects[i].Components)
+				{
+					Type type = component.GetType();
+					counts.TryGetValue(type, out int count);
+					counts[type] = count + 1;
+					shownCounts.TryGetValue(type, out int shown);
+					if (count + 1 > shown)
+					{
+						someLeftOut = true;
+						break;
+					}
+				}
+			}
+
+			if (someLeftOut)
+			{
+				ImGui.Spacing();
+				ImGui.TextDisabled("Components that are only on some of the selected objects are not shown.");
+			}
+
+			if (!readOnly)
+			{
+				DrawAddComponent(objects);
+			}
+
+			ImGui.BeginDisabled(readOnly);
+			DrawRendererMaterials(objects);
+			ImGui.EndDisabled();
+		}
+
+		/// <summary>The <paramref name="occurrence" />-th component of exactly this class on the object (0: the first), or null.</summary>
+		private static Behaviour NthOfType(GameObject go, Type type, int occurrence)
+		{
+			foreach (Behaviour component in go.Components)
+			{
+				if (component.GetType() == type && occurrence-- == 0)
+				{
+					return component;
+				}
+			}
+
+			return null;
+		}
+
+		/// <summary>The header of several objects: active flag, name, layer and static flag, "—" where they differ.</summary>
+		private void DrawMultipleHeader(List<GameObject> objects)
+		{
+			GameObject go = objects[0];
+			bool activeMixed = objects.Exists(o => o.activeSelf != go.activeSelf);
+			bool active = !activeMixed && go.activeSelf;
+			ImGui.PushItemFlag((ImGuiItemFlags)ImGuiItemFlagsPrivate.MixedValue, activeMixed);
+			bool toggled = EditorGui.Checkbox("##active", ref active);
+			ImGui.PopItemFlag();
+			if (toggled)
+			{
+				var step = new GroupRecord { Name = (active ? "Activate " : "Deactivate ") + objects.Count + " objects" };
+				foreach (GameObject target in objects)
+				{
+					if (target.activeSelf == active)
+					{
+						continue;
+					}
+
+					step.Records.Add(new GameObjectStateRecord { Name = step.Name, ObjectId = target.Id, NameBefore = target.Name, NameAfter = target.Name, ActiveBefore = target.activeSelf, ActiveAfter = active });
+					target.SetActive(active);
+					editor.NotifyChanged(target);
+				}
+
+				if (step.Records.Count > 0)
+				{
+					editor.Undo.Push(step);
+				}
+			}
+
+			// The name: the shared one, or "—" when they differ; what is typed renames them all.
+			bool namesMixed = objects.Exists(o => o.Name != go.Name);
+			if (nameOwner != go)
+			{
+				nameOwner = go;
+				nameBuffer = namesMixed ? "" : go.Name;
+			}
+
+			ImGui.SameLine();
+			ImGui.SetNextItemWidth(-(ImGui.GetFrameHeight() + ImGui.GetStyle().ItemSpacing.X));
+			if (namesMixed)
+			{
+				EditorGui.InputTextWithHint("##name", EditorGui.MixedValue, ref nameBuffer, 256);
+			}
+			else
+			{
+				EditorGui.InputText("##name", ref nameBuffer, 256);
+			}
+
+			if (ImGui.IsItemDeactivatedAfterEdit() && !string.IsNullOrWhiteSpace(nameBuffer))
+			{
+				var step = new GroupRecord { Name = "Rename " + objects.Count + " objects to " + nameBuffer };
+				foreach (GameObject target in objects)
+				{
+					if (target.Name == nameBuffer)
+					{
+						continue;
+					}
+
+					step.Records.Add(new GameObjectStateRecord { Name = step.Name, ObjectId = target.Id, NameBefore = target.Name, NameAfter = nameBuffer, ActiveBefore = target.activeSelf, ActiveAfter = target.activeSelf });
+					target.Name = nameBuffer;
+				}
+
+				if (step.Records.Count > 0)
+				{
+					editor.Undo.Push(step);
+					editor.MarkDirty();
+				}
+			}
+			else if (!ImGui.IsItemActive())
+			{
+				nameBuffer = namesMixed ? "" : go.Name;
+			}
+
+			// Layer: "—" when they differ; a layer picked goes to all (objects with children ask about them once).
+			bool layerMixed = objects.Exists(o => o.layer != go.layer);
+			ImGui.AlignTextToFramePadding();
+			ImGui.TextDisabled("Layer");
+			ImGui.SameLine();
+			ImGui.SetNextItemWidth(160);
+			if (EditorGui.BeginCombo("##layer", layerMixed ? EditorGui.MixedValue : LayerMask.DisplayName(go.layer)))
+			{
+				for (int layer = 0; layer < 32; layer++)
+				{
+					string name = LayerMask.LayerToName(layer);
+					if (name.Length == 0 && layer != go.layer && layer < 8)
+					{
+						continue;
+					}
+
+					if (EditorGui.Selectable(LayerMask.DisplayName(layer), !layerMixed && layer == go.layer) && (layerMixed || layer != go.layer))
+					{
+						editor.RequestLayer(objects, layer);
+					}
+				}
+
+				ImGui.Separator();
+				if (EditorGui.Selectable("Add Layer..."))
+				{
+					editor.ShowProjectSettings(ProjectSettingsWindow.Tab.Layers);
+				}
+
+				EditorGui.EndCombo();
+			}
+
+			ImGui.SameLine(0, 16);
+			bool staticMixed = objects.Exists(o => o.isStatic != go.isStatic);
+			bool isStatic = !staticMixed && go.isStatic;
+			ImGui.PushItemFlag((ImGuiItemFlags)ImGuiItemFlagsPrivate.MixedValue, staticMixed);
+			bool staticToggled = EditorGui.Checkbox("Static", ref isStatic);
+			ImGui.PopItemFlag();
+			if (staticToggled)
+			{
+				editor.RequestStatic(objects, isStatic);
+			}
+
+			if (ImGui.IsItemHovered())
+			{
+				EditorGui.SetTooltip(staticMixed ? "Static on some of the selected objects (click: all of them)" : "The objects do not move or change while the game runs (see the flag of one object)");
+			}
+		}
+
 		private void DrawAddComponent(GameObject go)
+		{
+			DrawAddComponent(new List<GameObject> { go });
+		}
+
+		/// <summary>Add Component: the class chosen is added to each of the objects (one undo step).</summary>
+		private void DrawAddComponent(List<GameObject> objects)
 		{
 			// Its own strip between the components and the materials (as in Unity): a rule above, room around, a
 			// centered button taller than the fields.
@@ -772,11 +1257,14 @@ namespace LELEngine.Editor
 			float width = Math.Min(avail, Math.Max(200f, avail * 0.6f));
 			ImGui.SetCursorPosX(ImGui.GetCursorPosX() + (avail - width) * 0.5f);
 			bool clicked = EditorGui.Button("Add Component", new NVector2(width, ImGui.GetFrameHeight() + 8f));
+			NVector2 below = new NVector2((ImGui.GetItemRectMin().X + ImGui.GetItemRectMax().X) * 0.5f, ImGui.GetItemRectMax().Y);
 			ImGui.Dummy(new NVector2(0f, 6f));
 			if (clicked)
 			{
 				componentFilter = "";
 				ImGui.OpenPopup("##add_component");
+				// Under the button (not where the mouse is: a click from automation has it anywhere).
+				ImGui.SetNextWindowPos(below, ImGuiCond.Always, new NVector2(0.5f, 0f));
 			}
 
 			if (!ImGui.BeginPopup("##add_component"))
@@ -784,29 +1272,28 @@ namespace LELEngine.Editor
 				return;
 			}
 
-			if (ImGui.IsWindowAppearing())
+			// The components by namespace (levels), all matches of a search flat.
+			LevelList.SearchField("##filter", ref componentFilter, 280);
+			List<Type> types = GetComponentTypes();
+			componentLevels ??= LevelList.OfTypes(types);
+			if (LevelList.BeginArea("##components", 280f))
 			{
-				ImGui.SetKeyboardFocusHere();
-			}
-
-			ImGui.SetNextItemWidth(280);
-			EditorGui.InputTextWithHint("##filter", "Search", ref componentFilter, 128);
-			foreach (Type type in GetComponentTypes())
-			{
-				string name = type.FullName ?? type.Name;
-				if (componentFilter.Length > 0 && name.IndexOf(componentFilter, StringComparison.OrdinalIgnoreCase) < 0)
+				int chosen = componentLevels.Draw(componentFilter);
+				if (chosen >= 0)
 				{
-					continue;
-				}
-
-				if (EditorGui.Selectable(name))
-				{
-					Type selected = type;
-					editor.RecordStructural("Add " + type.Name, () => go.AddComponent(selected)?.Reset());
+					Type selected = types[chosen];
+					editor.RecordStructural("Add " + selected.Name + (objects.Count > 1 ? " to " + objects.Count + " objects" : ""), () =>
+					{
+						foreach (GameObject target in objects)
+						{
+							target.AddComponent(selected)?.Reset();
+						}
+					});
 					ImGui.CloseCurrentPopup();
 				}
 			}
 
+			ImGui.EndChild();
 			ImGui.EndPopup();
 		}
 
@@ -819,6 +1306,7 @@ namespace LELEngine.Editor
 			}
 
 			componentTypesVersion = version;
+			componentLevels = null;
 			componentTypes = new List<Type>();
 			foreach (Assembly assembly in TypeRegistry.Assemblies)
 			{
@@ -852,8 +1340,11 @@ namespace LELEngine.Editor
 		{
 			PrefabInspector.Forget();
 			componentTypes = null;
+			componentLevels = null;
 			eulerHints.Clear();
 			nameOwner = null;
+			mixedCache.Clear();
+			mixedSelection = "";
 		}
 
 		/// <summary>The prefab instance overrides values of this component.</summary>

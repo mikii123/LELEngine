@@ -7,15 +7,16 @@ namespace LELEngine.Editor
 {
 	/// <summary>
 	///     An object's static flag (<see cref="GameObject.isStatic" />) and layer changed from the editor (the inspector's
-	///     header, automation). An object with children asks first, as Unity does: change the children too, this object
-	///     only, or nothing (the user's ask, 2026-11-20). Either way the change is one undo step.
+	///     header, automation), of one object or of several selected together. Objects with children ask first, as Unity
+	///     does: change the children too, these objects only, or nothing (the user's ask, 2026-11-20). Either way the change
+	///     is one undo step.
 	/// </summary>
 	internal sealed partial class EditorApplication
 	{
 		#region PrivateFields
 
-		// The question waiting for an answer: the object, and what it is to be set to (a layer, or the static flag).
-		private GameObject flagObject;
+		// The question waiting for an answer: the objects, and what they are to be set to (a layer, or the static flag).
+		private readonly List<GameObject> flagObjects = new List<GameObject>();
 		private bool flagIsLayer;
 		private bool flagStatic;
 		private int flagLayer;
@@ -34,41 +35,51 @@ namespace LELEngine.Editor
 		/// </summary>
 		public void RequestStatic(GameObject go, bool value)
 		{
-			if (go == null || go.isStatic == value && !HasChildren(go))
+			RequestStatic(new[] { go }, value);
+		}
+
+		/// <summary>The static flag of several objects (one undo step); the question comes when one of them has children.</summary>
+		public void RequestStatic(IReadOnlyList<GameObject> objects, bool value)
+		{
+			List<GameObject> live = Live(objects);
+			if (live.Count == 0 || !live.Exists(HasChildren) && !live.Exists(go => go.isStatic != value))
 			{
 				return;
 			}
 
-			if (!HasChildren(go))
+			if (!live.Exists(HasChildren))
 			{
-				SetStatic(go, value, false);
+				SetStatic(live, value, false);
 				return;
 			}
 
-			flagObject = go;
-			flagIsLayer = false;
+			Ask(live, false);
 			flagStatic = value;
-			openFlagPopup = true;
 		}
 
 		/// <summary>Sets the object's layer as the inspector's drop-down does: at once without children, else after the question.</summary>
 		public void RequestLayer(GameObject go, int layer)
 		{
-			if (go == null || go.layer == layer && !HasChildren(go))
+			RequestLayer(new[] { go }, layer);
+		}
+
+		/// <summary>The layer of several objects (one undo step); the question comes when one of them has children.</summary>
+		public void RequestLayer(IReadOnlyList<GameObject> objects, int layer)
+		{
+			List<GameObject> live = Live(objects);
+			if (live.Count == 0 || !live.Exists(HasChildren) && !live.Exists(go => go.layer != layer))
 			{
 				return;
 			}
 
-			if (!HasChildren(go))
+			if (!live.Exists(HasChildren))
 			{
-				SetLayer(go, layer, false);
+				SetLayer(live, layer, false);
 				return;
 			}
 
-			flagObject = go;
-			flagIsLayer = true;
+			Ask(live, true);
 			flagLayer = layer;
-			openFlagPopup = true;
 		}
 
 		/// <summary>
@@ -77,14 +88,20 @@ namespace LELEngine.Editor
 		/// </summary>
 		public int SetStatic(GameObject go, bool value, bool children)
 		{
-			List<GameObject> targets = FlagTargets(go, children, target => target.isStatic != value);
+			return SetStatic(new[] { go }, value, children);
+		}
+
+		/// <summary>The static flag of several objects (and with <paramref name="children" /> everything under them); one undo step.</summary>
+		public int SetStatic(IReadOnlyList<GameObject> objects, bool value, bool children)
+		{
+			List<GameObject> targets = FlagTargets(objects, children, target => target.isStatic != value);
 			if (targets.Count == 0)
 			{
 				return 0;
 			}
 
 			string what = value ? "Make " : "Make not static: ";
-			RecordStructural(what + Counted(go, targets.Count) + (value ? " static" : ""), () =>
+			RecordStructural(what + Counted(objects, targets.Count) + (value ? " static" : ""), () =>
 			{
 				foreach (GameObject target in targets)
 				{
@@ -97,14 +114,20 @@ namespace LELEngine.Editor
 		/// <summary>Sets the layer of an object, with <paramref name="children" /> of everything under it too; one undo step. Returns how many objects changed.</summary>
 		public int SetLayer(GameObject go, int layer, bool children)
 		{
+			return SetLayer(new[] { go }, layer, children);
+		}
+
+		/// <summary>The layer of several objects (and with <paramref name="children" /> everything under them); one undo step.</summary>
+		public int SetLayer(IReadOnlyList<GameObject> objects, int layer, bool children)
+		{
 			layer = Math.Clamp(layer, 0, 31);
-			List<GameObject> targets = FlagTargets(go, children, target => target.layer != layer);
+			List<GameObject> targets = FlagTargets(objects, children, target => target.layer != layer);
 			if (targets.Count == 0)
 			{
 				return 0;
 			}
 
-			RecordStructural("Change layer of " + Counted(go, targets.Count) + " to " + LayerMask.DisplayName(layer), () =>
+			RecordStructural("Change layer of " + Counted(objects, targets.Count) + " to " + LayerMask.DisplayName(layer), () =>
 			{
 				foreach (GameObject target in targets)
 				{
@@ -123,17 +146,41 @@ namespace LELEngine.Editor
 			return go.transform != null && go.transform.childCount > 0;
 		}
 
-		// The object and, with children, everything under it that is editable and would change.
-		private static List<GameObject> FlagTargets(GameObject go, bool children, Func<GameObject, bool> changes)
+		private static List<GameObject> Live(IReadOnlyList<GameObject> objects)
+		{
+			var live = new List<GameObject>();
+			foreach (GameObject go in objects ?? Array.Empty<GameObject>())
+			{
+				if (go != null && !go.dead && !live.Contains(go))
+				{
+					live.Add(go);
+				}
+			}
+
+			return live;
+		}
+
+		private void Ask(List<GameObject> objects, bool layer)
+		{
+			flagObjects.Clear();
+			flagObjects.AddRange(objects);
+			flagIsLayer = layer;
+			openFlagPopup = true;
+		}
+
+		// The objects and, with children, everything under them that is editable and would change (each once).
+		private static List<GameObject> FlagTargets(IReadOnlyList<GameObject> objects, bool children, Func<GameObject, bool> changes)
 		{
 			var targets = new List<GameObject>();
-			if (go == null || go.dead)
-			{
-				return targets;
-			}
+			var seen = new HashSet<GameObject>(ReferenceEqualityComparer.Instance);
 
 			void Visit(GameObject current, bool root)
 			{
+				if (!seen.Add(current))
+				{
+					return;
+				}
+
 				if ((root || !TempObjects.IsReadOnly(current)) && changes(current))
 				{
 					targets.Add(current);
@@ -153,16 +200,26 @@ namespace LELEngine.Editor
 				}
 			}
 
-			Visit(go, true);
+			foreach (GameObject go in Live(objects))
+			{
+				Visit(go, true);
+			}
+
 			return targets;
 		}
 
-		private static string Counted(GameObject go, int count)
+		private static string Counted(IReadOnlyList<GameObject> objects, int count)
 		{
-			return count == 1 ? go.Name : go.Name + " and its children (" + count + " objects)";
+			GameObject first = objects.Count > 0 ? objects[0] : null;
+			if (objects.Count == 1)
+			{
+				return count == 1 ? first?.Name : first?.Name + " and its children (" + count + " objects)";
+			}
+
+			return count + " objects";
 		}
 
-		/// <summary>The question of a static flag or layer set on an object with children (drawn with the editor's modals).</summary>
+		/// <summary>The question of a static flag or layer set on objects with children (drawn with the editor's modals).</summary>
 		private void DrawObjectFlagModal()
 		{
 			if (openFlagPopup)
@@ -183,20 +240,21 @@ namespace LELEngine.Editor
 				return;
 			}
 
-			GameObject go = flagObject;
-			if (go == null || go.dead || flagIsLayer != layer)
+			List<GameObject> objects = Live(flagObjects);
+			if (objects.Count == 0 || flagIsLayer != layer)
 			{
-				flagObject = null;
+				flagObjects.Clear();
 				ImGui.CloseCurrentPopup();
 				ImGui.EndPopup();
 				return;
 			}
 
+			string whose = objects.Count == 1 ? $"'{objects[0].Name}'" : $"the {objects.Count} selected objects";
 			ImGui.TextUnformatted(layer
-				? $"Do you want to set the layer to {LayerMask.DisplayName(flagLayer)} for all the child objects of '{go.Name}' as well?"
+				? $"Do you want to set the layer to {LayerMask.DisplayName(flagLayer)} for all the child objects of {whose} as well?"
 				: flagStatic
-					? $"Do you want to make all the child objects of '{go.Name}' static as well?"
-					: $"Do you want to make all the child objects of '{go.Name}' not static as well?");
+					? $"Do you want to make all the child objects of {whose} static as well?"
+					: $"Do you want to make all the child objects of {whose} not static as well?");
 			ImGui.Spacing();
 			bool? children = null;
 			if (EditorGui.Button("Yes, change children", new NVector2(170, 0)))
@@ -205,7 +263,7 @@ namespace LELEngine.Editor
 			}
 
 			ImGui.SameLine();
-			if (EditorGui.Button("No, this object only", new NVector2(170, 0)))
+			if (EditorGui.Button(objects.Count == 1 ? "No, this object only" : "No, these objects only", new NVector2(170, 0)))
 			{
 				children = false;
 			}
@@ -215,7 +273,7 @@ namespace LELEngine.Editor
 			if (children.HasValue || cancel)
 			{
 				ImGui.CloseCurrentPopup();
-				flagObject = null;
+				flagObjects.Clear();
 				if (children.HasValue)
 				{
 					// After the frame's panels: the change replaces nothing they hold, but it snapshots the scene.
@@ -224,18 +282,13 @@ namespace LELEngine.Editor
 					int newLayer = flagLayer;
 					Defer(() =>
 					{
-						if (go.dead)
-						{
-							return;
-						}
-
 						if (layer)
 						{
-							SetLayer(go, newLayer, withChildren);
+							SetLayer(objects, newLayer, withChildren);
 						}
 						else
 						{
-							SetStatic(go, value, withChildren);
+							SetStatic(objects, value, withChildren);
 						}
 					});
 				}

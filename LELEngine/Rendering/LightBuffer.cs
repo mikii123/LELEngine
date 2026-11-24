@@ -22,11 +22,16 @@ namespace LELEngine.Rendering
 		/// <summary>The uniform buffer binding of the list's header (Engine/Lights.glsl's LelLightBlock).</summary>
 		public const int Binding = 7;
 
-		/// <summary>The storage buffer binding of the list.</summary>
-		public const int ListBinding = 16;
+		/// <summary>
+		///     The storage buffer binding of the list. Under 16: some GPUs have no more (Intel's: 0..15), and 0..12 are cached
+		///     by the particles (VFX), so 13 and 14 are shared with the instance culling (<see cref="GpuScene" />), which binds
+		///     its own buffers there before its dispatch: every program that reads the lights binds them before it runs
+		///     (<see cref="EnsureBound" />, through Lighting.SetUniforms).
+		/// </summary>
+		public const int ListBinding = 13;
 
-		/// <summary>The storage buffer binding of the clusters' masks of the view being drawn.</summary>
-		public const int ClusterBinding = 17;
+		/// <summary>The storage buffer binding of the clusters' masks of the view being drawn (see <see cref="ListBinding" />).</summary>
+		public const int ClusterBinding = 14;
 
 		/// <summary>Bytes of the header (std140; <see cref="WriteHeader" />).</summary>
 		public const int HeaderBytes = 128;

@@ -411,6 +411,88 @@ namespace LELEngine.Editor
 			return FinishNumbers("input", label, id, request, MemoryMarshal.CreateSpan(ref Unsafe.As<NVector4, float>(ref v), 4), changed);
 		}
 
+		/// <summary>What a field shows when the objects edited together have different values in it (Unity's mixed value).</summary>
+		public const string MixedValue = "—";
+
+		/// <summary>
+		///     A vector of 2..4 floats as ImGui.DragFloatN draws it, where a component that differs between the objects edited
+		///     together (<paramref name="mixed" />, may be null) shows "—" until it is dragged or typed: then that component
+		///     alone is the new value. One group: one element for automation, and the undo tracking sees an edit in any part.
+		/// </summary>
+		public static bool DragFloats(string label, Span<float> values, bool[] mixed, float vSpeed = 1f, string format = "%.3f")
+		{
+			string request = ValueRequest(label, out uint id);
+			bool changed = false;
+			ImGui.BeginGroup();
+			ImGui.PushID(label);
+			ImGuiP.PushMultiItemsWidths(values.Length, ImGui.CalcItemWidth());
+			for (int i = 0; i < values.Length; i++)
+			{
+				if (i > 0)
+				{
+					ImGui.SameLine(0f, ImGui.GetStyle().ItemInnerSpacing.X);
+				}
+
+				ImGui.PushID(i);
+				bool isMixed = mixed != null && i < mixed.Length && mixed[i];
+				changed |= ImGui.DragFloat("##c", ref values[i], vSpeed, 0f, 0f, isMixed ? MixedValue : format);
+				ImGui.PopID();
+				ImGui.PopItemWidth();
+			}
+
+			ImGui.PopID();
+			string shown = label.StartsWith("##", StringComparison.Ordinal) ? "" : TestAnchors.VisibleText(label);
+			if (shown.Length > 0)
+			{
+				ImGui.SameLine(0f, ImGui.GetStyle().ItemInnerSpacing.X);
+				ImGui.TextUnformatted(shown);
+			}
+
+			ImGui.EndGroup();
+			return FinishNumbers("input", label, id, request, values, changed);
+		}
+
+		/// <summary><see cref="DragFloats" /> for whole numbers (Vector2i / 3i / 4i).</summary>
+		public static bool DragInts(string label, Span<int> values, bool[] mixed, float vSpeed = 1f)
+		{
+			string request = ValueRequest(label, out uint id);
+			bool changed = false;
+			ImGui.BeginGroup();
+			ImGui.PushID(label);
+			ImGuiP.PushMultiItemsWidths(values.Length, ImGui.CalcItemWidth());
+			for (int i = 0; i < values.Length; i++)
+			{
+				if (i > 0)
+				{
+					ImGui.SameLine(0f, ImGui.GetStyle().ItemInnerSpacing.X);
+				}
+
+				ImGui.PushID(i);
+				bool isMixed = mixed != null && i < mixed.Length && mixed[i];
+				changed |= ImGui.DragInt("##c", ref values[i], vSpeed, 0, 0, isMixed ? MixedValue : "%d");
+				ImGui.PopID();
+				ImGui.PopItemWidth();
+			}
+
+			ImGui.PopID();
+			ImGui.EndGroup();
+			return FinishNumbers("input", label, id, request, values, changed);
+		}
+
+		/// <summary>
+		///     Covers the last item's frame with "—" (a value that differs between the objects edited together, in a widget
+		///     with no text of its own to show it: a color, a curve, a gradient). The widget still works under it.
+		/// </summary>
+		public static void MixedOverlay()
+		{
+			NVector2 min = ImGui.GetItemRectMin();
+			NVector2 max = ImGui.GetItemRectMax();
+			ImDrawListPtr draw = ImGui.GetWindowDrawList();
+			draw.AddRectFilled(min, max, ImGui.GetColorU32(ImGuiCol.FrameBg), ImGui.GetStyle().FrameRounding);
+			NVector2 size = ImGui.CalcTextSize(MixedValue);
+			draw.AddText(new NVector2(min.X + ImGui.GetStyle().FramePadding.X, (min.Y + max.Y - size.Y) * 0.5f), ImGui.GetColorU32(ImGuiCol.Text), MixedValue);
+		}
+
 		public static bool DragInt(string label, ref int v, float vSpeed = 1f, int vMin = 0, int vMax = 0, string format = "%d", ImGuiSliderFlags flags = ImGuiSliderFlags.None)
 		{
 			string request = ValueRequest(label, out uint id);
@@ -520,14 +602,16 @@ namespace LELEngine.Editor
 		public static bool ColorEdit3(string label, ref NVector3 color, ImGuiColorEditFlags flags = ImGuiColorEditFlags.None)
 		{
 			string request = ValueRequest(label, out uint id);
-			bool changed = ImGui.ColorEdit3(label, ref color, flags);
+			var color4 = new NVector4(color, 1f);
+			bool changed = ColorPicker.Field(label, ref color4, flags | ImGuiColorEditFlags.NoAlpha, id);
+			color = new NVector3(color4.X, color4.Y, color4.Z);
 			return FinishNumbers("color", label, id, request, MemoryMarshal.CreateSpan(ref Unsafe.As<NVector3, float>(ref color), 3), changed, true);
 		}
 
 		public static bool ColorEdit4(string label, ref NVector4 color, ImGuiColorEditFlags flags = ImGuiColorEditFlags.None)
 		{
 			string request = ValueRequest(label, out uint id);
-			bool changed = ImGui.ColorEdit4(label, ref color, flags);
+			bool changed = ColorPicker.Field(label, ref color, flags, id);
 			return FinishNumbers("color", label, id, request, MemoryMarshal.CreateSpan(ref Unsafe.As<NVector4, float>(ref color), 4), changed, true);
 		}
 

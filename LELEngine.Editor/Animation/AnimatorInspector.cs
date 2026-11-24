@@ -1221,13 +1221,12 @@ namespace LELEngine.Editor.Animation
 				{
 					ImGui.Separator();
 					ImGui.TextDisabled("Script conditions");
-					foreach (Type type in scripts)
+					// By namespace (levels).
+					int index = TypeSelector.Levels(typeof(ScriptCondition)).Draw();
+					if (index >= 0)
 					{
-						if (EditorGui.Selectable(TypeSelector.DisplayName(type)))
-						{
-							Type chosen = type;
-							Document.Edit("Add script condition", () => conditions.Add((AnimatorCondition)Activator.CreateInstance(chosen)));
-						}
+						Type chosen = scripts[index];
+						Document.Edit("Add script condition", () => conditions.Add((AnimatorCondition)Activator.CreateInstance(chosen)));
 					}
 				}
 

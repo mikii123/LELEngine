@@ -77,7 +77,8 @@ namespace LELEngine.Editor.Automation
 			"  hierarchy                              the open scene's objects (ids, components)\n" +
 			"  select <object>|none [--add]           object: Parent/Child, a unique name, or #id; --add: it joins the\n" +
 			"                                         objects already selected (status lists them)\n" +
-			"  select-asset <assetPath>\n" +
+			"  select-asset <assetPath> [--add]       --add: it joins the files already selected (the inspector edits\n" +
+			"                                         files of one kind together)\n" +
 			"  delete-asset <assetPath>               a file (with its meta) or a folder, to the Recycle Bin on Windows\n" +
 			"  reparent <object> <parent|none> [index] (instead of dragging in the hierarchy); index: its place among the\n" +
 			"                                         new siblings, else after the last\n" +
@@ -372,8 +373,8 @@ namespace LELEngine.Editor.Automation
 					break;
 
 				case "select-asset":
-					Need(args, 1, "select-asset <assetPath>");
-					EditorAutomation.SelectAsset(Joined(args));
+					Need(args, 1, "select-asset <assetPath> [--add]");
+					EditorAutomation.SelectAsset(Joined(args), options.ContainsKey("add"));
 					await EditorAutomation.NextFrame(2);
 					break;
 
@@ -634,6 +635,15 @@ namespace LELEngine.Editor.Automation
 				// The active object first, then the others selected with it.
 				text.Append(" and ").Append(editor.SelectedObjects.Count - 1).Append(" more: ").Append(string.Join(", ", editor.SelectedObjects.Where(go => go != editor.Selected).Take(20).Select(go => go.Name + " #" + go.Id)));
 				if (editor.SelectedObjects.Count > 21)
+				{
+					text.Append(", ...");
+				}
+			}
+			else if (editor.SelectedAssets.Count > 1)
+			{
+				// The active file first, then the others selected with it.
+				text.Append(" and ").Append(editor.SelectedAssets.Count - 1).Append(" more: ").Append(string.Join(", ", editor.SelectedAssets.Where(path => path != editor.SelectedAsset).Take(20)));
+				if (editor.SelectedAssets.Count > 21)
 				{
 					text.Append(", ...");
 				}

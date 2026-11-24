@@ -17,6 +17,117 @@ namespace LELEngine.Editor
 	{
 		#region PublicMethods
 
+		/// <summary>
+		///     The inspector of the selected project files (the active one first). One file: its inspector. Several of one
+		///     kind that can be edited together (materials, images, models, ScriptableObjects of one class, physics
+		///     materials): their shared values with "—" where they differ, an edit going to all. Anything else: what is
+		///     selected, by kind.
+		/// </summary>
+		public static void Draw(IReadOnlyList<string> assetPaths, InspectorContext context)
+		{
+			if (assetPaths.Count == 1)
+			{
+				Draw(assetPaths[0], context);
+				return;
+			}
+
+			var existing = new List<string>();
+			foreach (string path in assetPaths)
+			{
+				if (File.Exists(AssetDatabase.ToAbsolute(path)))
+				{
+					existing.Add(path);
+				}
+			}
+
+			if (existing.Count <= 1)
+			{
+				if (existing.Count == 1)
+				{
+					Draw(existing[0], context);
+				}
+				else
+				{
+					ImGui.TextDisabled("The selected files no longer exist.");
+				}
+
+				return;
+			}
+
+			string kind = SharedKind(existing, out string kindName);
+			ImGui.TextUnformatted(existing.Count + " " + (kind != null ? kindName : "files") + " selected");
+			DrawSelectedList(existing);
+			bool builtin = existing.Exists(AssetDatabase.IsEngineResource);
+			if (builtin)
+			{
+				ImGui.TextDisabled("Some are built-in (part of the engine): read-only");
+			}
+
+			ImGui.Separator();
+			ImGui.Spacing();
+			if (kind == null)
+			{
+				ImGui.PushTextWrapPos(0f);
+				ImGui.TextDisabled("Files of different kinds: select files of one kind (materials, images, models, ScriptableObjects of one class, physics materials) to edit them together.");
+				ImGui.PopTextWrapPos();
+				return;
+			}
+
+			ImGui.BeginDisabled(builtin);
+			try
+			{
+				switch (kind)
+				{
+					case "material":
+					{
+						var materials = existing.ConvertAll(InternalStorage.GetOrCreateMaterial);
+						MaterialEditor.DrawMultiple(materials[0], materials.GetRange(1, materials.Count - 1), context);
+						break;
+					}
+					case "image":
+						TextureImporterInspector.Draw(existing, context);
+						break;
+					case "model":
+						ModelImporterInspector.Draw(existing, context);
+						break;
+					case "physicsmaterial":
+					{
+						var materials = existing.ConvertAll(path => (object)PhysicsMaterial2D.Load(path));
+						DrawObjectsTogether(materials, context, () => context.Editor.NotifySceneChanged());
+						break;
+					}
+					default:
+					{
+						// ScriptableObjects of one class.
+						var assets = existing.ConvertAll(path => (object)ScriptableObjectAssets.Load(path));
+						if (assets.Exists(asset => asset == null))
+						{
+							ImGui.TextColored(EditorStyle.Warning, "Some of them cannot be loaded (missing script).");
+							break;
+						}
+
+						DrawObjectsTogether(assets, context, () =>
+						{
+							foreach (object asset in assets)
+							{
+								((ScriptableObject)asset).Validate();
+							}
+
+							context.Editor.NotifySceneChanged();
+						});
+						break;
+					}
+				}
+			}
+			finally
+			{
+				ImGui.EndDisabled();
+				context.UndoGroup = null;
+				context.Mixed = null;
+				context.Touched.Clear();
+			}
+		}
+
 		public static void Draw(string assetPath, InspectorContext context)
 		{
 			string absolute = AssetDatabase.ToAbsolute(assetPath);
@@ -172,6 +283,105 @@ namespace LELEngine.Editor
 		#endregion
 
 		#region PrivateMethods
+
+		/// <summary>
+		///     The kind every file is of when they can be edited together ("material", "image", "model", "physicsmaterial",
+		///     or a ScriptableObject's class name), with its plural for the title; null when they differ or cannot be.
+		/// </summary>
+		private static string SharedKind(List<string> paths, out string plural)
+		{
+			plural = null;
+			string shared = null;
+			foreach (string path in paths)
+			{
+				Type type = AssetDatabase.GetAssetType(path);
+				string kind;
+				if (type == typeof(Material))
+				{
+					kind = "material";
+					plural = "materials";
+				}
+				else if (TextureAssets.IsImageFile(path))
+				{
+					kind = "image";
+					plural = "images";
+				}
+				else if (type == typeof(Model) && !ModelAssets.IsMeshFile(path))
+				{
+					kind = "model";
+					plural = "models";
+				}
+				else if (type == typeof(PhysicsMaterial2D))
+				{
+					kind = "physicsmaterial";
+					plural = "physics materials";
+				}
+				else if (type == typeof(ScriptableObject) && EditorIcons.KindOfFile(path) != IconKind.InputConfiguration)
+				{
+					Type stored = ScriptableObjectAssets.GetStoredType(path);
+					if (stored == null)
+					{
+						return null;
+					}
+
+					kind = stored.FullName;
+					plural = stored.Name + " assets";
+				}
+				else
+				{
+					return null;
+				}
+
+				if (shared != null && shared != kind)
+				{
+					plural = null;
+					return null;
+				}
+
+				shared = kind;
+			}
+
+			return shared;
+		}
+
+		/// <summary>The selected files' names, folded (a long selection would push the values far down).</summary>
+		private static void DrawSelectedList(List<string> paths)
+		{
+			if (!EditorGui.TreeNodeEx("Files##selected_files", ImGuiTreeNodeFlags.SpanAvailWidth))
+			{
+				return;
+			}
+
+			foreach (string path in paths)
+			{
+				ImGui.TextDisabled(path);
+			}
+
+			ImGui.TreePop();
+		}
+
+		/// <summary>
+		///     Objects of one class with serialized fields (assets) edited together: the first drawn, "—" where they differ,
+		///     an edit written into all of them, one undo step, each saved.
+		/// </summary>
+		private static void DrawObjectsTogether(List<object> targets, InspectorContext context, Action changed)
+		{
+			object primary = targets[0];
+			List<object> others = targets.GetRange(1, targets.Count - 1);
+			var serialization = new SerializationContext();
+			SerializedNode before = MultiEdit.NodeOf(primary, serialization);
+			context.UndoTarget = primary;
+			context.UndoGroup = others;
+			context.Mixed = MixedValues.Compare(primary, others, serialization);
+			bool edited = FieldDrawer.DrawFields(primary, context);
+			context.Mixed = null;
+			edited |= MultiEdit.Propagate(primary, before, others, () => new SerializationContext(), null, context.Touched) > 0;
+			context.Touched.Clear();
+			if (edited)
+			{
+				changed();
+			}
+		}
 
 		private static string Kind(string assetPath, Type type)
 		{

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using Hexa.NET.ImGui;
+using LELEngine.Serialization;
 using LELEngine.Shaders;
 using LELEngine.Graphics;
 using LELEngine.Mathematics;
@@ -23,6 +24,8 @@ namespace LELEngine.Editor
 		#region PrivateFields
 
 		private static List<string> shaderChoices;
+		private static LevelList shaderLevels;
+		private static string shaderSearch = "";
 		private static int shaderChoicesVersion = -1;
 
 		#endregion
@@ -134,7 +137,7 @@ namespace LELEngine.Editor
 
 					if (EditorGui.Button("Remove unused values"))
 					{
-						context.Editor.Edits.Begin(material);
+						context.Editor.Edits.Begin(material, context.UndoGroup);
 						foreach (MaterialProperty property in unused)
 						{
 							material.RemoveProperty(property.name);
@@ -151,13 +154,30 @@ namespace LELEngine.Editor
 			ImGui.Spacing();
 			if (EditorGui.Button("Reset to shader defaults"))
 			{
-				context.Editor.Edits.Begin(material);
-				foreach (string name in new List<string>(material.GetPropertyNames()))
+				context.Editor.Edits.Begin(material, context.UndoGroup);
+				// Every material edited together, whatever values it had.
+				var targets = new List<Material> { material };
+				if (context.UndoGroup != null)
 				{
-					material.RemoveProperty(name);
+					foreach (object other in context.UndoGroup)
+					{
+						if (other is Material otherMaterial)
+						{
+							targets.Add(otherMaterial);
+						}
+					}
 				}
 
-				material.ResetToShaderDefaults(false);
+				foreach (Material target in targets)
+				{
+					foreach (string name in new List<string>(target.GetPropertyNames()))
+					{
+						target.RemoveProperty(name);
+					}
+
+					target.ResetToShaderDefaults(false);
+				}
+
 				context.Editor.Edits.RequestCommit();
 				changed = true;
 			}
@@ -177,27 +197,220 @@ namespace LELEngine.Editor
 			Lighting.GI.InvalidateStatic();
 		}
 
+		/// <summary>
+		///     Several materials edited together (selected in the project panel): drawn from <paramref name="primary" /> with
+		///     "—" where their shaders, queues or values differ; what an edit changes in it (a value, a vector's or color's
+		///     components one by one, a texture, the shader, the queue, values removed) is set on the others too, as one
+		///     undo step, each saved.
+		/// </summary>
+		public static void DrawMultiple(Material primary, IReadOnlyList<Material> others, InspectorContext context)
+		{
+			Dictionary<string, (ValueTag tag, object value)> before = ValuesOf(primary);
+			context.UndoGroup = others;
+			context.Mixed = MixedOf(primary, before, others);
+			try
+			{
+				Draw(primary, context);
+			}
+			finally
+			{
+				context.UndoGroup = null;
+				context.Mixed = null;
+				context.Path = "";
+			}
+
+			if (Propagate(primary, before, others, context.Touched))
+			{
+				MaterialChanged(context.Editor);
+			}
+
+			context.Touched.Clear();
+		}
+
+		#endregion
+
+		#region MultipleMaterials
+
+		// The paths of a material's own state among its values (no shader property is named so).
+		private const string ShaderPath = "m_Shader";
+		private const string RenderQueuePath = "m_RenderQueue";
+
+		/// <summary>A material's shader, queue override and values by name (textures as the texture objects).</summary>
+		private static Dictionary<string, (ValueTag tag, object value)> ValuesOf(Material material)
+		{
+			var values = new Dictionary<string, (ValueTag, object)>(StringComparer.Ordinal)
+			{
+				[ShaderPath] = (ValueTag.String, material.ShaderPath ?? ""),
+				[RenderQueuePath] = (ValueTag.Int32, material.OverridesRenderQueue ? material.renderQueue : -1)
+			};
+			foreach (MaterialProperty property in material.Properties)
+			{
+				switch (property)
+				{
+					case FloatProperty f: values[property.name] = (ValueTag.Single, f.value); break;
+					case IntProperty i: values[property.name] = (ValueTag.Int32, i.value); break;
+					case VectorProperty v: values[property.name] = (ValueTag.Vector4, v.value); break;
+					case ColorProperty c: values[property.name] = (ValueTag.Color4, c.value); break;
+					case TextureProperty t: values[property.name] = (ValueTag.Asset, t.value); break;
+				}
+			}
+
+			return values;
+		}
+
+		private static SerializedNode NodeOf(Dictionary<string, (ValueTag tag, object value)> values)
+		{
+			var node = new SerializedNode { TypeName = "MaterialValues" };
+			foreach (KeyValuePair<string, (ValueTag tag, object value)> entry in values)
+			{
+				node.Properties.Add(new SerializedProperty { Name = entry.Key, Tag = entry.Value.tag, Value = entry.Value.value });
+			}
+
+			return node;
+		}
+
+		/// <summary>The values that differ between the materials (one has a value another has not: differs too).</summary>
+		private static MixedValues MixedOf(Material primary, Dictionary<string, (ValueTag tag, object value)> mine, IReadOnlyList<Material> others)
+		{
+			var differing = new List<string>();
+			var nodes = new List<SerializedNode>();
+			foreach (Material other in others)
+			{
+				Dictionary<string, (ValueTag tag, object value)> theirs = ValuesOf(other);
+				nodes.Add(NodeOf(theirs));
+				foreach (KeyValuePair<string, (ValueTag tag, object value)> entry in mine)
+				{
+					if (!theirs.TryGetValue(entry.Key, out (ValueTag tag, object value) value) || !Equals(value.value, entry.Value.value))
+					{
+						differing.Add(entry.Key);
+					}
+				}
+
+				foreach (string name in theirs.Keys)
+				{
+					if (!mine.ContainsKey(name))
+					{
+						differing.Add(name);
+					}
+				}
+			}
+
+			return MixedValues.FromPaths(differing, NodeOf(mine), nodes);
+		}
+
+		/// <summary>What the edit changed in <paramref name="primary" /> (against <paramref name="before" />) set on the others; true when one changed.</summary>
+		private static bool Propagate(Material primary, Dictionary<string, (ValueTag tag, object value)> before, IReadOnlyList<Material> others, List<string> touched)
+		{
+			Dictionary<string, (ValueTag tag, object value)> after = ValuesOf(primary);
+			var changed = new List<string>();
+			foreach (KeyValuePair<string, (ValueTag tag, object value)> entry in after)
+			{
+				// Set while the materials differed (an option picked, a toggle clicked) goes to all, changed or not; a
+				// vector or color only in the components that changed.
+				bool set = touched.Contains(entry.Key) && entry.Value.tag != ValueTag.Vector4 && entry.Value.tag != ValueTag.Color4;
+				if (set || !before.TryGetValue(entry.Key, out (ValueTag tag, object value) old) || !Equals(old.value, entry.Value.value))
+				{
+					changed.Add(entry.Key);
+				}
+			}
+
+			var removed = new List<string>();
+			foreach (string name in before.Keys)
+			{
+				if (!after.ContainsKey(name))
+				{
+					removed.Add(name);
+				}
+			}
+
+			if (changed.Count == 0 && removed.Count == 0)
+			{
+				return false;
+			}
+
+			foreach (Material other in others)
+			{
+				// The shader first: a new one fills in its defaults, which the values below then replace.
+				if (changed.Contains(ShaderPath) && primary.UsingShader != null)
+				{
+					other.shader = primary.UsingShader;
+				}
+
+				if (changed.Contains(RenderQueuePath))
+				{
+					other.renderQueue = (int)after[RenderQueuePath].value;
+				}
+
+				foreach (string name in changed)
+				{
+					MaterialProperty property = name == ShaderPath || name == RenderQueuePath ? null : primary.GetProperty(name);
+					before.TryGetValue(name, out (ValueTag tag, object value) old);
+					switch (property)
+					{
+						case FloatProperty f:
+							other.SetFloat(name, f.value);
+							break;
+						case IntProperty i:
+							other.SetInt(name, i.value);
+							break;
+						case VectorProperty v:
+						{
+							// Only the components the edit changed; the other material keeps the rest.
+							Vector4 theirs = other.GetVector(name, v.value);
+							Vector4 was = old.value is Vector4 previous ? previous : theirs;
+							other.SetVector(name, new Vector4(
+								was.X != v.value.X ? v.value.X : theirs.X, was.Y != v.value.Y ? v.value.Y : theirs.Y,
+								was.Z != v.value.Z ? v.value.Z : theirs.Z, was.W != v.value.W ? v.value.W : theirs.W));
+							break;
+						}
+						case ColorProperty c:
+						{
+							Color4 theirs = other.GetColor(name, c.value);
+							Color4 was = old.value is Color4 previous ? previous : theirs;
+							other.SetColor(name, new Color4(
+								was.R != c.value.R ? c.value.R : theirs.R, was.G != c.value.G ? c.value.G : theirs.G,
+								was.B != c.value.B ? c.value.B : theirs.B, was.A != c.value.A ? c.value.A : theirs.A));
+							break;
+						}
+						case TextureProperty t:
+							other.SetTexture(name, t.value);
+							break;
+					}
+				}
+
+				foreach (string name in removed)
+				{
+					other.RemoveProperty(name);
+				}
+			}
+
+			return true;
+		}
+
 		#endregion
 
 		#region PrivateMethods
 
 		private static bool DrawShaderRow(Material material, InspectorContext context)
 		{
+			context.Path = ShaderPath;
 			FieldDrawer.Label("Shader", null, context);
 			string current = material.shader?.AssetPath ?? "None";
 			bool changed = false;
-			if (EditorGui.BeginCombo("##shader", current))
+			if (EditorGui.BeginCombo("##shader", context.IsMixed() ? EditorGui.MixedValue : current, ImGuiComboFlags.HeightLarge))
 			{
-				foreach (string choice in ShaderChoices(context.Editor))
+				// The shaders by folder (levels), a search's matches flat.
+				List<string> choices = ShaderChoices(context.Editor);
+				LevelList.SearchField("##shader_search", ref shaderSearch);
+				int chosen = shaderLevels.Draw(shaderSearch, i => string.Equals(choices[i], current, StringComparison.OrdinalIgnoreCase));
+				if (chosen >= 0 && (context.IsMixed() || !string.Equals(choices[chosen], current, StringComparison.OrdinalIgnoreCase)))
 				{
-					bool selected = string.Equals(choice, current, StringComparison.OrdinalIgnoreCase);
-					if (EditorGui.Selectable(choice, selected) && !selected)
-					{
-						context.Editor.Edits.Begin(material);
-						material.shader = InternalStorage.GetOrCreateShader(choice);
-						context.Editor.Edits.RequestCommit();
-						changed = true;
-					}
+					context.Editor.Edits.Begin(material, context.UndoGroup);
+					material.shader = InternalStorage.GetOrCreateShader(choices[chosen]);
+					context.Editor.Edits.RequestCommit();
+					context.Touch();
+					changed = true;
+					ImGui.CloseCurrentPopup();
 				}
 
 				EditorGui.EndCombo();
@@ -207,7 +420,7 @@ namespace LELEngine.Editor
 			{
 				if (!ImGui.AcceptDragDropPayload(ProjectPanel.DragType).IsNull && ProjectPanel.DraggedAsset != null && ProjectPanel.DraggedAsset.EndsWith(".shader", StringComparison.OrdinalIgnoreCase))
 				{
-					context.Editor.Edits.Begin(material);
+					context.Editor.Edits.Begin(material, context.UndoGroup);
 					material.shader = InternalStorage.GetOrCreateShader(ProjectPanel.DraggedAsset);
 					context.Editor.Edits.RequestCommit();
 					changed = true;
@@ -232,10 +445,16 @@ namespace LELEngine.Editor
 				EditorGui.SetTooltip("Declared by the shader in its Properties block (Blend, ZWrite, ZTest, Cull, Queue).");
 			}
 
+			context.Path = RenderQueuePath;
 			FieldDrawer.Label("Render Queue", null, context);
 			int queue = material.renderQueue;
 			ImGui.SetNextItemWidth(Math.Max(60f, ImGui.GetContentRegionAvail().X - 110f));
 			bool changed = EditorGui.InputInt("##queue", ref queue, 10, 100);
+			if (context.IsMixed() && !ImGui.IsItemActive())
+			{
+				EditorGui.MixedOverlay();
+			}
+
 			context.Track(changed);
 			if (changed)
 			{
@@ -248,7 +467,7 @@ namespace LELEngine.Editor
 			{
 				if (EditorGui.SmallButton("Shader's"))
 				{
-					context.Editor.Edits.Begin(material);
+					context.Editor.Edits.Begin(material, context.UndoGroup);
 					material.renderQueue = -1;
 					context.Editor.Edits.RequestCommit();
 					changed = true;
@@ -277,6 +496,7 @@ namespace LELEngine.Editor
 			shaderChoicesVersion = editor.AssetsVersion;
 			shaderChoices = AssetDatabase.FindAssets(typeof(ShaderProgram));
 			shaderChoices.AddRange(ObjectPicker.EngineShaders());
+			shaderLevels = LevelList.OfPaths(shaderChoices);
 			return shaderChoices;
 		}
 
@@ -357,6 +577,7 @@ namespace LELEngine.Editor
 
 		private static bool DrawColor(Material material, string name, string label, bool hdr, InspectorContext context, Color4? fallback = null)
 		{
+			context.Path = name;
 			FieldDrawer.Label(label, null, context);
 			Color4 color = material.GetColor(name, fallback ?? Color4.White);
 			NVector4 n = new NVector4(color.R, color.G, color.B, color.A);
@@ -367,6 +588,11 @@ namespace LELEngine.Editor
 			}
 
 			bool changed = EditorGui.ColorEdit4("##v", ref n, flags);
+			if (context.IsMixed() && !ImGui.IsItemActive())
+			{
+				EditorGui.MixedOverlay();
+			}
+
 			context.Track(changed);
 			if (changed)
 			{
@@ -378,9 +604,15 @@ namespace LELEngine.Editor
 
 		private static bool DrawRange(Material material, string name, string label, float min, float max, InspectorContext context, float fallback = 0f)
 		{
+			context.Path = name;
 			FieldDrawer.Label(label, null, context);
 			float value = material.GetFloat(name, fallback);
 			bool changed = EditorGui.SliderFloat("##v", ref value, min, max);
+			if (context.IsMixed() && !ImGui.IsItemActive())
+			{
+				EditorGui.MixedOverlay();
+			}
+
 			context.Track(changed);
 			if (changed)
 			{
@@ -392,9 +624,10 @@ namespace LELEngine.Editor
 
 		private static bool DrawFloat(Material material, string name, string label, InspectorContext context, float fallback = 0f)
 		{
+			context.Path = name;
 			FieldDrawer.Label(label, null, context);
 			float value = material.GetFloat(name, fallback);
-			bool changed = EditorGui.DragFloat("##v", ref value, Math.Max(0.005f, Math.Abs(value) * 0.01f));
+			bool changed = EditorGui.DragFloat("##v", ref value, Math.Max(0.005f, Math.Abs(value) * 0.01f), 0f, 0f, context.IsMixed() ? EditorGui.MixedValue : "%.3f");
 			context.Track(changed);
 			if (changed)
 			{
@@ -406,9 +639,10 @@ namespace LELEngine.Editor
 
 		private static bool DrawInt(Material material, string name, string label, InspectorContext context, int fallback = 0)
 		{
+			context.Path = name;
 			FieldDrawer.Label(label, null, context);
 			int value = material.GetInt(name, fallback);
-			bool changed = EditorGui.DragInt("##v", ref value, 0.2f);
+			bool changed = EditorGui.DragInt("##v", ref value, 0.2f, 0, 0, context.IsMixed() ? EditorGui.MixedValue : "%d");
 			context.Track(changed);
 			if (changed)
 			{
@@ -421,18 +655,21 @@ namespace LELEngine.Editor
 		// [KeywordEnum]: a combo of the options; the value is the option's index (it picks the variant).
 		private static bool DrawKeywordEnum(Material material, ShaderProperty declared, string label, InspectorContext context)
 		{
+			context.Path = declared.Name;
 			FieldDrawer.Label(label, null, context);
 			int current = declared.OptionIndex(material.GetFloat(declared.Name, declared.DefaultValue.X));
+			bool mixed = context.IsMixed();
 			bool changed = false;
-			if (EditorGui.BeginCombo("##v", declared.EnumOptions[current]))
+			if (EditorGui.BeginCombo("##v", mixed ? EditorGui.MixedValue : declared.EnumOptions[current]))
 			{
 				for (int i = 0; i < declared.EnumOptions.Length; i++)
 				{
-					if (EditorGui.Selectable(declared.EnumOptions[i], i == current) && i != current)
+					if (EditorGui.Selectable(declared.EnumOptions[i], !mixed && i == current) && (mixed || i != current))
 					{
 						context.BeginEdit();
 						SetKeywordValue(material, declared, i);
 						context.EndEdit();
+						context.Touch();
 						changed = true;
 					}
 
@@ -456,9 +693,13 @@ namespace LELEngine.Editor
 		// [Toggle]: a checkbox (1 / 0) that switches the keyword.
 		private static bool DrawKeywordToggle(Material material, ShaderProperty declared, string label, InspectorContext context)
 		{
+			context.Path = declared.Name;
 			FieldDrawer.Label(label, null, context);
-			bool value = material.GetFloat(declared.Name, declared.DefaultValue.X) != 0f;
+			bool mixed = context.IsMixed();
+			bool value = !mixed && material.GetFloat(declared.Name, declared.DefaultValue.X) != 0f;
+			ImGui.PushItemFlag((ImGuiItemFlags)ImGuiItemFlagsPrivate.MixedValue, mixed);
 			bool changed = EditorGui.Checkbox("##v", ref value);
+			ImGui.PopItemFlag();
 			TestAnchors.RecordItem("materialfield:" + declared.Name);
 			if (ImGui.IsItemHovered())
 			{
@@ -488,9 +729,13 @@ namespace LELEngine.Editor
 
 		private static bool DrawBool(Material material, string name, string label, InspectorContext context)
 		{
+			context.Path = name;
 			FieldDrawer.Label(label, null, context);
-			bool value = material.GetInt(name) != 0;
+			bool mixed = context.IsMixed();
+			bool value = !mixed && material.GetInt(name) != 0;
+			ImGui.PushItemFlag((ImGuiItemFlags)ImGuiItemFlagsPrivate.MixedValue, mixed);
 			bool changed = EditorGui.Checkbox("##v", ref value);
+			ImGui.PopItemFlag();
 			context.Track(changed);
 			if (changed)
 			{
@@ -502,27 +747,13 @@ namespace LELEngine.Editor
 
 		private static bool DrawVector(Material material, string name, string label, int components, InspectorContext context, Vector4 fallback = default)
 		{
+			context.Path = name;
 			FieldDrawer.Label(label, null, context);
 			Vector4 value = material.GetVector(name, fallback);
-			bool changed;
-			if (components == 2)
-			{
-				NVector2 n = new NVector2(value.X, value.Y);
-				changed = EditorGui.DragFloat2("##v", ref n, 0.05f);
-				value = new Vector4(n.X, n.Y, value.Z, value.W);
-			}
-			else if (components == 3)
-			{
-				NVector3 n = new NVector3(value.X, value.Y, value.Z);
-				changed = EditorGui.DragFloat3("##v", ref n, 0.05f);
-				value = new Vector4(n.X, n.Y, n.Z, value.W);
-			}
-			else
-			{
-				NVector4 n = new NVector4(value.X, value.Y, value.Z, value.W);
-				changed = EditorGui.DragFloat4("##v", ref n, 0.05f);
-				value = new Vector4(n.X, n.Y, n.Z, n.W);
-			}
+			// The components that differ between materials edited together show "—".
+			Span<float> n = stackalloc float[] { value.X, value.Y, value.Z, value.W };
+			bool changed = EditorGui.DragFloats("##v", n.Slice(0, Math.Clamp(components, 2, 4)), context.MixedComponents(4), 0.05f);
+			value = new Vector4(n[0], n[1], n[2], n[3]);
 
 			context.Track(changed);
 			if (changed)
@@ -555,19 +786,21 @@ namespace LELEngine.Editor
 		private static bool DrawScaleOffset(Material material, ShaderProperty declared, InspectorContext context)
 		{
 			Vector4 value = material.GetVector(declared.Name, declared.DefaultValue);
-			var tiling = new NVector2(value.X, value.Y);
-			var offset = new NVector2(value.Z, value.W);
+			Span<float> tiling = stackalloc float[] { value.X, value.Y };
+			Span<float> offset = stackalloc float[] { value.Z, value.W };
+			context.Path = declared.Name;
+			bool[] mixed = context.MixedComponents(4);
 			ImGui.PushID(declared.Name);
 			FieldDrawer.Label("Tiling", null, context);
-			bool tilingChanged = EditorGui.DragFloat2("##tiling", ref tiling, 0.01f);
+			bool tilingChanged = EditorGui.DragFloats("##tiling", tiling, mixed, 0.01f);
 			context.Track(tilingChanged);
 			FieldDrawer.Label("Offset", null, context);
-			bool offsetChanged = EditorGui.DragFloat2("##offset", ref offset, 0.01f);
+			bool offsetChanged = EditorGui.DragFloats("##offset", offset, mixed != null ? new[] { mixed[2], mixed[3] } : null, 0.01f);
 			context.Track(offsetChanged);
 			ImGui.PopID();
 			if (tilingChanged || offsetChanged)
 			{
-				material.SetVector(declared.Name, new Vector4(tiling.X, tiling.Y, offset.X, offset.Y));
+				material.SetVector(declared.Name, new Vector4(tiling[0], tiling[1], offset[0], offset[1]));
 				return true;
 			}
 
@@ -576,14 +809,16 @@ namespace LELEngine.Editor
 
 		private static bool DrawTexture(Material material, string name, string label, Type textureType, InspectorContext context)
 		{
+			context.Path = name;
 			FieldDrawer.Label(label, null, context);
 			object value = material.GetTexture(name);
 			Func<string, bool> filter = path => ShapeMatches(path, textureType);
-			bool changed = AssetField.Draw(textureType, ref value, filter);
+			// Materials edited together: the field shows "—" where their textures differ.
+			bool changed = context.Mixed != null ? ObjectField.Draw(textureType, ref value, context) : AssetField.Draw(textureType, ref value, filter);
 			context.Track(changed);
 			if (changed)
 			{
-				context.Editor.Edits.Begin(material);
+				context.Editor.Edits.Begin(material, context.UndoGroup);
 				material.SetTexture(name, value as Texture);
 				context.Editor.Edits.RequestCommit();
 			}

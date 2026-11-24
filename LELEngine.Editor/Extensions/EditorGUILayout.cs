@@ -281,10 +281,23 @@ namespace LELEngine.Editor
 			}
 
 			object undoTarget = current.UndoTarget;
+			string path = current.Path;
+			IReadOnlyList<object> group = current.UndoGroup;
+			MixedValues mixed = current.Mixed;
 			Behaviour component = target as Behaviour;
 			if (component != null)
 			{
 				current.UndoTarget = component;
+			}
+
+			// The inspected component's field: its path (mixed values of several selected objects, prefab overrides); any
+			// other object's is that object's alone.
+			bool own = component != null && component == inspected;
+			current.Path = own ? PropertyPath.Field("", field.Name) : "";
+			if (!own)
+			{
+				current.UndoGroup = null;
+				current.Mixed = null;
 			}
 
 			bool edited;
@@ -302,6 +315,9 @@ namespace LELEngine.Editor
 			finally
 			{
 				current.UndoTarget = undoTarget;
+				current.Path = path;
+				current.UndoGroup = group;
+				current.Mixed = mixed;
 			}
 
 			if (edited)

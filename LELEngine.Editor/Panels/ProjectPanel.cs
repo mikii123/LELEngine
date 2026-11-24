@@ -104,6 +104,9 @@ namespace LELEngine.Editor
 		// The mesh row picked under a model ("Models/Ship.obj/Hull"); the inspector shows the model.
 		private string selectedSubAsset;
 
+		// A row selected with the keyboard: scrolled into view when it is drawn.
+		private string revealRow;
+
 		// Row layout of the tree and the file list (every kind of row alike): an icon 1 px in from where the row's content
 		// starts, the name 5 px after it. Rows touch: the file list's selectables pad into the item spacing, the tree's
 		// rows are as tall (text padded by half the spacing, no spacing), as in the hierarchy.
@@ -223,7 +226,8 @@ namespace LELEngine.Editor
 				// Above the child: only the files scroll, the breadcrumb stays.
 				DrawBreadcrumb();
 				ImGui.Separator();
-				if (ImGui.BeginChild("##files"))
+				// The arrows move the files' selection (HandleSelectionKeys), not ImGui's keyboard navigation.
+				if (ImGui.BeginChild("##files", NVector2.Zero, ImGuiChildFlags.None, ImGuiWindowFlags.NoNavInputs))
 				{
 					DrawFiles();
 				}
@@ -467,6 +471,12 @@ namespace LELEngine.Editor
 			shownRows.AddRange(rows);
 			DrawPingOutline();
 
+			// Ctrl+A, the arrows, Home and End move the files' selection.
+			if (ImGui.IsWindowFocused())
+			{
+				HandleSelectionKeys();
+			}
+
 			// F2 renames the picked folder or the inspected file.
 			if (renaming == null && ImGui.IsWindowFocused() && ImGui.IsKeyPressed(ImGuiKey.F2))
 			{
@@ -582,6 +592,16 @@ namespace LELEngine.Editor
 			}
 
 			TestAnchors.RecordItem("project:" + assetPath);
+			if (revealRow != null && string.Equals(revealRow, assetPath, StringComparison.OrdinalIgnoreCase))
+			{
+				// Selected with the keyboard: kept in view.
+				revealRow = null;
+				if (!ImGui.IsItemVisible())
+				{
+					ImGui.SetScrollHereY(0.5f);
+				}
+			}
+
 			NVector2 rowEnd = ImGui.GetCursorScreenPos();
 
 			// Icon and name over the row (ScriptableObject assets with their class, variants with their base).
@@ -628,8 +648,21 @@ namespace LELEngine.Editor
 
 			if (EditorGui.BeginPopupContextItem("##file_context" + assetPath))
 			{
-				selectedFile = assetPath;
-				editor.SelectAsset(assetPath);
+				// On one of several selected files the menu is the selection's (that file the active one); on any other
+				// file it selects that file.
+				if (!selection.Contains(assetPath))
+				{
+					selection.Clear();
+					selection.Add(assetPath);
+					selectionAnchor = assetPath;
+				}
+
+				if (!string.Equals(selectedFile, assetPath, StringComparison.OrdinalIgnoreCase) || editor.SelectedAssets.Count != selection.Count)
+				{
+					selectedFile = assetPath;
+					selectedFolder = null;
+					PushSelection();
+				}
 				if (EditorMenu.Item(isPrefab ? "Open Prefab" : "Open")) OpenAsset(assetPath);
 				if (isPrefab)
 				{
@@ -870,14 +903,93 @@ namespace LELEngine.Editor
 				}
 			}
 
+			PushSelection();
+		}
+
+		/// <summary>The editor selects what the panel has selected (the inspector edits several files of one kind together).</summary>
+		private void PushSelection()
+		{
 			if (selectedFile != null)
 			{
-				editor.SelectAsset(selectedFile);
+				editor.SelectAssets(SelectedFiles(), selectedFile);
 			}
 			else
 			{
 				editor.ClearSelection();
 			}
+		}
+
+		/// <summary>
+		///     The file list's keys while it has the focus: Ctrl+A selects every file shown, Up / Down move the selection to
+		///     the row above / below (Shift: the range from the row clicked first grows or shrinks), Home / End to the first /
+		///     last row.
+		/// </summary>
+		private void HandleSelectionKeys()
+		{
+			if (renaming != null || shownRows.Count == 0 || ImGui.GetIO().WantTextInput)
+			{
+				return;
+			}
+
+			ImGuiIOPtr io = ImGui.GetIO();
+			if (io.KeyCtrl && ImGui.IsKeyPressed(ImGuiKey.A, false))
+			{
+				selection.Clear();
+				foreach (string row in shownRows)
+				{
+					selection.Add(row);
+				}
+
+				selectedFolder = null;
+				selectedSubAsset = null;
+				if (selectedFile == null || !selection.Contains(selectedFile))
+				{
+					selectedFile = shownRows[0];
+				}
+
+				selectionAnchor ??= selectedFile;
+				PushSelection();
+				return;
+			}
+
+			int step = ImGui.IsKeyPressed(ImGuiKey.DownArrow) ? 1 : ImGui.IsKeyPressed(ImGuiKey.UpArrow) ? -1 : 0;
+			bool home = ImGui.IsKeyPressed(ImGuiKey.Home, false);
+			bool end = ImGui.IsKeyPressed(ImGuiKey.End, false);
+			if (step == 0 && !home && !end)
+			{
+				return;
+			}
+
+			int current = selectedFile != null ? shownRows.FindIndex(row => string.Equals(row, selectedFile, StringComparison.OrdinalIgnoreCase)) : -1;
+			int next = home ? 0 : end ? shownRows.Count - 1 : current < 0 ? (step > 0 ? 0 : shownRows.Count - 1) : Math.Clamp(current + step, 0, shownRows.Count - 1);
+			if (next == current)
+			{
+				return;
+			}
+
+			string target = shownRows[next];
+			selectedFolder = null;
+			selectedSubAsset = null;
+			if (io.KeyShift && selectionAnchor != null)
+			{
+				int anchor = shownRows.FindIndex(row => string.Equals(row, selectionAnchor, StringComparison.OrdinalIgnoreCase));
+				selection.Clear();
+				anchor = anchor < 0 ? next : anchor;
+				for (int i = Math.Min(anchor, next); i <= Math.Max(anchor, next); i++)
+				{
+					selection.Add(shownRows[i]);
+				}
+			}
+			else
+			{
+				selection.Clear();
+				selection.Add(target);
+				selectionAnchor = target;
+			}
+
+			selectedFile = target;
+			revealRow = target;
+			PushSelection();
 		}
 
 		/// <summary>A folder row picked: the files' selection and the inspector clear.</summary>
@@ -899,7 +1011,10 @@ namespace LELEngine.Editor
 		private void FollowEditorSelection()
 		{
 			string inspected = editor.SelectedAsset;
-			if (string.Equals(inspected, selectedFile, StringComparison.OrdinalIgnoreCase))
+			IReadOnlyList<string> selectedAssets = editor.SelectedAssets;
+			bool same = string.Equals(inspected, selectedFile, StringComparison.OrdinalIgnoreCase)
+				&& (inspected == null || selection.Count == selectedAssets.Count && AllSelected(selectedAssets));
+			if (same)
 			{
 				return;
 			}
@@ -908,9 +1023,26 @@ namespace LELEngine.Editor
 			selection.Clear();
 			if (inspected != null)
 			{
-				selection.Add(inspected);
+				foreach (string path in selectedAssets)
+				{
+					selection.Add(path);
+				}
+
 				selectedFolder = null;
 			}
+		}
+
+		private bool AllSelected(IReadOnlyList<string> paths)
+		{
+			foreach (string path in paths)
+			{
+				if (!selection.Contains(path))
+				{
+					return false;
+				}
+			}
+
+			return true;
 		}
 
 		/// <summary>Half the item spacing: how far a file list row's highlight reaches above and below its text.</summary>
@@ -1144,12 +1276,11 @@ namespace LELEngine.Editor
 
 			if (EditorMenu.Begin("All ScriptableObject Classes"))
 			{
-				foreach (Type type in types)
+				// By namespace: a sub-menu for every level.
+				int chosen = TypeSelector.ScriptableObjectLevels().DrawMenu();
+				if (chosen >= 0)
 				{
-					if (EditorMenu.Item(type.FullName))
-					{
-						StartCreateAsset(type, null);
-					}
+					StartCreateAsset(types[chosen], null);
 				}
 
 				EditorMenu.End();

@@ -94,6 +94,12 @@ namespace LELEngine.Editor
 				draw.AddText(min + new NVector2(6f, ImGui.GetStyle().FramePadding.Y), ImGui.GetColorU32(ImGuiCol.TextDisabled), "(no keys: click to edit)");
 			}
 
+			// Several objects edited together with different curves: "—"; the editor opens this one's, and its edits go to all.
+			if (context.IsMixed())
+			{
+				EditorGui.MixedOverlay();
+			}
+
 			if (hovered)
 			{
 				EditorGui.SetTooltip("Click to edit the curve");

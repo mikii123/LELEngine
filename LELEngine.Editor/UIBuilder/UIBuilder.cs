@@ -1151,16 +1151,17 @@ namespace LELEngine.Editor.UIBuilder
 				}
 
 				ImGui.Separator();
-				if (EditorGui.BeginCombo("##addsheet", "Add existing..."))
+				if (EditorGui.BeginCombo("##addsheet", "Add existing...", ImGuiComboFlags.HeightLarge))
 				{
-					foreach (string path in AssetDatabase.GetAllAssetPaths(".uss"))
+					// By folder (levels).
+					List<string> sheets = AssetDatabase.GetAllAssetPaths(".uss");
+					int chosen = LevelList.OfPaths(sheets).Draw();
+					if (chosen >= 0)
 					{
-						if (EditorGui.Selectable(path))
-						{
-							string src = document.RelativeSource(path);
-							Apply(() => document.styleSheets.Add(src));
-							OpenStyleSheet(path);
-						}
+						string path = sheets[chosen];
+						string src = document.RelativeSource(path);
+						Apply(() => document.styleSheets.Add(src));
+						OpenStyleSheet(path);
 					}
 
 					EditorGui.EndCombo();

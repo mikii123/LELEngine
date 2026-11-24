@@ -10,8 +10,8 @@
 // in view space, of the part of the view it covers, with a little room. One thread per cluster and mask word (32 lights).
 layout(local_size_x = 64) in;
 
-// A binding no other pass binds (Rendering.LightClusterPass.BuildBinding).
-layout(std430, binding = 18) writeonly buffer ClusterMasks
+// Rendering.LightClusterPass.BuildBinding.
+layout(std430, binding = 15) writeonly buffer ClusterMasks
 {
 	uint masks[];
 };

@@ -89,6 +89,31 @@ namespace LELEngine.Editor
 			set => EditorExtensions.Current.SelectAsset(value);
 		}
 
+		/// <summary>
+		///     Every selected project file ("Folder/File.ext"; empty when GameObjects or nothing are selected),
+		///     <see cref="activeAssetPath" /> among them. Setting it selects these files; the last one becomes the active one.
+		/// </summary>
+		public static string[] assetPaths
+		{
+			get
+			{
+				EditorApplication editor = EditorApplication.Instance;
+				if (editor == null)
+				{
+					return System.Array.Empty<string>();
+				}
+
+				var paths = new string[editor.SelectedAssets.Count];
+				for (int i = 0; i < paths.Length; i++)
+				{
+					paths[i] = editor.SelectedAssets[i];
+				}
+
+				return paths;
+			}
+			set => EditorApplication.Instance?.SelectAssets(value);
+		}
+
 		#endregion
 	}
 }

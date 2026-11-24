@@ -1857,6 +1857,39 @@
   the Game view; click the inspector during play and typing works there; undock the Game window and drag over its image
   while playing: it stays in place.
 
+## Progress bar of long tasks (2026-11-23)
+
+- The user's ask: a progress bar for the engine's tasks (applying import settings to many selected images, loading, ...),
+  at the top of the editor's window, not frozen by the work (its own thread), and modal popups' background overlay black
+  instead of white.
+- `LELEngine.Progress` (engine, `Mono/Progress.cs`): `using Progress.Scope p = Progress.Begin(title, cancelable)`,
+  `p.Report(fraction | done, total, what)`, `p.Canceled`; scopes nest (an outer `Report(3, 10)` gives the inner task
+  the 0.3..0.4 of the bar); `Progress.Current` is a thread-safe copy (title of the outermost, info of the innermost,
+  fraction or -1 unknown, seconds, cancel). Games show nothing. Editor scripts: `EditorUtility.DisplayProgressBar` /
+  `DisplayCancelableProgressBar` / `ClearProgressBar` (Unity's); a failing script or a script reload clears its bar.
+- `ProgressOverlay` (editor, Windows): a layered tool window (per-pixel alpha, `UpdateLayeredWindow`, GDI text) run by
+  the "Progress bar" thread, 30 ticks a second: shown over the editor's client area once a task has run 0.3 s, a black
+  dim (alpha 150) that takes the clicks, the panel 10 px from the top (title, percent, elapsed after 3 s, bar or a
+  moving piece while unknown, what it does, Cancel for cancelable tasks). Not owned by the editor's window (an owner
+  across threads joins the threads' input and a busy main thread would hold it): it keeps itself right above the
+  editor's window in the z-order (`GetWindow(GW_HWNDPREV)`), so other applications in front stay in front.
+  `DisableProcessWindowsGhosting` at start: Windows no longer washes a busy editor out white as "Not Responding"
+  (also means a truly hung editor cannot be dragged or closed with X: Task Manager). Test hook `progressshots=folder`
+  writes the painted frames (`progress_NN.png`, twice a second at most).
+- Reported: the project's load (8 steps), opening a scene, reloading it, entering / leaving play mode, Apply of image
+  import settings (per image, cancelable: the rest keep their old settings), of model import settings (and the scene
+  reload), files changed on disk (models imported by `ModelAssets.ImportOutdated`, images by
+  `TextureAssets.ReloadChanged`, each beginning its task with the first file it imports), Force Reserialize All Assets
+  (over frames), the distance-field bake before a build. Not: script builds (a process; the editor stays usable), game
+  builds (their own thread and log window).
+- `EditorStyle`: `ModalWindowDimBg` black 0.55, `NavWindowingDimBg` black 0.45 in every preset (a theme may override).
+- Verified on a scratch project (scratchpad `multi/` of session 4837dc96, `watch.ps1` reading the windows from outside):
+  an 8 s task blocking the main thread: the bar's window visible over exactly the client rect, right above the editor,
+  moving all along (frames at 67 %, "Step 54 of 80"); Windows reported the editor hung after ~4.6 s, no ghost, the
+  screen showed the dim and the panel; Cancel (a click posted to the window) stopped it at step 28; Apply of Max Size
+  512 to twelve loaded 2048 x 2048 images (2.3 s, "Textures/Big06.png (8 / 12)"); the load's steps; the Delete dialog
+  over a black dim. Not checked: another DPI than 100 %, a second monitor, the user's own long tasks on New Frontier.
+
 ## Editor start: the windows first, the project over frames (2026-11-09)
 
 - The user's ask: the editor's own windows show first, as they will be but without what is not loaded yet (an empty
@@ -3526,6 +3559,52 @@ lighting and the engine's other features. Octahedral impostors, baked into atlas
   dictionaries, nested lists, ScriptableObjects, Resources): batch `-executeMethod ProbeTests.Setup` / `Verify`
   (JSON, typeless JSON <-> binary, snapshot, duplicate remap), a game build and the player's log, scripted drags.
 
+## Multi-selection and multi-object editing (2026-11-23)
+
+- The user's ask: proper multi-select and multi-edit, in the inspector, the hierarchy and the project panel (Unity's).
+- Selection: `EditorApplication.SelectedObjects` (as before) and now `SelectedAssets` / `SelectAssets(paths, active)`
+  (the active file is `SelectedAsset`; setting it selects it alone); public `Selection.assetPaths`; CLI `select-asset
+  <path> --add`, `status` lists the files. Hierarchy (focused): Ctrl / Shift clicks as before, Ctrl+A every row shown,
+  Up / Down (Shift: the range from the anchor), Home / End, Right unfolds (unfolded: the first child), Left folds
+  (folded: the parent); the eye of one of several selected rows hides / shows them all. Project panel file list
+  (focused): Ctrl / Shift clicks now select in the editor too (`PushSelection`), Ctrl+A, Up / Down / Shift, Home / End,
+  a right click on one of several selected files keeps them ("Delete 2 Files"). Both windows have `NoNavInputs`: the
+  arrows are the selection's, not ImGui's keyboard navigation.
+- Inspector, several objects (`InspectorPanel.DrawMultiple`): the header's active flag, name, layer and static flag of
+  all ("—" where they differ; a layer / static change asks about children once for all: `RequestLayer(list)`,
+  `SetStatic(list)`); then the components every object has (the k-th of a class with the k-th), drawn from the active
+  object; "Components that are only on some ... are not shown". Remove Component, Reset, the enabled toggle, Add
+  Component act on all (one undo step). Prefab bars, override marks and Apply / Revert are single-object only.
+- How an edit reaches the others (`Inspector/MultiEdit.cs`): the shown component's serialized data before its draw
+  against after (`PrefabOverrides.DiffNode`, the prefab overrides' paths) gives the changed paths; each other object's
+  data gets those values (`GenericValues.Apply`) and is read back (`PrefabUtility.ReadInto`; non-components:
+  `MultiEdit.ReadInto`). A vector's or color's components go one by one (dragging X of objects at different places moves
+  X alone), a quaternion whole. Paths set while they were mixed (`InspectorContext.Touch`, from `Track`) go to all even
+  when the shown object had the value already (a dash toggle clicked, the shown object's option picked). So every
+  drawer, custom inspector and [CanEditMultipleObjects] editor works unchanged; a game `Editor` without the attribute
+  shows the default fields for several objects (`Editor.targets` holds all of them). The Transform has its own rows
+  (per-axis "—", an edited axis set on each, Euler hints kept).
+- Mixed values (`MixedValues`): the data diffed both ways against each other object (cached per component, again when
+  `SceneVersion` changes or after 0.5 s); `InspectorContext.Mixed` / `IsMixed(within)` / `MixedComponents(n)` by
+  `Path`. Shown as "—" (`EditorGui.MixedValue`): number formats, text hint, combo previews, ImGui's MixedValue flag on
+  toggles, `EditorGui.DragFloats` / `DragInts` per component, `EditorGui.MixedOverlay` on colors, sliders, curves,
+  gradients; object fields. A list that differs keeps its structure: elements edited by index, no add / remove / move /
+  resize / drop (`CollectionDrawers`, `locked`); dictionaries are by key and edit normally.
+- Undo: `EditTracker.Begin(target, others)` captures all; one `GroupRecord` "... (N objects)"; assets saved each.
+- Several project files of one kind (`AssetInspectors.Draw(list)`): materials (`MaterialEditor.DrawMultiple`: shader,
+  queue and values by name, removed values too; Reset resets all), images (`TextureImporterInspector`: shared settings,
+  "Apply to N images", no slicing), models (`ModelImporterInspector`: "Apply to N models", one scene reload),
+  physics materials and ScriptableObjects of one class (fields as for components). Other mixes: the count and a folded
+  list of the files.
+- Verified on a scratch project with the GUI editor and the CLI (session 4837dc96, scratchpad `multi/`): three objects
+  with a test component: speed to all, Offset Y alone (X / Z kept per object), a mixed bool and the shown enum value
+  going to all, Transform X alone, undo in one step, layer / rename / Remove Component for all and undone, a differing
+  list locked while its element [0] edits all, an equal list grew on all; hierarchy and project keys; three materials
+  (roughness saved in all files, undo), two images (filter applied to both metas), two ScriptableObjects (axis Y alone).
+  Not run: the GUI by hand (mouse drags of a mixed field), the 2D-physics / custom-inspector buttons with several
+  objects (they act on the shown one). Automation clicks disabled controls (a pre-existing gap): the list lock is also
+  a check in the code.
+
 ## Prefabs (variants, nested prefabs, overrides)
 
 - `.prefab` files are scene documents of kind "Prefab" (one root, no settings): `SceneSerializer` (partials
@@ -4378,11 +4457,11 @@ Clouds in the GI:
   lights' slots are params.w of the list, -1 none); the GI's injection does block it.
 - `Rendering/LightBuffer` (static): every frame (`Renderer.RenderFrame`, after `Lighting.BeginFrame`) every light that
   shines (enabled, intensity, range, colour), however many, in `Light.Active` order: a std430 storage buffer on binding
-  16 (`ListBinding`; grown by doubling), 6 vec4 per light (position + range, radiance + GI strength, spot direction + cos
+  13 (`ListBinding`; grown by doubling; see "Storage bindings under 16" below), 6 vec4 per light (position + range, radiance + GI strength, spot direction + cos
   outer, spot scale / flags / source radius, the clouds' transmittance towards +x -x +y and -y +z -z), and its header,
   a std140 uniform block on binding 7 (`LelLightBlock`, 128 bytes, `WriteHeader`: the count, the clusters' grid, the
   camera's view-projection, depth row and slicing). `Update` binds the plain header (no clusters: y = 0, every light
-  is visited) with an empty mask buffer on 17; `UseClusters` / `UseNoClusters` switch the header and masks bound, and
+  is visited) with an empty mask buffer on 14; `UseClusters` / `UseNoClusters` switch the header and masks bound, and
   `Bind` / `EnsureBound` (called by `Lighting.SetUniforms` for every draw: programs drawn before the first frame never
   read an unbound block) bind the ones in use. `Count` is what was uploaded (`Forget` takes a light out of `Shining` at
   once, the buffer keeps it until the next update).
@@ -4411,13 +4490,23 @@ Clouds in the GI:
   x 32 slices of depth, logarithmic from the near to the far plane (the first reaching back to the camera, the last to
   1.01 x far), and gives each cluster a bit per light whose range sphere reaches the cluster's view-space box (the
   bounds of its part of the view, through the inverse projection, with 0.002 x its far depth of room). On the GPU, one
-  thread per cluster and 32 lights, into a storage buffer per camera of the frame (output on binding 18: VFX caches
-  what it bound on 0..15; a later camera never writes masks an earlier one's draws read), then `UseClusters`. A lit
+  thread per cluster and 32 lights, into a storage buffer per camera of the frame (output on binding 15, see below; a
+  later camera never writes masks an earlier one's draws read), then `UseClusters`. A lit
   point finds its cluster from its world position through the matrices of the camera the clusters were made for (the
   header), not from `gl_FragCoord`: any draw (an overlay camera, a preview, another renderer's camera) gets a cluster
   that holds every light reaching that point, and a point outside that view (or before any clusters) visits every
   light. Memory: tiles x 32 x ceil(lights / 32) x 4 bytes (1080p, 130 lights: ~330 KB); a pixel reads ceil(lights / 32)
   mask words and tests only its cluster's lights.
+- Storage bindings under 16 (2026-11-23): Intel's driver (Intel Graphics, 32.0.101.8132) has 16 storage buffer bindings
+  (0..15; GL's minimum is 8) and refused the list on 16 / 17 and the build on 18 ("binding must be less than
+  GL_MAX_SHADER_STORAGE_BUFFER_BINDINGS"; its compile log for VoxelInject came out empty, the message followed in the
+  link log). Now the list is on 13, the masks on 14, the build's output on 15. The particles cache 0..12 (`VfxRuntime.BindStorage`),
+  so 13 / 14 are shared with the instance culling (`GpuScene`: it binds its count and segment buffers there right before
+  its dispatch); every program that reads the lights binds them first (`Lighting.SetUniforms` -> `EnsureBound`: lit draws,
+  VoxelInject, CardLighting, VFX lit outputs; `LightClusterPass` itself). 15 is `GpuScene`'s previous models, bound
+  before every cull and draw (`BindTables`). Checked on that Intel GPU with TestGame (`lights=1` with `gi=vct`,
+  `impostors=1`, `refraction=1`, `materials=1`): no compile or link error. Not checked: Lumen's CardLighting there, the
+  NVIDIA / AMD cards.
 - Lit materials: `Lit`, `LitTextured` (Scene workflow: Blinn-Phong as the sun; Metallic / Specular:
   `LelStandardBRDFDirect` in `StandardBRDF.glsl`), `LitTransparent` and `Impostor` add the lights of their point's
   cluster after the sun: `Lit`, `LitTextured` and `Impostor` behind their traced shadows where they have them
@@ -5218,8 +5307,9 @@ was made: "static batching has to work in the editor at run time too" and "you c
   transform as before (`Edits`); several: the transforms' states at the drag's start and end as one `GroupRecord`
   ("Move / Rotate / Scale N objects").
 - `DeleteSelected` / `DuplicateSelected` take `SelectedRoots()` ("Delete N objects"; the copies are selected, the active
-  one's copy active). The inspector edits the active object and says "N objects selected: the inspector shows X" under
-  its header. No editing of several objects' fields at once, no rubber band in the scene view, no Ctrl+A.
+  one's copy active). The inspector edited only the active object then; since 2026-11-23 it edits all of them together,
+  and the hierarchy has Ctrl+A and the arrows ("Multi-selection and multi-object editing"). Still no rubber band in the
+  scene view.
 - Editor scripts: `Selection.gameObjects` (get / set), `Selection.topLevelGameObjects`; `activeGameObject` as before.
 - Automation: `EditorAutomation.Select(path, add)`, `SelectObjects(paths)`, `GetSelection()`; CLI `select <object>
   --add`, `status` lists the active object "and N more: ..."; `click <element> --ctrl / --shift` (`UIAutomation.Invoke`
@@ -5451,3 +5541,27 @@ was made: "static batching has to work in the editor at run time too" and "you c
   output changed (screenshots: magenta, cyan; GPU-driven instanced variant), a syntax error logged and recovered,
   ScriptableObject, physics material, clip length / controller duration / graph zoom (Version 2 / 2 / 3), model
   bounds, prefab field, gravity in ProjectSettings.asset, StartScene in Project.json, an editor script edit.
+
+## Lists in levels: LevelList (2026-11-23)
+
+- The user's ask: drop-downs and popups listing scripts or shaders split themselves into levels, scripts by namespace,
+  shaders by folder. `LevelList` (`LELEngine.Editor/LevelList.cs`): items with levels (`OfTypes`: the namespace's parts;
+  `OfPaths`: the folder's parts, the file's name as the label), drawn as foldable tree nodes (`Draw`: groups first with
+  their item count at the row's end, then the level's own items, both in name order; the groups holding the selected
+  item open when the window appears) or as sub-menus (`DrawMenu`). A search (`SearchField`, the caller keeps the text)
+  shows the matches flat with their level beside them. The levels split themselves: a level holding only one other
+  level is one row ("FORGE3D/Planets/Shaders", "LELEngine.Physics"), the levels every item shares are left out (audio
+  projects all under one folder list flat). `BeginArea`: a child as tall as what is open, up to a height, then it
+  scrolls (`ImGuiChildFlags.AutoResizeY` + size constraints).
+- Used by: Add Component (it also opens under its button now, not at the mouse), the material's Shader drop-down (with a
+  search), `TypeSelector.Popup` (polymorphic fields; `TypeSelector.Levels(baseType)`), Create > All ScriptableObject
+  Classes and the animator's Add Behaviour (sub-menus), the animator's script conditions, Project Settings' Add Shader
+  (with a search), the UI Builder's Add existing style sheet, the audio settings' Audio Project.
+- Automation: an item inside a closed group is no element until its group is open (`click tree:NewFrontier`,
+  `click tree:Ships`), or type into the search (`input input:filter wreck`) and click the match. Leaves keep the
+  type's or file's name (`item:WreckFracture`, `item:Shader/FogSheet.shader`), not the full path.
+- Verified in the GUI editor on New Frontier (CLI clicks, screenshots, quit with `--discard`, the project unchanged): Add
+  Component (LELEngine 32, NewFrontier 60 with Combat, Core, EditorTools, ..., Ships 12; global-namespace components at
+  the top; "wreck" gives the four Wreck components with NewFrontier.Ships beside them), the FogOrange material's Shader
+  (Engine 8, FORGE3D/Planets/Shaders 13, Shaders 4 opened by itself with FogSheet.shader selected). The other lists were
+  built only, not looked at.

@@ -164,7 +164,8 @@ namespace LELEngine.Editor
 				return;
 			}
 
-			bool visible = ImGui.Begin("Hierarchy", ref Open);
+			// The arrows move the selection (HandleSelectionKeys), not ImGui's keyboard navigation.
+			bool visible = ImGui.Begin("Hierarchy", ref Open, ImGuiWindowFlags.NoNavInputs);
 			IsFocused = ImGui.IsWindowFocused(ImGuiFocusedFlags.RootAndChildWindows);
 			if (visible)
 			{
@@ -268,6 +269,10 @@ namespace LELEngine.Editor
 
 			(rows, shownRows) = (shownRows, rows);
 			ImGui.Unindent(gutterWidth);
+			if (IsFocused)
+			{
+				HandleSelectionKeys();
+			}
 
 			// Not drawn at all (hidden from the hierarchy): nothing to reveal.
 			revealSelection = null;
@@ -739,7 +744,19 @@ namespace LELEngine.Editor
 			bool hovered = ImGui.IsItemHovered();
 			if (clicked)
 			{
-				visibility.SetHidden(go, !hidden, ImGui.GetIO().KeyAlt);
+				// The eye of one of several selected rows hides or shows them all (as in Unity).
+				if (editor.IsSelected(go) && editor.SelectedObjects.Count > 1)
+				{
+					foreach (GameObject selected in editor.SelectedRoots())
+					{
+						visibility.SetHidden(selected, !hidden, ImGui.GetIO().KeyAlt);
+					}
+				}
+				else
+				{
+					visibility.SetHidden(go, !hidden, ImGui.GetIO().KeyAlt);
+				}
+
 				hidden = !hidden;
 			}
 
@@ -981,6 +998,109 @@ namespace LELEngine.Editor
 			}
 
 			rangeAnchor = go;
+		}
+
+		/// <summary>
+		///     The keys of the focused hierarchy (as in Unity): Ctrl+A selects every row shown; Up / Down select the row above
+		///     / below (Shift: the range from the row clicked first grows or shrinks); Home / End the first / last row; Right
+		///     unfolds the selected row (unfolded: its first child), Left folds it (folded: its parent).
+		/// </summary>
+		private void HandleSelectionKeys()
+		{
+			ImGuiIOPtr io = ImGui.GetIO();
+			if (renaming != null || io.WantTextInput || shownRows.Count == 0)
+			{
+				return;
+			}
+
+			if (io.KeyCtrl && ImGui.IsKeyPressed(ImGuiKey.A, false))
+			{
+				GameObject active = editor.Selected != null && shownRows.Contains(editor.Selected) ? editor.Selected : shownRows[0];
+				editor.SelectObjects(shownRows, active);
+				rangeAnchor ??= active;
+				return;
+			}
+
+			GameObject current = editor.Selected;
+			int index = current != null ? shownRows.IndexOf(current) : -1;
+			if (index >= 0 && !io.KeyShift && (ImGui.IsKeyPressed(ImGuiKey.RightArrow) || ImGui.IsKeyPressed(ImGuiKey.LeftArrow)))
+			{
+				bool right = ImGui.IsKeyPressed(ImGuiKey.RightArrow);
+				bool hasChildren = TempObjects.HasVisibleChildren(current);
+				bool unfolded = hasChildren && expanded.Contains(current.Id);
+				if (right && hasChildren && !unfolded)
+				{
+					SetExpanded(current, true);
+				}
+				else if (right && unfolded && index + 1 < shownRows.Count && shownRows[index + 1].transform.parent == current.transform)
+				{
+					SelectRow(shownRows[index + 1]);
+				}
+				else if (!right && unfolded)
+				{
+					SetExpanded(current, false);
+				}
+				else if (!right && current.transform.parent != null && shownRows.Contains(current.transform.parent.gameObject))
+				{
+					SelectRow(current.transform.parent.gameObject);
+				}
+
+				return;
+			}
+
+			int step = ImGui.IsKeyPressed(ImGuiKey.DownArrow) ? 1 : ImGui.IsKeyPressed(ImGuiKey.UpArrow) ? -1 : 0;
+			bool home = ImGui.IsKeyPressed(ImGuiKey.Home, false);
+			bool end = ImGui.IsKeyPressed(ImGuiKey.End, false);
+			if (step == 0 && !home && !end)
+			{
+				return;
+			}
+
+			int next = home ? 0 : end ? shownRows.Count - 1 : index < 0 ? (step > 0 ? 0 : shownRows.Count - 1) : Math.Clamp(index + step, 0, shownRows.Count - 1);
+			if (next == index)
+			{
+				return;
+			}
+
+			GameObject target = shownRows[next];
+			int from = io.KeyShift && rangeAnchor != null && !rangeAnchor.dead ? shownRows.IndexOf(rangeAnchor) : -1;
+			if (from >= 0)
+			{
+				// The range from the anchor to the new row; the anchor stays.
+				var range = new List<GameObject>();
+				for (int i = Math.Min(from, next); i <= Math.Max(from, next); i++)
+				{
+					range.Add(shownRows[i]);
+				}
+
+				editor.SelectObjects(range, target);
+				return;
+			}
+
+			SelectRow(target);
+		}
+
+		private void SelectRow(GameObject go)
+		{
+			editor.Select(go);
+			rangeAnchor = go;
+		}
+
+		/// <summary>Folds or unfolds a row from the keyboard (applied when it is drawn next, kept with the scene's folded rows).</summary>
+		private void SetExpanded(GameObject go, bool open)
+		{
+			if (open)
+			{
+				expanded.Add(go.Id);
+			}
+			else
+			{
+				expanded.Remove(go.Id);
+			}
+
+			expansionApplied.Remove(go.Id);
+			expansionDirty = true;
+			expansionChangedAt = ImGui.GetTime();
 		}
 
 		/// <summary>The dropped row goes where it was dropped; when it is one of several selected rows, they all do, in the hierarchy's order (one undo step).</summary>
