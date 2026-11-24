@@ -15,6 +15,10 @@
 // be a visible slow breathing of the far field). A per-probe change detector compares the summed radiance
 // of the fresh estimate with the summed history: a real lighting change (emitter moved or pulsed) restarts
 // the probe's accumulation, so it follows the change within a few updates.
+//
+// The LEL_RAY_QUERY variant (the probes traced the scene's triangles, RadianceCacheTrace.shader) finds the probes inside
+// geometry here: a ray that met a back face carries red -1 (and no light); a probe with a quarter of its rays or more on
+// back faces is invalid, as one inside the distance field's surfaces was before tracing.
 layout(local_size_x = 8, local_size_y = 8) in;
 
 uniform sampler2D TraceBuffer;   // rgb radiance, a = hit distance (-1: probe invalid)
@@ -65,6 +69,9 @@ shared int historyFixed;
 shared int comparedCount;
 shared uint movingCells;                      // cells with a moving hit in this update
 shared uint skipCells;                        // cells whose texels keep no history (moving now or the update before)
+#ifdef LEL_RAY_QUERY
+shared uint backFaceRays;                     // rays of the update that met a back face
+#endif
 
 int SequenceProbe(int q)
 {
@@ -144,6 +151,9 @@ void main()
 		historyFixed = 0;
 		comparedCount = 0;
 		movingCells = 0u;
+#ifdef LEL_RAY_QUERY
+		backFaceRays = 0u;
+#endif
 	}
 	barrier();
 
@@ -166,11 +176,20 @@ void main()
 			vec3 radiance = vec3(0.0);
 			float depth = 0.0;
 			bool moving = false;
+#ifdef LEL_RAY_QUERY
+			uint backFaces = 0u;
+#endif
 			for (int y = 0; y < factor; y++)
 			{
 				for (int x = 0; x < factor; x++)
 				{
 					vec4 s = texelFetch(TraceBuffer, traceOrigin + oct * factor + ivec2(x, y), 0);
+#ifdef LEL_RAY_QUERY
+					// A back face's mark: no light.
+					bool backFace = s.r < -0.5;
+					backFaces += backFace ? 1u : 0u;
+					s.rgb = backFace ? vec3(0.0) : s.rgb;
+#endif
 					radiance += s.rgb;
 					bool movingHit = s.a < -5.0;
 					moving = moving || movingHit;
@@ -188,6 +207,13 @@ void main()
 			}
 
 			bool interior = tx >= 1 && tx <= resolution && ty >= 1 && ty <= resolution;
+#ifdef LEL_RAY_QUERY
+			// Every ray once: the border texels repeat interior ones.
+			if (interior && backFaces > 0u)
+			{
+				atomicAdd(backFaceRays, backFaces);
+			}
+#endif
 			if (interior && history.a > 0.5)
 			{
 				atomicAdd(freshFixed, int(min(RcLuminance(radiance), 1e4) * 256.0));
@@ -197,6 +223,10 @@ void main()
 		}
 	}
 	barrier();
+#ifdef LEL_RAY_QUERY
+	// Inside geometry: a quarter of the rays or more met back faces.
+	valid = valid && backFaceRays * 4u < uint(rcTraceResolution * rcTraceResolution);
+#endif
 
 	// ---- 2. history weight for the whole probe
 	float historyWeight = 0.0;

@@ -56,6 +56,13 @@ namespace LELEngine.Rendering
 
 		private static readonly List<(Vector3 min, Vector3 max)> giChanges = new List<(Vector3, Vector3)>();
 
+		// The traced shadows' slots: their lights, what each light was like when its slot last traced it, and this frame's
+		// candidates (distance from the camera to the light's reach, the light's index in the list).
+		private static readonly Light[] shadowSlots = new Light[RayTracingSettings.MaxShadowedLocalLights];
+		private static readonly int[] shadowSlotStates = new int[RayTracingSettings.MaxShadowedLocalLights];
+		private static readonly List<(float Distance, int Index)> shadowCandidates = new List<(float, int)>();
+		private static readonly HashSet<Light> shadowChosen = new HashSet<Light>();
+
 		// The list (storage) and the lights it has room for; the lights uploaded into it (Forget takes a light out of
 		// shining at once, the buffer keeps it until the next update).
 		private static GpuBuffer listBuffer;
@@ -88,6 +95,20 @@ namespace LELEngine.Rendering
 
 		/// <summary>World boxes of the latest <see cref="GIVersion" /> change: the reach of every light that changed, where it was and where it is.</summary>
 		public static IReadOnlyList<(Vector3 min, Vector3 max)> GIChanges => giChanges;
+
+		/// <summary>
+		///     Slots of the traced shadows this frame (<see cref="Lighting.RayTracedLocalShadows" />): the lights whose shadows
+		///     <see cref="Passes.RayTracedShadowPass" /> traces, by slot (null: free). A light keeps its slot while it stays
+		///     among the <see cref="RayTracingSettings.ShadowedLocalLights" /> lights with <see cref="Light.CastShadows" />
+		///     nearest to the camera; its slot is in the list (params.w, -1: none).
+		/// </summary>
+		public static IReadOnlyList<Light> ShadowSlots => shadowSlots;
+
+		/// <summary>Slots up to the highest one in use (0: no light's shadows are traced).</summary>
+		public static int ShadowSlotCount { get; private set; }
+
+		/// <summary>Bit s: slot s holds another light than last frame (or none), or its light moved, turned or changed its size or range.</summary>
+		public static int ShadowSlotsChanged { get; private set; }
 
 		#endregion
 
@@ -125,6 +146,7 @@ namespace LELEngine.Rendering
 			}
 
 			TrackGIChanges();
+			AssignShadowSlots();
 
 			EnsureBuffers();
 			if (shining.Count > listCapacity)
@@ -224,6 +246,13 @@ namespace LELEngine.Rendering
 			}
 
 			giSeen.Remove(light);
+			for (int s = 0; s < shadowSlots.Length; s++)
+			{
+				if (ReferenceEquals(shadowSlots[s], light))
+				{
+					shadowSlots[s] = null;
+				}
+			}
 		}
 
 		/// <summary>
@@ -348,6 +377,92 @@ namespace LELEngine.Rendering
 			{
 				GIVersion++;
 			}
+		}
+
+		/// <summary>
+		///     Gives the traced shadows' slots to the lights that cast shadows, nearest to the camera first (a light whose range
+		///     holds the camera: distance 0), at most <see cref="RayTracingSettings.ShadowedLocalLights" />, none while local
+		///     lights' shadows are not traced. A light keeps its slot while it stays chosen. Writes every light's slot into the
+		///     list (params.w, -1: none) after the GI's change tracking (a slot changes nothing the GI takes).
+		/// </summary>
+		private static void AssignShadowSlots()
+		{
+			int wanted = Lighting.RayTracedLocalShadows ? Math.Clamp(Lighting.RayTracing.ShadowedLocalLights, 1, shadowSlots.Length) : 0;
+			shadowCandidates.Clear();
+			shadowChosen.Clear();
+			if (wanted > 0)
+			{
+				Camera camera = Camera.main;
+				Vector3 eye = camera != null && !camera.IsDestroyed ? camera.transform.position : Vector3.Zero;
+				for (int i = 0; i < shining.Count; i++)
+				{
+					Light light = shining[i];
+					if (light.CastShadows)
+					{
+						shadowCandidates.Add((MathF.Max(0f, (light.transform.position - eye).Length - light.Range), i));
+					}
+				}
+
+				shadowCandidates.Sort((a, b) => a.Distance != b.Distance ? a.Distance.CompareTo(b.Distance) : a.Index.CompareTo(b.Index));
+				for (int k = 0; k < shadowCandidates.Count && k < wanted; k++)
+				{
+					shadowChosen.Add(shining[shadowCandidates[k].Index]);
+				}
+			}
+
+			// Lights that stay keep their slots; the others leave theirs, the new ones take free ones.
+			int changed = 0;
+			for (int s = 0; s < shadowSlots.Length; s++)
+			{
+				if (shadowSlots[s] != null && !shadowChosen.Contains(shadowSlots[s]))
+				{
+					shadowSlots[s] = null;
+					changed |= 1 << s;
+				}
+			}
+
+			foreach (Light light in shadowChosen)
+			{
+				if (Array.IndexOf(shadowSlots, light) >= 0)
+				{
+					continue;
+				}
+
+				int free = Array.IndexOf(shadowSlots, null);
+				shadowSlots[free] = light;
+				changed |= 1 << free;
+			}
+
+			for (int i = 0; i < shining.Count; i++)
+			{
+				data[i * FloatsPerLight + 15] = -1f;
+			}
+
+			int count = 0;
+			for (int s = 0; s < shadowSlots.Length; s++)
+			{
+				Light light = shadowSlots[s];
+				if (light == null)
+				{
+					continue;
+				}
+
+				int index = shining.IndexOf(light);
+				data[index * FloatsPerLight + 15] = s;
+				count = s + 1;
+
+				// What its shadows depend on: where it is and points, its size and reach.
+				int at = index * FloatsPerLight;
+				int state = HashCode.Combine(data[at], data[at + 1], data[at + 2], data[at + 3], data[at + 8], data[at + 9], data[at + 10], HashCode.Combine(data[at + 11], data[at + 14]));
+				if (state != shadowSlotStates[s])
+				{
+					shadowSlotStates[s] = state;
+					changed |= 1 << s;
+				}
+			}
+
+			ShadowSlotCount = count;
+			ShadowSlotsChanged = changed;
 		}
 
 		// One light: position + range, radiance + GI strength, spot direction + cos outer, spot scale / flags / source

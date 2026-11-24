@@ -29,6 +29,10 @@ public sealed class DirectionalLight : Behaviour
 	[Tooltip("Geometry blocks the light: it gets a shadow map of its own, when it is one of the lights the project lets cast shadows (Project Settings > Lighting > Shadows: the main light first, then the brightest)")]
 	public bool CastShadows = true;
 
+	[Tooltip("The angle the light's source spans in the sky, in degrees (the sun: about 0.5): traced shadows (Project Settings > Lighting > Ray Tracing: Directional Light Shadows) grow as soft as it makes them with the distance from what casts them. Shadow maps do not read it")]
+	[Range(0f, 10f)]
+	public float AngularDiameter = 0.5f;
+
 	[Header("Global illumination")]
 	[Tooltip("The light bounces off what it lights (the GI: voxel cone tracing, Lumen)")]
 	public bool AffectsGI = true;

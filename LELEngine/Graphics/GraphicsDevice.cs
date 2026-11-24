@@ -63,6 +63,12 @@ namespace LELEngine.Graphics
 		public bool RayQuery { get; internal set; }
 
 		/// <summary>
+		///     A ray query reads the corners of the triangle it hit from the structure itself (GLSL's
+		///     GL_EXT_ray_tracing_position_fetch) in bottom levels made with <see cref="AccelerationStructureFlags.AllowDataAccess" />.
+		/// </summary>
+		public bool RayTracingPositionFetch { get; internal set; }
+
+		/// <summary>
 		///     Draws rasterize conservatively when their render state asks (<see cref="RenderState.ConservativeRasterization" />):
 		///     every pixel a triangle touches gets a fragment.
 		/// </summary>

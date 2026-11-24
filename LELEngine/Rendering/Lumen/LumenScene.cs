@@ -12,12 +12,16 @@ namespace LELEngine.Rendering.Lumen
 	///     mesh distance field and surface cache cards, uploaded once per frame as GPU tables shared by the
 	///     global distance field, the surface cache lighting and the probe gather
 	///     (Engine/SceneObjects.glsl, SSBO bindings 1 and 2), and while Lumen's rays trace with ray queries as a top level
-	///     acceleration structure of the same objects (<see cref="RayTracing" />).
+	///     acceleration structure of the same objects (<see cref="RayTracing" />). The meshes' distance fields exist only
+	///     while the global distance field is built (<see cref="GlobalIlluminationSettings.DistanceFieldActive" />): with
+	///     Lumen's rays on the triangles nothing needs them (unless something asks for the field, see
+	///     <see cref="Lighting.RequestDistanceField" />), an object is its renderer's own scale and its atlas is freed.
 	/// </summary>
 	public sealed class LumenScene
 	{
 		#region PublicFields
 
+		/// <summary>The meshes' distance fields; null while the global distance field is not built.</summary>
 		public DistanceFieldAtlas DistanceFields { get; private set; }
 
 		/// <summary>Lumen's surface cache; null unless Lumen runs (voxel cone tracing reads only the distance fields).</summary>
@@ -103,6 +107,11 @@ namespace LELEngine.Rendering.Lumen
 		private readonly List<MeshRenderer> goneRenderers = new List<MeshRenderer>();
 		private readonly List<ChangeRegion> changeRegions = new List<ChangeRegion>();
 		private int lastDynamicCount = -1;
+
+		// This update: the meshes' fields are resolved (the global field is built, or the rays trace it), the rays trace
+		// the triangles.
+		private bool fieldsNeeded = true;
+		private bool rayTracing;
 		private int lastStaticVersion = -1;
 		private int lastLightVersion = -1;
 		private int lastSunVersion = -1;
@@ -111,9 +120,6 @@ namespace LELEngine.Rendering.Lumen
 		private int surfaceCacheSize;
 		private int objectBufferBytes;
 		private int cardBufferBytes;
-
-		// This frame's objects have distance fields (see Update).
-		private bool fieldsUsed = true;
 
 		#endregion
 
@@ -136,10 +142,11 @@ namespace LELEngine.Rendering.Lumen
 				CardBuffer = Gfx.Device.CreateBuffer(new BufferDescriptor(BufferUsage.Storage, 0, true, "Lumen scene cards"));
 			}
 
-			// The objects' distance fields while the global field is built or the rays trace it; a scene whose rays only
-			// trace its triangles (voxel cone tracing with ray queries) has none.
-			fieldsUsed = !Lighting.SceneRayTracingActive || gi.DistanceFieldActive;
-			if (fieldsUsed)
+			// With the GI's rays on the triangles (Lumen's or voxel cone tracing's) the meshes' fields exist only while the
+			// global field is built (GlobalIlluminationSettings.DistanceFieldActive); else their atlas goes.
+			rayTracing = Lighting.SceneRayTracingActive;
+			fieldsNeeded = !rayTracing || gi.DistanceFieldActive;
+			if (fieldsNeeded)
 			{
 				DistanceFields ??= new DistanceFieldAtlas();
 				DistanceFields.BeginFrame(frame);
@@ -207,11 +214,9 @@ namespace LELEngine.Rendering.Lumen
 			commands.SetStorageBuffer(1, ObjectBuffer);
 			commands.SetStorageBuffer(2, CardBuffer);
 			program.SetInt("sceneObjectCount", objects.Count);
-			if (DistanceFields != null)
-			{
-				program.SetTexture("SdfAtlas", DistanceFields.AtlasTexture);
-				program.SetVector3("sdfAtlasTexels", DistanceFields.TexelCount);
-			}
+			// Without the meshes' fields (the GI's rays on the triangles) nothing samples the atlas: a stand-in is bound.
+			program.SetTexture("SdfAtlas", DistanceFields?.AtlasTexture);
+			program.SetVector3("sdfAtlasTexels", DistanceFields?.TexelCount ?? Vector3.One);
 			if (SurfaceCache != null)
 			{
 				program.SetVector2("surfaceCacheAtlasSize", new Vector2(SurfaceCache.Size, SurfaceCache.Size));
@@ -282,6 +287,10 @@ namespace LELEngine.Rendering.Lumen
 		/// </summary>
 		public const double ShapeSettleSeconds = 0.25;
 
+		// Where the field box of an object without a field starts (scaled-local units; it is as large again): far beyond
+		// any band, and every distance to it finite.
+		private const float NoFieldBounds = 1e8f;
+
 		#endregion
 
 		#region PrivateMethods
@@ -297,13 +306,26 @@ namespace LELEngine.Rendering.Lumen
 
 				seenRenderers.Add(renderer);
 				Vector3 scale = renderer.transform.scale;
-				MeshDistanceField field = null;
-				float uniform = 1f;
-				Vector3 giScale = scale;
-				if (fieldsUsed)
+				MeshDistanceField field = fieldsNeeded ? ResolveField(renderer, scale) : null;
+				float uniform = field != null ? DistanceFieldAtlas.UniformScale(scale, field.Shape) : 0f;
+				Vector3 giScale;
+				if (rayTracing)
 				{
-					field = ResolveField(renderer, scale);
-					uniform = field != null ? DistanceFieldAtlas.UniformScale(scale, field.Shape) : 0f;
+					// The rays trace the triangles: the object is its renderer's own size (unmirrored, as the cards are
+					// captured), with or without a field (one still being built goes into the triangles only).
+					giScale = new Vector3(Math.Abs(scale.X), Math.Abs(scale.Y), Math.Abs(scale.Z));
+					if (!(giScale.X > 0f && giScale.Y > 0f && giScale.Z > 0f))
+					{
+						continue;
+					}
+
+					if (!(uniform > 0f))
+					{
+						field = null;
+					}
+				}
+				else
+				{
 					if (!(uniform > 0f))
 					{
 						continue;
@@ -311,11 +333,6 @@ namespace LELEngine.Rendering.Lumen
 
 					// The size the GI sees: the field's shape at the renderer's scale (its own scale unless it borrows a field).
 					giScale = field.Shape * uniform;
-				}
-				else if (!(Math.Abs(scale.X) * Math.Abs(scale.Y) * Math.Abs(scale.Z) > 0f))
-				{
-					// Without fields the object is its triangles at its own scale; one without size has none.
-					continue;
 				}
 
 				// Cards only with Lumen's surface cache (see Update).
@@ -610,10 +627,9 @@ namespace LELEngine.Rendering.Lumen
 
 				// Emission intensity travels in the table so pulsing emitters never recapture their cards.
 
-				Vector3 meshMin = Vector3.ComponentMin(o.Renderer.Mesh.BoundsMin * scale, o.Renderer.Mesh.BoundsMax * scale);
-				Vector3 meshMax = Vector3.ComponentMax(o.Renderer.Mesh.BoundsMin * scale, o.Renderer.Mesh.BoundsMax * scale);
-				objectRows[o.Index] = o.Field != null
-					? new SceneObjectData
+				if (o.Field != null)
+				{
+					objectRows[o.Index] = new SceneObjectData
 					{
 						WorldToLocal = Matrix4.Invert(localToWorld),
 						LocalToWorld = localToWorld,
@@ -626,19 +642,26 @@ namespace LELEngine.Rendering.Lumen
 						MeshBoundsMin = new Vector4(o.Renderer.Mesh.BoundsMin * scale, 0f),
 						MeshBoundsMax = new Vector4(o.Renderer.Mesh.BoundsMax * scale, 0f),
 						CardInfo = new Vector4i(o.Cards?.FirstCardIndex ?? 0, o.Cards?.Cards.Length ?? 0, o.IsStatic ? 0 : 1, MovedRecently(o) ? 1 : 0)
-					}
-					: new SceneObjectData
+					};
+				}
+				else
+				{
+					// No field (the rays trace the triangles): a field box far from everything, so a global field composed
+					// meanwhile (Engine/SdfCompose.shader: out of reach) and a search of the objects by distance leave it out.
+					objectRows[o.Index] = new SceneObjectData
 					{
-						// No field (the rays trace the triangles): the bounds are the mesh's, nothing in the atlas.
 						WorldToLocal = Matrix4.Invert(localToWorld),
 						LocalToWorld = localToWorld,
-						BoundsMin = new Vector4(meshMin, 0f),
-						BoundsMax = new Vector4(meshMax, 0f),
+						BoundsMin = new Vector4(NoFieldBounds, NoFieldBounds, NoFieldBounds, 0f),
+						BoundsMax = new Vector4(2f * NoFieldBounds, 2f * NoFieldBounds, 2f * NoFieldBounds, 0f),
+						AtlasOrigin = Vector4.Zero,
+						AtlasSize = new Vector4(1f, 1f, 1f, 0f),
 						Padding = new Vector4(0f, 0f, 0f, emissiveIntensity),
-						MeshBoundsMin = new Vector4(meshMin, 0f),
-						MeshBoundsMax = new Vector4(meshMax, 0f),
+						MeshBoundsMin = new Vector4(o.Renderer.Mesh.BoundsMin * scale, 0f),
+						MeshBoundsMax = new Vector4(o.Renderer.Mesh.BoundsMax * scale, 0f),
 						CardInfo = new Vector4i(o.Cards?.FirstCardIndex ?? 0, o.Cards?.Cards.Length ?? 0, o.IsStatic ? 0 : 1, MovedRecently(o) ? 1 : 0)
 					};
+				}
 
 				if (o.Cards == null)
 				{

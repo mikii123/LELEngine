@@ -70,10 +70,22 @@ vec3 InterpolateRadiosity(ivec2 texel, Card card)
 }
 
 // How much of a local light reaches a texel: a sphere trace through the global distance field towards it, or in the
-// LEL_RAY_QUERY variant a ray through the scene's triangles (a surface before the light blocks it; a ray leaving the
-// field gets through).
-float CardLightVisibility(vec3 position, vec3 N, vec3 lightPosition)
+// LEL_RAY_QUERY variant a ray through the scene's triangles from just off the card's point (a surface before the light
+// blocks it; a ray leaving the GI volume gets through).
+float CardLightVisibility(vec3 position, vec3 localPos, vec3 N, vec3 lightPosition)
 {
+#ifdef LEL_RAY_QUERY
+	float bias = CardRayBias(localPos);
+	vec3 origin = SceneRayOrigin(position, N, bias);
+	vec3 toLight = lightPosition - origin;
+	float distanceToLight = length(toLight);
+	if (distanceToLight <= bias * 2.0)
+	{
+		return 1.0;
+	}
+
+	return SceneRayClear(origin, toLight / distanceToLight, 0.0, distanceToLight - bias) ? 1.0 : 0.0;
+#else
 	float voxel = SdfVoxelSize();
 	vec3 origin = position + N * voxel;
 	vec3 toLight = lightPosition - origin;
@@ -83,9 +95,6 @@ float CardLightVisibility(vec3 position, vec3 N, vec3 lightPosition)
 		return 1.0;
 	}
 
-#ifdef LEL_RAY_QUERY
-	return SceneRayClear(origin, toLight / distanceToLight, 0.0, distanceToLight - voxel) ? 1.0 : 0.0;
-#else
 	float hitT;
 	return TraceSdf(origin, toLight / distanceToLight, distanceToLight - voxel, hitT) ? 0.0 : 1.0;
 #endif
@@ -156,7 +165,7 @@ void main()
 		float nli = max(dot(N, Li), 0.0);
 		if (nli > 0.0)
 		{
-			float visibility = LelLightHas(i, LEL_LIGHT_GI_SHADOWS) ? CardLightVisibility(position, N, lelLights[i].positionRange.xyz) : 1.0;
+			float visibility = LelLightHas(i, LEL_LIGHT_GI_SHADOWS) ? CardLightVisibility(position, localPos.xyz, N, lelLights[i].positionRange.xyz) : 1.0;
 			direct += radiance * (giStrength * nli * visibility);
 		}
 	}

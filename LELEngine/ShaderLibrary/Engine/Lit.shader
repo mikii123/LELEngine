@@ -50,6 +50,7 @@ void main()
 #include "Engine/VoxelConeTracing.glsl"
 #include "Engine/Lights.glsl"
 #include "Engine/DirectionalLights.glsl"
+#include "Engine/RayTracedShadows.glsl"
 #endif
 
 // Material: Color, Emissive (rgb color, a intensity, also fed into the GI), Roughness (0 = unset -> 0.6).
@@ -122,14 +123,14 @@ void main()
 		float ndl = dot(N, L);
 		if (ndl > 0.0)
 		{
-			// Per channel: tinted transparent casters colour their shadows.
-			vec3 lightColor = LelDirectionalRadiance(i) * SampleLightShadowRGB(i, fPosition, N, L);
+			// Per channel: tinted transparent casters colour their shadows (traced shadows: Engine/RayTracedShadows.glsl).
+			vec3 lightColor = LelDirectionalRadiance(i) * LelDirectionalShadowRGB(i, fPosition, N, L);
 			float spec = pow(max(dot(N, normalize(L + V)), 0.0), LSpecular.specShine) * LSpecular.specStrength;
 			result += (albedo + spec) * lightColor * ndl;
 		}
 	}
 
-	// The local lights (Engine/Lights.glsl), lit as the directional ones, unshadowed.
+	// The local lights (Engine/Lights.glsl), lit as the directional ones, behind their traced shadows where they have them.
 	for (LelLightIterator lights = LelLightsAt(fPosition); LelNextLight(lights);)
 	{
 		int i = lights.light;
@@ -138,7 +139,7 @@ void main()
 		if (LelLightAt(i, fPosition, Li, radiance))
 		{
 			float specularI = pow(max(dot(N, normalize(Li + V)), 0.0), LSpecular.specShine) * LSpecular.specStrength;
-			result += (albedo + specularI) * radiance * max(dot(N, Li), 0.0);
+			result += (albedo + specularI) * radiance * (max(dot(N, Li), 0.0) * LelLocalLightShadow(i));
 		}
 	}
 

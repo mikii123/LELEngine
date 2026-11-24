@@ -108,6 +108,7 @@ void main()
 #ifndef LEL_SURFACE_CAPTURE
 #include "Engine/Lights.glsl"
 #include "Engine/DirectionalLights.glsl"
+#include "Engine/RayTracedShadows.glsl"
 #endif
 
 // Lit with an albedo map (multiplies Color) and, each in a variant of its own that only the materials setting it pay
@@ -311,13 +312,14 @@ void main()
 		vec3 L = LelDirectionalTowards(i);
 		if (dot(N, L) > 0.0)
 		{
-			// Per channel: tinted transparent casters colour their shadows. The geometric normal biases the lookup.
-			vec3 lightColor = LelDirectionalRadiance(i) * SampleLightShadowRGB(i, fPosition, vertexNormal, L);
+			// Per channel: tinted transparent casters colour their shadows. The geometric normal biases the lookup (traced
+			// shadows: Engine/RayTracedShadows.glsl).
+			vec3 lightColor = LelDirectionalRadiance(i) * LelDirectionalShadowRGB(i, fPosition, vertexNormal, L);
 			result += LelStandardBRDFDirect(diffColor, specColor, roughness, N, V, L, lightColor);
 		}
 	}
 
-	// The local lights (Engine/Lights.glsl): the same BRDF, unshadowed.
+	// The local lights (Engine/Lights.glsl): the same BRDF, behind their traced shadows where they have them.
 	for (LelLightIterator lights = LelLightsAt(fPosition); LelNextLight(lights);)
 	{
 		int i = lights.light;
@@ -325,7 +327,7 @@ void main()
 		vec3 radiance;
 		if (LelLightAt(i, fPosition, Li, radiance))
 		{
-			result += LelStandardBRDFDirect(diffColor, specColor, roughness, N, V, Li, radiance);
+			result += LelStandardBRDFDirect(diffColor, specColor, roughness, N, V, Li, radiance * LelLocalLightShadow(i));
 		}
 	}
 #else
@@ -349,14 +351,15 @@ void main()
 		float ndl = dot(N, L);
 		if (ndl > 0.0)
 		{
-			// Per channel: tinted transparent casters colour their shadows. The geometric normal biases the lookup.
-			vec3 lightColor = LelDirectionalRadiance(i) * SampleLightShadowRGB(i, fPosition, vertexNormal, L);
+			// Per channel: tinted transparent casters colour their shadows. The geometric normal biases the lookup (traced
+			// shadows: Engine/RayTracedShadows.glsl).
+			vec3 lightColor = LelDirectionalRadiance(i) * LelDirectionalShadowRGB(i, fPosition, vertexNormal, L);
 			float spec = pow(max(dot(N, normalize(L + V)), 0.0), LSpecular.specShine) * LSpecular.specStrength;
 			result += (albedo + spec) * lightColor * ndl;
 		}
 	}
 
-	// The local lights (Engine/Lights.glsl), lit as the directional ones, unshadowed.
+	// The local lights (Engine/Lights.glsl), lit as the directional ones, behind their traced shadows where they have them.
 	for (LelLightIterator lights = LelLightsAt(fPosition); LelNextLight(lights);)
 	{
 		int i = lights.light;
@@ -365,7 +368,7 @@ void main()
 		if (LelLightAt(i, fPosition, Li, radiance))
 		{
 			float specularI = pow(max(dot(N, normalize(Li + V)), 0.0), LSpecular.specShine) * LSpecular.specStrength;
-			result += (albedo + specularI) * radiance * max(dot(N, Li), 0.0);
+			result += (albedo + specularI) * radiance * (max(dot(N, Li), 0.0) * LelLocalLightShadow(i));
 		}
 	}
 #endif

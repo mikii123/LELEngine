@@ -1292,6 +1292,8 @@ namespace LELEngine.VFX
 		private static void SetSdfUniforms(ShaderProgram program)
 		{
 			GlobalIlluminationSettings gi = Lighting.GI;
+			// The system collides with the field (or conforms to it): built for it also while Lumen's rays trace the triangles.
+			Lighting.RequestDistanceField();
 			bool available = gi.DistanceFieldEnabled && gi.GlobalSdf != null && gi.Enabled;
 			if (available)
 			{

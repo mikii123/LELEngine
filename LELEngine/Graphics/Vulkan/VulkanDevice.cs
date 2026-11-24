@@ -1664,6 +1664,7 @@ namespace LELEngine.Graphics.Vulkan
 			caps.ParallelShaderCompile = true;
 			caps.ProgramBinaries = true;
 			caps.RayQuery = HasRayQuery;
+			caps.RayTracingPositionFetch = HasRayQuery && HasPositionFetch;
 			caps.ConservativeRasterization = HasConservativeRasterization;
 			caps.CompilesBlockEveryThread = false;
 			caps.AsyncCompute = computeStream != null;

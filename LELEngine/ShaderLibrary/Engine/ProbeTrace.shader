@@ -42,7 +42,10 @@ void main()
 // through the global distance field (or, in the LEL_RAY_QUERY variant, through the scene's triangles) up to the near
 // distance; hits read the surface cache, rays that get further read the world-space radiance cache, and without a
 // cache they trace on to the sky. A hit on an object that moved since the previous frame is flagged (see
-// EncodeMovingHit): its direction's history stays short.
+// EncodeMovingHit): its direction's history stays short. The LEL_RAY_QUERY variant needs no distance field at all: its
+// rays start just off the surface (not half a field voxel), the object at a screen trace's hit is the triangle a short
+// ray finds under it, a back face it meets gives no light, and the far field's clearance is the radiance cache's own
+// test (Engine/RadianceCache.glsl).
 out vec4 OutRay; // rgb radiance, a = hit distance (-1 sky / far field, -2 probe on sky / invalid, moving hits encoded)
 
 uniform sampler2D FinalLighting;
@@ -118,10 +121,25 @@ bool ScreenTrace(vec3 origin, vec3 direction, float jitter, out vec3 hitPos, out
 
 // Full trace of one ray: screen space first, then the distance field. Returns radiance and hit distance; reached is
 // how far along the ray what the radiance comes from lies (negative: the sky).
+#ifdef LEL_RAY_QUERY
+// How far off its depth buffer point a probe's rays start (world units): above the depth's error and the tilt of a
+// normal map, far below a distance field voxel.
+const float ProbeRayBias = 0.02;
+
+// How far off a triangle a screen trace's hit (a depth buffer point) may lie (SceneRayTracing.SurfaceReach).
+const float ScreenHitReach = 0.1;
+#endif
+
 vec4 TraceSurfaces(vec3 position, vec3 normal, vec3 direction, float jitter, out float reached)
 {
+#ifdef LEL_RAY_QUERY
+	vec3 origin = SceneRayOrigin(position, normal, ProbeRayBias);
+	// Where along the ray the triangles are traced from (after a screen trace: shortly before where it stopped).
+	float tStart = 0.0;
+#else
 	float voxel = SdfVoxelSize();
 	vec3 origin = position + normal * voxel * 0.5;
+#endif
 
 	if (screenTraceDistance > 0.0)
 	{
@@ -131,24 +149,35 @@ vec4 TraceSurfaces(vec3 position, vec3 normal, vec3 direction, float jitter, out
 		{
 			vec3 radiance;
 			int objectIndex;
+#ifdef LEL_RAY_QUERY
+			// The object under the depth buffer's point: a short ray into its triangle.
+			objectIndex = SceneObjectAtSurface(hitPos, hitNormal, ScreenHitReach);
+			radiance = objectIndex >= 0 ? SampleSurfaceCacheAtSceneHit(objectIndex, hitPos, hitNormal, FinalLighting) : vec3(0.0);
+#else
 			if (!SampleSurfaceCacheAtHitObject(hitPos, hitNormal, voxel * 2.0, FinalLighting, radiance, objectIndex))
 			{
 				radiance = vec3(0.0);
 			}
+#endif
 			float distance = length(hitPos - position);
 			reached = distance;
 			return vec4(radiance, SceneObjectMoved(objectIndex) ? EncodeMovingHit(distance) : distance);
 		}
+#ifdef LEL_RAY_QUERY
+		// The march saw nothing up to travelled; the triangles from a step before it (a surface between two steps).
+		tStart = max(travelled - screenTraceDistance / float(screenTraceSteps), 0.0);
+#else
 		origin += direction * max(travelled - voxel, 0.0);
+#endif
 	}
 
 	float maxDistance = rcNearDistance > 0.0 ? rcNearDistance : sdfGridSize;
 	float hitT;
 #ifdef LEL_RAY_QUERY
-	// The scene's triangles: the hit knows its object and its normal.
-	int rayObject;
-	vec3 rayNormal;
-	bool hit = TraceSceneRay(origin, direction, 0.0, maxDistance, hitT, rayObject, rayNormal);
+	// The scene's triangles: the hit knows its object, its normal and its facing.
+	SceneHit sceneHit;
+	bool hit = tStart < maxDistance && TraceSceneRay(origin, direction, tStart, maxDistance, sceneHit);
+	hitT = sceneHit.t;
 #else
 	bool hit = TraceSdf(origin, direction, maxDistance, hitT);
 #endif
@@ -157,11 +186,17 @@ vec4 TraceSurfaces(vec3 position, vec3 normal, vec3 direction, float jitter, out
 	{
 		// Far field: the radiance cache interpolated at the end of the near trace, in the ray direction.
 		// Only with clearance around that point: right next to a wall the probes just behind it would pass
-		// the occlusion test and leak the lighting of the other side, so such rays trace on instead.
+		// the occlusion test and leak the lighting of the other side, so such rays trace on instead (the LEL_RAY_QUERY
+		// variant: the probes' own depths tell, in SampleRadianceCache).
 		vec3 far = origin + direction * maxDistance;
 		vec3 radiance;
 		float beyond;
-		if (SampleSdf(far) >= rcProbeSpacing * 0.25 && SampleRadianceCache(far, direction, radiance, beyond))
+#ifdef LEL_RAY_QUERY
+		bool clear = true;
+#else
+		bool clear = SampleSdf(far) >= rcProbeSpacing * 0.25;
+#endif
+		if (clear && SampleRadianceCache(far, direction, radiance, beyond))
 		{
 			// The probes' misses lie the field's size away: the sky.
 			reached = beyond >= sdfGridSize * 0.75 ? -1.0 : length(far - position) + beyond;
@@ -169,7 +204,8 @@ vec4 TraceSurfaces(vec3 position, vec3 normal, vec3 direction, float jitter, out
 		}
 
 #ifdef LEL_RAY_QUERY
-		hit = TraceSceneRay(origin, direction, maxDistance, maxDistance + sdfGridSize, hitT, rayObject, rayNormal);
+		hit = TraceSceneRay(origin, direction, maxDistance, maxDistance + sdfGridSize, sceneHit);
+		hitT = sceneHit.t;
 #else
 		hit = TraceSdf(far, direction, sdfGridSize, hitT);
 		hitT += maxDistance;
@@ -182,8 +218,8 @@ vec4 TraceSurfaces(vec3 position, vec3 normal, vec3 direction, float jitter, out
 		vec3 radiance;
 		int objectIndex;
 #ifdef LEL_RAY_QUERY
-		objectIndex = rayObject;
-		radiance = SampleSurfaceCacheAtSceneHit(rayObject, hitPos, rayNormal, FinalLighting);
+		objectIndex = sceneHit.objectIndex;
+		radiance = SceneHitRadiance(sceneHit, origin, direction, FinalLighting);
 #else
 		if (!SampleSurfaceCacheAtHitObject(hitPos, SdfNormal(hitPos), voxel * 2.0, FinalLighting, radiance, objectIndex))
 		{

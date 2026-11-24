@@ -241,29 +241,38 @@
   VK_DESCRIPTOR_TYPE_ACCELERATION_STRUCTURE_KHR; shaderc compiles GL_EXT_ray_query for Vulkan 1.3 as is.
 - Engine: `Rendering/MeshAccelerationStructures` (graphics thread): a bottom level per mesh of the geometry pool, of all
   its triangles as the pool holds them (the pool's buffers carry `AccelerationStructureInput` on such devices), made the
-  first time it is asked for and built with the others of that frame in one command (`BuildPending`), PreferFastTrace +
-  AllowCompaction, swapped for a compacted copy once the GPU told its size when that saves an eighth or more, made again
-  when the mesh's hidden ranges change, freed with the mesh's ranges (`GeometryPool.Release` / `Clear`) and all of them
-  when Lumen's rays stop tracing triangles. `Rendering/Lumen/SceneRayTracing` (one per `LumenScene`, so per renderer):
-  instance i of the top level = GI object i of this frame (the lighting camera's GI renderers, the objects of the
-  distance field passes), custom index = its row of the object table, its mesh's bottom level placed in the GI's
-  scaled-local space (`CreateScale(o.Scale) * rotation * translation`, as the cards are captured); built again when the
-  instances (count, bottom levels, rows) changed, refitted when only placements did (built again after 60 refits),
-  kept otherwise; plus a table of each object's first index and base vertex in the pool. `LumenScene.Update` builds it
-  after the tables, `LumenScene.SetUniforms` binds it: acceleration structure 0, storage 19 (pool vertices), 20 (pool
-  indices), 21 (the ranges). GPU profiler section `GlobalSDF.rayTracing` (the scene's update with the builds).
-- Shaders: `Engine/SceneRayQuery.glsl` (`TraceSceneRay`: the nearest hit's distance, object and triangle normal facing
-  back along the ray, read from the pool through the object's range and the instance's transform; `SceneRayClear`:
-  shadow rays, first hit ends them; both bounded by the GI volume as the distance field is: a ray from outside it hits
-  nothing, one leaving it ends there; `SampleSurfaceCacheAtSceneHit`: the cards of the known object, no search). The
-  callers have the distance field code unchanged in the `#else` of `#ifdef LEL_RAY_QUERY`: `ProbeTrace.shader` (screen
-  probe rays after the screen trace, near and far), `RadianceCacheTrace.shader`, `CardRadiosityProbes.shader`,
-  `CardLighting.shader` (local lights' GI shadows). The define is a variant the passes ask for
+  first time it is asked for and built with the others asked for before the next `BuildPending` in one command (all of
+  them in the first frame after a load, `BuildEverythingNext` from `Renderer.InvalidateSceneCaches`; later at most
+  `TrianglesPerFrame` = 250,000 a frame, smallest first: `GetBuilt` is null for a mesh still waiting, which the top
+  levels leave out until then), PreferFastTrace + AllowCompaction + AllowDataAccess, swapped for a compacted copy once
+  the GPU told its size when that saves an eighth or more, made again when the mesh's hidden ranges change, freed with
+  the mesh's ranges (`GeometryPool.Release` / `Clear`) and all of them when nothing traces triangles any more (neither
+  Lumen's rays nor traced shadows). `Rendering/SceneTopLevel`: a top level of instances given every frame, built in full
+  when their number changes, updated in place when only what they hold changed (placements, bottom levels, custom
+  indices, masks; built in full after 60 updates in a row), kept when nothing did. `Rendering/Lumen/SceneRayTracing`
+  (one per `LumenScene`, so per renderer): instance = a GI object of this frame (the lighting camera's GI renderers),
+  custom index = its row of the object table, its mesh's bottom level placed in the GI's scaled-local space
+  (`CreateScale(o.Scale) * rotation * translation`, as the cards are captured); plus a table of each object's first
+  index and base vertex in the pool (uploaded when it changes). `LumenScene.Update` builds it after the tables,
+  `LumenScene.SetUniforms` binds it: acceleration structure 0, storage 19 (pool vertices), 20 (pool indices), 21 (the
+  ranges). GPU profiler section `RayTracing.scene` (the scene's update with the builds, in `SurfaceCachePass`), or
+  `GlobalSDF.rayTracing` while the distance field is built too.
+- Shaders: `Engine/SceneRayQuery.glsl`: `TraceSceneRay` gives a `SceneHit` (distance, object, the hit triangle's vertex
+  normals interpolated at the hit through the instance's inverse transpose, on the side the ray came from, the
+  triangle's own normal where the interpolated one turns away from the ray; front or back face), `SceneHitRadiance`
+  (the surface cache at a front face, black at a back face, as Lumen), `SceneRayClear` (shadow rays, first hit ends
+  them), all bounded by the GI volume (a ray from outside it hits nothing, one leaving it ends there);
+  `SampleSurfaceCacheAtSceneHit` (the cards of the known object, no search); `SceneObjectAtSurface` (a short ray back
+  along a depth buffer point's normal: its object); `CardRayBias`. `Engine/RayOrigin.glsl`: `SceneRayOrigin` (a bias
+  along the normal, then Wächter and Binder's offset of a few units in the last place), `DepthRayBias`. The callers
+  have the distance field code unchanged in the `#else` of `#ifdef LEL_RAY_QUERY`: `ProbeTrace.shader`,
+  `RadianceCacheTrace.shader` and `RadianceCacheResolve.shader`, `CardRadiosityProbes.shader`, `CardLighting.shader`,
+  `SurfaceCacheDebug.shader`, and `RadianceCache.glsl`'s near surface test. The define is a variant the passes ask for
   (`Lighting.RayTracingDefines`, `ShaderProgram.RayQueryDefine`); the preamble adds `#extension GL_EXT_ray_query :
-  require` with it where `ShaderFeatures.RayQueries` (`GraphicsCapabilities.RayQueries`), and drops it elsewhere.
-  Still on the distance fields: the object at a screen trace's hit (the field's object ids), the radiance cache probes'
-  validity (inside geometry) and the far field's clearance test, the debug views, effects. The voxel cone tracing's SDF
-  modes trace the top level too since 2026-11-23 ("Voxel GI and distance fields on Vulkan" below).
+  require` with it where `ShaderFeatures.RayQueries` (`GraphicsCapabilities.RayQueries`), and drops it elsewhere. Since
+  2026-11-23 (`vk-rtlight`) nothing of Lumen reads the distance fields while its rays trace triangles: next section.
+  The voxel cone tracing's SDF modes trace the top level too since 2026-11-23 ("Voxel GI and distance fields on Vulkan"
+  below).
 - Setting: `GlobalIlluminationSettings.HardwareRayTracing` (default on; Project Settings > Lighting, "Ray Tracing",
   shown for both methods since VCT reads it too), taken with the method (`Lighting.HardwareRayTracing`,
   `HardwareRayTracingActive`: fixed while the game
@@ -296,6 +305,133 @@
   7.09 -> 5.19). Moving objects (lumen `animate=1`): the top level refitted every frame, `GlobalSDF.rayTracing` 0.03
   ms; the GI 7.95 -> 4.76 ms. Bottom levels: TestGame's meshes 0.02-2.75 MB, a third to a half of it left after
   compaction.
+
+## Ray traced lighting: Lumen without distance fields, traced shadows and reflections (2026-11-23, branch `vk-rtlight`)
+
+- The ask (the optimization pass around hardware ray tracing): Lumen without the distance fields under hardware ray
+  tracing, ray traced shadows (local lights had none on surfaces), ray traced reflections of glossy surfaces, the
+  quality items left by the first ray tracing work, settings, measurements. Only where ray queries run; OpenGL and
+  `hwrt=0` are as they were.
+- Lumen without distance fields (`Lighting.HardwareRayTracingActive`): the one place that decides whether the global
+  field (and with it the meshes' fields) is built is `GlobalIlluminationSettings.DistanceFieldActive`, for both GI
+  methods: a method that reads it (Lumen, VCT in an SDF mode) and `!Lighting.HardwareRayTracing ||
+  Lighting.DistanceFieldRequested` (its rays not on the triangles, or something else asks for the field). The
+  merged VCT work (`Lighting.VoxelRayTracingActive`, `SceneRayTracingActive`) reads the same rule.
+  `GlobalDistanceFieldPass` releases the field and returns early when it is false (and updates VCT's scene under
+  `VoxelRayTracingActive`); `LumenScene.Update` (fields while `!SceneRayTracingActive || DistanceFieldActive`) then frees
+  the mesh field atlas (`ReleaseDistanceFields`) and makes objects without fields: an object is its renderer's own
+  (absolute) scale, rows without a field get a field box 1e8 away (a field composed meanwhile, for a request, leaves
+  them out while their fields build); `SurfaceCachePass` places the GI volume and updates Lumen's scene (section
+  `RayTracing.scene`). What read the fields, now from the rays: the object at a screen
+  trace's hit (`SceneObjectAtSurface`: a short ray back along the pixel's normal, reach 0.1), the radiance cache probes'
+  validity (`RadianceCacheTrace` marks a ray that meets a back face with red -1, the RT variant of
+  `RadianceCacheResolve` takes a probe with a quarter of its rays or more on back faces as inside geometry; outside the
+  volume as before), the far field's clearance (`RadianceCache.glsl` under `LEL_RAY_QUERY`: false when a probe's depth
+  towards the point ends within the occlusion margin of it, a wall next to the point; the caller traces on), the
+  surface cache debug view (its RT variant finds the object by a ray). Still read the field, so they ask for it
+  (`Lighting.RequestDistanceField`, kept `DistanceFieldRequestFrames` = 300 frames after the last ask, built from the
+  next frame): VFX systems that sample it (`VfxInstance.SetSdfUniforms`), the SDF debug view. VCT's SDF modes are not
+  Lumen: unchanged. Where the vk-sdfvct passes must look: `GI.DistanceFieldActive` in `GlobalDistanceFieldPass.Execute`
+  / `ReleaseUnusedResources` (as today), and `LumenScene.DistanceFields` may be null (only `SetUniforms`, `Delete` and
+  the TestGame probe read it).
+- Quality of Lumen's rays: rays start just off the surface (`SceneRayOrigin`: screen probes 0.02, card texels
+  0.005 + 0.001 x the scaled-local distance (their half-float positions), then Wächter and Binder's offset) instead of
+  half or one field voxel; after a screen trace the triangles are traced from one march step before where it stopped;
+  back faces give no light (`SceneHitRadiance`); hits read interpolated vertex normals (`TraceSceneRay`).
+  VK_KHR_ray_tracing_position_fetch: the device asks for it only with `LEL_VULKAN_ENABLE=positionfetch` (bottom levels
+  carry AllowDataAccess, the RT variants then get `GL_EXT_ray_tracing_position_fetch` and `LEL_RAY_POSITION_FETCH` and
+  read the hit triangle's corners from the structure): measured no gain (lumen ProbeGather.trace 1.30 / 1.30 ms, lights
+  1.54 / 1.54; the interpolated normals read the pool's vertices anyway) and this machine's validation layer (1.3.290)
+  rejects its SPIR-V capability (VUID-VkShaderModuleCreateInfo-pCode-08739).
+- Traced shadows (`Rendering/Passes/RayTracedShadowPass`, after the geometry prepass; `Lighting.RayTracedLocalShadows`,
+  `RayTracedDirectionalShadows`): the view's renderers that cast shadows (not impostors: their surface is not their
+  mesh) as a top level of their own (`SceneTopLevel`, real transforms, binding 1); per pixel of the prepass's depth a ray
+  to each traced light that reaches it (`Engine/RayTracedShadowTrace.shader`): local lights with a slot
+  (`LightBuffer.ShadowSlots`: at most `ShadowedLocalLights`, the lights with `Light.CastShadows` nearest the camera; a
+  light keeps its slot; params.w of the list), the shadowed directional lights; soft shadows: a point of the light's
+  disc of `SourceRadius` facing the surface (a directional light: its cone of `DirectionalLight.AngularDiameter`),
+  another each frame and pixel, accumulated over up to 16 frames (4 on moving surfaces) with the history of the same
+  surface point (reprojected by the prepass's motion, depth and normal tested), a slot's channel starting again when its
+  light changes (`ShadowSlotsChanged`), then `Engine/RayTracedShadowFilter.shader` (Gaussian radius 2 over the same
+  surface). Mask: RGBA8 2D array, the local slots' layers then one of the directional lights; history RGBA16F x 2 + meta.
+  The lit materials (`Lit`, `LitTextured`, `Impostor`) read it through `Engine/RayTracedShadows.glsl` (Vulkan only:
+  `LelLocalLightShadow`, `LelDirectionalShadowRGB`) for draws of the lighting camera's view (`Lighting.RayShadows`,
+  bound by `SetRayShadowUniforms`); transparent surfaces and other views keep unshadowed local lights and the maps.
+  With directional shadows traced the shadow maps are still drawn for transparent surfaces, particles and clouds.
+- Traced reflections (`Rendering/Passes/RayTracedReflectionPass`, after the screen probe gather;
+  `Lighting.RayTracedReflections`: Lumen with hardware ray tracing): per resolve pixel below `ReflectionMaxRoughness`
+  one ray of the surface's GGX lobe (visible normals; the mirror direction below 0.05) through Lumen's top level, lit
+  from the surface cache at a front face, black at a back face, the sky past the GI volume; a sample held to 4 x (the
+  probes' reflection + 1); accumulated over 1 (mirror) to 24 frames by roughness (3 on moving surfaces);
+  `Engine/RayTracedReflectionFilter.shader` smooths it (radius 0..2 by roughness) and blends it into the probes'
+  reflection over the last quarter of the range; it becomes `GI.ResolvedSpecular`.
+- Settings: `RayTracingSettings` (`ProjectSettings.RayTracing`, Project Settings > Lighting > Ray Tracing; read every
+  frame): Local Light Shadows (on), Shadowed Local Lights (8), Directional Light Shadows (off), Soft Shadows (on),
+  Reflections (on), Reflection Max Roughness (0.4). Lumen's own rays stay `GI.HardwareRayTracing`. Console:
+  `[RayTracing] Shadows: local lights traced (up to 8 at once), directional lights by shadow maps, soft by the lights'
+  size | reflections: glossy surfaces traced (roughness up to 0.4)` when it changes, or why not. TestGame: `rtshadows`,
+  `rtshadowlights`, `rtsunshadows`, `rtsoft`, `rtreflect`, `rtrough`, `rtbudget` (bottom level triangles a frame).
+- Verified (780M, Vulkan 1.4.315 / 2.0.353; scratchpad of session 2a1d1c21, `rtlight/`: `vktest` (vktest-final's tests
+  on this worktree, plus `updateSwapped` (a top level updated with other bottom levels, custom indices and masks),
+  `dataAccess`, `positionFetch` (the corners against the CPU's; with `LEL_VULKAN_ENABLE=positionfetch` and no
+  validation: equal), `meshStructures` (the budget: built in the order a | b | c | d e)), `rtdump.ps1`, `rtperf.ps1`,
+  `viz.ps1`): device tests 577 results, 571 equal, 6 known, 0 different, no message of the validation layer with and
+  without sync validation, also with `LEL_VULKAN_DISABLE=rayqueries`; TestGame's 18 scenes on Vulkan with `hwrt=1` and
+  with `hwrt=0 rtshadows=0` under validation without messages; `hwrt=0` within the base build's own run-to-run
+  difference from `dumps/vkC-rt0` (max 1-6, mean <= 0.005, both builds); sync validation on lumen, materials, lights,
+  outdoor, impostors (`hwrt=1`), lumen and lights with `rtsunshadows=1`, gi0 / lights with `hwrt=0` (traced shadows
+  without Lumen's rays): only SYNC-HAZARD-WRITE-AFTER-READ of the back buffer's present blit against a later layout
+  change, which the build before this work shows too (materials, gi0 with lights; it comes and goes with timing);
+  OpenGL's check 0 different, and every scene within OpenGL's own run-to-run difference of the build before (max 0-6);
+  `sdfview=1` under hardware ray tracing (the field asked for and built from the next frame), `cacheview=1` (objects
+  found by rays). Not checked: the settings in the editor by eye, a scene where meshes appear while it plays (the
+  budget through the device tests only), New Frontier.
+- Again with the voxel GI work merged (`brutal-port` 71d1cf1; one rule for the fields, above): the 206 shader programs
+  build on both APIs; TestGame's 18 scenes on Vulkan under validation without messages, `hwrt=1` within max 1-8
+  (mean <= 0.005) of the tree before the merge except vct (the merged voxel GI's own change), `hwrt=0 rtshadows=0`
+  within max 1-5 of `dumps/vkC-rt0` except vct (max 11, mean 0.06: the conservative voxelization); the voxel GI's
+  scenes (`sdfvct/vct-scenes.txt`: voxel and SDF modes, `hwrt=0|1`, night, materials, statics) within max 1-2 of
+  that work's own `final-vulkan` dumps; sync validation on lights, vct, materials without messages; OpenGL's check
+  0 different; the device tests 577 results, 571 equal, 6 known, 0 different, no validation message.
+- What it changes in the picture (frame 400 against `dumps/vkD-rt1`, of 255): lights mean 4.05 (max 77, 16.6 % of
+  pixels over 8), lumen 2.26, nogpudriven 2.26, materials 2.67 (max 239), refraction 2.09, suns3 1.92, outdoor 0.79,
+  anim 0.50, impostors 0.25 (max 221), volumetrics 0.10, vct / gi0 / the rest 0. Lumen's GI is darker by 1-8 levels,
+  most on floors and in corners (less light leaks): in the lights scene back faces black ~0.9 of the mean, the rays
+  starting just off the surface (not half a voxel) ~1.1, the probes' clearance test 0.3 closer to the field's than
+  none, interpolated normals ±0.4, the rest the field-free probe validity and object lookup. Traced shadows: mean
+  0.45 in lights (the blue spot's light off the bench behind the pillar, soft shadows under the bench), the same as the
+  maps within their penumbrae for the sun (`rtsunshadows=1` against the maps: mean 0.06-0.15). Reflections: the
+  metal spheres of materials and the impostor scene's cars reflect their neighbours sharply (max 239).
+- What it costs (780M, 1280 x 720, frame-on-GPU / CPU render ms; the GPU shared with two other sessions, so each figure
+  is the least of 2-s `[Stats]` windows over three rounds, `rtperf.ps1 -Shared`; columns: the build before / this
+  work / with `rtsunshadows=1` / with `rtshadows=0 rtreflect=0`): lumen 7.00 / 6.93 / 7.70 / 6.51, materials 6.77 /
+  6.96 / 8.02 / 6.67, refraction 8.22 / 8.22 / 9.15 / 8.07, lights (night) 7.24 / 8.23 / 8.46 / 7.26, lights by day
+  8.59 / 9.59 / 10.02 / 8.33, suns3 7.63 / 7.76 / 8.74 / 7.40, outdoor 3.76 / 4.09 / 4.69 / 3.72, impostors 3.34 /
+  3.59 / 4.10 / 3.17, impostors with lights 3.31 / 4.09 / 4.38 / 3.38, volumetrics 4.41 / 4.60 / 5.15 / 4.50,
+  volumetrics with 4 lamps 4.46 / 4.97 / 5.36 / 4.29, `gi=0` with lights 1.63 / 2.62 / 2.87 / 1.73. CPU render 0.6-3.1
+  ms, within its noise. Per pass: `ProbeGather.trace` 1.60 -> 1.29 (lumen), 1.69 -> 1.41 (materials), 1.88 -> 1.57
+  (lights), 0.66 -> 0.57 (volumetrics): no field to sphere trace before the triangles, the radiance cache and surface
+  cache unchanged within 0.02; `RayTracedShadows.trace` + `.filter` 0.73 + 0.21 with the four lights of the lights
+  scene (night or day, also without Lumen), 0.18-0.24 + 0.12-0.13 with the lamps of vollamps / implights;
+  `RayTracedReflections.trace` + `.filter` 0.18-0.31 + 0.10-0.13 (0.30 together even where few pixels are glossy:
+  a pass over the screen); the traced sun 0.48-1.10 + 0.20-0.40 on top of shadow maps of 0.9-1.45 ms. So: Lumen with
+  traced shadows and reflections costs about what Lumen cost with fields (+0.1..+1.0 ms where there are lights to
+  trace), and pays the shadows of local lights, which had none.
+- Directional lights stay on shadow maps by default (`DirectionalLightShadows` off): traced they cost 0.7-1.5 ms more on
+  the 780M and the maps cannot go (transparent surfaces, particles, clouds and tinted shadows read them), and the
+  picture differs from the maps only at the penumbrae (mean 0.06-0.15). Worth it where the maps are poor (a sun over a
+  wide view with fine shadows) or when transparent receivers move to rays too.
+- Memory (1280 x 720): freed the global field's 16 MB (4 levels of 128^3 half floats) and the mesh field atlas (8 MB
+  at first, up to 32 as it grows); added the traced shadows' mask and history, 32 MB a layer of four lights (51 MB with
+  the sun's layer), and the reflections' history, 28 MB (both RGBA16F accumulation, two frames, plus their metadata;
+  they scale with the screen). The mask is made once a light is traced; the reflections' history whenever they are on
+  (released when they go off).
+- Left: transparent surfaces keep unshadowed local lights (they are not in the prepass's depth); the surface cache's
+  directional shadows still come from the maps; the shadow maps could be skipped when the sun is traced and nothing
+  transparent receives it; mirrored objects in Lumen's field-less rows take the absolute scale; the reflection pass's
+  ~0.3 ms where little is glossy (skipping tiles without glossy pixels) and the history's formats (RGBA16F metadata
+  where two channels would do); position fetch waits for a validation layer that knows its capability; the settings
+  not seen in the editor, New Frontier not run on this branch.
 
 ## The Vulkan device's ordering, caches and speed (2026-11-23, branch `port-vkperf`)
 
@@ -2336,8 +2472,8 @@ lighting and the engine's other features. Octahedral impostors, baked into atlas
 - Every GI pass makes its shaders and textures on its first active frame and frees them when its part is not used:
   `VoxelGIPass` (VCT; only the selected mips' directional textures and shader variants, coverage accumulators only
   with `VoxelCoverage`), `GIResolvePass` (VCT + `ScreenSpaceResolve`, the variant in use), `GlobalDistanceFieldPass`
-  (`DistanceFieldActive`: Lumen, or VCT with an SDF trace mode whose rays do not trace the scene's triangles;
-  `VoxelCones`, and the SDF modes under `Lighting.VoxelRayTracingActive`, build no field and no mesh SDFs),
+  (`DistanceFieldActive`: Lumen, or VCT with an SDF trace mode, whose rays do not trace the scene's triangles, or do
+  and something asks for the field (`Lighting.RequestDistanceField`); `VoxelCones` builds no field and no mesh SDFs),
   `SurfaceCachePass` / `RadianceCachePass` / `ScreenProbeGatherPass` (Lumen), `LumenScene` (made by its first
   `Update`; surface cache only in Lumen; `Renderer.ReleaseLumenScene` when neither needs it), the GI's sky cubemap
   (`SkyEnvironment.Clear` with GI off), debug views (on first show). With GI off nothing is allocated.
@@ -3460,12 +3596,14 @@ Clouds in the GI:
 
 - `Light` (`Mono/Behaviours/Light.cs`, global namespace, `[ExecuteAlways]`): `Type` Point / Spot (`SpotAngle`,
   `InnerSpot`, shown in the inspector for spots only: `[ShowIf]`), `Color`, `Intensity` (radiance units as a directional light's Strength: a white surface facing the light one
-  unit away reflects Intensity), `Range`, `SourceRadius`; GI: `AffectsGI`, `IndirectStrength`, `GIShadows`; volumes:
+  unit away reflects Intensity), `Range`, `SourceRadius`, `CastShadows` (traced shadows on surfaces, 2026-11-23: "Ray
+  traced lighting" below); GI: `AffectsGI`, `IndirectStrength`, `GIShadows`; volumes:
   `AffectsVolumes`, `VolumetricStrength` (HDRP's Volumetric Multiplier: a flash can light the ships around brightly and
   its cloud less), `VolumetricShadows` (clouds between the light and what it lights dim it). Falloff (`Falloff(d)`, the
   shaders' formula): fade^2 / max(d^2, SourceRadius^2), fade = saturate(1 - d^4 / range^4) (Frostbite's window); a spot's
-  cone saturate((dot(-L, forward) - cos outer) x 1 / (cos inner - cos outer))^2. The direct light has no shadow maps
-  (geometry does not block it on surfaces); the GI's injection does block it.
+  cone saturate((dot(-L, forward) - cos outer) x 1 / (cos inner - cos outer))^2. The direct light has no shadow maps:
+  geometry blocks it on surfaces only with traced shadows (a device with ray queries: "Ray traced lighting" below; the
+  lights' slots are params.w of the list, -1 none); the GI's injection does block it.
 - `Rendering/LightBuffer` (static): every frame (`Renderer.RenderFrame`, after `Lighting.BeginFrame`) every light that
   shines (enabled, intensity, range, colour), however many, in `Light.Active` order: a std430 storage buffer on binding
   16 (`ListBinding`; grown by doubling), 6 vec4 per light (position + range, radiance + GI strength, spot direction + cos
@@ -3510,7 +3648,8 @@ Clouds in the GI:
   mask words and tests only its cluster's lights.
 - Lit materials: `Lit`, `LitTextured` (Scene workflow: Blinn-Phong as the sun; Metallic / Specular:
   `LelStandardBRDFDirect` in `StandardBRDF.glsl`), `LitTransparent` and `Impostor` add the lights of their point's
-  cluster after the sun (unshadowed).
+  cluster after the sun: `Lit`, `LitTextured` and `Impostor` behind their traced shadows where they have them
+  (`Engine/RayTracedShadows.glsl`), `LitTransparent` unshadowed.
 - GI: VCT's `VoxelInject.shader` adds the GI lights to the voxels (`VoxelLightVisibility`: a march through the voxels'
   occupancy towards it, voxel steps growing to an eighth of the distance, at most 48; none with `GIShadows` off); Lumen's
   `CardLighting.shader` to the cards (`CardLightVisibility`: `TraceSdf` through the global distance field;

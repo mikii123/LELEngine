@@ -112,7 +112,7 @@ namespace LELEngine.Rendering.Passes
 		{
 			GlobalIlluminationSettings gi = Lighting.GI;
 			LumenScene scene = context.Renderer.LumenScene;
-			bool active = gi.LumenActive && gi.GlobalSdf != null && context.DepthPrepassDone && context.NormalRoughness != null && context.Motion != null && scene.SurfaceCache != null;
+			bool active = gi.LumenActive && Lighting.LumenTracingReady && context.DepthPrepassDone && context.NormalRoughness != null && context.Motion != null && scene.SurfaceCache != null;
 			if (!active)
 			{
 				historyValid = false;
@@ -636,7 +636,8 @@ namespace LELEngine.Rendering.Passes
 				output[i]?.Delete();
 				output[i] = new Framebuffer(ow, oh);
 				output[i].AddColorAttachment(RenderTextureFormat.RGBA16F);
-				output[i].AddColorAttachment(RenderTextureFormat.RGBA16F);
+				// Also an image: traced reflections (RayTracedReflectionPass) are written over it where surfaces are glossy.
+				output[i].AddColorAttachment(RenderTextureFormat.RGBA16F, true, true);
 				// History record for the next frame's temporal filter: normal and frame count per texel.
 				output[i].AddColorAttachment(RenderTextureFormat.RGBA16F, false);
 				output[i].Validate();

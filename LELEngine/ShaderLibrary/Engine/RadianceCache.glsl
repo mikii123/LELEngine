@@ -98,6 +98,8 @@ vec4 RadianceCacheProbeSample(ivec3 coord, vec3 direction)
 
 // Radiance arriving at world point p from `direction`, interpolated from the eight surrounding probes.
 //  - Probes inside geometry or not traced yet are skipped.
+//  - In the LEL_RAY_QUERY variants (no distance field to ask for clearance): false when a probe's depth towards p ends
+//    within the occlusion margin of p, a wall right next to p.
 //  - Probe occlusion (Lumen): a probe whose stored hit distance towards p is shorter than the distance to p
 //    has a wall between them and is skipped; without this, probes outside a room leak sky light into it.
 //  - Parallax: a probe 1-2 m away from p sees something else along `direction` than p does (sky past a
@@ -143,6 +145,13 @@ bool SampleRadianceCache(vec3 p, vec3 direction, out vec3 radiance, out float hi
 			vec4 towards = RadianceCacheProbeSampleOct(probeIndex, DirectionToOctahedral(toPoint / distanceToPoint));
 			if (towards.a < 0.5) continue;
 			float depth = towards.a - 1.0;
+#ifdef LEL_RAY_QUERY
+			// A surface within the margin of p on the line from this probe (what it measured towards p ends within a
+			// quarter spacing of p): p is too near a wall for the probes on its other side to be told apart by the test
+			// below, which would let them leak. The caller traces on (without a distance field, this is the clearance
+			// test of the far field).
+			if (abs(depth - distanceToPoint) < occlusionMargin) return false;
+#endif
 			w *= clamp((depth - (distanceToPoint - occlusionMargin)) / occlusionMargin, 0.0, 1.0);
 			if (w < 1e-4) continue;
 		}

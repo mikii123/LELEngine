@@ -327,6 +327,17 @@ namespace LELEngine.Editor
 				ImGui.PopID();
 			}
 
+			if (EditorGui.CollapsingHeader("Ray Tracing", ImGuiTreeNodeFlags.DefaultOpen))
+			{
+				ImGui.PushID("raytracing");
+				ImGui.TextDisabled(GraphicsCapabilities.RayQueries
+					? "Traced through the scene's triangles by this graphics device (ray queries)."
+					: "This graphics device has no ray queries: none of this is traced here (Vulkan on a GPU with them).");
+				ImGui.TextDisabled("Lumen's own rays: Hardware Ray Tracing in the Lumen section.");
+				changed |= FieldDrawer.DrawFields(settings.RayTracing, context);
+				ImGui.PopID();
+			}
+
 			if (EditorGui.CollapsingHeader("Level of Detail", ImGuiTreeNodeFlags.DefaultOpen))
 			{
 				ImGui.PushID("lod");

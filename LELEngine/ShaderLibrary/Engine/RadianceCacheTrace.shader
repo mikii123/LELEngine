@@ -14,7 +14,9 @@
 // Radiance cache probe tracing. Lumen traces its world probes at a higher resolution than it stores them
 // (32x32 rays, 16x16 stored): every probe scheduled this frame gets rcTraceResolution^2 jittered rays over
 // the full sphere, one thread per ray, written to a scratch buffer of per-slot tiles. The rays sphere trace the global
-// distance field, or in the LEL_RAY_QUERY variant trace the scene's triangles.
+// distance field, or in the LEL_RAY_QUERY variant trace the scene's triangles: there a probe inside geometry is not
+// known before its rays are traced (no field to ask): a ray that meets a back face gives no light and marks itself
+// (radiance red -1), and the resolve takes a probe whose rays meet back faces a quarter of the time or more as invalid.
 // RadianceCacheResolve.shader then downsamples each tile into the probe's stored map and accumulates it, so
 // every stored texel averages several rays per update instead of one.
 //
@@ -69,7 +71,11 @@ void main()
 	vec3 position = RadianceCacheProbePosition(RadianceCacheProbeCoord(probeIndex));
 
 	float voxel = SdfVoxelSize();
+#ifdef LEL_RAY_QUERY
+	if (!InsideSdfGrid(position))
+#else
 	if (!InsideSdfGrid(position) || SampleSdf(position) < voxel * 0.5)
+#endif
 	{
 		imageStore(TraceBuffer, bufferTexel, vec4(0.0, 0.0, 0.0, -1.0));
 		return;
@@ -83,12 +89,12 @@ void main()
 	float depth = sdfGridSize; // misses: further than anything in the field
 	float hitT;
 #ifdef LEL_RAY_QUERY
-	int objectIndex;
-	vec3 normal;
-	if (TraceSceneRay(position, direction, 0.0, sdfGridSize, hitT, objectIndex, normal))
+	SceneHit hit;
+	if (TraceSceneRay(position, direction, 0.0, sdfGridSize, hit))
 	{
-		radiance = SampleSurfaceCacheAtSceneHit(objectIndex, position + direction * hitT, normal, FinalLighting);
-		depth = SceneObjectMoved(objectIndex) ? -(hitT + 10.0) : hitT;
+		// A back face: no light, and the mark the resolve counts (the probe may be inside geometry).
+		radiance = hit.frontFace ? SampleSurfaceCacheAtSceneHit(hit.objectIndex, position + direction * hit.t, hit.normal, FinalLighting) : vec3(-1.0, 0.0, 0.0);
+		depth = SceneObjectMoved(hit.objectIndex) ? -(hit.t + 10.0) : hit.t;
 	}
 #else
 	if (TraceSdf(position, direction, sdfGridSize, hitT))
