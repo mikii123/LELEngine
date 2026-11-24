@@ -45,6 +45,11 @@ namespace LELEngine.Graphics.Vulkan
 		private Requirement[] requirements = new Requirement[32];
 		private int requirementCount;
 
+		// The top levels the noted uses trace, and by which stages: marked ready once their reads are ordered.
+		private VulkanAccelerationStructure[] tracedStructures = new VulkanAccelerationStructure[4];
+		private VkPipelineStageFlags2[] tracedStages = new VkPipelineStageFlags2[4];
+		private int tracedCount;
+
 		/// <summary>The barriers before the next command of the stream.</summary>
 		private readonly SyncBatch streamBatch = new SyncBatch();
 
@@ -295,6 +300,13 @@ namespace LELEngine.Graphics.Vulkan
 				r = default;
 			}
 
+			for (int i = 0; i < tracedCount; i++)
+			{
+				tracedStructures[i].MarkReady(epoch, tracedStages[i]);
+				tracedStructures[i] = null;
+			}
+
+			tracedCount = 0;
 			requirementCount = 0;
 			if (!setup.IsEmpty)
 			{
@@ -650,14 +662,29 @@ namespace LELEngine.Graphics.Vulkan
 				}
 				else
 				{
-					// A traced top level, and the bottom levels its last build placed (a ray reads them too).
+					// A traced top level, and the bottom levels its last build placed (a ray reads them too); not looked at
+					// again in the epoch their reads were ordered in.
 					VulkanAccelerationStructure structure = entry.Structure;
 					structure.Use();
+					if (structure.IsReadyFor(epoch, stages))
+					{
+						continue;
+					}
+
 					RequireTarget(structure.Storage, stages, false);
 					foreach (VulkanAccelerationStructure bottom in structure.BottomLevels)
 					{
 						RequireTarget(bottom.Storage, stages, false, false);
 					}
+
+					if (tracedCount == tracedStructures.Length)
+					{
+						Array.Resize(ref tracedStructures, tracedCount * 2);
+						Array.Resize(ref tracedStages, tracedCount * 2);
+					}
+
+					tracedStructures[tracedCount] = structure;
+					tracedStages[tracedCount++] = stages;
 				}
 			}
 		}

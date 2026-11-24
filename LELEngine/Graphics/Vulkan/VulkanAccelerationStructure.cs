@@ -319,6 +319,10 @@ namespace LELEngine.Graphics.Vulkan
 		private long compactedSize;
 		private long bottomLevelsMarked;
 
+		// The sync epoch and stages of the last ordered trace (IsReadyFor).
+		private int readyEpoch = -1;
+		private VkPipelineStageFlags2 readyStages;
+
 		public readonly VkAccelerationStructureKHR Handle;
 
 		/// <summary>The structure's address: what the instances of a top level name a bottom level by.</summary>
@@ -526,7 +530,25 @@ namespace LELEngine.Graphics.Vulkan
 			BuiltInstances = instances;
 			BottomLevels = bottomLevels ?? noBottomLevels;
 			bottomLevelsMarked = 0;
+			readyEpoch = -1;
 			Use();
+		}
+
+		/// <summary>
+		///     Whether a trace's reads of the structure and of the bottom levels it holds, by these stages, were ordered in
+		///     this sync epoch (<see cref="VulkanDevice.SyncEpoch" />): nothing was built or written since, so the next trace
+		///     needs no look at them again (a top level may hold hundreds of bottom levels).
+		/// </summary>
+		internal bool IsReadyFor(int epoch, VkPipelineStageFlags2 stages)
+		{
+			return readyEpoch == epoch && (stages & ~readyStages) == 0;
+		}
+
+		/// <summary>A trace's reads of the structure and its bottom levels by these stages are ordered in this epoch.</summary>
+		internal void MarkReady(int epoch, VkPipelineStageFlags2 stages)
+		{
+			readyStages = readyEpoch == epoch ? readyStages | stages : stages;
+			readyEpoch = epoch;
 		}
 
 		/// <summary>A command writes the structure's compacted size (after a full build) into a query of its own.</summary>
