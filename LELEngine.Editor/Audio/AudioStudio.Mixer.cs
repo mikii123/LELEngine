@@ -38,7 +38,7 @@ namespace LELEngine.Editor.Audio
 
 					if (ImGui.IsItemHovered())
 					{
-						ImGui.SetTooltip("Adds a bus under the selected bus (or the master). Events route to a bus in the Deck.");
+						EditorGui.SetTooltip("Adds a bus under the selected bus (or the master). Events route to a bus in the Deck.");
 					}
 
 					ImGui.SameLine();
@@ -105,7 +105,7 @@ namespace LELEngine.Editor.Audio
 
 				if (ImGui.IsItemHovered())
 				{
-					ImGui.SetTooltip(Project.BusPath(bus) + "\n" + bus.Effects.Count + (bus.Effects.Count == 1 ? " effect" : " effects") + "\nDouble click: rename");
+					EditorGui.SetTooltip(Project.BusPath(bus) + "\n" + bus.Effects.Count + (bus.Effects.Count == 1 ? " effect" : " effects") + "\nDouble click: rename");
 				}
 
 				if (EditorGui.IsItemDoubleClicked() && !isMaster)
@@ -179,7 +179,7 @@ namespace LELEngine.Editor.Audio
 
 				if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
 				{
-					ImGui.SetTooltip((volume <= AudioMath.SilenceDb ? "-inf dB" : volume.ToString("0.0") + " dB") + (snapshotMode ? inScope ? " (snapshot value)" : " (not in the snapshot: tick the box below)" : " (double click to reset)"));
+					EditorGui.SetTooltip((volume <= AudioMath.SilenceDb ? "-inf dB" : volume.ToString("0.0") + " dB") + (snapshotMode ? inScope ? " (snapshot value)" : " (not in the snapshot: tick the box below)" : " (double click to reset)"));
 				}
 
 				if (!snapshotMode && EditorGui.IsItemDoubleClicked())
@@ -210,7 +210,7 @@ namespace LELEngine.Editor.Audio
 
 					if (ImGui.IsItemHovered())
 					{
-						ImGui.SetTooltip("The snapshot sets this bus's volume.");
+						EditorGui.SetTooltip("The snapshot sets this bus's volume.");
 					}
 
 					ImGui.SameLine();
@@ -234,7 +234,7 @@ namespace LELEngine.Editor.Audio
 
 				if (ImGui.IsItemHovered())
 				{
-					ImGui.SetTooltip("Mute");
+					EditorGui.SetTooltip("Mute");
 				}
 
 				ImGui.SameLine();
@@ -304,7 +304,7 @@ namespace LELEngine.Editor.Audio
 			DrawMeterBar(draw, min + new NVector2(12f, 0f), new NVector2(10f, height), shownRight);
 			if (ImGui.IsItemHovered())
 			{
-				ImGui.SetTooltip($"Peak {AudioMath.GainToDb(Math.Max(shownLeft, shownRight)):0.0} dB");
+				EditorGui.SetTooltip($"Peak {AudioMath.GainToDb(Math.Max(shownLeft, shownRight)):0.0} dB");
 			}
 		}
 

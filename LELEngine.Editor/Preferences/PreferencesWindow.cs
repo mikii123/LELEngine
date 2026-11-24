@@ -117,7 +117,7 @@ namespace LELEngine.Editor
 				ImGui.TextDisabled(EditorPreferences.File != null ? System.IO.Path.GetFileName(EditorPreferences.File) : "(not saved)");
 				if (ImGui.IsItemHovered())
 				{
-					ImGui.SetTooltip(EditorPreferences.File ?? "An automated run: nothing is saved");
+					EditorGui.SetTooltip(EditorPreferences.File ?? "An automated run: nothing is saved");
 				}
 			}
 
@@ -271,7 +271,7 @@ namespace LELEngine.Editor
 				if (changed && ImGui.IsItemHovered())
 				{
 					NVector4 preset = EditorStyle.PresetValue(theme.Preset, name);
-					ImGui.SetTooltip("Back to " + theme.Preset + "'s " + ColorHex.ToHex(preset));
+					EditorGui.SetTooltip("Back to " + theme.Preset + "'s " + ColorHex.ToHex(preset));
 				}
 
 				ImGui.PopID();
@@ -483,7 +483,7 @@ namespace LELEngine.Editor
 			ImGui.TextUnformatted(label);
 			if (tooltip != null && ImGui.IsItemHovered())
 			{
-				ImGui.SetTooltip(tooltip);
+				EditorGui.SetTooltip(tooltip);
 			}
 
 			ImGui.SameLine(labelWidth);

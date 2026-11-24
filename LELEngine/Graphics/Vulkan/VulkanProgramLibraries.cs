@@ -224,14 +224,15 @@ namespace LELEngine.Graphics.Vulkan
 				{
 					ProvokingVertexMode = VkProvokingVertexModeEXT.LastVertexEXT
 				};
+				// Disabled named outright where the device has the extension (see VulkanProgram's pipelines: Intel's driver).
 				VkPipelineRasterizationConservativeStateCreateInfoEXT conservative = new VkPipelineRasterizationConservativeStateCreateInfoEXT
 				{
 					Next = device.HasProvokingVertexLast ? &provoking : null,
-					ConservativeRasterizationMode = VkConservativeRasterizationModeEXT.OverestimateEXT
+					ConservativeRasterizationMode = conservativeRasterization ? VkConservativeRasterizationModeEXT.OverestimateEXT : VkConservativeRasterizationModeEXT.DisabledEXT
 				};
 				VkPipelineRasterizationStateCreateInfo rasterization = new VkPipelineRasterizationStateCreateInfo
 				{
-					Next = conservativeRasterization ? &conservative : device.HasProvokingVertexLast ? &provoking : null,
+					Next = device.HasConservativeRasterization ? &conservative : device.HasProvokingVertexLast ? &provoking : null,
 					PolygonMode = wireframe ? VkPolygonMode.Line : VkPolygonMode.Fill,
 					FrontFace = VkFrontFace.Clockwise,
 					LineWidth = 1f

@@ -1756,7 +1756,7 @@ namespace LELEngine.Editor.VFX
 		{
 			if (!string.IsNullOrEmpty(text) && ImGui.IsItemHovered())
 			{
-				ImGui.SetTooltip(text);
+				EditorGui.SetTooltip(text);
 			}
 		}
 

@@ -285,6 +285,14 @@ namespace LELEngine.Graphics.Vulkan
 				VkPhysicalDeviceVulkan11Features want11 = new VkPhysicalDeviceVulkan11Features { ShaderDrawParameters = true, Next = &want12 };
 				VkPhysicalDeviceFeatures2 want = new VkPhysicalDeviceFeatures2 { Next = &want11 };
 				VkPhysicalDeviceFeatures core = have.Features;
+				// LEL_VULKAN_ENABLE=robustness: reads and writes outside a buffer are bounded (a diagnosis: on a GPU that
+				// faults on them, such as Intel's, the device is lost instead).
+				if ((Environment.GetEnvironmentVariable("LEL_VULKAN_ENABLE") ?? "").IndexOf("robustness", StringComparison.OrdinalIgnoreCase) >= 0)
+				{
+					want.Features.RobustBufferAccess = core.RobustBufferAccess;
+					Console.WriteLine("[Vulkan] LEL_VULKAN_ENABLE=robustness: robust buffer access " + (core.RobustBufferAccess ? "on" : "not offered"));
+				}
+
 				want.Features.MultiDrawIndirect = core.MultiDrawIndirect;
 				want.Features.DrawIndirectFirstInstance = core.DrawIndirectFirstInstance;
 				want.Features.SamplerAnisotropy = core.SamplerAnisotropy;
@@ -666,7 +674,9 @@ namespace LELEngine.Graphics.Vulkan
 
 		public override GpuTexture CreateTexture(in TextureDescriptor descriptor)
 		{
-			return new VulkanTexture(this, descriptor, false);
+			VulkanTexture texture = new VulkanTexture(this, descriptor, false);
+			texture.ZeroAtCreation();
+			return texture;
 		}
 
 		public override GpuBuffer CreateBuffer(in BufferDescriptor descriptor)

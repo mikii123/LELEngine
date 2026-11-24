@@ -79,7 +79,7 @@ namespace LELEngine.Editor.Audio
 
 			if (ImGui.IsItemHovered() && current != null)
 			{
-				ImGui.SetTooltip(current.Path + "\nGUID " + current.Id + "\n" + current.Tracks.Count + " tracks" + (current.Spatializer.Enabled ? ", 3D" : ", 2D") + "\nDouble click: open in the Audio Studio");
+				EditorGui.SetTooltip(current.Path + "\nGUID " + current.Id + "\n" + current.Tracks.Count + " tracks" + (current.Spatializer.Enabled ? ", 3D" : ", 2D") + "\nDouble click: open in the Audio Studio");
 			}
 
 			if (EditorGui.IsItemDoubleClicked() && current != null && project != null)
@@ -110,7 +110,7 @@ namespace LELEngine.Editor.Audio
 
 			if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
 			{
-				ImGui.SetTooltip("Plays the event at the object's position (in edit mode too).");
+				EditorGui.SetTooltip("Plays the event at the object's position (in edit mode too).");
 			}
 
 			ImGui.SameLine();
@@ -234,7 +234,7 @@ namespace LELEngine.Editor.Audio
 
 			if (ImGui.IsItemHovered())
 			{
-				ImGui.SetTooltip("How banks hold the sound: decoded PCM (fastest load), the encoded file decoded when the bank loads (smaller builds), or streamed from disk while playing (music, long ambiences).");
+				EditorGui.SetTooltip("How banks hold the sound: decoded PCM (fastest load), the encoded file decoded when the bank loads (smaller builds), or streamed from disk while playing (music, long ambiences).");
 			}
 
 			FieldDrawer.Label("Force Mono", null, context);

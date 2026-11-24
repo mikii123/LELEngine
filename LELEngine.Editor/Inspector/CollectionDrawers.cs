@@ -93,7 +93,7 @@ namespace LELEngine.Editor
 
 				if (ImGui.IsItemHovered())
 				{
-					ImGui.SetTooltip("Number of elements");
+					EditorGui.SetTooltip("Number of elements");
 				}
 
 				if (ImGui.IsItemDeactivated() && countEditId == id)
@@ -428,7 +428,7 @@ namespace LELEngine.Editor
 			EditorIcons.Draw(ImGui.GetWindowDrawList(), start + new NVector2((width - icon) * 0.5f, (height - icon) * 0.5f), icon, IconKind.Grip, ImGui.GetColorU32(hovered ? ImGuiCol.Text : ImGuiCol.TextDisabled));
 			if (hovered && !ImGui.IsMouseDown(ImGuiMouseButton.Left))
 			{
-				ImGui.SetTooltip("Drag to reorder; right click for more");
+				EditorGui.SetTooltip("Drag to reorder; right click for more");
 			}
 
 			if (ImGui.BeginDragDropSource(ImGuiDragDropFlags.SourceNoDisableHover))
@@ -633,7 +633,7 @@ namespace LELEngine.Editor
 						}
 						else if (!Equals(editedKey, key))
 						{
-							ImGui.SetTooltip(editedKey == null ? "A key cannot be empty" : "The key " + editedKey + " is in use already");
+							EditorGui.SetTooltip(editedKey == null ? "A key cannot be empty" : "The key " + editedKey + " is in use already");
 						}
 					}
 
@@ -720,7 +720,7 @@ namespace LELEngine.Editor
 			ImGui.EndDisabled();
 			if (!free && ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
 			{
-				ImGui.SetTooltip(key == null || (key is string text && text.Length == 0 && keyType != typeof(string)) ? "Set the key first" : "This key is in use already");
+				EditorGui.SetTooltip(key == null || (key is string text && text.Length == 0 && keyType != typeof(string)) ? "Set the key first" : "This key is in use already");
 			}
 
 			ImGui.SameLine();

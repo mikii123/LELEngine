@@ -306,7 +306,7 @@ namespace LELEngine.Editor.Animation
 
 			if (ImGui.IsItemHovered())
 			{
-				ImGui.SetTooltip("A key at the playhead with the object's value: every exposed value of its components, your scripts' too");
+				EditorGui.SetTooltip("A key at the playhead with the object's value: every exposed value of its components, your scripts' too");
 			}
 
 			if (EditorMenu.Item("Select Object", "", false, target != null))
@@ -471,7 +471,7 @@ namespace LELEngine.Editor.Animation
 
 						if (ImGui.IsItemHovered())
 						{
-							ImGui.SetTooltip("The jump waits for the next grid point of the tempo markers (none: at once)");
+							EditorGui.SetTooltip("The jump waits for the next grid point of the tempo markers (none: at once)");
 						}
 					}
 
@@ -498,7 +498,7 @@ namespace LELEngine.Editor.Animation
 					DoubleField("Crossfade", transition.Crossfade, 0.01f, 0.0, 60.0, "%.2f s", value => transition.Crossfade = value);
 					if (ImGui.IsItemHovered())
 					{
-						ImGui.SetTooltip("Seconds the pose before the jump blends into the pose at the destination (0: a cut)");
+						EditorGui.SetTooltip("Seconds the pose before the jump blends into the pose at the destination (0: a cut)");
 					}
 
 					FloatField("Probability", transition.Probability, 0.5f, 0f, 100f, "%.0f %%", value => transition.Probability = value);
@@ -509,7 +509,7 @@ namespace LELEngine.Editor.Animation
 					IntField("Max Loops", loop.MaxLoops, 0, 100000, value => loop.MaxLoops = value);
 					if (ImGui.IsItemHovered())
 					{
-						ImGui.SetTooltip("How many times it jumps back per pass; 0: while the conditions hold");
+						EditorGui.SetTooltip("How many times it jumps back per pass; 0: while the conditions hold");
 					}
 
 					DrawConditions(loop.Conditions);
@@ -552,7 +552,7 @@ namespace LELEngine.Editor.Animation
 			DoubleField("Clip Start", clip.startOffset, 0.01f, 0.0, 1e6, "%.3f s", value => clip.startOffset = value);
 			if (ImGui.IsItemHovered())
 			{
-				ImGui.SetTooltip("Seconds into the clip where the region starts (dragging the left edge trims it too)");
+				EditorGui.SetTooltip("Seconds into the clip where the region starts (dragging the left edge trims it too)");
 			}
 
 			FloatField("Speed", clip.speed, 0.01f, 0.01f, 100f, "x %.2f", value => clip.speed = value);
@@ -570,7 +570,7 @@ namespace LELEngine.Editor.Animation
 
 			if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
 			{
-				ImGui.SetTooltip("The clip's keys in the Animation window, on this channel's object");
+				EditorGui.SetTooltip("The clip's keys in the Animation window, on this channel's object");
 			}
 
 			ImGui.SameLine();
@@ -587,7 +587,7 @@ namespace LELEngine.Editor.Animation
 
 			if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
 			{
-				ImGui.SetTooltip("Its own copy of the .anim file: keying it no longer changes other uses of the clip");
+				EditorGui.SetTooltip("Its own copy of the .anim file: keying it no longer changes other uses of the clip");
 			}
 
 			ImGui.EndDisabled();
@@ -633,7 +633,7 @@ namespace LELEngine.Editor.Animation
 			FloatField("Seek Speed", parameter.SeekSpeed, 0.01f, 0f, 1e6f, "%.2f /s", value => parameter.SeekSpeed = value);
 			if (ImGui.IsItemHovered())
 			{
-				ImGui.SetTooltip("Units per second the value moves towards what the game set; 0: it jumps");
+				EditorGui.SetTooltip("Units per second the value moves towards what the game set; 0: it jumps");
 			}
 
 			BoolField("Whole numbers", parameter.Type != AudioParameterType.Continuous, value => parameter.Type = value ? AudioParameterType.Discrete : AudioParameterType.Continuous);

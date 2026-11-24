@@ -101,7 +101,7 @@ namespace LELEngine.Editor
 				working.compression = (TextureCompression)compression;
 				if (ImGui.IsItemHovered())
 				{
-					ImGui.SetTooltip("How game builds store the texture (the editor shows the source image).\nBC7: compressed with every mip level baked, loads without decoding, a quarter of the memory.\nNone: uncompressed texels.\nBC7 High Quality: a search over every block mode, a little closer to the source, about 50x slower to build.");
+					EditorGui.SetTooltip("How game builds store the texture (the editor shows the source image).\nBC7: compressed with every mip level baked, loads without decoding, a quarter of the memory.\nNone: uncompressed texels.\nBC7 High Quality: a search over every block mode, a little closer to the source, about 50x slower to build.");
 				}
 			}
 

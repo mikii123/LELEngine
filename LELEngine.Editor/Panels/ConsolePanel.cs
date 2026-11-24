@@ -369,7 +369,7 @@ namespace LELEngine.Editor
 
 			if (hovered)
 			{
-				ImGui.SetTooltip($"{name}: {(filter.Regex ? "regex " : "")}\"{filter.Pattern}\"{(filter.InStackTrace ? " (also in call stacks)" : "")}\n" +
+				EditorGui.SetTooltip($"{name}: {(filter.Regex ? "regex " : "")}\"{filter.Pattern}\"{(filter.InStackTrace ? " (also in call stacks)" : "")}\n" +
 					"Click: show / hide its messages. Alt+click: only its messages. Right-click: edit.");
 			}
 
@@ -1181,7 +1181,7 @@ namespace LELEngine.Editor
 
 				if (ImGui.IsItemHovered())
 				{
-					ImGui.SetTooltip(frame.Method + (frame.File != null ? "\n" + frame.File + ":" + frame.Line : "") +
+					EditorGui.SetTooltip(frame.Method + (frame.File != null ? "\n" + frame.File + ":" + frame.Line : "") +
 						(wrapper ? "\nA logging wrapper (Preferences > Console > Hidden frames)" : "") + (frame.HasSource ? "\nDouble-click: open in the script editor" : ""));
 				}
 
@@ -1587,7 +1587,7 @@ namespace LELEngine.Editor
 		{
 			if (ImGui.IsItemHovered(ImGuiHoveredFlags.DelayShort))
 			{
-				ImGui.SetTooltip(text);
+				EditorGui.SetTooltip(text);
 			}
 		}
 

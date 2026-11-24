@@ -360,7 +360,7 @@ namespace LELEngine.Editor
 
 			if (ImGui.IsItemHovered())
 			{
-				ImGui.SetTooltip("Back to " + frames[frames.Count - 1].Name);
+				EditorGui.SetTooltip("Back to " + frames[frames.Count - 1].Name);
 			}
 
 			ImGui.SameLine();
@@ -408,7 +408,7 @@ namespace LELEngine.Editor
 
 			if (ImGui.IsItemHovered())
 			{
-				ImGui.SetTooltip("Write every change to the prefab file as it is made");
+				EditorGui.SetTooltip("Write every change to the prefab file as it is made");
 			}
 		}
 
@@ -507,7 +507,7 @@ namespace LELEngine.Editor
 
 				if (ImGui.IsItemHovered() && temporary != null && !DragAndDrop.IsDragging)
 				{
-					ImGui.SetTooltip(temporary);
+					EditorGui.SetTooltip(temporary);
 				}
 
 				// Selected when the click ends without a drag (as in Unity): dragging an object on to a field of the
@@ -617,7 +617,7 @@ namespace LELEngine.Editor
 
 				if (ImGui.IsItemHovered())
 				{
-					ImGui.SetTooltip("Saves the object as a prefab in the project panel's folder (or drag it there)");
+					EditorGui.SetTooltip("Saves the object as a prefab in the project panel's folder (or drag it there)");
 				}
 
 				PrefabMenus.DrawObjectMenu(editor, go);
@@ -748,7 +748,7 @@ namespace LELEngine.Editor
 			if (hovered)
 			{
 				draw.AddRectFilled(ImGui.GetItemRectMin(), ImGui.GetItemRectMax(), ImGui.GetColorU32(ImGuiCol.ButtonHovered), 2f);
-				ImGui.SetTooltip((hidden ? "Show in the Scene view" : "Hide in the Scene view") + " with the objects under it (Alt: the object alone)");
+				EditorGui.SetTooltip((hidden ? "Show in the Scene view" : "Hide in the Scene view") + " with the objects under it (Alt: the object alone)");
 			}
 
 			bool rowHovered = ImGui.IsWindowHovered() && ImGui.IsMouseHoveringRect(min, rowMax);
@@ -779,7 +779,7 @@ namespace LELEngine.Editor
 			if (hovered)
 			{
 				ImGui.GetWindowDrawList().AddRectFilled(ImGui.GetItemRectMin(), ImGui.GetItemRectMax(), ImGui.GetColorU32(ImGuiCol.ButtonHovered), 2f);
-				ImGui.SetTooltip("Open the prefab '" + prefab.name + "'");
+				EditorGui.SetTooltip("Open the prefab '" + prefab.name + "'");
 			}
 
 			float icon = height * 0.7f;

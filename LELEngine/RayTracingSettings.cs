@@ -22,7 +22,13 @@ namespace LELEngine
 		/// <summary>Rays a voxel cone traces at most (<see cref="ConeRays" />).</summary>
 		public const int MaxConeRays = 4;
 
-		[Header("Shadows")]
+		/// <summary>Rays a pixel and light of a soft shadow at most (<see cref="SoftShadowRays" />; Engine/RayTracedShadowTrace.shader's MaxSoftRays).</summary>
+		public const int MaxSoftShadowRays = 8;
+
+		// The editor draws these where they belong (ProjectSettingsWindow.DrawLighting): the shadows under Shadows, the
+		// reflections and the surface cache's shadows under Lumen's hardware ray tracing, the cones' rays under voxel cone
+		// tracing's; each only while it changes something.
+
 		[Tooltip("Point and spot lights cast shadows on opaque surfaces, traced through the scene's triangles: a ray from every pixel to each light that reaches it (lights with Cast Shadows on, the nearest to the camera first), soft by the light's Source Radius. Without ray tracing local lights cast no shadows on surfaces")]
 		public bool LocalLightShadows = true;
 
@@ -42,13 +48,16 @@ namespace LELEngine
 		[Tooltip("Transparent surfaces (shaders with RayQueries On: Lit Transparent) trace their shadows per fragment: a ray to each local light with a traced shadow and along each traced directional light (from its centre: hard). Off: local lights reach them unshadowed, directional lights through their maps")]
 		public bool TransparentShadows = true;
 
-		[Tooltip("Shadows as soft as the lights' size makes them: one ray a pixel and light towards a point of the light, averaged over frames and over neighbouring pixels. Off: hard shadows from the lights' centres, nothing averaged")]
+		[Tooltip("Shadows as soft as the lights' size makes them: Soft Shadow Rays rays a pixel and light towards points of the light (a pattern fixed per pixel), averaged over the neighbouring pixels of the same surface. Nothing is carried from one frame to the next. Off: hard shadows, one ray to each light's centre, nothing averaged")]
 		public bool SoftShadows = true;
+
+		[Tooltip("With Soft Shadows: rays a pixel and light towards points of the light. More: smoother penumbrae, the trace's cost times as much")]
+		[Range(1, MaxSoftShadowRays)]
+		public int SoftShadowRays = 4;
 
 		[Tooltip("With Lumen's hardware ray tracing: the surface cache traces the directional lights' shadows on its cards through the scene's triangles (a ray per texel and frame) instead of reading the shadow maps that cover the GI volume; those maps then hold only what transparent casters tint, and are not drawn without them")]
 		public bool SurfaceCacheShadows = true;
 
-		[Header("Reflections")]
 		[Tooltip("Glossy surfaces trace their reflections through the scene's triangles (with Lumen's hardware ray tracing): a ray a pixel along the reflection, lit where it lands from Lumen's surface cache, averaged over frames; rougher surfaces keep the screen probes' reflection")]
 		public bool Reflections = true;
 
@@ -56,8 +65,7 @@ namespace LELEngine
 		[Range(0.05f, 1f)]
 		public float ReflectionMaxRoughness = 0.4f;
 
-		[Header("Voxel GI")]
-		[Tooltip("With voxel cone tracing in an SDF mode on the scene's triangles: the rays each cone traces for its visibility, spread over the cone's opening (turned per surface cell, as the cones are). More rays see more of what lies beside the cone's axis, as the distance field did, at their cost")]
+		[Tooltip("With voxel cone tracing's SDF Cones on the scene's triangles: the rays each cone traces for its visibility, spread over the cone's opening (turned per surface cell, as the cones are). More rays see more of what lies beside the cone's axis, as the distance field did, at their cost")]
 		[Range(1, MaxConeRays)]
 		public int ConeRays = 1;
 

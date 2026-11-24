@@ -55,6 +55,18 @@ namespace LELEngine.Rendering.Passes
 
 		// The trace program is the ray query variant (Lighting.HardwareRayTracingActive when it was made).
 		private bool traceRayQueries;
+
+		/// <summary>
+		///     The probes' trace: through the distance field a fragment per ray (Engine/ProbeTrace.shader), through the
+		///     scene's triangles a compute thread per ray (Engine/ProbeTraceRays.shader: Intel's driver lost the device on
+		///     ray queries from these fragments). Made for <see cref="traceRayQueries" />.
+		/// </summary>
+		private static ShaderProgram TraceProgram()
+		{
+			return Lighting.HardwareRayTracingActive
+				? new ShaderProgram("Engine/ProbeTraceRays.shader", Lighting.RayTracingDefines)
+				: new ShaderProgram("Engine/ProbeTrace.shader", Lighting.RayTracingDefines);
+		}
 		private ComputeShader compose;
 		private ComputeShader filter;
 		private ComputeShader sh;
@@ -139,7 +151,7 @@ namespace LELEngine.Rendering.Passes
 				// The rays' way changed (the editor, in edit mode): the trace program of the other way.
 				trace.Delete();
 				traceRayQueries = Lighting.HardwareRayTracingActive;
-				trace = new ShaderProgram("Engine/ProbeTrace.shader", Lighting.RayTracingDefines);
+				trace = TraceProgram();
 			}
 
 			if (anchors == null)
@@ -152,7 +164,7 @@ namespace LELEngine.Rendering.Passes
 				GraphicsDevice device = Gfx.Device;
 				adaptiveLevelBuffer = device.CreateBuffer(new BufferDescriptor(BufferUsage.Storage, 0, true, "Screen probe adaptive levels"));
 				importance = new ComputeShader("Engine/ProbeImportance.shader");
-				trace = new ShaderProgram("Engine/ProbeTrace.shader", Lighting.RayTracingDefines);
+				trace = TraceProgram();
 				compose = new ComputeShader("Engine/ProbeCompose.shader");
 				filter = new ComputeShader("Engine/ProbeFilter.shader");
 				sh = new ComputeShader("Engine/ProbeSH.shader");
@@ -280,9 +292,13 @@ namespace LELEngine.Rendering.Passes
 			commands.SetImage(1, rayTableTexture, 0, 0, ImageAccess.Write);
 			importance.DispatchThreads(probesX, atlasRows, 1, 8, 8, 1);
 
-			// ---- 1b. trace: one ray per fragment
+			// ---- 1b. trace: one ray per texel of the ray atlas (fragments through the field, threads through the triangles)
 			profiler.Split("ProbeGather.trace");
-			traceTarget.Begin();
+			if (!traceRayQueries)
+			{
+				traceTarget.Begin();
+			}
+
 			trace.Use();
 			scene.SetUniforms(trace);
 			Lighting.SetSdfUniforms(trace);
@@ -310,7 +326,16 @@ namespace LELEngine.Rendering.Passes
 			trace.SetInt("screenTraceSteps", Math.Max(1, gi.ScreenTraceSteps));
 			trace.SetFloat("screenTraceThickness", gi.ScreenTraceThickness);
 			trace.SetInt("frameIndex", frameIndex);
-			context.Fullscreen.Draw();
+			if (traceRayQueries)
+			{
+				trace.SetInt2("rayAtlasSize", traceTarget.Width, traceTarget.Height);
+				commands.SetImage(0, traceTarget.ColorAttachments[0].Gpu, 0, 0, ImageAccess.Write);
+				commands.Dispatch((traceTarget.Width + 7) / 8, (traceTarget.Height + 7) / 8);
+			}
+			else
+			{
+				context.Fullscreen.Draw();
+			}
 
 			// ---- 1c. compose: rays -> octahedral map, sample-count accumulation with the per-direction change test and
 			// the short history of directions that see moving objects; per probe, how much of it changed. One
@@ -600,7 +625,8 @@ namespace LELEngine.Rendering.Passes
 
 			traceTarget?.Delete();
 			traceTarget = new Framebuffer(rayWidth, rayHeight);
-			traceTarget.AddColorAttachment(RenderTextureFormat.RGBA16F, false);
+			// Drawn into by the distance field's trace, written as an image by the traced rays' (TraceProgram).
+			traceTarget.AddColorAttachment(RenderTextureFormat.RGBA16F, false, true);
 			traceTarget.Validate();
 
 			filterScratch?.Delete();

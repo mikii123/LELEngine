@@ -60,14 +60,14 @@ namespace LELEngine.Editor
 
 			if (ImGui.IsItemHovered())
 			{
-				ImGui.SetTooltip("Reference point and size from the bounds of every level's renderers.");
+				EditorGui.SetTooltip("Reference point and size from the bounds of every level's renderers.");
 			}
 
 			// An impostor asset dropped or picked here becomes the last level: a child object drawing it.
 			FieldDrawer.Label("Add Impostor", null, context);
 			if (ImGui.IsItemHovered())
 			{
-				ImGui.SetTooltip("Drop or pick a baked impostor of this object: a child drawing it becomes the group's last level,\n" +
+				EditorGui.SetTooltip("Drop or pick a baked impostor of this object: a child drawing it becomes the group's last level,\n" +
 				                 "shown below the last level's height (one undo step). A group without levels gets its own\n" +
 				                 "renderers as the first level.");
 			}
@@ -133,7 +133,7 @@ namespace LELEngine.Editor
 			ImGui.Dummy(new NVector2(width, height));
 			if (ImGui.IsItemHovered())
 			{
-				ImGui.SetTooltip("Levels by height on screen (a share of the view's height, times the project's LOD bias):\n" +
+				EditorGui.SetTooltip("Levels by height on screen (a share of the view's height, times the project's LOD bias):\n" +
 				                 "each draws down to its own height; below the last one the group is culled.");
 			}
 		}

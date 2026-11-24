@@ -1349,16 +1349,19 @@ namespace LELEngine.Graphics.Vulkan
 				{
 					ProvokingVertexMode = VkProvokingVertexModeEXT.LastVertexEXT
 				};
-				// Overestimating by exactly what the GPU does (no extra size): every pixel a triangle touches.
+				// Overestimating by exactly what the GPU does (no extra size): every pixel a triangle touches. On a device
+				// that has it every other pipeline says Disabled outright: Intel's Windows driver (Arc iGPU, 101.8132) left
+				// the draws after a conservative pipeline conservative while their pipelines did not name the mode (every
+				// triangle edge drawn twice over, the editor's text smeared, the frame much slower).
+				bool conservativeRasterization = (pipelineKey.State & 1UL << 32) != 0;
 				VkPipelineRasterizationConservativeStateCreateInfoEXT conservative = new VkPipelineRasterizationConservativeStateCreateInfoEXT
 				{
 					Next = device.HasProvokingVertexLast ? &provoking : null,
-					ConservativeRasterizationMode = VkConservativeRasterizationModeEXT.OverestimateEXT
+					ConservativeRasterizationMode = conservativeRasterization ? VkConservativeRasterizationModeEXT.OverestimateEXT : VkConservativeRasterizationModeEXT.DisabledEXT
 				};
-				bool conservativeRasterization = (pipelineKey.State & 1UL << 32) != 0;
 				VkPipelineRasterizationStateCreateInfo rasterization = new VkPipelineRasterizationStateCreateInfo
 				{
-					Next = conservativeRasterization ? &conservative : device.HasProvokingVertexLast ? &provoking : null,
+					Next = device.HasConservativeRasterization ? &conservative : device.HasProvokingVertexLast ? &provoking : null,
 					PolygonMode = state.Wireframe && device.HasWireframe ? VkPolygonMode.Line : VkPolygonMode.Fill,
 					// The engine's counter-clockwise front faces, seen in a target whose first row is the lowest.
 					FrontFace = VkFrontFace.Clockwise,

@@ -56,10 +56,9 @@ namespace LELEngine.Rendering
 
 		private static readonly List<(Vector3 min, Vector3 max)> giChanges = new List<(Vector3, Vector3)>();
 
-		// The traced shadows' slots: their lights, what each light was like when its slot last traced it, and this frame's
-		// candidates (distance from the camera to the light's reach, the light's index in the list).
+		// The traced shadows' slots: their lights, and this frame's candidates (distance from the camera to the light's
+		// reach, the light's index in the list).
 		private static readonly Light[] shadowSlots = new Light[RayTracingSettings.MaxShadowedLocalLights];
-		private static readonly int[] shadowSlotStates = new int[RayTracingSettings.MaxShadowedLocalLights];
 		private static readonly List<(float Distance, int Index)> shadowCandidates = new List<(float, int)>();
 		private static readonly HashSet<Light> shadowChosen = new HashSet<Light>();
 
@@ -106,9 +105,6 @@ namespace LELEngine.Rendering
 
 		/// <summary>Slots up to the highest one in use (0: no light's shadows are traced).</summary>
 		public static int ShadowSlotCount { get; private set; }
-
-		/// <summary>Bit s: slot s holds another light than last frame (or none), or its light moved, turned or changed its size or range.</summary>
-		public static int ShadowSlotsChanged { get; private set; }
 
 		#endregion
 
@@ -411,13 +407,11 @@ namespace LELEngine.Rendering
 			}
 
 			// Lights that stay keep their slots; the others leave theirs, the new ones take free ones.
-			int changed = 0;
 			for (int s = 0; s < shadowSlots.Length; s++)
 			{
 				if (shadowSlots[s] != null && !shadowChosen.Contains(shadowSlots[s]))
 				{
 					shadowSlots[s] = null;
-					changed |= 1 << s;
 				}
 			}
 
@@ -430,7 +424,6 @@ namespace LELEngine.Rendering
 
 				int free = Array.IndexOf(shadowSlots, null);
 				shadowSlots[free] = light;
-				changed |= 1 << free;
 			}
 
 			for (int i = 0; i < shining.Count; i++)
@@ -450,19 +443,9 @@ namespace LELEngine.Rendering
 				int index = shining.IndexOf(light);
 				data[index * FloatsPerLight + 15] = s;
 				count = s + 1;
-
-				// What its shadows depend on: where it is and points, its size and reach.
-				int at = index * FloatsPerLight;
-				int state = HashCode.Combine(data[at], data[at + 1], data[at + 2], data[at + 3], data[at + 8], data[at + 9], data[at + 10], HashCode.Combine(data[at + 11], data[at + 14]));
-				if (state != shadowSlotStates[s])
-				{
-					shadowSlotStates[s] = state;
-					changed |= 1 << s;
-				}
 			}
 
 			ShadowSlotCount = count;
-			ShadowSlotsChanged = changed;
 		}
 
 		// One light: position + range, radiance + GI strength, spot direction + cos outer, spot scale / flags / source

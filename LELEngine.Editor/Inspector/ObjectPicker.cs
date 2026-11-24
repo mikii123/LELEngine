@@ -616,7 +616,7 @@ namespace LELEngine.Editor
 
 					if (ImGui.IsItemHovered() && entry.Detail != null)
 					{
-						ImGui.SetTooltip(entry.Detail);
+						EditorGui.SetTooltip(entry.Detail);
 					}
 
 					// Thumbnail or icon, then the label, drawn over the selectable (no items: the layout stays the selectable's).

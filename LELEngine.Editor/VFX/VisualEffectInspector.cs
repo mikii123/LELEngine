@@ -164,7 +164,7 @@ namespace LELEngine.Editor.VFX
 
 			if (ImGui.IsItemHovered())
 			{
-				ImGui.SetTooltip("Override the graph's value for this component.");
+				EditorGui.SetTooltip("Override the graph's value for this component.");
 			}
 
 			ImGui.SameLine();
@@ -172,7 +172,7 @@ namespace LELEngine.Editor.VFX
 			ImGui.TextUnformatted(property.Name);
 			if (!string.IsNullOrEmpty(property.Tooltip) && ImGui.IsItemHovered())
 			{
-				ImGui.SetTooltip(property.Tooltip);
+				EditorGui.SetTooltip(property.Tooltip);
 			}
 
 			ImGui.SameLine(context.LabelWidth);

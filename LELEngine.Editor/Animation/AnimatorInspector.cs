@@ -298,7 +298,7 @@ namespace LELEngine.Editor.Animation
 
 			if (ImGui.IsItemHovered())
 			{
-				ImGui.SetTooltip("Add a layer");
+				EditorGui.SetTooltip("Add a layer");
 			}
 
 			AnimatorPage page = window.Graph.Page;
@@ -413,13 +413,13 @@ namespace LELEngine.Editor.Animation
 				changed = EditorGui.Checkbox("in##inc", ref include);
 				context.Track(changed);
 				if (changed) entry.include = include;
-				if (ImGui.IsItemHovered()) ImGui.SetTooltip("Animated (ticked) or left alone");
+				if (ImGui.IsItemHovered()) EditorGui.SetTooltip("Animated (ticked) or left alone");
 				ImGui.SameLine();
 				bool recursive = entry.recursive;
 				changed = EditorGui.Checkbox("sub##rec", ref recursive);
 				context.Track(changed);
 				if (changed) entry.recursive = recursive;
-				if (ImGui.IsItemHovered()) ImGui.SetTooltip("Applies to the transforms under the path too");
+				if (ImGui.IsItemHovered()) EditorGui.SetTooltip("Applies to the transforms under the path too");
 				ImGui.SameLine();
 				if (EditorGui.SmallButton("x"))
 				{
@@ -446,7 +446,7 @@ namespace LELEngine.Editor.Animation
 					ImGui.OpenPopup("##mask_from_object");
 				}
 
-				if (ImGui.IsItemHovered()) ImGui.SetTooltip("Tick the transforms of the selected object's hierarchy the layer should animate.");
+				if (ImGui.IsItemHovered()) EditorGui.SetTooltip("Tick the transforms of the selected object's hierarchy the layer should animate.");
 				if (ImGui.BeginPopup("##mask_from_object"))
 				{
 					ImGui.TextDisabled("Transforms under " + selected.Name);
@@ -501,7 +501,7 @@ namespace LELEngine.Editor.Animation
 
 			if (ImGui.IsItemHovered())
 			{
-				ImGui.SetTooltip("Add a parameter (any serializable type)");
+				EditorGui.SetTooltip("Add a parameter (any serializable type)");
 			}
 
 			if (ImGui.BeginPopup("##add_parameter"))
@@ -559,7 +559,7 @@ namespace LELEngine.Editor.Animation
 					{
 						List<string> uses = controller.FindParameterUses(parameter.id);
 						string tooltip = parameter.TypeLabel + (string.IsNullOrEmpty(parameter.note) ? "" : "\n" + parameter.note) + "\n" + (uses.Count == 0 ? "Not used yet." : "Used by:\n  " + string.Join("\n  ", uses)) + "\nDouble click: rename";
-						ImGui.SetTooltip(tooltip);
+						EditorGui.SetTooltip(tooltip);
 					}
 
 					if (EditorGui.BeginPopupContextItem("##parameter_context"))
@@ -651,7 +651,7 @@ namespace LELEngine.Editor.Animation
 			if (parameter.defaultValue != null)
 			{
 				ValueField("Default", parameter.defaultValue, context);
-				if (ImGui.IsItemHovered()) ImGui.SetTooltip("The value every animator starts with.");
+				if (ImGui.IsItemHovered()) EditorGui.SetTooltip("The value every animator starts with.");
 			}
 
 			FieldDrawer.Label("Type", null, context);
@@ -838,7 +838,7 @@ namespace LELEngine.Editor.Animation
 			if (FieldDrawer.DrawValue("Loop", typeof(StateLoopMode), ref loop, null, context, 0)) state.loop = (StateLoopMode)loop;
 			object writeDefaults = state.writeDefaults;
 			if (FieldDrawer.DrawValue("Write Defaults", typeof(bool), ref writeDefaults, null, context, 0)) state.writeDefaults = (bool)writeDefaults;
-			if (ImGui.IsItemHovered()) ImGui.SetTooltip("Properties the motion does not animate get the values the objects had when the animator bound; off: they keep their last values.");
+			if (ImGui.IsItemHovered()) EditorGui.SetTooltip("Properties the motion does not animate get the values the objects had when the animator bound; off: they keep their last values.");
 
 			// Transitions.
 			ImGui.SeparatorText("Transitions (" + state.transitions.Count + ")");
@@ -881,19 +881,19 @@ namespace LELEngine.Editor.Animation
 					window.Graph.SelectTransition(transition);
 				}
 
-				if (ImGui.IsItemHovered()) ImGui.SetTooltip(transition.DescribeConditions(controller) + "\nClick to edit");
+				if (ImGui.IsItemHovered()) EditorGui.SetTooltip(transition.DescribeConditions(controller) + "\nClick to edit");
 				ImGui.SameLine();
 				bool solo = transition.solo;
 				bool changed = EditorGui.Checkbox("S##solo", ref solo);
 				context.Track(changed);
 				if (changed) transition.solo = solo;
-				if (ImGui.IsItemHovered()) ImGui.SetTooltip("Solo: only solo transitions of the state are taken");
+				if (ImGui.IsItemHovered()) EditorGui.SetTooltip("Solo: only solo transitions of the state are taken");
 				ImGui.SameLine();
 				bool mute = transition.mute;
 				changed = EditorGui.Checkbox("M##mute", ref mute);
 				context.Track(changed);
 				if (changed) transition.mute = mute;
-				if (ImGui.IsItemHovered()) ImGui.SetTooltip("Mute: never taken");
+				if (ImGui.IsItemHovered()) EditorGui.SetTooltip("Mute: never taken");
 				ImGui.SameLine();
 				if (EditorGui.SmallButton("^") && i > 0)
 				{
@@ -901,7 +901,7 @@ namespace LELEngine.Editor.Animation
 					Document.Edit("Reorder transitions", () => { transitions.RemoveAt(index); transitions.Insert(index - 1, transition); });
 				}
 
-				if (ImGui.IsItemHovered()) ImGui.SetTooltip("Earlier transitions win when several could be taken");
+				if (ImGui.IsItemHovered()) EditorGui.SetTooltip("Earlier transitions win when several could be taken");
 				ImGui.PopID();
 			}
 
@@ -999,7 +999,7 @@ namespace LELEngine.Editor.Animation
 				ImGui.SeparatorText("Timing");
 				object hasExit = transition.hasExitTime;
 				if (FieldDrawer.DrawValue("Has Exit Time", typeof(bool), ref hasExit, null, context, 0)) transition.hasExitTime = (bool)hasExit;
-				if (ImGui.IsItemHovered()) ImGui.SetTooltip("Without conditions: taken when the state's time passes the exit time (every cycle when looping).\nWith conditions: they count only after the exit time.");
+				if (ImGui.IsItemHovered()) EditorGui.SetTooltip("Without conditions: taken when the state's time passes the exit time (every cycle when looping).\nWith conditions: they count only after the exit time.");
 				if (transition.hasExitTime)
 				{
 					object exitTime = transition.exitTime;
@@ -1010,12 +1010,12 @@ namespace LELEngine.Editor.Animation
 
 				object fixedDuration = transition.fixedDuration;
 				if (FieldDrawer.DrawValue("Fixed Duration", typeof(bool), ref fixedDuration, null, context, 0)) transition.fixedDuration = (bool)fixedDuration;
-				if (ImGui.IsItemHovered()) ImGui.SetTooltip("Duration in seconds; off: in cycles of the source state");
+				if (ImGui.IsItemHovered()) EditorGui.SetTooltip("Duration in seconds; off: in cycles of the source state");
 				object duration = transition.duration;
 				if (FieldDrawer.DrawValue(transition.fixedDuration ? "Duration (s)" : "Duration (cycles)", typeof(float), ref duration, null, context, 0)) transition.duration = Math.Max(0f, (float)duration);
 				object offset = transition.offset;
 				if (FieldDrawer.DrawValue("Offset (cycles)", typeof(float), ref offset, null, context, 0)) transition.offset = (float)offset;
-				if (ImGui.IsItemHovered()) ImGui.SetTooltip("Where the destination starts");
+				if (ImGui.IsItemHovered()) EditorGui.SetTooltip("Where the destination starts");
 				FieldDrawer.Label("Interruption", null, context);
 				int interruption = (int)transition.interruptionSource;
 				if (EditorGui.BeginCombo("##interruption", InterruptionNames[Math.Clamp(interruption, 0, InterruptionNames.Length - 1)]))
@@ -1032,12 +1032,12 @@ namespace LELEngine.Editor.Animation
 					EditorGui.EndCombo();
 				}
 
-				if (ImGui.IsItemHovered()) ImGui.SetTooltip("Which transitions may cut this one short while it runs");
+				if (ImGui.IsItemHovered()) EditorGui.SetTooltip("Which transitions may cut this one short while it runs");
 				if (transition.interruptionSource != TransitionInterruptionSource.None)
 				{
 					object ordered = transition.orderedInterruption;
 					if (FieldDrawer.DrawValue("Ordered Interruption", typeof(bool), ref ordered, null, context, 0)) transition.orderedInterruption = (bool)ordered;
-					if (ImGui.IsItemHovered()) ImGui.SetTooltip("Only transitions listed before this one on the state may interrupt it");
+					if (ImGui.IsItemHovered()) EditorGui.SetTooltip("Only transitions listed before this one on the state may interrupt it");
 				}
 
 				if (edge.SourceKind == "any")
@@ -1099,7 +1099,7 @@ namespace LELEngine.Editor.Animation
 			ImGui.Dummy(new NVector2(width, height));
 			if (ImGui.IsItemHovered())
 			{
-				ImGui.SetTooltip($"Source: {sourceLength:0.##} s, exit at {start:0.##} s; blend {durationSeconds:0.##} s into the destination ({destinationLength:0.##} s)");
+				EditorGui.SetTooltip($"Source: {sourceLength:0.##} s, exit at {start:0.##} s; blend {durationSeconds:0.##} s into the destination ({destinationLength:0.##} s)");
 			}
 		}
 
@@ -1338,7 +1338,7 @@ namespace LELEngine.Editor.Animation
 					}
 				}
 
-				if (ImGui.IsItemHovered()) ImGui.SetTooltip(other ? "Comparing with another parameter (click: with a value)" : "Comparing with a value (click: with another parameter of the same type)");
+				if (ImGui.IsItemHovered()) EditorGui.SetTooltip(other ? "Comparing with another parameter (click: with a value)" : "Comparing with a value (click: with another parameter of the same type)");
 			}
 			else
 			{
@@ -1399,7 +1399,7 @@ namespace LELEngine.Editor.Animation
 			context.UndoTarget = null;
 			bool assetChanged = FieldDrawer.DrawValue("Controller Asset", typeof(AnimatorController), ref asset, null, context, 0);
 			context.UndoTarget = undoTarget;
-			if (ImGui.IsItemHovered()) ImGui.SetTooltip("Another .animator asset whose layer plays in this node (its states, transitions and behaviours); its parameters are fed from this controller's through the mapping below.");
+			if (ImGui.IsItemHovered()) EditorGui.SetTooltip("Another .animator asset whose layer plays in this node (its states, transitions and behaviours); its parameters are fed from this controller's through the mapping below.");
 			if (assetChanged)
 			{
 				window.Graph.SetExternal(machine, asset as AnimatorController);
@@ -1551,7 +1551,7 @@ namespace LELEngine.Editor.Animation
 					Document.Edit("Map parameters by name", () => AnimatorGraph.MapByName(machine, owner));
 				}
 
-				if (ImGui.IsItemHovered()) ImGui.SetTooltip("Feed every unmapped parameter from a parameter of this controller with the same name and type");
+				if (ImGui.IsItemHovered()) EditorGui.SetTooltip("Feed every unmapped parameter from a parameter of this controller with the same name and type");
 				ImGui.SameLine();
 				if (EditorGui.SmallButton("Create missing"))
 				{
@@ -1575,7 +1575,7 @@ namespace LELEngine.Editor.Animation
 					});
 				}
 
-				if (ImGui.IsItemHovered()) ImGui.SetTooltip("Add parameters of the same name, type and default to this controller for every unmapped one, and map them");
+				if (ImGui.IsItemHovered()) EditorGui.SetTooltip("Add parameters of the same name, type and default to this controller for every unmapped one, and map them");
 				ImGui.SameLine();
 				if (EditorGui.SmallButton("Unmap all"))
 				{
@@ -1990,7 +1990,7 @@ namespace LELEngine.Editor.Animation
 
 			if (tooltip != null && ImGui.IsItemHovered())
 			{
-				ImGui.SetTooltip(tooltip);
+				EditorGui.SetTooltip(tooltip);
 			}
 
 			if (changed && chosenId != parameterId)

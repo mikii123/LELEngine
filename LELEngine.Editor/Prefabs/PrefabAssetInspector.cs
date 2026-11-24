@@ -133,7 +133,7 @@ namespace LELEngine.Editor
 					lines.Add(GenericValues.Describe(component.Data, ValueTag.Object) + (component.Enabled ? "" : " (disabled)"));
 				}
 
-				ImGui.SetTooltip(string.Join("\n", lines));
+				EditorGui.SetTooltip(string.Join("\n", lines));
 			}
 
 			if (nested != null && EditorGui.IsItemDoubleClicked())

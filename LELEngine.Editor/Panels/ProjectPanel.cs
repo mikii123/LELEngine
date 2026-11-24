@@ -729,7 +729,7 @@ namespace LELEngine.Editor
 				TestAnchors.RecordItem("project:" + key);
 				if (ImGui.IsItemHovered())
 				{
-					ImGui.SetTooltip($"Mesh {name} of {Path.GetFileName(assetPath)}: {mesh.Vertices.Length} vertices, {mesh.TriangleCount} triangles (drag it on to a Mesh field)");
+					EditorGui.SetTooltip($"Mesh {name} of {Path.GetFileName(assetPath)}: {mesh.Vertices.Length} vertices, {mesh.TriangleCount} triangles (drag it on to a Mesh field)");
 				}
 
 				if (ImGui.BeginDragDropSource())
@@ -1775,7 +1775,7 @@ namespace LELEngine.Editor
 				}
 				else if (dragged != null)
 				{
-					ImGui.SetTooltip("Create a prefab of '" + dragged.Name + "' in Assets/" + targetFolder);
+					EditorGui.SetTooltip("Create a prefab of '" + dragged.Name + "' in Assets/" + targetFolder);
 				}
 
 				if (payload.IsDelivery() && fits)

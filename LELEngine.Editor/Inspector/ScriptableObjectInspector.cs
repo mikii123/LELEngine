@@ -38,7 +38,7 @@ namespace LELEngine.Editor
 			ImGui.EndDisabled();
 			if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
 			{
-				ImGui.SetTooltip(type.FullName + (script != null ? "\nOpen " + script : ""));
+				EditorGui.SetTooltip(type.FullName + (script != null ? "\nOpen " + script : ""));
 			}
 
 			ImGui.Separator();

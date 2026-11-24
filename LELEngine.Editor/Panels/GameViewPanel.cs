@@ -374,7 +374,7 @@ namespace LELEngine.Editor
 
 			if (ImGui.IsItemHovered())
 			{
-				ImGui.SetTooltip("While the game plays, the Game window fills the editor; stopping brings the windows back.");
+				EditorGui.SetTooltip("While the game plays, the Game window fills the editor; stopping brings the windows back.");
 			}
 
 			ImGui.SameLine(0, 10);
@@ -386,7 +386,7 @@ namespace LELEngine.Editor
 
 			if (ImGui.IsItemHovered())
 			{
-				ImGui.SetTooltip("The game's statistics over its image: frames a second, CPU and GPU times, draw calls, objects,\n" +
+				EditorGui.SetTooltip("The game's statistics over its image: frames a second, CPU and GPU times, draw calls, objects,\n" +
 					"memory, with graphs of the last five seconds.");
 			}
 

@@ -20,6 +20,27 @@ namespace LELEngine.Editor
 	{
 		#region PublicMethods
 
+		/// <summary>The widest a tooltip's text runs before it wraps, in font heights (ImGui's own tooltips never wrap).</summary>
+		public const float TooltipWidthEm = 36f;
+
+		/// <summary>
+		///     Shows <paramref name="text" /> as a tooltip (call it while the item is hovered), wrapped at
+		///     <see cref="TooltipWidthEm" />: a long line, or a whole paragraph, never runs across the screen. The text as it
+		///     is (no printf formatting: % stays %).
+		/// </summary>
+		public static void SetTooltip(string text)
+		{
+			if (string.IsNullOrEmpty(text) || !ImGui.BeginTooltip())
+			{
+				return;
+			}
+
+			ImGui.PushTextWrapPos(ImGui.GetFontSize() * TooltipWidthEm);
+			ImGui.TextUnformatted(text);
+			ImGui.PopTextWrapPos();
+			ImGui.EndTooltip();
+		}
+
 		public static bool Button(string label)
 		{
 			return Button(label, NVector2.Zero);

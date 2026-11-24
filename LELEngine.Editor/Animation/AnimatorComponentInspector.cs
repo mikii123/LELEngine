@@ -188,7 +188,7 @@ namespace LELEngine.Editor.Animation
 				if (FieldDrawer.DrawValue("Cycle Offset", typeof(float), ref offset, null, context, 0)) clip.cycleOffset = (float)offset;
 				object length = clip.lengthOverride;
 				if (FieldDrawer.DrawValue("Length Override", typeof(float), ref length, null, context, 0)) clip.lengthOverride = Math.Max(0f, (float)length);
-				if (ImGui.IsItemHovered()) ImGui.SetTooltip("0: the last key or event decides the length");
+				if (ImGui.IsItemHovered()) EditorGui.SetTooltip("0: the last key or event decides the length");
 				object rootMotion = clip.rootMotion;
 				if (FieldDrawer.DrawValue("Root Motion", typeof(RootMotionChannels), ref rootMotion, null, context, 0)) clip.rootMotion = (RootMotionChannels)rootMotion;
 				context.UndoTarget = undoTarget;

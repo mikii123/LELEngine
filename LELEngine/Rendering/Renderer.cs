@@ -74,6 +74,12 @@ namespace LELEngine.Rendering
 		/// </summary>
 		public static readonly string ABExperiment = Environment.GetEnvironmentVariable("LEL_AB");
 
+		/// <summary>
+		///     LEL_FINISH_EACH_PASS=1: the console names every pass as it ends and the CPU waits for the GPU to finish it, so a
+		///     pass that hangs the GPU or loses the device is the last one named (a diagnosis; very slow).
+		/// </summary>
+		public static readonly bool FinishEachPass = Environment.GetEnvironmentVariable("LEL_FINISH_EACH_PASS") == "1";
+
 		private static readonly int abFrames = int.TryParse(Environment.GetEnvironmentVariable("LEL_AB_FRAMES"), out int frames) && frames > 4 ? frames : 30;
 
 		/// <summary>The frame being rendered is in a block with <see cref="ABExperiment" /> switched off.</summary>
@@ -698,7 +704,13 @@ namespace LELEngine.Rendering
 			// Hand work to the GPU early. The driver otherwise queues the frame's first commands until its
 			// batch fills, leaving the GPU idle for milliseconds at the start of every frame; one flush
 			// after the first pass starts it, flushing after every pass costs more than it gains.
-			if (Settings.FlushBetweenPasses || (Settings.FlushAfterFirstPass && executed == 1))
+			if (FinishEachPass)
+			{
+				// Finding the pass that hangs or loses the device: its name, then the GPU waited for.
+				Console.WriteLine("[Renderer] finishing " + profileName);
+				Gfx.Device.Finish();
+			}
+			else if (Settings.FlushBetweenPasses || (Settings.FlushAfterFirstPass && executed == 1))
 			{
 				Gfx.Device.Flush();
 			}

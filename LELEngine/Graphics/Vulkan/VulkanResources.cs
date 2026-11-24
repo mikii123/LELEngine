@@ -245,6 +245,31 @@ namespace LELEngine.Graphics.Vulkan
 
 		public override bool IsBackbuffer => backbuffer;
 
+		/// <summary>
+		///     A colour texture the GPU writes (storage or attachment usage, not block compressed) starts with every texel of
+		///     every level and layer zero, as OpenGL's drivers give a new texture and as the engine's passes were written to
+		///     expect: Vulkan's new image holds whatever its memory held. The voxel GI's volumes, made again after the GI
+		///     method or the volume's resolution changed in the editor, took the freed memory of the volumes and caches
+		///     before (Lumen's), and the voxels nothing had written yet lit the scene in random colours until a restart.
+		///     The clear goes ahead of the stream (the texture is unused), like an upload. Textures of assets get their
+		///     texels by upload; the frame graph's transient textures are undefined by design.
+		/// </summary>
+		internal void ZeroAtCreation()
+		{
+			if (!zeroNewTextures || backbuffer || Aspect != VkImageAspectFlags.ColorBit || Format.IsCompressed() || (Usage & (TextureUsage.Storage | TextureUsage.Attachment)) == 0)
+			{
+				return;
+			}
+
+			VkCommandBuffer commands = device.CommandList.UploadCommands(this, 0, MipLevels, 0, Layers, true);
+			VkClearColorValue zero = default;
+			VkImageSubresourceRange range = new VkImageSubresourceRange { AspectMask = Aspect, BaseMipLevel = 0, LevelCount = MipLevels, BaseArrayLayer = 0, LayerCount = Layers };
+			device.Vk->vkCmdClearColorImage.Invoke(commands, Image, CopyDestinationLayout, &zero, 1, &range);
+		}
+
+		/// <summary>LEL_VULKAN_DISABLE=zerotextures: new textures keep what their memory held (to compare).</summary>
+		private static readonly bool zeroNewTextures = (Environment.GetEnvironmentVariable("LEL_VULKAN_DISABLE") ?? "").IndexOf("zerotextures", StringComparison.OrdinalIgnoreCase) < 0;
+
 		/// <summary>The compute queue may use the texture too (shared by both queues' families).</summary>
 		public readonly bool Concurrent;
 

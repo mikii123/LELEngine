@@ -709,7 +709,7 @@ namespace LELEngine.Editor
 			bool pressed = EditorGui.Button("##" + id, new NVector2(size, height));
 			if (tooltip != null && ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
 			{
-				ImGui.SetTooltip(tooltip);
+				EditorGui.SetTooltip(tooltip);
 			}
 
 			NVector2 min = ImGui.GetItemRectMin();

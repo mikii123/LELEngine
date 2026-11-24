@@ -69,7 +69,7 @@ namespace LELEngine.Editor
 			Bar(ImGui.GetItemRectMin().Y, ImGui.GetItemRectMax().Y);
 			if (ImGui.IsItemHovered() && !DragAndDrop.IsDragging)
 			{
-				ImGui.SetTooltip("Prefab override (right click: apply or revert)");
+				EditorGui.SetTooltip("Prefab override (right click: apply or revert)");
 			}
 
 			if (context.Overrides != null && EditorGui.BeginPopupContextItem("##prefab_override"))
@@ -171,7 +171,7 @@ namespace LELEngine.Editor
 			DrawIconText(shown.IsVariant ? IconKind.PrefabVariant : IconKind.Prefab, EditorStyle.Prefab, label);
 			if (ImGui.IsItemHovered())
 			{
-				ImGui.SetTooltip(shown.AssetPath);
+				EditorGui.SetTooltip(shown.AssetPath);
 			}
 
 			// Buttons at the end of the line: Open, Select (and Overrides on the instance's root).
@@ -192,7 +192,7 @@ namespace LELEngine.Editor
 			ImGui.EndDisabled();
 			if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
 			{
-				ImGui.SetTooltip("Edit the prefab '" + shown.name + "' (prefab mode)");
+				EditorGui.SetTooltip("Edit the prefab '" + shown.name + "' (prefab mode)");
 			}
 
 			ImGui.SameLine();
@@ -332,7 +332,7 @@ namespace LELEngine.Editor
 				Bar(ImGui.GetItemRectMin().Y, ImGui.GetItemRectMax().Y);
 				if (ImGui.IsItemHovered())
 				{
-					ImGui.SetTooltip("The prefab has this component; this instance removed it (right click: revert or apply)");
+					EditorGui.SetTooltip("The prefab has this component; this instance removed it (right click: revert or apply)");
 				}
 
 				if (EditorGui.BeginPopupContextItem("##removed_menu"))
@@ -477,7 +477,7 @@ namespace LELEngine.Editor
 
 			if (ImGui.IsItemHovered())
 			{
-				ImGui.SetTooltip("Every override goes into '" + instance.Prefab?.name + "' (the instance's position, rotation and name stay its own)");
+				EditorGui.SetTooltip("Every override goes into '" + instance.Prefab?.name + "' (the instance's position, rotation and name stay its own)");
 			}
 		}
 
@@ -552,7 +552,7 @@ namespace LELEngine.Editor
 				ImGui.EndDisabled();
 				if (targets.Count == 1 && ImGui.IsItemHovered())
 				{
-					ImGui.SetTooltip(PrefabMenus.ApplyLabel(targets[0]));
+					EditorGui.SetTooltip(PrefabMenus.ApplyLabel(targets[0]));
 				}
 
 				return;

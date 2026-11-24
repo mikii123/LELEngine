@@ -1820,7 +1820,7 @@ namespace LELEngine.Editor.Graphs
 				string tooltip = hit.Kind == HitKind.Node ? hit.Node.Tooltip : hit.Kind == HitKind.Edge ? hit.Edge.Tooltip : null;
 				if (!string.IsNullOrEmpty(tooltip))
 				{
-					ImGui.SetTooltip(tooltip);
+					EditorGui.SetTooltip(tooltip);
 				}
 			}
 
@@ -2230,7 +2230,7 @@ namespace LELEngine.Editor.Graphs
 					ImGui.EndDisabled();
 					if (!string.IsNullOrEmpty(entry.Tooltip) && ImGui.IsItemHovered())
 					{
-						ImGui.SetTooltip(entry.Tooltip);
+						EditorGui.SetTooltip(entry.Tooltip);
 					}
 				}
 

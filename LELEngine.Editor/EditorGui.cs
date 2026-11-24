@@ -40,7 +40,7 @@ namespace LELEngine.Editor
 
 			if (tooltip != null && ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
 			{
-				ImGui.SetTooltip(tooltip);
+				SetTooltip(tooltip);
 			}
 
 			NVector2 min = ImGui.GetItemRectMin();

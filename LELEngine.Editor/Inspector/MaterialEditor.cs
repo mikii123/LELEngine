@@ -51,7 +51,7 @@ namespace LELEngine.Editor
 				ImGui.TextDisabled("Variant: " + string.Join(" ", program.Keywords));
 				if (ImGui.IsItemHovered())
 				{
-					ImGui.SetTooltip("The keywords of the material's toggles, keyword enums and set maps: a program of its own (game builds compile the ones their materials use).");
+					EditorGui.SetTooltip("The keywords of the material's toggles, keyword enums and set maps: a program of its own (game builds compile the ones their materials use).");
 				}
 			}
 
@@ -229,7 +229,7 @@ namespace LELEngine.Editor
 			ImGui.TextDisabled(state.Describe());
 			if (ImGui.IsItemHovered())
 			{
-				ImGui.SetTooltip("Declared by the shader in its Properties block (Blend, ZWrite, ZTest, Cull, Queue).");
+				EditorGui.SetTooltip("Declared by the shader in its Properties block (Blend, ZWrite, ZTest, Cull, Queue).");
 			}
 
 			FieldDrawer.Label("Render Queue", null, context);
@@ -256,7 +256,7 @@ namespace LELEngine.Editor
 
 				if (ImGui.IsItemHovered())
 				{
-					ImGui.SetTooltip("Follow the shader's queue (" + state.Queue + ") again.");
+					EditorGui.SetTooltip("Follow the shader's queue (" + state.Queue + ") again.");
 				}
 			}
 			else
@@ -317,7 +317,7 @@ namespace LELEngine.Editor
 					bool changed = DrawTexture(material, name, label, typeof(Texture2D), context);
 					if (declared.IsMapKeyword && ImGui.IsItemHovered())
 					{
-						ImGui.SetTooltip("Keyword " + declared.Keywords[0] + " while a texture is set");
+						EditorGui.SetTooltip("Keyword " + declared.Keywords[0] + " while a texture is set");
 					}
 
 					return changed;
@@ -439,7 +439,7 @@ namespace LELEngine.Editor
 					TestAnchors.RecordItem("materialoption:" + declared.Name + "/" + i);
 					if (ImGui.IsItemHovered())
 					{
-						ImGui.SetTooltip("Keyword " + declared.Keywords[i]);
+						EditorGui.SetTooltip("Keyword " + declared.Keywords[i]);
 					}
 				}
 
@@ -462,7 +462,7 @@ namespace LELEngine.Editor
 			TestAnchors.RecordItem("materialfield:" + declared.Name);
 			if (ImGui.IsItemHovered())
 			{
-				ImGui.SetTooltip("Keyword " + declared.Keywords[0]);
+				EditorGui.SetTooltip("Keyword " + declared.Keywords[0]);
 			}
 
 			context.Track(changed);

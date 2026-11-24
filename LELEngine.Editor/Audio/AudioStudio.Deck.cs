@@ -41,7 +41,7 @@ namespace LELEngine.Editor.Audio
 			ImGui.TextUnformatted(label);
 			if (tooltip != null && ImGui.IsItemHovered())
 			{
-				ImGui.SetTooltip(tooltip);
+				EditorGui.SetTooltip(tooltip);
 			}
 
 			ImGui.SameLine(LabelWidth);
@@ -792,7 +792,7 @@ namespace LELEngine.Editor.Audio
 
 						if (ImGui.IsItemHovered())
 						{
-							ImGui.SetTooltip("A timeline of its own between the source and the destination, edited in the timeline: extend the source's sounds, start the destination's early, drag the fades and add fills.");
+							EditorGui.SetTooltip("A timeline of its own between the source and the destination, edited in the timeline: extend the source's sounds, start the destination's early, drag the fades and add fills.");
 						}
 					}
 					else
@@ -1667,7 +1667,7 @@ namespace LELEngine.Editor.Audio
 
 			if (hovered)
 			{
-				ImGui.SetTooltip("Click: add a point, drag: move it, right click: remove it.\n" + xLabel + " " + mx.ToString("0.###") + " -> " + my.ToString("0.##") + " " + unit);
+				EditorGui.SetTooltip("Click: add a point, drag: move it, right click: remove it.\n" + xLabel + " " + mx.ToString("0.###") + " -> " + my.ToString("0.##") + " " + unit);
 			}
 
 			if (selectedCurvePoint >= 0 && selectedCurvePoint < points.Count)
@@ -1726,7 +1726,7 @@ namespace LELEngine.Editor.Audio
 					if (EditorGui.SmallButton("Duplicate")) DuplicateEvent(current);
 					ImGui.SameLine();
 					if (EditorGui.SmallButton("Copy GUID")) ImGui.SetClipboardText(current.Id);
-					if (ImGui.IsItemHovered()) ImGui.SetTooltip("Components reference the event by this GUID (the inspector's event picker does it for you).");
+					if (ImGui.IsItemHovered()) EditorGui.SetTooltip("Components reference the event by this GUID (the inspector's event picker does it for you).");
 					ImGui.TextDisabled("Bank " + (Project.FindBank(current.BankId)?.Name ?? "?") + ", bus " + (Project.FindBus(current.BusId) != null ? Project.BusPath(Project.FindBus(current.BusId)) : "Master") + (current.Spatializer.Enabled ? ", 3D" : ", 2D") + (current.Persistent ? ", persistent" : ""));
 					ImGui.Separator();
 
@@ -1865,7 +1865,7 @@ namespace LELEngine.Editor.Audio
 
 				if (ImGui.IsItemHovered())
 				{
-					ImGui.SetTooltip("Click: edit the parameter in the Deck. Right click the knob: more.");
+					EditorGui.SetTooltip("Click: edit the parameter in the Deck. Right click the knob: more.");
 				}
 
 				ImGui.EndGroup();

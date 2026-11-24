@@ -136,7 +136,7 @@ namespace LELEngine.Editor
 			}
 			else if (ImGui.IsItemHovered(ImGuiHoveredFlags.ForTooltip))
 			{
-				ImGui.SetTooltip(TooltipOf(hot.Kind));
+				EditorGui.SetTooltip(TooltipOf(hot.Kind));
 			}
 
 			ImGui.SetMouseCursor(ImGuiMouseCursor.Hand);

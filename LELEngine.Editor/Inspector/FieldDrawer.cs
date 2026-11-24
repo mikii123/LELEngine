@@ -338,9 +338,25 @@ namespace LELEngine.Editor
 
 			ImGui.AlignTextToFramePadding();
 			OverrideLabel(label, context, false, false);
+			LabelHovered = ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled);
 			ShowTooltip(info);
 			ImGui.SameLine(context.LabelWidth);
 			ImGui.SetNextItemWidth(-1);
+		}
+
+		/// <summary>
+		///     The label <see cref="Label" /> drew last is under the mouse: a control drawn by hand after its label shows its
+		///     tooltip on the label, as the fields' tooltips are (<see cref="LabelTooltip" />).
+		/// </summary>
+		public static bool LabelHovered { get; private set; }
+
+		/// <summary>A tooltip for the control <see cref="Label" /> labelled last, shown while its label is hovered.</summary>
+		public static void LabelTooltip(string text)
+		{
+			if (LabelHovered)
+			{
+				EditorGui.SetTooltip(text);
+			}
 		}
 
 		/// <summary>The label as shown: ImGui's "##" starts the part that is only the widget's id.</summary>
@@ -525,7 +541,7 @@ namespace LELEngine.Editor
 				string hint = tooltip ?? info?.GetCustomAttribute<TooltipAttribute>(false)?.Text;
 				if (hint != null)
 				{
-					ImGui.SetTooltip(hint);
+					EditorGui.SetTooltip(hint);
 				}
 			}
 
@@ -643,7 +659,7 @@ namespace LELEngine.Editor
 			TooltipAttribute tooltip = info?.GetCustomAttribute<TooltipAttribute>(false);
 			if (tooltip != null && ImGui.IsItemHovered())
 			{
-				ImGui.SetTooltip(tooltip.Text);
+				EditorGui.SetTooltip(tooltip.Text);
 			}
 		}
 
@@ -773,7 +789,7 @@ namespace LELEngine.Editor
 						ImGui.GetWindowDrawList().AddText(start + new NVector2(5f, (height - ImGui.GetTextLineHeight()) * 0.5f), ImGui.GetColorU32(ImGuiCol.TextDisabled), "None (" + ObjectField.TypeLabel(declaredType) + ")");
 						if (ImGui.IsItemHovered())
 						{
-							ImGui.SetTooltip(hint);
+							EditorGui.SetTooltip(hint);
 						}
 
 						if (EditorGui.IsItemClicked() && creatable.Count > 0)
@@ -844,7 +860,7 @@ namespace LELEngine.Editor
 
 				if (ImGui.IsItemHovered() && !DragAndDrop.IsDragging)
 				{
-					ImGui.SetTooltip(valueType.FullName + "\n" + hint);
+					EditorGui.SetTooltip(valueType.FullName + "\n" + hint);
 				}
 
 				if (canReference && DragAndDrop.AcceptValue(declaredType, out object droppedOnType))

@@ -1268,7 +1268,7 @@ namespace LELEngine.Editor.UIBuilder
 
 				ImGui.SameLine();
 				EditorGui.Checkbox("Interact", ref interact);
-				if (ImGui.IsItemHovered()) ImGui.SetTooltip("Send the mouse to the preview (hover, clicks, scrolling) instead of selecting elements");
+				if (ImGui.IsItemHovered()) EditorGui.SetTooltip("Send the mouse to the preview (hover, clicks, scrolling) instead of selecting elements");
 				if (preview.errors.Count > 0)
 				{
 					ImGui.SameLine();

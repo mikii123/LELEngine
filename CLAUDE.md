@@ -1,5 +1,119 @@
 # LELEngine notes
 
+## Graphics rules (the user's, 2026-11-24)
+
+- The main GI method is voxel cone tracing (VCT). Work on lighting, ray tracing and performance is judged by what it does
+  to VCT first; Lumen and the ray traced features are secondary and must not make VCT slower or change how it looks by
+  default.
+- Zero ghosting, and nothing temporal beyond what the user explicitly agreed to: no history, reprojection or
+  accumulation over frames in a new feature without asking first. What shows in a frame is what that frame computed
+  (noise is averaged over space, or with more samples, not over time). The traced shadows of the third round broke this
+  (accumulated over up to 16 frames: they brightened while things moved and settled at rest; the user: "wyglądają
+  żałośnie") and lost their history ("Ray traced lighting" below). Still temporal from that work, not asked about:
+  the traced reflections' accumulation (Lumen with hardware ray tracing only).
+- A change that costs performance where it is not asked for is a regression even with its settings off. Measure the
+  engine before and after on the machine at hand with every new setting off, not only on the machine the work was done
+  on, and measure twice: one evening's runs blamed the Vulkan recording thread, which later runs cleared ("The Vulkan
+  device's CPU path" below).
+- No workaround for one machine's GPU, driver or CPU may turn a feature off, or make it work or look different, on the
+  other machines (the user's rule, 2026-11-24): fix it so it runs the same everywhere (the probe trace moved to a compute
+  shader on every GPU, conservative rasterization's mode named in every pipeline, new textures zeroed on every GPU), or
+  gate it on the capability that is the reason (the transmittance map's partial clears only where colour clears are slow:
+  the same picture either way), never on a vendor.
+
+## Project Settings > Lighting: laid out by what each setting belongs to (2026-11-24)
+
+- The user's ask: the lighting settings were a mess of categories; a feature's settings go when it is off; voxel cone
+  tracing's settings fixed whole; Hardware Ray Tracing, which changes VCT, in VCT's category; foldouts; settings that
+  change nothing fixed. Older notes that name "Project Settings > Lighting > Ray Tracing" or "Level of Detail" mean
+  the places below now.
+- Layout (`ProjectSettingsWindow.DrawLighting` and its `DrawShadows` / `DrawVoxelConeTracing` / `DrawLumen`, each field
+  drawn by name through `FieldDrawer`, foldouts open at first; the settings classes have no [Header]s any more):
+  GI Method; Shadows (Enabled; Shadow Maps: size, biases, cascades with their split bar right below, shadowed lights,
+  the further lights' map and cascades only with more than one; Ray Traced, only with a Vulkan project: local lights
+  (their count while on), directional (On Discrete GPUs while Directional Light Shadows is off), Skip Unneeded Shadow
+  Maps while a directional light may be traced, Transparent and Soft Shadows while anything is, Soft Shadow Rays while
+  soft); then the method's section only. Voxel Cone Tracing: Volume (Resolution 32-256 and the grid shadow map's size
+  as drop-downs, the update intervals, Soft Voxel Shadows), [Cones since the same day, the user: "to not use SDFs I
+  must set tracing to SDF?"; then "more technical, not like part of a sentence": two choices, `ConeVisibility` /
+  `ExactSurfacesSource`: Cone Occlusion = Voxel / Hybrid / Exact (the field `TraceMode` VoxelCones / SdfDetail /
+  SdfCones, names kept for the documents), then Geometry Source = Hardware Ray Tracing / Global SDF
+  (`HardwareRayTracing`; OpenGL: a line saying Global SDF), the field's foldout "Global SDF"], Voxelization (coverage's settings only with it), Mips
+  (Anisotropic Mip Levels only for anisotropic mips), Bounces (Bounce Cells only with bounces, Bounce Cone Layout only
+  without cells), Cones (Trace Mode, SDF Detail's distance only for it; for the SDF modes Hardware Ray Tracing with
+  VCT's own description, then Cone Rays (SDF Cones) and Material Cone Rays while on, or a Distance Field foldout while
+  off: resolution, band, Max Steps only for SDF Detail, the one VCT mode that sphere traces), Screen-Space Resolve (its
+  scale, filter and the jitter cell only with it), Volumetric Objects (the media volume's settings only while they are
+  in the GI; Accurate only with the resolve, else on / off). Lumen: Ray Tracing (Hardware Ray Tracing; Reflections and
+  their roughness, Surface Cache Shadows while on), Distance Field while off (with Dynamic Update Interval: Lumen's only
+  use of it), Surface Cache, Screen Probes, Probe History, Radiance Cache (the fallbacks of the history counts only at
+  0, their details only while on), Volumetric Objects (on / off: Lumen takes Fast and Accurate the same). With
+  Hardware Ray Tracing on, the distance field's settings are hidden (GPUs without ray queries still trace a field with
+  them: a line under the switch says so). Level of Detail moved to the Graphics tab.
+- Fixed settings: `DistanceFieldEnabled` removed (off it turned VCT's SDF modes into voxel cones, which Trace Mode
+  says, and left Lumen without rays); `RadiosityRays`, `ProbeFilterRadius`, `ProbeChangeThreshold` removed (read by
+  nothing); `SdfObjectIdLookup` out of the project settings into a static measurement switch like `ConeHitPlane`
+  (`Lighting.SdfObjectIdLookup`, on: the normal path, Lumen's one-fetch object lookup; off tests every object; TestGame
+  `objectids=0`). Choices that were numbers of which only
+  two values differed: `BounceCones` (int: 6 or more six cones, else one) -> `BounceConeLayout` (`VoxelBounceCones` Six /
+  OneWide), `InjectShadowTaps` (int: 4 or more four taps, else one) -> `SoftVoxelShadows`, `CoverageSplatWidth` (int:
+  3 or more quadratic) -> `CoverageSplat` (`VoxelCoverageSplat` Linear / Quadratic): new names, so an old document's
+  number is ignored and the default (what 8, 4 and 2 did) applies; TestGame keeps `bouncecones`, `shadowtaps`, `splat`.
+  Ranges where the code has them (Resolve Filter Passes 0-4: a fifth pass banded shadows; intervals 1-8; Bounce
+  Iterations 0-4; Coverage Occupancy Scale 1-2; Anisotropic Mip Levels 1-16; SDF band 2-16, steps 8-128) and tooltips
+  on every VCT and shadow setting. Traced local shadows now go off with Shadows > Enabled (they ignored it).
+- Tooltips (the user's ask, same day): a control drawn by hand after `FieldDrawer.Label` shows its tooltip on the label,
+  as the fields do (`FieldDrawer.LabelHovered` / `LabelTooltip`; the window's `Tooltip` helper goes through it), never on
+  the control. Every tooltip of the editor goes through `EditorGui.SetTooltip` (text unformatted, wrapped at
+  `EditorGui.TooltipWidthEm` = 36 font heights): ImGui's own `SetTooltip` never wraps, so a long one ran across the
+  screen. No `ImGui.SetTooltip` is left in the editor; new code uses `EditorGui.SetTooltip`.
+- A project's ProjectSettings.asset keeps the removed keys until a setting changes and the editor writes it (the reader
+  skips keys no field has). Verified: the solution builds; the window laid out in batch editors (the game project in
+  VCT without ray tracing, untouched; a scratch copy in Lumen and in VCT with Hardware Ray Tracing, Anisotropic mips, no
+  bounce cells); TestGame `gi=vct` renders at the same GPU time (16.0 ms). Not checked: the GUI editor by hand.
+
+## Lumen's probe rays from a compute shader: Intel's driver lost the device (2026-11-24)
+
+- The user's report: Lumen crashed the editor on New Frontier's Flight (Vulkan, Hardware Ray Tracing on, the Intel Arc
+  iGPU of the Core Ultra 7 155H, driver 101.8132): `vkQueueSubmit2` / `vkWaitForFences` ErrorDeviceLost a frame or two
+  after the load. TestGame's Lumen scene the same (`hwrt=1`); Lumen through the distance fields and VCT through the
+  triangles (the same scene top level, compute shaders) ran. Found with the diagnostics below: every pass and dispatch
+  finished but the device was lost at the submission after the screen probes' trace; `LEL_RAY_QUERY_OFF=ProbeTrace`
+  alone made it run. Not an out-of-bounds buffer read (robust buffer access changed nothing) nor a hang (the waits
+  returned): the driver faults on ray queries from the fragments of the full-atlas draw, while from compute shaders it
+  traces them (traced shadows, VCT, Lumen's radiosity and radiance cache; the transparent surfaces' few fragments too).
+- Fix: the probes' trace through the triangles is a compute shader, a thread per ray writing the ray atlas as an image
+  (`Engine/ProbeTraceRays.shader`; the trace target has Storage usage); through the distance field it stays the
+  fragment draw (`Engine/ProbeTrace.shader`, OpenGL as before). Both call `Engine/ProbeTraceCore.glsl`
+  (`TraceProbeTexel`), the shader's former body unchanged. `ScreenProbeGatherPass.TraceProgram`. Verified: TestGame
+  Lumen `hwrt=1` with the default ray traced shadows and reflections 25 s at 8.2-8.8 ms, the picture right; the game's
+  editor (batch, the project's Lumen with Hardware Ray Tracing) rendered Flight's Scene and Game views 240 frames. Not
+  run: AMD / NVIDIA since (the same rays, a compute dispatch instead of a draw), OpenGL's check.
+- Still fragments with ray queries: the transparent surfaces' traced shadows (`LitTransparent`) and the materials' own
+  cones on rays (`MaterialConeRays`, off on integrated GPUs). Large transparent areas with traced shadows on this driver
+  are the next suspect if the device is lost again.
+- Diagnostics kept (all off unless set): `LEL_FINISH_EACH_PASS=1` (each pass named and waited for), `LEL_FINISH_EACH_DISPATCH=1`
+  (each dispatch with its program), `LEL_RAY_QUERY_OFF=File,File` (shader files built without their ray query
+  variant), `LEL_VULKAN_ENABLE=robustness` (robust buffer access). A device lost on this driver is reported a
+  submission or two after the work that faulted.
+
+## New textures start zero on Vulkan (2026-11-24)
+
+- The user's report: switching the GI from Lumen to VCT, or VCT's resolution, in the editor lit the scene in random
+  colours (glowing magenta, orange, green surfaces) until the editor restarted. A new Vulkan image holds whatever its
+  memory held; OpenGL's drivers give new textures zeroed, and the engine's passes were written on OpenGL: VCT clears
+  only its radiance's first level and the regions with geometry, so its geometry volumes (albedo, normal, emission,
+  block flags), mips, SH gradients and bounce cells kept the freed memory of Lumen's caches or the volumes before. A
+  fresh process gets zeroed pages from the system: hence fine until something was freed.
+- `VulkanTexture.ZeroAtCreation` (called by `VulkanDevice.CreateTexture`): a colour texture the GPU writes (Storage or
+  Attachment usage, not block compressed) is cleared to zero, every level and layer, ahead of the stream (the setup
+  command buffer, as an upload). Textures of assets get their texels by upload; the frame graph's transient textures
+  stay undefined by design. `LEL_VULKAN_DISABLE=zerotextures` leaves them as they come (to compare).
+- Verified in a batch editor on a scratch copy of the game's project settings (a cube, a sphere, a point light; CLI
+  `exec` of a scratch editor script switching the method, then the resolution): without the clear the switch to VCT
+  showed a magenta block and coloured glows on the empty floor; with it the three views (Lumen, VCT, VCT at 128) are
+  clean.
+
 ## Building and running on this machine
 
 - Since 2026-10-20 the `dotnet` on PATH is the .NET 10 SDK (10.0.401, `C:\Program Files\dotnet`): plain `dotnet build`
@@ -356,13 +470,20 @@
   mesh) as a top level of their own (`SceneTopLevel`, real transforms, binding 1); per pixel of the prepass's depth a ray
   to each traced light that reaches it (`Engine/RayTracedShadowTrace.shader`): local lights with a slot
   (`LightBuffer.ShadowSlots`: at most `ShadowedLocalLights`, the lights with `Light.CastShadows` nearest the camera; a
-  light keeps its slot; params.w of the list), the shadowed directional lights; soft shadows: a point of the light's
-  disc of `SourceRadius` facing the surface (a directional light: its cone of `DirectionalLight.AngularDiameter`),
-  another each frame and pixel, accumulated over up to 16 frames (4 on moving surfaces) with the history of the same
-  surface point (reprojected by the prepass's motion, depth and normal tested), a slot's channel starting again when its
-  light changes (`ShadowSlotsChanged`), then `Engine/RayTracedShadowFilter.shader` (Gaussian radius 2 over the same
-  surface). Mask: RGBA8 2D array, the local slots' layers then one of the directional lights; history RGBA16F x 2 + meta
-  (RGBA8 and one 32-bit word since 2026-11-24). The lit materials (`Lit`, `LitTextured`, `Impostor`) read it through
+  light keeps its slot; params.w of the list), the shadowed directional lights; hard shadows: one ray to the light's
+  centre; soft shadows (since 2026-11-24, the user's rule above: nothing over frames): `RayTracingSettings
+  .SoftShadowRays` rays (default 4, at most 8) to points of the light's disc of `SourceRadius` facing the surface (a
+  directional light: its cone of `DirectionalLight.AngularDiameter`), one per stratum of the disc, shifted by the
+  pixel's hash and turned by its 4 x 4 dither index, the same in every frame, then `Engine/RayTracedShadowFilter.shader`
+  (Gaussian radius 2 over the same surface, `RayTracedShadowPass.FilterRadius`). No history, no reprojection, no motion
+  vectors read: a still scene's frames are equal (TestGame `gi=0 lights=1 night=1 animate=0`, 8 frames dumped in a row:
+  at most ~100 bytes of 2.7 M differ by 1), a moving light or surface shows what this frame traced. Before (2026-11-23 to
+  24): one ray a pixel to another point each frame, accumulated over up to 16 frames (4 on moving surfaces) with a
+  reprojected history and a slot's channel starting again when its light changed: it brightened while things moved and
+  settled at rest, which the user rejected. Mask: RGBA8 2D array, the local slots' layers then one of the directional
+  lights; the rays' RGBA8 array and the surfaces' R32UI word (`Engine/HistoryMeta.glsl`, normal 8 + 8 bits) for the
+  filter. Cost (Intel Arc iGPU of the Core Ultra 7 155H, 1280 x 720, `gi=0 lights=1 night=1`: four lamps, four rays):
+  trace 1.89 ms, filter 0.78 ms. The lit materials (`Lit`, `LitTextured`, `Impostor`) read it through
   `Engine/RayTracedShadows.glsl` (Vulkan only: `LelLocalLightShadow`, `LelDirectionalShadowRGB`) for draws of the
   lighting camera's view (`Lighting.RayShadows`, bound by `SetRayShadowUniforms`); transparent surfaces and other views
   kept unshadowed local lights and the maps, and with directional shadows traced the shadow maps were still drawn for
@@ -381,7 +502,9 @@
   `[RayTracing] Shadows: local lights traced (up to 8 at once), directional lights by shadow maps, soft by the lights'
   size | reflections: glossy surfaces traced (roughness up to 0.4)` when it changes, or why not. TestGame: `rtshadows`,
   `rtshadowlights`, `rtsunshadows`, `rtsoft`, `rtreflect`, `rtrough`, `rtbudget` (bottom level triangles a frame).
-  (Settings added since, and the console line's longer form: "Ray tracing and GI, third round" below.)
+  (Settings added since, and the console line's longer form: "Ray tracing and GI, third round" below; Soft Shadow Rays
+  (4) with the shadows' history gone, 2026-11-24, TestGame `rtsoftrays`, the console's `soft by the lights' size (4 rays
+  a pixel, nothing over frames)`.)
 - Verified (780M, Vulkan 1.4.315 / 2.0.353; scratchpad of session 2a1d1c21, `rtlight/`: `vktest` (vktest-final's tests
   on this worktree, plus `updateSwapped` (a top level updated with other bottom levels, custom indices and masks),
   `dataAccess`, `positionFetch` (the corners against the CPU's; with `LEL_VULKAN_ENABLE=positionfetch` and no
@@ -605,7 +728,10 @@
     transmittance map is no longer cleared whole each frame (a 2048² RGBA32F map: 64 MB of writes on a driver without
     fast colour clears). The first tile clears the rectangles the casters drew the frame before, each tile the
     rectangle its casters' world bounds project to (2 pixels wider), and the casters draw within it under a scissor;
-    everywhere else the map holds the clear value from before. A map made anew is cleared whole once.
+    everywhere else the map holds the clear value from before. A map made anew is cleared whole once. Since
+    2026-11-24 only where `DeviceCapabilities.FastColorClears` is false: on Intel's Arc iGPU (Core Ultra 7 155H, fast
+    clears) the tile's clears made the frame 0.44 ms longer (TestGame `gi=vct`, in-run `LEL_AB=transmittance`: 16.89
+    against 16.45 ms; the `Shadows` section 0.49 before this work, 0.98 with it, 0.42 with the whole clear again).
   - Geometry prepass (`GeometryPrepass`, `Engine/GBufferBackground.shader`), on a device whose colour clears write every
     texel (`DeviceCapabilities.FastColorClears` false: AMD's Vulkan driver on its integrated GPUs, as measured on the
     780M): for the base camera the normal and motion targets are not cleared; after the geometry a full-screen triangle
@@ -718,8 +844,18 @@
   segments and sends them in order (`EndStreamCommands`). The thread spins for 1 ms for more (the gaps between a
   frame's passes; woken from sleep it starts tens to hundreds of microseconds late, which a submission would wait for)
   and then sleeps; it runs above normal priority. Beyond 48 segments in a submission commands are recorded where
-  they are given. LEL_VULKAN_RECORDING_THREAD=0: always where they are given (written and recorded at once).
-  LEL_VULKAN_STATS=1 adds the command buffers per frame, the thread's recording time and the giving thread's wait for it.
+  they are given. LEL_VULKAN_STATS=1 adds the command buffers per frame, the thread's recording time and the giving
+  thread's wait for it.
+  On by default everywhere (it was off for some hours on 2026-11-24, then back on at the user's rule: nothing is turned
+  off for every machine because of one machine's trouble). That evening, on the Intel Core Ultra 7 155H machine, three
+  runs of TestGame `gi=0 gpudriven=0 stress=3000 hwrt=0` (Release, hidden) gave CPU render 31-42 ms a frame with the
+  thread against 8.5 without (the thread itself recording 2.4 ms, the giving thread waiting 3.6-5.4 ms for it;
+  LEL_ASYNC_COMPUTE=0 changed nothing). Hours later the same build on the same machine (on mains both times) gave 4.4 ms
+  with it against 7.2 without, and 4.9 / 5.7 with the thread forced onto the loop's own core (`GameWindow.Run` holds the
+  loop to core 0) or its SMT sibling: no starvation, the cause of that evening not found. The user's drastic drop in the
+  editor had another cause found later: the Intel driver's conservative rasterization leaking into every draw
+  ("Voxel GI and distance fields on Vulkan"). If a frame's CPU time looks wrong again, compare with
+  LEL_VULKAN_RECORDING_THREAD=0.
 - Command pools (`VulkanDeviceCommandPools.cs`): a submission's command buffers come from pools of its own, one per queue
   and per thread that records (transient, no reset of single buffers), reset whole with `vkResetCommandPool` when the
   GPU has run the submission; their buffers stay with the pool and are begun again. Before, one pool per queue whose
@@ -979,6 +1115,13 @@
   `DeviceCapabilities.ConservativeRasterization`. Vulkan: VK_EXT_conservative_rasterization where the GPU has it and
   overestimates by half a pixel at most (`VulkanDeviceConservative.cs`; `LEL_VULKAN_DISABLE=conservative` makes a
   device without it); a device without it (OpenGL always: its picture stays as it is) ignores the state.
+  Every other pipeline of a device with the extension names `DisabledEXT` outright (since 2026-11-24): Intel's Windows
+  driver (Arc iGPU of the Core Ultra 7 155H, 101.8132) kept rasterizing conservatively after the voxelization's
+  pipeline for pipelines that did not chain the struct at all (the user's report: Conservative Voxelization on made the
+  whole editor slow and its text smeared). Seen in TestGame `gi=vct animate=0` frame 600, conservative against
+  multisampled: before the fix max 201, mean 0.30, 9288 bytes over 8, every triangle edge of the later passes (a cube
+  face's diagonal, the faceted ball); after it max 11, mean 0.06, 4 over 8 (the voxels' own difference, as on the
+  780M). The engine set and reset the state right; nothing of it reached other pipelines' keys.
 - Coverage voxelization (`VoxelGIPass.VoxelizeCoverage`, `Engine/VoxelizeCoverage.shader` `LEL_VOXEL_CONSERVATIVE`):
   where `GlobalIlluminationSettings.ConservativeVoxelization` (default on; Project Settings > Lighting, the voxel cone
   tracing settings) and the device can, the pass has one sample and rasterizes conservatively: one fragment per voxel
@@ -1154,7 +1297,8 @@
   R32UI (normal 6 + 6 bits, frames - 1 in 4 bits); traced reflections' history RGBA16F with its frames in alpha (the
   filter reads the roughness from the normals) and meta R32UI (normal 8 + 8 bits). Per pixel at 1280 x 720: shadows 36
   -> 20 bytes for the first layer of four lights (33 -> 18 MB) and 20 -> 12 for each further layer (the sun's: 18 -> 11
-  MB), reflections 32 -> 24 bytes (28 -> 21 MB).
+  MB), reflections 32 -> 24 bytes (28 -> 21 MB). (The shadows' history is gone since: no accumulation over frames,
+  "Ray traced lighting" above; they keep the rays' RGBA8 and the surfaces' word, 12 bytes a pixel for one layer.)
 - Position fetch on by default: the device asks for VK_KHR_ray_tracing_position_fetch where the GPU has it and the
   validation layer is off (the installed layer rejects its SPIR-V capability; `LEL_VULKAN_ENABLE=positionfetch` asks
   for it under the layer, `LEL_VULKAN_DISABLE=positionfetch` refuses it). The new users read the hit triangle from the

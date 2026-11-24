@@ -18,9 +18,9 @@ namespace TestGame
 		///            [conejitter=0|1 world-anchored cone rotation + step jitter] [jittercell=meters] [gifilter=N a-trous passes over the resolve]
 		///            [occscale=1|2 coverage occupancy scale] [splat=2|3 tent or B-spline coverage splat]
 		///            [bouncecones=6|1] [furnace=1 closed box test] [furnacealbedo=0..1] [furnaceemission=radiance] [furnacewall=half thickness]
-		///            Lumen quality: [spacing=N px] [adaptive=0|1] [radrays=N] [radblend=0..1] [pblend=0..1] [tblend=0..1] [tmoving=frames]
+		///            Lumen quality: [spacing=N px] [adaptive=0|1] [radblend=0..1] [pblend=0..1] [tblend=0..1] [tmoving=frames]
 		///            [psigma=N] [pfloor=0..1] [pmoving=samples] [pmovingframes=N] [pmerge=0..1]
-		///            [importance=0|1] [pfilter=0|1] [pradius=N probes] [texels=N per meter] [ajitter=0..1] [djitter=0|1]
+		///            [importance=0|1] [pfilter=0|1] [texels=N per meter] [ajitter=0..1] [djitter=0|1]
 		///            [rcache=0|1] [rcradio=0|1] [rcnear=meters] [rchistory=frames] [rcprobes=N per frame] [rcres=8|16] [rctrace=16|32]
 		///            [dumpafter=seconds] [gpudriven=0|1] [stress=N extra cubes] [focus=0|1] [glass=0|1 transparent props]
 		///            [refraction=1 refracting props: GrabPass glass and particles before the player]
@@ -56,7 +56,8 @@ namespace TestGame
 		///            [staticrebuild=1 the GI's static caches (voxel geometry, global distance field) built again every frame]
 		///            Ray tracing besides (Project Settings > Lighting > Ray Tracing; devices with ray queries): [rtshadows=0|1 local lights' shadows traced (1)]
 		///            [rtshadowlights=1..8 how many at once] [rtsunshadows=0|1 directional lights' shadows traced on opaque surfaces instead of the maps (0)]
-		///            [rtsoft=0|1 soft by the lights' size, accumulated and filtered (1)] [rtreflect=0|1 glossy reflections traced with Lumen's rays (1)]
+		///            [rtsoft=0|1 soft by the lights' size, several rays a pixel, filtered (1)] [rtsoftrays=1..8 their rays a pixel and light (4)]
+		///            [rtreflect=0|1 glossy reflections traced with Lumen's rays (1)]
 		///            [rtrough=0.05..1 the roughness they trace up to (0.4)] [rtbudget=N triangles of bottom levels built a frame after the load's (250000)]
 		///            [rtsundiscrete=0|1 directional shadows traced on a discrete GPU whatever rtsunshadows says (1)]
 		///            [rtskipmaps=0|1 with rtsunshadows=1 the directional maps drawn only for what still reads them (1)] [rttransparent=0|1 transparent surfaces trace their shadows (1)]
@@ -141,13 +142,11 @@ namespace TestGame
 				ProbeDirectionJitter = GetBool(args, "djitter", true),
 				ProbeSpacing = GetInt(args, "spacing", 16),
 				ProbeAdaptivePlacement = GetBool(args, "adaptive", true),
-				RadiosityRays = GetInt(args, "radrays", 4),
 				RadiosityBlend = GetFloat(args, "radblend", 0.9f),
 				RadiosityMaxHistorySamples = GetFloat(args, "radmax", 64f),
 				RadiosityMovingHistorySamples = GetFloat(args, "radmoving", 16f),
 				ProbeHistoryWeight = GetFloat(args, "pblend", 0.5f),
 				ProbeMaxHistorySamples = GetFloat(args, "pmax", 32f),
-				ProbeChangeThreshold = GetFloat(args, "pchange", 0.5f),
 				ProbeChangeSigma = GetFloat(args, "psigma", 4f),
 				ProbeChangeFloor = GetFloat(args, "pfloor", 0.15f),
 				ProbeMovingHistorySamples = GetFloat(args, "pmoving", 2f),
@@ -159,7 +158,6 @@ namespace TestGame
 				ProbeImportanceSampling = GetBool(args, "importance", true),
 				ProbeSpatialFilter = GetBool(args, "pfilter", true),
 				ProbeSpatialFilterPasses = GetInt(args, "pfilterpasses", 1),
-				ProbeFilterRadius = GetInt(args, "pradius", 1),
 				SurfaceCacheTexelsPerMeter = GetInt(args, "texels", 6),
 				RadianceCache = GetBool(args, "rcache", true),
 				SdfObjectIdLookup = GetBool(args, "objectids", true),
@@ -243,6 +241,7 @@ namespace TestGame
 			rayTracing.ShadowedLocalLights = GetInt(args, "rtshadowlights", rayTracing.ShadowedLocalLights);
 			rayTracing.DirectionalLightShadows = GetBool(args, "rtsunshadows", rayTracing.DirectionalLightShadows);
 			rayTracing.SoftShadows = GetBool(args, "rtsoft", rayTracing.SoftShadows);
+			rayTracing.SoftShadowRays = GetInt(args, "rtsoftrays", rayTracing.SoftShadowRays);
 			rayTracing.Reflections = GetBool(args, "rtreflect", rayTracing.Reflections);
 			rayTracing.ReflectionMaxRoughness = GetFloat(args, "rtrough", rayTracing.ReflectionMaxRoughness);
 			rayTracing.DirectionalLightShadowsOnDiscreteGpus = GetBool(args, "rtsundiscrete", rayTracing.DirectionalLightShadowsOnDiscreteGpus);

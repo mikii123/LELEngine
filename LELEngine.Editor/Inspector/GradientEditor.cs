@@ -66,7 +66,7 @@ namespace LELEngine.Editor
 			draw.AddRect(min, min + size, ImGui.GetColorU32(hovered ? ImGuiCol.ButtonHovered : ImGuiCol.Border));
 			if (hovered)
 			{
-				ImGui.SetTooltip("Click to edit the gradient");
+				EditorGui.SetTooltip("Click to edit the gradient");
 			}
 
 			if (clicked)

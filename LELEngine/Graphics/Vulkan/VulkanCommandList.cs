@@ -1092,6 +1092,7 @@ namespace LELEngine.Graphics.Vulkan
 			if (PrepareDispatch(null))
 			{
 				device.Recorder.Dispatch(groupsX, groupsY, groupsZ);
+				FinishForDiagnosis($"dispatch {groupsX}x{groupsY}x{groupsZ}");
 			}
 		}
 
@@ -1101,6 +1102,19 @@ namespace LELEngine.Graphics.Vulkan
 			if (PrepareDispatch(buffer))
 			{
 				device.Recorder.DispatchIndirect(buffer.Handle, offset);
+				FinishForDiagnosis("indirect dispatch");
+			}
+		}
+
+		/// <summary>LEL_FINISH_EACH_DISPATCH=1: every dispatch named and waited for (finding one that loses the device; very slow).</summary>
+		private static readonly bool finishEachDispatch = Environment.GetEnvironmentVariable("LEL_FINISH_EACH_DISPATCH") == "1";
+
+		private void FinishForDiagnosis(string what)
+		{
+			if (finishEachDispatch && !InAsyncCompute)
+			{
+				Console.WriteLine($"[Vulkan] finishing {what} of {program?.Name}");
+				device.Finish();
 			}
 		}
 

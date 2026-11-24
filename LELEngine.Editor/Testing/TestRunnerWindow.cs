@@ -607,7 +607,7 @@ namespace LELEngine.Editor
 				if (node.IsExplicit) tip += "\n[Explicit]: runs only when run itself";
 				if (node.Error != null) tip += "\nCannot run: " + node.Error;
 				if (node.IsTest) tip += "\nDouble-click: open the test in the script editor";
-				ImGui.SetTooltip((tip.Length > 0 ? tip : node.Name).Replace("%", "%%"));
+				EditorGui.SetTooltip(tip.Length > 0 ? tip : node.Name);
 			}
 
 			// Arrow, icon, name, time.
@@ -1248,7 +1248,7 @@ namespace LELEngine.Editor
 		{
 			if (text != null && ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
 			{
-				ImGui.SetTooltip(text.Replace("%", "%%"));
+				EditorGui.SetTooltip(text);
 			}
 		}
 

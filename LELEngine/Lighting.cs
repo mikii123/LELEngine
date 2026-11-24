@@ -43,7 +43,7 @@ namespace LELEngine
 		///     Local lights' shadows on opaque surfaces are traced this frame (<see cref="RayTracingSettings.LocalLightShadows" />
 		///     on a device with ray queries): <see cref="Rendering.Passes.RayTracedShadowPass" />.
 		/// </summary>
-		public static bool RayTracedLocalShadows => RayTracing.LocalLightShadows && GraphicsCapabilities.RayQueries;
+		public static bool RayTracedLocalShadows => RayTracing.LocalLightShadows && Shadows.Enabled && GraphicsCapabilities.RayQueries;
 
 		/// <summary>
 		///     The shadowed directional lights' shadows on opaque surfaces are traced this frame instead of read from the
@@ -74,7 +74,7 @@ namespace LELEngine
 		///     while voxel cone tracing's SDF modes read the distance field: a ray query variant's cones trace the triangles.
 		/// </summary>
 		public static bool TransparentShadowRays => RayTracing.TransparentShadows && GraphicsCapabilities.RayQueries && (RayTracedLocalShadows || RayTracedDirectionalShadows)
-			&& !(GI.VoxelConeTracingActive && GI.DistanceFieldEnabled && GI.TraceMode != GITraceMode.VoxelCones && !VoxelRayTracingActive);
+			&& !(GI.VoxelConeTracingActive && GI.TraceMode != GITraceMode.VoxelCones && !VoxelRayTracingActive);
 
 		/// <summary>
 		///     Lumen's surface cache traces its directional lights' shadows (<see cref="RayTracingSettings.SurfaceCacheShadows" />
@@ -134,7 +134,7 @@ namespace LELEngine
 		///     <see cref="GITraceMode.SdfCones" />) with ray queries through its triangles (<see cref="HardwareRayTracing" />):
 		///     the near field and the cones' visibility come from the scene's top level, and no distance field is built.
 		/// </summary>
-		public static bool VoxelRayTracingActive => GI.VoxelConeTracingActive && GI.DistanceFieldEnabled && GI.TraceMode != GITraceMode.VoxelCones && HardwareRayTracing;
+		public static bool VoxelRayTracingActive => GI.VoxelConeTracingActive && GI.TraceMode != GITraceMode.VoxelCones && HardwareRayTracing;
 
 		/// <summary>The scene's top level is built: one of the GI methods traces its rays with ray queries.</summary>
 		public static bool SceneRayTracingActive => HardwareRayTracingActive || VoxelRayTracingActive;
@@ -500,7 +500,7 @@ namespace LELEngine
 				return;
 			}
 
-			bool sdf = GI.DistanceFieldEnabled && GI.GlobalSdf != null;
+			bool sdf = GI.GlobalSdf != null;
 			program.SetInt("giTraceMode", TraceModeUniform(sdf));
 			program.SetFloat("giSdfDetailDistance", GI.SdfDetailDistance);
 			if (sdf)
@@ -787,6 +787,13 @@ namespace LELEngine
 		/// </summary>
 		public static bool ConeHitPlane = true;
 
+		/// <summary>
+		///     Lumen's rays tell the object at a distance field hit from the field's object-id volume (one fetch: true, the
+		///     normal path), or by testing every scene object (false). A measurement switch (TestGame objectids=); it was a
+		///     hidden project setting until 2026-11-24.
+		/// </summary>
+		public static bool SdfObjectIdLookup = true;
+
 		/// <summary>giTraceMode of voxel cone tracing's ray query variants: the project's trace mode (1 SDF detail, 2 SDF cones).</summary>
 		public static int VoxelRayTraceMode => GI.TraceMode == GITraceMode.SdfDetail ? 1 : 2;
 
@@ -803,7 +810,7 @@ namespace LELEngine
 			program.SetFloat("sdfMaxDistance", GI.SdfBandVoxels * GI.SdfVoxelSize);
 			program.SetTexture("GlobalSdf", GI.GlobalSdf);
 			// Without the id volume the shaders fall back to testing every object (A/B switch, measurement).
-			program.SetTexture("GlobalSdfObjectIds", GI.SdfObjectIdLookup ? GI.GlobalSdfObjectIds : null);
+			program.SetTexture("GlobalSdfObjectIds", SdfObjectIdLookup ? GI.GlobalSdfObjectIds : null);
 		}
 
 		#endregion
@@ -861,7 +868,7 @@ namespace LELEngine
 			bool reflections = RayTracedReflections;
 			int flags = (RayTracedLocalShadows ? 1 : 0) | (RayTracedDirectionalShadows ? 2 : 0) | (settings.SoftShadows ? 4 : 0) | (reflections ? 8 : 0) | (settings.Reflections ? 16 : 0)
 				| (rayQueries ? 32 : 0) | (settings.SkipUnneededShadowMaps ? 64 : 0) | (TransparentShadowRays ? 128 : 0) | (SurfaceCacheTracedShadows ? 256 : 0)
-				| (VoxelRayTracingActive ? 512 : 0) | (MaterialConeRays ? 1024 : 0) | (settings.ShadowedLocalLights << 12) | (settings.ConeRays << 20);
+				| (VoxelRayTracingActive ? 512 : 0) | (MaterialConeRays ? 1024 : 0) | (settings.ShadowedLocalLights << 12) | (settings.ConeRays << 20) | (settings.SoftShadowRays << 24);
 			(int, float) state = (flags, settings.ReflectionMaxRoughness);
 			if (rayTracingReported && state == rayTracingState)
 			{
@@ -886,7 +893,8 @@ namespace LELEngine
 			string directional = directionalTraced
 				? "directional lights traced on opaque surfaces" + (settings.DirectionalLightShadows ? "" : " (a discrete GPU)") + (settings.SkipUnneededShadowMaps ? ", their maps only for what still reads them" : ", their maps drawn as well")
 				: "directional lights by shadow maps";
-			string soft = localTraced || directionalTraced ? settings.SoftShadows ? ", soft by the lights' size" : ", hard" : "";
+			int softRays = Math.Clamp(settings.SoftShadowRays, 1, RayTracingSettings.MaxSoftShadowRays);
+			string soft = localTraced || directionalTraced ? settings.SoftShadows ? $", soft by the lights' size ({softRays} ray{(softRays == 1 ? "" : "s")} a pixel, nothing over frames)" : ", hard" : "";
 			string transparent = TransparentShadowRays ? ", transparent surfaces trace theirs (hard)" : localTraced || directionalTraced ? ", transparent surfaces untraced" : "";
 			string cards = HardwareRayTracingActive ? SurfaceCacheTracedShadows ? ", surface cache's directional shadows traced" : ", surface cache's directional shadows by maps" : "";
 			string reflection = reflections ? $"glossy surfaces traced (roughness up to {settings.ReflectionMaxRoughness:0.##})"
@@ -1123,24 +1131,27 @@ namespace LELEngine
 	{
 		#region PublicFields
 
+		[Tooltip("Lights cast shadows: the directional lights through their shadow maps (or traced), the local lights where they are traced. Off: no shadows at all")]
 		public bool Enabled = true;
 
 		/// <summary>
 		///     Resolution of the camera shadow map. With cascades it is an atlas: two get half of it each (side by
 		///     side, the map half as tall), four a quarter each (2 x 2).
 		/// </summary>
+		[Tooltip("Resolution of the first directional light's shadow map. With cascades it is an atlas: two get half of it each, four a quarter each (2 x 2)")]
 		public int MapSize = 2048;
 
 		/// <summary>
 		///     Receivers move this many shadow-map texels toward the light before the depth comparison, against shadow
 		///     acne (too much detaches the shadows from their casters). Scaled by the soft filter's radius, as in Unity.
 		/// </summary>
+		[Tooltip("Receivers move this many shadow map texels towards the light before the comparison, against shadow acne (too much detaches the shadows from their casters)")]
 		public float DepthBiasTexels = 1f;
 
 		/// <summary>Receivers move this many texels along their normal, the more the more grazing the light (scaled like the depth bias).</summary>
+		[Tooltip("Receivers move this many texels along their normal, the more the more grazing the light")]
 		public float NormalBiasTexels = 1f;
 
-		[Header("Several directional lights")]
 		[Tooltip("How many directional lights cast shadows at once: the main light first, then the brightest that ask (Cast Shadows on the light). Every one renders the scene again into its cascades")]
 		[Range(1, DirectionalLight.MaxLights)]
 		public int ShadowedLights = 2;
@@ -1151,9 +1162,9 @@ namespace LELEngine
 		[Tooltip("Cascades of each directional light after the first that casts shadows. Fewer cost less (every cascade renders the casters again) and blur the shadows near the camera")]
 		public ShadowCascadeCount AdditionalLightCascades = ShadowCascadeCount.Four;
 
-		// The cascade count comes last: the editor draws the splits on a bar below it (the split fields are hidden).
+		// The editor draws the splits on a bar right below the cascade count (the split fields are hidden).
 
-		[Header("First light")]
+		[Tooltip("Cascades of the first directional light's map: more keep the shadows sharp near the camera and reaching far, each renders the casters again. The bar below sets where each begins")]
 		public ShadowCascadeCount Cascades = ShadowCascadeCount.Four;
 
 		/// <summary>With two cascades: where the second begins, as a fraction of the shadow distance.</summary>
@@ -1272,22 +1283,28 @@ namespace LELEngine
 
 		// ---- Project-wide ----
 
-		// Fields marked [GIMethod] are read by one method only (the editor shows them while it is selected); the
-		// others by both.
+		// Fields marked [GIMethod] are read by one method only; the others by both. The editor's Project Settings >
+		// Lighting lays them out by what they belong to and shows each only while it changes something
+		// (ProjectSettingsWindow.DrawLighting): keep that in step when a field is added or what reads it changes.
 
 		/// <summary>Voxels per axis. Memory is Resolution^3 * 8 bytes (RGBA16F) plus mips.</summary>
+		[Tooltip("Voxels of the GI volume along each axis: finer light and shadow in the GI, memory and voxelization cost by the cube (128: about 100 MB)")]
 		[GIMethod(GIMode.VoxelConeTracing)] public int Resolution = 128;
 
 		/// <summary>Maximum cone length in world units. 0 uses the grid size.</summary>
+		[Tooltip("How far a cone looks for light, in world units: shorter is cheaper and leaves out far surfaces. 0: the GI volume's size")]
 		[GIMethod(GIMode.VoxelConeTracing)] public float ConeMaxDistance;
 
 		/// <summary>
 		///     Trace cones once per reduced-resolution pixel (GIResolvePass) instead of per material fragment.
 		///     Requires the geometry prepass. Roughly 1 / ResolveScale^2 fewer cone traces.
 		/// </summary>
+		[Tooltip("The cones are traced once per pixel of a smaller image of the screen and filtered (Resolve Scale), instead of by every material for every pixel it draws: several times cheaper. Transparent surfaces and the other cameras of a stack always trace their own")]
 		[GIMethod(GIMode.VoxelConeTracing)] public bool ScreenSpaceResolve = true;
 
 		/// <summary>Resolution of the voxel GI resolve relative to the screen (0.5 = half width and height).</summary>
+		[Tooltip("The resolve's size against the screen (before super sampling): 0.5 is half the width and height, a quarter of the cones")]
+		[Range(0.25f, 1f)]
 		[GIMethod(GIMode.VoxelConeTracing)] public float ResolveScale = 0.5f;
 
 		/// <summary>
@@ -1298,6 +1315,7 @@ namespace LELEngine
 		///     average away. Anchored in the world: the same for every frame of a still scene, carried along by the
 		///     surfaces when the camera moves.
 		/// </summary>
+		[Tooltip("The cones are turned around the normal and their samples moved along them by a hash of the world position, so small bright emitters do not print rings and blobs on nearby surfaces: the prints become noise the resolve's filter and the mips average away. Anchored in the world: the same in every frame of a still scene")]
 		[GIMethod(GIMode.VoxelConeTracing)] public bool ConeJitter = true;
 
 		/// <summary>
@@ -1305,6 +1323,7 @@ namespace LELEngine
 		///     cost more (neighbouring pixels trace different directions: 5 cm +1.2 ms, 10 cm +0.65 ms, 20 cm +0.4 ms on
 		///     the test room), larger ones leave blotches the filter cannot reach.
 		/// </summary>
+		[Tooltip("World size of the cells that share one turn of the cones in the resolve; 0: half a voxel. Smaller cells cost more (neighbouring pixels trace other directions), larger ones leave blotches the filter cannot reach")]
 		[GIMethod(GIMode.VoxelConeTracing)] public float ConeJitterCellSize;
 
 		/// <summary>
@@ -1312,25 +1331,29 @@ namespace LELEngine
 		///     texels apart, weighted by normal agreement and distance from the centre's plane; spatial only). 0 = off.
 		///     A fifth pass (taps 16 texels apart) copies shadow edges to 16-texel offsets: visible doubled, banded shadows.
 		/// </summary>
+		[Tooltip("Passes of the edge-aware filter over the resolve's diffuse light (taps 1, 2, 4, 8 texels apart, within the same surface; nothing over frames). 0: unfiltered. A fifth pass would copy shadow edges 16 texels away")]
+		[Range(0, 4)]
 		[GIMethod(GIMode.VoxelConeTracing)] public int ResolveFilterPasses = 4;
 
 		/// <summary>
 		///     Re-voxelize dynamic (non-static) objects every N frames; Lumen rebuilds the dynamic part of the global
 		///     distance field at the same rate. 1 = every frame.
 		/// </summary>
+		[Tooltip("Moving (non-static) objects are put into the GI every this many frames (voxel cone tracing: voxelized; Lumen: the distance field's dynamic part). 1: every frame. More is cheaper and lets the GI trail behind them")]
+		[Range(1, 8)]
 		public int DynamicUpdateInterval = 1;
 
 		/// <summary>Recompute voxel lighting (sun, shadows, bounce) every N frames. 1 = every frame.</summary>
+		[Tooltip("The volume's light (lights, shadows, bounces) is worked out every this many frames, kept as it was between. 1: every frame")]
+		[Range(1, 8)]
 		[GIMethod(GIMode.VoxelConeTracing)] public int LightingUpdateInterval = 1;
 
 		/// <summary>
 		///     Resolution of the shadow map covering the whole GI volume, used when lighting voxels (voxel cone
 		///     tracing) or surface cache cards (Lumen).
 		/// </summary>
+		[Tooltip("Resolution of the directional lights' shadow maps that cover the whole GI volume, which the GI is lit through (voxel cone tracing: the voxels; Lumen: the surface cache's cards)")]
 		public int GridShadowMapSize = 1024;
-
-		/// <summary>Cones traced per voxel for the bounce: 6 (hemisphere layout) or 1 (single wide cone, cheaper).</summary>
-		[GIMethod(GIMode.VoxelConeTracing)] public int BounceCones = 6;
 
 		/// <summary>
 		///     Indirect bounces computed in the voxel volume every frame: the volume is lit (sun and emission), then lit
@@ -1338,20 +1361,33 @@ namespace LELEngine
 		///     lag, no ghosting); every iteration costs one light injection and its mips. 0 = direct light and emission.
 		///     The materials' own cone gather adds one more bounce on top.
 		/// </summary>
+		[Tooltip("Bounces of light worked out in the volume every frame, each tracing the one before (nothing carried over from earlier frames); the surfaces' own cones add one more. 0: the volume holds direct light and emission only. Each costs a light injection and its mips. The scene's Bounce Strength scales them (0 skips them)")]
+		[Range(0, 4)]
 		[GIMethod(GIMode.VoxelConeTracing)] public int BounceIterations = 2;
 
 		/// <summary>
 		///     Bounces per 2x2x2 voxels: the hemisphere cones traced once per group of voxels with geometry, around their
 		///     average normal (exact on flat surfaces, averaged at edges), several times cheaper than
-		///     <see cref="BounceCones" /> cones from every voxel. Off traces from every voxel.
+		///     <see cref="BounceConeLayout" /> from every voxel. Off traces from every voxel.
 		/// </summary>
+		[Tooltip("The bounces' six cones are traced once per 2 x 2 x 2 voxels with geometry, around their mean normal (exact on flat surfaces, averaged at edges): several times cheaper than tracing from every voxel")]
 		[GIMethod(GIMode.VoxelConeTracing)] public bool BounceCells = true;
 
 		/// <summary>
-		///     Sun shadow samples per voxel when lighting the volume: 4 spread over the voxel's surface (a voxel half in
-		///     shadow gets half the light, so GI shadow edges are smooth and do not crawl voxel by voxel) or 1.
+		///     Without <see cref="BounceCells" />: what each voxel traces for a bounce, six cones over its hemisphere or one
+		///     wide cone along its normal (cheaper, coarser). Bounce cells always trace six. (It was the int BounceCones, whose
+		///     values other than 1 and 6 traced the same: a new name, so an old document's number is not read as the enum.)
 		/// </summary>
-		[GIMethod(GIMode.VoxelConeTracing)] public int InjectShadowTaps = 4;
+		[Tooltip("What every voxel traces for a bounce: six cones over its hemisphere, or one wide cone along its normal (cheaper, coarser)")]
+		[GIMethod(GIMode.VoxelConeTracing)] public VoxelBounceCones BounceConeLayout = VoxelBounceCones.Six;
+
+		/// <summary>
+		///     Directional shadow samples per voxel when lighting the volume: four spread over the voxel's surface (a voxel
+		///     half in shadow gets half the light, so the GI's shadow edges are smooth and do not crawl voxel by voxel), or
+		///     one at its centre.
+		/// </summary>
+		[Tooltip("Each voxel takes the directional lights' shadow at four points of its surface: a voxel half in shadow gets half the light, so the GI's shadow edges are smooth and do not crawl voxel by voxel as things move. Off: one point, cheaper")]
+		[GIMethod(GIMode.VoxelConeTracing)] public bool SoftVoxelShadows = true;
 
 		/// <summary>
 		///     Coverage voxelization: triangles are rasterized with multisampling and splatted over the voxels nearest
@@ -1359,6 +1395,7 @@ namespace LELEngine
 		///     (order independent) and the occupancy follows the coverage. Objects then move through the volume smoothly
 		///     instead of jumping voxel by voxel. Off = one sample per voxel column, the last fragment wins.
 		/// </summary>
+		[Tooltip("Surfaces fill the voxels by how much of them they cover, splatted over the nearest voxels along their axis (colour, normal and emission averaged by area), so objects move through the volume smoothly instead of jumping voxel by voxel. Off: one sample per voxel column, the last surface wins")]
 		[GIMethod(GIMode.VoxelConeTracing)] public bool VoxelCoverage = true;
 
 		/// <summary>
@@ -1367,13 +1404,16 @@ namespace LELEngine
 		///     amount of a moving object in the volume then swings with its position within a voxel (one to two layers:
 		///     emitters pulse as they cross voxels). 1 keeps that amount constant.
 		/// </summary>
+		[Tooltip("A voxel's opacity is its covered weight times this. 2: a surface between two voxel centres fills both, so a wall always stops a cone, but a moving object's amount swings as it crosses voxels (emitters pulse). 1: that amount stays constant, thin walls let some light through")]
+		[Range(1f, 2f)]
 		[GIMethod(GIMode.VoxelConeTracing)] public float CoverageOccupancyScale = 2f;
 
 		/// <summary>
-		///     <see cref="VoxelCoverage" />: voxels a surface is splatted over along its projection axis: 2 (linear tent) or
-		///     3 (quadratic B-spline, smoother as objects move, a third more atomics).
+		///     <see cref="VoxelCoverage" />: how a surface is splatted over the voxels along its projection axis: two
+		///     (linear tent) or three (quadratic B-spline, smoother as objects move, a third more atomics).
 		/// </summary>
-		[GIMethod(GIMode.VoxelConeTracing)] public int CoverageSplatWidth = 2;
+		[Tooltip("How a surface is spread along its axis: over two voxels (linear), or three (quadratic: smoother as objects move, a third more work)")]
+		[GIMethod(GIMode.VoxelConeTracing)] public VoxelCoverageSplat CoverageSplat = VoxelCoverageSplat.Linear;
 
 		/// <summary>
 		///     <see cref="VoxelCoverage" /> where the graphics device rasterizes conservatively
@@ -1382,7 +1422,7 @@ namespace LELEngine
 		///     eight samples per column (a sliver between the samples counted nothing, every column's coverage a multiple
 		///     of an eighth). Off, or elsewhere: multisampled.
 		/// </summary>
-		[Tooltip("Coverage voxelization with conservative rasterization where the graphics device has it (Vulkan on most GPUs): every voxel column a triangle touches counts the exact area of the triangle in it, where multisampling counts eight points per column. Elsewhere, or off: multisampled")]
+		[Tooltip("Coverage with conservative rasterization where the graphics device has it (Vulkan on most GPUs): every voxel column a triangle touches counts the exact area of the triangle in it, where multisampling counts eight points per column. Elsewhere, or off: multisampled")]
 		[GIMethod(GIMode.VoxelConeTracing)] public bool ConservativeVoxelization = true;
 
 		/// <summary>
@@ -1390,6 +1430,7 @@ namespace LELEngine
 		///     both sides of a wall thinner than a cell: a cone sees half the light of a lit interior wall, and the light
 		///     of a sunlit exterior leaks in.
 		/// </summary>
+		[Tooltip("What the volume's coarser levels keep of the direction surfaces face. Isotropic: averages (cheapest; both sides of a thin wall mix, light leaks). Anisotropic: six views a level (a wall's near side hides its far side; the coarse levels change in steps as objects move). Spherical Harmonics: a gradient a texel (smooth as objects move, facing surfaces told apart)")]
 		[GIMethod(GIMode.VoxelConeTracing)] public VoxelMipMode VoxelMips = VoxelMipMode.Anisotropic;
 
 		/// <summary>
@@ -1400,6 +1441,8 @@ namespace LELEngine
 		///     wide an object is in decides what it hides): a faint pulse of the whole GI every few voxels of motion. 3
 		///     keeps motion as smooth as isotropic mips, at most of the isotropic mips' loss of light.
 		/// </summary>
+		[Tooltip("Levels above the voxels that keep six views (all of them at the most); the cones read averages above them. Fewer: motion as smooth as isotropic mips, with more of their light leaking")]
+		[Range(1, 16)]
 		[GIMethod(GIMode.VoxelConeTracing)] public int AnisotropicMipLevels = 16;
 
 		/// <summary>
@@ -1434,7 +1477,7 @@ namespace LELEngine
 		///     it, its debug view). The one place that decides it: the distance field passes, the GI's scene (whether objects
 		///     keep fields) and the renderer's releases read this.
 		/// </summary>
-		public bool DistanceFieldActive => Enabled && DistanceFieldEnabled
+		public bool DistanceFieldActive => Enabled
 			&& (Lighting.GIMethod == GIMode.Lumen || TraceMode != GITraceMode.VoxelCones)
 			&& (!Lighting.HardwareRayTracing || Lighting.DistanceFieldRequested);
 
@@ -1445,24 +1488,20 @@ namespace LELEngine
 		///     voxel cone tracing's distance field parts (<see cref="GITraceMode.SdfDetail" />'s near field,
 		///     <see cref="GITraceMode.SdfCones" />' visibility) trace the scene's triangles with ray queries where the graphics
 		///     device has them; elsewhere, or off, they trace the distance fields. Read once with the method
-		///     (<see cref="Lighting.HardwareRayTracing" />).
+		///     (<see cref="Lighting.HardwareRayTracing" />). The editor draws it in each method's section with that method's
+		///     own description.
 		/// </summary>
-		[Header("Ray Tracing")]
-		[Tooltip("The GI's rays trace the scene's triangles with the GPU's ray tracing where the graphics device has it (Vulkan on a GPU with ray queries); elsewhere, or off, they trace the distance fields. Lumen: the screen probes', radiance cache probes', surface cache radiosity's rays and the local lights' GI shadows; what a ray hits is lit from the surface cache either way. Voxel cone tracing (SDF Detail, SDF Cones): the near field and the cones' visibility, from a ray along each cone; no distance field is built then. Taken when the GI first runs, like the method: it does not change while the game runs")]
+		[Tooltip("The GI's rays trace the scene's triangles with the GPU's ray tracing where the graphics device has it (Vulkan on a GPU with ray queries); elsewhere, or off, they trace the distance fields. Taken when the GI first runs, like the method: it does not change while the game runs")]
 		public bool HardwareRayTracing = true;
 
 		// ---- Lumen surface cache (SurfaceCachePass) ----
 
-		[Header("Surface Cache")]
 		[GIMethod(GIMode.Lumen)] public int SurfaceCacheAtlasSize = 1024;
 
 		/// <summary>Card texels per world meter.</summary>
 		[GIMethod(GIMode.Lumen)] public int SurfaceCacheTexelsPerMeter = 6;
 
 		[GIMethod(GIMode.Lumen)] public int SurfaceCacheMaxCardSize = 96;
-
-		/// <summary>Kept for command-line compatibility; radiosity now traces 16 rays per 4x4-texel probe per frame.</summary>
-		[GIMethod(GIMode.Lumen)] public int RadiosityRays = 16;
 
 		/// <summary>Constant history weight of the radiosity probes per update when RadiosityMaxHistorySamples is 0.</summary>
 		[GIMethod(GIMode.Lumen)] public float RadiosityBlend = 0.9f;
@@ -1490,7 +1529,6 @@ namespace LELEngine
 		///     lower values detail smaller than two pixels (distant small objects) gets the blended lighting of its
 		///     neighbours and turns into mush. Costs about 0.7 ms more than 0.5 on the Intel iGPU at 1280x720.
 		/// </summary>
-		[Header("Screen Probes")]
 		[GIMethod(GIMode.Lumen)] public float ScreenProbeResolveScale = 1f;
 
 		/// <summary>Pixels between screen probes.</summary>
@@ -1548,9 +1586,6 @@ namespace LELEngine
 		/// <summary>A 2x2 block of directions gets a single ray when its importance is below this fraction of the mean block (at most 12 blocks).</summary>
 		[GIMethod(GIMode.Lumen)] public float ProbeImportanceMergeFraction = 0.5f;
 
-		/// <summary>Radius of the spatial probe filter, in probes (1 = 3x3 neighbourhood).</summary>
-		[GIMethod(GIMode.Lumen)] public int ProbeFilterRadius = 1; // the filter kernel is fixed at 3x3 probes; kept for CLI compatibility
-
 		/// <summary>
 		///     A neighbour probe's sample is reused only when its hit point lies within this many degrees of the
 		///     centre probe's own ray direction (Lumen's angle-error rejection).
@@ -1572,9 +1607,6 @@ namespace LELEngine
 		///     <see cref="ProbeHistoryWeight" />. Probes whose lighting changed restart their counts (see below).
 		/// </summary>
 		[GIMethod(GIMode.Lumen)] public float ProbeMaxHistorySamples = 32f;
-
-		/// <summary>No longer read: the probe change test is per direction (<see cref="ProbeChangeSigma" />, <see cref="ProbeChangeFloor" />).</summary>
-		[HideInInspector] public float ProbeChangeThreshold = 0.5f;
 
 		/// <summary>
 		///     Anti-lag of the probe directions (ProbeCompose.shader): besides its long history every direction keeps the
@@ -1624,7 +1656,6 @@ namespace LELEngine
 
 		// ---- Lumen world-space radiance cache (RadianceCachePass) ----
 
-		[Header("Radiance Cache")]
 		[GIMethod(GIMode.Lumen)] public bool RadianceCacheEnabled = true;
 
 		/// <summary>Probes per axis over the GI grid; probe spacing is GridSize / (n - 1).</summary>
@@ -1709,39 +1740,37 @@ namespace LELEngine
 		/// </summary>
 		[GIMethod(GIMode.Lumen)] public bool RadianceCacheFarShortcut = true;
 
-		// ---- Global distance field (GlobalDistanceFieldPass) ----
-
-		[Header("Distance Field")]
-		public bool DistanceFieldEnabled = true;
+		// ---- Global distance field (GlobalDistanceFieldPass): built while DistanceFieldActive ----
 
 		/// <summary>Texels per axis of the global distance field (shares the GI grid extent).</summary>
+		[Tooltip("Texels of the global distance field along each axis (over the GI volume): finer surfaces for the rays, memory and build cost by the cube")]
 		public int SdfResolution = 128;
 
 		/// <summary>Distances are clamped to this many SDF voxels; also bounds how far dynamic objects reach.</summary>
+		[Tooltip("How far from surfaces the field holds distances, in its texels (further is clamped); also how far a moving object's part of the field reaches. Wider: fewer steps through empty space, a dearer build")]
+		[Range(2, 16)]
 		public int SdfBandVoxels = 8;
 
 		/// <summary>Maximum sphere tracing iterations per ray.</summary>
+		[Tooltip("Steps a ray takes through the field at most before it gives up (sphere tracing)")]
+		[Range(8, 128)]
 		public int SdfMaxSteps = 48;
-
-		/// <summary>
-		///     Identify the object at a ray hit from the distance field's object-id volume (one fetch) instead of
-		///     testing every scene object. Off only for A/B measurements.
-		/// </summary>
-		public bool SdfObjectIdLookup = true;
 
 		/// <summary>
 		///     How voxel GI cones find geometry (see <see cref="GITraceMode" />). SDF cones are the default: voxel
 		///     cones leak through walls about one voxel thick and give stepped corners, the SDF detail trace is
-		///     binary per cone (banded corners). Falls back to voxel cones without the distance field.
+		///     binary per cone (banded corners). The SDF modes see the surfaces through the scene's triangles with
+		///     <see cref="HardwareRayTracing" /> on a device with ray queries, else through the global distance field.
 		/// </summary>
+		[Tooltip("How the cones see the surfaces they run into. Voxel Cones: the voxels' opacity only (cheapest; light leaks through walls about a voxel thick, stepped corners). SDF Detail: the first stretch of every cone traced exactly (Detail Distance), voxels after. SDF Cones: the whole cone's visibility from the exact surfaces (no leaks through walls, smooth corners). The exact surfaces are the scene's triangles with Hardware Ray Tracing, else the distance field")]
 		[GIMethod(GIMode.VoxelConeTracing)] public GITraceMode TraceMode = GITraceMode.SdfCones;
 
 		/// <summary>Length of the SDF detail trace at the start of every cone (world units).</summary>
+		[Tooltip("World units at the start of every cone traced exactly; past it the voxel cone goes on")]
 		[GIMethod(GIMode.VoxelConeTracing)] public float SdfDetailDistance = 1.5f;
 
 		// ---- Volumetric objects in the GI (VolumetricMediaPass) ----
 
-		[Header("Volumetric Objects")]
 		[Tooltip("The volumetric objects light the scene through the GI (those with Contribute GI): the light their clouds scatter and give off reaches the surfaces around them, and they hide the sky and the light behind them. A coarse volume of that is made every frame (about 0.2 ms on an integrated GPU). Fast: every pixel takes the clouds in with one wide cone (and one along its reflection), where its GI saw the sky; a cloud's light comes from all of the half space the surface faces at once; next to nothing on top. Accurate (voxel cone tracing): every cone of the screen-space GI reads the clouds on its way, so their light comes from where they are and stops at what stands in front of them; about half as much again for the GI's resolve where clouds are all around. Lumen's rays always read them on their way. Off: the GI does not see clouds at all")]
 		public VolumeGIMode VolumesInGI = VolumeGIMode.Fast;
 
@@ -1840,6 +1869,32 @@ namespace LELEngine
 		///     and the materials that trace themselves still take them in as <see cref="Fast" /> does).
 		/// </summary>
 		Accurate
+	}
+
+	/// <summary>
+	///     What a voxel traces for a bounce without bounce cells (<see cref="GlobalIlluminationSettings.BounceConeLayout" />); the
+	///     value is the cone count the shader takes.
+	/// </summary>
+	public enum VoxelBounceCones
+	{
+		/// <summary>Six cones over the hemisphere.</summary>
+		Six = 6,
+
+		/// <summary>One wide cone along the normal (cheaper, coarser).</summary>
+		OneWide = 1
+	}
+
+	/// <summary>
+	///     Over how many voxels along its projection axis the coverage voxelization spreads a surface
+	///     (<see cref="GlobalIlluminationSettings.CoverageSplat" />); the value is that count.
+	/// </summary>
+	public enum VoxelCoverageSplat
+	{
+		/// <summary>Two voxels, a linear tent.</summary>
+		Linear = 2,
+
+		/// <summary>Three voxels, a quadratic B-spline (smoother as objects move, a third more atomics).</summary>
+		Quadratic = 3
 	}
 
 	/// <summary>What the voxel radiance volume's mips keep of the direction its surfaces face.</summary>

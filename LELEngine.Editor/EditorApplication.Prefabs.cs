@@ -656,7 +656,7 @@ namespace LELEngine.Editor
 
 					if (ImGui.IsItemHovered())
 					{
-						ImGui.SetTooltip("A prefab of its own: the instance is unpacked first (prefabs nested in it stay nested).");
+						EditorGui.SetTooltip("A prefab of its own: the instance is unpacked first (prefabs nested in it stay nested).");
 					}
 
 					ImGui.SameLine();
@@ -672,7 +672,7 @@ namespace LELEngine.Editor
 
 					if (ImGui.IsItemHovered())
 					{
-						ImGui.SetTooltip("Keeps everything of its prefab and stores only what this instance changes (its overrides).");
+						EditorGui.SetTooltip("Keeps everything of its prefab and stores only what this instance changes (its overrides).");
 					}
 
 					ImGui.SameLine();

@@ -900,7 +900,7 @@ namespace LELEngine.Editor
 			TestAnchors.RecordItem("binding:" + action.Name + "/" + name);
 			if (ImGui.IsItemHovered())
 			{
-				ImGui.SetTooltip("Click, then press the " + (map.Type == ControllerType.Keyboard ? "key" : map.Type == ControllerType.Mouse ? "mouse button" : "button or push the stick") + " to bind (Esc cancels)");
+				EditorGui.SetTooltip("Click, then press the " + (map.Type == ControllerType.Keyboard ? "key" : map.Type == ControllerType.Mouse ? "mouse button" : "button or push the stick") + " to bind (Esc cancels)");
 			}
 
 			ImGui.SameLine();
@@ -1035,7 +1035,7 @@ namespace LELEngine.Editor
 			ImGui.PopStyleColor();
 			if (ImGui.IsItemHovered())
 			{
-				ImGui.SetTooltip("Waiting for input (Esc or a click here cancels)");
+				EditorGui.SetTooltip("Waiting for input (Esc or a click here cancels)");
 			}
 		}
 

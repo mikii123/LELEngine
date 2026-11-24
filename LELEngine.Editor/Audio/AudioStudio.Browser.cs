@@ -198,7 +198,7 @@ namespace LELEngine.Editor.Audio
 
 			if (ImGui.IsItemHovered())
 			{
-				ImGui.SetTooltip(audioEvent.Path + "\n" + audioEvent.Tracks.Count + " tracks, bank " + (bank?.Name ?? "?") + "\nDrag onto a folder to move it.");
+				EditorGui.SetTooltip(audioEvent.Path + "\n" + audioEvent.Tracks.Count + " tracks, bank " + (bank?.Name ?? "?") + "\nDrag onto a folder to move it.");
 			}
 
 			if (ImGui.BeginDragDropSource())
@@ -295,7 +295,7 @@ namespace LELEngine.Editor.Audio
 
 					if (ImGui.IsItemHovered())
 					{
-						ImGui.SetTooltip("Writes every bank into Library/AudioBanks (what a game build ships under Data/Audio/Banks) and logs their sizes.");
+						EditorGui.SetTooltip("Writes every bank into Library/AudioBanks (what a game build ships under Data/Audio/Banks) and logs their sizes.");
 					}
 
 					ImGui.Separator();
@@ -580,7 +580,7 @@ namespace LELEngine.Editor.Audio
 			ImGui.GetWindowDrawList().AddText(new NVector2(right, ImGui.GetItemRectMin().Y + 2f), ImGui.GetColorU32(ImGuiCol.TextDisabled), info);
 			if (ImGui.IsItemHovered())
 			{
-				ImGui.SetTooltip(path + "\n" + info + (clip != null ? "\nLoad: " + SerializationUtilityName(clip.Importer.loadType.ToString()) : "") + "\nDouble click: play. Drag onto a track to add an instrument, onto a playlist to add an entry.");
+				EditorGui.SetTooltip(path + "\n" + info + (clip != null ? "\nLoad: " + SerializationUtilityName(clip.Importer.loadType.ToString()) : "") + "\nDouble click: play. Drag onto a track to add an instrument, onto a playlist to add an entry.");
 			}
 
 			if (ImGui.BeginDragDropSource())

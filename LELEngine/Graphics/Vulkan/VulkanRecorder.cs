@@ -24,7 +24,10 @@ namespace LELEngine.Graphics.Vulkan
 	///     </para>
 	///     <para>
 	///         LEL_VULKAN_RECORDING_THREAD=0: the commands are recorded where they are given (written here and recorded at
-	///         once), for comparisons.
+	///         once). On by default on every machine: it was off for a day after one evening's runs on an Intel Core Ultra 7
+	///         155H made the render thread four to five times slower with it (31-42 against 8.5 ms a frame), which later
+	///         runs of the same build on the same machine did not show (4.4 against 7.2 ms: faster with it, also with the
+	///         thread held to the loop's own core). Disable it this way to compare if a frame's CPU time looks wrong.
 	///     </para>
 	/// </summary>
 	internal sealed unsafe partial class VulkanRecorder : IDisposable
@@ -47,7 +50,7 @@ namespace LELEngine.Graphics.Vulkan
 		/// <summary>Command buffers of a stream in one submission at most: the setup buffer and the segments (a few past the limit).</summary>
 		internal const int MaxSubmitBuffers = MaxSegments + 4;
 
-		/// <summary>LEL_VULKAN_RECORDING_THREAD=0: no recording thread.</summary>
+		/// <summary>LEL_VULKAN_RECORDING_THREAD=0: no recording thread (see the class).</summary>
 		internal static readonly bool Threaded = Environment.GetEnvironmentVariable("LEL_VULKAN_RECORDING_THREAD") != "0";
 
 		private readonly VulkanDevice device;

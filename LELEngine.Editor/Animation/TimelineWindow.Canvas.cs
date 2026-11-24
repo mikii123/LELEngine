@@ -450,7 +450,7 @@ namespace LELEngine.Editor.Animation
 
 			if (ImGui.IsItemHovered())
 			{
-				ImGui.SetTooltip("Click or drag: the playhead. In edit mode this previews on the objects (Stop puts them back).");
+				EditorGui.SetTooltip("Click or drag: the playhead. In edit mode this previews on the objects (Stop puts them back).");
 			}
 		}
 
@@ -509,7 +509,7 @@ namespace LELEngine.Editor.Animation
 			ImGui.EndDisabled();
 			if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
 			{
-				ImGui.SetTooltip("A channel per selected object. Or drag objects from the Hierarchy onto the timeline.");
+				EditorGui.SetTooltip("A channel per selected object. Or drag objects from the Hierarchy onto the timeline.");
 			}
 		}
 
@@ -531,7 +531,7 @@ namespace LELEngine.Editor.Animation
 
 			if (ImGui.IsItemHovered())
 			{
-				ImGui.SetTooltip("Show the properties this channel has keys for: the only ones it overrides");
+				EditorGui.SetTooltip("Show the properties this channel has keys for: the only ones it overrides");
 			}
 
 			// The name: the object's.
@@ -1611,20 +1611,20 @@ namespace LELEngine.Editor.Animation
 				case HitKind.ClipEnd:
 				{
 					TimelineClip clip = hit.Piece.Clip;
-					ImGui.SetTooltip(clip.DisplayName + "\n" + FormatTime(clip.start) + " - " + FormatTime(clip.End) + (clip.loop ? ", looping" : "") + "\nDrag: move, edges: trim, top corners: fades, overlap another clip: crossfade.\nDouble click: its keys in the Animation window. Right click: settings.");
+					EditorGui.SetTooltip(clip.DisplayName + "\n" + FormatTime(clip.start) + " - " + FormatTime(clip.End) + (clip.loop ? ", looping" : "") + "\nDrag: move, edges: trim, top corners: fades, overlap another clip: crossfade.\nDouble click: its keys in the Animation window. Right click: settings.");
 					break;
 				}
 				case HitKind.FadeIn:
-					ImGui.SetTooltip("Fade in: from what the property holds without the clip");
+					EditorGui.SetTooltip("Fade in: from what the property holds without the clip");
 					break;
 				case HitKind.FadeOut:
-					ImGui.SetTooltip("Fade out: back to what the property holds without the clip (without one, the last key holds).\nOverlapping the next clip crossfades into it: only what that clip has keys for changes.");
+					EditorGui.SetTooltip("Fade out: back to what the property holds without the clip (without one, the last key holds).\nOverlapping the next clip crossfades into it: only what that clip has keys for changes.");
 					break;
 				case HitKind.Key:
-					ImGui.SetTooltip(hit.Key.Property.Label + "\nDrag: move the key. Del: remove it.");
+					EditorGui.SetTooltip(hit.Key.Property.Label + "\nDrag: move the key. Del: remove it.");
 					break;
 				case HitKind.PropertyLane:
-					ImGui.SetTooltip(hit.Property.Label + "\nDouble click: a key here with the object's value");
+					EditorGui.SetTooltip(hit.Property.Label + "\nDouble click: a key here with the object's value");
 					break;
 				case HitKind.Marker:
 				case HitKind.MarkerEnd:
@@ -1632,7 +1632,7 @@ namespace LELEngine.Editor.Animation
 					AudioMarker marker = Asset.FindMarker(hit.Id);
 					if (marker != null)
 					{
-						ImGui.SetTooltip(marker.Kind + (string.IsNullOrEmpty(marker.Name) ? "" : ": " + marker.Name) + " at " + FormatTime(marker.Position) + (marker.Length > 0.0 ? " - " + FormatTime(marker.End) : "") + "\nDrag: move" + (marker.Length > 0.0 ? ", right edge: resize" : "") + ". Double or right click: settings.");
+						EditorGui.SetTooltip(marker.Kind + (string.IsNullOrEmpty(marker.Name) ? "" : ": " + marker.Name) + " at " + FormatTime(marker.Position) + (marker.Length > 0.0 ? " - " + FormatTime(marker.End) : "") + "\nDrag: move" + (marker.Length > 0.0 ? ", right edge: resize" : "") + ". Double or right click: settings.");
 					}
 
 					break;

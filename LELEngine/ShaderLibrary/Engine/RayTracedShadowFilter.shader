@@ -5,18 +5,18 @@
 #include "Engine/Sampling.glsl"
 #include "Engine/HistoryMeta.glsl"
 
-// Traced shadows (Rendering.Passes.RayTracedShadowPass), step 2: the frames' accumulation (Engine/RayTracedShadowTrace.shader)
-// smoothed over the neighbouring pixels of the same surface (a Gaussian of radius pixels, weighted by how well their
-// view depth and normal match the pixel's), into the mask the lit materials read (Engine/RayTracedShadows.glsl). What a
-// pixel's few frames of single rays leave of noise in a penumbra goes; a shadow's sharp edge on another surface stays.
-// A pixel whose rays all agreed (every channel exactly 0 or 1: fully lit or in shadow over its whole history) is kept
-// as it is, so only penumbrae pay for the filter.
+// Traced shadows (Rendering.Passes.RayTracedShadowPass), step 2 (soft shadows): this frame's rays
+// (Engine/RayTracedShadowTrace.shader: each pixel's few rays to points of the light, a pattern fixed per pixel) averaged
+// over the neighbouring pixels of the same surface (a Gaussian of radius pixels, weighted by how well their view depth
+// and normal match the pixel's), into the mask the lit materials read (Engine/RayTracedShadows.glsl). Neighbours hold
+// other points of the light, so a penumbra is the average of all of them; a shadow's edge on another surface stays sharp.
+// Only this frame's rays are read: nothing of earlier frames.
 layout(local_size_x = 8, local_size_y = 8) in;
 
-// The meta's normal bits per axis (Engine/RayTracedShadowTrace.shader).
-const uint MetaNormalBits = 6u;
+// The surface word's normal bits per axis (Engine/RayTracedShadowTrace.shader).
+const uint MetaNormalBits = 8u;
 
-uniform sampler2DArray AccumulatedMask;
+uniform sampler2DArray TracedMask;
 uniform usampler2D Meta;    // Engine/HistoryMeta.glsl: linear view depth (0: no surface the mask is read for), normal
 uniform ivec2 screenSize;
 uniform int layers;
@@ -40,19 +40,11 @@ void main()
 		return;
 	}
 
-	vec4 own[3];
-	bool settled = true;
-	for (int layer = 0; layer < layers; layer++)
-	{
-		own[layer] = texelFetch(AccumulatedMask, ivec3(pixel, layer), 0);
-		settled = settled && all(equal(own[layer] * (1.0 - own[layer]), vec4(0.0)));
-	}
-
-	if (radius <= 0 || settled)
+	if (radius <= 0)
 	{
 		for (int layer = 0; layer < layers; layer++)
 		{
-			imageStore(OutMask, ivec3(pixel, layer), own[layer]);
+			imageStore(OutMask, ivec3(pixel, layer), texelFetch(TracedMask, ivec3(pixel, layer), 0));
 		}
 
 		return;
@@ -94,7 +86,7 @@ void main()
 
 			for (int layer = 0; layer < layers; layer++)
 			{
-				sum[layer] += texelFetch(AccumulatedMask, ivec3(tap, layer), 0) * w;
+				sum[layer] += texelFetch(TracedMask, ivec3(tap, layer), 0) * w;
 			}
 
 			weightSum += w;
@@ -103,7 +95,7 @@ void main()
 
 	for (int layer = 0; layer < layers; layer++)
 	{
-		imageStore(OutMask, ivec3(pixel, layer), weightSum > 0.0 ? sum[layer] / weightSum : texelFetch(AccumulatedMask, ivec3(pixel, layer), 0));
+		imageStore(OutMask, ivec3(pixel, layer), weightSum > 0.0 ? sum[layer] / weightSum : texelFetch(TracedMask, ivec3(pixel, layer), 0));
 	}
 }
 

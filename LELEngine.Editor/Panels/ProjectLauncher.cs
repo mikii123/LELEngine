@@ -145,7 +145,7 @@ namespace LELEngine.Editor
 
 					if (ImGui.IsItemHovered())
 					{
-						ImGui.SetTooltip("Click to open. Right-click for more.");
+						EditorGui.SetTooltip("Click to open. Right-click for more.");
 					}
 
 					if (EditorGui.BeginPopupContextItem("row"))
@@ -228,7 +228,7 @@ namespace LELEngine.Editor
 			EditorGui.Checkbox("Create a folder named after the project", ref createFolder);
 			if (ImGui.IsItemHovered())
 			{
-				ImGui.SetTooltip("On: the project goes into Location/Name.\nOff: the project goes into Location itself (an existing folder keeps its files).");
+				EditorGui.SetTooltip("On: the project goes into Location/Name.\nOff: the project goes into Location itself (an existing folder keeps its files).");
 			}
 
 			string problem = ValidateNew(out string folder, out bool existing);
@@ -250,7 +250,7 @@ namespace LELEngine.Editor
 			ImGui.PopClipRect();
 			if (ImGui.IsItemHovered())
 			{
-				ImGui.SetTooltip(problem ?? folder);
+				EditorGui.SetTooltip(problem ?? folder);
 			}
 
 			ImGui.SameLine(ImGui.GetContentRegionAvail().X - buttonWidth + style.WindowPadding.X);

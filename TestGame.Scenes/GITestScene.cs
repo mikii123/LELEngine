@@ -131,13 +131,11 @@ namespace TestGame.Scenes
 			public bool ProbeDirectionJitter = true;
 			public int ProbeSpacing = 16;
 			public bool ProbeAdaptivePlacement = true;
-			public int RadiosityRays = 4;
 			public float RadiosityBlend = 0.9f;
 			public float RadiosityMaxHistorySamples = 64f;
 			public float RadiosityMovingHistorySamples = 16f;
 			public float ProbeHistoryWeight = 0.5f;
 			public float ProbeMaxHistorySamples = 32f;
-			public float ProbeChangeThreshold = 0.5f;
 			public float ProbeChangeSigma = 4f;
 			public float ProbeChangeFloor = 0.15f;
 			public float ProbeMovingHistorySamples = 2f;
@@ -149,7 +147,6 @@ namespace TestGame.Scenes
 			public bool ProbeImportanceSampling = true;
 			public bool ProbeSpatialFilter = true;
 			public int ProbeSpatialFilterPasses = 1;
-			public int ProbeFilterRadius = 1;
 			public int SurfaceCacheTexelsPerMeter = 6;
 			public bool RadianceCache = true;
 			public bool RadianceCacheForRadiosity = true;
@@ -664,13 +661,11 @@ namespace TestGame.Scenes
 			Lighting.GI.ProbeDirectionJitter = options.ProbeDirectionJitter;
 			Lighting.GI.ProbeSpacing = options.ProbeSpacing;
 			Lighting.GI.ProbeAdaptivePlacement = options.ProbeAdaptivePlacement;
-			Lighting.GI.RadiosityRays = options.RadiosityRays;
 			Lighting.GI.RadiosityBlend = options.RadiosityBlend;
 			Lighting.GI.RadiosityMaxHistorySamples = options.RadiosityMaxHistorySamples;
 			Lighting.GI.RadiosityMovingHistorySamples = options.RadiosityMovingHistorySamples;
 			Lighting.GI.ProbeHistoryWeight = options.ProbeHistoryWeight;
 			Lighting.GI.ProbeMaxHistorySamples = options.ProbeMaxHistorySamples;
-			Lighting.GI.ProbeChangeThreshold = options.ProbeChangeThreshold;
 			Lighting.GI.ProbeChangeSigma = options.ProbeChangeSigma;
 			Lighting.GI.ProbeChangeFloor = options.ProbeChangeFloor;
 			Lighting.GI.ProbeMovingHistorySamples = options.ProbeMovingHistorySamples;
@@ -682,9 +677,8 @@ namespace TestGame.Scenes
 			Lighting.GI.ProbeImportanceSampling = options.ProbeImportanceSampling;
 			Lighting.GI.ProbeSpatialFilter = options.ProbeSpatialFilter;
 			Lighting.GI.ProbeSpatialFilterPasses = options.ProbeSpatialFilterPasses;
-			Lighting.GI.ProbeFilterRadius = options.ProbeFilterRadius;
 			Lighting.GI.RadianceCacheEnabled = options.RadianceCache;
-			Lighting.GI.SdfObjectIdLookup = options.SdfObjectIdLookup;
+			Lighting.SdfObjectIdLookup = options.SdfObjectIdLookup;
 			Lighting.GI.HardwareRayTracing = options.HardwareRayTracing;
 			Lighting.GI.RadianceCacheFarShortcut = options.RadianceCacheFarShortcut;
 			Lighting.GI.ProbeAdaptiveFlaggedRefine = options.ProbeAdaptiveFlaggedRefine;
@@ -708,20 +702,20 @@ namespace TestGame.Scenes
 			Lighting.GI.LightingUpdateInterval = 1;
 			Lighting.GI.BounceStrength = options.Bounce ? 1f : 0f;
 			Lighting.GI.BounceIterations = options.Bounce ? Math.Max(0, options.BounceIterations) : 0;
-			Lighting.GI.BounceCones = options.BounceCones;
+			Lighting.GI.BounceConeLayout = options.BounceCones >= 6 ? VoxelBounceCones.Six : VoxelBounceCones.OneWide;
 			Lighting.GI.BounceCells = options.BounceCells;
 			Lighting.GI.ConeJitter = options.ConeJitter;
 			Lighting.GI.ConeJitterCellSize = options.ConeJitterCellSize;
 			Lighting.GI.CoverageOccupancyScale = options.CoverageOccupancyScale;
-			Lighting.GI.CoverageSplatWidth = options.CoverageSplatWidth;			Lighting.GI.ResolveFilterPasses = options.ResolveFilterPasses;
-			Lighting.GI.InjectShadowTaps = options.InjectShadowTaps;
+			Lighting.GI.CoverageSplat = options.CoverageSplatWidth >= 3 ? VoxelCoverageSplat.Quadratic : VoxelCoverageSplat.Linear;
+			Lighting.GI.ResolveFilterPasses = options.ResolveFilterPasses;
+			Lighting.GI.SoftVoxelShadows = options.InjectShadowTaps >= 4;
 			Lighting.GI.VoxelCoverage = options.VoxelCoverage;
 			Lighting.GI.ConservativeVoxelization = options.ConservativeVoxelization;
 			Lighting.GI.VoxelMips = options.VoxelMips;
 			Lighting.GI.AnisotropicMipLevels = options.AnisotropicMipLevels;
 
 			// Global SDF over the same grid; sky light enters through the open side of the room.
-			Lighting.GI.DistanceFieldEnabled = true;
 			Lighting.GI.SdfResolution = options.SdfResolution;
 			Lighting.GI.SdfBandVoxels = 8;
 			Lighting.GI.SdfMaxSteps = 48;

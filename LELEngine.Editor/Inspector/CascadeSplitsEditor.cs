@@ -137,7 +137,7 @@ namespace LELEngine.Editor
 				if (hovered || active)
 				{
 					ImGui.SetMouseCursor(ImGuiMouseCursor.ResizeEw);
-					ImGui.SetTooltip("Cascade " + (k + 1) + " starts at " + (splits[k] * 100f).ToString("0.#") + "%% (" +(splits[k] * distance).ToString("0.##") + " m)");
+					EditorGui.SetTooltip("Cascade " + (k + 1) + " starts at " + (splits[k] * 100f).ToString("0.#") + "% (" + (splits[k] * distance).ToString("0.##") + " m)");
 				}
 
 				float alpha = active ? 1f : hovered ? 0.9f : 0.6f;

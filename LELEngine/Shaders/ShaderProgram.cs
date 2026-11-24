@@ -341,6 +341,26 @@ namespace LELEngine.Shaders
 			: this(path, Array.Empty<string>())
 		{ }
 
+		/// <summary>LEL_RAY_QUERY_OFF=name,name: shader files (by file name) built without their ray query variant (a diagnosis).</summary>
+		private static readonly string[] rayQueryOff = (Environment.GetEnvironmentVariable("LEL_RAY_QUERY_OFF") ?? "").Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+		private static string[] WithoutDiagnosedRayQueries(string path, string[] defines)
+		{
+			if (rayQueryOff.Length == 0 || Array.IndexOf(defines, RayQueryDefine) < 0)
+			{
+				return defines;
+			}
+
+			string file = System.IO.Path.GetFileNameWithoutExtension(path);
+			if (Array.Exists(rayQueryOff, name => string.Equals(name, file, StringComparison.OrdinalIgnoreCase)))
+			{
+				Console.WriteLine("[Shaders] LEL_RAY_QUERY_OFF: " + path + " without its ray query variant");
+				return Array.FindAll(defines, define => define != RayQueryDefine);
+			}
+
+			return defines;
+		}
+
 		/// <summary>Loads a .shader file with preprocessor symbols defined in every stage (variants of one source).</summary>
 		public ShaderProgram(string path, string[] defines)
 			: this(path, defines, true)
@@ -352,6 +372,7 @@ namespace LELEngine.Shaders
 		/// </param>
 		internal ShaderProgram(string path, string[] defines, bool start)
 		{
+			defines = WithoutDiagnosedRayQueries(path, defines);
 			Name = defines.Length == 0 ? path : path + " [" + string.Join(", ", defines) + "]";
 			SourcePath = path;
 			assetPath = AssetDatabase.Resolve(path, "Shaders") ?? path.Replace('\\', '/');

@@ -164,6 +164,12 @@ namespace LELEngine.Editor
 			if (BeginTab(Tab.Graphics, "Graphics"))
 			{
 				changed |= DrawGraphics(settings.Graphics ??= new GraphicsSettings());
+				// How LOD groups pick their levels (it was under Lighting, which it has nothing to do with).
+				ImGui.Spacing();
+				ImGui.SeparatorText("Level of Detail");
+				ImGui.PushID("lod");
+				changed |= FieldDrawer.DrawFields(settings.LOD ??= new LODSettings(), context);
+				ImGui.PopID();
 				EndTab();
 			}
 
@@ -253,8 +259,8 @@ namespace LELEngine.Editor
 			}
 
 			ImGui.Spacing();
-			ImGui.TextDisabled("Scripts read actions of players: InputManager.GetPlayer(0).GetButtonDown(\"Fire\").");
-			ImGui.TextDisabled("Without a configuration the game reads keys directly (Input.GetKey).");
+			Hint("Scripts read actions of players: InputManager.GetPlayer(0).GetButtonDown(\"Fire\").");
+			Hint("Without a configuration the game reads keys directly (Input.GetKey).");
 			return changed;
 		}
 
@@ -287,7 +293,7 @@ namespace LELEngine.Editor
 			ImGui.EndDisabled();
 			if (playing && ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
 			{
-				ImGui.SetTooltip("The GI method cannot change in play mode.");
+				EditorGui.SetTooltip("The GI method cannot change in play mode.");
 			}
 
 			bool changed = selected != gi.Mode;
@@ -308,62 +314,568 @@ namespace LELEngine.Editor
 			return only == null || only == mode;
 		}
 
+		// The lighting settings are laid out by what they belong to, and a setting shows only while it changes something:
+		// a feature's settings go with it when it is off, a method's with the method, the distance field's while nothing
+		// traces it (Hardware Ray Tracing), a choice's details with the choice that reads them. What reads each setting:
+		// GlobalIlluminationSettings, RayTracingSettings, ShadowSettings (keep this in step when that changes).
 		private bool DrawLighting(ProjectSettings settings)
 		{
-			// The method comes first: the GI sections below show only the settings it reads.
 			GlobalIlluminationSettings gi = settings.GI;
 			bool changed = DrawGIMethod(gi, context);
 			ImGui.Spacing();
-			ImGui.TextDisabled("How shadows and global illumination are computed in every scene.");
-			ImGui.TextDisabled("A scene's environment, shadow reach and GI volume are in the Lighting panel.");
+			Hint("How shadows and global illumination are computed in every scene.");
+			Hint("A scene's environment, shadow reach and GI volume are in the Lighting panel.");
 			ImGui.Spacing();
 
-			if (EditorGui.CollapsingHeader("Shadows", ImGuiTreeNodeFlags.DefaultOpen))
-			{
-				ImGui.PushID("shadows");
-				changed |= FieldDrawer.DrawFields(settings.Shadows, context);
-				// Below the cascade count (the last field): the splits, which the fields leave out.
-				changed |= CascadeSplitsEditor.Draw(settings.Shadows, context);
-				ImGui.PopID();
-			}
+			changed |= DrawShadows(settings);
 
-			if (EditorGui.CollapsingHeader("Ray Tracing", ImGuiTreeNodeFlags.DefaultOpen))
-			{
-				ImGui.PushID("raytracing");
-				ImGui.TextDisabled(GraphicsCapabilities.RayQueries
-					? "Traced through the scene's triangles by this graphics device (ray queries)."
-					: "This graphics device has no ray queries: none of this is traced here (Vulkan on a GPU with them).");
-				ImGui.TextDisabled("Lumen's own rays: Hardware Ray Tracing in the Lumen section.");
-				changed |= FieldDrawer.DrawFields(settings.RayTracing, context);
-				ImGui.PopID();
-			}
-
-			if (EditorGui.CollapsingHeader("Level of Detail", ImGuiTreeNodeFlags.DefaultOpen))
-			{
-				ImGui.PushID("lod");
-				changed |= FieldDrawer.DrawFields(settings.LOD, context);
-				ImGui.PopID();
-			}
-
-			// Settings both methods read, then those of the selected method only (the header keeps its id, and so
-			// its open state, when the method changes).
-			GIMode mode = gi.Mode;
+			// The selected method's section (one id for both, so it keeps its open state when the method changes).
 			ImGui.PushID("gi");
-			if (EditorGui.CollapsingHeader("Global Illumination", ImGuiTreeNodeFlags.DefaultOpen)
-				&& FieldDrawer.DrawFields(gi, context, filter: field => field.Name != nameof(GlobalIlluminationSettings.Mode) && GIMethodAttribute.Of(field.Field) == null))
+			bool giChanged = false;
+			if (EditorGui.CollapsingHeader(SerializationUtility.NicifyName(gi.Mode.ToString()) + "###method", ImGuiTreeNodeFlags.DefaultOpen))
 			{
-				gi.InvalidateStatic();
-				changed = true;
-			}
-
-			if (EditorGui.CollapsingHeader(SerializationUtility.NicifyName(mode.ToString()) + "###method", ImGuiTreeNodeFlags.DefaultOpen)
-				&& FieldDrawer.DrawFields(gi, context, filter: field => GIMethodAttribute.Of(field.Field) == mode))
-			{
-				gi.InvalidateStatic();
-				changed = true;
+				giChanged = gi.Mode == GIMode.VoxelConeTracing ? DrawVoxelConeTracing(settings) : DrawLumen(settings);
 			}
 
 			ImGui.PopID();
+			if (giChanged)
+			{
+				gi.InvalidateStatic();
+			}
+
+			return changed | giChanged;
+		}
+
+		/// <summary>The project's graphics API is Vulkan, the only one that traces rays (on GPUs with ray queries).</summary>
+		private static bool ProjectCanTraceRays(ProjectSettings settings)
+		{
+			return settings.Graphics != null && settings.Graphics.GraphicsApi == Graphics.GraphicsApi.Vulkan;
+		}
+
+		private bool DrawShadows(ProjectSettings settings)
+		{
+			if (!EditorGui.CollapsingHeader("Shadows", ImGuiTreeNodeFlags.DefaultOpen))
+			{
+				return false;
+			}
+
+			ShadowSettings shadows = settings.Shadows;
+			RayTracingSettings rays = settings.RayTracing;
+			ImGui.PushID("shadows");
+			bool changed = Field(shadows, nameof(ShadowSettings.Enabled));
+			if (shadows.Enabled)
+			{
+				if (Group("Shadow Maps"))
+				{
+					changed |= Fields(shadows, nameof(ShadowSettings.MapSize), nameof(ShadowSettings.DepthBiasTexels), nameof(ShadowSettings.NormalBiasTexels),
+						nameof(ShadowSettings.Cascades));
+					// Right below the cascade count: where each cascade begins (the split fields are hidden).
+					changed |= CascadeSplitsEditor.Draw(shadows, context);
+					changed |= Field(shadows, nameof(ShadowSettings.ShadowedLights));
+					if (shadows.ShadowedLights > 1)
+					{
+						changed |= Fields(shadows, nameof(ShadowSettings.AdditionalLightMapSize), nameof(ShadowSettings.AdditionalLightCascades));
+					}
+
+					ImGui.TreePop();
+				}
+
+				if (ProjectCanTraceRays(settings) && Group("Ray Traced"))
+				{
+					if (!GraphicsCapabilities.RayQueries)
+					{
+						Hint("This GPU has no ray queries: here the shadows come from the maps only.");
+					}
+
+					changed |= Field(rays, nameof(RayTracingSettings.LocalLightShadows));
+					if (rays.LocalLightShadows)
+					{
+						changed |= Field(rays, nameof(RayTracingSettings.ShadowedLocalLights));
+					}
+
+					changed |= Field(rays, nameof(RayTracingSettings.DirectionalLightShadows));
+					if (!rays.DirectionalLightShadows)
+					{
+						changed |= Field(rays, nameof(RayTracingSettings.DirectionalLightShadowsOnDiscreteGpus));
+					}
+
+					bool directional = rays.DirectionalLightShadows || rays.DirectionalLightShadowsOnDiscreteGpus;
+					if (directional)
+					{
+						changed |= Field(rays, nameof(RayTracingSettings.SkipUnneededShadowMaps));
+					}
+
+					if (rays.LocalLightShadows || directional)
+					{
+						changed |= Fields(rays, nameof(RayTracingSettings.TransparentShadows), nameof(RayTracingSettings.SoftShadows));
+						if (rays.SoftShadows)
+						{
+							changed |= Field(rays, nameof(RayTracingSettings.SoftShadowRays));
+						}
+					}
+
+					ImGui.TreePop();
+				}
+			}
+
+			ImGui.PopID();
+			return changed;
+		}
+
+		private bool DrawVoxelConeTracing(ProjectSettings settings)
+		{
+			GlobalIlluminationSettings gi = settings.GI;
+			RayTracingSettings rays = settings.RayTracing;
+			bool changed = false;
+			if (Group("Volume"))
+			{
+				changed |= SizeCombo(gi, nameof(GlobalIlluminationSettings.Resolution), ref gi.Resolution, 32, 64, 128, 256);
+				changed |= Fields(gi, nameof(GlobalIlluminationSettings.LightingUpdateInterval), nameof(GlobalIlluminationSettings.DynamicUpdateInterval));
+				changed |= SizeCombo(gi, nameof(GlobalIlluminationSettings.GridShadowMapSize), ref gi.GridShadowMapSize, 256, 512, 1024, 2048, 4096);
+				changed |= Field(gi, nameof(GlobalIlluminationSettings.SoftVoxelShadows));
+				ImGui.TreePop();
+			}
+
+			if (Group("Voxelization"))
+			{
+				changed |= Field(gi, nameof(GlobalIlluminationSettings.VoxelCoverage));
+				if (gi.VoxelCoverage)
+				{
+					changed |= Field(gi, nameof(GlobalIlluminationSettings.ConservativeVoxelization));
+					if (gi.ConservativeVoxelization && Graphics.GraphicsDevice.Current != null && !Graphics.Gfx.Capabilities.ConservativeRasterization)
+					{
+						Hint("This graphics device has no conservative rasterization: it takes eight samples here.");
+					}
+
+					changed |= Fields(gi, nameof(GlobalIlluminationSettings.CoverageOccupancyScale), nameof(GlobalIlluminationSettings.CoverageSplat));
+				}
+
+				ImGui.TreePop();
+			}
+
+			if (Group("Mips"))
+			{
+				changed |= Field(gi, nameof(GlobalIlluminationSettings.VoxelMips));
+				if (gi.VoxelMips == VoxelMipMode.Anisotropic)
+				{
+					changed |= Field(gi, nameof(GlobalIlluminationSettings.AnisotropicMipLevels));
+				}
+
+				ImGui.TreePop();
+			}
+
+			if (Group("Bounces"))
+			{
+				changed |= Field(gi, nameof(GlobalIlluminationSettings.BounceIterations));
+				if (gi.BounceIterations > 0)
+				{
+					changed |= Field(gi, nameof(GlobalIlluminationSettings.BounceCells));
+					if (!gi.BounceCells)
+					{
+						changed |= Field(gi, nameof(GlobalIlluminationSettings.BounceConeLayout));
+					}
+				}
+
+				ImGui.TreePop();
+			}
+
+			if (Group("Cones"))
+			{
+				changed |= Fields(gi, nameof(GlobalIlluminationSettings.ConeMaxDistance), nameof(GlobalIlluminationSettings.ConeJitter));
+				// Two choices, said as what they are: what the cones see (the voxels only, or the exact surfaces near them or
+				// all along them), then where the exact surfaces come from (ray tracing or the distance field). The fields
+				// behind them keep their names (TraceMode: VoxelCones / SdfDetail / SdfCones; HardwareRayTracing).
+				changed |= ConeVisibility(gi);
+				if (gi.TraceMode == GITraceMode.SdfDetail)
+				{
+					changed |= Field(gi, nameof(GlobalIlluminationSettings.SdfDetailDistance));
+				}
+
+				if (gi.TraceMode != GITraceMode.VoxelCones)
+				{
+					bool traced = false;
+					if (ProjectCanTraceRays(settings))
+					{
+						changed |= ExactSurfacesSource(gi);
+						traced = gi.HardwareRayTracing;
+					}
+					else
+					{
+						Hint("Geometry Source: Global SDF (OpenGL has no ray tracing).");
+					}
+
+					if (traced)
+					{
+						if (gi.TraceMode == GITraceMode.SdfCones)
+						{
+							changed |= Field(rays, nameof(RayTracingSettings.ConeRays));
+						}
+
+						changed |= Field(rays, nameof(RayTracingSettings.MaterialConeRays));
+						Hint("GPUs without ray queries fall back to the Global SDF (its settings show with it selected).");
+					}
+					else if (Group("Global SDF"))
+					{
+						changed |= DistanceField(gi, gi.TraceMode == GITraceMode.SdfDetail);
+						ImGui.TreePop();
+					}
+				}
+
+				ImGui.TreePop();
+			}
+
+			if (Group("Screen-Space Resolve"))
+			{
+				changed |= Field(gi, nameof(GlobalIlluminationSettings.ScreenSpaceResolve));
+				if (gi.ScreenSpaceResolve)
+				{
+					changed |= Fields(gi, nameof(GlobalIlluminationSettings.ResolveScale), nameof(GlobalIlluminationSettings.ResolveFilterPasses));
+					if (gi.ConeJitter)
+					{
+						changed |= Field(gi, nameof(GlobalIlluminationSettings.ConeJitterCellSize));
+					}
+				}
+
+				ImGui.TreePop();
+			}
+
+			changed |= VolumetricObjects(gi, gi.ScreenSpaceResolve);
+			return changed;
+		}
+
+		private bool DrawLumen(ProjectSettings settings)
+		{
+			GlobalIlluminationSettings gi = settings.GI;
+			RayTracingSettings rays = settings.RayTracing;
+			bool changed = false;
+			if (ProjectCanTraceRays(settings) && Group("Ray Tracing"))
+			{
+				changed |= HardwareRayTracing(gi,
+					"Lumen's rays (screen probes, radiance cache probes, the surface cache's radiosity, the local lights' GI shadows) trace the scene's " +
+					"triangles with the GPU's ray tracing (Vulkan on a GPU with ray queries); no distance field is built then. Off, or on a GPU without " +
+					"ray queries: they trace the global distance field. What a ray hits is lit from the surface cache either way. Taken when the GI first runs.");
+				if (gi.HardwareRayTracing)
+				{
+					changed |= Field(rays, nameof(RayTracingSettings.Reflections));
+					if (rays.Reflections)
+					{
+						changed |= Field(rays, nameof(RayTracingSettings.ReflectionMaxRoughness));
+					}
+
+					if (settings.Shadows.Enabled)
+					{
+						changed |= Field(rays, nameof(RayTracingSettings.SurfaceCacheShadows));
+					}
+
+					Hint("GPUs without ray queries trace a distance field instead (its settings show with this off).");
+				}
+
+				ImGui.TreePop();
+			}
+
+			bool traced = ProjectCanTraceRays(settings) && gi.HardwareRayTracing;
+			if (!traced && Group("Distance Field"))
+			{
+				changed |= DistanceField(gi, true);
+				changed |= Field(gi, nameof(GlobalIlluminationSettings.DynamicUpdateInterval));
+				ImGui.TreePop();
+			}
+
+			if (Group("Surface Cache"))
+			{
+				changed |= Fields(gi, nameof(GlobalIlluminationSettings.SurfaceCacheAtlasSize), nameof(GlobalIlluminationSettings.SurfaceCacheTexelsPerMeter),
+					nameof(GlobalIlluminationSettings.SurfaceCacheMaxCardSize), nameof(GlobalIlluminationSettings.GridShadowMapSize),
+					nameof(GlobalIlluminationSettings.RadiosityMaxHistorySamples));
+				changed |= gi.RadiosityMaxHistorySamples > 0f
+					? Field(gi, nameof(GlobalIlluminationSettings.RadiosityMovingHistorySamples))
+					: Field(gi, nameof(GlobalIlluminationSettings.RadiosityBlend));
+				changed |= Field(gi, nameof(GlobalIlluminationSettings.RadiosityIdleDivisor));
+				ImGui.TreePop();
+			}
+
+			if (Group("Screen Probes"))
+			{
+				changed |= Fields(gi, nameof(GlobalIlluminationSettings.ScreenProbeResolveScale), nameof(GlobalIlluminationSettings.ProbeSpacing),
+					nameof(GlobalIlluminationSettings.ProbePlaneTolerance), nameof(GlobalIlluminationSettings.ProbeAdaptivePlacement));
+				if (gi.ProbeAdaptivePlacement)
+				{
+					changed |= Fields(gi, nameof(GlobalIlluminationSettings.ProbeAdaptiveFraction), nameof(GlobalIlluminationSettings.ProbeAdaptiveMinCoverage),
+						nameof(GlobalIlluminationSettings.ProbeAdaptiveFlaggedRefine));
+				}
+
+				changed |= Field(gi, nameof(GlobalIlluminationSettings.ProbeJitter));
+				if (gi.ProbeJitter)
+				{
+					changed |= Fields(gi, nameof(GlobalIlluminationSettings.ProbeAnchorJitter), nameof(GlobalIlluminationSettings.ProbeDirectionJitter));
+				}
+
+				changed |= Field(gi, nameof(GlobalIlluminationSettings.ProbeImportanceSampling));
+				if (gi.ProbeImportanceSampling)
+				{
+					changed |= Field(gi, nameof(GlobalIlluminationSettings.ProbeImportanceMergeFraction));
+				}
+
+				changed |= Field(gi, nameof(GlobalIlluminationSettings.ProbeSpatialFilter));
+				if (gi.ProbeSpatialFilter)
+				{
+					changed |= Fields(gi, nameof(GlobalIlluminationSettings.ProbeSpatialFilterPasses), nameof(GlobalIlluminationSettings.ProbeFilterMaxAngle));
+				}
+
+				changed |= Field(gi, nameof(GlobalIlluminationSettings.ScreenTraceDistance));
+				if (gi.ScreenTraceDistance > 0f)
+				{
+					changed |= Fields(gi, nameof(GlobalIlluminationSettings.ScreenTraceSteps), nameof(GlobalIlluminationSettings.ScreenTraceThickness));
+				}
+
+				ImGui.TreePop();
+			}
+
+			if (Group("Probe History"))
+			{
+				changed |= Field(gi, nameof(GlobalIlluminationSettings.ProbeMaxHistorySamples));
+				changed |= gi.ProbeMaxHistorySamples > 0f
+					? Fields(gi, nameof(GlobalIlluminationSettings.ProbeFastHistorySamples), nameof(GlobalIlluminationSettings.ProbeChangeSigma),
+						nameof(GlobalIlluminationSettings.ProbeChangeFloor), nameof(GlobalIlluminationSettings.ProbeJumpThreshold))
+					: Field(gi, nameof(GlobalIlluminationSettings.ProbeHistoryWeight));
+				changed |= Fields(gi, nameof(GlobalIlluminationSettings.ProbeHistoryDistance), nameof(GlobalIlluminationSettings.ProbeMovingHistorySamples),
+					nameof(GlobalIlluminationSettings.ProbeMovingFrames), nameof(GlobalIlluminationSettings.ProbeTemporalBlend));
+				if (gi.ProbeTemporalBlend > 0f)
+				{
+					changed |= Field(gi, nameof(GlobalIlluminationSettings.ProbeTemporalMovingFrames));
+				}
+
+				ImGui.TreePop();
+			}
+
+			if (Group("Radiance Cache"))
+			{
+				changed |= Field(gi, nameof(GlobalIlluminationSettings.RadianceCacheEnabled));
+				if (gi.RadianceCacheEnabled)
+				{
+					changed |= Fields(gi, nameof(GlobalIlluminationSettings.RadianceCacheProbesPerAxis), nameof(GlobalIlluminationSettings.RadianceCacheProbeResolution),
+						nameof(GlobalIlluminationSettings.RadianceCacheTraceResolution), nameof(GlobalIlluminationSettings.RadianceCacheProbesPerFrame),
+						nameof(GlobalIlluminationSettings.RadianceCacheMaxHistorySamples));
+					changed |= gi.RadianceCacheMaxHistorySamples > 0f
+						? Field(gi, nameof(GlobalIlluminationSettings.RadianceCacheMovingHistorySamples))
+						: Field(gi, nameof(GlobalIlluminationSettings.RadianceCacheHistoryFrames));
+					changed |= Fields(gi, nameof(GlobalIlluminationSettings.RadianceCacheChangeThreshold), nameof(GlobalIlluminationSettings.RadianceCacheChangeProbesPerFrame),
+						nameof(GlobalIlluminationSettings.RadianceCacheChangeRadius), nameof(GlobalIlluminationSettings.RadianceCacheIdleAfterFrames),
+						nameof(GlobalIlluminationSettings.RadianceCacheIdleDivisor), nameof(GlobalIlluminationSettings.RadianceCacheIdleAfterSweeps),
+						nameof(GlobalIlluminationSettings.RadianceCacheNearDistance), nameof(GlobalIlluminationSettings.RadianceCacheForRadiosity),
+						nameof(GlobalIlluminationSettings.RadianceCacheFarShortcut));
+				}
+
+				ImGui.TreePop();
+			}
+
+			changed |= VolumetricObjects(gi, false);
+			return changed;
+		}
+
+		/// <summary>
+		///     The global distance field's settings (while it is built: an SDF trace without the scene's triangles);
+		///     <paramref name="sphereTraced" />: something sphere traces it (Lumen, SDF Detail), which Max Steps bounds.
+		/// </summary>
+		private bool DistanceField(GlobalIlluminationSettings gi, bool sphereTraced)
+		{
+			bool changed = SizeCombo(gi, nameof(GlobalIlluminationSettings.SdfResolution), ref gi.SdfResolution, 64, 128, 256);
+			changed |= Field(gi, nameof(GlobalIlluminationSettings.SdfBandVoxels));
+			if (sphereTraced)
+			{
+				changed |= Field(gi, nameof(GlobalIlluminationSettings.SdfMaxSteps));
+			}
+
+			return changed;
+		}
+
+		/// <summary>
+		///     The volumetric objects in the GI. <paramref name="accurate" />: the method has the Accurate way (voxel cone
+		///     tracing's screen-space resolve); elsewhere Fast and Accurate are the same, so it is on or off.
+		/// </summary>
+		private bool VolumetricObjects(GlobalIlluminationSettings gi, bool accurate)
+		{
+			if (!Group("Volumetric Objects"))
+			{
+				return false;
+			}
+
+			bool changed;
+			if (accurate)
+			{
+				changed = Field(gi, nameof(GlobalIlluminationSettings.VolumesInGI));
+			}
+			else
+			{
+				bool on = gi.VolumesInGI != VolumeGIMode.Off;
+				FieldDrawer.Label("Volumes In GI", null, context);
+				changed = EditorGui.Checkbox("##volumesingi", ref on);
+				Tooltip("The volumetric objects with Contribute GI light the scene through the GI and hide the sky and the light behind them\n" +
+					"(a coarse volume of them is made every frame). Off: the GI does not see clouds at all.");
+				context.Track(changed);
+				if (changed)
+				{
+					gi.VolumesInGI = on ? VolumeGIMode.Fast : VolumeGIMode.Off;
+				}
+			}
+
+			if (gi.VolumesInGI != VolumeGIMode.Off)
+			{
+				changed |= Fields(gi, nameof(GlobalIlluminationSettings.VolumeMediaSides), nameof(GlobalIlluminationSettings.VolumeMediaResolution),
+					nameof(GlobalIlluminationSettings.VolumeMediaReach));
+			}
+
+			ImGui.TreePop();
+			return changed;
+		}
+
+		private static readonly (GITraceMode Mode, string Label)[] coneVisibilities =
+		{
+			(GITraceMode.VoxelCones, "Voxel"),
+			(GITraceMode.SdfDetail, "Hybrid"),
+			(GITraceMode.SdfCones, "Exact")
+		};
+
+		/// <summary>VCT's trace mode under the name of what it gives (the field stays <see cref="GlobalIlluminationSettings.TraceMode" />).</summary>
+		private bool ConeVisibility(GlobalIlluminationSettings gi)
+		{
+			FieldDrawer.Label("Cone Occlusion", null, context);
+			GITraceMode selected = gi.TraceMode;
+			string shown = Array.Find(coneVisibilities, entry => entry.Mode == selected).Label ?? selected.ToString();
+			if (EditorGui.BeginCombo("##conevisibility", shown))
+			{
+				foreach ((GITraceMode mode, string label) in coneVisibilities)
+				{
+					if (EditorGui.Selectable(label, mode == selected))
+					{
+						selected = mode;
+					}
+				}
+
+				EditorGui.EndCombo();
+			}
+
+			Tooltip("What the cones see of the surfaces they run into.\n" +
+				"Voxel: the voxel mips' opacity only (cheapest; light leaks through walls about a voxel thick, stepped corners).\n" +
+				"Hybrid: exact geometry over the first stretch of every cone (Detail Distance), voxel mips after it.\n" +
+				"Exact: the whole cone's visibility from the exact geometry (no leaks through walls, smooth corners).\n" +
+				"Geometry Source sets where the exact geometry comes from (hardware ray tracing or the global SDF).");
+			bool changed = selected != gi.TraceMode;
+			context.Track(changed);
+			if (changed)
+			{
+				gi.TraceMode = selected;
+			}
+
+			return changed;
+		}
+
+		/// <summary>Where VCT's exact surfaces come from: the triangles by ray tracing, or the distance field (<see cref="GlobalIlluminationSettings.HardwareRayTracing" />).</summary>
+		private bool ExactSurfacesSource(GlobalIlluminationSettings gi)
+		{
+			FieldDrawer.Label("Geometry Source", null, context);
+			int selected = gi.HardwareRayTracing ? 0 : 1;
+			string[] labels = { "Hardware Ray Tracing", "Global SDF" };
+			if (EditorGui.BeginCombo("##exactsurfaces", labels[selected]))
+			{
+				for (int i = 0; i < labels.Length; i++)
+				{
+					if (EditorGui.Selectable(labels[i], i == selected))
+					{
+						selected = i;
+					}
+				}
+
+				EditorGui.EndCombo();
+			}
+
+			Tooltip("Hardware Ray Tracing: the cones trace the scene's triangles with ray queries (Vulkan on a GPU that has them);\n" +
+				"no distance field is built. Global SDF: they read the scene's global signed distance field, built and kept up to date.\n" +
+				"A GPU without ray queries uses the distance field either way. Taken when the GI first runs: not while the game runs.");
+			bool changed = (selected == 0) != gi.HardwareRayTracing;
+			context.Track(changed);
+			if (changed)
+			{
+				gi.HardwareRayTracing = selected == 0;
+			}
+
+			if (gi.HardwareRayTracing && !GraphicsCapabilities.RayQueries)
+			{
+				Hint("This GPU has no ray queries: it falls back to the Global SDF.");
+			}
+
+			return changed;
+		}
+
+		/// <summary>The GI's Hardware Ray Tracing, with the description of what it changes for the method drawn.</summary>
+		private bool HardwareRayTracing(GlobalIlluminationSettings gi, string tooltip)
+		{
+			bool on = gi.HardwareRayTracing;
+			FieldDrawer.Label("Hardware Ray Tracing", null, context);
+			bool edited = EditorGui.Checkbox("##hardwareraytracing", ref on);
+			Tooltip(tooltip);
+			context.Track(edited);
+			if (edited)
+			{
+				gi.HardwareRayTracing = on;
+			}
+
+			if (on && !GraphicsCapabilities.RayQueries)
+			{
+				Hint("This GPU has no ray queries: here the rays trace the distance field.");
+			}
+
+			return edited;
+		}
+
+		/// <summary>
+		///     A size of a power of two as a drop-down of <paramref name="options" /> (a value set elsewhere shows as it is),
+		///     with the field's label and tooltip.
+		/// </summary>
+		private bool SizeCombo(object target, string fieldName, ref int value, params int[] options)
+		{
+			System.Reflection.FieldInfo info = target.GetType().GetField(fieldName);
+			FieldDrawer.Label(SerializationUtility.NicifyName(fieldName), info, context);
+			int selected = value;
+			if (EditorGui.BeginCombo("##" + fieldName, selected.ToString()))
+			{
+				foreach (int option in options)
+				{
+					if (EditorGui.Selectable(option.ToString(), option == selected))
+					{
+						selected = option;
+					}
+				}
+
+				EditorGui.EndCombo();
+			}
+
+			bool changed = selected != value;
+			context.Track(changed);
+			value = selected;
+			return changed;
+		}
+
+		/// <summary>A foldout of a section's settings, open at first; the caller pops it (ImGui.TreePop) when it returns true.</summary>
+		private static bool Group(string label)
+		{
+			return EditorGui.TreeNodeEx(label, ImGuiTreeNodeFlags.DefaultOpen | ImGuiTreeNodeFlags.SpanAvailWidth);
+		}
+
+		/// <summary>One field of <paramref name="target" /> through the inspector's drawer (label, tooltip, range, undo).</summary>
+		private bool Field(object target, string name)
+		{
+			return FieldDrawer.DrawFields(target, context, filter: field => field.Name == name);
+		}
+
+		/// <summary>The named fields of <paramref name="target" />, in the order given.</summary>
+		private bool Fields(object target, params string[] names)
+		{
+			bool changed = false;
+			foreach (string name in names)
+			{
+				changed |= Field(target, name);
+			}
+
 			return changed;
 		}
 
@@ -372,8 +884,8 @@ namespace LELEngine.Editor
 		/// <summary>The layer names: built in for 0..7, the project's for 8..31 (objects keep their layer when it is renamed).</summary>
 		private bool DrawLayers(LayerSettings layers)
 		{
-			ImGui.TextDisabled("Every object is on one layer (Inspector header). Cameras draw the layers of their culling mask,");
-			ImGui.TextDisabled("2D physics collides layers by the matrix in Physics 2D.");
+			Hint("Every object is on one layer (Inspector header). Cameras draw the layers of their culling mask,");
+			Hint("2D physics collides layers by the matrix in Physics 2D.");
 			ImGui.Spacing();
 
 			bool changed = false;
@@ -435,7 +947,7 @@ namespace LELEngine.Editor
 			ImGui.EndDisabled();
 			if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
 			{
-				ImGui.SetTooltip(editor.IsPlaying
+				EditorGui.SetTooltip(editor.IsPlaying
 					? "Applies when play starts (the running world keeps its plane)."
 					: "XY: 2D y is world Y, bodies turn about Z.\nXZ: 2D y is world Z, bodies turn about -Y (the XY plane turned 90 degrees about X).");
 			}
@@ -529,8 +1041,8 @@ namespace LELEngine.Editor
 		/// <summary>On / off, the minimum duration, the background color, the logo (a texture asset; its GUID is stored) and its size, with a preview.</summary>
 		private bool DrawSplashScreen(SplashScreenSettings splash)
 		{
-			ImGui.TextDisabled("The first image of a build: up a moment after its window opens, while the start scene");
-			ImGui.TextDisabled("loads in the background. The start scene replaces it once loaded and the duration is over.");
+			Hint("The first image of a build: up a moment after its window opens, while the start scene");
+			Hint("loads in the background. The start scene replaces it once loaded and the duration is over.");
 			ImGui.Spacing();
 
 			ImGui.PushID("splash");
@@ -639,7 +1151,7 @@ namespace LELEngine.Editor
 
 			draw.AddRect(start, start + extent, ImGui.GetColorU32(ImGuiCol.Border));
 			ImGui.Dummy(extent);
-			ImGui.TextDisabled(splash.Enabled
+			Hint(splash.Enabled
 				? $"{window.Width} x {window.Height}, the window of builds."
 				: "No splash screen: the window stays black until the start scene is ready.");
 		}
@@ -656,12 +1168,18 @@ namespace LELEngine.Editor
 			}
 		}
 
+		// A dim line of explanation, wrapped at the window's edge (never cut off).
+		private static void Hint(string text)
+		{
+			ImGui.PushTextWrapPos(0f);
+			ImGui.TextDisabled(text);
+			ImGui.PopTextWrapPos();
+		}
+
+		// The tooltip of a control drawn by hand after FieldDrawer.Label: on its label, as every field's (not on the control).
 		private static void Tooltip(string text)
 		{
-			if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
-			{
-				ImGui.SetTooltip(text);
-			}
+			FieldDrawer.LabelTooltip(text);
 		}
 
 		// ---------------------------------------------------------------- build
@@ -743,13 +1261,13 @@ namespace LELEngine.Editor
 
 			if (ImGui.IsItemHovered())
 			{
-				ImGui.SetTooltip("The game ships the .NET runtime and runs on machines without .NET installed (about 70 MB more).\n" +
+				EditorGui.SetTooltip("The game ships the .NET runtime and runs on machines without .NET installed (about 70 MB more).\n" +
 					"Off: framework-dependent, smaller; the target machine needs the .NET 10 runtime.");
 			}
 
 			string runtime = PlayerFiles.SelfContainedRuntime;
 			ImGui.SameLine();
-			ImGui.TextDisabled(!selfContained ? "Framework-dependent: the target machine needs the .NET 10 runtime."
+			Hint(!selfContained ? "Framework-dependent: the target machine needs the .NET 10 runtime."
 				: runtime != null ? "Includes the .NET runtime for " + runtime + "."
 				: "This editor has no self-contained player (published without a runtime identifier).");
 
@@ -762,7 +1280,7 @@ namespace LELEngine.Editor
 
 			if (ImGui.IsItemHovered())
 			{
-				ImGui.SetTooltip("The game's code is compiled when it is built, not method by method as it first runs (no stutter the first time\n" +
+				EditorGui.SetTooltip("The game's code is compiled when it is built, not method by method as it first runs (no stutter the first time\n" +
 					"something happens; larger assemblies). Needs a player published that way and the .NET SDK's crossgen compiler:\n" +
 					"a build that has neither fails. Off: the scripts compile as they run.");
 			}
@@ -776,7 +1294,7 @@ namespace LELEngine.Editor
 
 			if (ImGui.IsItemHovered())
 			{
-				ImGui.SetTooltip("The game keeps updating and rendering while its window is not focused.");
+				EditorGui.SetTooltip("The game keeps updating and rendering while its window is not focused.");
 			}
 
 			if (changed)
@@ -958,11 +1476,11 @@ namespace LELEngine.Editor
 			{
 				if (Graphics.GraphicsDevice.FellBackFrom == content.GraphicsApi)
 				{
-					ImGui.TextDisabled($"{content.GraphicsApi} is not available on this machine: the editor runs on {device.Api}.");
+					Hint($"{content.GraphicsApi} is not available on this machine: the editor runs on {device.Api}.");
 				}
 				else
 				{
-					ImGui.TextDisabled($"The editor runs on {device.Api}: {content.GraphicsApi} takes effect when it starts again.");
+					Hint($"The editor runs on {device.Api}: {content.GraphicsApi} takes effect when it starts again.");
 					if (EditorGui.Button("Restart Editor"))
 					{
 						try
@@ -1070,7 +1588,7 @@ namespace LELEngine.Editor
 			ImGui.Spacing();
 			ImGui.SeparatorText("Always Included Shaders");
 			ImGui.PushTextWrapPos(0f);
-			ImGui.TextDisabled("A build ships the shaders its materials use. A shader that only a script loads by its path (new ShaderProgram(\"Shaders/Fog.shader\")) is used by nothing the build can see, and the built game would not find it: put it on this list.");
+			Hint("A build ships the shaders its materials use. A shader that only a script loads by its path (new ShaderProgram(\"Shaders/Fog.shader\")) is used by nothing the build can see, and the built game would not find it: put it on this list.");
 			ImGui.PopTextWrapPos();
 			ImGui.Spacing();
 
@@ -1081,7 +1599,7 @@ namespace LELEngine.Editor
 			{
 				if (shaders.Count == 0)
 				{
-					ImGui.TextDisabled("Drag shader files here from the Project panel.");
+					Hint("Drag shader files here from the Project panel.");
 				}
 
 				float buttonWidth = ImGui.CalcTextSize("X").X + ImGui.GetStyle().FramePadding.X * 2f;
@@ -1100,7 +1618,7 @@ namespace LELEngine.Editor
 
 						if (ImGui.IsItemHovered())
 						{
-							ImGui.SetTooltip("Click: shows the file in the Project panel.");
+							EditorGui.SetTooltip("Click: shows the file in the Project panel.");
 						}
 					}
 					else
@@ -1119,7 +1637,7 @@ namespace LELEngine.Editor
 
 					if (ImGui.IsItemHovered())
 					{
-						ImGui.SetTooltip("Take it off the list.");
+						EditorGui.SetTooltip("Take it off the list.");
 					}
 
 					ImGui.PopID();
@@ -1167,7 +1685,7 @@ namespace LELEngine.Editor
 
 				if (!any)
 				{
-					ImGui.TextDisabled("Every shader of the project is on the list.");
+					Hint("Every shader of the project is on the list.");
 				}
 
 				EditorGui.EndCombo();
@@ -1183,7 +1701,7 @@ namespace LELEngine.Editor
 
 			ImGui.Spacing();
 			ImGui.PushTextWrapPos(0f);
-			ImGui.TextDisabled("Drag shader files onto the list from the Project panel, or pick them above. Their #include files go with them; the build checks that they compile, and the built game compiles them while it loads.");
+			Hint("Drag shader files onto the list from the Project panel, or pick them above. Their #include files go with them; the build checks that they compile, and the built game compiles them while it loads.");
 			ImGui.PopTextWrapPos();
 			return changed;
 		}

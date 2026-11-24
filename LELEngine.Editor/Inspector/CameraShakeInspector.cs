@@ -81,7 +81,7 @@ namespace LELEngine.Editor
 
 			if (ImGui.IsItemHovered())
 			{
-				ImGui.SetTooltip("Sets every value of this profile to the preset's (undoable).");
+				EditorGui.SetTooltip("Sets every value of this profile to the preset's (undoable).");
 			}
 
 			ImGui.PopID();
@@ -119,7 +119,7 @@ namespace LELEngine.Editor
 
 			if (ImGui.IsItemHovered())
 			{
-				ImGui.SetTooltip("One impact on this camera (the Impact preset).");
+				EditorGui.SetTooltip("One impact on this camera (the Impact preset).");
 			}
 
 			ImGui.SameLine();
@@ -130,7 +130,7 @@ namespace LELEngine.Editor
 
 			if (ImGui.IsItemHovered())
 			{
-				ImGui.SetTooltip("Stops what scripts started on this camera; the Profiles list plays on.");
+				EditorGui.SetTooltip("Stops what scripts started on this camera; the Profiles list plays on.");
 			}
 
 			return false;
@@ -258,7 +258,7 @@ namespace LELEngine.Editor
 
 			if (ImGui.IsItemHovered())
 			{
-				ImGui.SetTooltip("Plays the profile once in the viewfinder, as CameraShake.Impact does: its kick, and its movement dying away over its Duration.");
+				EditorGui.SetTooltip("Plays the profile once in the viewfinder, as CameraShake.Impact does: its kick, and its movement dying away over its Duration.");
 			}
 
 			ImGui.SameLine();
@@ -266,7 +266,7 @@ namespace LELEngine.Editor
 			EditorGui.SliderFloat("Lens", ref previewFieldOfView, 5f, 90f, "%.0f deg");
 			if (ImGui.IsItemHovered())
 			{
-				ImGui.SetTooltip("The viewfinder's vertical field of view: the same shake is larger in the picture of a longer lens.");
+				EditorGui.SetTooltip("The viewfinder's vertical field of view: the same shake is larger in the picture of a longer lens.");
 			}
 
 			Measure(profile, now);
@@ -372,7 +372,7 @@ namespace LELEngine.Editor
 			ImGui.Dummy(new NVector2(width, height));
 			if (ImGui.IsItemHovered())
 			{
-				ImGui.SetTooltip("The profile at full strength, seen through a camera: the far lines stand 5 degrees apart, the posts 2 and 3.5 m away.");
+				EditorGui.SetTooltip("The profile at full strength, seen through a camera: the far lines stand 5 degrees apart, the posts 2 and 3.5 m away.");
 			}
 		}
 

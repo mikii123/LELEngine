@@ -96,7 +96,7 @@ namespace LELEngine.Editor
 			{
 				draw.AddRect(start, end, ImGui.GetColorU32(ImGuiCol.HeaderHovered), 3f);
 				ImGui.SetMouseCursor(ImGuiMouseCursor.Hand);
-				ImGui.SetTooltip(file + ":" + line + "\nClick: open in the script editor");
+				EditorGui.SetTooltip(file + ":" + line + "\nClick: open in the script editor");
 			}
 
 			if (clicked)

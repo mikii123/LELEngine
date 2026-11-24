@@ -171,7 +171,7 @@ namespace LELEngine.Editor
 
 					if (ImGui.IsItemHovered())
 					{
-						ImGui.SetTooltip(type.FullName + (type.IsDefined(typeof(SerializableAttribute), false) ? "" : "\n(not marked [Serializable]: its fields are saved here, but a field of this exact class would not be)"));
+						EditorGui.SetTooltip(type.FullName + (type.IsDefined(typeof(SerializableAttribute), false) ? "" : "\n(not marked [Serializable]: its fields are saved here, but a field of this exact class would not be)"));
 					}
 
 					if (type.Namespace != null)

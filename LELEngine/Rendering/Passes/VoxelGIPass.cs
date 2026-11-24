@@ -160,7 +160,7 @@ namespace LELEngine.Rendering.Passes
 		private bool lastCoverage;
 		private bool lastConservative;
 		private float lastOccupancyScale;
-		private int lastSplatWidth;
+		private VoxelCoverageSplat lastSplat;
 		private VoxelMipMode lastMipMode;
 		private int frameIndex;
 
@@ -533,7 +533,7 @@ namespace LELEngine.Rendering.Passes
 				|| gi.VoxelCoverage != lastCoverage
 				|| ConservativeVoxelization(gi) != lastConservative
 				|| gi.CoverageOccupancyScale != lastOccupancyScale
-				|| gi.CoverageSplatWidth != lastSplatWidth
+				|| gi.CoverageSplat != lastSplat
 				|| mode != lastMipMode;
 
 			if (changed)
@@ -545,7 +545,7 @@ namespace LELEngine.Rendering.Passes
 				lastCoverage = gi.VoxelCoverage;
 				lastConservative = ConservativeVoxelization(gi);
 				lastOccupancyScale = gi.CoverageOccupancyScale;
-				lastSplatWidth = gi.CoverageSplatWidth;
+				lastSplat = gi.CoverageSplat;
 				lastMipMode = mode;
 			}
 
@@ -637,7 +637,7 @@ namespace LELEngine.Rendering.Passes
 		{
 			currentRegions.Clear();
 			// The B-spline splat reaches a voxel and a half past a surface.
-			int padding = gi.VoxelCoverage && gi.CoverageSplatWidth >= 3 ? 2 : 1;
+			int padding = gi.VoxelCoverage && gi.CoverageSplat == VoxelCoverageSplat.Quadratic ? 2 : 1;
 			foreach (MeshRenderer renderer in dynamicRenderers)
 			{
 				VoxelRegion region;
@@ -861,7 +861,7 @@ namespace LELEngine.Rendering.Passes
 			program.SetFloat("voxelGridSize", gi.GridSize);
 			program.SetInt("voxelResolution", currentResolution);
 			program.SetInt("voxSamples", coverageSamples);
-			program.SetInt("voxSplatWidth", gi.CoverageSplatWidth);
+			program.SetInt("voxSplatWidth", (int)gi.CoverageSplat);
 			accumulators.BindImages(0, ImageAccess.ReadWrite);
 			commands.SetImage(5, target.Blocks, 0, -1, ImageAccess.Write);
 			DrawRenderers(program, renderers);
@@ -985,14 +985,10 @@ namespace LELEngine.Rendering.Passes
 					? $"SDF detail through the scene's triangles (a ray query for every cone's near field; no distance fields; {materials})"
 					: $"SDF cones through the scene's triangles ({rays} ray quer{(rays == 1 ? "y" : "ies")} a cone, {distance}; no distance fields; {materials})";
 			}
-			else if (gi.DistanceFieldEnabled)
+			else
 			{
 				string why = !Lighting.HardwareRayTracing ? (gi.HardwareRayTracing ? "the graphics device has no ray queries" : "Hardware Ray Tracing is off") : "";
 				cones = (gi.TraceMode == GITraceMode.SdfDetail ? "SDF detail through the distance fields" : "SDF cones through the distance fields") + (why.Length > 0 ? " (" + why + ")" : "");
-			}
-			else
-			{
-				cones = "voxel cones (the distance field is off)";
 			}
 
 			if (cones != reportedCones)
@@ -1023,7 +1019,7 @@ namespace LELEngine.Rendering.Passes
 			}
 			else
 			{
-				bool sdf = gi.DistanceFieldEnabled && gi.GlobalSdf != null;
+				bool sdf = gi.GlobalSdf != null;
 				int traceMode = Lighting.TraceModeUniform(sdf) == 2 ? 2 : 0;
 				program.SetInt("giTraceMode", traceMode);
 				if (traceMode == 2)
@@ -1049,11 +1045,11 @@ namespace LELEngine.Rendering.Passes
 			// The lights' lists; shadows come from the grid-covering maps, not the camera's.
 			Lighting.SetUniforms(program, false, false);
 			gridShadow.SetUniforms(program);
-			program.SetInt("injectShadowTaps", gi.InjectShadowTaps);
+			program.SetInt("injectShadowTaps", gi.SoftVoxelShadows ? 4 : 1);
 
 			SetTraceUniforms(program, gi);
 			program.SetFloat("giBounceStrength", bounce ? gi.BounceStrength : 0f);
-			program.SetInt("giBounceCones", gi.BounceCones);
+			program.SetInt("giBounceCones", (int)gi.BounceConeLayout);
 			program.SetInt("giBounceCells", cells ? 1 : 0);
 			program.SetTexture("VoxelBounceCells", bounceCells);
 

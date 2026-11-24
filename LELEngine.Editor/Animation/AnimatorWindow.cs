@@ -523,7 +523,7 @@ namespace LELEngine.Editor.Animation
 				if (page.ReadOnly)
 				{
 					ImGui.TextColored(EditorStyle.Warning, "read-only");
-					if (ImGui.IsItemHovered()) ImGui.SetTooltip("Another asset's content: open it to edit.");
+					if (ImGui.IsItemHovered()) EditorGui.SetTooltip("Another asset's content: open it to edit.");
 					ImGui.SameLine();
 					if (EditorGui.SmallButton("Open " + page.External.name))
 					{
@@ -543,7 +543,7 @@ namespace LELEngine.Editor.Animation
 				ImGui.TextColored(EditorStyle.Accent, "LIVE");
 				if (ImGui.IsItemHovered())
 				{
-					ImGui.SetTooltip("Following '" + LiveAnimator.gameObject.Name + "' (select another object with an Animator of this controller to follow it)");
+					EditorGui.SetTooltip("Following '" + LiveAnimator.gameObject.Name + "' (select another object with an Animator of this controller to follow it)");
 				}
 
 				ImGui.SameLine();
@@ -568,7 +568,7 @@ namespace LELEngine.Editor.Animation
 							history.Append('\n').Append(name).Append("  (frame ").Append(frame).Append(')');
 						}
 
-						ImGui.SetTooltip(history.ToString());
+						EditorGui.SetTooltip(history.ToString());
 					}
 				}
 			}

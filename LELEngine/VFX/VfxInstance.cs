@@ -1316,7 +1316,7 @@ namespace LELEngine.VFX
 				Lighting.RequestDistanceField();
 			}
 
-			bool available = gi.DistanceFieldEnabled && gi.GlobalSdf != null && gi.Enabled;
+			bool available = gi.GlobalSdf != null && gi.Enabled;
 			if (available)
 			{
 				Lighting.SetSdfUniforms(program);

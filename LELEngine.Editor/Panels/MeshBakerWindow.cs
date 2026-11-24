@@ -189,7 +189,7 @@ namespace LELEngine.Editor
 
 					if (ImGui.IsItemHovered())
 					{
-						ImGui.SetTooltip(OriginalsTooltips[i]);
+						EditorGui.SetTooltip(OriginalsTooltips[i]);
 					}
 				}
 
@@ -318,7 +318,7 @@ namespace LELEngine.Editor
 			ImGui.TextUnformatted(label);
 			if (tooltip != null && ImGui.IsItemHovered())
 			{
-				ImGui.SetTooltip(tooltip);
+				EditorGui.SetTooltip(tooltip);
 			}
 
 			ImGui.SameLine(width);

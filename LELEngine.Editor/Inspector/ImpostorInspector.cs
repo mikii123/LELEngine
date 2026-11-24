@@ -44,7 +44,7 @@ namespace LELEngine.Editor
 			ImGui.EndDisabled();
 			if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
 			{
-				ImGui.SetTooltip(reason ?? "Draws the source from every view into the atlases and writes them, the proxy model\nand the material next to this asset (files of an earlier bake are written again).");
+				EditorGui.SetTooltip(reason ?? "Draws the source from every view into the atlases and writes them, the proxy model\nand the material next to this asset (files of an earlier bake are written again).");
 			}
 
 			if (!impostor.IsBaked)
@@ -169,7 +169,7 @@ namespace LELEngine.Editor
 			ImGui.Image(EditorGui.Texture(preview.Gpu), new NVector2(side, side));
 			if (ImGui.IsItemHovered())
 			{
-				ImGui.SetTooltip(shownAtlas == 1
+				EditorGui.SetTooltip(shownAtlas == 1
 					? "Shape: red and green the surface normal in the view's axes, blue the depth along the view;\nthe coverage is in the alpha (the texels outside the object are dimmed here)."
 					: shownAtlas == 0
 						? "Base: the colour the surface scatters; the alpha holds its smoothness (with a specular atlas)\nor the occlusion of its indirect light. Texels outside the object repeat its edge (dimmed here)."

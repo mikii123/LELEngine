@@ -558,7 +558,7 @@ namespace LELEngine.Editor.Audio
 
 				if (ImGui.IsItemHovered())
 				{
-					ImGui.SetTooltip("Parameter sheet: instruments trigger while '" + parameter.Name + "' is inside their range.\nDrag on the ruler to set the value. Right click: close the sheet.");
+					EditorGui.SetTooltip("Parameter sheet: instruments trigger while '" + parameter.Name + "' is inside their range.\nDrag on the ruler to set the value. Right click: close the sheet.");
 				}
 
 				if (EditorGui.BeginPopupContextItem("##sheet_menu_" + parameter.Id))
@@ -984,7 +984,7 @@ namespace LELEngine.Editor.Audio
 
 				if (ImGui.IsItemHovered())
 				{
-					ImGui.SetTooltip("Back to the plain timeline (Esc). The transition timeline stays; its badge on the marker opens it again.");
+					EditorGui.SetTooltip("Back to the plain timeline (Esc). The transition timeline stays; its badge on the marker opens it again.");
 				}
 			}
 			else
@@ -1137,7 +1137,7 @@ namespace LELEngine.Editor.Audio
 
 			if (ImGui.IsItemHovered())
 			{
-				ImGui.SetTooltip("The event's master track: its volume, pitch, effects, automation, routing and bank.");
+				EditorGui.SetTooltip("The event's master track: its volume, pitch, effects, automation, routing and bank.");
 			}
 
 			draw.AddText(min + new NVector2(12f, 28f), StudioUi.TextDim, Project.FindBus(current.BusId) != null ? "to " + Project.BusPath(Project.FindBus(current.BusId)) : "to Master");
@@ -1354,7 +1354,7 @@ namespace LELEngine.Editor.Audio
 
 			if (ImGui.IsItemHovered())
 			{
-				ImGui.SetTooltip(IsTimeSheet ? "Click or drag: the playback position. Ctrl + wheel: zoom, Shift + wheel: scroll." : "Click or drag: the parameter's value for the preview.");
+				EditorGui.SetTooltip(IsTimeSheet ? "Click or drag: the playback position. Ctrl + wheel: zoom, Shift + wheel: scroll." : "Click or drag: the parameter's value for the preview.");
 			}
 		}
 
@@ -2303,7 +2303,7 @@ namespace LELEngine.Editor.Audio
 
 			if (ImGui.IsItemHovered())
 			{
-				ImGui.SetTooltip("Overview of the whole event: click or drag to scroll.");
+				EditorGui.SetTooltip("Overview of the whole event: click or drag to scroll.");
 			}
 		}
 
@@ -2698,29 +2698,29 @@ namespace LELEngine.Editor.Audio
 					string role = hit.Piece.Kind == PieceKind.Source ? "\nSource: keeps playing into the transition timeline (drag its end, or the fade handle)"
 						: hit.Piece.Kind == PieceKind.Destination ? (hit.Piece.StartsAtDestination ? "\nDestination: starts early in the transition timeline (drag its start, or the fade handle)" : "\nAfter the destination")
 						: hit.Piece.Kind == PieceKind.TransitionClip ? "\nOn the transition timeline" : "";
-					ImGui.SetTooltip(instrument.DisplayName + "\n" + instrument.Kind + (instrument.Async ? ", async" : ", timelocked") + (instrument.Loop ? ", looping" : "") + "\n" + range + role + "\nDrag: move, edges: trim, right click: menu");
+					EditorGui.SetTooltip(instrument.DisplayName + "\n" + instrument.Kind + (instrument.Async ? ", async" : ", timelocked") + (instrument.Loop ? ", looping" : "") + "\n" + range + role + "\nDrag: move, edges: trim, right click: menu");
 					break;
 				}
 				case HitKind.TransitionBadge:
-					ImGui.SetTooltip(expandedTransitionId == hit.Id ? "Close the transition timeline" : "Open the transition timeline in the timeline");
+					EditorGui.SetTooltip(expandedTransitionId == hit.Id ? "Close the transition timeline" : "Open the transition timeline in the timeline");
 					break;
 				case HitKind.TransitionHeader:
-					ImGui.SetTooltip("The transition timeline: what plays between the transition and its destination.\nDouble click or Esc: close it.");
+					EditorGui.SetTooltip("The transition timeline: what plays between the transition and its destination.\nDouble click or Esc: close it.");
 					break;
 				case HitKind.SourceFade:
-					ImGui.SetTooltip("Source fade out: drag to set how long the source's sounds fade before the source region ends.");
+					EditorGui.SetTooltip("Source fade out: drag to set how long the source's sounds fade before the source region ends.");
 					break;
 				case HitKind.DestinationFade:
-					ImGui.SetTooltip("Destination fade in: drag to set how long the destination's sounds take to come up.");
+					EditorGui.SetTooltip("Destination fade in: drag to set how long the destination's sounds take to come up.");
 					break;
 				case HitKind.SourceEnd:
-					ImGui.SetTooltip("End of the source: how long the sounds playing at the transition keep playing.");
+					EditorGui.SetTooltip("End of the source: how long the sounds playing at the transition keep playing.");
 					break;
 				case HitKind.DestinationStart:
-					ImGui.SetTooltip("Start of the destination: when the destination's sounds begin.");
+					EditorGui.SetTooltip("Start of the destination: when the destination's sounds begin.");
 					break;
 				case HitKind.TimelineEnd:
-					ImGui.SetTooltip("End of the transition timeline: playback continues on the destination from here.");
+					EditorGui.SetTooltip("End of the transition timeline: playback continues on the destination from here.");
 					break;
 				case HitKind.Marker:
 				case HitKind.MarkerEnd:
@@ -2728,11 +2728,11 @@ namespace LELEngine.Editor.Audio
 					AudioMarker marker = current.FindMarker(hit.Id);
 					if (marker is TransitionMarker transition)
 					{
-						ImGui.SetTooltip(marker.Kind + " to " + DestinationName(current, transition.DestinationId) + "\nDouble click: " + (transition.Timeline == null ? "add a transition timeline" : expandedTransitionId == marker.Id ? "close the transition timeline" : "open the transition timeline") + "\nDrag: move, right click: menu");
+						EditorGui.SetTooltip(marker.Kind + " to " + DestinationName(current, transition.DestinationId) + "\nDouble click: " + (transition.Timeline == null ? "add a transition timeline" : expandedTransitionId == marker.Id ? "close the transition timeline" : "open the transition timeline") + "\nDrag: move, right click: menu");
 					}
 					else if (marker != null)
 					{
-						ImGui.SetTooltip(marker.Kind + ": " + (marker.Name ?? "") + " at " + FormatTime(marker.Position) + (marker.Length > 0.0 ? " - " + FormatTime(marker.End) : "") + "\nDrag: move" + (marker.Length > 0.0 ? ", right edge: resize" : "") + ", right click: menu");
+						EditorGui.SetTooltip(marker.Kind + ": " + (marker.Name ?? "") + " at " + FormatTime(marker.Position) + (marker.Length > 0.0 ? " - " + FormatTime(marker.End) : "") + "\nDrag: move" + (marker.Length > 0.0 ? ", right edge: resize" : "") + ", right click: menu");
 					}
 
 					break;

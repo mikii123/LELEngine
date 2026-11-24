@@ -85,7 +85,9 @@ namespace LELEngine.Rendering
 		///     cleared whole each frame: the first tile clears what the casters drew into the map the frame before, each
 		///     tile the rectangle its casters' bounds cover, and the casters draw within that rectangle; the map holds the
 		///     clear value everywhere else already, so it ends as a whole clear would leave it. A whole clear writes every
-		///     texel on GPUs that do not clear colour by its compression (a 2048 x 2048 map of 32-bit floats: 64 MB).
+		///     texel on GPUs that do not clear colour by its compression (a 2048 x 2048 map of 32-bit floats: 64 MB), so
+		///     only those (<see cref="DeviceCapabilities.FastColorClears" /> false) take the tile; elsewhere the whole clear
+		///     is the cheaper one (Intel's Arc iGPU: the shadow pass 0.44 ms longer with the tile's clears).
 		/// </summary>
 		public static RenderTexture DrawCasters(RenderContext context, Framebuffer target, Matrix4 lightView, Matrix4 lightProjection, bool clear = true, ViewCulling culling = null,
 			Box2i tile = default)
@@ -105,7 +107,8 @@ namespace LELEngine.Rendering
 			CommandList commands = Gfx.Commands;
 			RenderTexture transmittance = target.ColorAttachments[0];
 			commands.State.ColorMask = ColorWriteMask.All;
-			bool tiled = tile.Size.X > 0 && tile.Size.Y > 0 && transmittance.Gpu != null && !(context.Renderer != null && context.Renderer.ABOff && Renderer.ABExperiment == "transmittance");
+			bool tiled = tile.Size.X > 0 && tile.Size.Y > 0 && transmittance.Gpu != null && !Gfx.Capabilities.FastColorClears
+				&& !(context.Renderer != null && context.Renderer.ABOff && Renderer.ABExperiment == "transmittance");
 			Coverage cover = tiled ? coverage.GetValue(transmittance.Gpu, _ => new Coverage()) : null;
 			if (clear)
 			{

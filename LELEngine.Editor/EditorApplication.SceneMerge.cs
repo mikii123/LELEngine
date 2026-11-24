@@ -379,7 +379,7 @@ namespace LELEngine.Editor
 
 				if (ImGui.IsItemHovered())
 				{
-					ImGui.SetTooltip("Merge the file's changes into the scene, the conflicting values as chosen above; one undo step.");
+					EditorGui.SetTooltip("Merge the file's changes into the scene, the conflicting values as chosen above; one undo step.");
 				}
 
 				ImGui.SameLine();
@@ -394,7 +394,7 @@ namespace LELEngine.Editor
 
 			if (ImGui.IsItemHovered())
 			{
-				ImGui.SetTooltip("Load the file from disk; the changes made here are lost.");
+				EditorGui.SetTooltip("Load the file from disk; the changes made here are lost.");
 			}
 
 			ImGui.SameLine();
@@ -408,7 +408,7 @@ namespace LELEngine.Editor
 
 			if (ImGui.IsItemHovered())
 			{
-				ImGui.SetTooltip("Keep the scene as it is here, ignoring the file's changes; saving it overwrites the file on disk.");
+				EditorGui.SetTooltip("Keep the scene as it is here, ignoring the file's changes; saving it overwrites the file on disk.");
 			}
 
 			ImGui.EndPopup();

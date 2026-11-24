@@ -419,7 +419,7 @@ namespace LELEngine.Editor.Audio
 
 			if (ImGui.IsItemHovered())
 			{
-				ImGui.SetTooltip("Live preview: the editor shows the followed game instance (playhead, parameters, meters) while the studio's own preview is stopped.\nEdits apply to the game's instances at once.");
+				EditorGui.SetTooltip("Live preview: the editor shows the followed game instance (playhead, parameters, meters) while the studio's own preview is stopped.\nEdits apply to the game's instances at once.");
 			}
 
 			return x + width + 10f;
@@ -449,7 +449,7 @@ namespace LELEngine.Editor.Audio
 
 			if (ImGui.IsItemHovered())
 			{
-				ImGui.SetTooltip("Snapping step; the beat steps follow the event's tempo markers.");
+				EditorGui.SetTooltip("Snapping step; the beat steps follow the event's tempo markers.");
 			}
 
 			ImGui.SameLine(0f, 14f);

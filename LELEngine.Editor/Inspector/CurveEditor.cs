@@ -96,7 +96,7 @@ namespace LELEngine.Editor
 
 			if (hovered)
 			{
-				ImGui.SetTooltip("Click to edit the curve");
+				EditorGui.SetTooltip("Click to edit the curve");
 			}
 
 			if (clicked)
@@ -231,7 +231,7 @@ namespace LELEngine.Editor
 				DrawPreview(draw, Presets[i].Create(), min + new NVector2(5f, 4f), min + size - new NVector2(5f, 4f), ImGui.GetColorU32(ImGuiCol.Text), 1.2f);
 				if (ImGui.IsItemHovered())
 				{
-					ImGui.SetTooltip(Presets[i].Name);
+					EditorGui.SetTooltip(Presets[i].Name);
 				}
 
 				if (clicked)

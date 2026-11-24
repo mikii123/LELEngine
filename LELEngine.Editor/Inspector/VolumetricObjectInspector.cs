@@ -40,7 +40,7 @@ namespace LELEngine.Editor
 
 			if (ImGui.IsItemHovered())
 			{
-				ImGui.SetTooltip("Makes the cloud again now (it is made again by itself after its settings change).");
+				EditorGui.SetTooltip("Makes the cloud again now (it is made again by itself after its settings change).");
 			}
 
 			return false;

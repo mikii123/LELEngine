@@ -488,7 +488,7 @@ namespace LELEngine.Editor.UIBuilder
 			ImGui.PushClipRect(pos, new NVector2(pos.X + LabelWidth - 6, pos.Y + ImGui.GetFrameHeight()), true);
 			ImGui.TextUnformatted(text);
 			ImGui.PopClipRect();
-			if (ImGui.IsItemHovered() && ImGui.CalcTextSize(text).X > LabelWidth - 6) ImGui.SetTooltip(text);
+			if (ImGui.IsItemHovered() && ImGui.CalcTextSize(text).X > LabelWidth - 6) EditorGui.SetTooltip(text);
 			ImGui.SameLine(LabelWidth);
 			ImGui.SetNextItemWidth(-1);
 		}

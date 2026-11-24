@@ -36,7 +36,7 @@ namespace LELEngine.Editor
 			bool changed = EditorGui.Checkbox("##cleardepth", ref clear);
 			if (ImGui.IsItemHovered())
 			{
-				ImGui.SetTooltip("Clear the depth before drawing: this camera's objects draw over everything the cameras before it drew.");
+				EditorGui.SetTooltip("Clear the depth before drawing: this camera's objects draw over everything the cameras before it drew.");
 			}
 
 			context.Track(changed);
@@ -107,7 +107,7 @@ namespace LELEngine.Editor
 
 				if (ImGui.IsItemHovered())
 				{
-					ImGui.SetTooltip("Remove from the stack");
+					EditorGui.SetTooltip("Remove from the stack");
 				}
 
 				ImGui.SameLine();
@@ -218,7 +218,7 @@ namespace LELEngine.Editor
 
 			if (ImGui.IsItemHovered())
 			{
-				ImGui.SetTooltip(LightingHelp);
+				EditorGui.SetTooltip(LightingHelp);
 			}
 
 			if (changed && chosen != camera.LightingCamera)

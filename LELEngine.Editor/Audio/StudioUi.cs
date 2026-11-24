@@ -268,7 +268,7 @@ namespace LELEngine.Editor.Audio
 			{
 				// SetTooltip formats like printf: percent signs are escaped.
 				string text = (label != null ? label + ": " : "") + valueText + (tooltip != null ? "\n" + tooltip : "") + (readOnly ? "\n(live value from the game)" : "\nDrag up / down (Shift: fine). Double click: reset.");
-				ImGui.SetTooltip(text.Replace("%", "%%"));
+				EditorGui.SetTooltip(text);
 			}
 
 			return changed;
@@ -363,7 +363,7 @@ namespace LELEngine.Editor.Audio
 			DrawIcon(draw, icon, (min + max) * 0.5f, Math.Min(size.X, size.Y) * 0.3f, Rgb(0.08f, 0.08f, 0.09f));
 			if (hovered && tooltip != null)
 			{
-				ImGui.SetTooltip(tooltip);
+				EditorGui.SetTooltip(tooltip);
 			}
 
 			return pressed;
@@ -381,7 +381,7 @@ namespace LELEngine.Editor.Audio
 			DrawIcon(draw, icon, min + size * 0.5f, Math.Min(size.X, size.Y) * 0.3f, on ? Yellow : TextDim);
 			if (hovered && tooltip != null)
 			{
-				ImGui.SetTooltip(tooltip + (on ? " (on)" : " (off)"));
+				EditorGui.SetTooltip(tooltip + (on ? " (on)" : " (off)"));
 			}
 
 			return pressed;
@@ -455,7 +455,7 @@ namespace LELEngine.Editor.Audio
 
 				if (ImGui.IsItemHovered())
 				{
-					ImGui.SetTooltip(i == 0 ? "Show minutes:seconds.milliseconds" : beatsAvailable ? "Show bar.beat.sixteenth (from the event's tempo markers)" : "Needs a tempo marker on the event");
+					EditorGui.SetTooltip(i == 0 ? "Show minutes:seconds.milliseconds" : beatsAvailable ? "Show bar.beat.sixteenth (from the event's tempo markers)" : "Needs a tempo marker on the event");
 				}
 
 				ImGui.PopID();
@@ -493,7 +493,7 @@ namespace LELEngine.Editor.Audio
 			ImGui.PopFont();
 			if (hovered && tooltip != null)
 			{
-				ImGui.SetTooltip(tooltip);
+				EditorGui.SetTooltip(tooltip);
 			}
 
 			return pressed;

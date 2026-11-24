@@ -1,0 +1,291 @@
+// Screen probe ray tracing (Lumen final gather, step 1), shared by Engine/ProbeTrace.shader (a fragment per ray: the
+// distance field's variant) and Engine/ProbeTraceRays.shader (a compute thread per ray: the LEL_RAY_QUERY variant; see
+// there why ray queries are not traced from fragments): TraceProbeTexel gives one texel of the ray atlas.
+#ifndef LEL_PROBE_TRACE_CORE_GLSL
+#define LEL_PROBE_TRACE_CORE_GLSL
+
+#include "Engine/DistanceField.glsl"
+#include "Engine/SceneObjects.glsl"
+#include "Engine/SurfaceCache.glsl"
+#ifdef LEL_RAY_QUERY
+#include "Engine/SceneRayQuery.glsl"
+#endif
+#include "Engine/Sampling.glsl"
+// Rays that would read cache texels of a moving object trace on (see RadianceCache.glsl).
+#define RC_MOVING_MASK 1
+#include "Engine/RadianceCache.glsl"
+#include "Engine/ScreenProbes.glsl"
+#include "Engine/Sky.glsl"
+#include "Engine/GIMedia.glsl"
+
+// One probe per probeSpacing x probeSpacing pixels, anchored at a jittered pixel of its cell, 64 rays per probe,
+// exactly one ray per texel of the ray atlas.
+//
+// With a valid ray table (Engine/ProbeImportance.shader) each ray samples the direction its entry says: a whole
+// octahedral texel, a 2x2 block of dim texels or a quadrant of a bright one; otherwise one ray per direction.
+// ProbeCompose.shader turns the ray results back into the octahedral map.
+//
+// Each ray first marches the depth buffer (screen trace: pixel-exact near-field occlusion), then continues
+// through the global distance field (or, in the LEL_RAY_QUERY variant, through the scene's triangles) up to the near
+// distance; hits read the surface cache, rays that get further read the world-space radiance cache, and without a
+// cache they trace on to the sky. A hit on an object that moved since the previous frame is flagged (see
+// EncodeMovingHit): its direction's history stays short. The LEL_RAY_QUERY variant needs no distance field at all: its
+// rays start just off the surface (not half a field voxel), the object at a screen trace's hit is the triangle a short
+// ray finds under it, a back face it meets gives no light, and the far field's clearance is the radiance cache's own
+// test (Engine/RadianceCache.glsl).
+// A texel's result: rgb radiance, a = hit distance (-1 sky / far field, -2 probe on sky / invalid, moving hits encoded).
+
+uniform sampler2D FinalLighting;
+uniform usampler2D ProbeSelection;
+uniform usampler2D ProbeRayTable;
+uniform mat4 viewProjection;
+uniform vec3 cameraPosition;
+uniform vec3 cameraForward;
+uniform float screenTraceDistance;  // world units, 0 disables
+uniform int screenTraceSteps;
+uniform float screenTraceThickness; // world units
+uniform int frameIndex;
+
+uniform vec2 cameraClipPlanes; // near, far: linearise depth-buffer values without a matrix multiply
+
+float LinearViewDepth(float depth)
+{
+	float z = depth * 2.0 - 1.0;
+	float n = cameraClipPlanes.x;
+	float f = cameraClipPlanes.y;
+	return 2.0 * n * f / (f + n - z * (f - n));
+}
+
+// Marches the depth buffer along the ray. Returns true on a hit (position and normal from the G-buffer).
+// travelled receives how far the march got without hitting, so the SDF trace can continue from there.
+// Clip coordinates and view depth are linear along the segment, so the whole march costs two matrix
+// multiplies instead of two per step.
+bool ScreenTrace(vec3 origin, vec3 direction, float jitter, out vec3 hitPos, out vec3 hitNormal, out float travelled)
+{
+	float stepSize = screenTraceDistance / float(screenTraceSteps);
+	vec4 clipStart = viewProjection * vec4(origin, 1.0);
+	vec4 clipStep = viewProjection * vec4(direction * stepSize, 0.0);
+	float depthStart = dot(origin - cameraPosition, cameraForward);
+	float depthStep = dot(direction, cameraForward) * stepSize;
+	travelled = 0.0;
+
+	for (int i = 0; i < screenTraceSteps; i++)
+	{
+		float steps = float(i) + jitter;
+		vec4 clip = clipStart + clipStep * steps;
+		if (clip.w <= 0.01) return false;
+		vec2 uv = clip.xy / clip.w * 0.5 + 0.5;
+		if (any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0)))) return false;
+
+		ivec2 pixel = ivec2(uv * vec2(screenSize));
+		float sceneDepth = texelFetch(SceneDepth, pixel, 0).r;
+		if (sceneDepth >= 1.0)
+		{
+			travelled = steps * stepSize;
+			continue;
+		}
+
+		float sceneViewDepth = LinearViewDepth(sceneDepth);
+		float rayViewDepth = depthStart + depthStep * steps;
+
+		if (rayViewDepth > sceneViewDepth + 0.02)
+		{
+			if (rayViewDepth < sceneViewDepth + screenTraceThickness)
+			{
+				hitPos = ReconstructPosition(pixel, sceneDepth);
+				hitNormal = normalize(texelFetch(NormalRoughness, pixel, 0).xyz);
+				return true;
+			}
+			// Behind something thick: the depth buffer cannot tell what is there, hand over to the SDF.
+			return false;
+		}
+
+		travelled = steps * stepSize;
+	}
+
+	return false;
+}
+
+// Full trace of one ray: screen space first, then the distance field. Returns radiance and hit distance; reached is
+// how far along the ray what the radiance comes from lies (negative: the sky).
+#ifdef LEL_RAY_QUERY
+// How far off its depth buffer point a probe's rays start (world units): above the depth's error and the tilt of a
+// normal map, far below a distance field voxel.
+const float ProbeRayBias = 0.02;
+
+// How far off a triangle a screen trace's hit (a depth buffer point) may lie (SceneRayTracing.SurfaceReach).
+const float ScreenHitReach = 0.1;
+#endif
+
+vec4 TraceSurfaces(vec3 position, vec3 normal, vec3 direction, float jitter, out float reached)
+{
+#ifdef LEL_RAY_QUERY
+	vec3 origin = SceneRayOrigin(position, normal, ProbeRayBias);
+	// Where along the ray the triangles are traced from (after a screen trace: shortly before where it stopped).
+	float tStart = 0.0;
+#else
+	float voxel = SdfVoxelSize();
+	vec3 origin = position + normal * voxel * 0.5;
+#endif
+
+	if (screenTraceDistance > 0.0)
+	{
+		vec3 hitPos, hitNormal;
+		float travelled;
+		if (ScreenTrace(position + normal * 0.02, direction, jitter, hitPos, hitNormal, travelled))
+		{
+			vec3 radiance;
+			int objectIndex;
+#ifdef LEL_RAY_QUERY
+			// The object under the depth buffer's point: a short ray into its triangle.
+			objectIndex = SceneObjectAtSurface(hitPos, hitNormal, ScreenHitReach);
+			radiance = objectIndex >= 0 ? SampleSurfaceCacheAtSceneHit(objectIndex, hitPos, hitNormal, FinalLighting) : vec3(0.0);
+#else
+			if (!SampleSurfaceCacheAtHitObject(hitPos, hitNormal, voxel * 2.0, FinalLighting, radiance, objectIndex))
+			{
+				radiance = vec3(0.0);
+			}
+#endif
+			float distance = length(hitPos - position);
+			reached = distance;
+			return vec4(radiance, SceneObjectMoved(objectIndex) ? EncodeMovingHit(distance) : distance);
+		}
+#ifdef LEL_RAY_QUERY
+		// The march saw nothing up to travelled; the triangles from a step before it (a surface between two steps).
+		tStart = max(travelled - screenTraceDistance / float(screenTraceSteps), 0.0);
+#else
+		origin += direction * max(travelled - voxel, 0.0);
+#endif
+	}
+
+	float maxDistance = rcNearDistance > 0.0 ? rcNearDistance : sdfGridSize;
+	float hitT;
+#ifdef LEL_RAY_QUERY
+	// The scene's triangles: the hit knows its object, its normal and its facing.
+	SceneHit sceneHit;
+	bool hit = tStart < maxDistance && TraceSceneRay(origin, direction, tStart, maxDistance, sceneHit);
+	hitT = sceneHit.t;
+#else
+	bool hit = TraceSdf(origin, direction, maxDistance, hitT);
+#endif
+
+	if (!hit && rcNearDistance > 0.0)
+	{
+		// Far field: the radiance cache interpolated at the end of the near trace, in the ray direction.
+		// Only with clearance around that point: right next to a wall the probes just behind it would pass
+		// the occlusion test and leak the lighting of the other side, so such rays trace on instead (the LEL_RAY_QUERY
+		// variant: the probes' own depths tell, in SampleRadianceCache).
+		vec3 far = origin + direction * maxDistance;
+		vec3 radiance;
+		float beyond;
+#ifdef LEL_RAY_QUERY
+		bool clear = true;
+#else
+		bool clear = SampleSdf(far) >= rcProbeSpacing * 0.25;
+#endif
+		if (clear && SampleRadianceCache(far, direction, radiance, beyond))
+		{
+			// The probes' misses lie the field's size away: the sky.
+			reached = beyond >= sdfGridSize * 0.75 ? -1.0 : length(far - position) + beyond;
+			return vec4(radiance, -1.0);
+		}
+
+#ifdef LEL_RAY_QUERY
+		hit = TraceSceneRay(origin, direction, maxDistance, maxDistance + sdfGridSize, sceneHit);
+		hitT = sceneHit.t;
+#else
+		hit = TraceSdf(far, direction, sdfGridSize, hitT);
+		hitT += maxDistance;
+#endif
+	}
+
+	if (hit)
+	{
+		vec3 hitPos = origin + direction * hitT;
+		vec3 radiance;
+		int objectIndex;
+#ifdef LEL_RAY_QUERY
+		objectIndex = sceneHit.objectIndex;
+		radiance = SceneHitRadiance(sceneHit, origin, direction, FinalLighting);
+#else
+		if (!SampleSurfaceCacheAtHitObject(hitPos, SdfNormal(hitPos), voxel * 2.0, FinalLighting, radiance, objectIndex))
+		{
+			radiance = vec3(0.0);
+		}
+#endif
+		float distance = length(hitPos - position);
+		reached = distance;
+		return vec4(radiance, SceneObjectMoved(objectIndex) ? EncodeMovingHit(distance) : distance);
+	}
+
+	reached = -1.0;
+	return vec4(SkyRadiance(direction), -1.0);
+}
+
+// A probe's 64 rays cover its hemisphere: each stands for a cone of about ten degrees (tan 0.18), the width the
+// clouds on its way are read at.
+const float RayAperture = 0.18;
+
+// One ray: what it reaches, with the clouds on the way in front of it (the volumetric objects in the GI).
+vec4 TraceRay(vec3 position, vec3 normal, vec3 direction, float jitter)
+{
+	float reached;
+	vec4 ray = TraceSurfaces(position, normal, direction, jitter, reached);
+	ray.rgb = GIMediaApply(ray.rgb, position, direction, RayAperture, reached, jitter);
+	return ray;
+}
+
+// The ray of one texel of the ray atlas (a probe's PROBE_RESOLUTION^2 texels).
+vec4 TraceProbeTexel(ivec2 texel)
+{
+	ivec2 probe = texel / PROBE_RESOLUTION;
+	ivec2 local = texel - probe * PROBE_RESOLUTION;
+
+	vec3 position, normal;
+	if (!ProbeAnchor(probe, position, normal))
+	{
+		return vec4(0.0, 0.0, 0.0, -2.0);
+	}
+
+	// Which octahedral texel (and which part of it) does this ray sample? The sub-texel offset is this
+	// probe's own (see ProbeDirectionJitter), so neighbouring probes do not share their estimation error.
+	uvec4 selection = texelFetch(ProbeSelection, probe, 0);
+	vec2 probeOffset = ProbeDirectionJitter(probe);
+	vec2 octUV;
+	if (SelectionValid(selection))
+	{
+		uint entry = texelFetch(ProbeRayTable, texel, 0).r;
+		int texelIndex = RayTexel(entry);
+		vec2 oct = vec2(texelIndex % PROBE_RESOLUTION, texelIndex / PROBE_RESOLUTION);
+		uint mode = RayMode(entry);
+		if (mode == RAY_BLOCK)
+		{
+			// One ray anywhere in the 2x2 block of dim directions.
+			octUV = (oct + 2.0 * probeOffset) / float(PROBE_RESOLUTION);
+		}
+		else if (mode == RAY_QUADRANT)
+		{
+			int sub = RayQuadrant(entry);
+			vec2 subOffset = (vec2(sub & 1, sub >> 1) + fract(probeOffset + vec2(0.37, 0.61) * float(sub))) * 0.5;
+			octUV = (oct + subOffset) / float(PROBE_RESOLUTION);
+		}
+		else
+		{
+			octUV = (oct + probeOffset) / float(PROBE_RESOLUTION);
+		}
+	}
+	else
+	{
+		octUV = (vec2(local) + probeOffset) / float(PROBE_RESOLUTION);
+	}
+
+	vec3 tangent, bitangent;
+	TangentFrame(normal, tangent, bitangent);
+	vec3 h = HemiOctahedralToDirection(octUV);
+	vec3 direction = normalize(tangent * h.x + bitangent * h.y + normal * h.z);
+
+	float jitter = HashToFloat(HashCoord(texel, uint(frameIndex)));
+	return TraceRay(position, normal, direction, jitter);
+}
+
+#endif

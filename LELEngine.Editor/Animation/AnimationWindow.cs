@@ -512,7 +512,7 @@ namespace LELEngine.Editor.Animation
 			}
 
 			if (previewValue) ImGui.PopStyleColor();
-			if (ImGui.IsItemHovered()) ImGui.SetTooltip(canPreview ? "Sample the clip on the target object at the playhead (restored when off)" : "Select a GameObject (with the animated hierarchy) in edit mode to preview");
+			if (ImGui.IsItemHovered()) EditorGui.SetTooltip(canPreview ? "Sample the clip on the target object at the playhead (restored when off)" : "Select a GameObject (with the animated hierarchy) in edit mode to preview");
 			ImGui.SameLine();
 			if (record) ImGui.PushStyleColor(ImGuiCol.Button, EditorStyle.Error);
 			if (EditorGui.Button("Record"))
@@ -522,7 +522,7 @@ namespace LELEngine.Editor.Animation
 			}
 
 			if (record) ImGui.PopStyleColor();
-			if (ImGui.IsItemHovered()) ImGui.SetTooltip("Every change to an animated property (inspector, scene view) becomes a key at the playhead. Add properties with Add Property first.");
+			if (ImGui.IsItemHovered()) EditorGui.SetTooltip("Every change to an animated property (inspector, scene view) becomes a key at the playhead. Add properties with Add Property first.");
 			ImGui.EndDisabled();
 			ImGui.SameLine();
 			ImGui.Dummy(new NVector2(8, 0));
@@ -554,7 +554,7 @@ namespace LELEngine.Editor.Animation
 			frameInput = clip.TimeToFrame(Time);
 			EditorGui.InputInt("##frame", ref frameInput, 0, 0);
 			if (ImGui.IsItemDeactivatedAfterEdit()) SetTime(clip.FrameToTime(frameInput));
-			if (ImGui.IsItemHovered()) ImGui.SetTooltip("Frame");
+			if (ImGui.IsItemHovered()) EditorGui.SetTooltip("Frame");
 			ImGui.SameLine();
 			ImGui.SetNextItemWidth(60f);
 			float rate = clip.frameRate;
@@ -569,7 +569,7 @@ namespace LELEngine.Editor.Animation
 			ImGui.BeginDisabled(target == null);
 			if (EditorGui.Button("Add Property")) ImGui.OpenPopup("##add_property");
 			ImGui.EndDisabled();
-			if (ImGui.IsItemHovered()) ImGui.SetTooltip(target != null ? "Animate a property of '" + target.Name + "' or its children" : "Select a GameObject to add its properties");
+			if (ImGui.IsItemHovered()) EditorGui.SetTooltip(target != null ? "Animate a property of '" + target.Name + "' or its children" : "Select a GameObject to add its properties");
 			DrawAddPropertyPopup();
 			ImGui.SameLine();
 			if (EditorGui.Button("Add Event")) AddEvent(Time);
@@ -582,7 +582,7 @@ namespace LELEngine.Editor.Animation
 				valueRangeDirty = true;
 			}
 
-			if (ImGui.IsItemHovered()) ImGui.SetTooltip("Switch between the dope sheet and the curves");
+			if (ImGui.IsItemHovered()) EditorGui.SetTooltip("Switch between the dope sheet and the curves");
 			ImGui.SameLine();
 			ImGui.Dummy(new NVector2(8, 0));
 			ImGui.SameLine();
@@ -595,7 +595,7 @@ namespace LELEngine.Editor.Animation
 				UpdateTarget();
 			}
 
-			if (ImGui.IsItemHovered()) ImGui.SetTooltip("Keep this target while selecting other objects");
+			if (ImGui.IsItemHovered()) EditorGui.SetTooltip("Keep this target while selecting other objects");
 			ImGui.Separator();
 		}
 
@@ -810,7 +810,7 @@ namespace LELEngine.Editor.Animation
 				if (missing) ImGui.PopStyleColor();
 				if (ImGui.IsItemHovered())
 				{
-					ImGui.SetTooltip(label + "\n" + binding.kind + (missing ? "\nNot found on the target" : "") + "\nRight click for options");
+					EditorGui.SetTooltip(label + "\n" + binding.kind + (missing ? "\nNot found on the target" : "") + "\nRight click for options");
 				}
 
 				if (EditorGui.BeginPopupContextItem("##row_context"))
@@ -931,7 +931,7 @@ namespace LELEngine.Editor.Animation
 				AddKeyAtPlayhead(bindingIndex);
 			}
 
-			if (ImGui.IsItemHovered()) ImGui.SetTooltip("Click: key these values at the playhead (expand the row to edit channels)");
+			if (ImGui.IsItemHovered()) EditorGui.SetTooltip("Click: key these values at the playhead (expand the row to edit channels)");
 		}
 
 		// ---------------------------------------------------------------- timeline
@@ -1283,7 +1283,7 @@ namespace LELEngine.Editor.Animation
 
 				if (Math.Abs(ImGui.GetMousePos().X - x) <= 8f && ImGui.GetMousePos().Y >= eventsTop && ImGui.IsWindowHovered())
 				{
-					ImGui.SetTooltip(e.function + " @ " + e.time.ToString("0.###") + " s");
+					EditorGui.SetTooltip(e.function + " @ " + e.time.ToString("0.###") + " s");
 				}
 			}
 		}
@@ -2401,7 +2401,7 @@ namespace LELEngine.Editor.Animation
 					}
 
 					ImGui.EndDisabled();
-					if (ImGui.IsItemHovered()) ImGui.SetTooltip(property.Property + "  (" + property.Kind + ")");
+					if (ImGui.IsItemHovered()) EditorGui.SetTooltip(property.Property + "  (" + property.Kind + ")");
 				}
 
 				if (!filtered)

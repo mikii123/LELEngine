@@ -51,7 +51,7 @@ namespace LELEngine.Editor
 				string tooltip = Describe(value);
 				if (tooltip != null && !DragAndDrop.IsDragging)
 				{
-					ImGui.SetTooltip(tooltip + "\nClick: show it, double click: select it");
+					EditorGui.SetTooltip(tooltip + "\nClick: show it, double click: select it");
 				}
 			}
 

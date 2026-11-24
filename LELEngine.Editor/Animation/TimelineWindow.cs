@@ -470,14 +470,14 @@ namespace LELEngine.Editor.Animation
 			if (playing) ImGui.PushStyleColor(ImGuiCol.Button, EditorStyle.Accent);
 			bool pressPlay = EditorGui.Button(playing ? "||" : ">");
 			if (playing) ImGui.PopStyleColor();
-			if (ImGui.IsItemHovered()) ImGui.SetTooltip("Play / pause (Space)");
+			if (ImGui.IsItemHovered()) EditorGui.SetTooltip("Play / pause (Space)");
 			if (pressPlay) TogglePlay();
 			ImGui.SameLine();
 			bool active = shown != null && shown.IsPlaying;
 			ImGui.BeginDisabled(!active && preview == null);
 			if (EditorGui.Button("Stop")) StopPlayback();
 			ImGui.EndDisabled();
-			if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled)) ImGui.SetTooltip(editor.IsPlaying ? "Stop the Timeline" : "End the preview: the objects get their own values back");
+			if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled)) EditorGui.SetTooltip(editor.IsPlaying ? "Stop the Timeline" : "End the preview: the objects get their own values back");
 			ImGui.SameLine();
 			if (EditorGui.Button(">##next")) SeekTo(SnapToFrame(playhead) + frame);
 			ImGui.SameLine();
@@ -487,13 +487,13 @@ namespace LELEngine.Editor.Animation
 			if (recording) ImGui.PushStyleColor(ImGuiCol.Button, EditorStyle.Error);
 			bool pressRecord = EditorGui.Button("Record");
 			if (recording) ImGui.PopStyleColor();
-			if (ImGui.IsItemHovered()) ImGui.SetTooltip("Paused: changing a value of an armed channel's object (inspector, scene view) sets a key at the playhead.\nPlaying: what the armed objects do is recorded as it happens.\nAny exposed value counts: fields of your scripts, [Animatable] members.");
+			if (ImGui.IsItemHovered()) EditorGui.SetTooltip("Paused: changing a value of an armed channel's object (inspector, scene view) sets a key at the playhead.\nPlaying: what the armed objects do is recorded as it happens.\nAny exposed value counts: fields of your scripts, [Animatable] members.");
 			if (pressRecord) ToggleRecord();
 			ImGui.SameLine();
 			if (shown != null && shown.State == TimelinePlaybackState.Sustaining)
 			{
 				if (EditorGui.Button("Key Off")) shown.KeyOff();
-				if (ImGui.IsItemHovered()) ImGui.SetTooltip("The cursor waits at a sustain point: move on");
+				if (ImGui.IsItemHovered()) EditorGui.SetTooltip("The cursor waits at a sustain point: move on");
 				ImGui.SameLine();
 			}
 
@@ -507,10 +507,10 @@ namespace LELEngine.Editor.Animation
 			ImGui.Dummy(new NVector2(6, 0));
 			ImGui.SameLine();
 			if (EditorGui.Button("Fit")) FrameAll();
-			if (ImGui.IsItemHovered()) ImGui.SetTooltip("Show the whole timeline (F). Ctrl + wheel: zoom, Shift + wheel or middle drag: scroll.");
+			if (ImGui.IsItemHovered()) EditorGui.SetTooltip("Show the whole timeline (F). Ctrl + wheel: zoom, Shift + wheel or middle drag: scroll.");
 			ImGui.SameLine();
 			if (EditorGui.Checkbox("Snap", ref snap)) EditorPreferences.SetToggle("Timeline.Snap", snap);
-			if (ImGui.IsItemHovered()) ImGui.SetTooltip("Clips, markers and the playhead snap to frames and to each other");
+			if (ImGui.IsItemHovered()) EditorGui.SetTooltip("Clips, markers and the playhead snap to frames and to each other");
 			ImGui.SameLine();
 			ImGui.SetNextItemWidth(70f);
 			float rate = Asset.frameRate;
@@ -527,7 +527,7 @@ namespace LELEngine.Editor.Animation
 				ImGui.TextUnformatted("'" + host.gameObject.Name + "'");
 				ImGui.SameLine();
 				EditorGui.Checkbox("Lock", ref lockHost);
-				if (ImGui.IsItemHovered()) ImGui.SetTooltip("Keep this Timeline while selecting other objects");
+				if (ImGui.IsItemHovered()) EditorGui.SetTooltip("Keep this Timeline while selecting other objects");
 			}
 			else if (editor.Selected != null && !editor.IsPlaying)
 			{
@@ -578,7 +578,7 @@ namespace LELEngine.Editor.Animation
 
 				if (ImGui.IsItemHovered())
 				{
-					ImGui.SetTooltip("Parameter '" + parameter.Name + "': the game sets it with timeline.SetParameter.\nConditions of regions, transitions and clips read it. Right click: edit.");
+					EditorGui.SetTooltip("Parameter '" + parameter.Name + "': the game sets it with timeline.SetParameter.\nConditions of regions, transitions and clips read it. Right click: edit.");
 				}
 
 				if (EditorGui.BeginPopupContextItem("##parameter_menu"))
@@ -598,7 +598,7 @@ namespace LELEngine.Editor.Animation
 
 			if (ImGui.IsItemHovered())
 			{
-				ImGui.SetTooltip("Add a parameter");
+				EditorGui.SetTooltip("Add a parameter");
 			}
 		}
 

@@ -172,7 +172,7 @@ namespace LELEngine.Editor.VFX
 
 					if (ImGui.IsItemHovered())
 					{
-						ImGui.SetTooltip("Exposed properties show in the component's inspector and can be set from scripts.");
+						EditorGui.SetTooltip("Exposed properties show in the component's inspector and can be set from scripts.");
 					}
 
 					Label("Tooltip");
@@ -254,7 +254,7 @@ namespace LELEngine.Editor.VFX
 
 			if (ImGui.IsItemHovered())
 			{
-				ImGui.SetTooltip("Simulate When Visible: an effect no view sees freezes and costs nothing until it is seen again (Unity's default).\nAlways Simulate: it keeps running off-screen (for effects whose state matters while hidden).");
+				EditorGui.SetTooltip("Simulate When Visible: an effect no view sees freezes and costs nothing until it is seen again (Unity's default).\nAlways Simulate: it keeps running off-screen (for effects whose state matters while hidden).");
 			}
 		}
 
@@ -406,7 +406,7 @@ namespace LELEngine.Editor.VFX
 
 			if (!string.IsNullOrEmpty(setting.Tooltip) && ImGui.IsItemHovered())
 			{
-				ImGui.SetTooltip(setting.Tooltip);
+				EditorGui.SetTooltip(setting.Tooltip);
 			}
 
 			if (!changed)
@@ -462,7 +462,7 @@ namespace LELEngine.Editor.VFX
 			DrawValueEditor(document, "Edit " + slot.DisplayName, stored.Value, slot);
 			if (!string.IsNullOrEmpty(slot.Tooltip) && ImGui.IsItemHovered())
 			{
-				ImGui.SetTooltip(slot.Tooltip);
+				EditorGui.SetTooltip(slot.Tooltip);
 			}
 		}
 

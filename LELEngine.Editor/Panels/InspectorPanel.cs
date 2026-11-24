@@ -404,7 +404,7 @@ namespace LELEngine.Editor
 
 			if (ImGui.IsItemHovered())
 			{
-				ImGui.SetTooltip("The object does not move or change while the game runs: the GI works its renderer out once\n" +
+				EditorGui.SetTooltip("The object does not move or change while the game runs: the GI works its renderer out once\n" +
 					"instead of every frame, and static batching (Project Settings > Graphics; in built games and in\n" +
 					"play mode) may merge its mesh with other static ones into one draw.");
 			}
@@ -531,7 +531,7 @@ namespace LELEngine.Editor
 
 					if (ImGui.IsItemHovered())
 					{
-						ImGui.SetTooltip("Open " + script + " in the external script editor");
+						EditorGui.SetTooltip("Open " + script + " in the external script editor");
 					}
 				}
 
@@ -556,7 +556,7 @@ namespace LELEngine.Editor
 
 				if (ImGui.IsItemHovered())
 				{
-					ImGui.SetTooltip("Enabled");
+					EditorGui.SetTooltip("Enabled");
 				}
 			}
 

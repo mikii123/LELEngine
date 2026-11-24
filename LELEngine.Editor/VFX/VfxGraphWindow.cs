@@ -398,7 +398,7 @@ namespace LELEngine.Editor.VFX
 
 				if (ImGui.IsItemHovered())
 				{
-					ImGui.SetTooltip("Creates a GameObject with a VisualEffect component playing this graph.");
+					EditorGui.SetTooltip("Creates a GameObject with a VisualEffect component playing this graph.");
 				}
 			}
 			else
