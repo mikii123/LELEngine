@@ -85,7 +85,8 @@ namespace LELEngine.Rendering.Passes
 			for (int i = 0; i < buckets.Count; i++)
 			{
 				OpaqueBucket bucket = buckets[i];
-				ShaderProgram program = bucket.Program;
+				// The shader's ray query variant (its instanced one) while this view traces its voxel cones per fragment.
+				ShaderProgram program = Lighting.RayQueryProgram(bucket.Program, false);
 				program.Use();
 				program.RenderState.ApplyCull();
 				context.Camera.SetUniforms(program);
@@ -134,7 +135,7 @@ namespace LELEngine.Rendering.Passes
 			foreach (RendererPart part in parts)
 			{
 				MeshRenderer owner = part.Renderer;
-				ShaderProgram candidate = (layerMask & (1 << (owner.gameObject.layer & 31))) != 0 && culling.IsVisible(owner) ? part.Material?.Program : null;
+				ShaderProgram candidate = (layerMask & (1 << (owner.gameObject.layer & 31))) != 0 && culling.IsVisible(owner) ? Lighting.RayQueryProgram(part.Material?.Program, false) : null;
 				partPrograms.Add(candidate);
 				if (candidate != null && !programs.Contains(candidate))
 				{
@@ -174,7 +175,17 @@ namespace LELEngine.Rendering.Passes
 						resend = false;
 					}
 
-					renderer.RenderSubMesh(part.SubMesh);
+					if (program == material.Program)
+					{
+						renderer.RenderSubMesh(part.SubMesh);
+					}
+					else
+					{
+						// The material's ray query variant: its values go to the program drawn.
+						material.SetUniforms(program, renderer.PropertyBlock);
+						renderer.RenderSubMeshWith(program, part.SubMesh);
+					}
+
 					if (material.OverridesSharedUniforms())
 					{
 						resend = true;

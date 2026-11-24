@@ -530,7 +530,10 @@ namespace TestGame.Scenes
 			}
 			if (options.SurfaceCacheView)
 			{
-				Game.Mono.Renderer.GetPass<LELEngine.Rendering.Passes.SurfaceCacheDebugPass>().Enabled = true;
+				LELEngine.Rendering.Passes.SurfaceCacheDebugPass cacheView = Game.Mono.Renderer.GetPass<LELEngine.Rendering.Passes.SurfaceCacheDebugPass>();
+				cacheView.Enabled = true;
+				// LEL_CACHE_ALBEDO=1: the cards' captured albedo instead of their lighting.
+				cacheView.ShowAlbedo = System.Environment.GetEnvironmentVariable("LEL_CACHE_ALBEDO") == "1";
 			}
 			if (options.ProbeView)
 			{

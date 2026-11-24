@@ -20,6 +20,9 @@ ZWrite Off
 #endif
 Cull Off
 Queue Transparent
+// Its LEL_RAY_QUERY variant traces the fragments' shadows (local lights with a traced shadow, traced directional lights)
+// and, with voxel cone tracing on the scene's triangles, its cones' rays (Engine/RayTracedShadows.glsl).
+RayQueries On
 /////Properties
 
 //Vertex
@@ -73,6 +76,12 @@ void main()
 #include "Engine/VolumeLighting.glsl"
 #include "Engine/Lights.glsl"
 #include "Engine/DirectionalLights.glsl"
+// The ray query variant traces the shadows of the lights whose shadows are traced (the fragments are not in the view's
+// depth, which the opaque surfaces' traced shadows are made from).
+#ifdef LEL_RAY_QUERY
+#define LEL_SHADOW_RAYS
+#endif
+#include "Engine/RayTracedShadows.glsl"
 
 // Material: Color (a = opacity), Emissive (rgb color, a intensity), Roughness (0 = unset -> 0.2).
 #include "Engine/Instancing.glsl"
@@ -164,13 +173,14 @@ void main()
 		float ndl = dot(N, L);
 		if (ndl > 0.0)
 		{
-			vec3 lightColor = LelDirectionalRadiance(i) * SampleLightShadowRGB(i, fPosition, vertexNormal, L);
+			vec3 lightColor = LelDirectionalRadiance(i) * LelDirectionalShadowAtRGB(i, fPosition, vertexNormal, L);
 			scattered += albedo * lightColor * ndl;
 			reflected += lightColor * pow(max(dot(N, normalize(L + V)), 0.0), LSpecular.specShine) * LSpecular.specStrength * ndl;
 		}
 	}
 
-	// The local lights (Engine/Lights.glsl), lit as the directional ones, unshadowed.
+	// The local lights (Engine/Lights.glsl), lit as the directional ones; shadowed in the ray query variant where their
+	// shadows are traced, unshadowed elsewhere.
 	for (LelLightIterator lights = LelLightsAt(fPosition); LelNextLight(lights);)
 	{
 		int i = lights.light;
@@ -179,6 +189,9 @@ void main()
 		if (LelLightAt(i, fPosition, Li, radiance))
 		{
 			float nli = max(dot(N, Li), 0.0);
+#ifdef LEL_SHADOW_RAYS
+			radiance *= nli > 0.0 ? LelLocalLightShadowAt(i, fPosition, vertexNormal) : 1.0;
+#endif
 			scattered += albedo * radiance * nli;
 			reflected += radiance * pow(max(dot(N, normalize(Li + V)), 0.0), LSpecular.specShine) * LSpecular.specStrength * nli;
 		}

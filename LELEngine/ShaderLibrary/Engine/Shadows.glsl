@@ -161,6 +161,23 @@ vec3 SampleLightShadowRGB(int light, vec3 worldPos, vec3 worldNormal, vec3 toLig
 	return mix(vec3(1.0), ShadowOpaque(proj, rect) * ShadowTransmitted(proj), fade);
 }
 
+// Only the transparent casters' part of directional light `light` at the receiver, per colour channel (1.0 where none,
+// or without a map): for a receiver whose opaque casters are traced instead (ray queries), the maps holding the
+// transparent ones alone.
+vec3 SampleLightTransmittanceRGB(int light, vec3 worldPos, vec3 worldNormal, vec3 toLight)
+{
+	if (!ShadowLightHasMap(light) || shadowTransmittanceEnabled == 0) return vec3(1.0);
+
+	float fade = ShadowFade(worldPos);
+	if (fade <= 0.0) return vec3(1.0);
+
+	int cascade = ShadowLightCascade(light, worldPos);
+	vec4 rect = lelShadowCascades[cascade].rect;
+	vec3 proj = ShadowProjection(cascade, worldPos, worldNormal, toLight);
+	if (proj.z > 1.0 || any(lessThan(proj.xy, rect.xy)) || any(greaterThan(proj.xy, rect.zw))) return vec3(1.0);
+	return mix(vec3(1.0), ShadowTransmitted(proj), fade);
+}
+
 // The main light's (light 0): 1.0 fully lit, 0.0 fully shadowed, per colour channel.
 vec3 SampleShadowRGB(vec3 worldPos, vec3 worldNormal, vec3 toLight)
 {

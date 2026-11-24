@@ -178,6 +178,7 @@ namespace LELEngine.Graphics.Vulkan
 
 				InstanceHandle = instance.Handle;
 				InstanceVk = (VkInstance.FunctionTable*)Unsafe.AsPointer(ref instance.PInvoke);
+				validationLayerOn = validation;
 				if (validation && InstanceVk->vkCreateDebugUtilsMessengerEXT.Invoke != null)
 				{
 					VkDebugUtilsMessengerCreateInfoEXT messengerInfo = new VkDebugUtilsMessengerCreateInfoEXT
@@ -1670,6 +1671,7 @@ namespace LELEngine.Graphics.Vulkan
 			caps.AsyncCompute = computeStream != null;
 			// Measured on the Radeon 780M (driver 2.0.353): colour attachments are never compressed, a clear writes every texel.
 			caps.FastColorClears = !(properties.VendorID == 0x1002 && properties.DeviceType == VkPhysicalDeviceType.IntegratedGpu);
+			caps.DiscreteGpu = properties.DeviceType == VkPhysicalDeviceType.DiscreteGpu;
 		}
 
 		#endregion

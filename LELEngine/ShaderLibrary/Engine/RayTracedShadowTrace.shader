@@ -10,6 +10,7 @@ layout(local_size_x = 8, local_size_y = 8) in;
 #include "Engine/Lights.glsl"
 #include "Engine/DirectionalLights.glsl"
 #include "Engine/Sampling.glsl"
+#include "Engine/HistoryMeta.glsl"
 #include "Engine/RayOrigin.glsl"
 
 // Traced shadows of the lighting camera's view (Rendering.Passes.RayTracedShadowPass), step 1: for every pixel of the
@@ -25,6 +26,11 @@ layout(local_size_x = 8, local_size_y = 8) in;
 //
 // Mask layout (Lighting.RayShadowBinding): layers 0 .. localLayers - 1 the local lights' slots (slot s: layer s / 4,
 // channel s % 4), then one layer of the directional lights (light i: channel i) when any is traced.
+// The accumulation is RGBA8, rounded up or down at random in proportion (unbiased: a history converging by a sixteenth a
+// frame never sticks short of its value, and a channel that is exactly 0 or 1 stays so); the meta one 32-bit word
+// (Engine/HistoryMeta.glsl: the view depth, the normal in 6 bits an axis, the frames accumulated - 1 in 4 bits).
+
+const uint MetaNormalBits = 6u;
 
 layout(binding = 1) uniform accelerationStructureEXT ShadowScene;
 
@@ -32,7 +38,7 @@ uniform sampler2D SceneDepth;
 uniform sampler2D NormalRoughness;
 uniform sampler2D Motion;            // world-space motion since the previous frame (xyz), w = 1 where the surface moved
 uniform sampler2DArray HistoryMask;  // the previous frame's accumulation
-uniform sampler2D HistoryMeta;       // x: linear view depth (0: no history), y: frames accumulated, zw: octahedral normal
+uniform usampler2D HistoryMeta;      // the previous frame's meta (0: no history)
 
 uniform mat4 invViewProjection;
 uniform mat4 previousViewProjection;
@@ -54,10 +60,18 @@ uniform int slotsChanged;            // bit s: slot s starts again (another ligh
 uniform int directionalChanged;      // bit i: directional light i starts again (it turned, or its size changed)
 uniform float rayLength;             // how far a directional light's ray looks for casters
 
-layout(binding = 0, rgba16f) uniform writeonly image2DArray OutMask;
-layout(binding = 1, rgba16f) uniform writeonly image2D OutMeta;
+layout(binding = 0, rgba8) uniform writeonly image2DArray OutMask;
+layout(binding = 1, r32ui) uniform writeonly uimage2D OutMeta;
 
 const int MaxLayers = 3;
+
+// A value as RGBA8 holds it, rounded to one of its two neighbouring steps at random in proportion to how near it is.
+vec4 StochasticRound8(vec4 value, ivec2 pixel, int layer)
+{
+	uint seed = HashCoord(pixel, uint(frameIndex) * 3u + uint(layer) + 1u);
+	vec4 u = vec4(HashToFloat(seed), HashToFloat(seed * 747796405u + 2891336453u), HashToFloat(seed * 277803737u + 1442695041u), HashToFloat(seed * 2654435761u + 40503u));
+	return floor(clamp(value, 0.0, 1.0) * 255.0 + u) / 255.0;
+}
 
 // Whether nothing of the scene lies along a ray (first hit ends it).
 bool ShadowRayClear(vec3 origin, vec3 direction, float tMax)
@@ -120,7 +134,7 @@ void main()
 	if (depth >= 1.0)
 	{
 		// The sky: no surface reads the mask here (its meta says so, the filter leaves it).
-		imageStore(OutMeta, pixel, vec4(0.0));
+		imageStore(OutMeta, pixel, uvec4(0u));
 		return;
 	}
 
@@ -209,7 +223,7 @@ void main()
 	if (!reached)
 	{
 		// No traced light reaches the surface here: nothing of the mask is read for it (nor kept as history).
-		imageStore(OutMeta, pixel, vec4(0.0));
+		imageStore(OutMeta, pixel, uvec4(0u));
 		return;
 	}
 
@@ -232,10 +246,11 @@ void main()
 			ivec2 tap = ivec2(floor((previousClip.xy / previousClip.w * 0.5 + 0.5) * vec2(screenSize)));
 			if (all(greaterThanEqual(tap, ivec2(0))) && all(lessThan(tap, screenSize)))
 			{
-				vec4 meta = texelFetch(HistoryMeta, tap, 0);
+				uint meta = texelFetch(HistoryMeta, tap, 0).r;
+				float metaDepth = HistoryMetaDepth(meta);
 				float expectedDepth = dot(previousPosition - previousCameraPosition, previousCameraForward);
-				float match = meta.y < 0.5 ? 0.0 : clamp(1.0 - abs(meta.x - expectedDepth) / (0.03 * expectedDepth + 0.03), 0.0, 1.0)
-					* smoothstep(0.85, 0.97, dot(OctahedralToDirection(meta.zw), N));
+				float match = metaDepth <= 0.0 ? 0.0 : clamp(1.0 - abs(metaDepth - expectedDepth) / (0.03 * expectedDepth + 0.03), 0.0, 1.0)
+					* smoothstep(0.85, 0.97, dot(HistoryMetaNormal(meta, MetaNormalBits), N));
 				if (match > 0.05)
 				{
 					for (int layer = 0; layer < layers; layer++)
@@ -244,7 +259,7 @@ void main()
 					}
 
 					// A history that matched only partly (an edge) counts for less.
-					previousFrames = meta.y * clamp(match * 2.0, 0.0, 1.0);
+					previousFrames = float(HistoryMetaExtra(meta, MetaNormalBits) + 1u) * clamp(match * 2.0, 0.0, 1.0);
 				}
 			}
 		}
@@ -263,10 +278,10 @@ void main()
 			w[c] = restart ? 1.0 : w[c];
 		}
 
-		imageStore(OutMask, ivec3(pixel, layer), mix(history[layer], fresh[layer], w));
+		imageStore(OutMask, ivec3(pixel, layer), StochasticRound8(mix(history[layer], fresh[layer], w), pixel, layer));
 	}
 
-	imageStore(OutMeta, pixel, vec4(viewDepth, frames, DirectionToOctahedral(N)));
+	imageStore(OutMeta, pixel, uvec4(PackHistoryMeta(viewDepth, N, MetaNormalBits, clamp(uint(frames + 0.5), 1u, 16u) - 1u)));
 }
 #else
 void main()

@@ -16,10 +16,12 @@
 //                   continuous, it only decreases (no cone sees through a wall), and where it decreases the
 //                   cone takes the radiance of the surfaces there from the voxel volume.
 //
-// The LEL_RAY_QUERY variants (voxel cone tracing's own programs while Lighting.VoxelRayTracingActive: the scene's
-// triangles traced with ray queries, no distance field built) trace rays where the others read the field: the SDF
-// detail's near field is a ray, and an SDF cone's distance to the surfaces is the distance along its axis to the first
-// triangle a ray along the axis meets. The material shaders, which have no such variant, trace voxel cones then.
+// The LEL_RAY_QUERY variants (voxel cone tracing's own programs while Lighting.VoxelRayTracingActive, and the material
+// shaders' ray query variants that trace their cones per fragment: the scene's triangles traced with ray queries, no
+// distance field built) trace rays where the others read the field: the SDF detail's near field is a ray, and an SDF
+// cone's distance to the surfaces at a sample is the distance to the plane of the triangle a ray along its axis meets
+// (a wall the cone runs towards at a slant is near all along, as the field has it), and with giConeRays > 1 to the
+// nearest point other rays spread over the cone's opening met (what lies beside the axis).
 
 #include "Engine/DistanceField.glsl"
 #include "Engine/VoxelRadiance.glsl"
@@ -45,6 +47,17 @@ float SceneRayHitDistance(vec3 origin, vec3 direction, float tMin, float tMax)
 
 	return rayQueryGetIntersectionTypeEXT(query, true) == gl_RayQueryCommittedIntersectionTriangleEXT ? rayQueryGetIntersectionTEXT(query, true) : 1e30;
 }
+
+// The rays an SDF cone traces (Lighting.SetVoxelRayTracingUniforms: RayTracingSettings.ConeRays, 1..4): its axis, and
+// the rest spread around it over the cone's opening.
+uniform int giConeRays;
+const int MaxConeSideRays = 3;
+
+// How far an SDF cone's rays reach, in cone widths over the field's band (4: where the field's term falls under a
+// sixteenth), and whether a sample's distance is to the axis hit's plane (1) or along the axis (0): Lighting's
+// measurement switches, ConeRayReach and ConeHitPlane.
+uniform float giConeRayReach;
+uniform int giConeHitPlane;
 #endif
 
 uniform vec3 voxelGridMin;
@@ -253,9 +266,39 @@ vec4 TraceConeSdf(vec3 origin, vec3 direction, float aperture, float maxDistance
 	ConeClouds clouds = ConeClouds(0.0, GIMediaNoPhase, stepJitter);
 #endif
 #ifdef LEL_RAY_QUERY
-	// The scene's triangles in place of the field: one ray along the cone's axis, its first surface the one every
-	// sample's distance is taken to, along the axis (a surface beside the axis does not count).
-	float axisHit = SceneRayHitDistance(origin, direction, sdfVoxel * 0.5, maxDistance);
+	// The scene's triangles in place of the field. The rays reach only as far as the field's term can count: where the
+	// cone is four times wider than the band the field vouches for (coverage 1/4: at most a sixteenth of a sample's
+	// opacity), the voxels decide alone.
+	float rayReach = min(maxDistance, giConeRayReach * maxRadius / occlusionAperture);
+	// A ray along the axis: a sample's distance to the surfaces is its distance to the plane of the triangle the ray
+	// met (along the axis times the slant), as the field gives it for a wall the cone runs towards.
+	float axisHit;
+	float axisFacing = 1.0;
+	if (giConeHitPlane != 0)
+	{
+		vec3 axisNormal;
+		SceneRayHitPlane(origin, direction, sdfVoxel * 0.5, rayReach, axisHit, axisNormal);
+		axisFacing = abs(dot(direction, axisNormal));
+	}
+	else
+	{
+		axisHit = SceneRayHitDistance(origin, direction, sdfVoxel * 0.5, rayReach);
+	}
+	// The other rays, at half the cone's opening around the axis (turned by the cone's jitter): the points they met, a
+	// sample's distance the nearest of them where nearer than the axis's surface (what lies beside the axis).
+	int sideRays = clamp(giConeRays, 1, MaxConeSideRays + 1) - 1;
+	vec3 sideHits[MaxConeSideRays];
+	if (sideRays > 0)
+	{
+		vec3 sideTangent = normalize(cross(abs(direction.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0), direction));
+		vec3 sideBitangent = cross(direction, sideTangent);
+		for (int k = 0; k < sideRays; k++)
+		{
+			float angle = 6.2831853 * (float(k) + stepJitter) / float(sideRays);
+			vec3 side = normalize(direction + (sideTangent * cos(angle) + sideBitangent * sin(angle)) * (occlusionAperture * 0.5));
+			sideHits[k] = origin + side * SceneRayHitDistance(origin, side, sdfVoxel * 0.5, rayReach);
+		}
+	}
 #endif
 	while (dist < maxDistance && alpha < 0.98)
 	{
@@ -280,9 +323,13 @@ vec4 TraceConeSdf(vec3 origin, vec3 direction, float aperture, float maxDistance
 			float radius = min(coneRadius, maxRadius);
 			float coverage = radius / coneRadius;
 #ifdef LEL_RAY_QUERY
-			// Up to the hit, and 0 past it: what the ray hit counts as solid (a thin surface the cone passes would let
-			// light through walls the field stops).
-			float surfaceDistance = max(axisHit - dist, 0.0);
+			// Up to the hit's plane, and 0 past the hit: what the ray hit counts as solid (a thin surface the cone passes
+			// would let light through walls the field stops).
+			float surfaceDistance = max(axisHit - dist, 0.0) * axisFacing;
+			for (int k = 0; k < sideRays; k++)
+			{
+				surfaceDistance = min(surfaceDistance, distance(p, sideHits[k]));
+			}
 #else
 			float surfaceDistance = SampleSdf(p);
 #endif

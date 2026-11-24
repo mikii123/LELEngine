@@ -812,17 +812,27 @@ namespace LELEngine.VFX
 					b.Writer.EndBlock();
 					MarkCollisionWrites(b);
 				});
-			Block("Block.CollideSdf", "Collide With Global SDF", category, "Particles bounce off the scene geometry through the GI's global distance field.", VfxContextMask.Update,
+			Block("Block.CollideSdf", "Collide With Global SDF", category, "Particles bounce off the scene geometry through the GI's global distance field (while the GI's rays trace the scene's triangles: through them, along each particle's step).", VfxContextMask.Update,
 				node => Slots(CollisionInputs()),
 				b =>
 				{
 					b.Writer.UsesSdf = true;
 					b.Line("vec3 sdfWorld = " + PointToWorld(b, b.Read(VfxAttributes.Position)) + ";");
+					// The kernel's ray query variant (no distance field built): the surface the particle's step would reach.
+					b.Line("#ifdef LEL_RAY_QUERY");
+					b.Line("float sdfDistance;");
+					b.Line("vec3 sdfWorldNormal;");
+					b.Writer.BeginBlock("if (VfxSceneCollision(sdfWorld, " + VectorToWorld(b, b.Read(VfxAttributes.Velocity)) + " * vfxDeltaTime, " + b.Emit("Radius") + ", sdfDistance, sdfWorldNormal))");
+					b.Line("vec3 sdfNormal = " + VectorFromWorld(b, "sdfWorldNormal") + ";");
+					b.Line(Collide(b, "sdfDistance", "sdfNormal"));
+					b.Writer.EndBlock();
+					b.Line("#else");
 					b.Writer.BeginBlock("if (VfxGlobalSdfAvailable(sdfWorld))");
 					b.Line("float sdfDistance = VfxSampleGlobalSdf(sdfWorld);");
 					b.Line("vec3 sdfNormal = " + VectorFromWorld(b, "VfxGlobalSdfNormal(sdfWorld)") + ";");
 					b.Line(Collide(b, "sdfDistance", "sdfNormal"));
 					b.Writer.EndBlock();
+					b.Line("#endif");
 					MarkCollisionWrites(b);
 				});
 		}

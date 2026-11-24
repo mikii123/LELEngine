@@ -168,6 +168,51 @@ bool TraceSceneRay(vec3 origin, vec3 direction, float tMin, float tMax, out floa
 	return found;
 }
 
+// The nearest triangle along a ray between tMin and tMax (inside the GI volume): its distance and its plane's normal in
+// the world (the triangle's own, not the vertex normals: with position fetch nothing of the geometry pool is read). False
+// (t = 1e30) when the ray meets none.
+bool SceneRayHitPlane(vec3 origin, vec3 direction, float tMin, float tMax, out float t, out vec3 normal)
+{
+	t = 1e30;
+	normal = -direction;
+	if (!GISceneRayInterval(origin, direction, tMin, tMax))
+	{
+		return false;
+	}
+
+	rayQueryEXT query;
+	rayQueryInitializeEXT(query, GIScene, gl_RayFlagsOpaqueEXT, 0xFFu, origin, tMin, direction, tMax);
+	while (rayQueryProceedEXT(query))
+	{
+	}
+
+	if (rayQueryGetIntersectionTypeEXT(query, true) != gl_RayQueryCommittedIntersectionTriangleEXT)
+	{
+		return false;
+	}
+
+	t = rayQueryGetIntersectionTEXT(query, true);
+#ifdef LEL_RAY_POSITION_FETCH
+	vec3 corners[3];
+	rayQueryGetIntersectionTriangleVertexPositionsEXT(query, true, corners);
+	vec3 p0 = corners[0];
+	vec3 p1 = corners[1];
+	vec3 p2 = corners[2];
+#else
+	uvec2 range = giSceneRanges[rayQueryGetIntersectionInstanceCustomIndexEXT(query, true)];
+	uint first = range.x + uint(rayQueryGetIntersectionPrimitiveIndexEXT(query, true)) * 3u;
+	vec3 p0 = GISceneVertex(range.y + giSceneIndices[first]);
+	vec3 p1 = GISceneVertex(range.y + giSceneIndices[first + 1u]);
+	vec3 p2 = GISceneVertex(range.y + giSceneIndices[first + 2u]);
+#endif
+	mat4x3 worldToObject = rayQueryGetIntersectionWorldToObjectEXT(query, true);
+	vec3 g = cross(p1 - p0, p2 - p0);
+	g = vec3(dot(worldToObject[0], g), dot(worldToObject[1], g), dot(worldToObject[2], g));
+	float g2 = dot(g, g);
+	normal = g2 > 1e-30 ? g * inversesqrt(g2) : -direction;
+	return true;
+}
+
 // Whether nothing of the scene lies along a ray between tMin and tMax (inside the GI volume; a ray from outside it is
 // clear): shadow rays, which end at the first surface they meet, front or back.
 bool SceneRayClear(vec3 origin, vec3 direction, float tMin, float tMax)

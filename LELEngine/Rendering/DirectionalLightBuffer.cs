@@ -89,6 +89,24 @@ namespace LELEngine.Rendering
 			return index >= 0 && index < shining.Count && shadowed[index];
 		}
 
+		/// <summary>Bit i set: light i of the list casts shadows this frame (<see cref="CastsShadows" />).</summary>
+		public static int ShadowedMask
+		{
+			get
+			{
+				int mask = 0;
+				for (int i = 0; i < shining.Count; i++)
+				{
+					if (shadowed[i])
+					{
+						mask |= 1 << i;
+					}
+				}
+
+				return mask;
+			}
+		}
+
 		/// <summary>
 		///     Gathers the lights that shine, picks the ones that cast shadows, and uploads and binds the list. Once a
 		///     frame, before anything draws.

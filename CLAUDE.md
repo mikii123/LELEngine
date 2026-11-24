@@ -320,7 +320,8 @@
   `GlobalDistanceFieldPass` releases the field and returns early when it is false (and updates VCT's scene under
   `VoxelRayTracingActive`); `LumenScene.Update` (fields while `!SceneRayTracingActive || DistanceFieldActive`) then frees
   the mesh field atlas (`ReleaseDistanceFields`) and makes objects without fields: an object is its renderer's own
-  (absolute) scale, rows without a field get a field box 1e8 away (a field composed meanwhile, for a request, leaves
+  (absolute) scale (a negative component: the mirror in the object's placement since 2026-11-24, "Ray tracing and GI,
+  third round" below), rows without a field get a field box 1e8 away (a field composed meanwhile, for a request, leaves
   them out while their fields build); `SurfaceCachePass` places the GI volume and updates Lumen's scene (section
   `RayTracing.scene`). What read the fields, now from the rays: the object at a screen
   trace's hit (`SceneObjectAtSurface`: a short ray back along the pixel's normal, reach 0.1), the radiance cache probes'
@@ -330,7 +331,8 @@
   towards the point ends within the occlusion margin of it, a wall next to the point; the caller traces on), the
   surface cache debug view (its RT variant finds the object by a ray). Still read the field, so they ask for it
   (`Lighting.RequestDistanceField`, kept `DistanceFieldRequestFrames` = 300 frames after the last ask, built from the
-  next frame): VFX systems that sample it (`VfxInstance.SetSdfUniforms`), the SDF debug view. VCT's SDF modes are not
+  next frame): the SDF debug view (VFX systems that sample it trace the triangles instead since 2026-11-24: "Ray tracing
+  and GI, third round" below). VCT's SDF modes are not
   Lumen: unchanged. Where the vk-sdfvct passes must look: `GI.DistanceFieldActive` in `GlobalDistanceFieldPass.Execute`
   / `ReleaseUnusedResources` (as today), and `LumenScene.DistanceFields` may be null (only `SetUniforms`, `Delete` and
   the TestGame probe read it).
@@ -338,11 +340,12 @@
   0.005 + 0.001 x the scaled-local distance (their half-float positions), then Wächter and Binder's offset) instead of
   half or one field voxel; after a screen trace the triangles are traced from one march step before where it stopped;
   back faces give no light (`SceneHitRadiance`); hits read interpolated vertex normals (`TraceSceneRay`).
-  VK_KHR_ray_tracing_position_fetch: the device asks for it only with `LEL_VULKAN_ENABLE=positionfetch` (bottom levels
+  VK_KHR_ray_tracing_position_fetch: the device asked for it only with `LEL_VULKAN_ENABLE=positionfetch` (bottom levels
   carry AllowDataAccess, the RT variants then get `GL_EXT_ray_tracing_position_fetch` and `LEL_RAY_POSITION_FETCH` and
   read the hit triangle's corners from the structure): measured no gain (lumen ProbeGather.trace 1.30 / 1.30 ms, lights
   1.54 / 1.54; the interpolated normals read the pool's vertices anyway) and this machine's validation layer (1.3.290)
-  rejects its SPIR-V capability (VUID-VkShaderModuleCreateInfo-pCode-08739).
+  rejects its SPIR-V capability (VUID-VkShaderModuleCreateInfo-pCode-08739). On by default since 2026-11-24 where the
+  GPU has it and no validation layer is on ("Ray tracing and GI, third round" below).
 - Traced shadows (`Rendering/Passes/RayTracedShadowPass`, after the geometry prepass; `Lighting.RayTracedLocalShadows`,
   `RayTracedDirectionalShadows`): the view's renderers that cast shadows (not impostors: their surface is not their
   mesh) as a top level of their own (`SceneTopLevel`, real transforms, binding 1); per pixel of the prepass's depth a ray
@@ -353,11 +356,13 @@
   another each frame and pixel, accumulated over up to 16 frames (4 on moving surfaces) with the history of the same
   surface point (reprojected by the prepass's motion, depth and normal tested), a slot's channel starting again when its
   light changes (`ShadowSlotsChanged`), then `Engine/RayTracedShadowFilter.shader` (Gaussian radius 2 over the same
-  surface). Mask: RGBA8 2D array, the local slots' layers then one of the directional lights; history RGBA16F x 2 + meta.
-  The lit materials (`Lit`, `LitTextured`, `Impostor`) read it through `Engine/RayTracedShadows.glsl` (Vulkan only:
-  `LelLocalLightShadow`, `LelDirectionalShadowRGB`) for draws of the lighting camera's view (`Lighting.RayShadows`,
-  bound by `SetRayShadowUniforms`); transparent surfaces and other views keep unshadowed local lights and the maps.
-  With directional shadows traced the shadow maps are still drawn for transparent surfaces, particles and clouds.
+  surface). Mask: RGBA8 2D array, the local slots' layers then one of the directional lights; history RGBA16F x 2 + meta
+  (RGBA8 and one 32-bit word since 2026-11-24). The lit materials (`Lit`, `LitTextured`, `Impostor`) read it through
+  `Engine/RayTracedShadows.glsl` (Vulkan only: `LelLocalLightShadow`, `LelDirectionalShadowRGB`) for draws of the
+  lighting camera's view (`Lighting.RayShadows`, bound by `SetRayShadowUniforms`); transparent surfaces and other views
+  kept unshadowed local lights and the maps, and with directional shadows traced the shadow maps were still drawn for
+  transparent surfaces, particles and clouds (since 2026-11-24 transparent surfaces trace theirs and the maps are drawn
+  only for what reads them: "Ray tracing and GI, third round" below).
 - Traced reflections (`Rendering/Passes/RayTracedReflectionPass`, after the screen probe gather;
   `Lighting.RayTracedReflections`: Lumen with hardware ray tracing): per resolve pixel below `ReflectionMaxRoughness`
   one ray of the surface's GGX lobe (visible normals; the mirror direction below 0.05) through Lumen's top level, lit
@@ -371,6 +376,7 @@
   `[RayTracing] Shadows: local lights traced (up to 8 at once), directional lights by shadow maps, soft by the lights'
   size | reflections: glossy surfaces traced (roughness up to 0.4)` when it changes, or why not. TestGame: `rtshadows`,
   `rtshadowlights`, `rtsunshadows`, `rtsoft`, `rtreflect`, `rtrough`, `rtbudget` (bottom level triangles a frame).
+  (Settings added since, and the console line's longer form: "Ray tracing and GI, third round" below.)
 - Verified (780M, Vulkan 1.4.315 / 2.0.353; scratchpad of session 2a1d1c21, `rtlight/`: `vktest` (vktest-final's tests
   on this worktree, plus `updateSwapped` (a top level updated with other bottom levels, custom indices and masks),
   `dataAccess`, `positionFetch` (the corners against the CPU's; with `LEL_VULKAN_ENABLE=positionfetch` and no
@@ -421,18 +427,18 @@
 - Directional lights stay on shadow maps by default (`DirectionalLightShadows` off): traced they cost 0.7-1.5 ms more on
   the 780M and the maps cannot go (transparent surfaces, particles, clouds and tinted shadows read them), and the
   picture differs from the maps only at the penumbrae (mean 0.06-0.15). Worth it where the maps are poor (a sun over a
-  wide view with fine shadows) or when transparent receivers move to rays too.
+  wide view with fine shadows) or when transparent receivers move to rays too. (Since 2026-11-24 they are traced on
+  discrete GPUs by default and the maps are drawn only for what still reads them: "Ray tracing and GI, third round".)
 - Memory (1280 x 720): freed the global field's 16 MB (4 levels of 128^3 half floats) and the mesh field atlas (8 MB
   at first, up to 32 as it grows); added the traced shadows' mask and history, 32 MB a layer of four lights (51 MB with
   the sun's layer), and the reflections' history, 28 MB (both RGBA16F accumulation, two frames, plus their metadata;
   they scale with the screen). The mask is made once a light is traced; the reflections' history whenever they are on
-  (released when they go off).
-- Left: transparent surfaces keep unshadowed local lights (they are not in the prepass's depth); the surface cache's
-  directional shadows still come from the maps; the shadow maps could be skipped when the sun is traced and nothing
-  transparent receives it; mirrored objects in Lumen's field-less rows take the absolute scale; the reflection pass's
-  ~0.3 ms where little is glossy (skipping tiles without glossy pixels) and the history's formats (RGBA16F metadata
-  where two channels would do); position fetch waits for a validation layer that knows its capability; the settings
-  not seen in the editor, New Frontier not run on this branch.
+  (released when they go off). (Smaller since 2026-11-24: "Ray tracing and GI, third round" below.)
+- Left then, done since ("Ray tracing and GI, third round" below, 2026-11-24): transparent surfaces' unshadowed local
+  lights, the surface cache's directional shadows from the maps, the shadow maps drawn while the sun is traced and
+  nothing receives them, mirrored objects in Lumen's field-less rows, the reflection pass's floor where little is
+  glossy and the histories' formats, position fetch by default. Still: the settings not seen in the editor, New
+  Frontier not run on this branch.
 
 ## The Vulkan device's ordering, caches and speed (2026-11-23, branch `port-vkperf`)
 
@@ -684,7 +690,9 @@
   surfaces is the distance along its axis to the first triangle a ray along the axis meets (`SceneRayHitDistance`: one
   ray per cone, nothing read of the hit; the floor of each sample's opacity is the field's formula with that distance,
   the same band and coverage). The material shaders have no such variant: their per-fragment cones (transparent
-  materials, cameras of a stack other than the lighting camera, `resolve=0`) are voxel cones then. The console:
+  materials, cameras of a stack other than the lighting camera, `resolve=0`) are voxel cones then. (Both changed on
+  2026-11-24: the distance is to the axis hit's plane, more rays a cone are a setting, and the materials have ray query
+  variants for their own cones: "Ray tracing and GI, third round" below.) The console:
   `[VoxelGI] Cones: SDF cones through the scene's triangles (...)` or `... through the distance fields (why)`.
 - Where VCT's time went on Vulkan (780M, per pass against OpenGL, TestGame `gi=vct`): the bounce passes (+0.5 ms
   each), all of it the bounce cells' cone tracing of the anisotropic mips with the distance field's floor (iso mips +
@@ -764,12 +772,115 @@
   and clears": the layout changes back in the present's command buffer). OpenGL's check (`check.ps1`): 0 different. Not
   checked: the settings in the editor by eye (Hardware Ray Tracing now shown with VCT, Conservative Voxelization), a
   GPU without ray queries or without conservative rasterization (only the switches above), Linux.
-- Left: VCT's bounce through the distance field on Vulkan (+0.45 ms each against OpenGL: the driver's code for the
-  conditional slab fetches in compute; the ray-traced path does not have it); the ray-traced cones' quality (one ray
-  per cone sees only what lies on the axis: more rays per cone, or the hit's plane, would bring the field's soft
-  occlusion back at their cost); the material shaders' per-fragment cones under ray tracing (a ray query variant of the
-  materials); what still reads the distance fields under VCT with ray tracing has none (VFX collisions, the SDF debug
-  view); the GIResolve's rays (+0.4 ms) could stop where the field's band no longer counts.
+- Left then, done since ("Ray tracing and GI, third round" below, 2026-11-24): VCT's bounce through the distance field
+  on Vulkan (the slabs fetched without branches), the ray-traced cones' quality (the axis hit's plane, more rays a cone
+  as a setting), the material shaders' per-fragment cones under ray tracing (their ray query variants), VFX collisions
+  without the fields (rays), the GIResolve's rays (they stop where the field's term no longer counts). Still left: the
+  SDF debug view builds the field under ray tracing (it shows the field).
+
+## Ray tracing and GI, third round: traced shadows everywhere, fewer maps, smaller histories, VCT and VFX on rays (2026-11-24, branch `vk-rtgi`)
+
+- The ask (the third round of the Vulkan work: finish what was left open, a discrete GPU the primary target): the open
+  items of the ray traced lighting and the voxel GI under ray tracing, each measured (per scene and pass, memory) and
+  its picture compared with the Vulkan frames of the commit before (`brutal-port` 3290518).
+- Material shaders with ray queries (`ShaderRenderState.RayQueries`, the Properties line `RayQueries On`;
+  `ShaderProgram.GetRayQueryVariant`, a partial file `ShaderProgram.RayQueries.cs`): the shader's variant compiled with
+  `LEL_RAY_QUERY` as well (its keywords and instanced define kept), made on first use. `Lighting.RayQueryProgram(program,
+  transparent)` gives it to the passes that draw materials (`TransparentPass.DrawMaterialEntry`, `OpaquePass` GPU-driven
+  buckets and per-shader parts; the per-object queue keeps the plain programs) while what the draw lights per fragment
+  traces rays: a transparent surface's shadows (`Lighting.TransparentShadowRays` while this frame's mask was traced),
+  or voxel cones traced per fragment under VCT on rays (`Lighting.VoxelRayTracingActive` with `Lighting.VoxelRayScene`,
+  the scene the voxel GI pass publishes): transparent surfaces, the other cameras of a stack, no screen-space resolve.
+  `Lit`, `LitTextured` and `LitTransparent` declare it. `ShaderProgram.TracesRays` says whether a program (also a
+  generated one: `StartFromSources` keeps its defines) traces.
+- Transparent surfaces shadowed (`RayTracingSettings.TransparentShadows`, on): `LitTransparent`'s ray query variant
+  (`Engine/RayTracedShadows.glsl` with `LEL_SHADOW_RAYS`: `LelLocalLightShadowAt`, `LelDirectionalShadowAtRGB`) traces
+  from each fragment, just off the surface on the light's side (a transparent surface is lit from both sides; bias 0.002
+  + 0.0005 x the camera distance), to each local light with a traced shadow (to its centre, up to its source's disc) and
+  along each traced directional light, through the shadow casters' top level of `RayTracedShadowPass` (published as
+  `RayShadowBinding.TopLevel`, acceleration structure 1). Hard shadows: no history for a surface outside the depth.
+  Particles: `ParticlesUnlit` is unlit, lit VFX outputs have only directional lights and keep their maps (one ray per
+  fragment of overlapping particles would cost the most where it shows the least).
+- The surface cache's directional shadows traced (`RayTracingSettings.SurfaceCacheShadows`, on; `Lighting
+  .SurfaceCacheTracedShadows`: with Lumen's hardware ray tracing): `Engine/CardLighting.shader`'s ray query variant
+  (`cardTracedDirectional`, bit per light) traces a ray per card texel and frame towards each shadowed directional light
+  through Lumen's scene (`SceneRayClear`, from the texel's point at `CardRayBias`; leaving the GI volume the light gets
+  through), times the transparent casters' tint (`SampleLightTransmittanceRGB`, new in `Engine/Shadows.glsl`). The grid
+  maps (`GridShadowMap.Render(..., opaqueCasters: false)`) then hold only transparent casters over a cleared depth, and
+  are not drawn at all without them. VCT's injection keeps its grid maps (its voxels' points are a voxel off the
+  surface; not asked).
+- Directional shadow maps only for what reads them (`RayTracingSettings.SkipUnneededShadowMaps`, on; with the sun
+  traced): `DirectionalShadowMapReaders.Decide` (per frame, before the shadow pass) gives `All` (every caster: the other
+  cameras of a stack, clouds, lit particle outputs that receive shadows, a transparent renderer whose program does not
+  trace, an opaque one whose program reads only the maps: `ShaderProgram.ReadsShadowMapsOnly`, a game's own shaders),
+  `Untraced` (only the casters the rays do not see: transparent casters' tint, particle casters, casters that draw their
+  own shadow such as impostors) or `None` (the pass draws nothing, the maps are null). `ShadowPass` leaves the opaque
+  buckets out for `Untraced` (the culling dispatches stay: the own-pass buckets read them); the traced receivers
+  multiply the rays' shadow by those maps (`rayShadowMapRest`, `Lighting.DirectionalShadowMapsHoldRest`): tinted glass
+  shadows and impostor shadows under a traced sun, which the traced path lost before. The console says what the maps
+  hold and why when it changes (`[RayTracing] Directional shadow maps: ...`, per renderer).
+- Traced sun on discrete GPUs (`RayTracingSettings.DirectionalLightShadowsOnDiscreteGpus`, on; `DeviceCapabilities
+  .DiscreteGpu` from Vulkan's device type, false on OpenGL): `Lighting.RayTracedDirectionalShadows` is
+  `DirectionalLightShadows || (DirectionalLightShadowsOnDiscreteGpus && DiscreteGpu)`. Integrated GPUs keep the maps
+  unless `DirectionalLightShadows` is on. How the default was decided: below (measurements).
+- Mirrored objects in Lumen (and its fields): a GI object whose renderer's scale has a negative component
+  (`SceneObject.Mirrored`) is placed by the renderer's own matrix with its axes made unit (`Placement`, the mirror and
+  the turns of a mirrored parent's children kept), in the rows' matrices, the change regions and the top level
+  instance (`CreateScale(o.Scale) * LocalToWorld()`); no facing flag (the rays tell a triangle's front in the mesh's own
+  space: the device test `rayQueryMirrored`). The card capture draws the renderer's `Mesh` (it drew the mirrored twin
+  in the unmirrored space: every face back facing, the cards' normals inwards, their lighting black, the hit lookups
+  missing). Unmirrored renderers take the old path bit for bit.
+- Traced reflections over the glossy tiles only (`RayTracedReflectionPass.TileClassification`, TestGame `rttiles=0`
+  for the whole resolve): `Engine/RayTracedReflectionTiles.shader` (a work group per 8 x 8 tile of the resolve) flags
+  each tile (R32UI, two frames) and lists those with a pixel below the roughness limit behind an indirect dispatch's
+  arguments; the trace and the filter (`LEL_REFLECTION_TILES`) run as one work group per listed tile; history taps and
+  filter neighbours count only in tiles flagged in their frame (an unlisted tile writes nothing).
+- Smaller histories (`Engine/HistoryMeta.glsl`: one 32-bit word a pixel, the view depth as a half float, the
+  octahedral normal, a small count): traced shadows' accumulation RGBA8 (rounded up or down at random in proportion,
+  `StochasticRound8`: unbiased, a channel exactly 0 or 1 stays so, a history never sticks short of its value) and meta
+  R32UI (normal 6 + 6 bits, frames - 1 in 4 bits); traced reflections' history RGBA16F with its frames in alpha (the
+  filter reads the roughness from the normals) and meta R32UI (normal 8 + 8 bits). Per pixel at 1280 x 720: shadows 36
+  -> 20 bytes for the first layer of four lights (33 -> 18 MB) and 20 -> 12 for each further layer (the sun's: 18 -> 11
+  MB), reflections 32 -> 24 bytes (28 -> 21 MB).
+- Position fetch on by default: the device asks for VK_KHR_ray_tracing_position_fetch where the GPU has it and the
+  validation layer is off (the installed layer rejects its SPIR-V capability; `LEL_VULKAN_ENABLE=positionfetch` asks
+  for it under the layer, `LEL_VULKAN_DISABLE=positionfetch` refuses it). The new users read the hit triangle from the
+  structure with nothing of the pool: `SceneRayHitPlane` (VCT's cones), `VfxSceneRay` (effects).
+- VCT on rays: the materials' per-fragment cones trace rays (above; `RayTracingSettings.MaterialConeRays`, `Off` /
+  `DiscreteGpus` (default) / `Always`, `Lighting.MaterialConeRays`; `Lighting.SetConeTraceUniforms` binds the scene for
+  a ray query variant, also one drawn only for its shadows). An SDF cone's distance at a sample is the distance to the
+  plane of the triangle the axis ray met (`SceneRayHitPlane`: along the axis times the slant; a wall the cone runs
+  towards is near all along, as the field has it; `Lighting.ConeHitPlane`, TestGame `rtconeplane=0` for the old
+  along-the-axis distance and its ray that reads nothing of the hit), and with `RayTracingSettings.ConeRays` 2..4 also
+  to the points further rays met, spread at half the cone's opening around the axis and turned by the cone's jitter
+  (default 1). The rays stop where the field's term could no longer count: where the cone is four times wider than the
+  band the field vouches for (coverage 1/4, at most a sixteenth of a sample's opacity; `Lighting.ConeRayReach`, TestGame
+  `rtconereach=0` for the whole cone). The bounce through the distance field on Vulkan fetches the anisotropic slabs
+  without a branch each (`LEL_ANISO_ALL_SLABS` in `VoxelGIPass.Variant`, not the ray query variants: the cells of a work
+  group trace their cones every way; the sum is the same; `VoxelGIPass.AnisoSlabsWithoutBranches`, TestGame
+  `voxallslabs=0`). While VCT's SDF modes read the distance field (no ray tracing for its rays) transparent surfaces keep
+  their plain programs (a ray query variant's cones would trace the triangles): no traced shadows on them there.
+- VFX on rays: a system that reads the scene's surfaces (`Collide With Global SDF`, `Conform To Global SDF`, `Sample
+  Global SDF`, code calling them) gets its initialize and update kernels compiled with `LEL_RAY_QUERY` too where the
+  device has ray queries (`VfxProgramSet.SystemPrograms.InitializeRays` / `UpdateRays`); while the GI's rays trace the
+  triangles the simulation uses them (`VfxRuntime.SceneRays`, the renderer's GI scene as the simulation pass finds it:
+  its top level of the frame before) and asks for no field. `Engine/VFX/VfxSdf.glsl` under `LEL_RAY_QUERY`: the
+  distance from six rays along the axes (each the distance to the plane of the triangle it met, within the field's
+  band; negative when three or more meet back faces), the nearest one's normal (one query per position, kept for the
+  normal); the collision block traces the particle's step (`VfxSceneCollision`: the signed distance to the plane of the
+  surface it would reach, after the step, so a fast particle does not pass a wall; at rest the six rays). TestGame
+  `vfx=1 vfxsdf=1` (the cube rain collides with the scene), `vfxrays=0` (the field asked for as before).
+- Settings (Project Settings > Lighting > Ray Tracing, `RayTracingSettings`): Directional Light Shadows (off),
+  Directional Light Shadows On Discrete GPUs (on), Skip Unneeded Shadow Maps (on), Transparent Shadows (on), Surface
+  Cache Shadows (on), Cone Rays (1), Material Cone Rays (Discrete GPUs), besides the earlier ones. Console: `[RayTracing] Shadows: local lights traced (up to
+  8 at once), directional lights traced on opaque surfaces (a discrete GPU), their maps only for what still reads them,
+  soft by the lights' size, transparent surfaces trace theirs (hard), surface cache's directional shadows traced |
+  reflections: ... | voxel cones: 1 ray each through the triangles, the materials' own as voxel cones`, `[RayTracing]
+  Directional shadow maps: ...`, `[VoxelGI] Cones: SDF cones through the scene's triangles (1 ray query a cone, the
+  distance to the axis hit's plane; no distance fields; the materials' own cones are voxel cones)`, `[Vulkan] Ray
+  tracing position fetch left out under the validation layer (...)`. TestGame: `rtsundiscrete`, `rtskipmaps`,
+  `rttransparent`, `rtcardsun`, `rtconerays`, `rtmatcones=0|1|2`, `rttiles`, `rtconereach`, `rtconeplane`,
+  `voxallslabs`, `vfxsdf`, `vfxrays`; `LEL_CACHE_ALBEDO=1` with `cacheview=1` shows the cards' albedo.
 
 ## Models and meshes
 
@@ -4266,7 +4377,9 @@ texture read back), see the port's `PORTING.md` "UI".
 - Normals needed nothing: the shaders' normal matrix is transpose(inverse(model)) (`GpuScene.NormalMatrix`, the
   per-object uniform), right for a mirror. CPU users of `renderer.Mesh` (picking, navmesh, distance fields, Lumen cards,
   the Mesh Baker) keep the original mesh: winding does not matter to them, and `MeshCombiner` turns mirrored triangles
-  itself.
+  itself. (Lumen's card capture drew `DrawnMesh`, the twin, in the unmirrored object space until 2026-11-24: every face a
+  back face, the cards' normals inwards and their lighting black; it draws `Mesh` since, and the GI's object of a
+  mirroring renderer carries the mirror in its placement: "Ray tracing and GI, third round".)
 - A first version recursed for ever in `GeometryPool.Release(mesh?.MirroredIfMade)` (null -> null): a stack overflow
   the Mesh Baker probe caught at once (exit 0xC00000FD).
 - Verified on the probe project of the Mesh Baker section (`BakeProbe.BuildMirrors` / `CheckMirrors`: rows of spheres,

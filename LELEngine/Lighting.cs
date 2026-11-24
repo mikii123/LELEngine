@@ -47,15 +47,54 @@ namespace LELEngine
 
 		/// <summary>
 		///     The shadowed directional lights' shadows on opaque surfaces are traced this frame instead of read from the
-		///     maps (<see cref="RayTracingSettings.DirectionalLightShadows" />, shadows on, a device with ray queries).
+		///     maps (<see cref="RayTracingSettings.DirectionalLightShadows" />, or on a discrete GPU
+		///     <see cref="RayTracingSettings.DirectionalLightShadowsOnDiscreteGpus" />; shadows on, a device with ray queries).
 		/// </summary>
-		public static bool RayTracedDirectionalShadows => RayTracing.DirectionalLightShadows && Shadows.Enabled && GraphicsCapabilities.RayQueries;
+		public static bool RayTracedDirectionalShadows => (RayTracing.DirectionalLightShadows || (RayTracing.DirectionalLightShadowsOnDiscreteGpus && DiscreteGpu)) && Shadows.Enabled && GraphicsCapabilities.RayQueries;
+
+		/// <summary>The graphics device's GPU is a discrete one (<see cref="DeviceCapabilities.DiscreteGpu" />).</summary>
+		private static bool DiscreteGpu => GraphicsDevice.Current != null && Gfx.Capabilities.DiscreteGpu;
+
+		/// <summary>
+		///     The materials' own voxel cones trace rays while voxel cone tracing's rays trace the triangles
+		///     (<see cref="RayTracingSettings.MaterialConeRays" /> on this GPU): their ray query variants are drawn for it.
+		/// </summary>
+		public static bool MaterialConeRays => RayTracing.MaterialConeRays == RayTracingUse.Always || (RayTracing.MaterialConeRays == RayTracingUse.DiscreteGpus && DiscreteGpu);
 
 		/// <summary>
 		///     Glossy surfaces trace their reflections this frame (<see cref="RayTracingSettings.Reflections" /> with Lumen's
 		///     rays on the triangles, <see cref="HardwareRayTracingActive" />): <see cref="Rendering.Passes.RayTracedReflectionPass" />.
 		/// </summary>
 		public static bool RayTracedReflections => RayTracing.Reflections && HardwareRayTracingActive;
+
+		/// <summary>
+		///     Transparent surfaces trace the shadows of the lights whose shadows are traced, per fragment
+		///     (<see cref="RayTracingSettings.TransparentShadows" />, a device with ray queries; the shaders with
+		///     <c>RayQueries On</c>, drawn with <see cref="RayQueryProgram" /> while this frame's shadows are traced). Not
+		///     while voxel cone tracing's SDF modes read the distance field: a ray query variant's cones trace the triangles.
+		/// </summary>
+		public static bool TransparentShadowRays => RayTracing.TransparentShadows && GraphicsCapabilities.RayQueries && (RayTracedLocalShadows || RayTracedDirectionalShadows)
+			&& !(GI.VoxelConeTracingActive && GI.DistanceFieldEnabled && GI.TraceMode != GITraceMode.VoxelCones && !VoxelRayTracingActive);
+
+		/// <summary>
+		///     Lumen's surface cache traces its directional lights' shadows (<see cref="RayTracingSettings.SurfaceCacheShadows" />
+		///     with Lumen's rays on the triangles, shadows on): the maps covering the GI volume hold only transparent casters.
+		/// </summary>
+		public static bool SurfaceCacheTracedShadows => RayTracing.SurfaceCacheShadows && HardwareRayTracingActive && Shadows.Enabled;
+
+		/// <summary>
+		///     What the directional lights' shadow maps hold this frame (<see cref="Rendering.Passes.ShadowPass" />): every
+		///     caster, or while their shadows are traced only the casters the rays do not see (transparent ones, particles,
+		///     casters that draw their own shadow), whose shadow the traced surfaces take on top of the rays'
+		///     (<see cref="Rendering.DirectionalShadowMapReaders" />).
+		/// </summary>
+		public static bool DirectionalShadowMapsHoldRest { get; internal set; }
+
+		/// <summary>
+		///     The scene whose triangles voxel cone tracing's rays trace this frame (<see cref="VoxelRayTracingActive" />): set
+		///     by the voxel GI pass for the materials that trace their own cones (<see cref="RayQueryProgram" />); null otherwise.
+		/// </summary>
+		public static Rendering.Lumen.LumenScene VoxelRayScene { get; internal set; }
 
 		/// <summary>
 		///     The traced shadows of this frame's lighting camera for the lit materials (Engine/RayTracedShadows.glsl):
@@ -247,7 +286,7 @@ namespace LELEngine
 		private static bool rayTracingWarned;
 		private static long distanceFieldRequestFrame = -1;
 		private static bool rayTracingReported;
-		private static (bool, bool, bool, int, bool, bool, float, bool) rayTracingState;
+		private static (int, float) rayTracingState;
 		private static readonly string[] rayQueryDefines = { ShaderProgram.RayQueryDefine };
 		private static (GIMode, bool, bool, bool, bool) giUsage;
 
@@ -374,6 +413,28 @@ namespace LELEngine
 		}
 
 		/// <summary>
+		///     The program a material draws with in the view being drawn: the shader's ray query variant
+		///     (<see cref="ShaderProgram.GetRayQueryVariant" />, shaders whose render state says <c>RayQueries On</c>) while
+		///     what the draw lights per fragment traces rays: a transparent surface's shadows
+		///     (<see cref="TransparentShadowRays" /> while this frame's are traced), or voxel cones traced per fragment while
+		///     voxel cone tracing's rays trace the scene's triangles (<see cref="VoxelRayTracingActive" /> and
+		///     <see cref="MaterialConeRays" />: transparent surfaces, the other cameras of a stack, no screen-space resolve).
+		///     The program itself otherwise. (A variant drawn for its shadows traces its cones too.)
+		/// </summary>
+		public static ShaderProgram RayQueryProgram(ShaderProgram program, bool transparent)
+		{
+			if (program == null || !program.RenderState.RayQueries || !GraphicsCapabilities.RayQueries)
+			{
+				return program;
+			}
+
+			bool coneRays = MaterialConeRays && VoxelRayTracingActive && VoxelRayScene?.RayTracing?.TopLevel != null
+				&& (transparent || !(ScreenGIView && GI.ResolveActive && GI.ResolvedDiffuse != null));
+			bool shadowRays = transparent && TransparentShadowRays && RayShadows.Valid && RayShadows.TopLevel != null;
+			return coneRays || shadowRays ? program.GetRayQueryVariant() ?? program : program;
+		}
+
+		/// <summary>
 		///     GI of an opaque material (Engine/VoxelConeTracing.glsl) for the view being drawn: the lighting camera reads
 		///     its screen-space resolve (giResolveMode 1); the other cameras of a stack trace the voxel cones per fragment
 		///     (0) or, with Lumen, read the radiance cache probes (2). Off when the GI is (no method produced anything).
@@ -406,14 +467,7 @@ namespace LELEngine
 			SetSkyUniforms(program);
 			// The clouds on the cones' way (the cones are traced with the voxel volume only).
 			SetMediaUniforms(program, voxels);
-			bool sdf = GI.DistanceFieldEnabled && GI.GlobalSdf != null;
-			program.SetInt("giTraceMode", TraceModeUniform(sdf));
-			program.SetFloat("giSdfDetailDistance", GI.SdfDetailDistance);
-			if (sdf)
-			{
-				SetSdfUniforms(program);
-			}
-
+			SetConeTraceUniforms(program, voxels && !resolve);
 			program.SetInt("giResolveMode", resolve ? 1 : probes ? 2 : 0);
 			if (resolve)
 			{
@@ -428,6 +482,30 @@ namespace LELEngine
 			{
 				SetRadianceCacheUniforms(program);
 				program.SetTexture("RadianceCacheSH", RadianceCache.SH);
+			}
+		}
+
+		/// <summary>
+		///     How a material's cones see the scene (giTraceMode, Engine/VoxelConeTracingCore.glsl): through the distance field
+		///     when it is built, else voxel cones; a ray query variant (<see cref="RayQueryProgram" />) that traces its cones
+		///     per fragment (<paramref name="perFragment" />) while voxel cone tracing's rays trace the scene's triangles traces
+		///     them too, with the scene's objects and top level bound.
+		/// </summary>
+		private static void SetConeTraceUniforms(ShaderProgram program, bool perFragment)
+		{
+			Rendering.Lumen.LumenScene scene = VoxelRayScene;
+			if (perFragment && program.TracesRays && VoxelRayTracingActive && scene?.RayTracing?.TopLevel != null)
+			{
+				SetVoxelRayTracingUniforms(program, scene, VoxelRayTraceMode);
+				return;
+			}
+
+			bool sdf = GI.DistanceFieldEnabled && GI.GlobalSdf != null;
+			program.SetInt("giTraceMode", TraceModeUniform(sdf));
+			program.SetFloat("giSdfDetailDistance", GI.SdfDetailDistance);
+			if (sdf)
+			{
+				SetSdfUniforms(program);
 			}
 		}
 
@@ -462,13 +540,7 @@ namespace LELEngine
 				program.SetInt("voxelResolution", GI.Resolution);
 				program.SetFloat("giConeMaxDistance", GI.ConeMaxDistance);
 				SetVoxelRadianceUniforms(program, GI.VoxelVolume);
-				bool sdf = GI.DistanceFieldEnabled && GI.GlobalSdf != null;
-				program.SetInt("giTraceMode", TraceModeUniform(sdf));
-				program.SetFloat("giSdfDetailDistance", GI.SdfDetailDistance);
-				if (sdf)
-				{
-					SetSdfUniforms(program);
-				}
+				SetConeTraceUniforms(program, true);
 			}
 			else
 			{
@@ -619,10 +691,26 @@ namespace LELEngine
 			bool enabled = receiveShadows && ScreenGIView && shadows.Valid;
 			program.SetInt("rayShadowLocal", enabled && shadows.LocalSlots > 0 ? 1 : 0);
 			program.SetInt("rayShadowDirectional", enabled ? shadows.DirectionalLights : 0);
+			program.SetInt("rayShadowMapRest", enabled && shadows.DirectionalLights != 0 && DirectionalShadowMapsHoldRest ? 1 : 0);
 			if (enabled)
 			{
 				program.SetInt("rayShadowDirectionalLayer", shadows.DirectionalLayer);
 				program.SetTexture("RayShadowMask", shadows.Mask);
+			}
+
+			// A ray query variant traces its fragments' shadows itself (Engine/RayTracedShadows.glsl, LEL_SHADOW_RAYS)
+			// through the casters' top level.
+			if (program.TracesRays)
+			{
+				bool trace = enabled && TransparentShadowRays && shadows.TopLevel != null;
+				program.SetInt("rayShadowTrace", trace ? 1 : 0);
+				if (trace)
+				{
+					program.SetFloat("rayShadowLength", Rendering.Passes.RayTracedShadowPass.DirectionalRayLength);
+					Camera camera = Camera.current ?? Camera.main;
+					program.SetVector3("rayShadowCamera", camera != null ? camera.transform.position : Vector3.Zero);
+					Gfx.Commands.SetAccelerationStructure(Rendering.Passes.RayTracedShadowPass.SceneBinding, shadows.TopLevel);
+				}
 			}
 		}
 
@@ -680,8 +768,24 @@ namespace LELEngine
 			program.SetFloat("sdfGridSize", GI.GridSize);
 			program.SetInt("sdfResolution", GI.SdfResolution);
 			program.SetFloat("sdfMaxDistance", GI.SdfBandVoxels * GI.SdfVoxelSize);
+			program.SetInt("giConeRays", Math.Clamp(RayTracing.ConeRays, 1, RayTracingSettings.MaxConeRays));
+			program.SetFloat("giConeRayReach", ConeRayReach > 0f ? ConeRayReach : 1e30f);
+			program.SetInt("giConeHitPlane", ConeHitPlane ? 1 : 0);
 			scene.SetUniforms(program);
 		}
+
+		/// <summary>
+		///     How far voxel cone tracing's rays reach (Engine/VoxelConeTracingCore.glsl), in cone widths over the distance
+		///     field's band: 4 stops them where the field's term in a sample's opacity falls under a sixteenth; 0 lets them
+		///     run the whole cone. A measurement switch (TestGame rtconereach=).
+		/// </summary>
+		public static float ConeRayReach = 4f;
+
+		/// <summary>
+		///     Voxel cone tracing's rays take a sample's distance to the plane of the triangle the axis met (true), or along
+		///     the axis (false, as before). A measurement switch (TestGame rtconeplane=).
+		/// </summary>
+		public static bool ConeHitPlane = true;
 
 		/// <summary>giTraceMode of voxel cone tracing's ray query variants: the project's trace mode (1 SDF detail, 2 SDF cones).</summary>
 		public static int VoxelRayTraceMode => GI.TraceMode == GITraceMode.SdfDetail ? 1 : 2;
@@ -749,14 +853,16 @@ namespace LELEngine
 			}
 		}
 
-		// A console line whenever what is traced besides Lumen's rays changes (shadows, reflections), and why not.
+		// A console line whenever what is traced besides Lumen's rays changes (shadows, reflections, voxel cones), and why not.
 		private static void ReportRayTracing()
 		{
 			RayTracingSettings settings = RayTracing;
 			bool rayQueries = GraphicsCapabilities.RayQueries;
 			bool reflections = RayTracedReflections;
-			(bool, bool, bool, int, bool, bool, float, bool) state = (RayTracedLocalShadows, RayTracedDirectionalShadows, settings.SoftShadows, settings.ShadowedLocalLights, reflections, settings.Reflections,
-				settings.ReflectionMaxRoughness, rayQueries);
+			int flags = (RayTracedLocalShadows ? 1 : 0) | (RayTracedDirectionalShadows ? 2 : 0) | (settings.SoftShadows ? 4 : 0) | (reflections ? 8 : 0) | (settings.Reflections ? 16 : 0)
+				| (rayQueries ? 32 : 0) | (settings.SkipUnneededShadowMaps ? 64 : 0) | (TransparentShadowRays ? 128 : 0) | (SurfaceCacheTracedShadows ? 256 : 0)
+				| (VoxelRayTracingActive ? 512 : 0) | (MaterialConeRays ? 1024 : 0) | (settings.ShadowedLocalLights << 12) | (settings.ConeRays << 20);
+			(int, float) state = (flags, settings.ReflectionMaxRoughness);
 			if (rayTracingReported && state == rayTracingState)
 			{
 				return;
@@ -774,12 +880,22 @@ namespace LELEngine
 				return;
 			}
 
-			string local = state.Item1 ? $"local lights traced (up to {Math.Clamp(settings.ShadowedLocalLights, 1, RayTracingSettings.MaxShadowedLocalLights)} at once)" : "local lights unshadowed";
-			string directional = state.Item2 ? "directional lights traced on opaque surfaces (maps for the rest)" : "directional lights by shadow maps";
-			string soft = state.Item1 || state.Item2 ? settings.SoftShadows ? ", soft by the lights' size" : ", hard" : "";
+			bool localTraced = RayTracedLocalShadows;
+			bool directionalTraced = RayTracedDirectionalShadows;
+			string local = localTraced ? $"local lights traced (up to {Math.Clamp(settings.ShadowedLocalLights, 1, RayTracingSettings.MaxShadowedLocalLights)} at once)" : "local lights unshadowed";
+			string directional = directionalTraced
+				? "directional lights traced on opaque surfaces" + (settings.DirectionalLightShadows ? "" : " (a discrete GPU)") + (settings.SkipUnneededShadowMaps ? ", their maps only for what still reads them" : ", their maps drawn as well")
+				: "directional lights by shadow maps";
+			string soft = localTraced || directionalTraced ? settings.SoftShadows ? ", soft by the lights' size" : ", hard" : "";
+			string transparent = TransparentShadowRays ? ", transparent surfaces trace theirs (hard)" : localTraced || directionalTraced ? ", transparent surfaces untraced" : "";
+			string cards = HardwareRayTracingActive ? SurfaceCacheTracedShadows ? ", surface cache's directional shadows traced" : ", surface cache's directional shadows by maps" : "";
 			string reflection = reflections ? $"glossy surfaces traced (roughness up to {settings.ReflectionMaxRoughness:0.##})"
 				: settings.Reflections ? "from the GI (they trace with Lumen's hardware ray tracing only)" : "from the GI";
-			Console.WriteLine($"[RayTracing] Shadows: {local}, {directional}{soft} | reflections: {reflection}");
+			string cones = VoxelRayTracingActive
+				? $" | voxel cones: {Math.Clamp(settings.ConeRays, 1, RayTracingSettings.MaxConeRays)} ray{(settings.ConeRays > 1 ? "s" : "")} each through the triangles"
+				  + (MaterialConeRays ? ", the materials' own cones too" : ", the materials' own as voxel cones")
+				: "";
+			Console.WriteLine($"[RayTracing] Shadows: {local}, {directional}{soft}{transparent}{cards} | reflections: {reflection}{cones}");
 		}
 
 		// Whether Lumen's rays trace with ray queries, and a console line that says which way and why.
@@ -902,6 +1018,9 @@ namespace LELEngine
 
 			/// <summary>The layer of the directional lights (after the local slots' layers).</summary>
 			public int DirectionalLayer;
+
+			/// <summary>The shadow casters the mask was traced through (surfaces outside the view's depth trace through them too).</summary>
+			public GpuAccelerationStructure TopLevel;
 
 			public bool Valid => Mask != null && (LocalSlots > 0 || DirectionalLights != 0);
 		}

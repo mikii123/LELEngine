@@ -23,10 +23,15 @@ namespace LELEngine.Graphics.Vulkan
 
 		/// <summary>
 		///     Ray queries read the corners of a hit triangle from the structure (VK_KHR_ray_tracing_position_fetch,
-		///     <see cref="DeviceCapabilities.RayTracingPositionFetch" />): asked for with ray queries where the GPU has it and
-		///     LEL_VULKAN_ENABLE names "positionfetch".
+		///     <see cref="DeviceCapabilities.RayTracingPositionFetch" />): asked for with ray queries where the GPU has it,
+		///     unless the validation layer is on (LEL_VULKAN_ENABLE=positionfetch asks for it then too) or LEL_VULKAN_DISABLE
+		///     names "positionfetch".
 		/// </summary>
 		internal bool HasPositionFetch { get; private set; }
+
+		// The Khronos validation layer is on (LEL_VULKAN_VALIDATION=1 and the layer found): the installed one (1.3.290)
+		// rejects the SPIR-V capability of position fetch, so the device leaves it out unless asked for it by name.
+		private bool validationLayerOn;
 
 		private int scratchAlignment;
 		private VkBuffer scratchBuffer;
@@ -89,13 +94,23 @@ namespace LELEngine.Graphics.Vulkan
 			extensions.Add("VK_KHR_ray_query");
 			extensions.Add("VK_KHR_deferred_host_operations");
 
-			// The hit triangle's corners from the structure, where the GPU has it and LEL_VULKAN_ENABLE names "positionfetch":
-			// the rays read their hit's vertex normals from the geometry pool anyway, so it saves nothing measurable (780M),
-			// and the validation layer of this machine (1.3.290) does not know its SPIR-V capability.
+			// The hit triangle's corners from the structure, where the GPU has it: a hit's triangle without reading the
+			// geometry pool's vertices (80 bytes each). Not with the validation layer on unless LEL_VULKAN_ENABLE names
+			// "positionfetch": the layer of this machine (1.3.290) does not know its SPIR-V capability and reports every
+			// program that uses it.
 			HasPositionFetch = false;
 			string enabled = Environment.GetEnvironmentVariable("LEL_VULKAN_ENABLE") ?? "";
 			bool askedForFetch = enabled.IndexOf("positionfetch", StringComparison.OrdinalIgnoreCase) >= 0;
-			if (askedForFetch && candidate.SupportsExtension("VK_KHR_ray_tracing_position_fetch") && disabled.IndexOf("positionfetch", StringComparison.OrdinalIgnoreCase) < 0)
+			bool refused = disabled.IndexOf("positionfetch", StringComparison.OrdinalIgnoreCase) >= 0;
+			if (refused)
+			{
+				Console.WriteLine("[Vulkan] Disabled by LEL_VULKAN_DISABLE: positionfetch");
+			}
+			else if (validationLayerOn && !askedForFetch && candidate.SupportsExtension("VK_KHR_ray_tracing_position_fetch"))
+			{
+				Console.WriteLine("[Vulkan] Ray tracing position fetch left out under the validation layer (LEL_VULKAN_ENABLE=positionfetch asks for it)");
+			}
+			else if ((askedForFetch || !validationLayerOn) && candidate.SupportsExtension("VK_KHR_ray_tracing_position_fetch"))
 			{
 				VkPhysicalDeviceRayTracingPositionFetchFeaturesKHR fetchHave = new VkPhysicalDeviceRayTracingPositionFetchFeaturesKHR();
 				VkPhysicalDeviceFeatures2 haveFetch = new VkPhysicalDeviceFeatures2 { Next = &fetchHave };
@@ -110,7 +125,7 @@ namespace LELEngine.Graphics.Vulkan
 			}
 			else if (askedForFetch)
 			{
-				Console.WriteLine("[Vulkan] LEL_VULKAN_ENABLE=positionfetch: the GPU has no VK_KHR_ray_tracing_position_fetch (or LEL_VULKAN_DISABLE names it)");
+				Console.WriteLine("[Vulkan] LEL_VULKAN_ENABLE=positionfetch: the GPU has no VK_KHR_ray_tracing_position_fetch");
 			}
 
 			return true;

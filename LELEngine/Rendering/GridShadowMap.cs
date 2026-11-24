@@ -65,8 +65,10 @@ namespace LELEngine.Rendering
 		///     Renders all shadow casters among <paramref name="casters" /> (the opaque renderers) and the frame's
 		///     transparent casters from every directional light that lights the GI with shadows, covering the GI grid.
 		///     Nothing is drawn (and nothing kept) while no light needs a map: shadows off, no light in the GI.
+		///     <paramref name="opaqueCasters" /> false (the readers trace the opaque casters' shadows with ray queries):
+		///     only the transparent casters' transmittance, over a cleared depth; nothing at all without such casters.
 		/// </summary>
-		public void Render(RenderContext context, IReadOnlyList<MeshRenderer> casters, GlobalIlluminationSettings gi)
+		public void Render(RenderContext context, IReadOnlyList<MeshRenderer> casters, GlobalIlluminationSettings gi, bool opaqueCasters = true)
 		{
 			IReadOnlyList<DirectionalLight> lights = DirectionalLightBuffer.Shining;
 			cascades.Clear();
@@ -87,7 +89,10 @@ namespace LELEngine.Rendering
 
 			LightCount = count;
 			Transmittance = null;
-			if (count == 0 || !Lighting.Shadows.Enabled)
+			// The transparent casters are asked about once (the question walks every transparent renderer); without the
+			// opaque casters a frame without them draws nothing.
+			bool transparentCasters = count > 0 && Lighting.Shadows.Enabled && TransparentShadows.HasCasters(context);
+			if (count == 0 || !Lighting.Shadows.Enabled || (!opaqueCasters && !transparentCasters))
 			{
 				LightCount = 0;
 				cascades.Clear();
@@ -118,7 +123,6 @@ namespace LELEngine.Rendering
 			uniforms.Upload(cascades);
 
 			// The transmittance attachment has to be there when the pass begins.
-			bool transparentCasters = TransparentShadows.HasCasters(context);
 			if (transparentCasters)
 			{
 				TransparentShadows.EnsureTransmittance(target);
@@ -133,7 +137,7 @@ namespace LELEngine.Rendering
 
 			ShaderProgram program = context.DepthOnlyProgram;
 			bool frustumCulling = context.Settings == null || context.Settings.FrustumCulling;
-			for (int i = 0; i < count; i++)
+			for (int i = 0; i < count && opaqueCasters; i++)
 			{
 				ContinueTile(i);
 				program.Use();

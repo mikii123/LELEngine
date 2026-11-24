@@ -31,6 +31,9 @@ DetailAlbedoMap_ST ("Detail Tiling Offset", Vector) = (1, 1, 0, 0)
 DetailNormalScale ("Detail Normal Scale", Float) = 1
 // The LEL_SURFACE_CAPTURE variant writes the surface instead of lighting it (impostor bakes).
 SurfaceCapture On
+// The LEL_RAY_QUERY variant traces its voxel cones' rays per fragment where voxel cone tracing's rays trace the scene's
+// triangles and the view has no screen-space resolve (the other cameras of a stack).
+RayQueries On
 /////Properties
 
 //Vertex

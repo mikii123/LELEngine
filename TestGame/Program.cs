@@ -57,6 +57,11 @@ namespace TestGame
 		///            [rtshadowlights=1..8 how many at once] [rtsunshadows=0|1 directional lights' shadows traced on opaque surfaces instead of the maps (0)]
 		///            [rtsoft=0|1 soft by the lights' size, accumulated and filtered (1)] [rtreflect=0|1 glossy reflections traced with Lumen's rays (1)]
 		///            [rtrough=0.05..1 the roughness they trace up to (0.4)] [rtbudget=N triangles of bottom levels built a frame after the load's (250000)]
+		///            [rtsundiscrete=0|1 directional shadows traced on a discrete GPU whatever rtsunshadows says (1)]
+		///            [rtskipmaps=0|1 with rtsunshadows=1 the directional maps drawn only for what still reads them (1)] [rttransparent=0|1 transparent surfaces trace their shadows (1)]
+		///            [rtcardsun=0|1 Lumen's surface cache traces the directional shadows (1)] [rtconerays=1..4 rays per voxel cone through the triangles (1)]
+		///            [rtmatcones=0|1|2 the materials' own voxel cones on rays: never / on discrete GPUs (1) / always]
+		///            [rttiles=0|1 traced reflections only in the tiles with glossy pixels (1)] [mirror=1 the GI room's props mirrored (negative scales)]
 		///            Fallback tests: environment LEL_GL_DISABLE=drawparameters,indirectparameters,subgroups
 		///     Loads the GI test room with the FPS controller.
 		/// </summary>
@@ -237,6 +242,20 @@ namespace TestGame
 			rayTracing.SoftShadows = GetBool(args, "rtsoft", rayTracing.SoftShadows);
 			rayTracing.Reflections = GetBool(args, "rtreflect", rayTracing.Reflections);
 			rayTracing.ReflectionMaxRoughness = GetFloat(args, "rtrough", rayTracing.ReflectionMaxRoughness);
+			rayTracing.DirectionalLightShadowsOnDiscreteGpus = GetBool(args, "rtsundiscrete", rayTracing.DirectionalLightShadowsOnDiscreteGpus);
+			rayTracing.SkipUnneededShadowMaps = GetBool(args, "rtskipmaps", rayTracing.SkipUnneededShadowMaps);
+			rayTracing.TransparentShadows = GetBool(args, "rttransparent", rayTracing.TransparentShadows);
+			rayTracing.SurfaceCacheShadows = GetBool(args, "rtcardsun", rayTracing.SurfaceCacheShadows);
+			rayTracing.ConeRays = GetInt(args, "rtconerays", rayTracing.ConeRays);
+			// rtmatcones=0|1|2: the materials' own voxel cones on rays never / on discrete GPUs / always.
+			rayTracing.MaterialConeRays = (RayTracingUse)Math.Clamp(GetInt(args, "rtmatcones", (int)rayTracing.MaterialConeRays), 0, 2);
+			// rtconereach=0 / rtconeplane=0: voxel cone tracing's rays over the whole cone / their distance along the axis (A/B).
+			Lighting.ConeRayReach = GetFloat(args, "rtconereach", Lighting.ConeRayReach);
+			Lighting.ConeHitPlane = GetBool(args, "rtconeplane", Lighting.ConeHitPlane);
+			// voxallslabs=0: the voxel bounce's anisotropic slabs fetched in branches as before (A/B, Vulkan).
+			LELEngine.Rendering.Passes.VoxelGIPass.AnisoSlabsWithoutBranches = GetBool(args, "voxallslabs", true);
+			// rttiles=0: traced reflections over the whole resolve instead of the tiles with glossy pixels (A/B).
+			LELEngine.Rendering.Passes.RayTracedReflectionPass.TileClassification = GetBool(args, "rttiles", true);
 			// rtbudget=N: triangles of bottom levels a frame builds after the load's (the spreading over frames, tested small).
 			LELEngine.Rendering.MeshAccelerationStructures.TrianglesPerFrame = GetInt(args, "rtbudget", (int)LELEngine.Rendering.MeshAccelerationStructures.TrianglesPerFrame);
 
@@ -340,6 +359,10 @@ namespace TestGame
 				}
 				else
 				{
+					// vfxsdf=1: the cube rain collides with the scene's surfaces (the distance field, or its triangles under ray
+					// tracing; vfxrays=0: the distance field asked for under ray tracing too, as before).
+					VfxTestScene.SdfCollisions = GetBool(args, "vfxsdf", false);
+					LELEngine.VFX.VfxRuntime.TraceScene = GetBool(args, "vfxrays", true);
 					VfxTestScene.Load(scene, options);
 				}
 

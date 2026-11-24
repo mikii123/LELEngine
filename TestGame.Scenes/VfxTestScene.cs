@@ -11,6 +11,13 @@ namespace TestGame.Scenes
 	/// </summary>
 	public static class VfxTestScene
 	{
+		#region PublicFields
+
+		/// <summary>The cube rain bounces off the scene (Collide With Global SDF) instead of an inverted box (TestGame vfxsdf=1).</summary>
+		public static bool SdfCollisions;
+
+		#endregion
+
 		#region PublicMethods
 
 		public static void Load(Scene scene, GITestScene.Options options)
@@ -204,9 +211,18 @@ namespace TestGame.Scenes
 
 			VfxNodeData update = b.Context(VfxContextNodes.Update, 0f, 620f);
 			b.Block(update, "Block.Gravity");
-			VfxNodeData box = b.Block(update, "Block.CollideBox");
-			b.Settings(box, ("Mode", "Inverted"));
-			b.Inputs(box, ("Center", VfxValue.FromVector3(0f, -2f, 0f)), ("Size", VfxValue.FromVector3(3.5f, 4f, 3.5f)), ("Bounce", VfxValue.FromFloat(0.6f)), ("Friction", VfxValue.FromFloat(0.1f)));
+			if (SdfCollisions)
+			{
+				// vfxsdf=1: the cubes bounce off the scene itself (the GI's distance field, or its triangles under ray tracing).
+				VfxNodeData scene = b.Block(update, "Block.CollideSdf");
+				b.Inputs(scene, ("Bounce", VfxValue.FromFloat(0.6f)), ("Friction", VfxValue.FromFloat(0.1f)), ("Radius", VfxValue.FromFloat(0.05f)));
+			}
+			else
+			{
+				VfxNodeData box = b.Block(update, "Block.CollideBox");
+				b.Settings(box, ("Mode", "Inverted"));
+				b.Inputs(box, ("Center", VfxValue.FromVector3(0f, -2f, 0f)), ("Size", VfxValue.FromVector3(3.5f, 4f, 3.5f)), ("Bounce", VfxValue.FromFloat(0.6f)), ("Friction", VfxValue.FromFloat(0.1f)));
+			}
 
 			VfxNodeData output = b.Context(VfxContextNodes.OutputMesh, 0f, 900f);
 			b.Settings(output, ("Blend", "Opaque"), ("Lighting", "Lit"), ("CastShadows", "1"));

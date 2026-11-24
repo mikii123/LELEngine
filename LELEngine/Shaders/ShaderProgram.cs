@@ -31,7 +31,7 @@ namespace LELEngine.Shaders
 	///     parallel shader compile (<see cref="GraphicsCapabilities.ParallelShaderCompile" />) the programs a load started
 	///     compile together on the driver's threads.
 	/// </summary>
-	public sealed class ShaderProgram : IAsset
+	public sealed partial class ShaderProgram : IAsset
 	{
 		#region PublicFields
 
@@ -475,7 +475,7 @@ namespace LELEngine.Shaders
 				if (cached != null)
 				{
 					FrameProfiler.EventSince(startedAt, "shader", name, "generated program loaded from the binary cache");
-					return new ShaderProgram(name, cached);
+					return new ShaderProgram(name, cached) { generatedDefines = defines };
 				}
 			}
 
@@ -485,7 +485,7 @@ namespace LELEngine.Shaders
 				shaders[i] = new Shader(sources[i].Value, sources[i].Key, name);
 			}
 
-			var program = new ShaderProgram(name, shaders);
+			var program = new ShaderProgram(name, shaders) { generatedDefines = defines };
 			if (cacheKey != null && program.linked)
 			{
 				ProgramBinaryCache.Save(program.gpu, cacheKey);
@@ -504,7 +504,7 @@ namespace LELEngine.Shaders
 		/// </summary>
 		public static ShaderProgram StartFromSources(string name, IEnumerable<KeyValuePair<ShaderStage, string>> stages, params string[] defines)
 		{
-			return new ShaderProgram(name, GeneratedSources(name, stages, defines));
+			return new ShaderProgram(name, GeneratedSources(name, stages, defines)) { generatedDefines = defines };
 		}
 
 		// The stages of a generated program as they are compiled: includes expanded, the engine preamble in front.
@@ -832,6 +832,7 @@ namespace LELEngine.Shaders
 				variant.Reload();
 			}
 
+			rayQueryVariant?.Reload();
 			return true;
 		}
 
@@ -859,6 +860,9 @@ namespace LELEngine.Shaders
 					passVariants[i]?.Delete();
 					passVariants[i] = null;
 				}
+
+				rayQueryVariant?.Delete();
+				rayQueryVariant = null;
 			}
 		}
 
