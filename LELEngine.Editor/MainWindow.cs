@@ -76,14 +76,60 @@ namespace LELEngine.Editor
 		///     Creates the window on the graphics API asked for (<see cref="Graphics.GraphicsDevice.RequestedApi" />), on
 		///     OpenGL with the newest context the driver grants (4.6 down to 4.3) where this machine has no other.
 		/// </summary>
-		public static MainWindow Create(string[] args)
+		/// <param name="preimport">
+		///     The project's full import begun when the project was known (<see cref="BeginPreimport" />), finished here once
+		///     the window exists, before it shows.
+		/// </param>
+		public static MainWindow Create(string[] args, AssetPreimport.Opening preimport = null)
 		{
 			// focus=0: automated runs open the window without taking the keyboard focus (hidden=1: there is none to focus).
 			StartFocused = Array.IndexOf(args, "focus=0") < 0 && !StartHidden;
-			// On the graphics API asked for (GraphicsDevice.RequestedApi: the project's), OpenGL where this machine has no other.
-			MainWindow window = Open(version => new MainWindow(version, args));
+			// The project's full import before the editor's window shows (the user's ask, 2026-11-25): its bar, a small window
+			// of its own, shows at once, the asset index and the look run while the window and its graphics device are made,
+			// the import once they are (the window still hidden, its context current).
+			MainWindow window;
+			try
+			{
+				// On the graphics API asked for (GraphicsDevice.RequestedApi: the project's), OpenGL where this machine has no other.
+				window = Open(version => new MainWindow(version, args));
+			}
+			catch
+			{
+				preimport?.Abandon();
+				throw;
+			}
+
+			preimport?.Finish();
 			window.placement.Restore(window.rememberPlacement);
 			return window;
+		}
+
+		/// <summary>
+		///     Starts the project's full import (<see cref="AssetPreimport.Opening" />) as soon as the project is known, before
+		///     the editor's own preparations (preferences, the project's graphics API) and its window: its bar shows at once.
+		///     Not for hidden runs (hidden=1) nor a project the command line makes: the load's own step imports for them.
+		/// </summary>
+		public static AssetPreimport.Opening BeginPreimport(string[] args)
+		{
+			string root = EditorApplication.ProjectArgument(args);
+			if (Array.IndexOf(args, "hidden=1") >= 0 || root == null || !ProjectInfo.IsProjectFolder(Path.GetFullPath(root)))
+			{
+				return null;
+			}
+
+			// The bar's frames for tests from its first one (progressshots=folder).
+			string shots = Array.Find(args, a => a.StartsWith("progressshots=", StringComparison.Ordinal));
+			if (shots != null)
+			{
+				ProgressOverlay.ShotsFolder = shots.Substring("progressshots=".Length).Trim('"');
+			}
+
+			if (OperatingSystem.IsWindows())
+			{
+				DisableProcessWindowsGhosting();
+			}
+
+			return AssetPreimport.Opening.Begin(Path.GetFullPath(root));
 		}
 
 		#endregion

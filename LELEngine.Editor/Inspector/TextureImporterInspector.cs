@@ -299,7 +299,7 @@ namespace LELEngine.Editor
 
 					string assetPath = i == 0 ? path : otherPaths[i - 1];
 					progress.Report(i, count, assetPath);
-					Apply(assetPath, i == 0 ? working : otherWorking[i - 1]);
+					Apply(assetPath, i == 0 ? working : otherWorking[i - 1], editor);
 				}
 			}
 
@@ -308,12 +308,14 @@ namespace LELEngine.Editor
 			Lighting.GI.InvalidateStatic();
 		}
 
-		private static void Apply(string assetPath, TextureImporter settings)
+		private static void Apply(string assetPath, TextureImporter settings, EditorApplication editor)
 		{
 			AssetMeta meta = AssetDatabase.GetMeta(assetPath);
 			settings.version++;
 			meta.importer = Clone(settings);
 			AssetDatabase.SaveMeta(assetPath, meta);
+			// The full import with the new settings (the bake builds ship), then the loaded texture takes it in place.
+			editor.ImportAssetsNow(new[] { assetPath }, false);
 			TextureAssets.Reimport(assetPath);
 			AssetThumbnails.Invalidate(assetPath);
 			Debug.Log("[Editor] Reimported " + assetPath);

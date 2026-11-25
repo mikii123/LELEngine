@@ -679,6 +679,8 @@ namespace LELEngine.Editor
 
 				if (TextureAssets.IsImageFile(assetPath) && EditorMenu.Item("Reimport"))
 				{
+					// The full import made again (the bake builds ship), then the loaded texture takes it in place.
+					editor.ImportAssetsNow(new[] { assetPath }, true);
 					TextureAssets.Reimport(assetPath);
 					AssetThumbnails.Invalidate(assetPath);
 					editor.NotifySceneChanged();

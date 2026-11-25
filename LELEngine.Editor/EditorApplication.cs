@@ -320,8 +320,11 @@ namespace LELEngine.Editor
 		// first step; handed over to Scripts at the scripts' step. The build's own time, for the load's summary.
 		private ScriptDomain startupScripts;
 
-		// Texture assets load from the bakes builds ship (Library/TextureCache), made as they are first needed.
+		// Texture assets load from the bakes builds ship (Library/TextureCache), made by the assets' full import (AssetPreimport).
 		private EditorTextureBakes textureBakes;
+
+		// The meshes' distance fields in the Library (DistanceFieldAtlas.Store), made by the assets' full import too.
+		private DistanceFieldBaker.Store distanceFields;
 		private System.Threading.Tasks.Task<bool> startupScriptsStart;
 		private double startupBuildMs = -1;
 
@@ -1068,6 +1071,9 @@ namespace LELEngine.Editor
 
 				try
 				{
+					// The project's full import while the editor's window is still hidden, its bar a small window of its own shown
+					// at once (as at the editor's start, MainWindow.Create).
+					AssetPreimport.BeforeOpen(chosen);
 					OpenProject(chosen);
 				}
 				catch (Exception e)
@@ -1164,10 +1170,34 @@ namespace LELEngine.Editor
 			LELEngine.Volumetrics.VolumeCache.Folder = project.VolumeCachePath;
 			// The GI's mesh distance fields (Library/DistanceFieldCache, the cache builds bake into): read instead of built
 			// by brute force in every session, written when a view builds one.
-			LELEngine.Rendering.DistanceField.DistanceFieldAtlas.Store = new DistanceFieldBaker.Store(project);
-			yield return "Importing models";
+			distanceFields = new DistanceFieldBaker.Store(project);
+			LELEngine.Rendering.DistanceField.DistanceFieldAtlas.Store = distanceFields;
+			yield return "Importing assets";
 
-			ImportChangedModels(true);
+			// The preimport (the user's ask, 2026-11-25): every asset's full import (models, images baked as builds ship them,
+			// the meshes' distance fields) is in the Library before the project loads on. Made before the editor's window showed
+			// (AssetPreimport.BeforeOpen, its bar a small window of its own); here for the runs that skip that (hidden ones,
+			// batch editors: models only), with the Library complete only a look. While it works here the progress bar is its
+			// own ("Importing assets", not a part of the load's), the windows drawing under it.
+			var preimport = CreatePreimport(null, false, true);
+			if (!AssetPreimport.TakeImported(project.RootPath))
+			{
+				preimport.FindWork();
+			}
+
+			if (preimport.HasWork)
+			{
+				loadProgress?.Dispose();
+				loadProgress = null;
+				foreach (bool _ in preimport.Run("Importing assets", HasUI))
+				{
+					yield return "Importing assets";
+				}
+
+				loadProgress = Progress.Begin("Opening " + project.Name);
+				loadProgress.Report(loadStep - 1, LoadStepCount, loadingStatus);
+			}
+
 			// What play mode keeps between runs (PlayerPrefs, remapped controls) is the project's, in its PersistentData
 			// folder, not the built game's (the user's local app data).
 			LELEngine.Application.persistentDataPath = project.PersistentDataPath;
@@ -1576,6 +1606,7 @@ namespace LELEngine.Editor
 			LELEngine.Volumetrics.VolumeCache.Folder = null;
 			LELEngine.Volumetrics.VolumeCache.Clear();
 			LELEngine.Rendering.DistanceField.DistanceFieldAtlas.Store = null;
+			distanceFields = null;
 			// Audio: the studio closes with the project, every bank and clip goes.
 			audioStudio?.Dispose();
 			audioStudio = null;
@@ -3516,13 +3547,44 @@ namespace LELEngine.Editor
 		}
 
 		/// <summary>
-		///     Models new or changed on disk import completely now (materials extracted when their settings ask), not when
-		///     something first uses them; a loaded one is replaced by its new import (the scene reloads, not in play mode).
+		///     The assets' full import (<see cref="AssetPreimport" />) of those of <paramref name="assetPaths" /> (null: every
+		///     asset of the project) whose caches are missing or outdated (<paramref name="force" />: all of them). Batch
+		///     editors (no UI: tests, the automation, builds) import only models: a build bakes what it ships, and a fresh
+		///     Library (a CI's) would bake every image and field of the project first, the fields on a software renderer.
 		/// </summary>
-		private void ImportChangedModels(bool verifyMaterials = false)
+		private AssetPreimport CreatePreimport(IEnumerable<string> assetPaths, bool force, bool verifyMaterials)
 		{
-			List<string> imported = ModelAssets.ImportOutdated(verifyMaterials);
-			List<string> loaded = imported.FindAll(ModelAssets.IsLoaded);
+			return new AssetPreimport(HasUI ? textureBakes : null, HasUI ? distanceFields : null, assetPaths, force, verifyMaterials);
+		}
+
+		/// <summary>
+		///     The full import of these assets now (<see cref="AssetPreimport" />: a model imported, an image baked as builds
+		///     ship it, the meshes' distance fields), as when they are added: Apply of import settings, Reimport
+		///     (<paramref name="force" />: made again even when current). The caller reloads what holds them. Main thread.
+		/// </summary>
+		public void ImportAssetsNow(IEnumerable<string> assetPaths, bool force)
+		{
+			if (Project == null || !AssetsReady)
+			{
+				return;
+			}
+
+			AssetPreimport preimport = CreatePreimport(assetPaths, force, false);
+			preimport.FindWork();
+			preimport.RunNow("Importing assets");
+		}
+
+		/// <summary>
+		///     Assets new or changed on disk get their full import now (<see cref="AssetPreimport" />: models with their
+		///     materials extracted when their settings ask, images baked, the meshes' distance fields), not when something
+		///     first uses them; a loaded model is replaced by its new import (the scene reloads, not in play mode).
+		/// </summary>
+		private void ImportChangedAssets()
+		{
+			AssetPreimport preimport = CreatePreimport(null, false, false);
+			preimport.FindWork();
+			preimport.RunNow("Importing assets");
+			List<string> loaded = preimport.ImportedModels.FindAll(ModelAssets.IsLoaded);
 			if (!IsPlaying)
 			{
 				// Mesh assets (.mesh) are not imported: the loaded ones whose file changed (a checkout, another program)
@@ -3551,10 +3613,13 @@ namespace LELEngine.Editor
 			}
 
 			assetsChanged = false;
-			// The bar shows when it takes a while (models and images imported again report inside it).
+			// The bar shows when it takes a while (models and images imported again report inside it; the assets' full import
+			// fills it).
 			using Progress.Scope progress = Progress.Begin("Importing changed files");
 			AssetDatabase.Refresh(true);
-			ImportChangedModels();
+			progress.Report(0, 1);
+			ImportChangedAssets();
+			progress.Report(-1f);
 			AssetsVersion++;
 			// Hot reload of .uss / .uxml files: the documents using them rebuild.
 			UIElements.UIAssets.ReloadChanged();

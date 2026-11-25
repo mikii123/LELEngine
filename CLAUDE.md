@@ -1442,8 +1442,9 @@
   loads from instead of its image; the editor's `EditorTextureBakes` (set while a project is open) answers with
   `TextureBaker`'s bake in `Library/TextureCache`, the file a build ships, made with the asset's import settings
   (compression BC7 / BC7HighQuality / None, maximum size, color space, mip levels in linear light). Baked: what a build
-  bakes but HDR images and volumes (their bakes hold what the images give); sprites stay images as in builds. A scene
-  load's worker thread (`TextureImportBatch`) bakes a missing one itself (BC7; the import's header stays the image's,
+  bakes but HDR images and volumes (their bakes hold what the images give); sprites stay images as in builds. Since
+  2026-11-25 the assets' full import makes them before the project opens ("Assets' full import before the project
+  opens"); what follows is for a bake still missing. A scene load's worker thread (`TextureImportBatch`) bakes a missing one itself (BC7; the import's header stays the image's,
   the same size and color space); BC7HighQuality (minutes for a large image) and loads on the main thread (cubemaps,
   reimports, inspectors) load the image as it is and queue the bake on one background thread, after which
   `EditorTextureBakes.Update` (each editor frame) reimports the loaded texture in place. A failed bake logs once and
@@ -1889,6 +1890,57 @@
   screen showed the dim and the panel; Cancel (a click posted to the window) stopped it at step 28; Apply of Max Size
   512 to twelve loaded 2048 x 2048 images (2.3 s, "Textures/Big06.png (8 / 12)"); the load's steps; the Delete dialog
   over a black dim. Not checked: another DPI than 100 %, a second monitor, the user's own long tasks on New Frontier.
+
+## Assets' full import before the project opens (preimport, 2026-11-25)
+
+- The user's ask: after a project is chosen (and when the command line names one) a preimport that makes every cache the
+  editor and play mode load assets from, so nothing is made at first use; the same full import for an asset added,
+  changed on disk, given new import settings or reimported; an open with a complete Library only looks. Its screen: a
+  small window of its own before the editor's window, looking like the progress bar (the user's correction: the first
+  version showed the bar over the editor's window). Kept to what the game needs (the user: what can come later and the
+  game does without may stay): models imported (Library/ModelCache, materials extracted), images baked as builds ship
+  them (Library/TextureCache: `EditorTextureBakes.NeedsBake` / `BakeNow`), every mesh's distance field at the uniform
+  shape, the one every unstretched renderer uses (Library/DistanceFieldCache: `DistanceFieldBaker.Store`
+  `ModelFieldsCurrent` / `BuildModelFields`, record `models.txt`: model, stamp, field files). Not: thumbnails (the user:
+  skip them), fields of stretched shapes, static batches, clouds, shader binaries (per driver, in LocalAppData).
+- `AssetPreimport` (`LELEngine.Editor/Project`): `FindWork` (models by `ModelAssets.FindOutdated` on the main thread,
+  images and fields looked at on worker threads), `Run(title, overFrames)` under one `Progress` task: models on the main
+  thread (material assets), images and fields listed again after them (an import extracts images and writes its meta
+  file), then the images on worker threads (`ProcessorCount / 4` at once, 2..6; each bake spreads itself over the cores)
+  while the fields build on the main thread in an atlas of their own (as a build bakes them). A summary line: "[Editor]
+  Assets imported in N s: ...".
+- Where: `AssetPreimport.Opening`, in two halves. `Begin` (`MainWindow.BeginPreimport`, called by `Program.RunEditor`
+  as soon as the project is known: the first thing for a command line's project, right after the chooser for a chosen
+  one) shows the bar and reads the asset index and looks at every asset (counted on the bar: "Looking at the assets",
+  then the import's own count) on a worker thread, while the editor makes its preferences, reads the project's
+  graphics API and makes its window and device (the user's correction: with many assets the bar came only after the
+  index and the look). `Finish` in `MainWindow.Create` (the window made hidden, its context current, before
+  `placement.Restore` shows it) waits for the look and imports; `ChooseProject` after File > Close Project runs both at
+  once (`BeforeOpen`) before `OpenProject`. What the imports loaded (materials, their shader, textures read from the
+  images) is dropped with `InternalStorage.Clear`. Its bar is `ProgressOverlay.Standalone`: the same panel (560 x 70 at
+  96 DPI, the scale of the monitor under the mouse: `GetDpiForMonitor`, GLFW initialized first for the process's
+  per-monitor awareness) as a window of its own (layered, a taskbar button, never activated) in the middle of that
+  monitor, painted by the bar's thread (started without the editor's window; `Start` with it gives the owner later),
+  shown at once (no `ShowDelay`). Not a GL window of its own: a second OpenGL context shares nothing with the editor's,
+  so the shaders and materials a model import makes would die with it. Then the editor opens the project as
+  before; its step "Importing assets" (was "Importing models") skips its look right after `BeforeOpen` (`TakeImported`),
+  else runs it with its own bar over the window (hidden runs: `hidden=1` has no window to show). Batch editors (no UI)
+  import models only, as before: a build bakes what it ships, and a CI's fresh Library would bake every image and field
+  of the project, the fields on a software renderer.
+- After the start: `RefreshAssetsIfChanged` -> `ImportChangedAssets` (over the project: only what changed has work;
+  loaded models reload as before; the import fills the "Importing changed files" bar), texture Apply (per image, before
+  `TextureAssets.Reimport`), model Apply (one and several, before the scene's reload), the Project panel's Reimport of an
+  image (forced: `TextureBaker.Forget`, then the bake). The bakes on a load's worker thread or in the background stay for
+  a texture loaded before its import (changed while the editor was in the background).
+- Verified on a scratch project (batch `-createProject` plus TestGame's 17 images and 11 models; Debug, Intel Arc iGPU):
+  OpenGL 6.7 s before the editor's window (11 models, 17 bakes, 11 fields), then the load 449 ms with the step's look 34
+  ms; Vulkan 7.2 s, the step 4 ms (skipped). The bar's window shown (its log line: "The progress bar's own window shown
+  N ms after the process started") at 1958 ms when begun in `MainWindow.Create`, 1039 ms when begun first in
+  `RunEditor` (a bare `-help` process takes 100-300 ms), the editor's window and device at 8.4 s; `progressshots=` frames of the small window ("Importing assets of PreProj
+  94 % 5 s", "Textures/MRARSpec.png (38 / 39)"); an image added and another's meta file changed, CLI `refresh`: 2 bakes
+  in 0.4 s; the inspector's Apply of Max Size 128: baked in 0.1 s, then reimported from it; a model's Apply (Scale Factor
+  2, hidden editor): imported and its field built in 0.2 s. Not checked: a large project (the look's time with a complete
+  Library, five 4K bakes at once in memory), a project chosen after File > Close Project, another DPI or monitor.
 
 ## Editor start: the windows first, the project over frames (2026-11-09)
 

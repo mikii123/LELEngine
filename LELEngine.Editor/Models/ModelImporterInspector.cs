@@ -231,7 +231,6 @@ namespace LELEngine.Editor
 			paths.AddRange(otherPaths);
 			var settings = new List<ModelImporter> { working };
 			settings.AddRange(otherWorking);
-			// The import itself happens as the reloaded scene reads the models.
 			using Progress.Scope progress = Progress.Begin("Importing " + paths.Count + " models");
 			for (int i = 0; i < paths.Count; i++)
 			{
@@ -241,6 +240,9 @@ namespace LELEngine.Editor
 				AssetDatabase.SaveMeta(paths[i], meta);
 			}
 
+			// The full import with the new settings (materials, the meshes' distance fields); the reloaded scene reads it.
+			progress.Report(0, 1);
+			editor.ImportAssetsNow(paths, false);
 			dirty = false;
 			editor.ReloadScene(() =>
 			{
@@ -265,6 +267,9 @@ namespace LELEngine.Editor
 			working.version++;
 			meta.importer = Clone(working);
 			AssetDatabase.SaveMeta(assetPath, meta);
+			// The full import with the new settings (materials, the meshes' distance fields); the reloaded scene reads it.
+			progress.Report(0, 1);
+			editor.ImportAssetsNow(new[] { assetPath }, false);
 			dirty = false;
 			// Renderers hold the old meshes: the scene is rebuilt from its saved state with the new import.
 			editor.ReloadScene(() => ModelAssets.Unload(assetPath));

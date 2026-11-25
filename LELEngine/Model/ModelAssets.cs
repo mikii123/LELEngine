@@ -481,6 +481,37 @@ namespace LELEngine
 			return imported;
 		}
 
+		/// <summary>
+		///     The source models whose cached import is missing or outdated, as <see cref="ImportOutdated" /> finds them, of
+		///     <paramref name="assetPaths" /> (null: every model of the project); nothing is imported. One thread at a time,
+		///     while nothing imports (an import's identity is taken from its settings object, changed meanwhile).
+		/// </summary>
+		public static List<string> FindOutdated(bool verifyMaterials, IEnumerable<string> assetPaths = null)
+		{
+			var outdated = new List<string>();
+			if (CacheFolder == null)
+			{
+				return outdated;
+			}
+
+			foreach (string assetPath in assetPaths ?? AssetDatabase.GetAllAssetPaths(Extensions))
+			{
+				try
+				{
+					if (IsModelFile(assetPath) && NeedsImport(assetPath, verifyMaterials))
+					{
+						outdated.Add(assetPath);
+					}
+				}
+				catch (Exception e)
+				{
+					Debug.LogWarning($"[Model] Cannot check the import of {assetPath}: {e.Message}");
+				}
+			}
+
+			return outdated;
+		}
+
 		/// <summary>The model is loaded (its meshes may be in use).</summary>
 		public static bool IsLoaded(string assetPath)
 		{

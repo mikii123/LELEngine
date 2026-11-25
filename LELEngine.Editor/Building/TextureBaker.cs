@@ -82,6 +82,17 @@ namespace LELEngine.Editor
 			}
 		}
 
+		/// <summary>Deletes the image asset's bake (Reimport: the next one is made from scratch). Any thread.</summary>
+		public static void Forget(ProjectInfo project, string assetPath)
+		{
+			string cacheFile = CacheFile(project, assetPath);
+			lock (Lock(cacheFile))
+			{
+				File.Delete(cacheFile + ".stamp");
+				File.Delete(cacheFile);
+			}
+		}
+
 		/// <summary>"BC7 sRGB 2048x2048, 12 levels" (for the build log).</summary>
 		public static string Describe(KtxFile ktx)
 		{

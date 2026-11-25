@@ -13,6 +13,11 @@ namespace LELEngine.Editor
 	///     while the work blocks the editor's main thread. It shows a task that has run <see cref="ShowDelay" /> seconds
 	///     (short ones never flash), and keeps just above the editor's window in the z-order (not owned by it: a window owned
 	///     across threads would join the two threads' input, and a busy main thread would hold it up).
+	///     <para>
+	///         <see cref="Standalone" />: the same panel as a small window of its own in the middle of the screen, with a
+	///         taskbar button, while the editor's window is not shown yet (the project's full import before the editor
+	///         opens it, <see cref="AssetPreimport.BeforeOpen" />; the user's ask, 2026-11-25).
+	///     </para>
 	/// </summary>
 	internal static class ProgressOverlay
 	{
@@ -24,10 +29,21 @@ namespace LELEngine.Editor
 		// The dim over the editor's window (premultiplied black).
 		private const byte DimAlpha = 150;
 
+		// The panel's size at 96 DPI.
+		private const int PanelWidth = 560;
+		private const int PanelHeight = 70;
+
 		private static Thread thread;
 		private static volatile bool stopping;
+		private static volatile bool standalone;
 		private static IntPtr owner;
 		private static IntPtr window;
+
+		// The standalone window, where it stands while shown and its scale there, and the window shown now (either, or none).
+		private static IntPtr alone;
+		private static POINT aloneOrigin;
+		private static float aloneScale = 1f;
+		private static IntPtr shownWindow;
 		private static WndProc procedure;
 
 		// The painted frame: a top-down 32-bit DIB of the editor's client size, selected into memoryDC.
@@ -43,7 +59,6 @@ namespace LELEngine.Editor
 		private static IntPtr arrowCursor;
 		private static IntPtr busyCursor;
 		private static RECT cancelRect;
-		private static bool shown;
 		private static long paintedVersion = -1;
 		private static double paintedTime;
 		private static double lastShot;
@@ -56,19 +71,41 @@ namespace LELEngine.Editor
 		/// <summary>Test runs (<c>progressshots=folder</c>): every painted frame (twice a second at most) as folder/progress_NN.png.</summary>
 		public static string ShotsFolder;
 
+		/// <summary>
+		///     The bar shows as a small window of its own in the middle of the screen (the monitor under the mouse), not over
+		///     the editor's window: before that window shows. Any thread.
+		/// </summary>
+		public static bool Standalone
+		{
+			get => standalone;
+			set => standalone = value;
+		}
+
 		#endregion
 
 		#region PublicMethods
 
-		/// <summary>Starts the bar's thread for the editor's window (Windows only; nothing elsewhere).</summary>
+		/// <summary>
+		///     Starts the bar's thread for the editor's window (Windows only; nothing elsewhere); without the window yet
+		///     (<see cref="IntPtr.Zero" />: the standalone bar before it is made), a later call gives it.
+		/// </summary>
 		public static void Start(IntPtr editorWindow)
 		{
-			if (!OperatingSystem.IsWindows() || thread != null || editorWindow == IntPtr.Zero)
+			if (!OperatingSystem.IsWindows())
 			{
 				return;
 			}
 
-			owner = editorWindow;
+			if (editorWindow != IntPtr.Zero)
+			{
+				Volatile.Write(ref owner, editorWindow);
+			}
+
+			if (thread != null)
+			{
+				return;
+			}
+
 			stopping = false;
 			thread = new Thread(Run) { IsBackground = true, Name = "Progress bar" };
 			thread.Start();
@@ -120,7 +157,10 @@ namespace LELEngine.Editor
 				if (titleFont != IntPtr.Zero) DeleteObject(titleFont);
 				if (textFont != IntPtr.Zero) DeleteObject(textFont);
 				if (window != IntPtr.Zero) DestroyWindow(window);
+				if (alone != IntPtr.Zero) DestroyWindow(alone);
 				window = IntPtr.Zero;
+				alone = IntPtr.Zero;
+				shownWindow = IntPtr.Zero;
 			}
 		}
 
@@ -149,85 +189,144 @@ namespace LELEngine.Editor
 			{
 				throw new InvalidOperationException("its window was not made (error " + Marshal.GetLastWin32Error() + ")");
 			}
+
+			// The standalone panel: a window of its own with a taskbar button (the editor's is not shown yet).
+			alone = CreateWindowExW(WS_EX_LAYERED | WS_EX_APPWINDOW | WS_EX_NOACTIVATE, "LELEngineProgressBar", "LELEngine - importing assets", WS_POPUP,
+				0, 0, 1, 1, IntPtr.Zero, IntPtr.Zero, instance, IntPtr.Zero);
 		}
 
 		private static void Tick(double time)
 		{
 			ProgressState state = Progress.Current;
-			bool show = state.Running && state.Seconds >= ShowDelay && IsWindow(owner) && IsWindowVisible(owner) && !IsIconic(owner);
-			RECT client = default;
-			if (show)
+			bool single = standalone && alone != IntPtr.Zero;
+			IntPtr target = single ? alone : window;
+			IntPtr editor = Volatile.Read(ref owner);
+			// The standalone bar shows at once: it is all there is to see.
+			bool show = state.Running && (single || state.Seconds >= ShowDelay && IsWindow(editor) && IsWindowVisible(editor) && !IsIconic(editor));
+			int width = 0;
+			int height = 0;
+			var origin = new POINT();
+			if (show && single)
 			{
-				GetClientRect(owner, out client);
-				show = client.Right > 40 && client.Bottom > 40;
+				// The panel alone, centred on the monitor under the mouse (where the project was chosen) at its scale, where it
+				// stays.
+				if (shownWindow != alone)
+				{
+					PlaceAlone();
+				}
+
+				width = (int)Math.Round(PanelWidth * aloneScale);
+				height = (int)Math.Round(PanelHeight * aloneScale);
+				origin = aloneOrigin;
+			}
+			else if (show)
+			{
+				GetClientRect(editor, out RECT client);
+				width = client.Right;
+				height = client.Bottom;
+				show = width > 40 && height > 40;
+				ClientToScreen(editor, ref origin);
+			}
+
+			if (shownWindow != IntPtr.Zero && (!show || shownWindow != target))
+			{
+				ShowWindow(shownWindow, SW_HIDE);
+				shownWindow = IntPtr.Zero;
+				paintedVersion = -1;
 			}
 
 			if (!show)
 			{
-				if (shown)
-				{
-					ShowWindow(window, SW_HIDE);
-					shown = false;
-				}
-
 				paintedVersion = -1;
 				return;
 			}
 
-			int width = client.Right;
-			int height = client.Bottom;
-			var origin = new POINT();
-			ClientToScreen(owner, ref origin);
 			// Repainted when the task changes, the window's size does, or a bar of unknown length moves (and the time shown).
 			bool animate = state.Fraction < 0f && time - paintedTime > 1.0 / 30.0;
 			if (state.Version != paintedVersion || width != bitmapWidth || height != bitmapHeight || animate || time - paintedTime > 0.5)
 			{
-				Paint(state, width, height, time);
+				Paint(state, width, height, time, single);
 				paintedVersion = state.Version;
 				paintedTime = time;
 				var size = new SIZE { cx = width, cy = height };
 				var source = new POINT();
 				var blend = new BLENDFUNCTION { BlendOp = 0, BlendFlags = 0, SourceConstantAlpha = 255, AlphaFormat = AC_SRC_ALPHA };
 				IntPtr screen = GetDC(IntPtr.Zero);
-				UpdateLayeredWindow(window, screen, ref origin, ref size, memoryDC, ref source, 0, ref blend, ULW_ALPHA);
+				UpdateLayeredWindow(target, screen, ref origin, ref size, memoryDC, ref source, 0, ref blend, ULW_ALPHA);
 				ReleaseDC(IntPtr.Zero, screen);
 				SaveShot(width, height, time);
 			}
-			else
+			else if (!single)
 			{
 				SetWindowPos(window, IntPtr.Zero, origin.X, origin.Y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
 			}
 
-			// Just above the editor's window (below whatever is above it: another application in front stays in front).
-			IntPtr above = GetWindow(owner, GW_HWNDPREV);
-			if (above != window)
+			if (!single)
 			{
-				SetWindowPos(window, above == IntPtr.Zero ? HWND_TOP : above, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
+				// Just above the editor's window (below whatever is above it: another application in front stays in front).
+				IntPtr above = GetWindow(editor, GW_HWNDPREV);
+				if (above != window)
+				{
+					SetWindowPos(window, above == IntPtr.Zero ? HWND_TOP : above, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER);
+				}
 			}
 
-			if (!shown)
+			if (shownWindow != target)
 			{
-				ShowWindow(window, SW_SHOWNOACTIVATE);
-				shown = true;
+				ShowWindow(target, SW_SHOWNOACTIVATE);
+				if (single)
+				{
+					// In front of what is there (the project chooser just closed): it is all the editor shows.
+					SetWindowPos(target, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+					Console.WriteLine($"[Editor] The progress bar's own window shown {(DateTime.Now - System.Diagnostics.Process.GetCurrentProcess().StartTime).TotalMilliseconds:F0} ms after the process started ({state.Title})");
+				}
+
+				shownWindow = target;
 			}
+		}
+
+		// The scale of the editor's window's monitor.
+		private static float Scale()
+		{
+			return Math.Max(1f, GetDpiForWindow(Volatile.Read(ref owner)) / 96f);
+		}
+
+		// The standalone panel's scale and place: the middle of the work area of the monitor under the mouse, at its DPI.
+		private static void PlaceAlone()
+		{
+			GetCursorPos(out POINT cursor);
+			IntPtr monitor = MonitorFromPoint(cursor, MONITOR_DEFAULTTOPRIMARY);
+			aloneScale = GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, out uint dpi, out _) == 0 ? Math.Max(1f, dpi / 96f) : 1f;
+			int width = (int)Math.Round(PanelWidth * aloneScale);
+			int height = (int)Math.Round(PanelHeight * aloneScale);
+			var info = new MONITORINFO { cbSize = (uint)Marshal.SizeOf<MONITORINFO>() };
+			if (!GetMonitorInfoW(monitor, ref info))
+			{
+				aloneOrigin = new POINT { X = 100, Y = 100 };
+				return;
+			}
+
+			RECT work = info.rcWork;
+			aloneOrigin = new POINT { X = work.Left + (work.Right - work.Left - width) / 2, Y = work.Top + (work.Bottom - work.Top - height) / 2 };
 		}
 
 		// ---------------------------------------------------------------- painting
 
-		private static unsafe void Paint(ProgressState state, int width, int height, double time)
+		// The frame: the panel at the top of a dim over the editor's client area, or (single) the panel alone, the whole bitmap.
+		private static unsafe void Paint(ProgressState state, int width, int height, double time, bool single)
 		{
 			EnsureBitmap(width, height);
-			float scale = Math.Max(1f, GetDpiForWindow(owner) / 96f);
+			float scale = single ? aloneScale : Scale();
 			EnsureFonts((int)(scale * 96f));
 			uint* pixels = (uint*)bits;
 			uint dim = (uint)DimAlpha << 24;
 			new Span<uint>(pixels, width * height).Fill(dim);
 
 			int S(float value) => (int)Math.Round(value * scale);
-			int panelWidth = Math.Min(S(560), width - S(32));
-			int panelHeight = S(70);
-			int left = (width - panelWidth) / 2;
-			int top = S(10);
+			int panelWidth = single ? width : Math.Min(S(PanelWidth), width - S(32));
+			int panelHeight = single ? height : S(PanelHeight);
+			int left = single ? 0 : (width - panelWidth) / 2;
+			int top = single ? 0 : S(10);
 			int padding = S(14);
 			Fill(pixels, width, height, left, top, panelWidth, panelHeight, Rgb(0.36f, 0.38f, 0.42f));
 			Fill(pixels, width, height, left + 1, top + 1, panelWidth - 2, panelHeight - 2, Rgb(0.13f, 0.135f, 0.15f));
@@ -499,7 +598,10 @@ namespace LELEngine.Editor
 		private const uint WS_POPUP = 0x80000000;
 		private const uint WS_EX_LAYERED = 0x00080000;
 		private const uint WS_EX_TOOLWINDOW = 0x00000080;
+		private const uint WS_EX_APPWINDOW = 0x00040000;
 		private const uint WS_EX_NOACTIVATE = 0x08000000;
+		private const uint MONITOR_DEFAULTTOPRIMARY = 1;
+		private const int MDT_EFFECTIVE_DPI = 0;
 		private const uint PM_REMOVE = 1;
 		private const uint QS_ALLINPUT = 0x04FF;
 		private const int SW_HIDE = 0;
@@ -580,6 +682,15 @@ namespace LELEngine.Editor
 			public int Top;
 			public int Right;
 			public int Bottom;
+		}
+
+		[StructLayout(LayoutKind.Sequential)]
+		private struct MONITORINFO
+		{
+			public uint cbSize;
+			public RECT rcMonitor;
+			public RECT rcWork;
+			public uint dwFlags;
 		}
 
 		[StructLayout(LayoutKind.Sequential)]
@@ -669,6 +780,15 @@ namespace LELEngine.Editor
 
 		[DllImport("user32.dll")]
 		private static extern uint GetDpiForWindow(IntPtr hwnd);
+
+		[DllImport("user32.dll")]
+		private static extern IntPtr MonitorFromPoint(POINT point, uint flags);
+
+		[DllImport("shcore.dll")]
+		private static extern int GetDpiForMonitor(IntPtr monitor, int type, out uint dpiX, out uint dpiY);
+
+		[DllImport("user32.dll")]
+		private static extern bool GetMonitorInfoW(IntPtr monitor, ref MONITORINFO info);
 
 		[DllImport("user32.dll")]
 		private static extern IntPtr GetDC(IntPtr hwnd);

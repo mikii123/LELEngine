@@ -54,6 +54,10 @@ namespace LELEngine.Editor
 			// its place when the editor starts.
 			ConsoleLogWriter.Install();
 
+			// A project named on the command line: its full import begins now, its bar shown at once (MainWindow.Create
+			// finishes it once the editor's window exists, before that window shows).
+			AssetPreimport.Opening preimport = EditorApplication.OpensProjectDirectly(args) ? MainWindow.BeginPreimport(args) : null;
+
 			// The driver's binaries of the programs linked before (keyed by their final sources: an edited shader compiles
 			// again), before the first window builds a shader; shadercache=0 compiles everything, as the player's switch.
 			if (Array.IndexOf(args, "shadercache=0") < 0)
@@ -96,6 +100,8 @@ namespace LELEngine.Editor
 				}
 
 				args = ProjectGraphicsApi.WithProject(args, chosen);
+				// The chosen project's full import begins now, its bar shown at once.
+				preimport = MainWindow.BeginPreimport(args);
 			}
 			else
 			{
@@ -103,7 +109,7 @@ namespace LELEngine.Editor
 				LELEngine.Graphics.GraphicsDevice.RequestedApi = ProjectGraphicsApi.Requested(args, EditorApplication.ProjectArgument(args));
 			}
 
-			using (MainWindow window = MainWindow.Create(args))
+			using (MainWindow window = MainWindow.Create(args, preimport))
 			{
 				window.Run();
 			}

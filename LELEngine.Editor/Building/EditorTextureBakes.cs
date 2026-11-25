@@ -14,7 +14,10 @@ namespace LELEngine.Editor
 	///     which the GPU no longer generates. A bake is made once per image and settings and serves builds too; a change
 	///     of the image or of its meta file makes it again.
 	///     <para>
-	///         A missing or outdated bake is made on the worker thread of the scene load that asks for it; for the high
+	///         The bakes are made by the assets' full import (<see cref="AssetPreimport" />: <see cref="NeedsBake" />,
+	///         <see cref="BakeNow" />) when the project opens and when an image is added, changed on disk, given new import
+	///         settings or reimported. A bake still missing when a texture loads (the image changed while the editor was
+	///         in the background) is made on the worker thread of the scene load that asks for it; for the high
 	///         quality setting (minutes for a large image) and for loads on the main thread (a reimport, an inspector) it
 	///         is made in the background while the image loads as it is, and the loaded texture is imported again from
 	///         the bake once it is there (<see cref="Update" />).
@@ -78,6 +81,77 @@ namespace LELEngine.Editor
 
 			Enqueue(assetPath);
 			return null;
+		}
+
+		/// <summary>
+		///     The image asset has to be baked: a build bakes it, and its bake is missing or older than its image or meta file
+		///     (not when its bake failed for these files). Any thread.
+		/// </summary>
+		public bool NeedsBake(string assetPath)
+		{
+			if (closed || !File.Exists(AssetDatabase.ToAbsolute(assetPath)))
+			{
+				return false;
+			}
+
+			try
+			{
+				TextureImporter importer = TextureAssets.GetImporter(assetPath);
+				if (!Bakes(assetPath, importer) || failed.TryGetValue(assetPath, out long stamp) && stamp == FilesStamp(assetPath))
+				{
+					return false;
+				}
+
+				return TextureBaker.CurrentBake(project, assetPath) == null;
+			}
+			catch (Exception e)
+			{
+				Fail(assetPath, e);
+				return false;
+			}
+		}
+
+		/// <summary>
+		///     Bakes the image asset now, on this thread, when its bake is missing or outdated, whatever its compression (the
+		///     high quality one too); <paramref name="force" />: also when current (Reimport). The asset's full import
+		///     (<see cref="AssetPreimport" />). A failure is logged once and the editor loads the image as it is. Any thread;
+		///     true when a bake was made.
+		/// </summary>
+		public bool BakeNow(string assetPath, bool force, bool log)
+		{
+			if (closed || !File.Exists(AssetDatabase.ToAbsolute(assetPath)))
+			{
+				return false;
+			}
+
+			try
+			{
+				TextureImporter importer = TextureAssets.GetImporter(assetPath);
+				if (!Bakes(assetPath, importer))
+				{
+					return false;
+				}
+
+				if (force)
+				{
+					TextureBaker.Forget(project, assetPath);
+				}
+
+				long started = System.Diagnostics.Stopwatch.GetTimestamp();
+				TextureBaker.BakeFile(project, assetPath, importer, out bool fromCache);
+				failed.TryRemove(assetPath, out _);
+				if (!fromCache && log)
+				{
+					Debug.Log($"[Textures] Baked {assetPath} ({importer.compression}) in {System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds:F0} ms: the editor and builds load it from the Library");
+				}
+
+				return !fromCache;
+			}
+			catch (Exception e)
+			{
+				Fail(assetPath, e);
+				return false;
+			}
 		}
 
 		/// <summary>Main thread, every editor frame: the loaded textures whose bake the background made are imported again from it.</summary>

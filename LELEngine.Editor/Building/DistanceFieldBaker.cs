@@ -512,12 +512,189 @@ namespace LELEngine.Editor
 			private bool indexRead;
 			private bool indexDirty;
 
+			// The models whose meshes all have their field at the uniform shape (the full import, ModelFieldsCurrent): the
+			// model's stamp then and the field files' names.
+			private readonly Dictionary<string, (string Stamp, string[] Files)> imported = new Dictionary<string, (string, string[])>(StringComparer.OrdinalIgnoreCase);
+			private bool importedRead;
+			private bool importedDirty;
+
 			public Store(ProjectInfo project)
 			{
 				this.project = project;
 			}
 
 			private string IndexFile => Path.Combine(project.LibraryPath, "DistanceFieldCache", "stamps.txt");
+			private string ImportedFile => Path.Combine(project.LibraryPath, "DistanceFieldCache", "models.txt");
+
+			/// <summary>The shape of every uniform scale: the field every renderer without a stretched scale uses.</summary>
+			public static Vector3i UniformShape => DistanceFieldAtlas.ShapeKey(Vector3.One);
+
+			/// <summary>
+			///     Every mesh of the model has its field at the uniform shape for the model's current files (a record of the
+			///     full import, <see cref="BuildModelFields" />, and the field files there). Any thread; a model that cannot be
+			///     read counts as current (its import reports it).
+			/// </summary>
+			public bool ModelFieldsCurrent(string modelPath)
+			{
+				string stamp;
+				try
+				{
+					stamp = StampOf(modelPath);
+				}
+				catch (Exception e) when (e is IOException || e is UnauthorizedAccessException)
+				{
+					return true;
+				}
+
+				(string Stamp, string[] Files) record;
+				lock (sync)
+				{
+					ReadImported();
+					if (!imported.TryGetValue(modelPath, out record) || record.Stamp != stamp)
+					{
+						return false;
+					}
+				}
+
+				string folder = Path.Combine(project.LibraryPath, "DistanceFieldCache");
+				foreach (string file in record.Files)
+				{
+					if (!File.Exists(Path.Combine(folder, file)))
+					{
+						return false;
+					}
+				}
+
+				return true;
+			}
+
+			/// <summary>
+			///     The model's full import of distance fields: the field of every mesh at the uniform shape, built on the GPU when
+			///     the cache has none for the model's current files (with <paramref name="atlas" />, made on first need: the
+			///     caller deletes it). Then recorded for <see cref="ModelFieldsCurrent" /> (<see cref="SaveImported" /> writes the
+			///     record). Main thread with the graphics context. Returns the fields built.
+			/// </summary>
+			public int BuildModelFields(string modelPath, ref DistanceFieldAtlas atlas)
+			{
+				string stamp = StampOf(modelPath);
+				// A model in use gives its meshes; else they are read from its import and dropped after (the GPU never gets them).
+				Model model = ModelAssets.IsLoaded(modelPath) ? ModelAssets.Load(modelPath) : new Model(modelPath, ModelAssets.LoadData(modelPath));
+				Vector3i key = UniformShape;
+				var files = new List<string>();
+				int built = 0;
+				foreach (Mesh mesh in model.Meshes)
+				{
+					if (!IsStored(mesh) || mesh.TriangleCount == 0)
+					{
+						continue;
+					}
+
+					string file = CacheFile(project, modelPath, mesh.SubAssetName, key);
+					files.Add(Path.GetFileName(file));
+					if (ReadCache(file, stamp) != null)
+					{
+						continue;
+					}
+
+					// The build's own atlas (one field at a time, built whole, read back here), as a game build bakes them.
+					atlas ??= new DistanceFieldAtlas(DistanceFieldAtlas.AtlasXY) { KeepsFields = false, BuildsOverFrames = false };
+					atlas.Reset();
+					MeshDistanceField field = atlas.GetOrBuild(mesh, key);
+					if (field == null)
+					{
+						files.RemoveAt(files.Count - 1);
+						continue;
+					}
+
+					var baked = new BakedDistanceField { ShapeKey = key, Size = field.Size, Voxels = atlas.Read(field) };
+					DistanceFieldFile.Write(file, stamp, new[] { new KeyValuePair<string, BakedDistanceField>(mesh.SubAssetName, baked) });
+					built++;
+				}
+
+				lock (sync)
+				{
+					ReadImported();
+					imported[modelPath] = (stamp, files.ToArray());
+					importedDirty = true;
+				}
+
+				return built;
+			}
+
+			/// <summary>Writes the record of the models' full imports of fields and the models' stamps when they changed (after an import).</summary>
+			public void SaveImported()
+			{
+				bool stampsChanged;
+				lock (sync)
+				{
+					stampsChanged = indexDirty;
+				}
+
+				if (stampsChanged)
+				{
+					WriteIndex();
+				}
+
+				var lines = new List<string>();
+				lock (sync)
+				{
+					if (!importedDirty)
+					{
+						return;
+					}
+
+					importedDirty = false;
+					foreach (KeyValuePair<string, (string Stamp, string[] Files)> entry in imported)
+					{
+						lines.Add(string.Join("\t", entry.Key, entry.Value.Stamp, string.Join("|", entry.Value.Files)));
+					}
+				}
+
+				try
+				{
+					lines.Sort(StringComparer.Ordinal);
+					Directory.CreateDirectory(Path.GetDirectoryName(ImportedFile));
+					string temporary = ImportedFile + ".tmp";
+					File.WriteAllLines(temporary, lines);
+					File.Move(temporary, ImportedFile, true);
+				}
+				catch (Exception e) when (e is IOException || e is UnauthorizedAccessException)
+				{
+					// Only a record: without it the next import reads the fields' files to find them current.
+					Debug.LogWarning("[SDF] Cannot write " + ImportedFile + ": " + e.Message);
+				}
+			}
+
+			private void ReadImported()
+			{
+				if (importedRead)
+				{
+					return;
+				}
+
+				importedRead = true;
+				try
+				{
+					if (!File.Exists(ImportedFile))
+					{
+						return;
+					}
+
+					foreach (string line in File.ReadAllLines(ImportedFile))
+					{
+						string[] parts = line.Split('\t');
+						if (parts.Length == 3)
+						{
+							imported[parts[0]] = (parts[1], parts[2].Length > 0 ? parts[2].Split('|') : Array.Empty<string>());
+						}
+					}
+				}
+				catch (Exception)
+				{
+					// An unreadable record: the models' fields are looked at again.
+					imported.Clear();
+				}
+			}
 
 			public BakedDistanceField Load(Mesh mesh, Vector3i shapeKey, Vector3i size)
 			{
