@@ -714,8 +714,9 @@ namespace LELEngine.Rendering
 
 		#region NestedTypes
 
+		/// <summary>A row of the instance table: Engine/Instancing.glsl's LelInstance (the GI's own tables use it too, <see cref="GIDrawTable" />).</summary>
 		[StructLayout(LayoutKind.Sequential)]
-		private struct GpuInstance
+		internal struct GpuInstance
 		{
 			public Matrix4 Model;
 			public Matrix4 NormalMatrix;

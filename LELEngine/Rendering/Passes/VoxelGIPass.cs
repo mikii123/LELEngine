@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using LELEngine.Shaders;
 using LELEngine.Graphics;
 using LELEngine.Mathematics;
@@ -120,6 +121,22 @@ namespace LELEngine.Rendering.Passes
 
 		// The coverage voxelization rasterizing conservatively (LEL_VOXEL_CONSERVATIVE), where the device can.
 		private ShaderProgram voxelizeConservative;
+
+		// The same three programs' instanced variants: the renderers drawn GPU-driven from a table (GIDrawTable.Enabled), a
+		// multi-draw per material.
+		private ShaderProgram voxelizeInstanced;
+		private ShaderProgram voxelizeCoverageInstanced;
+		private ShaderProgram voxelizeConservativeInstanced;
+
+		// The static cache's and the dynamic renderers' tables (one each: both may draw in a frame).
+		private readonly GIDrawTable staticTable = new GIDrawTable("Voxel GI static geometry");
+		private readonly GIDrawTable dynamicTable = new GIDrawTable("Voxel GI dynamic geometry");
+
+		// The batches of the table being drawn: their materials in order, and the sub-meshes of each (reused; cleared after
+		// each voxelization, so no scene reference is kept).
+		private readonly List<Material> tableMaterials = new List<Material>();
+		private readonly Dictionary<Material, int> tableMaterialSlots = new Dictionary<Material, int>();
+		private readonly List<List<TablePart>> tableParts = new List<List<TablePart>>();
 		private ComputeShader clearGeometry;
 		private ComputeShader clearAccumulators;
 		private ComputeShader resolveGeometry;
@@ -336,6 +353,14 @@ namespace LELEngine.Rendering.Passes
 			voxelize?.Delete();
 			voxelizeCoverage?.Delete();
 			voxelizeConservative?.Delete();
+			voxelizeInstanced?.Delete();
+			voxelizeCoverageInstanced?.Delete();
+			voxelizeConservativeInstanced?.Delete();
+			voxelizeInstanced = null;
+			voxelizeCoverageInstanced = null;
+			voxelizeConservativeInstanced = null;
+			staticTable.Dispose();
+			dynamicTable.Dispose();
 			clearGeometry?.Delete();
 			clearAccumulators?.Delete();
 			resolveGeometry?.Delete();
@@ -634,7 +659,7 @@ namespace LELEngine.Rendering.Passes
 		private void RebuildStaticCache(GlobalIlluminationSettings gi)
 		{
 			ClearGeometry(staticGeometry, VoxelRegion.Full(currentResolution));
-			Voxelize(staticGeometry, staticRenderers, gi, null);
+			Voxelize(staticGeometry, staticRenderers, staticTable, gi, null);
 
 			// Blocks that no longer hold geometry will not be revisited by injection: start both buffers clean.
 			ClearRadiance(0, VoxelRegion.Full(currentResolution));
@@ -673,7 +698,7 @@ namespace LELEngine.Rendering.Passes
 
 			if (dynamicRenderers.Count > 0)
 			{
-				Voxelize(dynamicGeometry, dynamicRenderers, gi, RegionCoverage(currentRegions) > FullClearCoverage ? null : currentRegions);
+				Voxelize(dynamicGeometry, dynamicRenderers, dynamicTable, gi, RegionCoverage(currentRegions) > FullClearCoverage ? null : currentRegions);
 			}
 
 			List<VoxelRegion> swap = previousRegions;
@@ -804,8 +829,9 @@ namespace LELEngine.Rendering.Passes
 			shader.DispatchThreads(region.SizeX, region.SizeY, region.SizeZ, 4, 4, 4);
 		}
 
-		// regions: where the renderers can be (null = the whole volume); only the coverage path needs them.
-		private void Voxelize(GeometryVolume target, IReadOnlyList<MeshRenderer> renderers, GlobalIlluminationSettings gi, List<VoxelRegion> regions)
+		// regions: where the renderers can be (null = the whole volume); only the coverage path needs them. table: the one
+		// the renderers are drawn from when the GI draws GPU-driven (GIDrawTable.Enabled).
+		private void Voxelize(GeometryVolume target, IReadOnlyList<MeshRenderer> renderers, GIDrawTable table, GlobalIlluminationSettings gi, List<VoxelRegion> regions)
 		{
 			if (renderers.Count == 0)
 			{
@@ -814,9 +840,12 @@ namespace LELEngine.Rendering.Passes
 
 			if (gi.VoxelCoverage)
 			{
-				VoxelizeCoverage(target, renderers, gi, regions);
+				VoxelizeCoverage(target, renderers, table, gi, regions);
 				return;
 			}
+
+			voxelize ??= new ShaderProgram("Engine/Voxelize.shader");
+			ShaderProgram program = PrepareTable(table, renderers, ref voxelizeInstanced, "Engine/Voxelize.shader", Array.Empty<string>()) ?? voxelize;
 
 			CommandList commands = Gfx.Commands;
 			commands.BeginRenderPass(currentResolution, currentResolution);
@@ -824,13 +853,12 @@ namespace LELEngine.Rendering.Passes
 			commands.State.Culling = FaceCulling.None;
 			commands.State.DepthWrite = false;
 
-			voxelize ??= new ShaderProgram("Engine/Voxelize.shader");
-			voxelize.Use();
-			voxelize.SetVector3("voxelGridMin", gi.GridMin);
-			voxelize.SetFloat("voxelGridSize", gi.GridSize);
-			voxelize.SetInt("voxelResolution", currentResolution);
+			program.Use();
+			program.SetVector3("voxelGridMin", gi.GridMin);
+			program.SetFloat("voxelGridSize", gi.GridSize);
+			program.SetInt("voxelResolution", currentResolution);
 			target.BindImages(0, ImageAccess.Write, true);
-			DrawRenderers(voxelize, renderers);
+			DrawRenderers(program, renderers, table);
 
 			commands.State.DepthWrite = true;
 			commands.State.DepthTest = true;
@@ -840,7 +868,7 @@ namespace LELEngine.Rendering.Passes
 
 		// Coverage voxelization: clear the accumulators where the renderers can be, rasterize them with multisampling
 		// into the accumulators (block flags straight into the target), then resolve the accumulators into the target.
-		private void VoxelizeCoverage(GeometryVolume target, IReadOnlyList<MeshRenderer> renderers, GlobalIlluminationSettings gi, List<VoxelRegion> regions)
+		private void VoxelizeCoverage(GeometryVolume target, IReadOnlyList<MeshRenderer> renderers, GIDrawTable table, GlobalIlluminationSettings gi, List<VoxelRegion> regions)
 		{
 			if (accumulators.AlbedoRG == null)
 			{
@@ -858,6 +886,9 @@ namespace LELEngine.Rendering.Passes
 			ShaderProgram program = conservative
 				? voxelizeConservative ??= new ShaderProgram("Engine/VoxelizeCoverage.shader", new[] { "LEL_VOXEL_CONSERVATIVE" })
 				: voxelizeCoverage ??= new ShaderProgram("Engine/VoxelizeCoverage.shader");
+			program = (conservative
+				? PrepareTable(table, renderers, ref voxelizeConservativeInstanced, "Engine/VoxelizeCoverage.shader", new[] { "LEL_VOXEL_CONSERVATIVE" })
+				: PrepareTable(table, renderers, ref voxelizeCoverageInstanced, "Engine/VoxelizeCoverage.shader", Array.Empty<string>())) ?? program;
 
 			CommandList commands = Gfx.Commands;
 			clearAccumulators.Use();
@@ -878,7 +909,7 @@ namespace LELEngine.Rendering.Passes
 			program.SetInt("voxSplatWidth", (int)gi.CoverageSplat);
 			accumulators.BindImages(0, ImageAccess.ReadWrite);
 			commands.SetImage(5, target.Blocks, 0, -1, ImageAccess.Write);
-			DrawRenderers(program, renderers);
+			DrawRenderers(program, renderers, table);
 
 			commands.State.ConservativeRasterization = false;
 			commands.State.DepthWrite = true;
@@ -918,8 +949,30 @@ namespace LELEngine.Rendering.Passes
 			}
 		}
 
-		private void DrawRenderers(ShaderProgram program, IReadOnlyList<MeshRenderer> renderers)
+		// The renderers' opaque sub-meshes with the bound program: one multi-draw per material from the table when the
+		// program is the table's instanced variant (PrepareTable built it), else one draw per sub-mesh.
+		private void DrawRenderers(ShaderProgram program, IReadOnlyList<MeshRenderer> renderers, GIDrawTable table)
 		{
+			if (program.IsInstancedVariant)
+			{
+				for (int i = 0; i < tableMaterials.Count; i++)
+				{
+					// Materials describe themselves through conventional uniform names.
+					GISurface.SetUniforms(program, tableMaterials[i]);
+					table.Draw(i);
+				}
+
+				// No scene reference kept past the draw.
+				tableMaterials.Clear();
+				tableMaterialSlots.Clear();
+				foreach (List<TablePart> parts in tableParts)
+				{
+					parts.Clear();
+				}
+
+				return;
+			}
+
 			foreach (MeshRenderer renderer in renderers)
 			{
 				for (int i = 0; i < renderer.SubMeshCount; i++)
@@ -935,6 +988,75 @@ namespace LELEngine.Rendering.Passes
 					renderer.RenderSubMeshWith(program, i);
 				}
 			}
+		}
+
+		// The renderers' opaque sub-meshes (those DrawRenderers draws one by one) in the table, a batch per material in the
+		// order the materials first come, uploaded; the voxelization program's instanced variant that draws them. Null
+		// when they draw one by one: LEL_GI_GPU_DRAWS=0, no GPU-driven programs on the device, the variant not linked.
+		private ShaderProgram PrepareTable(GIDrawTable table, IReadOnlyList<MeshRenderer> renderers, ref ShaderProgram instanced, string path, string[] defines)
+		{
+			if (!GIDrawTable.Enabled)
+			{
+				return null;
+			}
+
+			instanced ??= new ShaderProgram(path, defines.Append(ShaderProgram.InstancedDefine).ToArray());
+			if (!instanced.IsLinked)
+			{
+				return null;
+			}
+
+			table.Clear();
+			tableMaterials.Clear();
+			tableMaterialSlots.Clear();
+			foreach (MeshRenderer renderer in renderers)
+			{
+				int instance = -1;
+				for (int i = 0; i < renderer.SubMeshCount; i++)
+				{
+					Material material = renderer.GetMaterial(i);
+					if (material == null || material.IsTransparent)
+					{
+						continue;
+					}
+
+					if (instance < 0)
+					{
+						instance = table.AddInstance(renderer);
+						if (instance < 0)
+						{
+							// No triangles: as GeometryPool.DrawSubMesh draws nothing for it.
+							break;
+						}
+					}
+
+					if (!tableMaterialSlots.TryGetValue(material, out int slot))
+					{
+						slot = tableMaterials.Count;
+						tableMaterials.Add(material);
+						tableMaterialSlots.Add(material, slot);
+						if (tableParts.Count <= slot)
+						{
+							tableParts.Add(new List<TablePart>());
+						}
+					}
+
+					tableParts[slot].Add(new TablePart { Instance = instance, Mesh = renderer.DrawnMesh, SubMesh = i });
+				}
+			}
+
+			for (int slot = 0; slot < tableMaterials.Count; slot++)
+			{
+				foreach (TablePart part in tableParts[slot])
+				{
+					table.AddSubMesh(part.Instance, part.Mesh, part.SubMesh);
+				}
+
+				table.EndBatch();
+			}
+
+			table.Upload();
+			return instanced;
 		}
 
 		// ---------------------------------------------------------------- lighting
@@ -1188,6 +1310,14 @@ namespace LELEngine.Rendering.Passes
 		#endregion
 
 		#region NestedTypes
+
+		/// <summary>A sub-mesh of a table's instance (its drawn mesh) waiting for its material's batch.</summary>
+		private struct TablePart
+		{
+			public int Instance;
+			public Mesh Mesh;
+			public int SubMesh;
+		}
 
 		/// <summary>Surface attributes of voxelized geometry (albedo + occupancy, normal, emission) plus block flags.</summary>
 		private struct GeometryVolume

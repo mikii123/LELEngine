@@ -2,7 +2,9 @@
 
 #version 430
 
-uniform mat4 modelMatrix;
+// The object's placement: the modelMatrix uniform per draw, or the GI's instance table (LEL_INSTANCED: Rendering.GIDrawTable,
+// a multi-draw per material). The normal is worked out from it here either way, so both give the same voxels.
+#include "Engine/Instancing.glsl"
 
 in vec3 vPosition;
 in vec3 vNormal;
@@ -14,8 +16,9 @@ out vec2 gUV;
 
 void main()
 {
-	gWorldPos = vec3(modelMatrix * vec4(vPosition, 1.0));
-	gNormal = normalize(mat3(transpose(inverse(modelMatrix))) * vNormal);
+	mat4 model = LelModelMatrix();
+	gWorldPos = vec3(model * vec4(vPosition, 1.0));
+	gNormal = normalize(mat3(transpose(inverse(model))) * vNormal);
 	gUV = vTexCoord;
 }
 

@@ -429,6 +429,28 @@ public sealed class MeshRenderer : Behaviour
 		DrawSubMesh(subMesh);
 	}
 
+	/// <summary>
+	///     What <see cref="RenderWith(ShaderProgram)" /> (<paramref name="shadowCastersOnly" /> false) or
+	///     <see cref="RenderShadowCastersWith" /> (true) draws is the whole mesh in one range: no sub-mesh is left out.
+	///     Otherwise it draws the sub-meshes <see cref="DrawsSubMesh" /> picks. For the GI's tables (<see cref="LELEngine.Rendering.GIDrawTable" />).
+	/// </summary>
+	internal bool DrawsWholeMesh(bool shadowCastersOnly)
+	{
+		bool every = !HasTransparentParts;
+		for (int i = 0; every && shadowCastersOnly && i < PartCount; i++)
+		{
+			every = IsSubMeshShadowCaster(i) && !IsOwnShadowCaster(i);
+		}
+
+		return every;
+	}
+
+	/// <summary>The sub-mesh is opaque and, for <paramref name="shadowCastersOnly" />, cast by the engine's depth program.</summary>
+	internal bool DrawsSubMesh(int subMesh, bool shadowCastersOnly)
+	{
+		return !IsSubMeshTransparent(subMesh) && (!shadowCastersOnly || (IsSubMeshShadowCaster(subMesh) && !IsOwnShadowCaster(subMesh)));
+	}
+
 	/// <summary>Binds the shared geometry and draws every sub-mesh in one call. No uniforms are touched.</summary>
 	public void DrawGeometry()
 	{
@@ -476,13 +498,7 @@ public sealed class MeshRenderer : Behaviour
 		}
 
 		transform.SetModelMatrix(program);
-		bool every = !HasTransparentParts;
-		for (int i = 0; every && shadowCastersOnly && i < PartCount; i++)
-		{
-			every = IsSubMeshShadowCaster(i) && !IsOwnShadowCaster(i);
-		}
-
-		if (every)
+		if (DrawsWholeMesh(shadowCastersOnly))
 		{
 			DrawGeometry();
 			return;
@@ -490,7 +506,7 @@ public sealed class MeshRenderer : Behaviour
 
 		for (int i = 0; i < mesh.SubMeshCount; i++)
 		{
-			if (!IsSubMeshTransparent(i) && (!shadowCastersOnly || (IsSubMeshShadowCaster(i) && !IsOwnShadowCaster(i))))
+			if (DrawsSubMesh(i, shadowCastersOnly))
 			{
 				DrawSubMesh(i);
 			}

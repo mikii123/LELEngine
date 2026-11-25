@@ -5617,3 +5617,29 @@ was made: "static batching has to work in the editor at run time too" and "you c
   the top; "wreck" gives the four Wreck components with NewFrontier.Ships beside them), the FogOrange material's Shader
   (Engine 8, FORGE3D/Planets/Shaders 13, Shaders 4 opened by itself with FogSheet.shader selected). The other lists were
   built only, not looked at.
+
+## The GI's own draws from instance tables (GIDrawTable, 2026-11-25)
+
+- The ask: VCT's voxelization and the GI's grid shadow map drew every renderer one by one from the CPU (a call per
+  sub-mesh with its model matrix and, for the voxelization, its material's GI uniforms). `Rendering/GIDrawTable`: an
+  instance per renderer in a table of `GpuScene`'s layout (`GpuScene.GpuInstance`, Engine/Instancing.glsl's
+  LelInstance, binding 10; model matrix and mesh range only), draws written by the CPU into an indirect buffer, one
+  `DrawIndexedIndirect` per batch, read by the programs' instanced variants. Its own table, not the GPU scene's: the GI
+  draws its renderers (level 0 of every LOD group, out of the view too), which the cameras' tables do not hold.
+- `VoxelGIPass`: a batch per material (`GISurface.SetUniforms` once per material), one table for the static cache and
+  one for the dynamic renderers; `Voxelize.shader` / `VoxelizeCoverage.shader` read the placement through
+  `LelModelMatrix()` and work the normal out from it as before. `GridShadowMap`: a batch per light of the casters the
+  CPU culling keeps (`MeshRenderer.DrawsWholeMesh` / `DrawsSubMesh`: what `RenderShadowCastersWith` draws), the depth
+  program's instanced variant; casters that draw their own shadow stay one by one. `LEL_GI_GPU_DRAWS=0`: the old path
+  (also where `GpuScene.IsSupported` is false or a variant does not link).
+- Pictures (TestGame frame 400, against the old path): Vulkan vct, static=0, voxconservative=0, staticrebuild=1,
+  materials, impostors, lumen hwrt=0; OpenGL vct, static=0, lumen: within the old path's own run-to-run difference
+  (max 1-4). `voxcoverage=0` max 6, mean 0.12: that voxelization's image stores are last-writer-wins, the draw order
+  changed (by material).
+- Measured (780M, Vulkan, 1920 x 1080, 875 renderers / 1705 opaque sub-meshes, two rounds each): everything dynamic:
+  draw calls 2686 -> 153, render CPU 11.3 / 10.3 -> 8.4 / 8.0 ms (the VoxelGI scope 7.5-7.7 -> 4.8-5.4), GPU frame
+  57.4 / 55.7 -> 47.1 / 46.9 ms (`VoxelGI.dynamic` 13.9 / 14.4 -> 8.2 / 8.2: the GPU had waited for the calls);
+  everything static (only the grid map each frame): draw calls 981 -> 107, CPU the same within noise (Vulkan's
+  per-draw cost is small with the recording thread; building the table costs about as much), `VoxelGI.shadow`
+  4.49 / 4.51 -> 4.84 / 4.91 ms GPU. Kept on the tables by the user's choice (a discrete GPU with costlier calls is
+  where it should pay; not measured there).

@@ -39,6 +39,12 @@ namespace LELEngine.Rendering
 		// The light's map being drawn: casters outside its view (off the grid, as the light sees it) are left out.
 		private readonly ViewCulling culling = new ViewCulling();
 
+		// The opaque casters drawn GPU-driven (GIDrawTable.Enabled): an instance per caster, a batch per light of the casters
+		// in its view, drawn by the depth program's instanced variant.
+		private readonly GIDrawTable casterTable = new GIDrawTable("Grid shadow casters");
+		private int[] casterInstances = Array.Empty<int>();
+		private ShaderProgram instancedDepth;
+
 		#endregion
 
 		#region Constructors
@@ -128,6 +134,10 @@ namespace LELEngine.Rendering
 				TransparentShadows.EnsureTransmittance(target);
 			}
 
+			bool frustumCulling = context.Settings == null || context.Settings.FrustumCulling;
+			// The opaque casters in a table of their own, a multi-draw per light (before the maps' pass: the upload).
+			bool tableDraws = opaqueCasters && BuildCasterTable(casters, count, frustumCulling);
+
 			CommandList commands = Gfx.Commands;
 			ref RenderState state = ref commands.State;
 			state.SetDepth(true, true);
@@ -135,8 +145,7 @@ namespace LELEngine.Rendering
 			state.ColorMask = ColorWriteMask.None;
 			target.Begin(LoadOperation.Load, default, LoadOperation.Clear, 1f);
 
-			ShaderProgram program = context.DepthOnlyProgram;
-			bool frustumCulling = context.Settings == null || context.Settings.FrustumCulling;
+			ShaderProgram program = tableDraws ? instancedDepth : context.DepthOnlyProgram;
 			for (int i = 0; i < count && opaqueCasters; i++)
 			{
 				ContinueTile(i);
@@ -144,11 +153,18 @@ namespace LELEngine.Rendering
 				program.SetMatrix4("viewMatrix", views[i]);
 				program.SetMatrix4("projectionMatrix", projections[i]);
 				culling.Begin(views[i] * projections[i], frustumCulling);
-				foreach (MeshRenderer renderer in casters)
+				if (tableDraws)
 				{
-					if (renderer.CastShadows && culling.IsVisible(renderer))
+					casterTable.Draw(i);
+				}
+				else
+				{
+					foreach (MeshRenderer renderer in casters)
 					{
-						renderer.RenderShadowCastersWith(program);
+						if (renderer.CastShadows && culling.IsVisible(renderer))
+						{
+							renderer.RenderShadowCastersWith(program);
+						}
 					}
 				}
 
@@ -200,6 +216,9 @@ namespace LELEngine.Rendering
 		{
 			DeleteTarget();
 			uniforms.Delete();
+			casterTable.Dispose();
+			instancedDepth?.Delete();
+			instancedDepth = null;
 		}
 
 		#endregion
@@ -217,6 +236,69 @@ namespace LELEngine.Rendering
 			}
 
 			commands.SetViewport(tile * Size, 0, Size, Size);
+		}
+
+		// The casters as RenderShadowCastersWith draws them (the whole mesh, or its sub-meshes the depth program casts) in
+		// the table, a batch per light (batch i: light i's map) of those in its view. False when the table cannot be used
+		// (LEL_GI_GPU_DRAWS=0, no GPU-driven programs, the instanced program not linked): the casters draw one by one.
+		private bool BuildCasterTable(IReadOnlyList<MeshRenderer> casters, int lightCount, bool frustumCulling)
+		{
+			if (!GIDrawTable.Enabled)
+			{
+				return false;
+			}
+
+			instancedDepth ??= new ShaderProgram("Engine/DepthOnly.shader", new[] { ShaderProgram.InstancedDefine });
+			if (!instancedDepth.IsLinked)
+			{
+				return false;
+			}
+
+			casterTable.Clear();
+			if (casterInstances.Length < casters.Count)
+			{
+				casterInstances = new int[Math.Max(casters.Count, casterInstances.Length * 2)];
+			}
+
+			for (int r = 0; r < casters.Count; r++)
+			{
+				MeshRenderer renderer = casters[r];
+				casterInstances[r] = renderer.CastShadows ? casterTable.AddInstance(renderer) : -1;
+			}
+
+			for (int i = 0; i < lightCount; i++)
+			{
+				culling.Begin(views[i] * projections[i], frustumCulling);
+				for (int r = 0; r < casters.Count; r++)
+				{
+					int instance = casterInstances[r];
+					MeshRenderer renderer = casters[r];
+					if (instance < 0 || !culling.IsVisible(renderer))
+					{
+						continue;
+					}
+
+					Mesh mesh = renderer.DrawnMesh;
+					if (renderer.DrawsWholeMesh(true))
+					{
+						casterTable.AddWholeMesh(instance, mesh);
+						continue;
+					}
+
+					for (int s = 0; s < mesh.SubMeshCount; s++)
+					{
+						if (renderer.DrawsSubMesh(s, true))
+						{
+							casterTable.AddSubMesh(instance, mesh, s);
+						}
+					}
+				}
+
+				casterTable.EndBatch();
+			}
+
+			casterTable.Upload();
+			return true;
 		}
 
 		private void DeleteTarget()
