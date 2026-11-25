@@ -275,6 +275,24 @@ namespace LELEngine.Rendering.Lumen
 			CardBuffer?.Dispose();
 			RayTracing?.Delete();
 			RayTracing = null;
+
+			// A deleted scene is never updated again: what it kept per renderer goes too, so a reference to it left
+			// somewhere does not keep the replaced scene's objects (and their scripts) alive.
+			objects.Clear();
+			foreach (SceneObject o in objectPool)
+			{
+				o.Renderer = null;
+				o.Field = null;
+				o.Cards = null;
+			}
+			lastTransforms.Clear();
+			lastMaterials.Clear();
+			lastMoveFrames.Clear();
+			lastBounds.Clear();
+			fieldStates.Clear();
+			seenRenderers.Clear();
+			goneRenderers.Clear();
+			changeRegions.Clear();
 		}
 
 		#endregion

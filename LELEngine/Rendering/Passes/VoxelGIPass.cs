@@ -272,6 +272,9 @@ namespace LELEngine.Rendering.Passes
 			dynamicRenderers.Clear();
 			lastStaticCount = -1;
 			staticDirty = true;
+			// The renderer's scene was replaced (InvalidateSceneCaches): the one the rays traced holds the old scene's
+			// renderers until the next Execute takes the new one, which an idle editor may not run for a long time.
+			ForgetRayScene();
 		}
 
 		public override void ReleaseUnusedResources()
@@ -370,9 +373,20 @@ namespace LELEngine.Rendering.Passes
 			lastStaticCount = -1;
 			previousRegions.Clear();
 			currentRegions.Clear();
-			rayScene = null;
+			ForgetRayScene();
 			reportedCones = null;
 			Console.WriteLine("[VoxelGI] Volume released");
+		}
+
+		// Lets go of the scene the cones traced, and of what this pass published of it for the materials' cones.
+		private void ForgetRayScene()
+		{
+			if (rayScene != null && ReferenceEquals(Lighting.VoxelRayScene, rayScene))
+			{
+				Lighting.VoxelRayScene = null;
+			}
+
+			rayScene = null;
 		}
 
 		// The volume's resolution for a setting: a multiple of the block size.
