@@ -39,6 +39,12 @@ namespace LELEngine.Editor
 		/// <summary>Samples kept (up to <see cref="Capacity" />).</summary>
 		public int Count { get; private set; }
 
+		/// <summary>Samples taken since the editor started (the play session's recorder tells a new one by it).</summary>
+		public long Taken { get; private set; }
+
+		/// <summary>The slot of the newest sample (valid while <see cref="Count" /> &gt; 0).</summary>
+		public int Newest => Slot(Count - 1);
+
 		#endregion
 
 		#region PrivateFields
@@ -112,6 +118,7 @@ namespace LELEngine.Editor
 			Collections[next] = (byte)collected;
 			next = (next + 1) % Capacity;
 			Count = Math.Min(Count + 1, Capacity);
+			Taken++;
 			lastFrame = now;
 			updateMs = 0f;
 			allocatedKB = 0f;

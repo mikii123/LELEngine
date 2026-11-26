@@ -11,7 +11,8 @@ namespace LELEngine.Editor
 	///     Edit > Preferences...: the user's settings for every project (<see cref="EditorPreferences" />), a section
 	///     each: Theme (preset, text sizes, every color of the editor, its source code and ImGui, each resettable to the
 	///     preset's), Console (toolbar, list, stack traces, hidden wrapper frames, source view, custom filters, hidden
-	///     tags) and External Tools (the script editor). Changes apply at once and are saved a moment later.
+	///     tags), External Tools (the script editor) and Play Sessions (recording play mode, how long sessions are kept; the
+	///     open project's sessions listed). Changes apply at once and are saved a moment later.
 	/// </summary>
 	internal sealed class PreferencesWindow : IEditorPanel
 	{
@@ -21,7 +22,8 @@ namespace LELEngine.Editor
 		{
 			Theme,
 			Console,
-			ExternalTools
+			ExternalTools,
+			PlaySessions
 		}
 
 		public bool Open;
@@ -36,7 +38,7 @@ namespace LELEngine.Editor
 
 		#region PrivateFields
 
-		private static readonly string[] SectionNames = { "Theme", "Console", "External Tools" };
+		private static readonly string[] SectionNames = { "Theme", "Console", "External Tools", "Play Sessions" };
 		private static readonly string[] StackTraceNames = { "None", "Script Only", "Full" };
 
 		private Section section = Section.Theme;
@@ -133,6 +135,9 @@ namespace LELEngine.Editor
 						break;
 					case Section.Console:
 						DrawConsole(EditorPreferences.Current.Console);
+						break;
+					case Section.PlaySessions:
+						DrawPlaySessions(EditorPreferences.Current.PlaySessions);
 						break;
 					default:
 						DrawExternalTools(EditorPreferences.Current.ExternalTools);
@@ -460,6 +465,220 @@ namespace LELEngine.Editor
 			if (changed)
 			{
 				EditorPreferences.MarkChanged();
+			}
+		}
+
+		// ---------------------------------------------------------------- play sessions
+
+		private void DrawPlaySessions(PlaySessionPreferences sessions)
+		{
+			bool changed = false;
+			ImGui.PushTextWrapPos(0f);
+			ImGui.TextDisabled("Play mode's sessions are recorded into the project's Library/PlaySessions by a thread of their own, a folder each: "
+				+ "frames.csv (a row per frame: what the Game view's debug overlay shows and more), events.jsonl (the console's messages with their "
+				+ "frame's row, the input, scenes, pauses, hitches, GPU passes) and session.json (where it ran, how it ended, a summary).");
+			ImGui.PopTextWrapPos();
+
+			ImGui.SeparatorText("Recording");
+			changed |= Check("Record play sessions", ref sessions.Record, "Every play mode session is recorded (from the next one on)");
+			ImGui.BeginDisabled(!sessions.Record);
+			changed |= Check("Hitch reports", ref sessions.HitchReports, "The hitch profiler runs while a session records: each frame it finds much longer than the ones before "
+				+ "gets its report in the session (where the frame's time went, what was loaded or compiled for the first time in it, JIT, GC). Costs a little per frame");
+			ImGui.EndDisabled();
+			Label("Keep for", "Sessions older than this are deleted when a project opens and after each session (a change applies then, not at once)");
+			if (EditorGui.SliderInt("##keepdays", ref sessions.KeepDays, PlaySessionPreferences.MinDays, 90, sessions.KeepDays == 1 ? "%d day" : "%d days", ImGuiSliderFlags.AlwaysClamp))
+			{
+				changed = true;
+			}
+
+			Label("Size limit (MB)", "The oldest sessions also go while all of a project's take more than this (MB; 0: no limit)");
+			if (EditorGui.InputInt("##maxtotal", ref sessions.MaxTotalMB, 256, 1024))
+			{
+				sessions.MaxTotalMB = sessions.MaxTotalMB <= 0 ? 0 : Math.Clamp(sessions.MaxTotalMB, PlaySessionPreferences.MinTotalMB, PlaySessionPreferences.MaxTotalMBLimit);
+				changed = true;
+			}
+
+			if (changed)
+			{
+				EditorPreferences.MarkChanged();
+			}
+
+			if (EditorPreferences.File == null)
+			{
+				ImGui.TextDisabled("An automated run without preferencesfile=: nothing is recorded.");
+			}
+
+			ImGui.SeparatorText("This project's sessions");
+			PlaySessionRecorder recorder = EditorApplication.Instance?.Sessions;
+			if (recorder?.Root == null)
+			{
+				ImGui.TextDisabled("No project is open.");
+				return;
+			}
+
+			if (recorder.ListingVersion != recorder.Version)
+			{
+				recorder.RequestListing();
+			}
+
+			List<PlaySessionListing> listing = recorder.Listing;
+			ImGui.AlignTextToFramePadding();
+			ImGui.TextUnformatted(recorder.Root);
+			if (EditorGui.Button("Open Folder"))
+			{
+				System.IO.Directory.CreateDirectory(recorder.Root);
+				ShowInExplorer(recorder.Root);
+			}
+
+			ImGui.SameLine();
+			if (EditorGui.Button("Refresh"))
+			{
+				recorder.RequestListing();
+			}
+
+			ImGui.SameLine();
+			ImGui.BeginDisabled(listing == null || listing.Count == 0);
+			if (EditorGui.Button("Delete All..."))
+			{
+				ImGui.OpenPopup("Delete the recorded play sessions?");
+			}
+
+			ImGui.EndDisabled();
+			if (ImGui.BeginPopupModal("Delete the recorded play sessions?", ImGuiWindowFlags.AlwaysAutoResize))
+			{
+				ImGui.TextUnformatted($"Every recorded session of this project ({listing?.Count ?? 0}) is deleted from disk; this cannot be undone.");
+				ImGui.TextDisabled("A session recording now is kept.");
+				if (EditorGui.Button("Delete"))
+				{
+					recorder.DeleteAll();
+					ImGui.CloseCurrentPopup();
+				}
+
+				ImGui.SameLine();
+				if (EditorGui.Button("Cancel"))
+				{
+					ImGui.CloseCurrentPopup();
+				}
+
+				ImGui.EndPopup();
+			}
+
+			if (listing == null)
+			{
+				ImGui.TextDisabled("Reading...");
+				return;
+			}
+
+			long bytes = 0;
+			foreach (PlaySessionListing session in listing)
+			{
+				bytes += session.Bytes;
+			}
+
+			ImGui.TextDisabled($"{listing.Count} session{(listing.Count == 1 ? "" : "s")}, {bytes / (1024.0 * 1024.0):0.0} MB");
+			if (listing.Count == 0 || !ImGui.BeginTable("##sessions", 9, ImGuiTableFlags.SizingFixedFit | ImGuiTableFlags.RowBg | ImGuiTableFlags.BordersInnerV | ImGuiTableFlags.ScrollY, new NVector2(0f, Math.Max(160f, ImGui.GetContentRegionAvail().Y))))
+			{
+				return;
+			}
+
+			ImGui.TableSetupScrollFreeze(0, 1);
+			ImGui.TableSetupColumn("Started");
+			ImGui.TableSetupColumn("Scene", ImGuiTableColumnFlags.WidthStretch);
+			ImGui.TableSetupColumn("Length");
+			ImGui.TableSetupColumn("Frame ms");
+			ImGui.TableSetupColumn("Worst");
+			ImGui.TableSetupColumn("Hitches");
+			ImGui.TableSetupColumn("Errors");
+			ImGui.TableSetupColumn("Ended", ImGuiTableColumnFlags.WidthStretch);
+			ImGui.TableSetupColumn("");
+			ImGui.TableHeadersRow();
+			for (int i = 0; i < listing.Count; i++)
+			{
+				PlaySessionListing session = listing[i];
+				ImGui.PushID(i);
+				ImGui.TableNextRow();
+				ImGui.TableNextColumn();
+				ImGui.AlignTextToFramePadding();
+				ImGui.TextUnformatted(session.Started.ToString("yyyy-MM-dd HH:mm:ss", System.Globalization.CultureInfo.InvariantCulture));
+				ImGui.TableNextColumn();
+				ImGui.TextUnformatted(System.IO.Path.GetFileNameWithoutExtension(session.Scene ?? ""));
+				if (ImGui.IsItemHovered() && !string.IsNullOrEmpty(session.Scene))
+				{
+					EditorGui.SetTooltip(session.Scene);
+				}
+
+				ImGui.TableNextColumn();
+				ImGui.TextUnformatted(session.Recording ? "recording" : Duration(session.Seconds));
+				ImGui.TableNextColumn();
+				ImGui.TextUnformatted(session.AverageFrameMs > 0 ? session.AverageFrameMs.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture) : "-");
+				ImGui.TableNextColumn();
+				ImGui.TextUnformatted(session.WorstFrameMs > 0 ? session.WorstFrameMs.ToString("0", System.Globalization.CultureInfo.InvariantCulture) : "-");
+				ImGui.TableNextColumn();
+				ImGui.TextUnformatted(session.Hitches.ToString(System.Globalization.CultureInfo.InvariantCulture));
+				ImGui.TableNextColumn();
+				int errors = session.Errors + session.Exceptions;
+				if (errors > 0)
+				{
+					ImGui.TextColored(EditorStyle.Error, errors.ToString(System.Globalization.CultureInfo.InvariantCulture));
+				}
+				else if (session.Warnings > 0)
+				{
+					ImGui.TextColored(EditorStyle.Warning, session.Warnings + " w");
+				}
+				else
+				{
+					ImGui.TextDisabled("0");
+				}
+
+				if (ImGui.IsItemHovered())
+				{
+					EditorGui.SetTooltip($"{session.Errors} errors, {session.Exceptions} exceptions, {session.Warnings} warnings");
+				}
+
+				ImGui.TableNextColumn();
+				string ended = session.Recording ? "" : session.EndReason ?? "";
+				if (session.Interrupted)
+				{
+					ImGui.TextColored(EditorStyle.Error, "interrupted");
+				}
+				else
+				{
+					ImGui.TextUnformatted(ended);
+				}
+
+				if (ImGui.IsItemHovered() && ended.Length > 0)
+				{
+					EditorGui.SetTooltip(ended);
+				}
+
+				ImGui.TableNextColumn();
+				if (EditorGui.SmallButton("Show"))
+				{
+					ShowInExplorer(System.IO.Path.Combine(session.Folder, PlaySessionWriter.HeaderFile));
+				}
+
+				ImGui.PopID();
+			}
+
+			ImGui.EndTable();
+		}
+
+		private static string Duration(double seconds)
+		{
+			var time = TimeSpan.FromSeconds(Math.Max(0, seconds));
+			return time.TotalHours >= 1 ? $"{(int)time.TotalHours}:{time.Minutes:00}:{time.Seconds:00}" : $"{time.Minutes}:{time.Seconds:00}";
+		}
+
+		private static void ShowInExplorer(string path)
+		{
+			try
+			{
+				string arguments = System.IO.File.Exists(path) ? "/select,\"" + path + "\"" : "\"" + path + "\"";
+				System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("explorer.exe", arguments) { UseShellExecute = true });
+			}
+			catch (Exception e)
+			{
+				Debug.LogWarning("[Editor] Cannot open Explorer: " + e.Message);
 			}
 		}
 

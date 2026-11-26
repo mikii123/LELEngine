@@ -177,10 +177,14 @@ namespace LELEngine.Editor
 			return false;
 		}
 
-		/// <summary>A console window of its own would close with the process: keep it until a key is pressed.</summary>
+		/// <summary>
+		///     A console window of its own would close with the process: keep it until a key is pressed. Not a hidden one (a
+		///     process started with its window hidden, by a script or a tool): nobody can press a key there, and the process
+		///     would wait for ever.
+		/// </summary>
 		public static void Release(bool ownConsole)
 		{
-			if (!ownConsole)
+			if (!ownConsole || !IsWindowVisible(GetConsoleWindow()))
 			{
 				return;
 			}
@@ -222,6 +226,9 @@ namespace LELEngine.Editor
 
 		[DllImport("kernel32.dll")]
 		private static extern IntPtr GetConsoleWindow();
+
+		[DllImport("user32.dll")]
+		private static extern bool IsWindowVisible(IntPtr window);
 
 		[DllImport("kernel32.dll")]
 		private static extern IntPtr GetStdHandle(int handle);

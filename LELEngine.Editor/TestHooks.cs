@@ -1049,7 +1049,7 @@ namespace LELEngine.Editor
 			// comes back to the editor: an automated run is never in front).
 			// inputmanager=N;Page: Window > Input Manager on the project's configuration, showing a page (Actions, KeyboardMaps, ...).
 			At("inputmanager", parts => editor.OpenInputManager(null, parts.Length > 1 ? parts[1] : null));
-			// preferences=N;Section: Edit > Preferences on a section (Theme, Console, ExternalTools).
+			// preferences=N;Section: Edit > Preferences on a section (Theme, Console, ExternalTools, PlaySessions).
 			At("preferences", parts => editor.ShowPreferences(parts.Length > 1 ? Enum.Parse<PreferencesWindow.Section>(parts[1], true) : null));
 			// log=N;Type;text: a message logged from a few nested calls (console call stacks), Type Log / Warning / Error / Exception.
 			At("log", parts => TestLog.Write(Enum.Parse<LogType>(parts[1], true), parts.Length > 2 ? parts[2] : "Test message"));

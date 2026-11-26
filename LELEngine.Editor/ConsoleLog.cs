@@ -135,6 +135,13 @@ namespace LELEngine.Editor
 		/// <summary>Bumped when messages go or change (clear, the oldest trimmed): views rebuild instead of adding the new ones.</summary>
 		public int RemovalVersion { get; private set; }
 
+		/// <summary>
+		///     Every message as it arrives, on the thread that logged it and under the log's lock (the play session's recorder
+		///     queues it): it must only copy what it needs and never log. An entry whose call stack lines came after it in the
+		///     same write is raised again, whole, with the same <see cref="ConsoleEntry.Id" />.
+		/// </summary>
+		public Action<ConsoleEntry> EntryAdded;
+
 		#endregion
 
 		#region PrivateFields
@@ -279,13 +286,15 @@ namespace LELEngine.Editor
 					{
 						// Stack trace line of something printed to the console: belongs to the previous entry.
 						ConsoleEntry last = entries[entries.Count - 1];
-						entries[entries.Count - 1] = new ConsoleEntry
+						ConsoleEntry whole = new ConsoleEntry
 						{
 							Id = last.Id, Source = last.Source, Text = last.Text, Type = last.Type, Time = last.Time, Frame = last.Frame, Context = last.Context, Sticky = last.Sticky,
 							File = last.File, Line = last.Line, StackTrace = last.StackTrace != null ? last.StackTrace + "\n" + text : text
 						};
+						entries[entries.Count - 1] = whole;
 						Version++;
 						RemovalVersion++;
+						Raise(whole);
 						continue;
 					}
 
@@ -342,6 +351,19 @@ namespace LELEngine.Editor
 			}
 
 			Version++;
+			Raise(entry);
+		}
+
+		private void Raise(ConsoleEntry entry)
+		{
+			try
+			{
+				EntryAdded?.Invoke(entry);
+			}
+			catch (Exception)
+			{
+				// A listener's failure must not lose the message for the console (and it cannot be logged from here).
+			}
 		}
 
 		#endregion

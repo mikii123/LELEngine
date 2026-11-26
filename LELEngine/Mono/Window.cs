@@ -161,7 +161,11 @@ namespace LELEngine
 			double deltaTime = NextDeltaTime(e.Time);
 			Time.unscaledDeltaTimeD = deltaTime;
 			Time.unscaledTimeD += deltaTime;
-			deltaTime *= Time.timeScaleD;
+			// The game's step is at most Time.maximumDeltaTime (Unity's): a frame that stalled (a load, entering play mode, a
+			// hitch) moves the scripts and Time.time by that much, as far as the fixed steps catch up (Scene.UpdateScenes);
+			// the real interval stays in unscaledDeltaTime. Before, Update got the whole stall (3.7 s after entering play
+			// mode) while physics got 0.1 s of it.
+			deltaTime = Math.Min(deltaTime * Time.timeScaleD, Time.maximumDeltaTimeD);
 			Time.deltaTimeD = deltaTime;
 			Time.timeD += deltaTime;
 

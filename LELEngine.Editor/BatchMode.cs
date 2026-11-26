@@ -71,6 +71,8 @@ namespace LELEngine.Editor
 		{
 			CommandLine options = CommandLine.Parse(args);
 			StreamWriter logFile = null;
+			TextWriter consoleOut = Console.Out;
+			TextWriter consoleError = Console.Error;
 			try
 			{
 				string logPath = options.Get("logfile");
@@ -102,7 +104,16 @@ namespace LELEngine.Editor
 				graphics?.Dispose();
 				graphics = null;
 				Console.Out.Flush();
-				logFile?.Dispose();
+				if (logFile != null)
+				{
+					// What is written after the run goes to the console alone, not into the closed file: a console window of the
+					// editor's own asks "Press any key to close." (ConsoleHost.Release), a worker thread logs its last line. They
+					// ended the process with an ObjectDisposedException before.
+					Console.SetOut(consoleOut);
+					Console.SetError(consoleError);
+					Debug.Output = consoleOut;
+					logFile.Dispose();
+				}
 			}
 		}
 

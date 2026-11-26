@@ -93,6 +93,16 @@ namespace LELEngine.Editor
 		public UndoStack Undo { get; } = new UndoStack();
 		public EditTracker Edits { get; }
 		public ConsoleLog Log { get; }
+
+		/// <summary>Records play mode's sessions into the project's Library/PlaySessions (Preferences > Play Sessions).</summary>
+		public PlaySessionRecorder Sessions { get; }
+
+		/// <summary>An automated run (<see cref="IsAutomatedRun" />, or batch mode).</summary>
+		public bool Automated => automated;
+
+		/// <summary>Edit > Reload Scripts On Play, for the open project.</summary>
+		public bool ReloadScriptsOnPlay => reloadScriptsOnPlay;
+
 		public ScriptDomain Scripts { get; private set; }
 
 		/// <summary>Custom inspectors, windows and menu items of the project's editor scripts.</summary>
@@ -386,6 +396,7 @@ namespace LELEngine.Editor
 			Extensions = new EditorExtensions(this);
 			Tests = new EditorTests(this);
 			Log = ConsoleLog.Install();
+			Sessions = new PlaySessionRecorder(this);
 			// The audio device opens on its own thread; the project's audio project and banks follow when it opens.
 			LELEngine.Audio.AudioSystem.Initialize(new LELEngine.Audio.AudioSettings());
 			layoutFileExisted = File.Exists(layoutFile);
@@ -585,6 +596,8 @@ namespace LELEngine.Editor
 					// The game's time step (paced and scaled, Window.NextDeltaTime), as the player runs it: the same step
 					// the scripts read from Time.deltaTime.
 					SceneManager.UpdateScenes(Time.deltaTime);
+					// The frame's keys and actions for the play session's record, before the input forgets them.
+					Sessions.SampleInput();
 					Input.EndFrame();
 				}
 				finally
@@ -898,6 +911,7 @@ namespace LELEngine.Editor
 			if (projectLoad == null)
 			{
 				GameView.Stats.EndFrame(GameView.ViewRenderer?.Renderer);
+				Sessions.EndFrame(GameView.Stats, GameView.ViewRenderer?.Renderer, SceneView.ViewRenderer?.Renderer);
 			}
 		}
 
@@ -969,6 +983,8 @@ namespace LELEngine.Editor
 			GameView.Render(continuous);
 			DebugDraw.Clear();
 			GameView.Stats.EndFrame(GameView.ViewRenderer?.Renderer);
+			// The frame's row of the play session (the overlay's sample just taken, the views' statistics).
+			Sessions.EndFrame(GameView.Stats, GameView.ViewRenderer?.Renderer, SceneView.ViewRenderer?.Renderer);
 		}
 
 		/// <summary>A view must render on its next frame(s) whatever changed.</summary>
@@ -1125,6 +1141,8 @@ namespace LELEngine.Editor
 		private IEnumerator<string> OpenProjectSteps(ProjectInfo project)
 		{
 			Project = project;
+			// Its recorded play sessions: the old ones go, the ones an editor never ended are marked (a worker thread).
+			Sessions.ProjectOpened(project);
 			// The user's own settings of the project (windows.json, not in the project): Edit > Reload Scripts On Play, the
 			// scene open last.
 			WindowStates states = WindowStates.Load(WindowStatesFile);
@@ -1558,8 +1576,11 @@ namespace LELEngine.Editor
 			AssetsReady = false;
 			if (IsPlaying)
 			{
+				Sessions.EndReason ??= "the project closed";
 				ExitPlayMode();
 			}
+
+			Sessions.ProjectClosed();
 
 			// Edit mode scripts and editor tools write PlayerPrefs too.
 			PlayerPrefs.Save();
@@ -2348,6 +2369,10 @@ namespace LELEngine.Editor
 			}
 
 			LELEngine.Audio.AudioSystem.PauseAll(PlayState == PlayState.Paused);
+			if (IsPlaying)
+			{
+				Sessions.Paused(PlayState == PlayState.Paused);
+			}
 		}
 
 		/// <summary>One frame of game logic while paused.</summary>
@@ -2355,11 +2380,13 @@ namespace LELEngine.Editor
 		{
 			if (PlayState == PlayState.Paused && Scene != null)
 			{
+				Sessions.Stepped();
 				ConsoleLog.BeginGame();
 				try
 				{
 					Input.BeginFrame();
 					Scene.Update(1f / 60f);
+					Sessions.SampleInput();
 					Input.EndFrame();
 				}
 				finally
@@ -2431,6 +2458,8 @@ namespace LELEngine.Editor
 		[System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
 		private ulong[] LeaveEditScene()
 		{
+			// The session's record starts here: the scripts' reload and the scene's load and start are in its first row.
+			Sessions.Begin(Scene?.Path);
 			Edits.Commit();
 			if (EditorPreferences.Current.Console.ClearOnPlay)
 			{
@@ -2530,6 +2559,7 @@ namespace LELEngine.Editor
 			}
 
 			using Progress.Scope progress = Progress.Begin("Leaving play mode");
+			Sessions.End(Sessions.EndReason ?? "stopped");
 			Input.SetCursorLocked(false);
 			// The next play starts the input system again (with the configuration as edited meanwhile).
 			LELEngine.InputSystem.InputManager.Shutdown();
@@ -2569,6 +2599,10 @@ namespace LELEngine.Editor
 			string path = scene.Path;
 			ulong[] selected = CaptureSelection();
 			bool playing = IsPlaying;
+			if (playing)
+			{
+				Sessions.Note("scripts reloaded");
+			}
 			bool fromFile = !playing && Stage == null && pendingMerge == null && sceneFileBase != null && !string.IsNullOrEmpty(path) && File.Exists(AssetDatabase.ToAbsolute(path));
 			byte[] mineBase = null;
 			if (fromFile && SceneDirty)
@@ -2862,7 +2896,10 @@ namespace LELEngine.Editor
 			uiBuilder = null;
 			audioStudio?.Dispose();
 			audioStudio = null;
+			Sessions.EndReason = "the editor closed";
 			CloseProject();
+			// The last session's thread writes its summary and closes its files before the process ends.
+			Sessions.Shutdown(3000);
 			Automation.WindowCapture.ReleaseViews();
 			LELEngine.Audio.AudioSystem.Shutdown();
 			SceneView.Dispose();

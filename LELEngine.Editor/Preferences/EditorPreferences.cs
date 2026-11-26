@@ -22,6 +22,7 @@ namespace LELEngine.Editor
 		public ThemePreferences Theme = new ThemePreferences();
 		public ConsolePreferences Console = new ConsolePreferences();
 		public ExternalToolsPreferences ExternalTools = new ExternalToolsPreferences();
+		public PlaySessionPreferences PlaySessions = new PlaySessionPreferences();
 
 		/// <summary>The toggles of the editor's windows (panels shown, snapping, ...) by name; one not set has the window's default.</summary>
 		public Dictionary<string, bool> Toggles = new Dictionary<string, bool>();
@@ -234,6 +235,9 @@ namespace LELEngine.Editor
 
 			ExternalTools.CustomPath ??= "";
 			ExternalTools.CustomArguments ??= ExternalToolsPreferences.DefaultArguments;
+			PlaySessions ??= new PlaySessionPreferences();
+			PlaySessions.KeepDays = Math.Clamp(PlaySessions.KeepDays, PlaySessionPreferences.MinDays, PlaySessionPreferences.MaxDays);
+			PlaySessions.MaxTotalMB = PlaySessions.MaxTotalMB <= 0 ? 0 : Math.Clamp(PlaySessions.MaxTotalMB, PlaySessionPreferences.MinTotalMB, PlaySessionPreferences.MaxTotalMBLimit);
 		}
 
 		/// <summary>The engine settings the preferences hold (how much of the call stack log messages record).</summary>
@@ -378,6 +382,33 @@ namespace LELEngine.Editor
 
 		/// <summary>Arguments of the custom editor: $(File), $(Line), $(Column), $(ProjectPath) are replaced.</summary>
 		public string CustomArguments = DefaultArguments;
+	}
+
+	/// <summary>
+	///     Play mode's sessions recorded into the project's Library/PlaySessions (<see cref="PlaySessionRecorder" />): whether
+	///     to record them and how long to keep them.
+	/// </summary>
+	internal sealed class PlaySessionPreferences
+	{
+		public const int MinDays = 1;
+		public const int MaxDays = 365;
+		public const int MinTotalMB = 100;
+		public const int MaxTotalMBLimit = 100_000;
+
+		/// <summary>Every play session is recorded (frames, messages, input, scenes) by a thread of its own.</summary>
+		public bool Record = true;
+
+		/// <summary>Sessions older than this many days are deleted (when a project opens and when a session starts).</summary>
+		public int KeepDays = 7;
+
+		/// <summary>The oldest sessions also go while all of them take more than this (MB; 0: no limit).</summary>
+		public int MaxTotalMB = 2048;
+
+		/// <summary>
+		///     The hitch profiler (<see cref="FrameProfiler" />) runs while a session records, and each frame it reports (its
+		///     scopes, first-use work, JIT and GC) goes into the session.
+		/// </summary>
+		public bool HitchReports = true;
 	}
 
 	/// <summary>Colors as #RRGGBBAA text (preferences files).</summary>

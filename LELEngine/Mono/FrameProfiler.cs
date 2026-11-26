@@ -60,6 +60,20 @@ namespace LELEngine
 		/// <summary>Frames over the threshold since <see cref="ResetStatistics" />.</summary>
 		public static int HitchCount { get; private set; }
 
+		/// <summary>
+		///     A hitch's report (the text <see cref="Write" /> logs: the frame's scope tree, its one-off work, the GPU, the
+		///     runtime), raised on the main thread at the end of the frame it is about. A host keeping a record of its frames
+		///     (the editor's play sessions) takes it from here.
+		/// </summary>
+		public static event Action<string> HitchReported;
+
+		/// <summary>
+		///     Hitch reports (and the line saying the profiler is on) are written to the profiler's log: its file, else the
+		///     console. False: only <see cref="HitchReported" /> gets them (a host that switched the profiler on to record
+		///     them itself; the editor's console would get each report's lines as messages of their own).
+		/// </summary>
+		public static bool WritesReports { get; set; } = true;
+
 		#endregion
 
 		#region PrivateFields
@@ -123,6 +137,7 @@ namespace LELEngine
 		// was held up, which no scope of the frame explains (every scope just takes longer). The longest sleep since the
 		// frame started, in Stopwatch ticks; its usual length for comparison.
 		private static Thread stallThread;
+		private static readonly object stallSync = new object();
 		private static long stallMaxTicks;
 		private static double stallTypicalMs;
 		private static readonly double[] recent = new double[32];
@@ -181,6 +196,15 @@ namespace LELEngine
 				{
 					Enabled = true;
 				}
+
+				if (!Enabled)
+				{
+					// Off: the frame open now is no frame of the next time it is switched on (it would span the whole pause
+					// and be reported as a hitch), and the stall watch ends (it only sleeps while the profiler is on).
+					inFrame = false;
+					depth = 0;
+					previousFrameStart = 0;
+				}
 			}
 
 			if (!string.IsNullOrWhiteSpace(logEvents))
@@ -205,7 +229,7 @@ namespace LELEngine
 				}
 			}
 
-			if (Enabled && !configured)
+			if (Enabled && !configured && WritesReports)
 			{
 				configured = true;
 				string summary = $"[Hitch] Frame profiler on: frames over {ThresholdMs.ToString("0.#", CultureInfo.InvariantCulture)} ms are logged" + (LogEvents ? ", every first-use event too" : "") + (trace != null ? ", per-frame trace written" : "");
@@ -224,10 +248,13 @@ namespace LELEngine
 				jitListener = new JitListener();
 			}
 
-			if (Enabled && stallThread == null)
+			lock (stallSync)
 			{
-				stallThread = new Thread(WatchForStalls) { IsBackground = true, Name = "Hitch profiler: stall watch", Priority = ThreadPriority.AboveNormal };
-				stallThread.Start();
+				if (Enabled && stallThread == null)
+				{
+					stallThread = new Thread(WatchForStalls) { IsBackground = true, Name = "Hitch profiler: stall watch", Priority = ThreadPriority.AboveNormal };
+					stallThread.Start();
+				}
 			}
 		}
 
@@ -237,6 +264,16 @@ namespace LELEngine
 			double typical = 0;
 			while (true)
 			{
+				// The profiler switched off (Configure "0"): the watch ends; switching it on again starts another.
+				lock (stallSync)
+				{
+					if (!Enabled)
+					{
+						stallThread = null;
+						return;
+					}
+				}
+
 				Thread.Sleep(1);
 				long now = Stopwatch.GetTimestamp();
 				long slept = now - last;
@@ -697,11 +734,17 @@ namespace LELEngine
 					.Append(stallTypical.ToString("0.0", c)).Append(" ms): the process was held up from outside (the system, another program, a driver), not by the scopes above");
 			}
 
-			Write(text.ToString());
-			lock (logSync)
+			string report = text.ToString();
+			if (WritesReports)
 			{
-				log?.Flush();
+				Write(report);
+				lock (logSync)
+				{
+					log?.Flush();
+				}
 			}
+
+			HitchReported?.Invoke(report);
 		}
 
 		private static void AppendChildren(StringBuilder text, int parent, double floor, CultureInfo c)

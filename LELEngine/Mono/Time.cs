@@ -44,7 +44,12 @@
 		/// <summary>True while FixedUpdate and the physics callbacks run.</summary>
 		public static bool inFixedTimeStep;
 
-		/// <summary>Fixed steps per frame at most: a stalled frame does not catch up forever (Unity's maximum allowed timestep).</summary>
+		/// <summary>
+		///     The longest step of the game in one frame, seconds (Unity's maximum allowed timestep): <see cref="deltaTime" />
+		///     (after <see cref="timeScale" />) and the fixed steps a frame catches up with never take more, so a stalled frame
+		///     (a load, a hitch) slows the game down for that frame instead of making it jump. <see cref="unscaledDeltaTime" />
+		///     keeps the real interval.
+		/// </summary>
 		public static double maximumDeltaTimeD = 0.1;
 
 		public static float deltaTime => (float)deltaTimeD;

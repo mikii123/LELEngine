@@ -2361,6 +2361,86 @@ first `Instantiate`, on the main thread, one file after another, and its program
   draw calls (54 indirect), 20.8 M triangles, 513 opaque renderers, 522 GPU-driven instances, 30-40 KB allocated a frame;
   `click "checkbox:Debug Overlay"` turned it off and on.
 
+## Play session recording (PlaySessionRecorder, 2026-11-26)
+
+- The user's ask: every play mode session written to a file on a thread of its own (the debug overlay's numbers, the
+  logs, more that could help), kept in Library for X days, whether to record and how long set in the editor's
+  preferences; so a problem seen once and hard to reproduce can be looked at afterwards. And (their remark while it was
+  built) every log line says which frame it came from, to be read against the frames' CSV.
+- `LELEngine.Editor/PlaySessions`: `PlaySessionRecorder` (main thread, `EditorApplication.Sessions`), `PlaySessionWriter`
+  (a thread per session: `Add` only queues, it writes four times a second, so a crash loses at most 250 ms; numbers
+  formatted into buffers, events through one `Utf8JsonWriter` into an `ArrayBufferWriter`: little garbage, which would
+  stop the game's thread too), `PlaySessionStore` (folders, retention, listing), `PlaySessionRecords` (the row struct,
+  the event classes). Folder per session: `Library/PlaySessions/yyyy-MM-dd_HH-mm-ss <Scene>/`:
+  - `frames.csv`: a row per frame of the game (playing, or a Step: `state` step; paused frames have none). The
+    overlay's sample (`GameViewStats.Newest`, `Taken`: frame, game update, Game view render CPU / GPU, allocated,
+    collections) and the views' statistics (draw calls, indirect, triangles, opaque / transparent / culled renderers,
+    GPU instances, lights; empty when the Game view did not render: batch mode renders it only for captures), the Scene
+    view's render, the swap's wait (`Time.swapMs`), the process's allocations, GC pause, methods JIT-compiled and their
+    time (all threads), `Time.deltaTime` / `timeScale`, four times a second the scenes' objects, updating components,
+    2D bodies, particles, heap, working set, thread pool threads and queue; the main camera's position, the mouse.
+  - `events.jsonl`: an object per line, `t` (seconds), `row` (the frames.csv row of the frame it happened in: the row
+    that frame gets when it ends; row 0 is the frame that entered play mode, so the script reload, the scene's load and
+    its Awake / Start are in it), `frame` (`Time.frameCount`), `kind`: `log` (every console entry from `ConsoleLog.EntryAdded`,
+    game and editor, type, source; warnings / errors / exceptions with their whole stack, plain ones with the first
+    line, `at`; a console write whose stack lines came after it is raised again with the same `id`: keep the last),
+    `input` (keys and mouse buttons down / up, wheel, the input system's actions that changed, "Player/Action" with
+    several players; read in `SampleInput` before `Input.EndFrame` into buffers that do not allocate), `state` (paused,
+    resumed, step, scripts reloaded, editor in front / in the background, ended), `scene`, `view` (the Game view's
+    size changed), `gpu` (its passes once a second), `hitch` (over `FrameProfiler.ThresholdMs` and `SpikeFactor` x the
+    median of the 32 before), `hitchReport` (the hitch profiler's report, `FrameProfiler.HitchReported`), `controller`,
+    `crash` (an exception nobody caught: written at once, the session ended "crashed").
+  - `session.json`: written at the start with `"ended": null` (where it ran: project and its git branch / commit read
+    from `.git` files, the game scripts' assembly MVID, the editor's version, build time and git state, process id and
+    start, command line, automated / batch, Reload Scripts On Play, Maximize On Play, overlay, Always Refresh, machine,
+    CPU, memory, GPU API / vendor / renderer / driver, super sampling, fixed and maximum delta time); at the end again
+    with `ended`, `endReason` (stopped, the project closed, the editor closed, crashed: ..., writing failed) and
+    `summary` (frames, game frames, paused seconds, frame / update / GPU ms average, p50, p95, p99, max, hitches, the ten
+    worst rows, messages per type, first error and exception, scenes, peak heap and process, collections and their
+    pause, MB allocated, JIT methods).
+- Hooks: `LeaveEditScene` begins (it holds the edit scene anyway; `EnterPlayMode`'s own frame must not, for the script
+  reload's leak check), `ExitPlayMode` ends, `RenderViews` / `FrameWithoutUI` give each frame's row after the overlay's
+  sample, `Update` / `Step` sample the input, `TogglePause`, `Step`, `ReloadSceneAround` note; `CloseProject` and
+  `Dispose` end it with their reason, `Dispose` waits up to 3 s for the writers. `AppDomain.UnhandledException` /
+  `ProcessExit` end and flush too.
+- Preferences > Play Sessions (`PlaySessionPreferences` in preferences.json): Record (on), Hitch reports (on: the
+  recorder switches `FrameProfiler` on for the session alone, with `FrameProfiler.WritesReports` off so the reports go
+  into the session and not into the console line by line; LEL_HITCH from outside is left alone; `Configure("0")` now
+  closes the open frame and ends the stall thread), Keep for (days, 1..90 on the slider, 365 in the file), Size limit (MB,
+  2048, 0 none). Below: the project's sessions (started, scene, length, average and worst frame, hitches, errors,
+  how it ended, Show in Explorer), Open Folder, Refresh, Delete All (asks). Changed days or size apply at the next project
+  open or session end, never while the slider moves. Automated runs record only with `preferencesfile=` (as they save no
+  other preference). Test hook `preferences=N;PlaySessions`.
+- Retention (`PlaySessionStore.Maintain`, a worker thread, at project open and after each session): sessions older than
+  the days go, then the oldest while all exceed the size; a folder being written is never touched. Sessions an editor
+  never ended (`"ended": null` and no live process with that id and start time) get `"interrupted": true`, the reason and
+  `lastRow` / `lastFrameSeconds` from frames.csv's last whole line: a crash shows in the list (red) and says where to look.
+- Verified (780M, New Frontier's Flight, batch editor with `preferencesfile=` and CLI): a 16 s session with keys (W ->
+  Move Vertical 1, Space -> Thrust), pause, two steps, a Game screenshot: 109 rows (2 `step`), 268 logs each with its row,
+  6 hitches, the profiler's report of row 1 (389 ms: Start 149 ms, Prefab.Instantiate x57, Physics2D step) in that row,
+  the summary; a fake session 25 days old deleted at the next open; the editor killed mid-play, its session marked
+  interrupted at row 219, 7.44 s on the next start; 0 hitch lines in the console; the Preferences section in a layout
+  capture. Not checked: the GUI editor by hand (the section's buttons, Delete All's question), a real managed crash, the
+  recorder's cost per frame (not measured).
+- Seen in the first recording: `Time.maximumDeltaTime` clamped only the fixed steps' accumulator (`Scene.cs`), not
+  `Time.deltaTime`: the first frame after entering play mode gave the scripts a 3.7 s delta (the load) while physics
+  got 0.1 s of it. Now `Window.OnUpdateFrame` caps the scaled step (the user's go-ahead, as in Unity): `deltaTime` and
+  `Time.time`'s advance are at most `maximumDeltaTimeD` (0.1), the same as the fixed steps, so Update and physics stay
+  together and a stalled frame slows the game for that frame instead of making it jump; `unscaledDeltaTime` keeps the
+  real interval. Players and the editor alike (TestGame's `fixeddt` and the test kit's own steps are not affected).
+  Verified: a recorded session's rows after entering play mode show 100 ms where they showed 3730 ms, none over; the
+  game's 581 tests pass. A game that sets `timeScale` above 1 with slow frames is capped too (New Frontier sets only 0
+  and 1).
+- Found on the way (the user saw it): a batch editor with `-logFile` and a console window of its own (started without
+  a parent console, e.g. PowerShell's `Start-Process`) ended every run with an unhandled `ObjectDisposedException`:
+  `BatchMode.Run` closed the log file while `Console.Out` was still the tee over it, and `ConsoleHost.Release` wrote
+  "Press any key to close." through it (WER events 1000 / 1026, nothing in the log file). `Run` now gives the console
+  back its own writers (and `Debug.Output`) before closing the file. Then such an editor started with its window hidden
+  (`Start-Process -WindowStyle Hidden`) waited for ever for "any key" in a console nobody sees: `ConsoleHost.Release`
+  waits only when its console window is visible (`IsWindowVisible`). Verified: `-runTests -logFile` started hidden
+  exits by itself (code 0, 11 s), no crash event. Start agents' batch editors hidden: a console window of its own
+  shows on the user's screen otherwise.
+
 ## Textures of a load on worker threads (TextureImportBatch, 2026-10-26)
 
 - `SceneSerializer.LoadFromBytes` (every scene and prefab load: the editor's `OpenSceneNow`, `SceneLoadOperation.Read`
