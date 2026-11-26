@@ -3529,6 +3529,17 @@ lighting and the engine's other features. Octahedral impostors, baked into atlas
   vertex list (circle: centre; capsule: its ends' centres; polygon: corners, rounded by the radius; edge: two points).
   Nothing while not simulated (a disabled collider has no shapes). For what game code needs of the exact geometry the
   physics uses (shadows, outlines) without Box2D's types (game scripts do not reference Box2D.NET).
+- Interpolation (2026-11-26; a report of things jumping a physics step at a time beside interpolated bodies): the
+  transform of an interpolating body is exact. Measured with two bodies side by side, frames of 60 / 144 / 165 Hz over
+  50 Hz steps, even and with ±15 % jitter: the drawn speed held to 0.001-0.002 u/s, the two bodies' distance did not
+  change, while `position` (the body's state) moved 0 or 117 u/s from frame to frame. What jumps is whatever is drawn
+  from `position` / `rotation` / `velocity` (the state the last step left, as in Unity) next to the transform.
+  `Rigidbody2D.interpolationLag`: the seconds the transform is behind that state in this frame (`(1 - alpha) x step`
+  while interpolating, `-alpha x step` extrapolating, 0 without interpolation, after a teleport (the position / rotation
+  setters, `MovePosition` of a dynamic body, a moved transform, a new body) until the next step); something worked out
+  from the state is taken back by it to go with the transform. The position setter now also holds the angle (and the
+  rotation setter the position) until the next step: the other component went on interpolating between the steps
+  before while the one set held.
 
 ## Inspector fields, drag and drop, polymorphism, ScriptableObjects
 

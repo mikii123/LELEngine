@@ -156,8 +156,25 @@ namespace LELEngine
 		public RigidbodyInterpolation2D interpolation
 		{
 			get => m_Interpolate;
-			set => m_Interpolate = value;
+			set
+			{
+				m_Interpolate = value;
+				if (value == RigidbodyInterpolation2D.None)
+				{
+					interpolationLag = 0f;
+				}
+			}
 		}
+
+		/// <summary>
+		///     Seconds the transform's pose is behind the body's state (<see cref="position" />, <see cref="rotation" />,
+		///     <see cref="velocity" />: as the last physics step left them) in this frame. Interpolating, the transform lies
+		///     between the last two steps: up to one step behind. 0 without interpolation and after a teleport until the
+		///     next step (the transform shows the state); negative extrapolating (ahead of it). Something worked out from the
+		///     body's state and drawn with the transform (a predicted path, an aim mark) is taken back by this much to stay
+		///     with what is seen.
+		/// </summary>
+		public float interpolationLag { get; private set; }
 
 		public RigidbodyConstraints2D constraints
 		{
@@ -233,6 +250,8 @@ namespace LELEngine
 					float angle = b2Rot_GetAngle(q);
 					WriteTransform(value, angle);
 					currentPosition = previousPosition = value;
+					previousAngle = currentAngle = angle;
+					Teleported();
 				}
 				else if (transform != null)
 				{
@@ -252,8 +271,11 @@ namespace LELEngine
 				{
 					B2Vector2 p = b2Body_GetPosition(body);
 					b2Body_SetTransform(body, p, b2MakeRot(angle));
-					WriteTransform(Physics2DMath.ToEngine(p), angle);
+					Vector2 planar = Physics2DMath.ToEngine(p);
+					WriteTransform(planar, angle);
 					currentAngle = previousAngle = angle;
+					currentPosition = previousPosition = planar;
+					Teleported();
 				}
 				else if (transform != null)
 				{
@@ -335,6 +357,7 @@ namespace LELEngine
 		private Vector2 currentPosition;
 		private float previousAngle;
 		private float currentAngle;
+		private bool teleported;
 		private Vector2? moveTarget;
 		private float? moveAngle;
 		private readonly List<Collider2D> colliderBuffer = new List<Collider2D>();
@@ -599,6 +622,7 @@ namespace LELEngine
 			lastWrittenRotation = transform.rotation;
 			previousPosition = currentPosition = position;
 			previousAngle = currentAngle = angle;
+			Teleported();
 			if (initialVelocity != Vector2.Zero)
 			{
 				b2Body_SetLinearVelocity(body, Physics2DMath.ToB2(initialVelocity));
@@ -719,6 +743,7 @@ namespace LELEngine
 				lastWrittenRotation = rotation;
 				previousPosition = currentPosition = planar;
 				previousAngle = currentAngle = angle;
+				Teleported();
 			}
 		}
 
@@ -732,6 +757,7 @@ namespace LELEngine
 			B2Transform pose = b2Body_GetTransform(body);
 			previousPosition = Physics2DMath.ToEngine(pose.p);
 			previousAngle = b2Rot_GetAngle(pose.q);
+			teleported = false;
 			stepStartVelocity = Physics2DMath.ToEngine(b2Body_GetLinearVelocity(body));
 
 			if (bodyType == RigidbodyType2D.Kinematic && (moveTarget.HasValue || moveAngle.HasValue))
@@ -772,6 +798,7 @@ namespace LELEngine
 			if (interpolation == RigidbodyInterpolation2D.None || bodyType == RigidbodyType2D.Static)
 			{
 				WriteTransform(currentPosition, currentAngle);
+				interpolationLag = 0f;
 			}
 		}
 
@@ -783,13 +810,15 @@ namespace LELEngine
 			}
 
 			alpha = Math.Clamp(alpha, 0f, 1f);
+			float step = world?.LastStepDeltaTime ?? 0.02f;
 			Vector2 position;
 			float angle;
 			if (interpolation == RigidbodyInterpolation2D.Extrapolate)
 			{
-				float ahead = alpha * (world?.LastStepDeltaTime ?? 0.02f);
+				float ahead = alpha * step;
 				position = currentPosition + Physics2DMath.ToEngine(b2Body_GetLinearVelocity(body)) * ahead;
 				angle = currentAngle + b2Body_GetAngularVelocity(body) * ahead;
+				interpolationLag = -ahead;
 			}
 			else
 			{
@@ -798,6 +827,8 @@ namespace LELEngine
 				while (delta > MathF.PI) delta -= 2f * MathF.PI;
 				while (delta < -MathF.PI) delta += 2f * MathF.PI;
 				angle = previousAngle + delta * alpha;
+				// After a teleport the previous pose is the current one: the transform shows the state itself.
+				interpolationLag = teleported ? 0f : (1f - alpha) * step;
 			}
 
 			WriteTransform(position, angle);
@@ -806,6 +837,13 @@ namespace LELEngine
 		#endregion
 
 		#region PrivateMethods
+
+		/// <summary>The body was put somewhere: the transform shows that pose until the next step moves on from it.</summary>
+		private void Teleported()
+		{
+			teleported = true;
+			interpolationLag = 0f;
+		}
 
 		private static bool RotationEquals(Quaternion a, Quaternion b)
 		{
