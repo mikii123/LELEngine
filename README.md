@@ -4,7 +4,7 @@ A C# game engine with a Unity-like workflow: GameObjects and components, prefabs
 with scene and game views and play mode, and a standalone player for game builds. Built on .NET 10 and the BRUTAL
 framework (GLFW, OpenGL and Vulkan bindings); renders on OpenGL 4.3+ or Vulkan 1.3.
 
-![The editor with the GI test room in the scene view](docs/images/editor.png)
+![The editor: hierarchy, scene view with a point light selected, inspector and project browser](docs/images/editor.png)
 
 ## Features
 
@@ -43,7 +43,7 @@ framework (GLFW, OpenGL and Vulkan bindings); renders on OpenGL 4.3+ or Vulkan 1
 
 | | |
 | --- | --- |
-| ![Lumen-style GI](docs/images/lumen-gi.png) | ![GPU particles](docs/images/vfx-showcase.png) |
+| ![Voxel cone traced GI with PBR materials](docs/images/gi.png) | ![GPU particles](docs/images/vfx-showcase.png) |
 | ![The Audio Studio](docs/images/audio-studio.png) | ![The VFX Graph window](docs/images/vfx-graph.png) |
 
 ## Repository layout
