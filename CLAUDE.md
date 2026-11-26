@@ -3522,6 +3522,13 @@ lighting and the engine's other features. Octahedral impostors, baked into atlas
   `m_SleepingMode`, `m_Interpolate`, `m_Constraints`); setters push into the live body at once (`SettingsChanged`,
   `MassChanged`; deferred to `SyncToBody` while the world steps), and so does `OnValidate`. Since 2026-10-22: documents
   saved earlier with the plain names (`mass`, `bodyType`, ...) lose those values until re-saved.
+- `Collider2D.GetShapes(List<PhysicsShape2D>, List<Vector2> vertices)` (2026-11-25; Unity's GetShapes, read only): appends
+  the collider's live Box2D shapes (each segment of a chain too) in its rigidbody's space (a point p is at
+  `position + p` turned by `rotation`; world plane coordinates for a collider without a body): `PhysicsShape2D`
+  (`shapeType` Circle / Capsule / Polygon / Edge, `vertexStartIndex`, `vertexCount`, `radius`), points into the shared
+  vertex list (circle: centre; capsule: its ends' centres; polygon: corners, rounded by the radius; edge: two points).
+  Nothing while not simulated (a disabled collider has no shapes). For what game code needs of the exact geometry the
+  physics uses (shadows, outlines) without Box2D's types (game scripts do not reference Box2D.NET).
 
 ## Inspector fields, drag and drop, polymorphism, ScriptableObjects
 

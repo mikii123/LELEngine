@@ -324,6 +324,85 @@ namespace LELEngine
 			return results.Count;
 		}
 
+		/// <summary>
+		///     Appends the collider's shapes as the simulation holds them (every Box2D shape, each segment of a chain), in
+		///     the space of its rigidbody: the frame of <see cref="Rigidbody2D.position" /> and
+		///     <see cref="Rigidbody2D.rotation" />, so a point p of a shape is at position + p turned by rotation; a collider
+		///     without a rigidbody in world plane coordinates. The object's offset, rotation and scale are in them. Their
+		///     points go to <paramref name="vertices" /> (<see cref="PhysicsShape2D.vertexStartIndex" />). Nothing while the
+		///     collider is not simulated. Returns the number of shapes appended.
+		/// </summary>
+		public int GetShapes(List<PhysicsShape2D> results, List<Vector2> vertices)
+		{
+			int added = 0;
+			foreach (B2ShapeId shape in shapes)
+			{
+				if (!b2Shape_IsValid(shape))
+				{
+					continue;
+				}
+
+				int start = vertices.Count;
+				var result = new PhysicsShape2D { vertexStartIndex = start };
+				switch (b2Shape_GetType(shape))
+				{
+					case B2ShapeType.b2_circleShape:
+					{
+						B2Circle circle = b2Shape_GetCircle(shape);
+						result.shapeType = PhysicsShapeType2D.Circle;
+						result.radius = circle.radius;
+						vertices.Add(Physics2DMath.ToEngine(circle.center));
+						break;
+					}
+					case B2ShapeType.b2_capsuleShape:
+					{
+						B2Capsule capsule = b2Shape_GetCapsule(shape);
+						result.shapeType = PhysicsShapeType2D.Capsule;
+						result.radius = capsule.radius;
+						vertices.Add(Physics2DMath.ToEngine(capsule.center1));
+						vertices.Add(Physics2DMath.ToEngine(capsule.center2));
+						break;
+					}
+					case B2ShapeType.b2_polygonShape:
+					{
+						B2Polygon polygon = b2Shape_GetPolygon(shape);
+						result.shapeType = PhysicsShapeType2D.Polygon;
+						result.radius = polygon.radius;
+						for (int i = 0; i < polygon.count; i++)
+						{
+							vertices.Add(Physics2DMath.ToEngine(polygon.vertices[i]));
+						}
+
+						break;
+					}
+					case B2ShapeType.b2_chainSegmentShape:
+					{
+						B2Segment segment = b2Shape_GetChainSegment(shape).segment;
+						result.shapeType = PhysicsShapeType2D.Edge;
+						vertices.Add(Physics2DMath.ToEngine(segment.point1));
+						vertices.Add(Physics2DMath.ToEngine(segment.point2));
+						break;
+					}
+					case B2ShapeType.b2_segmentShape:
+					{
+						B2Segment segment = b2Shape_GetSegment(shape);
+						result.shapeType = PhysicsShapeType2D.Edge;
+						vertices.Add(Physics2DMath.ToEngine(segment.point1));
+						vertices.Add(Physics2DMath.ToEngine(segment.point2));
+						break;
+					}
+					default:
+						continue;
+				}
+
+				result.vertexCount = vertices.Count - start;
+				results.Add(result);
+				added++;
+			}
+
+			return added;
+		}
+
 		/// <summary>Raycasts from this collider's position (hits against its own shapes are skipped).</summary>
 		public int Raycast(Vector2 direction, List<RaycastHit2D> results, float distance = float.PositiveInfinity, int layerMask = -1)
 		{
