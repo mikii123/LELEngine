@@ -22,14 +22,22 @@ namespace LELEngine.Rendering.Passes
 			context.SceneTarget.Begin();
 			commands.State.SetDepth(true, true);
 
-			foreach (Behaviour behaviour in context.Behaviours)
+			RenderContext.Current = context;
+			try
 			{
-				behaviour.PostRender();
-				// A callback that ended the pass (a dispatch, a copy) leaves it open for the next one.
-				if (!commands.InRenderPass)
+				foreach (Behaviour behaviour in context.Behaviours)
 				{
-					context.SceneTarget.Begin();
+					behaviour.PostRender();
+					// A callback that ended the pass (a dispatch, a copy) leaves it open for the next one.
+					if (!commands.InRenderPass)
+					{
+						context.SceneTarget.Begin();
+					}
 				}
+			}
+			finally
+			{
+				RenderContext.Current = null;
 			}
 		}
 

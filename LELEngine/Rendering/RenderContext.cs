@@ -13,6 +13,13 @@ namespace LELEngine.Rendering
 	{
 		#region PublicFields
 
+		/// <summary>
+		///     The context of the camera whose <see cref="Behaviour.PostRender" /> callbacks are running, null outside
+		///     them: the scene's targets (<see cref="SceneTarget" />, <see cref="SceneColor" />, <see cref="SceneDepth" />)
+		///     and the view that a script's own draws over the scene need.
+		/// </summary>
+		public static RenderContext Current { get; internal set; }
+
 		public Renderer Renderer;
 		public RenderSettings Settings;
 
