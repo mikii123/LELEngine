@@ -125,6 +125,9 @@ namespace LELEngine.UIElements
 		private bool disposed;
 		private bool warnedUnsettledLayout;
 
+		// The geometry events of the last layout pass while it settles: the unsettled layout's warning names them.
+		private readonly List<GeometryChange> lastPassChanges = new List<GeometryChange>();
+
 		#endregion
 
 		#region Constructors
@@ -446,6 +449,8 @@ namespace LELEngine.UIElements
 			{
 				GeometryChange[] changes = geometryChanges.ToArray();
 				geometryChanges.Clear();
+				lastPassChanges.Clear();
+				lastPassChanges.AddRange(changes);
 				foreach (GeometryChange change in changes)
 				{
 					if (change.element.elementPanel != this)
@@ -468,22 +473,86 @@ namespace LELEngine.UIElements
 		/// </summary>
 		private void SettleLayout()
 		{
-			for (int pass = 1; layoutDirty || stylesDirty.Count > 0; pass++)
+			try
 			{
-				if (pass >= MaxLayoutPasses)
+				for (int pass = 1; layoutDirty || stylesDirty.Count > 0; pass++)
 				{
-					if (!warnedUnsettledLayout)
+					if (pass >= MaxLayoutPasses)
 					{
-						warnedUnsettledLayout = true;
-						Debug.LogWarning($"[UI] The layout did not settle in {MaxLayoutPasses} passes: a GeometryChangedEvent callback keeps changing styles or sizes.");
+						if (!warnedUnsettledLayout)
+						{
+							warnedUnsettledLayout = true;
+							Debug.LogWarning($"[UI] The layout did not settle in {MaxLayoutPasses} passes: a GeometryChangedEvent callback keeps changing styles or sizes. Geometry events of the last pass: {DescribeChanges(lastPassChanges)}");
+						}
+
+						return;
 					}
 
-					return;
+					UpdateStyles();
+					UpdateLayout();
+				}
+			}
+			finally
+			{
+				// Only for the warning: never kept past the pass (the elements would hold their scene).
+				lastPassChanges.Clear();
+			}
+		}
+
+		// "ScrollView#cargo > VisualElement.unity-content-viewport (10, 20, 300 x 200 -> 10, 20, 288 x 200)", the first few.
+		private static string DescribeChanges(List<GeometryChange> changes)
+		{
+			if (changes.Count == 0)
+			{
+				return "none (styles changed by something else meanwhile)";
+			}
+
+			const int shown = 8;
+			var text = new System.Text.StringBuilder();
+			for (int i = 0; i < changes.Count && i < shown; i++)
+			{
+				GeometryChange change = changes[i];
+				if (i > 0)
+				{
+					text.Append("; ");
 				}
 
-				UpdateStyles();
-				UpdateLayout();
+				VisualElement parent = change.element.parent;
+				if (parent != null)
+				{
+					text.Append(DescribeElement(parent)).Append(" > ");
+				}
+
+				text.Append(DescribeElement(change.element)).Append(" (").Append(DescribeRect(change.oldRect)).Append(" -> ").Append(DescribeRect(change.newRect)).Append(')');
 			}
+
+			if (changes.Count > shown)
+			{
+				text.Append("; ").Append(changes.Count - shown).Append(" more");
+			}
+
+			return text.ToString();
+		}
+
+		private static string DescribeElement(VisualElement element)
+		{
+			var text = new System.Text.StringBuilder(element.GetType().Name);
+			if (!string.IsNullOrEmpty(element.name))
+			{
+				text.Append('#').Append(element.name);
+			}
+
+			foreach (string className in element.GetClasses())
+			{
+				text.Append('.').Append(className);
+			}
+
+			return text.ToString();
+		}
+
+		private static string DescribeRect(Rect rect)
+		{
+			return FormattableString.Invariant($"{rect.x:0.#}, {rect.y:0.#}, {rect.width:0.#} x {rect.height:0.#}");
 		}
 
 		private void UpdateTransforms()

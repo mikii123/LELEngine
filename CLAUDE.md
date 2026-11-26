@@ -1660,6 +1660,24 @@
   `giGone` for the next frame's GI change), and `candidates` is cleared after use. Verified with scratchpad
   `storm/selectleak.ps1` (`-AllFlashes`, `-SetTime 0.754693`, `-Click -Button 'Next Strike'`: all three leaked, now
   "unloaded (4-5 GC passes)"); the report itself checked by switching the fix off for one run.
+- Found with it (2026-11-26, the user's log: the previous scripts still held after a script reload): static buffers
+  that kept their last use's results. `Physics2D.hitBuffer` / `colliderBuffer` (the queries that return one result or
+  an array of their own: `Raycast`, `RaycastAll`, `RaycastNonAlloc`, `OverlapPoint(All)`, `OverlapCircleAll`,
+  `OverlapBoxAll`, the shape casts) are emptied as soon as a query has read them (`TakeFirst`, `TakeAll`), and
+  `VolumetricRuntime.dynamicSlots` after the march has set the dynamic lights: they held a trigger collider and a
+  point light of the unloaded scene. A static buffer of a query or a pass is emptied after use, never left for the
+  next call to overwrite. Built only; the reload not repeated.
+- The same day, again: `Renderer.staleTargets` (the scratch list of target-texture cameras to free) was emptied only
+  before use, inside a block that runs while any target camera is known: the last one freed (a preview camera of the
+  unloaded scene) stayed in it for good. Emptied after use now, and `InvalidateSceneCaches` (scene replaced, editor
+  reload) releases the target renderers at once (`ReleaseTargetRenderers`, also `Dispose`'s): they are keyed by the
+  old scene's cameras, and an idle editor draws no frame that would free them. Built only.
+- The report's names were off by one array slot (same day): ClrMD 4.2's `ClrReference.Offset` counts from after the
+  method table pointer (measured: element 0 of an object[] at 8, a static's slot at the array's address + 8 + the
+  offset; scratchpad `clrmdprobe` of that session). `StaticField` first looked up the array's address + the offset,
+  the slot before, and named the neighbouring static (`static BuilderWindow.ScreenshotFolder -> List<RaycastHit2D>`, a
+  string field, for `Physics2D.hitBuffer`); `Edge` printed element i as [i - 1] (element 0 as `[]`). Both use the
+  measured base now; the example paths above were printed before the fix.
 - Open windows are saved (type, ImGui id, serialized fields) before a reload, before play mode and as they change
   (`Library/EditorWindows.txt`), and restored on the next frame. Their capture runs before the scene unloads, since
   references to scene objects are only written for objects of the current scene.
@@ -4955,6 +4973,9 @@ texture read back), see the port's `PORTING.md` "UI".
   past it the rest waits for the next frame and the panel warns once). Before, it waited for the next frame, which drew
   the state in between: NF's tooltip one frame out of place wherever its side depends on its size. Layout getters do not
   validate during `Update`, so test this through the geometry events per `Update` (they read nothing lazily), not `layout`.
+  The warning names the elements whose geometry events ran in the last pass (2026-11-26: it named none, so a report
+  could not tell which callback): `Parent > Type#name.classes (x, y, w x h -> x, y, w x h)`, eight at most. The list
+  lives only while the layout settles (emptied on the way out: it must not hold a scene's elements).
 - Layout quirk kept (Yoga's): measuring a column container of known width, a child with `flex-basis: 0` counts as
   its basis plus padding, not its min-height, so the container measures short and the child overflows at layout
   time. NF's settings fields give the dropdown input `flex-basis: auto`.
@@ -5319,6 +5340,13 @@ was made: "static batching has to work in the editor at run time too" and "you c
 - Not done or not checked: transparent shadow casters and `OwnPassParts` casters under a tile's culling (no test
   scene had such casters: those lines never ran); a camera stack and a target-texture camera (each has its own
   culling by construction, not run); a built game; the game's tests; only the 780M.
+- `MeshRenderer.bounds` (2026-11-26, the user's ask: Unity's Renderer.bounds for scripts): `Bounds` (`Mono/Bounds.cs`,
+  Unity's shape: `center`, `extents`, `size`, `min`, `max`, `SetMinMax`, `Encapsulate`, `Expand`, `Contains`,
+  `Intersects`), the mesh's box under the transform as it is when asked (not the culling's per-frame `worldCenter` /
+  `worldExtent`: a script may move the object and ask in the same frame), through `Frustum.WorldBox`, the culling's own
+  function; without a mesh an empty box at the object. `LODGroup.RecalculateBounds` takes the same function for each
+  renderer in the group's space (it had a loop of its own over the eight corners: the same box). Built; checked only by
+  a game's tests (a box turned a quarter and an eighth, scaled, without a mesh), not run yet.
 
 ## Surface cache atlas full: asked once a frame for nothing, no line per object (2026-11-20)
 

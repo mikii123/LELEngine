@@ -82,6 +82,9 @@ namespace LELEngine
 
 		#region PrivateFields
 
+		// The queries' shared results, emptied as soon as a query has read them (TakeFirst, TakeAll): left filled they held
+		// the last query's colliders, and through them their scene, after the scene was gone (a script reload's previous
+		// scripts with it).
 		private static readonly List<RaycastHit2D> hitBuffer = new List<RaycastHit2D>();
 		private static readonly List<Collider2D> colliderBuffer = new List<Collider2D>();
 
@@ -148,7 +151,7 @@ namespace LELEngine
 			}
 
 			world.RaycastAll(origin, direction, distance, layerMask, null, hitBuffer, true);
-			return hitBuffer.Count > 0 ? hitBuffer[0] : default;
+			return TakeFirst(hitBuffer);
 		}
 
 		public static int Raycast(Vector2 origin, Vector2 direction, ContactFilter2D filter, List<RaycastHit2D> results, float distance = float.PositiveInfinity)
@@ -172,7 +175,7 @@ namespace LELEngine
 			}
 
 			world.RaycastAll(origin, direction, distance, layerMask, null, hitBuffer, false);
-			return hitBuffer.ToArray();
+			return TakeAll(hitBuffer);
 		}
 
 		public static int RaycastNonAlloc(Vector2 origin, Vector2 direction, RaycastHit2D[] results, float distance = float.PositiveInfinity, int layerMask = DefaultRaycastLayers)
@@ -186,6 +189,7 @@ namespace LELEngine
 			world.RaycastAll(origin, direction, distance, layerMask, null, hitBuffer, false);
 			int count = Math.Min(results.Length, hitBuffer.Count);
 			hitBuffer.CopyTo(0, results, 0, count);
+			hitBuffer.Clear();
 			return count;
 		}
 
@@ -212,7 +216,7 @@ namespace LELEngine
 			}
 
 			world.OverlapPointAll(point, layerMask, null, colliderBuffer);
-			return colliderBuffer.Count > 0 ? colliderBuffer[0] : null;
+			return TakeFirst(colliderBuffer);
 		}
 
 		public static Collider2D[] OverlapPointAll(Vector2 point, int layerMask = DefaultRaycastLayers)
@@ -224,7 +228,7 @@ namespace LELEngine
 			}
 
 			world.OverlapPointAll(point, layerMask, null, colliderBuffer);
-			return colliderBuffer.ToArray();
+			return TakeAll(colliderBuffer);
 		}
 
 		public static int OverlapPoint(Vector2 point, ContactFilter2D filter, List<Collider2D> results)
@@ -253,7 +257,7 @@ namespace LELEngine
 			}
 
 			world.OverlapShapeAll(Circle(point, radius), layerMask, null, colliderBuffer);
-			return colliderBuffer.ToArray();
+			return TakeAll(colliderBuffer);
 		}
 
 		public static int OverlapCircle(Vector2 point, float radius, ContactFilter2D filter, List<Collider2D> results)
@@ -282,7 +286,7 @@ namespace LELEngine
 			}
 
 			world.OverlapShapeAll(Box(point, size, angle), layerMask, null, colliderBuffer);
-			return colliderBuffer.ToArray();
+			return TakeAll(colliderBuffer);
 		}
 
 		public static int OverlapBox(Vector2 point, Vector2 size, float angle, ContactFilter2D filter, List<Collider2D> results)
@@ -321,7 +325,7 @@ namespace LELEngine
 			}
 
 			world.ShapeCastAll(Circle(origin, radius), direction, distance, layerMask, null, hitBuffer, true);
-			return hitBuffer.Count > 0 ? hitBuffer[0] : default;
+			return TakeFirst(hitBuffer);
 		}
 
 		public static RaycastHit2D[] CircleCastAll(Vector2 origin, float radius, Vector2 direction, float distance = float.PositiveInfinity, int layerMask = DefaultRaycastLayers)
@@ -333,7 +337,7 @@ namespace LELEngine
 			}
 
 			world.ShapeCastAll(Circle(origin, radius), direction, distance, layerMask, null, hitBuffer, false);
-			return hitBuffer.ToArray();
+			return TakeAll(hitBuffer);
 		}
 
 		public static RaycastHit2D BoxCast(Vector2 origin, Vector2 size, float angle, Vector2 direction, float distance = float.PositiveInfinity, int layerMask = DefaultRaycastLayers)
@@ -345,7 +349,7 @@ namespace LELEngine
 			}
 
 			world.ShapeCastAll(Box(origin, size, angle), direction, distance, layerMask, null, hitBuffer, true);
-			return hitBuffer.Count > 0 ? hitBuffer[0] : default;
+			return TakeFirst(hitBuffer);
 		}
 
 		public static RaycastHit2D[] BoxCastAll(Vector2 origin, Vector2 size, float angle, Vector2 direction, float distance = float.PositiveInfinity, int layerMask = DefaultRaycastLayers)
@@ -357,7 +361,7 @@ namespace LELEngine
 			}
 
 			world.ShapeCastAll(Box(origin, size, angle), direction, distance, layerMask, null, hitBuffer, false);
-			return hitBuffer.ToArray();
+			return TakeAll(hitBuffer);
 		}
 
 		#endregion
@@ -367,6 +371,22 @@ namespace LELEngine
 		private static Collider2D First(Collider2D[] colliders)
 		{
 			return colliders.Length > 0 ? colliders[0] : null;
+		}
+
+		/// <summary>The first of a shared buffer's results; the buffer is emptied.</summary>
+		private static T TakeFirst<T>(List<T> buffer)
+		{
+			T first = buffer.Count > 0 ? buffer[0] : default;
+			buffer.Clear();
+			return first;
+		}
+
+		/// <summary>A shared buffer's results as an array of their own; the buffer is emptied.</summary>
+		private static T[] TakeAll<T>(List<T> buffer)
+		{
+			T[] all = buffer.ToArray();
+			buffer.Clear();
+			return all;
 		}
 
 		/// <summary>A circle at a world point, as a query shape.</summary>

@@ -16,6 +16,26 @@ public sealed class MeshRenderer : Behaviour
 	/// <summary>The mesh drawn; it uploads into the shared geometry buffers (Rendering.GeometryPool) on first use.</summary>
 	public Mesh Mesh => mesh;
 
+	/// <summary>
+	///     The mesh's bounds in world space (Unity's Renderer.bounds): the axis-aligned box around the mesh's own bounds
+	///     under the transform as it is now, worked out as frustum culling and LOD groups work it out
+	///     (<see cref="LELEngine.Rendering.Frustum.WorldBox" />). Without a mesh, an empty box at the object's position.
+	/// </summary>
+	public Bounds bounds
+	{
+		get
+		{
+			LELEngine.Mathematics.Matrix4 localToWorld = transform.LocalToWorld;
+			if (mesh == null)
+			{
+				return new Bounds(localToWorld.ExtractTranslation(), LELEngine.Mathematics.Vector3.Zero);
+			}
+
+			LELEngine.Rendering.Frustum.WorldBox(localToWorld, mesh.BoundsMin, mesh.BoundsMax, out LELEngine.Mathematics.Vector3 center, out LELEngine.Mathematics.Vector3 extent);
+			return new Bounds(center, extent * 2f);
+		}
+	}
+
 	/// <summary>The material of each sub-mesh.</summary>
 	public IReadOnlyList<Material> Materials => materials;
 

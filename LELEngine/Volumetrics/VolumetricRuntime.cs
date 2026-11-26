@@ -484,6 +484,9 @@ namespace LELEngine.Volumetrics
 				SetDynamicLights(program, volume, dynamicSlots);
 			}
 
+			// Not kept past the march: the lights (and their scene) would stay referenced after the scene is gone, until
+			// another cloud marched; a script reload's old scripts with them.
+			dynamicSlots.Clear();
 			context.Fullscreen.Draw();
 
 			if (Debug && frameStamp % 120 == 1)

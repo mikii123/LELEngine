@@ -1013,6 +1013,10 @@ namespace LELEngine.Rendering
 					targetRenderers.Remove(camera);
 					targetFrame.Remove(camera);
 				}
+
+				// Emptied after use: the last stale camera (and its unloaded scene) stayed in it while no target camera was left
+				// to run this again.
+				staleTargets.Clear();
 			}
 		}
 
@@ -1034,6 +1038,8 @@ namespace LELEngine.Rendering
 			return false;
 		}
 
+		// The renderers of the cameras that draw into textures, and what remembers them: at Dispose, and when the scene is
+		// replaced (keyed by its cameras; the new scene's get theirs in its first frame).
 		private void ReleaseTargetRenderers()
 		{
 			foreach (TargetRenderer target in targetRenderers.Values)
@@ -1043,6 +1049,7 @@ namespace LELEngine.Rendering
 
 			targetRenderers.Clear();
 			targetFrame.Clear();
+			staleTargets.Clear();
 		}
 
 		private void EnsureDumpTarget()
@@ -1079,11 +1086,13 @@ namespace LELEngine.Rendering
 
 		/// <summary>
 		///     Drops everything the GI keeps per scene object (surface cache cards, distance field instances, object
-		///     tables) and marks the static caches dirty. Call when the rendered scene is replaced (scene load,
-		///     editor reload): the cached state is keyed by the old scene's renderers.
+		///     tables) and marks the static caches dirty, and releases the renderers of cameras that draw into textures. Call
+		///     when the rendered scene is replaced (scene load, editor reload): the cached state is keyed by the old scene's
+		///     renderers and cameras (an idle editor draws no frame that would let them go).
 		/// </summary>
 		public void InvalidateSceneCaches()
 		{
+			ReleaseTargetRenderers();
 			LumenScene?.Delete();
 			LumenScene = new LumenScene();
 			foreach (RenderPass pass in passes)

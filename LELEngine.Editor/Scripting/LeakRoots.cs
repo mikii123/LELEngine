@@ -485,10 +485,12 @@ namespace LELEngine.Editor
 
 				foreach (ClrReference reference in holder.EnumerateReferencesWithFields(false, false))
 				{
-					if (reference.Object.Address == to && reference.IsArrayElement)
+					if (reference.IsArrayElement && reference.Object.Address == to)
 					{
-						// The slot's address: the offset counts from the object's start (or from its data, after the method table).
-						return statics.Find(array + (ulong)reference.Offset) ?? statics.Find(array + (ulong)IntPtr.Size + (ulong)reference.Offset);
+						// The slot's address: ClrMD's offset counts from after the method table pointer (element 0 of an
+						// object[] at IntPtr.Size). The object's start plus the offset is the slot before it, the
+						// neighbouring static: a path named a string field as the holder of a list.
+						return statics.Find(array + (ulong)IntPtr.Size + (ulong)reference.Offset);
 					}
 				}
 			}
@@ -521,9 +523,10 @@ namespace LELEngine.Editor
 					string inner = reference.InnerField is { Field: not null } nested ? "." + FieldName(nested.Field.Name) : "";
 					if (reference.IsArrayElement)
 					{
-						// Offsets count from the method table pointer; elements start after it and the length.
+						// Offsets count from after the method table pointer; elements start after the length (IntPtr.Size
+						// with its padding).
 						int size = from.Type?.ComponentSize ?? 0;
-						int index = size > 0 ? (reference.Offset - 2 * IntPtr.Size) / size : -1;
+						int index = size > 0 ? (reference.Offset - IntPtr.Size) / size : -1;
 						return (index >= 0 ? "[" + index + "]" : "[]") + inner;
 					}
 

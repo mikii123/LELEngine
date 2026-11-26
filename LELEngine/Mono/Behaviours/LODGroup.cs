@@ -160,16 +160,11 @@ public sealed class LODGroup : Behaviour
 					continue;
 				}
 
+				// The box around the mesh's bounds in the group's space, as culling and MeshRenderer.bounds take it.
 				Matrix4 toGroup = renderer.transform.LocalToWorld * toLocal;
-				Vector3 a = renderer.Mesh.BoundsMin;
-				Vector3 b = renderer.Mesh.BoundsMax;
-				for (int corner = 0; corner < 8; corner++)
-				{
-					Vector3 p = new Vector3((corner & 1) != 0 ? b.X : a.X, (corner & 2) != 0 ? b.Y : a.Y, (corner & 4) != 0 ? b.Z : a.Z);
-					p = Vector3.TransformPosition(p, toGroup);
-					min = Vector3.ComponentMin(min, p);
-					max = Vector3.ComponentMax(max, p);
-				}
+				LELEngine.Rendering.Frustum.WorldBox(toGroup, renderer.Mesh.BoundsMin, renderer.Mesh.BoundsMax, out Vector3 boxCenter, out Vector3 boxExtent);
+				min = Vector3.ComponentMin(min, boxCenter - boxExtent);
+				max = Vector3.ComponentMax(max, boxCenter + boxExtent);
 			}
 		}
 
