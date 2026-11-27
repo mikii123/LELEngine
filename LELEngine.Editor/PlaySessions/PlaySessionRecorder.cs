@@ -247,19 +247,19 @@ namespace LELEngine.Editor
 				return;
 			}
 
-			foreach (Input.KeyController key in Input.Pressed)
+			foreach (LELEngine.Windowing.Keys key in Input.keysPressed)
 			{
-				if (key.frame == 0 && keysDown.Count < 64)
+				if (keysDown.Count < 64)
 				{
-					keysDown.Add((int)key.key);
+					keysDown.Add((int)key);
 				}
 			}
 
-			foreach (Input.KeyController key in Input.UnPressed)
+			foreach (LELEngine.Windowing.Keys key in Input.keysReleased)
 			{
-				if (key.frame == 0 && keysUp.Count < 64)
+				if (keysUp.Count < 64)
 				{
-					keysUp.Add((int)key.key);
+					keysUp.Add((int)key);
 				}
 			}
 

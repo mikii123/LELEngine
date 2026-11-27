@@ -1372,7 +1372,9 @@ namespace LELEngine.Editor.UIBuilder
 				// Letters only as shortcuts (Ctrl+A/C/V/X/Z/Y); plain letters arrive as text.
 				bool letter = pair.imgui >= ImGuiKey.A && pair.imgui <= ImGuiKey.Z;
 				if (letter && !io.KeyCtrl) continue;
-				if (ImGui.IsKeyPressed(pair.imgui)) panel.ProcessKeyDown(pair.key, modifiers);
+				// A press, or ImGui's repeat of a held key (the panel gives repeats to text editing only).
+				if (ImGui.IsKeyPressed(pair.imgui, false)) panel.ProcessKeyDown(pair.key, modifiers);
+				else if (ImGui.IsKeyPressed(pair.imgui)) panel.ProcessKeyDown(pair.key, modifiers, true);
 				if (ImGui.IsKeyReleased(pair.imgui)) panel.ProcessKeyUp(pair.key, modifiers);
 			}
 

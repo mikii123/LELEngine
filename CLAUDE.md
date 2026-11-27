@@ -114,6 +114,24 @@
   showed a magenta block and coloured glows on the empty floor; with it the three views (Lumen, VCT, VCT at 128) are
   clean.
 
+## Keys: one press is one event, as in Unity (2026-11-27)
+
+- The user's rule ("as in Unity: GetKey constant, key down only the frame of the press, key up only the frame of the
+  release"), after a held key repeated into the UI: `Input` keeps the keys pressed and released since the last frame
+  ended (`keysPressed` / `keysReleased`, cleared by `EndFrame`; the old `Pressed` / `UnPressed` lists of
+  `KeyController`s are gone). `GetKeyDown`: the frame of the press, never a repeat (`KeyboardKeyEventArgs.IsRepeat`,
+  GLFW's Repeat action); `GetKeyUp`: the frame of the release; `GetKey`: the window's held state, or a press this
+  frame. A tap shorter than a frame is now seen by both (the release used to drop the press before the frame read it,
+  so the input system's keyboard, which reads `GetKeyDown` for such taps, lost them).
+- The UI: a raw key down carries `repeat`; `BaseVisualElementPanel.ProcessKeyDown(key, modifiers, repeat)` gives a
+  repeat only to a text field being edited (`TextField.TextInput`: Backspace, Delete, the caret's keys held), never to
+  anything else and never as navigation (submit, cancel, moves). Before, every repeat was a KeyDownEvent and Space /
+  Enter a submit again: Space held while flying into a game's station submitted on its menu until let go. The UI
+  Builder's preview forwards ImGui's repeats as repeats.
+- Verified in a game's tests (New Frontier `Tests/UI/KeyRepeatTests`: the frames of press, repeat, release and a tap;
+  a held Space on a focused button and on a station's market row submits nothing until a new press; both failed with
+  repeats passed through as before).
+
 ## Building and running on this machine
 
 - Since 2026-10-20 the `dotnet` on PATH is the .NET 10 SDK (10.0.401, `C:\Program Files\dotnet`): plain `dotnet build`
@@ -1624,6 +1642,12 @@
   `OnDomainUnloading`: the context keeps the scene it last drew with, and a Timeline opened and closed once held the
   unloaded scene, and with it the old scripts, through every reload ("still referenced ... timelineWindow.context.Scene").
   Reproduced and verified with scratchpad `storm/timelineleak.ps1` (CLI `open Timeline`, `close Timeline`, then a reload).
+- The inspector forgets what it showed at a reload (`InspectorPanel.ClearTypeCaches`: `Shown` and the shown objects,
+  2026-11-27, the user's report: "still referenced ... inspector (InspectorPanel).Shown (GameObject 'Player')", every
+  component of the unloaded scene alive). `Shown` is set by each draw of the inspector and kept until the next one, and
+  no draw came during the unload check: a maximized Scene or Game view draws alone (`DrawUI` returns before the
+  panels), a minimized window draws nothing. The next draw finds the object again (the selection, a lock's ids). Built,
+  not reproduced (it needs the GUI editor with a maximized view at the reload).
 - Screenshots' own renderers (`WindowCapture`: a Scene / Game view captured at a size renders with a renderer of its own)
   are released at a reload (`EditorApplication.ClearTypeCaches` -> `WindowCapture.ReleaseViews`, 2026-11-09): their
   `LumenScene.lastMaterials` kept the unloaded scene's materials, and with them the old scripts. Verified: a sized

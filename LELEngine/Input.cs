@@ -21,8 +21,11 @@ namespace LELEngine
 		/// <summary>Source of keyboard / mouse state; set by the host that owns the window.</summary>
 		public static IInputHost Host;
 
-		public static List<KeyController> Pressed = new List<KeyController>();
-		public static List<KeyController> UnPressed = new List<KeyController>();
+		// Keys pressed / released since the last frame ended, from the window's events (Unity's GetKeyDown / GetKeyUp: the
+		// frame of the press, the frame of the release; a tap shorter than a frame is both). The system's repeats of a
+		// held key are not presses. Read by the editor's play session recorder (internal: it allocates nothing).
+		internal static readonly HashSet<Keys> keysPressed = new HashSet<Keys>();
+		internal static readonly HashSet<Keys> keysReleased = new HashSet<Keys>();
 
 		public static Vector2 mousePosition { get; private set; }
 		public static Vector2 relativeMousePosition { get; private set; }
@@ -52,15 +55,8 @@ namespace LELEngine
 
 		public static void EndFrame()
 		{
-			foreach (KeyController pr in Pressed)
-			{
-				pr.frame++;
-			}
-			foreach (KeyController upr in UnPressed)
-			{
-				upr.frame++;
-			}
-
+			keysPressed.Clear();
+			keysReleased.Clear();
 			lastMousePosition = mousePosition;
 			mouseScrollDelta = Vector2.Zero;
 			mouseButtonsPressed = 0;
@@ -123,50 +119,39 @@ namespace LELEngine
 			return (mouseButtonsReleased & (1 << (int)button)) != 0;
 		}
 
+		/// <summary>The key is held (every frame it is down; also the frame of a tap shorter than a frame).</summary>
 		public static bool GetKey(Keys code)
 		{
-			return Host != null && Host.IsKeyDown(code);
+			return (Host != null && Host.IsKeyDown(code)) || keysPressed.Contains(code);
 		}
 
+		/// <summary>The key was released this frame (only that frame).</summary>
 		public static bool GetKeyUp(Keys code)
 		{
-			if (UnPressed.Exists(item => item.key == code))
-			{
-				KeyController kc = UnPressed.Find(item => item.key == code);
-				return kc.frame == 0;
-			}
-			return false;
+			return keysReleased.Contains(code);
 		}
 
+		/// <summary>The key was pressed this frame (only that frame; holding it does not repeat it).</summary>
 		public static bool GetKeyDown(Keys code)
 		{
-			if (Pressed.Exists(item => item.key == code))
-			{
-				KeyController kc = Pressed.Find(item => item.key == code);
-				return kc.frame == 0;
-			}
-			return false;
+			return keysPressed.Contains(code);
 		}
 
 		public static void Input_KeyUp(KeyboardKeyEventArgs e)
 		{
-			if (!UnPressed.Exists(item => item.key == e.Key))
-			{
-				UnPressed.Add(new KeyController(e.Key));
-			}
-			Pressed.RemoveAll(item => item.key == e.Key);
+			keysReleased.Add(e.Key);
 			UIEvents.Add(new RawInputEvent { kind = RawInputKind.KeyUp, key = e.Key, modifiers = e.Modifiers, position = mousePosition });
 		}
 
 		public static void Input_KeyDown(KeyboardKeyEventArgs e)
 		{
-			if (!Pressed.Exists(item => item.key == e.Key))
+			if (!e.IsRepeat)
 			{
-				Pressed.Add(new KeyController(e.Key));
+				keysPressed.Add(e.Key);
 			}
-			UnPressed.RemoveAll(item => item.key == e.Key);
-			// Key repeats reach the UI (text fields), the game sees one press.
-			UIEvents.Add(new RawInputEvent { kind = RawInputKind.KeyDown, key = e.Key, modifiers = e.Modifiers, position = mousePosition });
+
+			// The game sees one press; the UI gets the system's repeats marked as such (only text editing takes them).
+			UIEvents.Add(new RawInputEvent { kind = RawInputKind.KeyDown, key = e.Key, modifiers = e.Modifiers, position = mousePosition, repeat = e.IsRepeat });
 		}
 
 		public static void Input_MouseMove(MouseMoveEventArgs e)
@@ -229,30 +214,9 @@ namespace LELEngine
 			public Vector2 position;
 			public Vector2 delta;
 			public char character;
-		}
 
-		#endregion
-
-		#region NestedTypes
-
-		public class KeyController
-		{
-			#region PublicFields
-
-			public Keys key;
-			public int frame;
-
-			#endregion
-
-			#region Constructors
-
-			public KeyController(Keys k)
-			{
-				key = k;
-				frame = 0;
-			}
-
-			#endregion
+			/// <summary>A key down the system repeats while the key is held (not a press of its own).</summary>
+			public bool repeat;
 		}
 
 		#endregion

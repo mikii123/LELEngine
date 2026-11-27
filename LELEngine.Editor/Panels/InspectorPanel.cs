@@ -1338,6 +1338,11 @@ namespace LELEngine.Editor
 		/// <summary>Drops all cached types (before the script assembly is unloaded).</summary>
 		public void ClearTypeCaches()
 		{
+			// What the last draw showed belongs to the scene the reload unloads. The next draw finds it again (the selection,
+			// a lock's ids), but no draw may come for a while: a maximized Scene or Game view draws alone, a minimized window
+			// draws nothing. Kept, the object held the unloaded scene and the old scripts through the whole unload check.
+			Shown = null;
+			shownObjects.Clear();
 			PrefabInspector.Forget();
 			componentTypes = null;
 			componentLevels = null;

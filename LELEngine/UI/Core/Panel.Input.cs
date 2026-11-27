@@ -198,9 +198,21 @@ namespace LELEngine.UIElements
 			lastPointerPosition = new Vector2(-1f, -1f);
 		}
 
-		public void ProcessKeyDown(Keys key, EventModifiers modifiers)
+		/// <summary>
+		///     A key went down: the focused element's (else the root's) KeyDownEvent, then, when nothing took it, the
+		///     navigation the key stands for (Tab and the arrows move, Enter / Space submit, Escape cancels). One press is one
+		///     event: <paramref name="repeat" /> (the system repeating a held key) reaches only a text field being edited
+		///     (Backspace, Delete, the caret's keys held there), never anything else and never as navigation. Before, every
+		///     repeat was a press: a Space held from flying into a menu that opened submitted again and again.
+		/// </summary>
+		public void ProcessKeyDown(Keys key, EventModifiers modifiers, bool repeat = false)
 		{
 			VisualElement target = focusController.focusedElement as VisualElement ?? visualTree;
+			if (repeat && !(target is TextField.TextInput))
+			{
+				return;
+			}
+
 			bool handled;
 			using (KeyDownEvent evt = KeyDownEvent.GetPooled('\0', key, modifiers))
 			{
@@ -209,7 +221,7 @@ namespace LELEngine.UIElements
 				handled = evt.isDefaultPrevented || evt.isPropagationStopped;
 			}
 
-			if (handled)
+			if (handled || repeat)
 			{
 				return;
 			}

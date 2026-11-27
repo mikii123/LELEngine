@@ -159,7 +159,7 @@ namespace LELEngine.UIElements
 					case Input.RawInputKind.KeyDown:
 					{
 						RuntimePanel panel = PanelForKeyboard();
-						panel?.ProcessKeyDown(e.key, Convert(e.modifiers));
+						panel?.ProcessKeyDown(e.key, Convert(e.modifiers), e.repeat);
 						break;
 					}
 
