@@ -54,6 +54,15 @@ namespace LELEngine
 		}
 	}
 
+	/// <summary>
+	///     An int field holding one layer (0..31): the inspector draws it as the layers' names to pick from, as the object
+	///     header's Layer (a <see cref="LayerMask" /> field is several layers).
+	/// </summary>
+	[AttributeUsage(AttributeTargets.Field)]
+	public sealed class LayerAttribute : Attribute
+	{
+	}
+
 	/// <summary>Inspector tooltip of a field.</summary>
 	[AttributeUsage(AttributeTargets.Field)]
 	public sealed class TooltipAttribute : Attribute

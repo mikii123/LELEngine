@@ -262,12 +262,27 @@ namespace LELEngine.Navigation.Builder
 				return null;
 			}
 
+			// Obstacles before the erosion (agents keep their radius off them), areas after it (exactly where they are drawn).
+			if (volumes != null)
+			{
+				foreach (NavMeshAreaVolume volume in volumes)
+				{
+					if (volume.Obstacle)
+					{
+						chf.MarkConvexPolyArea(volume.Polygon, volume.MinY, volume.MaxY, NavMeshArea.Null);
+					}
+				}
+			}
+
 			chf.ErodeWalkableArea(config.WalkableRadius);
 			if (volumes != null)
 			{
 				foreach (NavMeshAreaVolume volume in volumes)
 				{
-					chf.MarkConvexPolyArea(volume.Polygon, volume.MinY, volume.MaxY, NavMeshArea.ToInternal(volume.Area));
+					if (!volume.Obstacle)
+					{
+						chf.MarkConvexPolyArea(volume.Polygon, volume.MinY, volume.MaxY, NavMeshArea.ToInternal(volume.Area));
+					}
 				}
 			}
 

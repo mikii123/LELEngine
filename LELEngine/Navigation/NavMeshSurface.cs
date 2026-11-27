@@ -216,6 +216,14 @@ namespace LELEngine.Navigation
 					{
 						volumes.Add(volume.ToLocalVolume(worldToLocal));
 					}
+
+					// Obstacles only bakes see (in Volume mode: those reaching into the volume).
+					float cell = buildSettings.CellSize;
+					if (component is NavMeshBakeObstacle obstacle && component.enabled && obstacle.Affects(agentTypeId)
+					    && obstacle.GetFootprint(worldToLocal, NavMeshShapes.CoverMargin(cell), cell * 0.25f, false, 0f, 0f, out NavMeshAreaVolume footprint))
+					{
+						volumes.Add(footprint);
+					}
 				}
 			}
 		}

@@ -319,6 +319,16 @@ namespace LELEngine
 
 			IsPlaying = playing;
 			LifecycleStarted = true;
+			// The scene's baked navmeshes join the world before its components start (agents look for them in OnEnable).
+			try
+			{
+				Navigation.SceneNavigation.Sync(this);
+			}
+			catch (Exception e)
+			{
+				Debug.LogException(e);
+			}
+
 			long started = FrameProfiler.Timestamp;
 			int count = components.Count;
 			foreach (Behaviour component in new List<Behaviour>(components))
@@ -449,6 +459,7 @@ namespace LELEngine
 		/// <summary>Destroys every object of the scene now (unloading, reloading).</summary>
 		public void Unload()
 		{
+			Navigation.SceneNavigation.Unregister(this);
 			foreach (GameObject root in GetRootGameObjects())
 			{
 				DestroyNow(root);

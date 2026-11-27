@@ -595,7 +595,9 @@ namespace LELEngine.Navigation
 			for (int i = 0; i < candidates.Count; i++)
 			{
 				EdgeRef candidate = candidates[i];
-				if (candidate.Tile == tile)
+				// Surfaces connect only within an agent type: navmeshes of several agent types over the same ground touch
+				// everywhere, and a link between them would walk one agent onto the other's navmesh.
+				if (candidate.Tile == tile || candidate.Tile.Surface.AgentTypeId != tile.Surface.AgentTypeId)
 				{
 					continue;
 				}

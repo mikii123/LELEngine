@@ -303,6 +303,26 @@ namespace LELEngine.Editor
 			// Impostors: of the selected prefab or model, the selected impostor asset, or all of the project's.
 			AddImpostorActions(all);
 
+			// The open scene's navigation (Window > Navigation has the same buttons and its settings).
+			all.Add(new EditorAction("Edit/Navigation/Bake Scene NavMeshes", () =>
+			{
+				try
+				{
+					BakeSceneNavigation();
+				}
+				catch (InvalidOperationException e)
+				{
+					Debug.LogWarning("[Navigation] " + e.Message);
+				}
+			})
+			{
+				Enabled = () => Scene != null && !IsPlaying, SeparatorBefore = true
+			});
+			all.Add(new EditorAction("Edit/Navigation/Clear Scene NavMeshes", ClearSceneNavigation)
+			{
+				Enabled = () => Scene?.Settings.Navigation?.NavMesh != null && !IsPlaying
+			});
+
 			// GameObject (the hierarchy's context menu creates the same under the clicked object)
 			AddCreateActions(all);
 
@@ -328,6 +348,7 @@ namespace LELEngine.Editor
 			all.Add(new EditorAction("Window/Project", () => projectPanel.Open = !projectPanel.Open) { Checked = () => projectPanel.Open });
 			all.Add(new EditorAction("Window/Console", () => consolePanel.Open = !consolePanel.Open) { Checked = () => consolePanel.Open });
 			all.Add(new EditorAction("Window/Lighting", () => lightingPanel.Open = !lightingPanel.Open) { Checked = () => lightingPanel.Open });
+			all.Add(new EditorAction("Window/Navigation", () => navigationPanel.Open = !navigationPanel.Open) { Checked = () => navigationPanel.Open });
 			all.Add(new EditorAction("Window/Project Settings", () =>
 			{
 				if (projectSettingsWindow.Open) projectSettingsWindow.Open = false;
@@ -444,6 +465,11 @@ namespace LELEngine.Editor
 			{
 				NavMeshObstacle obstacle = go.AddComponent<NavMeshObstacle>();
 				obstacle.size = new Vector3(2f, 2f, 2f);
+			}, createParent)));
+			all.Add(new EditorAction("GameObject/Navigation/NavMesh Bake Obstacle", () => CreateObject("NavMesh Bake Obstacle", go =>
+			{
+				NavMeshBakeObstacle obstacle = go.AddComponent<NavMeshBakeObstacle>();
+				obstacle.size = new Vector3(10f, 4f, 10f);
 			}, createParent)));
 			all.Add(new EditorAction("GameObject/Physics 2D/Dynamic Box (Rigidbody2D + BoxCollider2D)", () => CreateModelObject("Box 2D", DefaultScene.CubeModel, go =>
 			{

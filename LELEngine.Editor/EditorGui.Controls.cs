@@ -328,6 +328,45 @@ namespace LELEngine.Editor
 			ImGui.EndCombo();
 		}
 
+		/// <summary>
+		///     The editor's one way to pick a layer (the object header's Layer, [Layer] int fields): the layers by name, the
+		///     built-in slots 0..7 only when named or chosen, "—" for <paramref name="mixed" /> values, then Add Layer...
+		///     (Project Settings > Layers). True, with <paramref name="picked" />, when another layer was chosen (any, while
+		///     mixed).
+		/// </summary>
+		public static bool LayerCombo(string label, int current, bool mixed, out int picked)
+		{
+			picked = current;
+			bool changed = false;
+			if (!BeginCombo(label, mixed ? MixedValue : LayerMask.DisplayName(current)))
+			{
+				return false;
+			}
+
+			for (int layer = 0; layer < LayerMask.LayerCount; layer++)
+			{
+				if (LayerMask.LayerToName(layer).Length == 0 && layer != current && layer < LayerMask.FirstUserLayer)
+				{
+					continue;
+				}
+
+				if (Selectable(LayerMask.DisplayName(layer), !mixed && layer == current) && (mixed || layer != current))
+				{
+					picked = layer;
+					changed = true;
+				}
+			}
+
+			ImGui.Separator();
+			if (Selectable("Add Layer..."))
+			{
+				EditorApplication.Instance?.ShowProjectSettings(ProjectSettingsWindow.Tab.Layers);
+			}
+
+			EndCombo();
+			return changed;
+		}
+
 		public static bool InputText(string label, ref string text, nuint maxLength)
 		{
 			return InputText(label, ref text, maxLength, ImGuiInputTextFlags.None);

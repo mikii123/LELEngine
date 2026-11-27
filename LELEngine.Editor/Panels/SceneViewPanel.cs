@@ -401,6 +401,8 @@ namespace LELEngine.Editor
 				return;
 			}
 
+			// The scene's navmeshes as its settings name them now (a bake, an undo, the asset read again).
+			Navigation.SceneNavigation.Sync(editor.Scene);
 			Navigation.NavMeshDebug.DrawAll();
 			if (selected != null)
 			{

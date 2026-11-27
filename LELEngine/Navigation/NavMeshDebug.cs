@@ -19,17 +19,52 @@ namespace LELEngine.Navigation
 		public static Color4 AgentColor = new Color4(0.2f, 1f, 0.3f, 1f);
 		public static Color4 PathColor = new Color4(1f, 0.9f, 0.2f, 1f);
 		public static Color4 ObstacleColor = new Color4(1f, 0.3f, 0.2f, 1f);
+		public static Color4 BakeObstacleColor = new Color4(1f, 0.55f, 0.1f, 0.9f);
+
+		/// <summary>The agent type whose navmeshes are drawn (-1: every agent type's; navmeshes of several agents overlap).</summary>
+		public static int AgentTypeFilter = -1;
 
 		#endregion
 
 		#region PublicMethods
 
-		/// <summary>Everything: surfaces, agents, obstacles.</summary>
+		/// <summary>Everything: surfaces, agents, obstacles (the bake obstacles too).</summary>
 		public static void DrawAll()
 		{
 			DrawSurfaces();
 			DrawAgents();
 			DrawObstacles();
+			DrawBakeObstacles();
+		}
+
+		/// <summary>The enabled bake obstacles of the loaded scenes, as their shapes stand.</summary>
+		public static void DrawBakeObstacles()
+		{
+			foreach (NavMeshBakeObstacle obstacle in NavMeshBakeObstacle.All)
+			{
+				DrawBakeObstacle(obstacle);
+			}
+		}
+
+		public static void DrawBakeObstacle(NavMeshBakeObstacle obstacle)
+		{
+			if (obstacle == null || obstacle.transform == null || !obstacle.gameObject.activeInHierarchy)
+			{
+				return;
+			}
+
+			Transform t = obstacle.transform;
+			if (obstacle.shape == NavMeshObstacleShape.Capsule)
+			{
+				obstacle.GetWorldCylinder(out Vector3 center, out float radius, out float halfHeight);
+				DebugDraw.Cylinder(center - new Vector3(0f, halfHeight, 0f), radius, halfHeight * 2f, BakeObstacleColor);
+			}
+			else
+			{
+				Vector3 scale = t.lossyScale;
+				Vector3 half = new Vector3(Math.Abs(obstacle.size.X * scale.X), Math.Abs(obstacle.size.Y * scale.Y), Math.Abs(obstacle.size.Z * scale.Z)) * 0.5f;
+				DebugDraw.WireBox(t.TransformPoint(obstacle.center), half, t.rotation, BakeObstacleColor);
+			}
 		}
 
 		public static void DrawSurfaces()
@@ -37,7 +72,7 @@ namespace LELEngine.Navigation
 			Span<Vector3> verts = stackalloc Vector3[NavMeshQuery.MaxPolyVerts];
 			foreach (NavSurface surface in NavMesh.World.Surfaces)
 			{
-				if (surface == null)
+				if (surface == null || (AgentTypeFilter >= 0 && surface.AgentTypeId != AgentTypeFilter))
 				{
 					continue;
 				}

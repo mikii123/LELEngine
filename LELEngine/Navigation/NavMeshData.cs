@@ -248,7 +248,7 @@ namespace LELEngine.Navigation
 		public object Owner;
 	}
 
-	/// <summary>A convex volume (in the surface's local space) whose cells get an area.</summary>
+	/// <summary>A convex volume (in the surface's local space) whose cells get an area, or that is cut out as an obstacle.</summary>
 	public struct NavMeshAreaVolume
 	{
 		/// <summary>Convex polygon in the xz plane (x, z pairs), counter-clockwise or clockwise.</summary>
@@ -257,5 +257,12 @@ namespace LELEngine.Navigation
 		public float MinY;
 		public float MaxY;
 		public int Area;
+
+		/// <summary>
+		///     An obstacle: its cells are not walkable before the walkable area shrinks by the agent's radius, so agents keep
+		///     their radius off it, as off solid geometry (<see cref="Area" /> is not read). Otherwise its cells get
+		///     <see cref="Area" /> after the shrinking: the area exactly as the polygon draws it.
+		/// </summary>
+		public bool Obstacle;
 	}
 }

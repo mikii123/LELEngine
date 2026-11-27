@@ -28,7 +28,9 @@ framework (GLFW, OpenGL and Vulkan bindings); renders on OpenGL 4.3+ or Vulkan 1
   thread of its own.
 - **Input**: Rewired-style actions and controller maps, remapping, gamepads assigned automatically.
 - **UI**: UI Toolkit-style UXML and USS, flexbox layout, SDF text, data binding.
-- **Navigation**: tiled navmesh surfaces, carving obstacles, crowd agents, NavMesh queries.
+- **Navigation**: tiled navmesh surfaces, carving obstacles, crowd agents, NavMesh queries; per-scene bakes for
+  several agent types at once (Window > Navigation) from render meshes or from the 2D colliders on the physics plane,
+  with obstacles only the bake sees.
 
 **Editor**
 - Dockable Dear ImGui interface: hierarchy, inspector, project browser, console, undo, gizmos, multi-selection.

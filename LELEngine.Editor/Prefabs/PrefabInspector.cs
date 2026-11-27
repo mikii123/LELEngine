@@ -618,6 +618,12 @@ namespace LELEngine.Editor
 				return modification.Removed ? name + "  (removed)" : name + " = " + ValueText(modification.Value, modification.Tag);
 			}
 
+			// A layer by its name, as the header shows it.
+			if (path == PropertyModification.LayerProperty && modification.Value is IConvertible layer)
+			{
+				return name + " = " + LayerMask.DisplayName(layer.ToInt32(System.Globalization.CultureInfo.InvariantCulture));
+			}
+
 			return name + " = " + ValueText(modification.Value, modification.Tag);
 		}
 

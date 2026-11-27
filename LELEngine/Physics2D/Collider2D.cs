@@ -403,6 +403,67 @@ namespace LELEngine
 			return added;
 		}
 
+		/// <summary>
+		///     Appends the shapes this collider makes where its object stands now, in world plane coordinates, simulated or
+		///     not (an edit-mode scene, a tool that reads the level): the shapes a static collider of the object would have,
+		///     its offset, rotation and scale in them. A collider on a rigidbody gives them where the object is drawn now.
+		///     A chain comes as its segments in order (<see cref="PhysicsShapeType2D.Edge" />, each segment's second point
+		///     the next one's first), thick edges as capsules in the same order. Returns the number of shapes appended.
+		/// </summary>
+		public int GetWorldShapes(List<PhysicsShape2D> results, List<Vector2> vertices)
+		{
+			if (gameObject == null || transform == null)
+			{
+				return 0;
+			}
+
+			Plane.PlanarPose(transform, null, out Vector2 position, out float angle, out Vector2 scale);
+			var geometry = new List<ShapeGeometry>();
+			BuildShapes(geometry, scale, angle, position);
+			int added = 0;
+			foreach (ShapeGeometry shape in geometry)
+			{
+				switch (shape.Kind)
+				{
+					case ShapeKind.Circle:
+						Append(results, vertices, PhysicsShapeType2D.Circle, shape.Circle.radius, shape.Circle.center);
+						added++;
+						break;
+					case ShapeKind.Capsule:
+						Append(results, vertices, PhysicsShapeType2D.Capsule, shape.Capsule.radius, shape.Capsule.center1, shape.Capsule.center2);
+						added++;
+						break;
+					case ShapeKind.Polygon:
+					{
+						int start = vertices.Count;
+						for (int i = 0; i < shape.Polygon.count; i++)
+						{
+							vertices.Add(Physics2DMath.ToEngine(shape.Polygon.vertices[i]));
+						}
+
+						results.Add(new PhysicsShape2D { shapeType = PhysicsShapeType2D.Polygon, radius = shape.Polygon.radius, vertexStartIndex = start, vertexCount = vertices.Count - start });
+						added++;
+						break;
+					}
+					case ShapeKind.Segment:
+						Append(results, vertices, PhysicsShapeType2D.Edge, 0f, shape.Segment.point1, shape.Segment.point2);
+						added++;
+						break;
+					case ShapeKind.Chain:
+						// The first and the last point are Box2D's ghost points: not part of the chain.
+						for (int i = 1; i + 2 < shape.ChainPoints.Length; i++)
+						{
+							Append(results, vertices, PhysicsShapeType2D.Edge, 0f, shape.ChainPoints[i], shape.ChainPoints[i + 1]);
+							added++;
+						}
+
+						break;
+				}
+			}
+
+			return added;
+		}
+
 		/// <summary>Raycasts from this collider's position (hits against its own shapes are skipped).</summary>
 		public int Raycast(Vector2 direction, List<RaycastHit2D> results, float distance = float.PositiveInfinity, int layerMask = -1)
 		{
@@ -626,6 +687,19 @@ namespace LELEngine
 					b2Shape_SetRestitution(shape, bounciness);
 				}
 			}
+		}
+
+		private static void Append(List<PhysicsShape2D> results, List<Vector2> vertices, PhysicsShapeType2D type, float radius, B2Vector2 a)
+		{
+			results.Add(new PhysicsShape2D { shapeType = type, radius = radius, vertexStartIndex = vertices.Count, vertexCount = 1 });
+			vertices.Add(Physics2DMath.ToEngine(a));
+		}
+
+		private static void Append(List<PhysicsShape2D> results, List<Vector2> vertices, PhysicsShapeType2D type, float radius, B2Vector2 a, B2Vector2 b)
+		{
+			results.Add(new PhysicsShape2D { shapeType = type, radius = radius, vertexStartIndex = vertices.Count, vertexCount = 2 });
+			vertices.Add(Physics2DMath.ToEngine(a));
+			vertices.Add(Physics2DMath.ToEngine(b));
 		}
 
 		private static bool MatrixEquals(Matrix4 a, Matrix4 b)

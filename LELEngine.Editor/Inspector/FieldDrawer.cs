@@ -1084,6 +1084,11 @@ namespace LELEngine.Editor
 				context.Track(changed);
 				value = type == typeof(float) ? (object)f : (double)f;
 			}
+			else if (type == typeof(int) && info != null && info.IsDefined(typeof(LayerAttribute), false))
+			{
+				changed = DrawLayer(ref value, mixed);
+				context.Track(changed);
+			}
 			else if (type.IsPrimitive && type != typeof(char))
 			{
 				int i = Convert.ToInt32(value);
@@ -1224,6 +1229,18 @@ namespace LELEngine.Editor
 			}
 
 			return changed;
+		}
+
+		/// <summary>One layer ([Layer] int): the editor's layer picker, as the object header's Layer.</summary>
+		private static bool DrawLayer(ref object value, bool mixed)
+		{
+			if (!EditorGui.LayerCombo("##v", Convert.ToInt32(value), mixed, out int picked))
+			{
+				return false;
+			}
+
+			value = picked;
+			return true;
 		}
 
 		/// <summary>A layer mask as a dropdown of the named layers to tick, with Nothing / Everything (as Unity draws it).</summary>

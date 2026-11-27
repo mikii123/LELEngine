@@ -136,6 +136,77 @@
   a held Space on a focused button and on a station's market row submits nothing until a new press; both failed with
   repeats passed through as before).
 
+## Scene navigation: agent types, bakes from 2D colliders, bake obstacles (2026-11-27)
+
+- The ask (a top-down game on the 2D physics): a navmesh workflow with no objects switched on and off for a bake and
+  no object made to be the ground; the 2D colliders are the obstacles; one bake makes a navmesh per agent width; and
+  obstacles only the bake sees (a cut where agents must not go, without a collider).
+- Agent types are project settings (`ProjectSettings.Navigation`, `Navigation/NavigationSettings.cs`: `NavMeshAgentType`
+  Id, Name, `Build` (`NavMeshBuildSettings`: radius, height, climb, slope, voxels, tiles)). A scene's navigation is a
+  scene setting (`SceneSettings.Navigation`, `Navigation/SceneNavigation.cs`: `SceneNavigationSettings` Geometry,
+  Include Layers, Agent Types (empty: all), Auto Bounds + Padding or Center / Size, Default Area, NavMesh). No object
+  holds the navmeshes: the bake writes them into an asset next to the scene (`SceneNavMeshAsset`, a ScriptableObject,
+  "Scenes/Flight/NavMesh.asset" for "Scenes/Flight.scene", Unity's place; the scene names it, so undo snapshots of the
+  scene settings carry a reference, not megabytes, and builds ship it as the scene's dependency, binary), one
+  `SceneNavMesh` per agent type (its data and the surface space's turn in the world).
+- Registration: `SceneNavigation.Sync(scene)` keeps the scene's navmeshes in the world as its settings name them
+  (`NavMesh.World.AddSurface(null, ...)`: a surface without a component); `Scene.StartLifecycle` calls it before the
+  components start (agents look in OnEnable), every navigation step and the Scene view's draw call it (a bake, an undo,
+  the asset read again), `Scene.Unload` takes them out (`Unregister`). Edit mode too: the Scene view shows them.
+- Geometry Render Meshes: the renderers as a `NavMeshSurface` collects them (layers, `NavMeshModifier`). Physics
+  Colliders: the ground is the simulation plane over the bounds (two triangles in the surface's space, which is the
+  plane's frame: x and z its axes, y off it; identity for XZ); every enabled, non-trigger `Collider2D` on an included
+  layer whose object has no rigidbody or a static one (`Moves`: dynamic and kinematic bodies are left out, as are
+  NavMesh Agents and Obstacles) is an obstacle. Shapes come from `Collider2D.GetWorldShapes` (new: the shapes in world
+  plane coordinates simulated or not, chains as ordered segments, thick edges as capsules), each a convex footprint
+  (hull, rounded by its radius: `Navigation/NavMeshShapes.cs`) widened by 0.71 voxel so it covers every voxel it
+  touches (the builder marks a voxel by its centre). Joined segments: a capsule each, and a closed run that goes
+  counter-clockwise (an outline facing out, Box2D's solid side) is filled by ear clipping; open chains and clockwise
+  loops (walls keeping things in) stay walls. `NavMeshModifier`: Ignore From Build leaves the object out; Override Area
+  other than Not Walkable makes its colliders an area (exact) instead of an obstacle. A trigger counts only with an
+  override: Not Walkable cuts it out like an obstacle (a zone agents keep out of: a landing zone that docks whatever
+  enters it), another area marks it.
+- Obstacles in the builder: `NavMeshAreaVolume.Obstacle` (new): marked not walkable before the erosion by the agent's
+  radius, so agents keep their radius off it as off solid geometry; area volumes stay after it (exact).
+- `NavMeshBakeObstacle` (new component, Navigation colour): box or upright cylinder (center, size, radius, height),
+  Affected Agent Type (-1 all). Only bakes see it: the scene's (with Physics Colliders its footprint cuts the plane
+  whatever its height; it also extends Auto Bounds) and `NavMeshSurface`'s. No collider, nothing at runtime. Drawn in
+  the Scene view with the navmesh (`NavMeshDebug.DrawBakeObstacles`, orange). GameObject > Navigation > NavMesh Bake
+  Obstacle.
+- Editor: Window > Navigation (`Panels/NavigationPanel.cs`): Agent Types (project; add / remove, ids assigned), Bake
+  (the scene's settings, a tick per agent type), Bake / Clear, what each navmesh came to, Scene View Shows (one agent
+  type or all: `NavMeshDebug.AgentTypeFilter`; navmeshes of several agents overlap). Actions Edit > Navigation > Bake
+  Scene NavMeshes / Clear Scene NavMeshes (CLI `action`); `EditorApplication.BakeSceneNavigation` throws while playing
+  or for a scene without a file. Clear empties the asset (the file stays). The bake is not undoable (Unity's isn't);
+  naming a new asset is a scene edit.
+- Fixed on the way: the world linked boundary edges of tiles of any two surfaces, whatever their agent types, so
+  navmeshes of two agent types over the same ground were linked wherever their edges met within the link tolerance and
+  a large agent's path walked over the small agent's navmesh (seen: a path 2.7 units from a rock with radius 10).
+  `NavMeshWorld.ConnectEdge` links within one agent type only.
+- Verified (a game's tests, New Frontier `Tests/Core/SceneNavigationTests`: box, circle, capsule, polygon, a closed
+  outline filled, a clockwise pen left open, an open wall, a barrier with a gap 4 wide, a dynamic body, a trigger, an
+  ignored object, an area collider, a bake obstacle; two agents of radius 1 and 3: middles cut, 0.4 off not walkable,
+  2.5 off walkable, 400 random points at least radius - 0.5 from every obstacle, the small agent through the gap, the
+  large one not, round the wall's end, the navmeshes gone with the setting). On a level of 196 static colliders (1736
+  shapes, 3246 obstacle pieces), radius 3 / voxel 1: 529 tiles in ~300 ms, radius 10: 49 tiles in ~37 ms; random points
+  at least 3.3 / 8.9 from every collider, paths at least 2.9 / 8.4 (the polygons' edge error), path queries ~0.1-0.2 ms.
+  Not checked: the Navigation window by hand in the GUI editor (built and drawn through the CLI's actions only), a
+  scene on the XY plane, Render Meshes bakes beyond the code shared with `NavMeshSurface`.
+
+## [Layer]: one layer in an int field (2026-11-27)
+
+- The user's ask: a game's generators drew their collider layer as a number (an int with [Range(0, 31)]); it should be
+  picked as everywhere else. `LayerAttribute` (`Mono/Attributes.cs`) on an int field: `FieldDrawer.DrawLeaf` draws it
+  with the editor's one layer picker, in collections and nested objects too (the field's `FieldInfo`). A `LayerMask`
+  field stays the multi-layer dropdown.
+- One picker everywhere (the user's follow-up: "replace it everywhere"): `EditorGui.LayerCombo(label, current, mixed,
+  out picked)`: the layers by name (slots 0..7 only when named or chosen), "—" for mixed values, Add Layer... (Project
+  Settings > Layers). The object header's Layer (one object and several) and [Layer] fields draw it; the prefab
+  overrides list shows a layer override by its name ("Layer = Level", was the number). No other inspector field holds a
+  single layer as an int (the engine's other `Layer` ints are texture layers, navmesh tile layers, GPU event depths).
+  Seen in a batch editor's Inspector screenshot (header "Default", a generator's Layer "Level"); a list element and
+  the overrides list not opened (batch mode clicks nothing).
+
 ## Building and running on this machine
 
 - Since 2026-10-20 the `dotnet` on PATH is the .NET 10 SDK (10.0.401, `C:\Program Files\dotnet`): plain `dotnet build`

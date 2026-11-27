@@ -48,6 +48,9 @@ namespace LELEngine
 		/// <summary>Graphics: the shaders every build ships although nothing of it references them (the ones scripts load by path).</summary>
 		public GraphicsSettings Graphics = new GraphicsSettings();
 
+		/// <summary>Navigation: the agent types scenes bake their navmeshes for.</summary>
+		public Navigation.NavigationSettings Navigation = new Navigation.NavigationSettings();
+
 		#endregion
 
 		#region PublicMethods

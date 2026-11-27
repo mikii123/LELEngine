@@ -175,6 +175,7 @@ namespace LELEngine.Editor
 		private readonly ProjectPanel projectPanel;
 		private readonly ConsolePanel consolePanel;
 		private readonly LightingPanel lightingPanel;
+		private readonly NavigationPanel navigationPanel;
 		private readonly ProjectSettingsWindow projectSettingsWindow;
 		private readonly PreferencesWindow preferencesWindow = new PreferencesWindow();
 		private readonly VFX.VfxGraphWindow vfxGraphWindow;
@@ -409,6 +410,7 @@ namespace LELEngine.Editor
 			projectPanel = new ProjectPanel(this);
 			consolePanel = new ConsolePanel(this);
 			lightingPanel = new LightingPanel(this);
+			navigationPanel = new NavigationPanel(this);
 			projectSettingsWindow = new ProjectSettingsWindow(this);
 			vfxGraphWindow = new VFX.VfxGraphWindow(this);
 			animatorWindow = new Animation.AnimatorWindow(this);
@@ -727,6 +729,7 @@ namespace LELEngine.Editor
 			GameView.Draw();
 			inspector.Draw();
 			lightingPanel.Draw();
+			navigationPanel.Draw();
 			projectPanel.Draw();
 			if (loading)
 			{
@@ -949,7 +952,7 @@ namespace LELEngine.Editor
 		{
 			var panels = new List<IEditorPanel>
 			{
-				mainPanel, hierarchy, SceneView, GameView, inspector, projectPanel, consolePanel, lightingPanel,
+				mainPanel, hierarchy, SceneView, GameView, inspector, projectPanel, consolePanel, lightingPanel, navigationPanel,
 				projectSettingsWindow, preferencesWindow, vfxGraphWindow, animatorWindow, animationWindow, timelineWindow, inputManagerWindow, testRunnerWindow, meshBakerWindow, uiBuilderPanel, audioStudioPanel
 			};
 			panels.AddRange(Extensions.OpenWindowPanels());
@@ -1497,6 +1500,7 @@ namespace LELEngine.Editor
 			projectPanel.Open = Saved("Project", true);
 			consolePanel.Open = Saved("Console", true);
 			lightingPanel.Open = Saved("Lighting", true);
+			navigationPanel.Open = Saved("Navigation", false);
 			inputManagerWindow.Open = Saved("Input Manager", false);
 			testRunnerWindow.Open = Saved("Test Runner", false);
 			meshBakerWindow.Open = Saved("Mesh Baker", false);
@@ -3922,6 +3926,7 @@ namespace LELEngine.Editor
 			states.Open["Project"] = projectPanel.Open;
 			states.Open["Console"] = consolePanel.Open;
 			states.Open["Lighting"] = lightingPanel.Open;
+			states.Open["Navigation"] = navigationPanel.Open;
 			states.Open["Project Settings"] = projectSettingsWindow.Open;
 			states.ProjectSettingsTab = projectSettingsWindow.CurrentTab.ToString();
 			states.Open["VFX Graph"] = vfxGraphWindow.Open;
@@ -3984,6 +3989,7 @@ namespace LELEngine.Editor
 			projectPanel.Open = Saved("Project", true);
 			consolePanel.Open = Saved("Console", true);
 			lightingPanel.Open = Saved("Lighting", true);
+			navigationPanel.Open = Saved("Navigation", false);
 			inputManagerWindow.Open = Saved("Input Manager", false);
 			testRunnerWindow.Open = Saved("Test Runner", false);
 			meshBakerWindow.Open = Saved("Mesh Baker", false);

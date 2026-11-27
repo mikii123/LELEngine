@@ -353,6 +353,7 @@ namespace LELEngine.Navigation
 		internal static void Update(Scene scene, float deltaTime)
 		{
 			long start = System.Diagnostics.Stopwatch.GetTimestamp();
+			SceneNavigation.Sync(scene);
 			foreach (NavMeshSurface surface in Surfaces)
 			{
 				surface.SyncTransform();

@@ -478,30 +478,10 @@ namespace LELEngine.Editor
 			ImGui.TextDisabled("Layer");
 			ImGui.SameLine();
 			ImGui.SetNextItemWidth(160);
-			if (EditorGui.BeginCombo("##layer", LayerMask.DisplayName(go.layer)))
+			if (EditorGui.LayerCombo("##layer", go.layer, false, out int pickedLayer))
 			{
-				for (int layer = 0; layer < 32; layer++)
-				{
-					string name = LayerMask.LayerToName(layer);
-					if (name.Length == 0 && layer != go.layer && layer < 8)
-					{
-						continue;
-					}
-
-					if (EditorGui.Selectable(LayerMask.DisplayName(layer), layer == go.layer) && layer != go.layer)
-					{
-						// An object with children asks whether they change too (EditorApplication.RequestLayer).
-						editor.RequestLayer(go, layer);
-					}
-				}
-
-				ImGui.Separator();
-				if (EditorGui.Selectable("Add Layer..."))
-				{
-					editor.ShowProjectSettings(ProjectSettingsWindow.Tab.Layers);
-				}
-
-				EditorGui.EndCombo();
+				// An object with children asks whether they change too (EditorApplication.RequestLayer).
+				editor.RequestLayer(go, pickedLayer);
 			}
 
 			PrefabInspector.MarkHeaderProperty(context, go, LELEngine.Serialization.PropertyModification.LayerProperty);
@@ -1197,29 +1177,9 @@ namespace LELEngine.Editor
 			ImGui.TextDisabled("Layer");
 			ImGui.SameLine();
 			ImGui.SetNextItemWidth(160);
-			if (EditorGui.BeginCombo("##layer", layerMixed ? EditorGui.MixedValue : LayerMask.DisplayName(go.layer)))
+			if (EditorGui.LayerCombo("##layer", go.layer, layerMixed, out int pickedLayer))
 			{
-				for (int layer = 0; layer < 32; layer++)
-				{
-					string name = LayerMask.LayerToName(layer);
-					if (name.Length == 0 && layer != go.layer && layer < 8)
-					{
-						continue;
-					}
-
-					if (EditorGui.Selectable(LayerMask.DisplayName(layer), !layerMixed && layer == go.layer) && (layerMixed || layer != go.layer))
-					{
-						editor.RequestLayer(objects, layer);
-					}
-				}
-
-				ImGui.Separator();
-				if (EditorGui.Selectable("Add Layer..."))
-				{
-					editor.ShowProjectSettings(ProjectSettingsWindow.Tab.Layers);
-				}
-
-				EditorGui.EndCombo();
+				editor.RequestLayer(objects, pickedLayer);
 			}
 
 			ImGui.SameLine(0, 16);

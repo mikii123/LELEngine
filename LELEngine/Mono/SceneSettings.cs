@@ -21,6 +21,9 @@ namespace LELEngine
 		public SceneShadowSettings Shadows = new SceneShadowSettings();
 		public SceneGISettings GI = new SceneGISettings();
 
+		/// <summary>The scene's navigation bake and its navmeshes (Window > Navigation); part of the world while the scene is loaded.</summary>
+		public Navigation.SceneNavigationSettings Navigation = new Navigation.SceneNavigationSettings();
+
 		#endregion
 
 		#region PublicMethods
