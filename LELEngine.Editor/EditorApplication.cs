@@ -418,7 +418,7 @@ namespace LELEngine.Editor
 			testRunnerWindow = new TestRunnerWindow(this);
 			meshBakerWindow = new MeshBakerWindow(this);
 
-			gameInput = new GameInputHost(window, () => PlayState == PlayState.Playing && GameView.HasInputFocus);
+			gameInput = new GameInputHost(window, () => PlayState == PlayState.Playing && GameView.HasInputFocus, () => new Vector2(GameView.ImageOrigin.X, GameView.ImageOrigin.Y));
 			Input.Host = gameInput;
 			if (window.Controller != null)
 			{

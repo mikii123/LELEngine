@@ -128,6 +128,10 @@
   anything else and never as navigation (submit, cancel, moves). Before, every repeat was a KeyDownEvent and Space /
   Enter a submit again: Space held while flying into a game's station submitted on its menu until let go. The UI
   Builder's preview forwards ImGui's repeats as repeats.
+- `Input.WarpCursor(pixel)` (2026-11-27, for a game whose aim follows the cursor: give the cursor back where the aim is
+  after a menu): `mousePosition` is that pixel at once (no movement counted), and the system's cursor moves there through
+  `IInputHost.WarpCursor` (new member): the game window sets GLFW's cursor position, the editor's `GameInputHost` adds
+  the Game view image's origin and moves the editor's cursor only while the game has the input.
 - Verified in a game's tests (New Frontier `Tests/UI/KeyRepeatTests`: the frames of press, repeat, release and a tap;
   a held Space on a focused button and on a station's market row submits nothing until a new press; both failed with
   repeats passed through as before).

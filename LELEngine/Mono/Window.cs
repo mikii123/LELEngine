@@ -33,6 +33,9 @@ namespace LELEngine
 		/// <summary>The window's frame pacing (its refresh period, what it still owes the real clock).</summary>
 		public FramePacing Pacing { get; } = new FramePacing();
 
+		/// <summary>The game's image is the window: its pixels are the window's.</summary>
+		public void WarpCursor(Vector2 position) => MousePosition = position;
+
 		#endregion
 
 		#region Constructors

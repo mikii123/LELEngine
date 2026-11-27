@@ -15,6 +15,7 @@ namespace LELEngine.Editor
 
 		private readonly NativeWindow window;
 		private readonly Func<bool> active;
+		private readonly Func<Vector2> imageOrigin;
 
 		// Keys held by automation (the CLI's "key" in play mode): down for the game whatever has focus.
 		private readonly HashSet<Keys> heldKeys = new HashSet<Keys>();
@@ -23,10 +24,12 @@ namespace LELEngine.Editor
 
 		#region Constructors
 
-		public GameInputHost(NativeWindow window, Func<bool> active)
+		/// <param name="imageOrigin">Where the game view's image starts in the window (the game's pixel 0, 0).</param>
+		public GameInputHost(NativeWindow window, Func<bool> active, Func<Vector2> imageOrigin)
 		{
 			this.window = window;
 			this.active = active;
+			this.imageOrigin = imageOrigin;
 		}
 
 		#endregion
@@ -67,6 +70,15 @@ namespace LELEngine.Editor
 		public bool IsMouseButtonDown(MouseButton button)
 		{
 			return active() && window.IsMouseButtonDown(button);
+		}
+
+		/// <summary>The editor's cursor moves only while the game has the input (a game never takes it from the editor's panels).</summary>
+		public void WarpCursor(Vector2 position)
+		{
+			if (active())
+			{
+				window.MousePosition = position + imageOrigin();
+			}
 		}
 
 		#endregion

@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using LELEngine.Mathematics;
 using LELEngine.Windowing;
@@ -12,6 +13,9 @@ namespace LELEngine
 		Vector2i ClientSize { get; }
 		bool IsKeyDown(Keys key);
 		bool IsMouseButtonDown(MouseButton button);
+
+		/// <summary>Moves the system's cursor to a pixel of the game's image (<see cref="Input.mousePosition" />'s coordinates).</summary>
+		void WarpCursor(Vector2 position);
 	}
 
 	public sealed class Input
@@ -87,6 +91,21 @@ namespace LELEngine
 			{
 				Host.CursorState = locked ? CursorState.Grabbed : CursorState.Normal;
 			}
+		}
+
+		/// <summary>
+		///     Puts the cursor on a pixel of the game's image (<see cref="mousePosition" />'s coordinates: from the image's
+		///     top left): the system's cursor moves there (in the editor only while the Game view has the input) and
+		///     <see cref="mousePosition" /> is that pixel from now on, with no movement counted (Unity's
+		///     Mouse.WarpCursorPosition). For a game whose aim follows the cursor: give the cursor back where the aim is.
+		/// </summary>
+		public static void WarpCursor(Vector2 position)
+		{
+			Vector2i size = Host != null ? Host.ClientSize : new Vector2i(1, 1);
+			mousePosition = position;
+			lastMousePosition = position;
+			relativeMousePosition = new Vector2(position.X / MathF.Max(1f, size.X), position.Y / MathF.Max(1f, size.Y));
+			Host?.WarpCursor(position);
 		}
 
 		public static float GetStandardAxis(StandardInputAxis axis, float sensitivity = 0.1f)
