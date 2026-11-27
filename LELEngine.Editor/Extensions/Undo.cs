@@ -22,6 +22,21 @@ namespace LELEngine.Editor
 		}
 
 		/// <summary>
+		///     Call before changing fields of a ScriptableObject asset (Unity's Undo.RecordObject on an asset): its state is
+		///     captured once, and the values it has when the edit ends become one undo step, as the inspector's edits of an
+		///     asset are; its file is written then (assets are saved as their edits end). Call it again before each change
+		///     (cheap while the same asset's edit goes on).
+		/// </summary>
+		/// <param name="name">Undo menu text (default: "Edit &lt;asset name&gt;").</param>
+		public static void RecordObject(ScriptableObject asset, string name = null)
+		{
+			if (asset != null)
+			{
+				EditorExtensions.Current.RecordAsset(asset, name);
+			}
+		}
+
+		/// <summary>
 		///     Runs a structural change of the scene (create or delete GameObjects, add or remove components, re-parent)
 		///     as one undo step.
 		/// </summary>

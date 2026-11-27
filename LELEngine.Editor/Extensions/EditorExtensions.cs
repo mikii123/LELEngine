@@ -671,6 +671,13 @@ namespace LELEngine.Editor
 			changedComponents.Add(component);
 		}
 
+		/// <summary>An editor script is about to change an asset: one undo step from now until the edit ends, the file written then.</summary>
+		public void RecordAsset(ScriptableObject asset, string name)
+		{
+			editor.Edits.Begin(asset, name);
+			recordPending = true;
+		}
+
 		public void RecordSceneChange(string name, Action change)
 		{
 			editor.RecordStructural(name, change);

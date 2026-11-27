@@ -1689,6 +1689,13 @@
 
 - Public API in `LELEngine.Editor/Extensions`: `Editor` + `[CustomEditor]`, `EditorWindow`, `[MenuItem]`,
   `EditorGUILayout`, `Undo`, `Selection`; the internal host is `EditorExtensions` (`EditorApplication.Extensions`).
+- `Undo.RecordObject(ScriptableObject asset, name)` (2026-11-27, Unity's RecordObject on an asset; a game's editor
+  window that adds and removes the elements of its assets): before an editor script changes an asset, the edit tracker
+  takes its state (`EditorExtensions.RecordAsset` -> `EditTracker.Begin`, as the inspector's asset edits), and when no
+  ImGui item is active any more the step is one `AssetStateRecord` and the file is written (assets save as their edits
+  end; a script calls nothing to save). Called again before each change of the same asset it costs nothing. Verified in
+  a batch editor through a script (an element added: the file has it; undo: gone from the loaded asset and the file;
+  redo: back).
   The editor's own main window class is `MainWindow` (the name `EditorWindow` belongs to the public API).
 - Scripts in any `Editor` folder under `Assets` build into `Game.Editor.dll` through a second generated project
   (`<Name>.Editor.csproj`, ProjectReference to `<Name>.csproj`, which excludes `Assets\**\Editor\**` and
