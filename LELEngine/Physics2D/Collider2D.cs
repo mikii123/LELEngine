@@ -92,6 +92,31 @@ namespace LELEngine
 			}
 		}
 
+		/// <summary>
+		///     Decides this collider's touching contacts before the solver, every step they touch (false: no response in that
+		///     step, the bodies keep their velocities; see <see cref="PreSolveContact2D" />). Called on the physics worker
+		///     threads, also for several contacts at once: it may read the scene's state and its own, but must not change
+		///     the scene, the physics or anything a main-thread script reads during the step; queue what it decides and act
+		///     on it after the step. When both colliders of a contact have one, both are asked and the contact is solved only
+		///     if both say so. Not serialized: set it from code, before the collider is simulated (a contact made before
+		///     keeps going without it until it ends).
+		/// </summary>
+		public PreSolveCallback2D preSolve
+		{
+			get => m_PreSolve;
+			set
+			{
+				m_PreSolve = value;
+				foreach (B2ShapeId shape in shapes)
+				{
+					if (b2Shape_IsValid(shape))
+					{
+						b2Shape_EnablePreSolveEvents(shape, value != null);
+					}
+				}
+			}
+		}
+
 		/// <summary>The rigidbody this collider is attached to (null for static colliders or while not simulated).</summary>
 		public Rigidbody2D attachedRigidbody { get; internal set; }
 
@@ -186,6 +211,7 @@ namespace LELEngine
 		#region PrivateFields
 
 		private Matrix4 staticPose;
+		private PreSolveCallback2D m_PreSolve;
 
 		#endregion
 
@@ -573,6 +599,8 @@ namespace LELEngine
 			def.enableSensorEvents = true;
 			def.enableContactEvents = true;
 			def.enableCustomFiltering = true;
+			// The world's pre-solve callback is asked only for contacts of shapes that want it (preSolve).
+			def.enablePreSolveEvents = m_PreSolve != null;
 			// The body's mass is computed once after all of its shapes exist (Rigidbody2D.MassChanged).
 			def.updateBodyMass = false;
 

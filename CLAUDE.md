@@ -220,6 +220,32 @@
   no begin event (the slot never saw the ship), so the slot asks the world instead. Verified through that game's slot
   tests (the ship still in the slot keeps it, gone frees it, a dead one frees it).
 
+## Collider2D.preSolve: deciding a contact before the solver (2026-11-27)
+
+- Made for a game's shield bubble that breaks on a hard impact and lets the body through (a contact let through keeps
+  both bodies' velocities; deciding after the step would be too late: the solver has already stopped them). Unity's
+  classic 2D API has nothing like it; Box2D v3 has the pre-solve callback.
+- `Collider2D.preSolve` (`PreSolveCallback2D`, not serialized): asked for each touching contact of the collider every
+  step it touches, before the solver; false: no response in that step (no OnCollision events while it says so). The
+  `PreSolveContact2D` it gets: `collider` (its own), `otherCollider`, `point` (the manifold's deepest, world plane),
+  `normal` (unit, from the collider towards the other), `pointVelocity` / `otherPointVelocity` (each body's velocity at
+  the point, `b2Body_GetWorldPointVelocity`), `mass` / `otherMass` (a dynamic body's, 0 for one that cannot be moved),
+  `relativeVelocity` (other minus own, as `ContactPoint2D`), `approachSpeed` (positive while closing). The bodies' state
+  is the step's start (the last step's velocities, this step's forces not in them).
+- Box2D calls it on its worker threads, several contacts at once: the callback may read, must not change the scene or the
+  physics, and should queue what it decides for after the step. When both colliders have one, both are asked (each from
+  its own view) and the contact is solved only if both agree. An exception it throws is caught on the worker and logged
+  after the step (the contact solved as usual). Contacts made before the callback was set keep going without it
+  (Box2D takes the flag when a contact is made): set it before the collider is simulated.
+- How: shapes are created with `enablePreSolveEvents` while the collider has a callback (setting it later turns it on for
+  existing shapes, `b2Shape_EnablePreSolveEvents`); the world has one `b2World_SetPreSolveCallback`
+  (`PhysicsScene2D.PreSolve`: the colliders from the shapes' user data, Box2D's normal points from A to B), asked only for
+  contacts with the flag. Box2D asks it for speculative contacts too (the step the bodies close in, before they touch):
+  a callback that counts impacts has to treat consecutive steps of one contact as one.
+- Verified in a game's tests (New Frontier `Tests/Ships/ShieldCollisionTests`: a bubble that holds stops the body where it
+  touches, one that breaks lets it through at its speed to meet the wall with its hull, two bubbles meeting, its mass
+  zero on the body).
+
 ## [Layer]: one layer in an int field (2026-11-27)
 
 - The user's ask: a game's generators drew their collider layer as a number (an int with [Range(0, 31)]); it should be

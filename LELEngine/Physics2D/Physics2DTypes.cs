@@ -84,6 +84,63 @@ namespace LELEngine
 		public bool enabled;
 	}
 
+	/// <summary>
+	///     A touching contact about to be solved, from <see cref="collider" />'s view, as <see cref="Collider2D.preSolve" />
+	///     gets it: before the solver of the step resolves it, so the callback can still let it through. The bodies' state
+	///     is the step's start: their velocities are the last step's result (without this step's forces).
+	/// </summary>
+	public readonly struct PreSolveContact2D
+	{
+		/// <summary>The collider whose callback this is.</summary>
+		public readonly Collider2D collider;
+
+		/// <summary>The collider it touches.</summary>
+		public readonly Collider2D otherCollider;
+
+		/// <summary>The contact's deepest point, in world (simulation plane) coordinates.</summary>
+		public readonly Vector2 point;
+
+		/// <summary>Unit normal from <see cref="collider" /> towards <see cref="otherCollider" />.</summary>
+		public readonly Vector2 normal;
+
+		/// <summary>The velocity of <see cref="collider" />'s body at <see cref="point" /> (zero for a static collider).</summary>
+		public readonly Vector2 pointVelocity;
+
+		/// <summary>The velocity of the other body at <see cref="point" />.</summary>
+		public readonly Vector2 otherPointVelocity;
+
+		/// <summary>The mass of <see cref="collider" />'s body when it is dynamic; 0 when it cannot be moved (static, kinematic).</summary>
+		public readonly float mass;
+
+		/// <summary>The other body's mass when it is dynamic; 0 when it cannot be moved.</summary>
+		public readonly float otherMass;
+
+		public PreSolveContact2D(Collider2D collider, Collider2D otherCollider, Vector2 point, Vector2 normal, Vector2 pointVelocity, Vector2 otherPointVelocity, float mass, float otherMass)
+		{
+			this.collider = collider;
+			this.otherCollider = otherCollider;
+			this.point = point;
+			this.normal = normal;
+			this.pointVelocity = pointVelocity;
+			this.otherPointVelocity = otherPointVelocity;
+			this.mass = mass;
+			this.otherMass = otherMass;
+		}
+
+		/// <summary>The other body's velocity relative to this one's at the point (as <see cref="ContactPoint2D.relativeVelocity" />).</summary>
+		public Vector2 relativeVelocity => otherPointVelocity - pointVelocity;
+
+		/// <summary>How fast the two close in along the normal (positive while they approach, negative while they part).</summary>
+		public float approachSpeed => -Vector2.Dot(relativeVelocity, normal);
+	}
+
+	/// <summary>
+	///     Decides a touching contact before the solver (<see cref="Collider2D.preSolve" />): false lets the colliders pass
+	///     through each other in this step (no response, no OnCollision events while it says so). Called on the physics
+	///     worker threads, several at once.
+	/// </summary>
+	public delegate bool PreSolveCallback2D(in PreSolveContact2D contact);
+
 	/// <summary>Information about a collision given to OnCollisionEnter2D / Stay2D / Exit2D (from the receiving object's view).</summary>
 	public sealed class Collision2D
 	{

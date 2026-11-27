@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using Box2D.NET;
 using LELEngine.Mathematics;
 using static Box2D.NET.B2Bodies;
@@ -92,6 +93,10 @@ namespace LELEngine
 
 		private static readonly b2OverlapResultFcn overlapCallback = (shape, context) => ((QueryState)context).OnOverlap(shape);
 		private static readonly b2CastResultFcn rayCallback = (shape, point, normal, fraction, context) => ((QueryState)context).OnCast(shape, point, normal, fraction);
+		private static readonly b2PreSolveFcn preSolveCallback = (shapeA, shapeB, point, normal, context) => ((PhysicsScene2D)context).PreSolve(shapeA, shapeB, point, normal);
+
+		// The first exception a collider's pre-solve callback threw in the step (on a worker thread): logged after it.
+		private Exception preSolveFailure;
 
 		#endregion
 
@@ -117,6 +122,8 @@ namespace LELEngine
 			}
 
 			World = b2CreateWorld(def);
+			// Asked only for contacts of shapes created with pre-solve events (colliders with Collider2D.preSolve).
+			b2World_SetPreSolveCallback(World, preSolveCallback, this);
 			customFilter = CustomFilter;
 			query.Scene = this;
 			Array.Copy(MatrixOf(Settings), filteredMatrix, 32);
@@ -389,6 +396,12 @@ namespace LELEngine
 			finally
 			{
 				IsStepping = false;
+			}
+
+			Exception failure = Interlocked.Exchange(ref preSolveFailure, null);
+			if (failure != null)
+			{
+				Debug.LogException(failure);
 			}
 
 			foreach (Rigidbody2D rigidbody in bodies)
@@ -708,6 +721,52 @@ namespace LELEngine
 			if (closestOnly && results.Count > 1)
 			{
 				results.RemoveRange(1, results.Count - 1);
+			}
+		}
+
+		/// <summary>
+		///     Box2D's pre-solve, on its worker threads, for a touching contact of a shape with pre-solve events: each side's
+		///     <see cref="Collider2D.preSolve" /> from its own view; solved only if every callback agrees. Reads only (the
+		///     bodies' velocities and masses as the step began).
+		/// </summary>
+		private bool PreSolve(B2ShapeId shapeA, B2ShapeId shapeB, B2Vector2 point, B2Vector2 normal)
+		{
+			try
+			{
+				Collider2D a = b2Shape_GetUserData(shapeA).GetRef<Collider2D>();
+				Collider2D b = b2Shape_GetUserData(shapeB).GetRef<Collider2D>();
+				PreSolveCallback2D callA = a?.preSolve;
+				PreSolveCallback2D callB = b?.preSolve;
+				if (a == null || b == null || (callA == null && callB == null))
+				{
+					return true;
+				}
+
+				B2BodyId bodyA = b2Shape_GetBody(shapeA);
+				B2BodyId bodyB = b2Shape_GetBody(shapeB);
+				Vector2 at = Physics2DMath.ToEngine(point);
+				Vector2 towardsB = Physics2DMath.ToEngine(normal);
+				Vector2 velocityA = Physics2DMath.ToEngine(b2Body_GetWorldPointVelocity(bodyA, point));
+				Vector2 velocityB = Physics2DMath.ToEngine(b2Body_GetWorldPointVelocity(bodyB, point));
+				float massA = b2Body_GetType(bodyA) == B2BodyType.b2_dynamicBody ? b2Body_GetMass(bodyA) : 0f;
+				float massB = b2Body_GetType(bodyB) == B2BodyType.b2_dynamicBody ? b2Body_GetMass(bodyB) : 0f;
+				bool solve = true;
+				if (callA != null)
+				{
+					solve &= callA(new PreSolveContact2D(a, b, at, towardsB, velocityA, velocityB, massA, massB));
+				}
+
+				if (callB != null)
+				{
+					solve &= callB(new PreSolveContact2D(b, a, at, -towardsB, velocityB, velocityA, massB, massA));
+				}
+
+				return solve;
+			}
+			catch (Exception e)
+			{
+				Interlocked.CompareExchange(ref preSolveFailure, e, null);
+				return true;
 			}
 		}
 
