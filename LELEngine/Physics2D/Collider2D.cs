@@ -4,6 +4,7 @@ using Box2D.NET;
 using LELEngine.Mathematics;
 using static Box2D.NET.B2Bodies;
 using static Box2D.NET.B2Constants;
+using static Box2D.NET.B2Distances;
 using static Box2D.NET.B2Geometries;
 using static Box2D.NET.B2Hulls;
 using static Box2D.NET.B2MathFunction;
@@ -462,6 +463,50 @@ namespace LELEngine
 			}
 
 			return added;
+		}
+
+		/// <summary>
+		///     The colliders that overlap this collider's shapes where its object stands now (Unity's
+		///     Physics2D.OverlapCollider), whether or not this collider is simulated: a disabled trigger can ask whether
+		///     something is still in it. Its own colliders (this one, those of its rigidbody) are left out; triggers are
+		///     found as <paramref name="useTriggers" /> says (null: the project's Queries Hit Triggers). A query of the
+		///     scene's physics world: sleeping bodies are found too, nothing waits for contact or trigger events. Returns the
+		///     number found.
+		/// </summary>
+		public int OverlapCollider(List<Collider2D> results, int layerMask = -1, bool? useTriggers = null)
+		{
+			results.Clear();
+			PhysicsScene2D scene = world ?? gameObject?.scene?.Physics2DIfCreated;
+			if (scene == null)
+			{
+				return 0;
+			}
+
+			var placed = new List<PhysicsShape2D>();
+			var points = new List<Vector2>();
+			GetWorldShapes(placed, points);
+			var found = new List<Collider2D>();
+			Span<B2Vector2> corners = stackalloc B2Vector2[B2_MAX_POLYGON_VERTICES];
+			foreach (PhysicsShape2D shape in placed)
+			{
+				int count = Math.Min(shape.vertexCount, B2_MAX_POLYGON_VERTICES);
+				for (int i = 0; i < count; i++)
+				{
+					corners[i] = Physics2DMath.ToB2(points[shape.vertexStartIndex + i]);
+				}
+
+				B2ShapeProxy proxy = b2MakeProxy(corners, count, Math.Max(shape.radius, shape.shapeType == PhysicsShapeType2D.Circle ? 0.0001f : 0f));
+				scene.OverlapShapeAll(proxy, layerMask, useTriggers, found);
+				foreach (Collider2D other in found)
+				{
+					if (other != this && (attachedRigidbody == null || other.attachedRigidbody != attachedRigidbody) && !results.Contains(other))
+					{
+						results.Add(other);
+					}
+				}
+			}
+
+			return results.Count;
 		}
 
 		/// <summary>Raycasts from this collider's position (hits against its own shapes are skipped).</summary>

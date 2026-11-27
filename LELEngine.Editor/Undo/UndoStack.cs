@@ -180,6 +180,7 @@ namespace LELEngine.Editor
 		{
 			EditorSerialization.ApplyObject(ProjectSettings.Current, data, null);
 			Lighting.GI.InvalidateStatic();
+			ProjectSettings.Current.Navigation?.Apply();
 			editor.SaveProjectSettings();
 		}
 

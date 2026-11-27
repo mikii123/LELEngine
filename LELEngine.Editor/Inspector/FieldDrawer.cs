@@ -1089,6 +1089,11 @@ namespace LELEngine.Editor
 				changed = DrawLayer(ref value, mixed);
 				context.Track(changed);
 			}
+			else if (type == typeof(int) && info != null && info.IsDefined(typeof(Navigation.NavAreaAttribute), false))
+			{
+				changed = DrawNavArea(ref value, mixed);
+				context.Track(changed);
+			}
 			else if (type.IsPrimitive && type != typeof(char))
 			{
 				int i = Convert.ToInt32(value);
@@ -1223,6 +1228,46 @@ namespace LELEngine.Editor
 						value = Enum.ToObject(type, current);
 						changed = true;
 					}
+				}
+
+				EditorGui.EndCombo();
+			}
+
+			return changed;
+		}
+
+		/// <summary>
+		///     A navmesh area ([NavArea] int) by name: the engine's three and the project's own (Project Settings >
+		///     Navigation > Areas, with their costs), an undefined one when it is the value.
+		/// </summary>
+		private static bool DrawNavArea(ref object value, bool mixed)
+		{
+			int current = Convert.ToInt32(value);
+			Navigation.NavigationSettings settings = ProjectSettings.Current.Navigation;
+			string Label(int area) => Navigation.NavMesh.AreaNames[Math.Clamp(area, 0, Navigation.NavMeshArea.Count - 1)]
+			                          + (area >= Navigation.NavMeshArea.FirstUserArea ? $" (cost {Navigation.NavMesh.GetAreaCost(area):0.##})" : "");
+			bool changed = false;
+			if (EditorGui.BeginCombo("##v", mixed ? EditorGui.MixedValue : Label(current)))
+			{
+				for (int area = 0; area < Navigation.NavMeshArea.Count; area++)
+				{
+					bool defined = area < Navigation.NavMeshArea.FirstUserArea || (settings?.Areas?.Exists(definition => definition != null && definition.Index == area) ?? false);
+					if (!defined && area != current)
+					{
+						continue;
+					}
+
+					if (EditorGui.Selectable(Label(area) + "##area" + area, !mixed && area == current) && (mixed || area != current))
+					{
+						value = area;
+						changed = true;
+					}
+				}
+
+				ImGui.Separator();
+				if (EditorGui.Selectable("Add Area..."))
+				{
+					EditorApplication.Instance?.ShowNavigationWindow();
 				}
 
 				EditorGui.EndCombo();

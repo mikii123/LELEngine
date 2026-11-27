@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
+using Hexa.NET.ImGui;
 using LELEngine.Navigation;
 
 namespace LELEngine.Editor
@@ -95,6 +96,13 @@ namespace LELEngine.Editor
 			NotifySceneChanged();
 			Debug.Log(DescribeBake(scene, path, results));
 			return results;
+		}
+
+		/// <summary>Opens Window > Navigation in front (its Areas: where an area picker's Add Area... leads).</summary>
+		public void ShowNavigationWindow()
+		{
+			navigationPanel.Open = true;
+			ImGui.SetWindowFocus("Navigation");
 		}
 
 		/// <summary>Empties the open scene's navmesh asset (the file stays, holding none): no navmesh of the scene is left in the world.</summary>

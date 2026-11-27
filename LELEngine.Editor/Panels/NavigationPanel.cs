@@ -94,6 +94,13 @@ namespace LELEngine.Editor
 				ImGui.PopID();
 			}
 
+			if (EditorGui.CollapsingHeader("Areas (project)", ImGuiTreeNodeFlags.DefaultOpen))
+			{
+				ImGui.PushID("areas");
+				DrawAreas(project);
+				ImGui.PopID();
+			}
+
 			if (EditorGui.CollapsingHeader("Bake (" + scene.Name + ")", ImGuiTreeNodeFlags.DefaultOpen))
 			{
 				ImGui.PushID("bake");
@@ -150,6 +157,57 @@ namespace LELEngine.Editor
 				project.AgentTypes.Add(new NavMeshAgentType { Id = id, Name = "Agent " + id });
 				context.EndEdit();
 			}
+		}
+
+		/// <summary>The project's areas: name and path cost each (Walkable, Not Walkable and Jump are the engine's).</summary>
+		private void DrawAreas(NavigationSettings project)
+		{
+			context.UndoTarget = ProjectSettings.Current;
+			project.Areas ??= new List<NavMeshAreaDefinition>();
+			ImGui.TextDisabled("Walkable costs 1, Jump 2; Not Walkable is no navmesh. Paths go round a costly area.");
+			int remove = -1;
+			for (int i = 0; i < project.Areas.Count; i++)
+			{
+				NavMeshAreaDefinition area = project.Areas[i];
+				if (area == null)
+				{
+					continue;
+				}
+
+				ImGui.PushID(i);
+				if (ImGui.TreeNodeEx($"{area.Name} (area {area.Index}, cost {area.Cost:0.##})###area", ImGuiTreeNodeFlags.DefaultOpen))
+				{
+					FieldDrawer.DrawFields(area, context, filter: field => field.Name != nameof(NavMeshAreaDefinition.Index));
+					if (EditorGui.Button("Remove " + area.Name))
+					{
+						remove = i;
+					}
+
+					ImGui.TreePop();
+				}
+
+				ImGui.PopID();
+			}
+
+			if (remove >= 0)
+			{
+				context.BeginEdit();
+				project.Areas.RemoveAt(remove);
+				context.EndEdit();
+			}
+
+			int next = project.NextAreaIndex();
+			ImGui.BeginDisabled(next < 0);
+			if (EditorGui.Button("Add Area"))
+			{
+				context.BeginEdit();
+				project.Areas.Add(new NavMeshAreaDefinition { Index = next, Name = "Area " + next, Cost = 2f });
+				context.EndEdit();
+			}
+
+			ImGui.EndDisabled();
+			// The names and costs queries and the pickers read: live as they are edited.
+			project.Apply();
 		}
 
 		private void DrawBake(Scene scene, NavigationSettings project)

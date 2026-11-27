@@ -15,9 +15,53 @@ namespace LELEngine.Navigation
 
 		public List<NavMeshAgentType> AgentTypes = new List<NavMeshAgentType> { new NavMeshAgentType() };
 
+		/// <summary>The project's own areas (3..31: 0 Walkable, 1 Not Walkable and 2 Jump are the engine's): names and path costs.</summary>
+		public List<NavMeshAreaDefinition> Areas = new List<NavMeshAreaDefinition>();
+
 		#endregion
 
 		#region PublicMethods
+
+		/// <summary>
+		///     Makes the areas the live ones: <see cref="NavMesh.AreaNames" /> and the costs paths are found with
+		///     (<see cref="NavMesh.SetAreaCost" />); areas not defined go back to "User n" at cost 1.
+		/// </summary>
+		public void Apply()
+		{
+			for (int area = NavMeshArea.FirstUserArea; area < NavMeshArea.Count; area++)
+			{
+				NavMesh.AreaNames[area] = "User " + area;
+				NavMesh.SetAreaCost(area, 1f);
+			}
+
+			if (Areas == null)
+			{
+				return;
+			}
+
+			foreach (NavMeshAreaDefinition definition in Areas)
+			{
+				if (definition != null && definition.Index >= NavMeshArea.FirstUserArea && definition.Index < NavMeshArea.Count)
+				{
+					NavMesh.AreaNames[definition.Index] = string.IsNullOrEmpty(definition.Name) ? "User " + definition.Index : definition.Name;
+					NavMesh.SetAreaCost(definition.Index, definition.Cost);
+				}
+			}
+		}
+
+		/// <summary>An area index no area of the project has (the first free one from 3), or -1 when all are taken.</summary>
+		public int NextAreaIndex()
+		{
+			for (int area = NavMeshArea.FirstUserArea; area < NavMeshArea.Count; area++)
+			{
+				if (Areas == null || !Areas.Exists(definition => definition != null && definition.Index == area))
+				{
+					return area;
+				}
+			}
+
+			return -1;
+		}
 
 		/// <summary>The agent type of an id, or null.</summary>
 		public NavMeshAgentType Find(int id)
@@ -62,6 +106,23 @@ namespace LELEngine.Navigation
 
 			return next;
 		}
+
+		#endregion
+	}
+
+	/// <summary>An area of the project: its index (what modifiers and polygons carry), its name and its path cost.</summary>
+	[Serializable]
+	public sealed class NavMeshAreaDefinition
+	{
+		#region PublicFields
+
+		[Tooltip("The area's number (3..31) in modifiers, volumes and the baked polygons.")]
+		public int Index = NavMeshArea.FirstUserArea;
+
+		public string Name = "Area";
+
+		[Tooltip("What a unit of path through it costs (Walkable costs 1): paths go round it unless the way round is this many times longer.")]
+		public float Cost = 1f;
 
 		#endregion
 	}

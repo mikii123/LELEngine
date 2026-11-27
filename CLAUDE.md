@@ -193,6 +193,33 @@
   Not checked: the Navigation window by hand in the GUI editor (built and drawn through the CLI's actions only), a
   scene on the XY plane, Render Meshes bakes beyond the code shared with `NavMeshSurface`.
 
+## Navigation areas: names and costs, cylinder modifier volumes (2026-11-27)
+
+- The ask (a game: a costly band round a station so ships passing by keep off those manoeuvring at it): Project
+  Settings > Navigation > Areas (Unity's Areas tab): `NavigationSettings.Areas`, `NavMeshAreaDefinition` Index (3..31,
+  `NavMeshArea.FirstUserArea`), Name, Cost; `NavigationSettings.Apply` makes them live (`NavMesh.AreaNames`,
+  `SetAreaCost`; undefined areas back to "User n", cost 1), called by `ProjectSettings.Use`, the undo of a project
+  settings edit and the Navigation window (each draw, cheap). Edited in Window > Navigation (Add / Remove; Walkable 1,
+  Jump 2, Not Walkable none are the engine's).
+- `[NavArea]` (`Navigation/NavMeshData.cs`) on an int field: the inspector picks the area by name with its cost, then
+  Add Area... (opens Window > Navigation). On `NavMeshModifier.area`, `NavMeshModifierVolume.area`,
+  `NavMeshSurface.defaultArea`, `SceneNavigationSettings.DefaultArea`.
+- `NavMeshModifierVolume.shape`: Box (as before) or Capsule, an upright cylinder of `radius` (x the larger of X / Z
+  scale) and the box's height. A scene's Physics Colliders bake takes a volume's outline through the plane whatever its
+  height (as bake obstacles). Areas are marked after the erosion and only on walkable cells: holes stay holes.
+- Verified (a game's `SceneNavigationTests.PathsGoRoundACostlyAreaShipsCanStillFlyInto`: a cylinder of radius 12, the
+  path across straight through at cost 1, round it at cost 5, no corner inside, a path into its middle complete).
+
+## Collider2D.OverlapCollider (2026-11-27)
+
+- Unity's Physics2D.OverlapCollider as a collider's method: `OverlapCollider(results, layerMask, useTriggers)` finds
+  the colliders overlapping its shapes where its object stands, simulated or not (the shapes from `GetWorldShapes`, each
+  a Box2D proxy through `PhysicsScene2D.OverlapShapeAll`, the scene's world even for a disabled collider); its own
+  colliders (itself, its rigidbody's) left out. A query: sleeping bodies are found, nothing waits for events. Made for a
+  game's docking slot whose trigger is off while a ship leaves it: a sensor switched on again over a body at rest gave
+  no begin event (the slot never saw the ship), so the slot asks the world instead. Verified through that game's slot
+  tests (the ship still in the slot keeps it, gone frees it, a dead one frees it).
+
 ## [Layer]: one layer in an int field (2026-11-27)
 
 - The user's ask: a game's generators drew their collider layer as a number (an int with [Range(0, 31)]); it should be

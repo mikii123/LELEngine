@@ -12,6 +12,10 @@ namespace LELEngine.Navigation
 		public const int Walkable = 0;
 		public const int NotWalkable = 1;
 		public const int Jump = 2;
+
+		/// <summary>The first area a project defines (Project Settings > Navigation > Areas).</summary>
+		public const int FirstUserArea = 3;
+
 		public const int Count = 32;
 		public const int AllAreas = -1;
 
@@ -27,6 +31,12 @@ namespace LELEngine.Navigation
 		{
 			return internalArea == Null ? NotWalkable : internalArea - 1;
 		}
+	}
+
+	/// <summary>An int field holding a navmesh area: the inspector picks it by name (the engine's areas and the project's).</summary>
+	[AttributeUsage(AttributeTargets.Field)]
+	public sealed class NavAreaAttribute : Attribute
+	{
 	}
 
 	/// <summary>

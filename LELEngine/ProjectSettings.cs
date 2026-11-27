@@ -60,6 +60,7 @@ namespace LELEngine
 		{
 			Current = settings ?? new ProjectSettings();
 			Current.GI.InvalidateStatic();
+			(Current.Navigation ??= new Navigation.NavigationSettings()).Apply();
 			return Current;
 		}
 

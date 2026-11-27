@@ -51,7 +51,7 @@ namespace LELEngine.Navigation
 		public Vector3 Size = new Vector3(200f, 20f, 200f);
 
 		[Tooltip("Area of the walkable ground (Physics Colliders: the plane; Render Meshes: renderers without a NavMesh Modifier).")]
-		public int DefaultArea = NavMeshArea.Walkable;
+		[NavArea] public int DefaultArea = NavMeshArea.Walkable;
 
 		[Tooltip("The baked navmeshes, one per agent type (written by Bake into the scene's folder).")]
 		public SceneNavMeshAsset NavMesh;
@@ -188,7 +188,7 @@ namespace LELEngine.Navigation
 			}
 
 			CollectBakeObstacles(scene, settings, agentType.Id, build, worldToSurface, plane, volumes, ref min, ref max);
-			CollectModifierVolumes(scene, worldToSurface, volumes);
+			CollectModifierVolumes(scene, worldToSurface, plane, Math.Max(10f, build.AgentHeight * 4f), volumes);
 			foreach (NavMeshAreaVolume volume in volumes)
 			{
 				if (volume.Obstacle)
@@ -624,13 +624,21 @@ namespace LELEngine.Navigation
 			}
 		}
 
-		private static void CollectModifierVolumes(Scene scene, in Matrix4 worldToSurface, List<NavMeshAreaVolume> volumes)
+		/// <summary>Area volumes; on the simulation plane their outline marks the plane whatever their height.</summary>
+		private static void CollectModifierVolumes(Scene scene, in Matrix4 worldToSurface, bool plane, float depth, List<NavMeshAreaVolume> volumes)
 		{
 			foreach (NavMeshModifierVolume volume in scene.FindObjectsOfType<NavMeshModifierVolume>())
 			{
 				if (volume.enabled && volume.gameObject.activeInHierarchy)
 				{
-					volumes.Add(volume.ToLocalVolume(worldToSurface));
+					NavMeshAreaVolume local = volume.ToLocalVolume(worldToSurface);
+					if (plane)
+					{
+						local.MinY = -depth;
+						local.MaxY = depth;
+					}
+
+					volumes.Add(local);
 				}
 			}
 		}

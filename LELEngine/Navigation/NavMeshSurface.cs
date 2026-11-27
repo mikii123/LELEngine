@@ -47,7 +47,7 @@ namespace LELEngine.Navigation
 
 		public Vector3 size = new Vector3(50f, 20f, 50f);
 
-		[Tooltip("Area of the geometry without a NavMeshModifier.")]
+		[Tooltip("Area of the geometry without a NavMeshModifier.")] [NavArea]
 		public int defaultArea = NavMeshArea.Walkable;
 
 		[Tooltip("Ignore NavMeshModifier components while collecting.")]
@@ -409,7 +409,7 @@ namespace LELEngine.Navigation
 		[Tooltip("Bake this object with the area below instead of the surface's default.")]
 		public bool overrideArea;
 
-		public int area = NavMeshArea.Walkable;
+		[NavArea] public int area = NavMeshArea.Walkable;
 
 		[Tooltip("The modifier also applies to the children of this object.")]
 		public bool applyToChildren = true;
@@ -429,16 +429,27 @@ namespace LELEngine.Navigation
 		#endregion
 	}
 
-	/// <summary>A box volume whose walkable cells get an area (water, mud, danger zones), yaw-aligned with the object.</summary>
+	/// <summary>
+	///     A box or an upright cylinder whose walkable cells get an area (water, mud, danger zones, a costly approach round
+	///     a station), yaw-aligned with the object. Only bakes read it. A scene's Physics Colliders bake takes its outline
+	///     through the plane whatever its height.
+	/// </summary>
 	[ExecuteAlways]
 	[InspectorColor(InspectorColorKind.Navigation)]
 	public sealed class NavMeshModifierVolume : Behaviour
 	{
 		#region PublicFields
 
+		[Tooltip("Box, or Capsule: an upright cylinder of Radius and the box's height.")]
+		public NavMeshObstacleShape shape = NavMeshObstacleShape.Box;
+
 		public Vector3 center;
 		public Vector3 size = Vector3.One;
-		public int area = NavMeshArea.Walkable;
+
+		[Tooltip("Cylinder radius in local space (the larger of the object's X and Z scales).")]
+		public float radius = 0.5f;
+
+		[NavArea] public int area = NavMeshArea.Walkable;
 
 		#endregion
 
@@ -447,6 +458,16 @@ namespace LELEngine.Navigation
 		internal NavMeshAreaVolume ToLocalVolume(in Matrix4 worldToLocal)
 		{
 			Matrix4 m = transform.LocalToWorld * worldToLocal;
+			if (shape == NavMeshObstacleShape.Capsule)
+			{
+				Vector3 scale = transform.lossyScale;
+				float r = Math.Abs(radius) * Math.Max(Math.Abs(scale.X), Math.Abs(scale.Z));
+				Vector3 c = Vector3.TransformPosition(center, m);
+				float halfHeight = Math.Abs(size.Y * scale.Y) * 0.5f;
+				Vector2[] circle = NavMeshShapes.Rounded(new List<Vector2> { new Vector2(c.X, c.Z) }, r, r * 0.002f);
+				return new NavMeshAreaVolume { Polygon = circle, MinY = c.Y - halfHeight, MaxY = c.Y + halfHeight, Area = area };
+			}
+
 			Vector3 half = size * 0.5f;
 			var polygon = new Vector2[4];
 			float minY = float.MaxValue;
