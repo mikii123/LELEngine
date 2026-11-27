@@ -425,7 +425,8 @@ namespace LELEngine.Graphics.Vulkan
 
 	/// <summary>
 	///     What a thread that only builds programs holds on Vulkan: nothing of the API's (programs are built without a
-	///     context), only the mark that the thread may make them.
+	///     context), only the mark that the thread may make them. It records no commands: the device's Flush and Finish
+	///     do nothing on its thread (the device's recording is the drawing thread's).
 	/// </summary>
 	internal sealed class VulkanWorkerContext : GraphicsContext
 	{

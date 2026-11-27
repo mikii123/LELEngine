@@ -719,13 +719,28 @@ namespace LELEngine.Graphics.Vulkan
 			return new VulkanTimestamp(this);
 		}
 
+		// Flush and Finish are the calling thread's, as glFlush and glFinish are its context's. A worker context
+		// (VulkanWorkerContext: the shader compile thread) records nothing, so it has nothing to send or wait for; the
+		// device's recording belongs to the thread that draws. Sent from a worker (a program built there calls Finish
+		// before it counts as built), it ended and submitted command buffers the drawing thread was still recording, on
+		// the queue that thread was submitting and presenting on: the device was lost within frames.
 		public override void Flush()
 		{
+			if (currentContext is VulkanWorkerContext)
+			{
+				return;
+			}
+
 			Submit();
 		}
 
 		public override void Finish()
 		{
+			if (currentContext is VulkanWorkerContext)
+			{
+				return;
+			}
+
 			Submit();
 			WaitFor(RecordingSerial - 1, long.MaxValue);
 		}
