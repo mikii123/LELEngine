@@ -498,8 +498,14 @@ namespace LELEngine
 		///     found as <paramref name="useTriggers" /> says (null: the project's Queries Hit Triggers). A query of the
 		///     scene's physics world: sleeping bodies are found too, nothing waits for contact or trigger events. Returns the
 		///     number found.
+		///     <para>
+		///         <paramref name="distance" /> &gt; 0 also finds the colliders within that distance of its shapes (the
+		///         shapes grown by it, corners rounded): whether something is clear of a trigger, not merely outside it. A
+		///         trigger switched on again over a shape that only just misses it may still see it enter (sensors and this
+		///         query need not agree at the very edge): ask with a margin before switching it on.
+		///     </para>
 		/// </summary>
-		public int OverlapCollider(List<Collider2D> results, int layerMask = -1, bool? useTriggers = null)
+		public int OverlapCollider(List<Collider2D> results, int layerMask = -1, bool? useTriggers = null, float distance = 0f)
 		{
 			results.Clear();
 			PhysicsScene2D scene = world ?? gameObject?.scene?.Physics2DIfCreated;
@@ -508,10 +514,13 @@ namespace LELEngine
 				return 0;
 			}
 
-			var placed = new List<PhysicsShape2D>();
-			var points = new List<Vector2>();
+			// Scratch lists of the thread (a slot asks every physics step while a ship leaves it): no garbage per query.
+			List<PhysicsShape2D> placed = overlapShapes ??= new List<PhysicsShape2D>();
+			List<Vector2> points = overlapPoints ??= new List<Vector2>();
+			List<Collider2D> found = overlapFound ??= new List<Collider2D>();
+			placed.Clear();
+			points.Clear();
 			GetWorldShapes(placed, points);
-			var found = new List<Collider2D>();
 			Span<B2Vector2> corners = stackalloc B2Vector2[B2_MAX_POLYGON_VERTICES];
 			foreach (PhysicsShape2D shape in placed)
 			{
@@ -521,7 +530,8 @@ namespace LELEngine
 					corners[i] = Physics2DMath.ToB2(points[shape.vertexStartIndex + i]);
 				}
 
-				B2ShapeProxy proxy = b2MakeProxy(corners, count, Math.Max(shape.radius, shape.shapeType == PhysicsShapeType2D.Circle ? 0.0001f : 0f));
+				float radius = Math.Max(shape.radius, shape.shapeType == PhysicsShapeType2D.Circle ? 0.0001f : 0f) + Math.Max(0f, distance);
+				B2ShapeProxy proxy = b2MakeProxy(corners, count, radius);
 				scene.OverlapShapeAll(proxy, layerMask, useTriggers, found);
 				foreach (Collider2D other in found)
 				{
@@ -532,8 +542,13 @@ namespace LELEngine
 				}
 			}
 
+			found.Clear();
 			return results.Count;
 		}
+
+		[ThreadStatic] private static List<PhysicsShape2D> overlapShapes;
+		[ThreadStatic] private static List<Vector2> overlapPoints;
+		[ThreadStatic] private static List<Collider2D> overlapFound;
 
 		/// <summary>Raycasts from this collider's position (hits against its own shapes are skipped).</summary>
 		public int Raycast(Vector2 direction, List<RaycastHit2D> results, float distance = float.PositiveInfinity, int layerMask = -1)

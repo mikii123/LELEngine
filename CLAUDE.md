@@ -219,6 +219,13 @@
   game's docking slot whose trigger is off while a ship leaves it: a sensor switched on again over a body at rest gave
   no begin event (the slot never saw the ship), so the slot asks the world instead. Verified through that game's slot
   tests (the ship still in the slot keeps it, gone frees it, a dead one frees it).
+- `distance` (2026-11-28, optional, default 0): the colliders within that distance of its shapes too (each proxy's
+  radius grown by it: corners rounded). For "is it clear of the trigger", not merely outside it: a trigger switched on
+  again over a shape that only just misses it may still see it enter. The query's three lists are scratch lists of the
+  thread now (`[ThreadStatic]`; the found list cleared at the end, so no collider is held): a caller asking every
+  physics step makes no garbage. Note while testing it: Box2D here reports a sensor entering another sensor (the scene
+  dispatches it as a trigger enter on both), so a trigger handler that means solid bodies has to skip `isTrigger`.
+  Verified through a game's slot tests.
 
 ## Collider2D.preSolve: deciding a contact before the solver (2026-11-27)
 
