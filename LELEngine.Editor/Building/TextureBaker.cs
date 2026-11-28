@@ -52,6 +52,9 @@ namespace LELEngine.Editor
 		// One lock per cache file: an asset is baked once however many threads ask (the editor's loads, a build).
 		private static readonly ConcurrentDictionary<string, object> Locks = new ConcurrentDictionary<string, object>(StringComparer.OrdinalIgnoreCase);
 
+		// The last stamp and server key per image, with the files' sizes and times they were hashed at (QuickKey).
+		private static readonly ConcurrentDictionary<string, (string Quick, string Stamp, string Key)> Stamps = new ConcurrentDictionary<string, (string, string, string)>(StringComparer.OrdinalIgnoreCase);
+
 		#endregion
 
 		#region PublicMethods
@@ -127,6 +130,35 @@ namespace LELEngine.Editor
 			{
 				return IsCurrent(assetPath, cacheFile) ? cacheFile : null;
 			}
+		}
+
+		/// <summary>
+		///     The library cache server's item for the image's bake (the import's prefetch): its key from the image's contents
+		///     now, and the install that puts a downloaded bake into the Library with this machine's stamp, under the bake's
+		///     lock. Any thread (it hashes the image; <see cref="BakeFile(ProjectInfo,string,TextureImporter,bool,out BakeResult)" />
+		///     reuses the hash while the files' sizes and times stay the same).
+		/// </summary>
+		public static LibraryCacheServer.Item PrefetchItem(ProjectInfo project, string assetPath)
+		{
+			string cacheFile = CacheFile(project, assetPath);
+			string quick = QuickKey(assetPath);
+			string stamp = Stamp(assetPath, out string resultKey);
+			return new LibraryCacheServer.Item(ResultKind, resultKey, downloaded =>
+			{
+				if (!KtxFile.IsKtxFile(downloaded))
+				{
+					return false;
+				}
+
+				lock (Lock(cacheFile))
+				{
+					Directory.CreateDirectory(Path.GetDirectoryName(cacheFile));
+					File.Move(downloaded, cacheFile, true);
+					WriteReplacing(cacheFile + ".stamp", Encoding.UTF8.GetBytes(stamp + "\n" + quick));
+				}
+
+				return true;
+			}, assetPath);
 		}
 
 		/// <summary>Deletes the image asset's bake (Reimport: the next one is made from scratch). Any thread.</summary>
@@ -215,6 +247,21 @@ namespace LELEngine.Editor
 		///     LF (a checkout may give it CRLF on one machine and LF on another), so every machine finds the same entry.
 		/// </param>
 		private static string Stamp(string assetPath, out string resultKey)
+		{
+			// Hashed once per contents: the prefetch takes the key, the bake after it (a miss) the stamp.
+			string quick = QuickKey(assetPath);
+			if (Stamps.TryGetValue(assetPath, out (string Quick, string Stamp, string Key) known) && known.Quick == quick)
+			{
+				resultKey = known.Key;
+				return known.Stamp;
+			}
+
+			string stamp = HashStamp(assetPath, out resultKey);
+			Stamps[assetPath] = (quick, stamp, resultKey);
+			return stamp;
+		}
+
+		private static string HashStamp(string assetPath, out string resultKey)
 		{
 			string absolute = AssetDatabase.ToAbsolute(assetPath);
 			string meta = absolute + AssetDatabase.MetaExtension;

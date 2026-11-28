@@ -763,6 +763,10 @@ namespace LELEngine.Editor
 			}
 
 			changed |= Check("Download", ref server.Download, "An import missing from the Library takes the server's result before making it here");
+			Label("Parallel downloads", "How many results an import downloads at once: it asks the server once which of the results it needs it has, downloads those on this many threads, then makes only the rest");
+			ImGui.BeginDisabled(!server.Download);
+			changed |= EditorGui.SliderInt("##downloads", ref server.Downloads, 1, 32, "%d", ImGuiSliderFlags.AlwaysClamp);
+			ImGui.EndDisabled();
 			changed |= Check("Upload", ref server.Upload, "Results made here are sent to the server in the background (what it has already is not sent)");
 			if (changed)
 			{

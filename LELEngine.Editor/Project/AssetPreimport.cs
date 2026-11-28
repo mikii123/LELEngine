@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using LELEngine.Rendering;
@@ -165,8 +166,59 @@ namespace LELEngine.Editor
 			}
 
 			total = models.Count + images.Count + fieldModels.Count;
+			// The library cache server's prefetch (not for a Reimport, which wants everything made here): asked once which of
+			// the results this import needs it has, those downloaded at once on several threads straight into the Library,
+			// then only the rest is made, without asking the server asset by asset.
+			bool prefetch = !force && server.CanFetch;
+			var prefetchedImages = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 			try
 			{
+				if (prefetch && (models.Count > 0 || images.Count > 0))
+				{
+					Report(progress, "Asking the library cache server");
+					var items = new List<LibraryCacheServer.Item>();
+					foreach (string model in models)
+					{
+						LibraryCacheServer.Item item = ModelItem(model);
+						if (item != null)
+						{
+							items.Add(item);
+						}
+
+						if (overFrames && SliceOver(ref slice))
+						{
+							yield return true;
+						}
+					}
+
+					List<string> imageList = new List<string>(images);
+					prefetchedImages.UnionWith(imageList);
+					Task<HashSet<LibraryCacheServer.Item>> download = Task.Run(() => Prefetch(server, items, imageList, null, progress));
+					while (!download.IsCompleted)
+					{
+						if (!overFrames)
+						{
+							download.Wait();
+							break;
+						}
+
+						yield return true;
+					}
+
+					foreach (LibraryCacheServer.Item item in download.Result)
+					{
+						if (item.Kind == ModelAssets.ResultKind && models.Remove(item.AssetPath))
+						{
+							ImportedModels.Add(item.AssetPath);
+							done++;
+						}
+						else if (item.Kind == TextureBaker.ResultKind && images.Remove(item.AssetPath))
+						{
+							done++;
+						}
+					}
+				}
+
 				foreach (string model in models)
 				{
 					Report(progress, model);
@@ -186,6 +238,44 @@ namespace LELEngine.Editor
 				if (ImportedModels.Count > 0)
 				{
 					FindImagesAndFields();
+					total = done + images.Count + fieldModels.Count;
+				}
+
+				// Second prefetch: the meshes' fields (their names come from the models' imports, now in the Library) and the
+				// images the imports extracted.
+				List<string> newImages = images.FindAll(path => !prefetchedImages.Contains(path));
+				if (prefetch && (fieldModels.Count > 0 || newImages.Count > 0))
+				{
+					var needs = new List<DistanceFieldBaker.Store.FieldNeed>();
+					foreach (string model in fieldModels)
+					{
+						AddFieldNeeds(model, needs);
+						if (overFrames && SliceOver(ref slice))
+						{
+							yield return true;
+						}
+					}
+
+					Task<HashSet<LibraryCacheServer.Item>> download = Task.Run(() => Prefetch(server, new List<LibraryCacheServer.Item>(), newImages, needs, progress));
+					while (!download.IsCompleted)
+					{
+						if (!overFrames)
+						{
+							download.Wait();
+							break;
+						}
+
+						yield return true;
+					}
+
+					foreach (LibraryCacheServer.Item item in download.Result)
+					{
+						if (item.Kind == TextureBaker.ResultKind && images.Remove(item.AssetPath))
+						{
+							done++;
+						}
+					}
+
 					total = done + images.Count + fieldModels.Count;
 				}
 
@@ -338,6 +428,106 @@ namespace LELEngine.Editor
 			{
 				Debug.LogWarning($"[Model] Cannot import {assetPath}: {e.Message}");
 				return false;
+			}
+		}
+
+		/// <summary>The library cache server's item for a model's import (its settings read here, on the import's thread), or null.</summary>
+		private static LibraryCacheServer.Item ModelItem(string modelPath)
+		{
+			try
+			{
+				(string Kind, string Key, Func<string, bool> Install)? item = ModelAssets.ResultPrefetch(modelPath);
+				return item == null ? null : new LibraryCacheServer.Item(item.Value.Kind, item.Value.Key, item.Value.Install, modelPath);
+			}
+			catch (Exception e) when (e is IOException || e is UnauthorizedAccessException || e is InvalidDataException)
+			{
+				return null;
+			}
+		}
+
+		/// <summary>The model's meshes whose fields the Library lacks (main thread: the meshes come from its import).</summary>
+		private void AddFieldNeeds(string modelPath, List<DistanceFieldBaker.Store.FieldNeed> needs)
+		{
+			try
+			{
+				needs.AddRange(fields.MissingFields(modelPath));
+			}
+			catch (Exception e)
+			{
+				Debug.LogWarning($"[SDF] Cannot list the distance fields of {modelPath}: {e.Message}");
+			}
+		}
+
+		/// <summary>
+		///     One prefetch from the library cache server (a worker thread): the images' and fields' items made here (their
+		///     hashes on worker threads, a model's fields together), the models' given; the downloads counted on the bar.
+		///     Returns the items put into the Library.
+		/// </summary>
+		private HashSet<LibraryCacheServer.Item> Prefetch(LibraryCacheServer server, List<LibraryCacheServer.Item> items, List<string> imagePaths,
+			List<DistanceFieldBaker.Store.FieldNeed> fieldNeeds, Progress.Scope progress)
+		{
+			try
+			{
+				var made = new System.Collections.Concurrent.ConcurrentBag<LibraryCacheServer.Item>();
+				Parallel.ForEach(imagePaths, path =>
+				{
+					try
+					{
+						LibraryCacheServer.Item item = textures.PrefetchItem(path);
+						if (item != null)
+						{
+							made.Add(item);
+						}
+					}
+					catch (Exception e) when (e is IOException || e is UnauthorizedAccessException || e is InvalidDataException)
+					{
+						// Looked at again by its bake, which reports it.
+					}
+				});
+
+				if (fieldNeeds != null)
+				{
+					// A model's meshes on one thread: the model is hashed once for all of them.
+					var byModel = new Dictionary<string, List<DistanceFieldBaker.Store.FieldNeed>>(StringComparer.OrdinalIgnoreCase);
+					foreach (DistanceFieldBaker.Store.FieldNeed need in fieldNeeds)
+					{
+						if (!byModel.TryGetValue(need.ModelPath, out List<DistanceFieldBaker.Store.FieldNeed> list))
+						{
+							byModel[need.ModelPath] = list = new List<DistanceFieldBaker.Store.FieldNeed>();
+						}
+
+						list.Add(need);
+					}
+
+					Parallel.ForEach(byModel.Values, list =>
+					{
+						foreach (DistanceFieldBaker.Store.FieldNeed need in list)
+						{
+							try
+							{
+								made.Add(fields.PrefetchItem(need));
+							}
+							catch (Exception e) when (e is IOException || e is UnauthorizedAccessException)
+							{
+								// Built by the import, which reports it.
+							}
+						}
+					});
+				}
+
+				items.AddRange(made);
+				if (items.Count == 0)
+				{
+					return new HashSet<LibraryCacheServer.Item>();
+				}
+
+				progress.Report(0, items.Count, "Asking the library cache server about " + items.Count + " results");
+				return server.Prefetch(items, (downloaded, of) => progress.Report(downloaded, of, "Downloading from the library cache server"));
+			}
+			catch (Exception e)
+			{
+				Debug.LogWarning("[CacheServer] The prefetch failed (the import makes its results here): " + e.Message);
+				return new HashSet<LibraryCacheServer.Item>();
 			}
 		}
 

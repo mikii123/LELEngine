@@ -244,6 +244,7 @@ namespace LELEngine.Editor
 			CacheServer ??= new CacheServerPreferences();
 			CacheServer.Url ??= "";
 			CacheServer.AccessKey ??= "";
+			CacheServer.Downloads = CacheServer.Downloads <= 0 ? 8 : Math.Clamp(CacheServer.Downloads, 1, 32);
 		}
 
 		/// <summary>The engine settings the preferences hold (how much of the call stack log messages record).</summary>
@@ -455,6 +456,9 @@ namespace LELEngine.Editor
 
 		/// <summary>Results made here are sent to the server (in the background; what it has already is not sent).</summary>
 		public bool Upload = true;
+
+		/// <summary>How many of an import's results are downloaded at once (its prefetch, before it makes anything).</summary>
+		public int Downloads = 8;
 	}
 
 	/// <summary>Colors as #RRGGBBAA text (preferences files).</summary>

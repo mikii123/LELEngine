@@ -163,6 +163,122 @@ namespace LELEngine.Editor
 				return false;
 			}
 
+			// The import's prefetch asked the server about this result moments ago and it had none: no request per asset.
+			if (KnownMissing(settings, kind + "/" + key))
+			{
+				Interlocked.Increment(ref misses);
+				return false;
+			}
+
+			return Download(settings, kind, key, file, accept);
+		}
+
+		/// <summary>
+		///     An import's results asked for at once (<see cref="AssetPreimport" />, before it makes anything): one
+		///     <c>POST exists</c> for all of them, then the ones the server has downloaded on <see cref="CacheServerPreferences.Downloads" />
+		///     threads, each handed to its <see cref="Item.Install" /> (which checks it and puts it into the Library). The
+		///     ones the server lacks (or whose install refused them) are remembered for a while, so the import's own
+		///     <see cref="TryFetch(string,string,string,Func{string,bool})" /> for them answers at once without a request.
+		///     Returns the items installed. Any thread; it waits for the downloads. <paramref name="progress" /> gets
+		///     (done, total) from the downloading threads.
+		/// </summary>
+		public HashSet<Item> Prefetch(IReadOnlyList<Item> items, Action<int, int> progress)
+		{
+			var installed = new HashSet<Item>();
+			if (items.Count == 0 || !Usable(out Settings settings) || !settings.Download)
+			{
+				return installed;
+			}
+
+			HashSet<string> present = Present(settings, items);
+			if (present == null)
+			{
+				// The server cannot say (an older one without "exists", or unreachable): the import asks per asset.
+				return installed;
+			}
+
+			var wanted = new List<Item>();
+			foreach (Item item in items)
+			{
+				string path = item.Kind + "/" + item.Key;
+				if (present.Contains(path))
+				{
+					wanted.Add(item);
+				}
+				else
+				{
+					RememberMissing(settings, path);
+				}
+			}
+
+			int done = 0;
+			var options = new System.Threading.Tasks.ParallelOptions { MaxDegreeOfParallelism = Math.Clamp(settings.Downloads, 1, 32) };
+			System.Threading.Tasks.Parallel.ForEach(wanted, options, (item, state) =>
+			{
+				if (!Usable(out Settings current) || current != settings)
+				{
+					state.Stop();
+					return;
+				}
+
+				string temporary = Path.Combine(Path.GetTempPath(), "lelengine-cache-" + Guid.NewGuid().ToString("N"));
+				try
+				{
+					bool ok = Download(settings, item.Kind, item.Key, temporary, null) && item.Install(temporary);
+					if (ok)
+					{
+						lock (installed)
+						{
+							installed.Add(item);
+						}
+					}
+					else
+					{
+						RememberMissing(settings, item.Kind + "/" + item.Key);
+					}
+				}
+				catch (Exception e)
+				{
+					RememberMissing(settings, item.Kind + "/" + item.Key);
+					Debug.LogWarning($"[CacheServer] {item.Kind}/{item.Key} could not be put into the Library: {e.Message}");
+				}
+				finally
+				{
+					TryDelete(temporary);
+					progress?.Invoke(Interlocked.Increment(ref done), wanted.Count);
+				}
+			});
+
+			return installed;
+		}
+
+		/// <summary>One result an import may take from the server: what <see cref="Install" /> does with the downloaded file decides.</summary>
+		public sealed class Item
+		{
+			public readonly string Kind;
+			public readonly string Key;
+
+			/// <summary>Checks the downloaded file and puts it into the Library (moves or rewrites it); false: not used. Any thread.</summary>
+			public readonly Func<string, bool> Install;
+
+			/// <summary>The asset it is for (the caller's).</summary>
+			public readonly string AssetPath;
+
+			public Item(string kind, string key, Func<string, bool> install, string assetPath)
+			{
+				Kind = kind;
+				Key = key;
+				Install = install;
+				AssetPath = assetPath;
+			}
+		}
+
+		/// <summary>
+		///     The file of <paramref name="kind" />/<paramref name="key" /> written to <paramref name="file" /> (through a
+		///     temporary file beside it, its hash and length checked, <paramref name="accept" /> asked).
+		/// </summary>
+		private bool Download(Settings settings, string kind, string key, string file, Func<string, bool> accept)
+		{
 			string temporary = file + "." + Environment.CurrentManagedThreadId + ".download";
 			long started = System.Diagnostics.Stopwatch.GetTimestamp();
 			try
@@ -379,6 +495,7 @@ namespace LELEngine.Editor
 				{
 					known.Download = made.Download;
 					known.Upload = made.Upload;
+					known.Downloads = made.Downloads;
 					made = known;
 				}
 
@@ -505,6 +622,72 @@ namespace LELEngine.Editor
 			catch (Exception e) when (e is IOException || e is UnauthorizedAccessException)
 			{
 				// A leftover temporary file: the next transfer of that result replaces it.
+			}
+		}
+
+		// How long a result the server lacked counts as lacking (another editor may send it meanwhile).
+		private const int MissingSeconds = 600;
+
+		private static bool KnownMissing(Settings settings, string path)
+		{
+			return settings.Missing.TryGetValue(path, out long until) && System.Diagnostics.Stopwatch.GetTimestamp() < until;
+		}
+
+		private static void RememberMissing(Settings settings, string path)
+		{
+			settings.Missing[path] = System.Diagnostics.Stopwatch.GetTimestamp() + MissingSeconds * System.Diagnostics.Stopwatch.Frequency;
+		}
+
+		/// <summary>
+		///     Which of the items' paths the server has (<c>POST exists</c>, in chunks); null when it cannot say (an older
+		///     server, unreachable, refused).
+		/// </summary>
+		private HashSet<string> Present(Settings settings, IReadOnlyList<Item> items)
+		{
+			var present = new HashSet<string>(StringComparer.Ordinal);
+			try
+			{
+				for (int i = 0; i < items.Count; i += 5000)
+				{
+					var paths = new List<string>();
+					for (int j = i; j < Math.Min(items.Count, i + 5000); j++)
+					{
+						paths.Add(items[j].Kind + "/" + items[j].Key);
+					}
+
+					using var request = new HttpRequestMessage(HttpMethod.Post, settings.Base + "exists")
+					{
+						Content = new StringContent(JsonSerializer.Serialize(new { paths }), Encoding.UTF8, "application/json")
+					};
+					using var timeout = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+					using HttpResponseMessage response = Send(settings, request, timeout.Token);
+					if (response.StatusCode == HttpStatusCode.NotFound || response.StatusCode == HttpStatusCode.MethodNotAllowed)
+					{
+						return null;
+					}
+
+					if (!Answered(settings, response, "ask which results exist"))
+					{
+						return null;
+					}
+
+					ExistsAnswer answer = JsonSerializer.Deserialize<ExistsAnswer>(response.Content.ReadAsStringAsync(timeout.Token).GetAwaiter().GetResult(), Json);
+					foreach (string path in answer?.Present ?? new List<string>())
+					{
+						present.Add(path);
+					}
+				}
+
+				return present;
+			}
+			catch (JsonException)
+			{
+				return null;
+			}
+			catch (Exception e) when (IsTransport(e))
+			{
+				Unreachable(settings, e);
+				return null;
 			}
 		}
 
@@ -796,6 +979,10 @@ namespace LELEngine.Editor
 			public string AccessKey;
 			public bool Download;
 			public bool Upload;
+			public int Downloads;
+
+			/// <summary>Results the server lacked (path → until when, Stopwatch ticks).</summary>
+			public readonly System.Collections.Concurrent.ConcurrentDictionary<string, long> Missing = new System.Collections.Concurrent.ConcurrentDictionary<string, long>(StringComparer.Ordinal);
 
 			/// <summary>Server address and key: what was learned is kept while they stay the same.</summary>
 			public string Identity;
@@ -825,6 +1012,7 @@ namespace LELEngine.Editor
 					AccessKey = key,
 					Download = preferences.Download,
 					Upload = preferences.Upload,
+					Downloads = preferences.Downloads,
 					Identity = trimmed + "\n" + key
 				};
 			}
@@ -842,6 +1030,11 @@ namespace LELEngine.Editor
 			public long MaxFileBytes { get; set; }
 			public long Files { get; set; }
 			public long Bytes { get; set; }
+		}
+
+		private sealed class ExistsAnswer
+		{
+			public List<string> Present { get; set; }
 		}
 
 		private sealed class UploadStart

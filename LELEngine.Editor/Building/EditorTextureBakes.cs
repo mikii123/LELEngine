@@ -152,6 +152,21 @@ namespace LELEngine.Editor
 			}
 		}
 
+		/// <summary>
+		///     The library cache server's item for the image's bake (<see cref="AssetPreimport" />'s prefetch), or null when a
+		///     build does not bake it. Any thread; it hashes the image.
+		/// </summary>
+		public LibraryCacheServer.Item PrefetchItem(string assetPath)
+		{
+			if (closed || !File.Exists(AssetDatabase.ToAbsolute(assetPath)))
+			{
+				return null;
+			}
+
+			TextureImporter importer = TextureAssets.GetImporter(assetPath);
+			return Bakes(assetPath, importer) ? TextureBaker.PrefetchItem(project, assetPath) : null;
+		}
+
 		/// <summary>Main thread, every editor frame: the loaded textures whose bake the background made are imported again from it.</summary>
 		public void Update()
 		{

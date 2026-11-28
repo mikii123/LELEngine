@@ -749,6 +749,63 @@ namespace LELEngine.Editor
 				});
 			}
 
+			/// <summary>A mesh's field at the uniform shape that the Library lacks (<see cref="MissingFields" />).</summary>
+			public sealed class FieldNeed
+			{
+				public string ModelPath;
+				public string MeshName;
+				public Vector3i Shape;
+				public string File;
+				public string Stamp;
+			}
+
+			/// <summary>
+			///     The fields <see cref="BuildModelFields" /> would build for the model (its meshes at the uniform shape without a
+			///     current field in the Library), for the import's prefetch. Main thread (the model's meshes).
+			/// </summary>
+			public List<FieldNeed> MissingFields(string modelPath)
+			{
+				var needs = new List<FieldNeed>();
+				string stamp = StampOf(modelPath);
+				Model model = ModelAssets.IsLoaded(modelPath) ? ModelAssets.Load(modelPath) : new Model(modelPath, ModelAssets.LoadData(modelPath));
+				Vector3i key = UniformShape;
+				foreach (Mesh mesh in model.Meshes)
+				{
+					if (!IsStored(mesh) || mesh.TriangleCount == 0)
+					{
+						continue;
+					}
+
+					string file = CacheFile(project, modelPath, mesh.SubAssetName, key);
+					if (ReadCache(file, stamp) == null)
+					{
+						needs.Add(new FieldNeed { ModelPath = modelPath, MeshName = mesh.SubAssetName, Shape = key, File = file, Stamp = stamp });
+					}
+				}
+
+				return needs;
+			}
+
+			/// <summary>
+			///     The library cache server's item for a missing field: its key (it hashes the model, once per version) and the
+			///     install that writes the downloaded field with this machine's stamp. Any thread.
+			/// </summary>
+			public LibraryCacheServer.Item PrefetchItem(FieldNeed need)
+			{
+				string key = FieldKey(ResultStampOf(need.ModelPath, need.Stamp), need.MeshName, need.Shape);
+				return new LibraryCacheServer.Item(ResultKind, key, downloaded =>
+				{
+					List<KeyValuePair<string, BakedDistanceField>> fields = DistanceFieldFile.Read(downloaded, out _);
+					if (fields == null || fields.Count != 1 || fields[0].Value?.Voxels == null || fields[0].Value.ShapeKey != need.Shape)
+					{
+						return false;
+					}
+
+					DistanceFieldFile.Write(need.File, need.Stamp, fields);
+					return ReadCache(need.File, need.Stamp) != null;
+				}, need.ModelPath);
+			}
+
 			/// <summary>
 			///     The field the library cache server has for this mesh and shape of the model's current contents, written to the
 			///     Library's <paramref name="file" /> with this machine's <paramref name="stamp" />; false when it has none.

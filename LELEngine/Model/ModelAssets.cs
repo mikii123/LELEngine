@@ -87,6 +87,10 @@ namespace LELEngine
 		private static readonly AssetFileStamps meshFileStamps = new AssetFileStamps();
 		private static readonly List<IModelImportBackend> backends = new List<IModelImportBackend> { new ObjModelBackend() };
 
+		// Source files' SHA-256 for ResultKey, with the size and time they were hashed at.
+		private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, (long Length, long Ticks, string Hash)> contentHashes
+			= new System.Collections.Concurrent.ConcurrentDictionary<string, (long, long, string)>(StringComparer.OrdinalIgnoreCase);
+
 		#endregion
 
 		#region PublicMethods
@@ -913,12 +917,23 @@ namespace LELEngine
 		/// </summary>
 		private static string ResultKey(string assetPath, string file, ModelImporter settings, IModelImportBackend backend)
 		{
+			// Hashed once per file version (size and time): the prefetch and the import after it (a miss) share it.
+			var info = new FileInfo(file);
+			long length = info.Length;
+			long ticks = info.LastWriteTimeUtc.Ticks;
 			string content;
-			long length;
-			using (FileStream stream = File.OpenRead(file))
+			if (!contentHashes.TryGetValue(file, out (long Length, long Ticks, string Hash) known) || known.Length != length || known.Ticks != ticks)
 			{
-				length = stream.Length;
-				content = Convert.ToHexString(SHA256.HashData(stream));
+				using (FileStream stream = File.OpenRead(file))
+				{
+					content = Convert.ToHexString(SHA256.HashData(stream));
+				}
+
+				contentHashes[file] = (length, ticks, content);
+			}
+			else
+			{
+				content = known.Hash;
 			}
 
 			bool namesFiles = settings.importMaterials && MaterialExtractor != null && !AssetDatabase.IsEngineResource(assetPath);
@@ -938,11 +953,51 @@ namespace LELEngine
 			string fetchedFile = cacheFile + ".fetched";
 			try
 			{
-				if (!results.TryFetch(ResultKind, key, fetchedFile))
+				return results.TryFetch(ResultKind, key, fetchedFile) ? InstallResult(assetPath, fetchedFile, settings, stamp, cacheFile) : null;
+			}
+			finally
+			{
+				try
 				{
-					return null;
+					File.Delete(fetchedFile);
 				}
+				catch (Exception e) when (e is IOException || e is UnauthorizedAccessException)
+				{
+					// A leftover next to the cache file: replaced by the next fetch.
+				}
+			}
+		}
 
+		/// <summary>
+		///     A model's import for <see cref="ResultCache" />'s prefetch (an import of many models asks the store for all of
+		///     them at once, then downloads them in parallel): its kind, key and the install that writes a downloaded import
+		///     into <see cref="CacheFolder" /> with this machine's stamp (false: not used, the model is imported here). Null for
+		///     a file no backend imports or without the cache. Any thread, as <see cref="FindOutdated" />; it hashes the file.
+		/// </summary>
+		public static (string Kind, string Key, Func<string, bool> Install)? ResultPrefetch(string assetPath)
+		{
+			string file = AssetDatabase.ToAbsolute(assetPath);
+			IModelImportBackend backend = FindBackend(assetPath);
+			string cacheFile = CacheFile(assetPath);
+			if (backend == null || cacheFile == null || IsImportedFile(file))
+			{
+				return null;
+			}
+
+			ModelImporter settings = AssetDatabase.GetImporter<ModelImporter>(assetPath);
+			string stamp = Stamp(file, settings, backend);
+			string key = ResultKey(assetPath, file, settings, backend);
+			return (ResultKind, key, downloaded => InstallResult(assetPath, downloaded, settings, stamp, cacheFile) != null);
+		}
+
+		/// <summary>
+		///     A downloaded import written to the cache file with this machine's <paramref name="stamp" />; null when it cannot
+		///     be read or the material assets it names are missing here.
+		/// </summary>
+		private static ModelData InstallResult(string assetPath, string fetchedFile, ModelImporter settings, string stamp, string cacheFile)
+		{
+			try
+			{
 				ModelData data;
 				using (FileStream stream = File.OpenRead(fetchedFile))
 				{
@@ -977,17 +1032,6 @@ namespace LELEngine
 			{
 				Debug.LogWarning($"[Model] The library cache server's import of {assetPath} cannot be read ({e.Message}); importing it here");
 				return null;
-			}
-			finally
-			{
-				try
-				{
-					File.Delete(fetchedFile);
-				}
-				catch (Exception e) when (e is IOException || e is UnauthorizedAccessException)
-				{
-					// A leftover next to the cache file: replaced by the next fetch.
-				}
 			}
 		}
 
