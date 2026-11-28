@@ -9,11 +9,14 @@ namespace LELEngine
 	{
 		#region Constructors
 
-		internal ProgressState(bool running, string title, string info, float fraction, bool cancelable, bool cancelRequested, double seconds, long version)
+		internal ProgressState(bool running, string title, string info, int step, int steps, float fraction, bool cancelable, bool cancelRequested, double seconds,
+			long version)
 		{
 			Running = running;
 			Title = title;
 			Info = info;
+			Step = step;
+			Steps = steps;
 			Fraction = fraction;
 			Cancelable = cancelable;
 			CancelRequested = cancelRequested;
@@ -33,6 +36,15 @@ namespace LELEngine
 
 		/// <summary>What it does now (the innermost task's report), or null.</summary>
 		public string Info { get; }
+
+		/// <summary>
+		///     Which part <see cref="Info" /> is of a counted task (<see cref="Progress.Scope.Report(int, int, string)" />), from 1;
+		///     0 when it is not counted. A display shows "<see cref="Step" /> / <see cref="Steps" />" apart from the text.
+		/// </summary>
+		public int Step { get; }
+
+		/// <summary>How many parts the counted task has (<see cref="Step" />); 0 when it is not counted.</summary>
+		public int Steps { get; }
 
 		/// <summary>How far it is, 0..1; negative when not known (a bar going back and forth).</summary>
 		public float Fraction { get; }
@@ -94,7 +106,7 @@ namespace LELEngine
 				{
 					if (scopes.Count == 0)
 					{
-						return new ProgressState(false, null, null, -1f, false, false, 0, version);
+						return new ProgressState(false, null, null, 0, 0, -1f, false, false, 0, version);
 					}
 
 					// The bar: each task places the next one inside its current step.
@@ -121,8 +133,9 @@ namespace LELEngine
 					Scope outer = scopes[0];
 					Scope inner = scopes[scopes.Count - 1];
 					string info = inner.info ?? (inner != outer ? inner.title : null);
-					return new ProgressState(true, outer.title, info, known ? (float)Math.Clamp(start, 0, 1) : -1f, cancelable, cancelRequested,
-						Stopwatch.GetElapsedTime(started).TotalSeconds, version);
+					bool counted = inner.info != null && inner.steps > 0;
+					return new ProgressState(true, outer.title, info, counted ? inner.stepShown : 0, counted ? inner.steps : 0,
+						known ? (float)Math.Clamp(start, 0, 1) : -1f, cancelable, cancelRequested, Stopwatch.GetElapsedTime(started).TotalSeconds, version);
 				}
 			}
 		}
@@ -223,6 +236,10 @@ namespace LELEngine
 			internal readonly string title;
 			internal readonly bool cancelable;
 			internal string info;
+
+			// The counter shown with info (a counted report's "3 / 10"); steps 0: none.
+			internal int stepShown;
+			internal int steps;
 			internal float fraction = -1f;
 
 			// The part of the bar a task begun inside this one gets (one step of a counted task).
@@ -259,13 +276,17 @@ namespace LELEngine
 					if (what != null)
 					{
 						info = what;
+						steps = 0;
 					}
 				}
 
 				Changed();
 			}
 
-			/// <summary><paramref name="done" /> of <paramref name="total" /> parts finished, <paramref name="what" /> the next one.</summary>
+			/// <summary>
+			///     <paramref name="done" /> of <paramref name="total" /> parts finished, <paramref name="what" /> the next one (shown
+			///     with its counter, "done + 1 / total", apart from the text: <see cref="ProgressState.Step" />).
+			/// </summary>
 			public void Report(int done, int total, string what = null)
 			{
 				lock (sync)
@@ -274,7 +295,9 @@ namespace LELEngine
 					step = total > 0 ? 1f / total : 0f;
 					if (what != null)
 					{
-						info = total > 1 ? what + "  (" + Math.Min(done + 1, total) + " / " + total + ")" : what;
+						info = what;
+						steps = total > 1 ? total : 0;
+						stepShown = Math.Clamp(done + 1, 1, Math.Max(total, 1));
 					}
 				}
 

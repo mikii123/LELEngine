@@ -33,6 +33,8 @@ namespace LELEngine.Editor
 		private const int PanelWidth = 560;
 		private const int PanelHeight = 70;
 
+		private const string Ellipsis = "…";
+
 		private static Thread thread;
 		private static volatile bool stopping;
 		private static volatile bool standalone;
@@ -387,10 +389,20 @@ namespace LELEngine.Editor
 				infoRect.Right = cancelRect.Left - S(8);
 			}
 
+			SetTextColor(memoryDC, ColorRef(0.66f, 0.68f, 0.72f));
+			if (state.Steps > 0)
+			{
+				// The counter at the right, in the width of its widest value: the text before it stays put as it counts.
+				string counter = state.Step + " / " + state.Steps;
+				RECT counterRect = infoRect;
+				DrawTextW(memoryDC, counter, counter.Length, ref counterRect, DT_RIGHT | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+				infoRect.Right -= MeasureWidth(state.Steps + " / " + state.Steps) + S(12);
+			}
+
 			if (!string.IsNullOrEmpty(state.Info))
 			{
-				SetTextColor(memoryDC, ColorRef(0.66f, 0.68f, 0.72f));
-				DrawTextW(memoryDC, state.Info, state.Info.Length, ref infoRect, DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX | DT_PATH_ELLIPSIS);
+				string info = Fit(state.Info, infoRect.Right - infoRect.Left);
+				DrawTextW(memoryDC, info, info.Length, ref infoRect, DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
 			}
 
 			SelectObject(memoryDC, previousFont);
@@ -441,6 +453,78 @@ namespace LELEngine.Editor
 		private static uint ColorRef(float r, float g, float b)
 		{
 			return (uint)(r * 255f) | (uint)(g * 255f) << 8 | (uint)(b * 255f) << 16;
+		}
+
+		// The text cut to the width (the font selected now), with an ellipsis: a path loses the middle of its folders while
+		// its file name fits (GDI's DT_PATH_ELLIPSIS looks for backslashes only: a path with slashes was clipped at the
+		// edge), anything else its end.
+		private static string Fit(string text, int width)
+		{
+			if (width <= 0)
+			{
+				return "";
+			}
+
+			if (MeasureWidth(text) <= width)
+			{
+				return text;
+			}
+
+			int separator = LastPathSeparator(text);
+			if (separator > 0)
+			{
+				string name = text.Substring(separator);
+				int kept = LongestFit(separator, count => text.Substring(0, count) + Ellipsis + name, width);
+				if (kept >= 0)
+				{
+					return text.Substring(0, kept) + Ellipsis + name;
+				}
+
+				text = Ellipsis + name;
+			}
+
+			int start = LongestFit(text.Length - 1, count => text.Substring(0, count) + Ellipsis, width);
+			return start >= 0 ? text.Substring(0, start) + Ellipsis : "";
+		}
+
+		// The most characters, 0..most, whose text (made) fits the width; -1 when not even none do.
+		private static int LongestFit(int most, Func<int, string> made, int width)
+		{
+			if (MeasureWidth(made(0)) > width)
+			{
+				return -1;
+			}
+
+			int low = 0;
+			int high = most;
+			while (low < high)
+			{
+				int middle = (low + high + 1) / 2;
+				if (MeasureWidth(made(middle)) <= width)
+				{
+					low = middle;
+				}
+				else
+				{
+					high = middle - 1;
+				}
+			}
+
+			return low;
+		}
+
+		// The last slash or backslash with a name on both sides (" / " is prose or a count, not a path), or -1.
+		private static int LastPathSeparator(string text)
+		{
+			for (int i = text.Length - 2; i > 0; i--)
+			{
+				if ((text[i] == '/' || text[i] == '\\') && text[i - 1] != ' ' && text[i + 1] != ' ')
+				{
+					return i;
+				}
+			}
+
+			return -1;
 		}
 
 		private static int MeasureWidth(string text)
@@ -623,7 +707,6 @@ namespace LELEngine.Editor
 		private const uint DT_SINGLELINE = 0x20;
 		private const uint DT_CALCRECT = 0x400;
 		private const uint DT_NOPREFIX = 0x800;
-		private const uint DT_PATH_ELLIPSIS = 0x4000;
 		private const uint DT_END_ELLIPSIS = 0x8000;
 		private const uint CLEARTYPE_QUALITY = 5;
 		private const uint WM_SETCURSOR = 0x0020;

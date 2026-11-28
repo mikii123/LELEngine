@@ -2061,6 +2061,12 @@
   `DisableProcessWindowsGhosting` at start: Windows no longer washes a busy editor out white as "Not Responding"
   (also means a truly hung editor cannot be dragged or closed with X: Task Manager). Test hook `progressshots=folder`
   writes the painted frames (`progress_NN.png`, twice a second at most).
+- The counter of a counted report (`Report(done, total, what)`) is not part of the text (2026-11-28, the user's ask: it
+  was appended as "  (n / total)" and a long path clipped it at the panel's edge: GDI's `DT_PATH_ELLIPSIS` looks for
+  backslashes only): `ProgressState.Step` / `Steps`, drawn "n / total" at the right of the info line (left of Cancel)
+  in the width of "total / total", the text fitted before it (`ProgressOverlay.Fit`: a path loses the middle of its
+  folders while its file name fits, anything else its end, with "…"). Seen through the shots hook from a scratch
+  harness: the preimport's path at 100 / 1000 and 1000 / 1000, a file name too long alone, a long sentence, with Cancel.
 - Reported: the project's load (8 steps), opening a scene, reloading it, entering / leaving play mode, Apply of image
   import settings (per image, cancelable: the rest keep their old settings), of model import settings (and the scene
   reload), files changed on disk (models imported by `ModelAssets.ImportOutdated`, images by
