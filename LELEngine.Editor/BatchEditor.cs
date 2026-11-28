@@ -40,6 +40,8 @@ namespace LELEngine.Editor
 			var editorArgs = new List<string>(args) { "project=" + projectPath, "focus=0" };
 			string[] all = editorArgs.ToArray();
 			EditorPreferences.Initialize(all);
+			// The library cache server: off with the defaults; a run with preferencesfile= naming one uses it.
+			ModelAssets.ResultCache = LibraryCacheServer.Instance;
 			ImGuiController.ReadOnlyLayouts = true;
 			HierarchyExpansion.Initialize(all);
 			Window.StartFocused = false;

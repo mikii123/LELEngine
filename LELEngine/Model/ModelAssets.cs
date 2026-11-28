@@ -58,6 +58,16 @@ namespace LELEngine
 		/// <summary>Creates the material assets of imports (null: imported models use the default material).</summary>
 		public static IModelMaterialExtractor MaterialExtractor { get; set; }
 
+		/// <summary>
+		///     Imports other machines made (the editor's library cache server; null: none): a model without a valid import in
+		///     <see cref="CacheFolder" /> takes the one stored for its file's content, settings and importer before importing
+		///     it here, and an import made here is offered to it. Under the kind <see cref="ResultKind" />.
+		/// </summary>
+		public static IImportResultCache ResultCache { get; set; }
+
+		/// <summary>The kind of <see cref="ResultCache" /> entries that hold model imports.</summary>
+		public const string ResultKind = "models";
+
 		/// <summary>Raised after a model was imported (not when it came from the cache).</summary>
 		public static event Action<string> Imported;
 
@@ -530,6 +540,16 @@ namespace LELEngine
 		/// <summary>The imported data of a model file; <paramref name="reimport" /> imports it even when the cached import is valid.</summary>
 		public static ModelData LoadData(string assetPath, bool reimport)
 		{
+			return LoadData(assetPath, reimport, true);
+		}
+
+		/// <summary>
+		///     The imported data of a model file; <paramref name="reimport" /> imports it even when the cached import is valid;
+		///     <paramref name="useResultCache" />: a missing or skipped import is first looked for in <see cref="ResultCache" />
+		///     (off for a forced Reimport, which wants the import made here).
+		/// </summary>
+		public static ModelData LoadData(string assetPath, bool reimport, bool useResultCache)
+		{
 			string file = AssetDatabase.ToAbsolute(assetPath);
 			if (IsImportedFile(file))
 			{
@@ -569,6 +589,26 @@ namespace LELEngine
 				}
 			}
 
+			// The import another machine made of the same file, settings and importer, when the shared store has it.
+			IImportResultCache results = useResultCache && cacheFile != null ? ResultCache : null;
+			string resultKey = null;
+			if (results != null && (results.CanFetch || results.CanOffer))
+			{
+				try
+				{
+					resultKey = ResultKey(assetPath, file, settings, backend);
+					ModelData fetched = results.CanFetch ? FetchResult(results, assetPath, resultKey, settings, stamp, cacheFile) : null;
+					if (fetched != null)
+					{
+						return fetched;
+					}
+				}
+				catch (Exception e) when (e is IOException || e is UnauthorizedAccessException)
+				{
+					Debug.LogWarning($"[Model] Cannot look for the import of {assetPath} in the library cache server: {e.Message}");
+				}
+			}
+
 			var watch = System.Diagnostics.Stopwatch.StartNew();
 			ModelData data = backend.Import(assetPath, settings);
 			ApplySettings(data, settings);
@@ -593,6 +633,11 @@ namespace LELEngine
 					using (FileStream stream = File.Create(cacheFile))
 					{
 						Write(stream, data, stamp);
+					}
+
+					if (resultKey != null && results.CanOffer)
+					{
+						results.Offer(ResultKind, resultKey, cacheFile);
 					}
 				}
 				catch (Exception e)
@@ -838,7 +883,16 @@ namespace LELEngine
 		private static string Stamp(string file, ModelImporter settings, IModelImportBackend backend)
 		{
 			var info = new FileInfo(file);
-			// The import's own record (the material assets it made) is not a setting.
+			// Extractor layout 3 (2026-10-22): materials and embedded textures next to the model, kept by GUID (older
+			// imports redo once).
+			return $"{info.Length}:{info.LastWriteTimeUtc.Ticks}:{SettingsHash(settings)}:{backend.GetType().Name}:{backend.Version}:{ExtractorLayout}";
+		}
+
+		private static int ExtractorLayout => MaterialExtractor != null ? 3 : 0;
+
+		/// <summary>The import settings' identity: the import's own record (the material assets it made) is not a setting.</summary>
+		private static string SettingsHash(ModelImporter settings)
+		{
 			int version = settings.version;
 			List<ModelExtractedAsset> materialAssets = settings.materialAssets;
 			List<ModelExtractedAsset> textureAssets = settings.textureAssets;
@@ -849,10 +903,92 @@ namespace LELEngine
 			settings.version = version;
 			settings.materialAssets = materialAssets;
 			settings.textureAssets = textureAssets;
-			string settingsHash = Convert.ToHexString(SHA1.HashData(settingsBytes));
-			// Extractor layout 3 (2026-10-22): materials and embedded textures next to the model, kept by GUID (older
-			// imports redo once).
-			return $"{info.Length}:{info.LastWriteTimeUtc.Ticks}:{settingsHash}:{backend.GetType().Name}:{backend.Version}:{(MaterialExtractor != null ? 3 : 0)}";
+			return Convert.ToHexString(SHA1.HashData(settingsBytes));
+		}
+
+		/// <summary>
+		///     The key of a model's import in <see cref="ResultCache" />: what <see cref="Stamp" /> holds, with the file's
+		///     content in place of its size and time (the same on every machine, which a checkout's file times are not), and
+		///     the asset's path when the import extracts material assets (the import names their files, next to the model).
+		/// </summary>
+		private static string ResultKey(string assetPath, string file, ModelImporter settings, IModelImportBackend backend)
+		{
+			string content;
+			long length;
+			using (FileStream stream = File.OpenRead(file))
+			{
+				length = stream.Length;
+				content = Convert.ToHexString(SHA256.HashData(stream));
+			}
+
+			bool namesFiles = settings.importMaterials && MaterialExtractor != null && !AssetDatabase.IsEngineResource(assetPath);
+			string identity = $"model|{FormatVersion}|{length}|{content}|{SettingsHash(settings)}|{backend.GetType().Name}|{backend.Version}|{ExtractorLayout}"
+				+ (namesFiles ? "|" + assetPath.Replace('\\', '/') : "");
+			return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(identity))).ToLowerInvariant();
+		}
+
+		/// <summary>
+		///     The import stored in <paramref name="results" /> under <paramref name="key" />, written to this machine's cache
+		///     file with its own <paramref name="stamp" /> (the stored file holds the stamp of the machine that made it); null
+		///     when there is none, it cannot be read, or the material assets it names are missing here (an import then makes
+		///     them).
+		/// </summary>
+		private static ModelData FetchResult(IImportResultCache results, string assetPath, string key, ModelImporter settings, string stamp, string cacheFile)
+		{
+			string fetchedFile = cacheFile + ".fetched";
+			try
+			{
+				if (!results.TryFetch(ResultKind, key, fetchedFile))
+				{
+					return null;
+				}
+
+				ModelData data;
+				using (FileStream stream = File.OpenRead(fetchedFile))
+				{
+					data = Read(stream, out _);
+				}
+
+				if (settings.importMaterials && MaterialExtractor != null && !AssetDatabase.IsEngineResource(assetPath))
+				{
+					foreach (ModelMeshData mesh in data.Meshes)
+					{
+						foreach (int index in mesh.Materials)
+						{
+							string materialPath = index >= 0 && index < data.Materials.Count ? data.Materials[index].AssetPath : "";
+							if (materialPath == null || (materialPath.Length > 0 && !File.Exists(AssetDatabase.ToAbsolute(materialPath))))
+							{
+								return null;
+							}
+						}
+					}
+				}
+
+				Directory.CreateDirectory(Path.GetDirectoryName(cacheFile));
+				using (FileStream stream = File.Create(cacheFile))
+				{
+					Write(stream, data, stamp);
+				}
+
+				Debug.Log($"[Model] Took the import of {assetPath} from the library cache server: {data.Meshes.Count} meshes, {data.Materials.Count} materials");
+				return data;
+			}
+			catch (Exception e) when (e is InvalidDataException || e is EndOfStreamException)
+			{
+				Debug.LogWarning($"[Model] The library cache server's import of {assetPath} cannot be read ({e.Message}); importing it here");
+				return null;
+			}
+			finally
+			{
+				try
+				{
+					File.Delete(fetchedFile);
+				}
+				catch (Exception e) when (e is IOException || e is UnauthorizedAccessException)
+				{
+					// A leftover next to the cache file: replaced by the next fetch.
+				}
+			}
 		}
 
 		// A source model without a cached import of its current file, settings and importer (or, verifying materials,

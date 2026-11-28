@@ -14,6 +14,13 @@ namespace LELEngine.Editor
 	{
 		public string Folder;
 		public string Name;
+
+		/// <summary>The session's id (session.json's "id"; for a session recorded before ids, one made from where and when it ran).</summary>
+		public string Id;
+
+		/// <summary>The server address it was sent to (<see cref="PlaySessionServer.MarkerFile" />), or null.</summary>
+		public string SentTo;
+
 		public DateTime Started;
 		public string Scene;
 
@@ -211,6 +218,8 @@ namespace LELEngine.Editor
 					session.Started = started.LocalDateTime;
 				}
 
+				session.Id = PlaySessionServer.IdOf(header);
+				session.SentTo = PlaySessionServer.SentTo(folder);
 				session.Scene = (string)header["scene"] ?? "";
 				session.Seconds = (double?)header["seconds"] ?? 0;
 				session.EndReason = (string)header["endReason"];

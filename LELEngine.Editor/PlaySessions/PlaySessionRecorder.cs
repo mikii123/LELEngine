@@ -627,7 +627,7 @@ namespace LELEngine.Editor
 
 		/// <summary>
 		///     The old sessions go (older than the preferences keep them, over their size) and interrupted ones are marked, on
-		///     a worker thread.
+		///     a worker thread; then the ones not sent to the play session server are offered to it (Upload on).
 		/// </summary>
 		private void MaintainLater()
 		{
@@ -650,6 +650,10 @@ namespace LELEngine.Editor
 						Console.WriteLine($"[Editor] Deleted {deleted} play session{(deleted == 1 ? "" : "s")} older than {preferences.KeepDays} days"
 							+ (preferences.MaxTotalMB > 0 ? $" or over {preferences.MaxTotalMB} MB in all" : "") + $" ({root})");
 					}
+
+					// The play session server (Upload on): the sessions not sent yet, the one just ended among them (its
+					// writer still finishing it: the sender waits), after the interrupted ones were marked above.
+					PlaySessionServer.Instance.OfferPending(root, InUse, preferences.KeepDays);
 				}
 				catch (Exception e)
 				{
@@ -711,6 +715,7 @@ namespace LELEngine.Editor
 			Assembly game = editor.Scripts?.GameAssembly;
 			return new SessionHeader
 			{
+				Id = Guid.NewGuid().ToString("N"),
 				Started = now,
 				ProjectName = editor.Project?.Name,
 				ProjectPath = editor.Project?.RootPath,

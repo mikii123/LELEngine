@@ -151,6 +151,9 @@ namespace LELEngine.Editor
 			long started = Stopwatch.GetTimestamp();
 			long slice = started;
 			int modelCount = models.Count;
+			LibraryCacheServer server = LibraryCacheServer.Instance;
+			long serverFetched = server.Fetched;
+			long serverBytes = server.FetchedBytes;
 			Progress.Scope progress = Progress.Begin(title);
 			Task bakes = null;
 			stopping = false;
@@ -231,8 +234,10 @@ namespace LELEngine.Editor
 				progress.Dispose();
 			}
 
+			long fromServer = server.Fetched - serverFetched;
+			string served = fromServer > 0 ? $"; {fromServer} results taken from the library cache server ({LibraryCacheServer.Megabytes(server.FetchedBytes - serverBytes)})" : "";
 			Debug.Log($"[Editor] Assets imported in {Stopwatch.GetElapsedTime(started).TotalSeconds:F1} s: {ImportedModels.Count} of {modelCount} models, "
-				+ $"{imagesBaked} of {images.Count} images baked, {fieldsBuilt} distance fields built for {fieldModels.Count} models");
+				+ $"{imagesBaked} of {images.Count} images baked, {fieldsBuilt} distance fields built for {fieldModels.Count} models{served}");
 		}
 
 		/// <summary>
@@ -320,12 +325,13 @@ namespace LELEngine.Editor
 			return result;
 		}
 
-		private static bool ImportModel(string assetPath)
+		private bool ImportModel(string assetPath)
 		{
 			try
 			{
-				// A fresh import: the cached one may match the file and still miss its material files.
-				ModelAssets.LoadData(assetPath, true);
+				// A fresh import: the cached one may match the file and still miss its material files. The library cache
+				// server's is taken when its material files are there (not for a Reimport, which wants the import made here).
+				ModelAssets.LoadData(assetPath, true, !force);
 				return true;
 			}
 			catch (Exception e)

@@ -64,12 +64,8 @@ namespace LELEngine.Editor
 				if (bakeNow && importer.compression != TextureCompression.BC7HighQuality)
 				{
 					long started = System.Diagnostics.Stopwatch.GetTimestamp();
-					string file = TextureBaker.BakeFile(project, assetPath, importer, out bool fromCache);
-					if (!fromCache)
-					{
-						Debug.Log($"[Textures] Baked {assetPath} ({importer.compression}) in {System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds:F0} ms: the editor and builds load it from the Library");
-					}
-
+					string file = TextureBaker.BakeFile(project, assetPath, importer, true, out BakeResult result);
+					LogBake(assetPath, importer, result, started, "");
 					return file;
 				}
 			}
@@ -115,7 +111,8 @@ namespace LELEngine.Editor
 		///     Bakes the image asset now, on this thread, when its bake is missing or outdated, whatever its compression (the
 		///     high quality one too); <paramref name="force" />: also when current (Reimport). The asset's full import
 		///     (<see cref="AssetPreimport" />). A failure is logged once and the editor loads the image as it is. Any thread;
-		///     true when a bake was made.
+		///     true when a bake was made here (not when the Library's was current or the library cache server gave it; a
+		///     forced one never asks the server).
 		/// </summary>
 		public bool BakeNow(string assetPath, bool force, bool log)
 		{
@@ -138,14 +135,15 @@ namespace LELEngine.Editor
 				}
 
 				long started = System.Diagnostics.Stopwatch.GetTimestamp();
-				TextureBaker.BakeFile(project, assetPath, importer, out bool fromCache);
+				// A Reimport bakes here (the server would give back the bake it asks to make again).
+				TextureBaker.BakeFile(project, assetPath, importer, !force, out BakeResult result);
 				failed.TryRemove(assetPath, out _);
-				if (!fromCache && log)
+				if (log)
 				{
-					Debug.Log($"[Textures] Baked {assetPath} ({importer.compression}) in {System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds:F0} ms: the editor and builds load it from the Library");
+					LogBake(assetPath, importer, result, started, "");
 				}
 
-				return !fromCache;
+				return result == BakeResult.Baked;
 			}
 			catch (Exception e)
 			{
@@ -229,12 +227,8 @@ namespace LELEngine.Editor
 					if (File.Exists(AssetDatabase.ToAbsolute(assetPath)) && Bakes(assetPath, importer))
 					{
 						long started = System.Diagnostics.Stopwatch.GetTimestamp();
-						TextureBaker.BakeFile(project, assetPath, importer, out bool fromCache);
-						if (!fromCache)
-						{
-							Debug.Log($"[Textures] Baked {assetPath} ({importer.compression}) in the background in {System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds:F0} ms: the editor and builds load it from the Library");
-						}
-
+						TextureBaker.BakeFile(project, assetPath, importer, true, out BakeResult result);
+						LogBake(assetPath, importer, result, started, " in the background");
 						baked.Enqueue(assetPath);
 					}
 				}
@@ -249,6 +243,20 @@ namespace LELEngine.Editor
 						queued.Remove(assetPath);
 					}
 				}
+			}
+		}
+
+		/// <summary>A line for a bake made or taken from the library cache server (none when the Library's was current).</summary>
+		private static void LogBake(string assetPath, TextureImporter importer, BakeResult result, long started, string where)
+		{
+			double milliseconds = System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalMilliseconds;
+			if (result == BakeResult.Baked)
+			{
+				Debug.Log($"[Textures] Baked {assetPath} ({importer.compression}){where} in {milliseconds:F0} ms: the editor and builds load it from the Library");
+			}
+			else if (result == BakeResult.Downloaded)
+			{
+				Debug.Log($"[Textures] Took the bake of {assetPath} ({importer.compression}) from the library cache server{where} in {milliseconds:F0} ms");
 			}
 		}
 

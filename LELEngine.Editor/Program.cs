@@ -67,6 +67,8 @@ namespace LELEngine.Editor
 
 			// The user's preferences first: the theme applies to the first window.
 			EditorPreferences.Initialize(args);
+			// Model imports ask the library cache server set up there (the textures' and fields' bakes ask it themselves).
+			ModelAssets.ResultCache = LibraryCacheServer.Instance;
 			// layoutfile=path: a layout of the run's own (automated runs then read and write it, never the user's).
 			ImGuiController.LayoutFileOverride = Array.Find(args, a => a.StartsWith("layoutfile=", StringComparison.OrdinalIgnoreCase))?.Substring("layoutfile=".Length).Trim('"');
 			ImGuiController.ReadOnlyLayouts = EditorApplication.IsAutomatedRun(args) && ImGuiController.LayoutFileOverride == null;

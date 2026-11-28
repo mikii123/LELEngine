@@ -103,6 +103,18 @@ namespace LELEngine.Editor.Automation
 			"  refresh                                import changed files now, also those the watchers have not reported yet\n" +
 			"                                         (every command first imports what changed since the last one)\n" +
 			"  console [N] [--errors] [--clear]       the last N (30) messages, each with its call stack\n" +
+			"  sessions [N] [--errors] [--remote [--machine M] [--scene S]]\n" +
+			"                                         recorded play sessions, newest first (N: 20), a line each: start, id,\n" +
+			"                                         scene, length, frames, frame times, hitches, errors; --errors: with errors\n" +
+			"                                         or a crash; --remote: the play session server's (every editor of the team,\n" +
+			"                                         Preferences > Play Sessions > Server), --machine / --scene filter them\n" +
+			"  session <id|folder|latest> [--remote]  one session: its line, files and whole session.json (where it ran, how it\n" +
+			"                                         ended, the summary); local: its folder (frames.csv, events.jsonl)\n" +
+			"  session fetch <id>                     a server session's files, checked and unpacked, into\n" +
+			"                                         <project>/Library/RemoteSessions/<id>/ (session.json, events.jsonl,\n" +
+			"                                         frames.csv: read them as a local session's)\n" +
+			"  session upload <id|folder|latest|all> [--force]\n" +
+			"                                         sends local sessions to the server now (not twice unless --force)\n" +
 			"  wait <frames> | wait idle [seconds]    idle: scripts built, assets refreshed, loads done\n" +
 			"  exec <Namespace.Type.Method> [args]    a static method of the scripts / engine / editor (Task allowed)\n" +
 			"  quit [--save|--discard]                ends the editor; unsaved changes without --save / --discard: it fails\n" +
@@ -130,7 +142,7 @@ namespace LELEngine.Editor.Automation
 				if (word.StartsWith("--", StringComparison.Ordinal) && word.Length > 2)
 				{
 					string name = word.Substring(2);
-					bool takesValue = name is "frames" or "window" or "count" or "timeout" or "hold";
+					bool takesValue = name is "frames" or "window" or "count" or "timeout" or "hold" or "machine" or "scene";
 					options[name] = takesValue && i + 1 < words.Count ? words[++i] : "";
 				}
 				else
@@ -154,7 +166,7 @@ namespace LELEngine.Editor.Automation
 				// A command that does something may have changed what the views show through code that tells nobody (exec, an
 				// action, a script's button): they draw again, as after the user's own click. Commands that only read leave an
 				// idle editor idle.
-				if (command is not ("help" or "status" or "windows" or "screenshot" or "elements" or "anchors" or "actions" or "menus" or "hierarchy" or "inspect" or "get" or "console" or "wait" or "refresh" or "quit"))
+				if (command is not ("help" or "status" or "windows" or "screenshot" or "elements" or "anchors" or "actions" or "menus" or "hierarchy" or "inspect" or "get" or "console" or "wait" or "refresh" or "quit" or "sessions" or "session"))
 				{
 					EditorAutomation.Editor.NotifySceneChanged();
 				}
@@ -572,6 +584,116 @@ namespace LELEngine.Editor.Automation
 
 					break;
 
+				case "sessions":
+				{
+					int count = args.Count > 0 ? int.Parse(args[0], CultureInfo.InvariantCulture) : 20;
+					bool errors = options.ContainsKey("errors");
+					if (options.ContainsKey("remote"))
+					{
+						options.TryGetValue("machine", out string machine);
+						options.TryGetValue("scene", out string scene);
+						(bool ok, string listing) = await Task.Run(() => PlaySessionServer.Instance.List(count, machine, scene, errors));
+						if (!ok)
+						{
+							return CommandResult.Fail(listing);
+						}
+
+						text.Append(listing);
+					}
+					else
+					{
+						PlaySessionRecorder recorder = EditorAutomation.Editor.Sessions;
+						string root = recorder.Root ?? throw new InvalidOperationException("No project is open.");
+						List<PlaySessionListing> sessions = await Task.Run(() => PlaySessionStore.List(root, recorder.InUse));
+						sessions = sessions.FindAll(s => !errors || s.Errors + s.Exceptions > 0 || s.Interrupted);
+						text.Append($"{sessions.Count} session{(sessions.Count == 1 ? "" : "s")} in {root} (newest first; 'session <id|folder|latest>' for one):\n");
+						foreach (PlaySessionListing session in sessions.Take(count))
+						{
+							text.Append(LocalRow(session)).Append('\n');
+						}
+					}
+
+					break;
+				}
+
+				case "session":
+				{
+					Need(args, 1, "session <id|folder|latest> [--remote] | session fetch <id> | session upload <id|folder|latest|all> [--force]");
+					string what = args[0].ToLowerInvariant();
+					if (what == "fetch")
+					{
+						Need(args, 2, "session fetch <id>");
+						string library = EditorAutomation.Editor.Project?.LibraryPath ?? throw new InvalidOperationException("No project is open.");
+						(bool ok, string fetched) = await Task.Run(() => PlaySessionServer.Instance.Fetch(args[1], library));
+						if (!ok)
+						{
+							return CommandResult.Fail(fetched);
+						}
+
+						text.Append(fetched);
+						break;
+					}
+
+					if (what == "upload")
+					{
+						Need(args, 2, "session upload <id|folder|latest|all> [--force]");
+						PlaySessionRecorder recorder = EditorAutomation.Editor.Sessions;
+						string root = recorder.Root ?? throw new InvalidOperationException("No project is open.");
+						bool force = options.ContainsKey("force");
+						List<PlaySessionListing> sessions = await Task.Run(() => PlaySessionStore.List(root, recorder.InUse));
+						List<PlaySessionListing> chosen = string.Equals(args[1], "all", StringComparison.OrdinalIgnoreCase)
+							? sessions.FindAll(s => !s.Recording)
+							: new List<PlaySessionListing> { FindLocal(sessions, args[1]) };
+						bool allOk = true;
+						foreach (PlaySessionListing session in chosen)
+						{
+							(bool ok, string message) = await Task.Run(() => PlaySessionServer.Instance.Send(session.Folder, force));
+							allOk &= ok;
+							text.Append(ok ? "" : "FAILED ").Append(session.Name).Append(": ").Append(message).Append('\n');
+						}
+
+						if (!allOk)
+						{
+							return CommandResult.Fail(text.ToString().TrimEnd());
+						}
+
+						break;
+					}
+
+					if (options.ContainsKey("remote"))
+					{
+						(bool ok, string described) = await Task.Run(() => PlaySessionServer.Instance.Describe(args[0]));
+						if (!ok)
+						{
+							return CommandResult.Fail(described);
+						}
+
+						text.Append(described);
+						break;
+					}
+
+					{
+						PlaySessionRecorder recorder = EditorAutomation.Editor.Sessions;
+						string root = recorder.Root ?? throw new InvalidOperationException("No project is open.");
+						List<PlaySessionListing> sessions = await Task.Run(() => PlaySessionStore.List(root, recorder.InUse));
+						PlaySessionListing session = FindLocal(sessions, args[0]);
+						text.Append(LocalRow(session)).Append('\n');
+						text.Append("folder: ").Append(session.Folder).Append('\n');
+						foreach (string file in Directory.GetFiles(session.Folder))
+						{
+							text.Append($"  {Path.GetFileName(file)}  {new FileInfo(file).Length} bytes\n");
+						}
+
+						string header = Path.Combine(session.Folder, PlaySessionWriter.HeaderFile);
+						if (File.Exists(header))
+						{
+							text.Append("session.json:\n").Append(File.ReadAllText(header)).Append('\n');
+						}
+					}
+
+					break;
+				}
+
 				case "exec":
 				{
 					Need(args, 1, "exec <Namespace.Type.Method> [args]");
@@ -596,6 +718,44 @@ namespace LELEngine.Editor.Automation
 
 			result.Output = text.ToString();
 			return result;
+		}
+
+		/// <summary>A local session by its id, its folder's name (or the start of it) or "latest" (the newest one).</summary>
+		private static PlaySessionListing FindLocal(List<PlaySessionListing> sessions, string which)
+		{
+			if (sessions.Count == 0)
+			{
+				throw new InvalidOperationException("This project has no recorded play sessions.");
+			}
+
+			if (string.Equals(which, "latest", StringComparison.OrdinalIgnoreCase))
+			{
+				return sessions[0];
+			}
+
+			PlaySessionListing found = sessions.Find(s => string.Equals(s.Id, which, StringComparison.OrdinalIgnoreCase))
+				?? sessions.Find(s => string.Equals(s.Name, which, StringComparison.OrdinalIgnoreCase));
+			if (found != null)
+			{
+				return found;
+			}
+
+			List<PlaySessionListing> starting = sessions.FindAll(s => s.Name.StartsWith(which, StringComparison.OrdinalIgnoreCase) || (s.Id?.StartsWith(which, StringComparison.OrdinalIgnoreCase) ?? false));
+			return starting.Count switch
+			{
+				1 => starting[0],
+				0 => throw new ArgumentException($"No session '{which}' (see: sessions)"),
+				_ => throw new ArgumentException($"'{which}' names {starting.Count} sessions: " + string.Join(", ", starting.Take(5).Select(s => s.Name)))
+			};
+		}
+
+		/// <summary>A local session as one line, the shape of a remote one ('sessions --remote').</summary>
+		private static string LocalRow(PlaySessionListing s)
+		{
+			string ended = s.Recording ? "recording" : s.Interrupted ? "INTERRUPTED: " + s.EndReason : s.EndReason;
+			return string.Format(CultureInfo.InvariantCulture, "{0:yyyy-MM-dd HH:mm:ss}  {1}  {2}  {3:0.0} s  {4} frames  avg {5:0.0} ms  worst {6:0} ms  {7} hitches  {8} errors  {9} warnings  {10}  [{11}]{12}",
+				s.Started, s.Id, s.Scene, s.Seconds, s.Frames, s.AverageFrameMs, s.WorstFrameMs, s.Hitches, s.Errors + s.Exceptions, s.Warnings, ended, s.Name,
+				s.SentTo != null ? "  sent" : "");
 		}
 
 		/// <summary>--save / --discard: what a command that would lose unsaved changes does with them (neither: it refuses).</summary>

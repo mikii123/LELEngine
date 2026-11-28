@@ -11,8 +11,9 @@ namespace LELEngine.Editor
 	///     Edit > Preferences...: the user's settings for every project (<see cref="EditorPreferences" />), a section
 	///     each: Theme (preset, text sizes, every color of the editor, its source code and ImGui, each resettable to the
 	///     preset's), Console (toolbar, list, stack traces, hidden wrapper frames, source view, custom filters, hidden
-	///     tags), External Tools (the script editor) and Play Sessions (recording play mode, how long sessions are kept; the
-	///     open project's sessions listed). Changes apply at once and are saved a moment later.
+	///     tags), External Tools (the script editor), Play Sessions (recording play mode, how long sessions are kept, the
+	///     play session server they are sent to; the open project's sessions listed) and Cache Server (the library cache server: address, access key, which way results
+	///     go, a connection test, this session's transfers). Changes apply at once and are saved a moment later.
 	/// </summary>
 	internal sealed class PreferencesWindow : IEditorPanel
 	{
@@ -23,7 +24,8 @@ namespace LELEngine.Editor
 			Theme,
 			Console,
 			ExternalTools,
-			PlaySessions
+			PlaySessions,
+			CacheServer
 		}
 
 		public bool Open;
@@ -38,13 +40,16 @@ namespace LELEngine.Editor
 
 		#region PrivateFields
 
-		private static readonly string[] SectionNames = { "Theme", "Console", "External Tools", "Play Sessions" };
+		private static readonly string[] SectionNames = { "Theme", "Console", "External Tools", "Play Sessions", "Cache Server" };
 		private static readonly string[] StackTraceNames = { "None", "Script Only", "Full" };
 
 		private Section section = Section.Theme;
 		private bool focus;
 		private string colorFilter = "";
 		private float labelWidth;
+		private bool showAccessKey;
+		private bool showSessionKey;
+		private int listedSent = -1;
 
 		#endregion
 
@@ -138,6 +143,9 @@ namespace LELEngine.Editor
 						break;
 					case Section.PlaySessions:
 						DrawPlaySessions(EditorPreferences.Current.PlaySessions);
+						break;
+					case Section.CacheServer:
+						DrawCacheServer(EditorPreferences.Current.CacheServer);
 						break;
 					default:
 						DrawExternalTools(EditorPreferences.Current.ExternalTools);
@@ -498,9 +506,55 @@ namespace LELEngine.Editor
 				changed = true;
 			}
 
+			ImGui.SeparatorText("Server");
+			ImGui.PushTextWrapPos(0f);
+			ImGui.TextDisabled("A play session server (a portal project's play sessions endpoint) keeps the sessions of every editor of the team, their "
+				+ "console messages in the project's debug tracing. An AI agent driving an editor reads them with the automation's 'sessions --remote' "
+				+ "and 'session fetch <id>' (the address and key below, Upload on or not).");
+			ImGui.PopTextWrapPos();
+			changed |= Check("Upload sessions", ref sessions.Upload, "Every session is sent to the server when it ends (in the background), and the ones not sent yet when a project opens");
+			Label("Address", "The play sessions endpoint of a portal project: https://host/api/{project}/play-sessions");
+			changed |= EditorGui.InputTextWithHint("##sessionserver", "https://portal.example.com/api/project/play-sessions", ref sessions.ServerUrl, 512);
+			Label("Access key", "Sent with every request (X-Api-Key): a key the server accepts. Kept in the preferences file as it is typed");
+			float showWidth = ImGui.CalcTextSize("Hide").X + ImGui.GetStyle().FramePadding.X * 2f;
+			ImGui.SetNextItemWidth(Math.Max(80f, ImGui.GetContentRegionAvail().X - showWidth - ImGui.GetStyle().ItemSpacing.X));
+			changed |= EditorGui.InputText("##sessionkey", ref sessions.AccessKey, 256, showSessionKey ? ImGuiInputTextFlags.None : ImGuiInputTextFlags.Password);
+			ImGui.SameLine();
+			if (EditorGui.Button(showSessionKey ? "Hide##sessionkey" : "Show##sessionkey", new NVector2(showWidth, 0)))
+			{
+				showSessionKey = !showSessionKey;
+			}
+
+			// The cache server of the same portal project: its address with the last segment swapped, the same key.
+			CacheServerPreferences cache = EditorPreferences.Current.CacheServer;
+			string cacheUrl = cache.Url?.Trim().TrimEnd('/') ?? "";
+			if (cacheUrl.EndsWith("/library-cache", StringComparison.OrdinalIgnoreCase))
+			{
+				ImGui.SetCursorPosX(ImGui.GetCursorPosX() + labelWidth);
+				if (EditorGui.Button("Use the cache server's project and key"))
+				{
+					sessions.ServerUrl = cacheUrl.Substring(0, cacheUrl.Length - "library-cache".Length) + "play-sessions";
+					sessions.AccessKey = cache.AccessKey ?? "";
+					changed = true;
+				}
+			}
+
 			if (changed)
 			{
 				EditorPreferences.MarkChanged();
+			}
+
+			PlaySessionServer server = PlaySessionServer.Instance;
+			if (server.Configured)
+			{
+				ImGui.TextDisabled($"Sent this session: {server.Sent}; waiting: {server.Waiting}" + (server.Failures > 0 ? $"; failures: {server.Failures}" : ""));
+				string serverError = server.LastError;
+				if (serverError != null)
+				{
+					ImGui.PushTextWrapPos(0f);
+					ImGui.TextColored(EditorStyle.Warning, serverError);
+					ImGui.PopTextWrapPos();
+				}
 			}
 
 			if (EditorPreferences.File == null)
@@ -516,8 +570,10 @@ namespace LELEngine.Editor
 				return;
 			}
 
-			if (recorder.ListingVersion != recorder.Version)
+			// A session sent to the server since (its folder got the marker): the list's Sent column follows.
+			if (recorder.ListingVersion != recorder.Version || listedSent != server.Sent)
 			{
+				listedSent = server.Sent;
 				recorder.RequestListing();
 			}
 
@@ -576,7 +632,7 @@ namespace LELEngine.Editor
 			}
 
 			ImGui.TextDisabled($"{listing.Count} session{(listing.Count == 1 ? "" : "s")}, {bytes / (1024.0 * 1024.0):0.0} MB");
-			if (listing.Count == 0 || !ImGui.BeginTable("##sessions", 9, ImGuiTableFlags.SizingFixedFit | ImGuiTableFlags.RowBg | ImGuiTableFlags.BordersInnerV | ImGuiTableFlags.ScrollY, new NVector2(0f, Math.Max(160f, ImGui.GetContentRegionAvail().Y))))
+			if (listing.Count == 0 || !ImGui.BeginTable("##sessions", 10, ImGuiTableFlags.SizingFixedFit | ImGuiTableFlags.RowBg | ImGuiTableFlags.BordersInnerV | ImGuiTableFlags.ScrollY, new NVector2(0f, Math.Max(160f, ImGui.GetContentRegionAvail().Y))))
 			{
 				return;
 			}
@@ -590,6 +646,7 @@ namespace LELEngine.Editor
 			ImGui.TableSetupColumn("Hitches");
 			ImGui.TableSetupColumn("Errors");
 			ImGui.TableSetupColumn("Ended", ImGuiTableColumnFlags.WidthStretch);
+			ImGui.TableSetupColumn("Sent");
 			ImGui.TableSetupColumn("");
 			ImGui.TableHeadersRow();
 			for (int i = 0; i < listing.Count; i++)
@@ -652,6 +709,20 @@ namespace LELEngine.Editor
 				}
 
 				ImGui.TableNextColumn();
+				if (session.SentTo != null)
+				{
+					ImGui.TextUnformatted("yes");
+					if (ImGui.IsItemHovered())
+					{
+						EditorGui.SetTooltip(session.SentTo + "\nid " + session.Id);
+					}
+				}
+				else
+				{
+					ImGui.TextDisabled("-");
+				}
+
+				ImGui.TableNextColumn();
 				if (EditorGui.SmallButton("Show"))
 				{
 					ShowInExplorer(System.IO.Path.Combine(session.Folder, PlaySessionWriter.HeaderFile));
@@ -661,6 +732,91 @@ namespace LELEngine.Editor
 			}
 
 			ImGui.EndTable();
+		}
+
+		// ---------------------------------------------------------------- cache server
+
+		private void DrawCacheServer(CacheServerPreferences server)
+		{
+			bool changed = false;
+			ImGui.PushTextWrapPos(0f);
+			ImGui.TextDisabled("A library cache server shares the Library's import results between the editors of a team: model imports, images baked "
+				+ "as builds ship them and the meshes' distance fields. An import missing from the Library takes the server's result instead of "
+				+ "making it (a fresh checkout's full import, a high quality bake), and what this editor makes is sent to it in the background. "
+				+ "Results are kept by the content of the files they come from, their import settings and the importer's version, never by path "
+				+ "or file time.");
+			ImGui.PopTextWrapPos();
+
+			ImGui.SeparatorText("Server");
+			changed |= Check("Use a cache server", ref server.Enabled, "Imports ask the server and send it what they make; off: the Library alone");
+			ImGui.BeginDisabled(!server.Enabled);
+			Label("Address", "The library cache endpoint of a portal project: https://host/api/{project}/library-cache");
+			changed |= EditorGui.InputTextWithHint("##url", "https://portal.example.com/api/project/library-cache", ref server.Url, 512);
+			Label("Access key", "Sent with every request (X-Api-Key): a key the server accepts. Kept in the preferences file as it is typed");
+			float showWidth = ImGui.CalcTextSize("Hide").X + ImGui.GetStyle().FramePadding.X * 2f;
+			ImGui.SetNextItemWidth(Math.Max(80f, ImGui.GetContentRegionAvail().X - showWidth - ImGui.GetStyle().ItemSpacing.X));
+			changed |= EditorGui.InputText("##accesskey", ref server.AccessKey, 256, showAccessKey ? ImGuiInputTextFlags.None : ImGuiInputTextFlags.Password);
+			ImGui.SameLine();
+			if (EditorGui.Button(showAccessKey ? "Hide" : "Show", new NVector2(showWidth, 0)))
+			{
+				showAccessKey = !showAccessKey;
+			}
+
+			changed |= Check("Download", ref server.Download, "An import missing from the Library takes the server's result before making it here");
+			changed |= Check("Upload", ref server.Upload, "Results made here are sent to the server in the background (what it has already is not sent)");
+			if (changed)
+			{
+				EditorPreferences.MarkChanged();
+			}
+
+			Label("Connection", "Asks the server for its status with this address and key");
+			if (EditorGui.Button("Test Connection"))
+			{
+				LibraryCacheServer.Instance.TestConnection();
+			}
+
+			string test = LibraryCacheServer.Instance.ConnectionTest;
+			if (test != null)
+			{
+				ImGui.PushTextWrapPos(0f);
+				ImGui.TextUnformatted(test == "..." ? "Asking the server..." : test);
+				ImGui.PopTextWrapPos();
+			}
+
+			ImGui.EndDisabled();
+
+			ImGui.SeparatorText("This session");
+			LibraryCacheServer cache = LibraryCacheServer.Instance;
+			switch (cache.State)
+			{
+				case LibraryCacheServer.ServerState.Off:
+					ImGui.TextDisabled(EditorPreferences.File == null ? "Off: an automated run without preferencesfile= uses no server." : "Off.");
+					break;
+				case LibraryCacheServer.ServerState.Ready:
+					ImGui.TextUnformatted(server.Download || server.Upload ? "In use." : "Set up, but neither downloads nor uploads.");
+					break;
+				case LibraryCacheServer.ServerState.Unreachable:
+					ImGui.TextColored(EditorStyle.Warning, $"Unreachable: imports make their results here; asked again {LibraryCacheServer.RetryAfterSeconds} s after the last try.");
+					break;
+				case LibraryCacheServer.ServerState.Refused:
+					ImGui.TextColored(EditorStyle.Error, "The server refused the access key: not asked again until the preferences change (or Test Connection).");
+					break;
+			}
+
+			ImGui.TextUnformatted($"Downloaded: {cache.Fetched} result{(cache.Fetched == 1 ? "" : "s")}, {LibraryCacheServer.Megabytes(cache.FetchedBytes)}; not on the server: {cache.Misses}");
+			ImGui.TextUnformatted($"Uploaded: {cache.Sent} result{(cache.Sent == 1 ? "" : "s")}, {LibraryCacheServer.Megabytes(cache.SentBytes)}; the server had them already: {cache.AlreadyStored}; waiting: {cache.Waiting}");
+			if (cache.Failures > 0)
+			{
+				ImGui.TextColored(EditorStyle.Warning, $"Failures: {cache.Failures}");
+			}
+
+			string error = cache.LastError;
+			if (error != null)
+			{
+				ImGui.PushTextWrapPos(0f);
+				ImGui.TextColored(EditorStyle.Warning, error);
+				ImGui.PopTextWrapPos();
+			}
 		}
 
 		private static string Duration(double seconds)

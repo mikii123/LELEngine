@@ -10,7 +10,7 @@ namespace LELEngine.Editor
 {
 	/// <summary>
 	///     The user's editor preferences, the same for every project (Edit > Preferences...): the theme of every editor
-	///     window, the console, the external script editor. Saved as preferences.json in the editor's data folder
+	///     window, the console, the external script editor, play sessions, the library cache server. Saved as preferences.json in the editor's data folder
 	///     (%APPDATA%/LELEngine/Editor), outside projects, a moment after a change (<see cref="Update" />); another
 	///     editor's change to the file is read back. Automated runs use the defaults and save nothing, unless
 	///     preferencesfile=path names a file of their own.
@@ -23,6 +23,7 @@ namespace LELEngine.Editor
 		public ConsolePreferences Console = new ConsolePreferences();
 		public ExternalToolsPreferences ExternalTools = new ExternalToolsPreferences();
 		public PlaySessionPreferences PlaySessions = new PlaySessionPreferences();
+		public CacheServerPreferences CacheServer = new CacheServerPreferences();
 
 		/// <summary>The toggles of the editor's windows (panels shown, snapping, ...) by name; one not set has the window's default.</summary>
 		public Dictionary<string, bool> Toggles = new Dictionary<string, bool>();
@@ -238,6 +239,11 @@ namespace LELEngine.Editor
 			PlaySessions ??= new PlaySessionPreferences();
 			PlaySessions.KeepDays = Math.Clamp(PlaySessions.KeepDays, PlaySessionPreferences.MinDays, PlaySessionPreferences.MaxDays);
 			PlaySessions.MaxTotalMB = PlaySessions.MaxTotalMB <= 0 ? 0 : Math.Clamp(PlaySessions.MaxTotalMB, PlaySessionPreferences.MinTotalMB, PlaySessionPreferences.MaxTotalMBLimit);
+			PlaySessions.ServerUrl ??= "";
+			PlaySessions.AccessKey ??= "";
+			CacheServer ??= new CacheServerPreferences();
+			CacheServer.Url ??= "";
+			CacheServer.AccessKey ??= "";
 		}
 
 		/// <summary>The engine settings the preferences hold (how much of the call stack log messages record).</summary>
@@ -409,6 +415,46 @@ namespace LELEngine.Editor
 		///     scopes, first-use work, JIT and GC) goes into the session.
 		/// </summary>
 		public bool HitchReports = true;
+
+		/// <summary>
+		///     Every session that ended is sent to <see cref="ServerUrl" /> (<see cref="PlaySessionServer" />, in the
+		///     background), and the ones not sent yet when a project opens.
+		/// </summary>
+		public bool Upload;
+
+		/// <summary>
+		///     The play session server: the play sessions endpoint of a portal project, https://host/api/{project}/play-sessions.
+		///     Also what the automation's "sessions --remote" and "session fetch" read, with or without <see cref="Upload" />.
+		/// </summary>
+		public string ServerUrl = "";
+
+		/// <summary>Sent with every request to it (X-Api-Key). Kept in this file as it is typed.</summary>
+		public string AccessKey = "";
+	}
+
+	/// <summary>
+	///     The library cache server (<see cref="LibraryCacheServer" />): where the Library's import results are shared with
+	///     the other editors of a team, and which way they go.
+	/// </summary>
+	internal sealed class CacheServerPreferences
+	{
+		/// <summary>Imports ask the server and send it what they make (off: the Library alone, as without a server).</summary>
+		public bool Enabled;
+
+		/// <summary>The server's address: the library cache endpoint of a portal project, https://host/api/{project}/library-cache.</summary>
+		public string Url = "";
+
+		/// <summary>
+		///     Sent with every request (X-Api-Key): a key the server accepts. Kept in this file as it is typed, so the file is
+		///     as private as the key.
+		/// </summary>
+		public string AccessKey = "";
+
+		/// <summary>An import missing from the Library takes the server's result before making it here.</summary>
+		public bool Download = true;
+
+		/// <summary>Results made here are sent to the server (in the background; what it has already is not sent).</summary>
+		public bool Upload = true;
 	}
 
 	/// <summary>Colors as #RRGGBBAA text (preferences files).</summary>

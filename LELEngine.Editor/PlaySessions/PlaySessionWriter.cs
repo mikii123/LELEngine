@@ -13,6 +13,9 @@ namespace LELEngine.Editor
 	/// <summary>What a session records about where it ran (session.json), gathered on the main thread when it starts.</summary>
 	internal sealed class SessionHeader
 	{
+		/// <summary>The session's id (32 hex digits): its name on a play session server, the same however often it is sent.</summary>
+		public string Id;
+
 		public DateTimeOffset Started;
 		public string ProjectName;
 		public string ProjectPath;
@@ -524,6 +527,7 @@ namespace LELEngine.Editor
 				w.WriteStartObject();
 				w.WriteString("format", "LELEngine play session");
 				w.WriteNumber("version", 1);
+				w.WriteString("id", header.Id);
 				w.WriteString("started", header.Started.ToString("o", CultureInfo.InvariantCulture));
 				if (final)
 				{

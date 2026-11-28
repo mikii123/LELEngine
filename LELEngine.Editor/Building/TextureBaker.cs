@@ -10,6 +10,19 @@ using BCnEncoder.Shared;
 
 namespace LELEngine.Editor
 {
+	/// <summary>How <see cref="TextureBaker.BakeFile(ProjectInfo,string,TextureImporter,bool,out BakeResult)" /> got its file.</summary>
+	internal enum BakeResult
+	{
+		/// <summary>The Library's bake was current.</summary>
+		Current,
+
+		/// <summary>Taken from the library cache server (another editor baked it).</summary>
+		Downloaded,
+
+		/// <summary>Baked here.</summary>
+		Baked
+	}
+
 	/// <summary>
 	///     Bakes image assets for game builds into KTX files the player uploads as they are (<see cref="KtxFile" />): the
 	///     import (shape, size, color space) with every mip level computed here (a box filter, in linear light for sRGB
@@ -17,10 +30,18 @@ namespace LELEngine.Editor
 	///     setting) unless the importer asks for no compression (<see cref="TextureCompression" />).
 	///     HDR images stay RGBA16F, volumes RGBA8 (their mip levels come from the GPU). Bakes are cached in
 	///     Library/TextureCache per asset, valid while the image's content, its meta file and this baker's version are the
-	///     same.
+	///     same. A bake missing there is taken from the library cache server when it has one for the same contents
+	///     (<see cref="LibraryCacheServer" />, kind <see cref="ResultKind" />), and a bake made here is sent to it.
 	/// </summary>
 	internal static class TextureBaker
 	{
+		#region PublicFields
+
+		/// <summary>The kind of the library cache server's entries that hold image bakes.</summary>
+		public const string ResultKind = "textures";
+
+		#endregion
+
 		#region PrivateFields
 
 		// 3 (2026-10-24): BC7 keeps the alpha of fully transparent texels at 0.
@@ -47,24 +68,50 @@ namespace LELEngine.Editor
 		/// </summary>
 		public static string BakeFile(ProjectInfo project, string assetPath, TextureImporter importer, out bool fromCache)
 		{
+			string file = BakeFile(project, assetPath, importer, true, out BakeResult result);
+			fromCache = result != BakeResult.Baked;
+			return file;
+		}
+
+		/// <summary>
+		///     The cache file of the image asset's current bake, made now when there is none: taken from the library cache
+		///     server when <paramref name="useServer" /> and it has the bake of these contents, else baked here (and sent to
+		///     it). <paramref name="useServer" /> off: a Reimport, which wants the bake made here. Any thread; one bake of an
+		///     asset at a time.
+		/// </summary>
+		public static string BakeFile(ProjectInfo project, string assetPath, TextureImporter importer, bool useServer, out BakeResult result)
+		{
 			string cacheFile = CacheFile(project, assetPath);
 			lock (Lock(cacheFile))
 			{
 				if (IsCurrent(assetPath, cacheFile))
 				{
-					fromCache = true;
+					result = BakeResult.Current;
 					return cacheFile;
 				}
 
-				fromCache = false;
 				// Taken before the image is read: an image changed during the bake leaves a stale stamp, not a stale bake.
-				string stamp = Stamp(assetPath);
+				string stamp = Stamp(assetPath, out string resultKey);
 				string quick = QuickKey(assetPath);
+				LibraryCacheServer server = LibraryCacheServer.Instance;
+				Directory.CreateDirectory(Path.GetDirectoryName(cacheFile));
+				if (useServer && server.CanFetch && server.TryFetch(ResultKind, resultKey, cacheFile, KtxFile.IsKtxFile))
+				{
+					WriteReplacing(cacheFile + ".stamp", Encoding.UTF8.GetBytes(stamp + "\n" + quick));
+					result = BakeResult.Downloaded;
+					return cacheFile;
+				}
+
 				ImportedTexture imported = TextureAssets.Import(assetPath, importer) ?? throw new InvalidDataException("the image does not fit its import settings");
 				byte[] ktx = Encode(imported, importer.compression);
-				Directory.CreateDirectory(Path.GetDirectoryName(cacheFile));
 				WriteReplacing(cacheFile, ktx);
 				WriteReplacing(cacheFile + ".stamp", Encoding.UTF8.GetBytes(stamp + "\n" + quick));
+				if (server.CanOffer)
+				{
+					server.Offer(ResultKind, resultKey, cacheFile);
+				}
+
+				result = BakeResult.Baked;
 				return cacheFile;
 			}
 		}
@@ -160,22 +207,39 @@ namespace LELEngine.Editor
 		/// </summary>
 		private static string Stamp(string assetPath)
 		{
+			return Stamp(assetPath, out _);
+		}
+
+		/// <param name="resultKey">
+		///     The bake's key on the library cache server, from the same contents: the meta file's hash with its line ends as
+		///     LF (a checkout may give it CRLF on one machine and LF on another), so every machine finds the same entry.
+		/// </param>
+		private static string Stamp(string assetPath, out string resultKey)
+		{
 			string absolute = AssetDatabase.ToAbsolute(assetPath);
 			string meta = absolute + AssetDatabase.MetaExtension;
-			string metaHash = File.Exists(meta) ? Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(meta))) : "";
+			byte[] metaBytes = File.Exists(meta) ? File.ReadAllBytes(meta) : null;
+			string metaHash = metaBytes != null ? Convert.ToHexString(SHA256.HashData(metaBytes)) : "";
+			string metaTextHash = metaBytes != null ? LibraryCacheServer.TextHash(metaBytes) : "";
 			var stamp = new StringBuilder();
+			var identity = new StringBuilder("texture");
 			using (FileStream image = File.OpenRead(absolute))
 			{
-				stamp.Append($"{Version}|{image.Length}|{Convert.ToHexString(SHA256.HashData(image))}|{metaHash}");
+				string imageHash = Convert.ToHexString(SHA256.HashData(image));
+				stamp.Append($"{Version}|{image.Length}|{imageHash}|{metaHash}");
+				identity.Append($"|{Version}|{image.Length}|{imageHash}|{metaTextHash}");
 			}
 
 			List<string> sources = TextureAssets.GetSourceFiles(assetPath);
 			for (int i = 1; i < sources.Count; i++)
 			{
 				using FileStream other = File.OpenRead(AssetDatabase.ToAbsolute(sources[i]));
-				stamp.Append($"|{other.Length}|{Convert.ToHexString(SHA256.HashData(other))}");
+				string part = $"|{other.Length}|{Convert.ToHexString(SHA256.HashData(other))}";
+				stamp.Append(part);
+				identity.Append(part);
 			}
 
+			resultKey = LibraryCacheServer.Key(identity.ToString());
 			return stamp.ToString();
 		}
 

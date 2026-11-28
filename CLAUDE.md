@@ -2126,6 +2126,60 @@
   2, hidden editor): imported and its field built in 0.2 s. Not checked: a large project (the look's time with a complete
   Library, five 4K bakes at once in memory), a project chosen after File > Close Project, another DPI or monitor.
 
+## Library cache server (Preferences > Cache Server, 2026-11-28)
+
+- The user's ask: the Library's import results shared through a server, set up in the editor preferences; the server is
+  a lelware portal project with endpoints to upload, download and list files (the portal side is a module in the
+  private modules repo, `NewFrontier/`, route `api/newfrontier/library-cache`, access keys `NewFrontier:Keys` shared
+  with the play session server). Like Unity's cache server / Accelerator.
+- What it holds: the caches that depend only on the project's files: model imports (Library/ModelCache, kind `models`),
+  image bakes (Library/TextureCache, `textures`) and meshes' distance fields (Library/DistanceFieldCache,
+  `distance-fields`). Not: thumbnails, static batches (per scene, depend on many assets), clouds (VolumeCache: runtime,
+  GPU-made), shader binaries (per driver), script assemblies.
+- Keys (`LibraryCacheServer.Key`: SHA-256 hex of an identity text) come from content, never paths or file times: textures
+  `texture|Version|image length|image SHA-256|meta SHA-256 with CRLF as LF|other source files` (computed in the same pass
+  as the local stamp, `TextureBaker.Stamp(path, out key)`); models `model|FormatVersion|file length|file SHA-256|settings
+  hash|backend|backend version|extractor layout` plus the asset path when materials are extracted (the import names
+  their files); fields `distance-field|DistanceFieldBaker.ResultStamp|mesh|shape` (`ResultStamp` = the local stamp with
+  the meta hashed with LF line ends). The local stamps are unchanged (Libraries stay valid). The meta's line ends are
+  normalized because a checkout may give CRLF on one machine and LF on another.
+- Where it plugs in: `IImportResultCache` (runtime, `LELEngine/Assets`) set on `ModelAssets.ResultCache` by
+  `Program.RunEditor` and `BatchEditor.Run`; `ModelAssets.LoadData(path, reimport, useResultCache)` fetches before an
+  import (the fetched file's stamp is rewritten to this machine's, materials it names must exist here or it imports)
+  and offers after one. `TextureBaker.BakeFile(..., useServer, out BakeResult)` fetches into the cache file under the
+  bake's lock (accepted only if `KtxFile.IsKtxFile`), writes the `.stamp`, offers after a bake. `DistanceFieldBaker.Store`
+  fetches in `BuildModelFields` (the stored file's stamp rewritten too) and offers from `BuildModelFields` and `Save`
+  (fields views build). A forced Reimport (preimport `force`, `BakeNow(force)`) never fetches. The preimport's summary
+  adds "N results taken from the library cache server (MB)"; texture loads log "Took the bake of X from the library
+  cache server", models "Took the import of X ...".
+- Client (`LELEngine.Editor/Project/LibraryCacheServer.cs`, one instance): settings from `EditorPreferences.CacheServer`
+  (Enabled, Url, AccessKey in `X-Api-Key`, Download, Upload; the key is kept in preferences.json as typed), rebuilt when
+  the preferences change. Fetch on the importing thread (sync `HttpClient.Send`, 5 s connect, 20 s headers, 60 s per
+  read), streamed to a temp file while hashed, kept only if `X-Content-SHA256` and the length match, then moved into
+  place. Offers queue (deduped) for one background thread: HEAD first (a result the server has is not sent), then one
+  `PUT files/{kind}/{key}` up to the server's part size (`GET status` once per server and key) or `POST uploads` +
+  `PUT uploads/{id}/{n}` per part (each with its own hash; read per part with FileShare.Delete, so a re-bake replacing
+  the file is not blocked, and a file that changed meanwhile is dropped) + `POST uploads/{id}/complete`
+  (`DELETE uploads/{id}` on failure). Unreachable (transport errors, 5xx, 408, 429): one warning, not asked for 60 s;
+  401/403: one warning, not asked until the preferences change or Test Connection. Automated runs use defaults (off)
+  unless `preferencesfile=` names a file with a server.
+- Preferences > Cache Server (`PreferencesWindow.DrawCacheServer`, hook `preferences=N;CacheServer`): the switch,
+  address, key (password field, Show), Download / Upload, Test Connection (the server's file count and size, whether
+  the key may upload), this session's downloads / uploads / waiting / failures and the last error.
+- Server protocol (the portal module; any server answering it works): `GET status` -> `{upload, partSize, maxFileBytes,
+  files, bytes}`; `GET|HEAD files/{kind}/{key}` (bytes + `X-Content-SHA256`, 404 when absent); `PUT files/{kind}/{key}`
+  (201 stored, 200 had it, 409 another upload of it in progress, 413 over the part size); `POST uploads {path, size,
+  sha256}` -> `{uploadId, partSize}` or `{exists:true}`; `PUT uploads/{id}/{part}`; `POST uploads/{id}/complete` (the
+  server hashes the whole file again); `DELETE uploads/{id}`; `GET list?prefix=&after=&limit=`; `DELETE files/...`.
+- Verified 2026-11-28 (Debug editor, AMD 780M) against the module in a test host over the portal's real
+  `ProjectStorageService` with throwaway Postgres 16 + Silo containers: a protocol script (37 checks: keys and the
+  read-only key, single PUT, 70 MB in 3 parts, damaged part and lying whole hash refused, abort, list paging, delete,
+  cleanup by age); a probe project (TestGame's 18 images and 11 models + a 3000x3000 noise PNG baked RGBA8 = 2 parts):
+  fresh Library with the server: 43 results sent (8.5 s import); fresh Library again: "40 results taken from the
+  library cache server (89.9 MB)" in 0.8 s and all 43 cache files byte-identical to the first run's; server stopped:
+  one warning, local import 10.0 s; wrong key: one warning, local import. Not checked: a real team (two machines,
+  CRLF vs LF metas), a slow line, the 400 MB skybox bake, Linux.
+
 ## Editor start: the windows first, the project over frames (2026-11-09)
 
 - The user's ask: the editor's own windows show first, as they will be but without what is not loaded yet (an empty
@@ -2606,6 +2660,44 @@ first `Instantiate`, on the main thread, one file after another, and its program
   waits only when its console window is visible (`IsWindowVisible`). Verified: `-runTests -logFile` started hidden
   exits by itself (code 0, 11 s), no crash event. Start agents' batch editors hidden: a console window of its own
   shows on the user's screen otherwise.
+
+### Play session server, remote sessions for agents (2026-11-28)
+
+- The user's ask: the play sessions sent to the portal's debug tracing, set up in the editor, so an AI agent driving an
+  editor through the CLI has access to remote play sessions. The server is the lelware portal module `NewFrontier`
+  (private modules repo), route `api/newfrontier/play-sessions`, the same access keys as the library cache
+  (`NewFrontier:Keys`); it puts each session's console messages into the project's debug tracing.
+- `session.json` has `"id"` (a GUID, `SessionHeader.Id`); a session recorded before has a stable id made from machine,
+  start and pid (`PlaySessionServer.IdOf`). Listings carry `Id` and `SentTo` (the address in the folder's `server.json`).
+- Preferences > Play Sessions > Server (`PlaySessionPreferences.Upload / ServerUrl / AccessKey`): Upload sessions,
+  Address (`https://host/api/{project}/play-sessions`), Access key (password field, Show), "Use the cache server's
+  project and key" (shown when the cache server's address ends in /library-cache: the last segment swapped, its key),
+  this session's sent / waiting / failures and the last error; the sessions table's Sent column (tooltip: address, id).
+- `PlaySessionServer` (`LELEngine.Editor/PlaySessions`): `Send(folder, force)` = `POST {url}` `{id, session}`, then each
+  of session.json / events.jsonl / frames.csv gzipped `PUT {url}/{id}/files/{name}.gz` (`X-Content-SHA256`), then
+  `POST {url}/{id}/complete` (the server traces the messages once per session) and the folder's `server.json`
+  (`{url, id, sent, traceEntries}`). Not a session still recording, nor one sent to that address, unless forced.
+  `OfferPending` (from `PlaySessionRecorder.MaintainLater`'s worker, after `Maintain`: at project open and after each
+  session) queues every session of the last KeepDays not sent to the current address that ended or was marked
+  interrupted, or that this editor's writer is finishing (the sender's thread waits up to 120 s for it); a session
+  another editor records now is left. Unreachable: one warning, the queue dropped (the next offer queues it again), not
+  sent for 60 s; 401: one warning, nothing sent until the preferences change. Reads: `List`, `Describe`, `Fetch` (into
+  `<project>/Library/RemoteSessions/<id>/`, each file's hash checked, unpacked: the layout of a local session).
+- CLI (`AutomationCommands`, help text): `sessions [N] [--errors] [--remote [--machine M] [--scene S]]` (a line each:
+  start, id, scene, length, frames, average / worst frame, hitches, errors, warnings, machine, how it ended; local ones
+  also their folder and "sent"), `session <id|folder|latest> [--remote]` (its line, files, whole session.json; local:
+  its folder), `session fetch <id>`, `session upload <id|folder|latest|all> [--force]`. HTTP runs on a worker
+  (`Task.Run`), the editor keeps drawing. Read-only commands (no `NotifySceneChanged`).
+- Verified 2026-11-28 (Debug editor, batch `-listen` with `preferencesfile=`) against the module in a test host (real
+  `ProjectStorageService`, throwaway Postgres + Silo, a recording fake `IDebugTraceService`): play, `exec` of a script
+  logging a warning, an error and an exception, stop: sent by itself; `sessions --remote`, `session <id> --remote`,
+  `session fetch` (the three files byte-identical to the local ones), `session upload latest` ("sent already"),
+  `--force` (sent again, no duplicate traces: 9 = 8 messages + the summary, levels Log / Warning / Error / Exception with
+  stacks, row / frame / source; context machine, "LELEngine Editor", OS, version, session id); the editor killed in
+  play mode: the next start marked the session interrupted and sent it (Error summary, 100 frames, the 2 errors counted
+  from its events); keys: none 401, read-only 403 on POST, bad id / file name 400. The Preferences section in a layout
+  capture. Not checked: the real portal's `DebugTraceService` with these batches, Cloudflare in front, a long session's
+  sizes.
 
 ## Textures of a load on worker threads (TextureImportBatch, 2026-10-26)
 

@@ -16,11 +16,17 @@ namespace LELEngine.Editor
 	///     renderer's own GPU build. The player
 	///     uploads them instead of building them, which takes seconds for big meshes right when a scene appears.
 	///     Baking needs the GL context on the calling thread; without it only cached fields are used. Fields are cached
-	///     in Library/DistanceFieldCache, valid while the model file, its meta file and the field layout are the same.
+	///     in Library/DistanceFieldCache, valid while the model file, its meta file and the field layout are the same. The
+	///     editor's full import (<see cref="Store.BuildModelFields" />) takes a missing field from the library cache server
+	///     when it has it (<see cref="LibraryCacheServer" />, kind <see cref="ResultKind" />), and the fields the editor
+	///     builds are sent to it.
 	/// </summary>
 	internal static class DistanceFieldBaker
 	{
 		#region PublicFields
+
+		/// <summary>The kind of the library cache server's entries that hold a mesh's distance field.</summary>
+		public const string ResultKind = "distance-fields";
 
 		/// <summary>What one collection found.</summary>
 		public sealed class Result
@@ -512,6 +518,9 @@ namespace LELEngine.Editor
 			private bool indexRead;
 			private bool indexDirty;
 
+			// Per model path: its local stamp and the stamp every machine has for it (the library cache server's keys).
+			private readonly Dictionary<string, (string Stamp, string Result)> resultStamps = new Dictionary<string, (string, string)>(StringComparer.OrdinalIgnoreCase);
+
 			// The models whose meshes all have their field at the uniform shape (the full import, ModelFieldsCurrent): the
 			// model's stamp then and the field files' names.
 			private readonly Dictionary<string, (string Stamp, string[] Files)> imported = new Dictionary<string, (string, string[])>(StringComparer.OrdinalIgnoreCase);
@@ -591,7 +600,7 @@ namespace LELEngine.Editor
 
 					string file = CacheFile(project, modelPath, mesh.SubAssetName, key);
 					files.Add(Path.GetFileName(file));
-					if (ReadCache(file, stamp) != null)
+					if (ReadCache(file, stamp) != null || FetchField(modelPath, mesh.SubAssetName, key, stamp, file))
 					{
 						continue;
 					}
@@ -608,6 +617,7 @@ namespace LELEngine.Editor
 
 					var baked = new BakedDistanceField { ShapeKey = key, Size = field.Size, Voxels = atlas.Read(field) };
 					DistanceFieldFile.Write(file, stamp, new[] { new KeyValuePair<string, BakedDistanceField>(mesh.SubAssetName, baked) });
+					OfferField(modelPath, mesh.SubAssetName, key, stamp, file);
 					built++;
 				}
 
@@ -728,13 +738,104 @@ namespace LELEngine.Editor
 				{
 					try
 					{
-						DistanceFieldFile.Write(file, StampOf(modelPath), new[] { new KeyValuePair<string, BakedDistanceField>(meshName, field) });
+						string stamp = StampOf(modelPath);
+						DistanceFieldFile.Write(file, stamp, new[] { new KeyValuePair<string, BakedDistanceField>(meshName, field) });
+						OfferField(modelPath, meshName, field.ShapeKey, stamp, file);
 					}
 					catch (Exception e)
 					{
 						Debug.LogWarning($"[SDF] The distance field of {modelPath}#{meshName} could not be cached ({e.Message}).");
 					}
 				});
+			}
+
+			/// <summary>
+			///     The field the library cache server has for this mesh and shape of the model's current contents, written to the
+			///     Library's <paramref name="file" /> with this machine's <paramref name="stamp" />; false when it has none.
+			///     Thread of the import (it waits for the download).
+			/// </summary>
+			private bool FetchField(string modelPath, string meshName, Vector3i shape, string stamp, string file)
+			{
+				LibraryCacheServer server = LibraryCacheServer.Instance;
+				if (!server.CanFetch)
+				{
+					return false;
+				}
+
+				string fetchedFile = file + ".fetched";
+				try
+				{
+					if (!server.TryFetch(ResultKind, FieldKey(ResultStampOf(modelPath, stamp), meshName, shape), fetchedFile))
+					{
+						return false;
+					}
+
+					// The stored file holds the stamp of the machine that built it (its meta file's line ends may differ).
+					List<KeyValuePair<string, BakedDistanceField>> fields = DistanceFieldFile.Read(fetchedFile, out _);
+					if (fields == null || fields.Count != 1 || fields[0].Value?.Voxels == null || fields[0].Value.ShapeKey != shape)
+					{
+						Debug.LogWarning($"[SDF] The library cache server's field of {modelPath}#{meshName} is not one field of its shape; building it here");
+						return false;
+					}
+
+					DistanceFieldFile.Write(file, stamp, fields);
+					return ReadCache(file, stamp) != null;
+				}
+				catch (Exception e) when (e is IOException || e is UnauthorizedAccessException || e is InvalidDataException || e is EndOfStreamException)
+				{
+					Debug.LogWarning($"[SDF] The library cache server's field of {modelPath}#{meshName} cannot be used ({e.Message}); building it here");
+					return false;
+				}
+				finally
+				{
+					try
+					{
+						File.Delete(fetchedFile);
+					}
+					catch (Exception e) when (e is IOException || e is UnauthorizedAccessException)
+					{
+						// A leftover beside the field: replaced by the next fetch.
+					}
+				}
+			}
+
+			/// <summary>A field built here goes to the library cache server (in the background). Any thread.</summary>
+			private void OfferField(string modelPath, string meshName, Vector3i shape, string stamp, string file)
+			{
+				LibraryCacheServer server = LibraryCacheServer.Instance;
+				if (!server.CanOffer)
+				{
+					return;
+				}
+
+				try
+				{
+					server.Offer(ResultKind, FieldKey(ResultStampOf(modelPath, stamp), meshName, shape), file);
+				}
+				catch (Exception e) when (e is IOException || e is UnauthorizedAccessException)
+				{
+					// The model changed or went meanwhile: its next field is offered.
+				}
+			}
+
+			/// <summary>The model's stamp as every machine has it (<see cref="ResultStamp" />), hashed again only when its local stamp changed.</summary>
+			private string ResultStampOf(string modelPath, string stamp)
+			{
+				lock (sync)
+				{
+					if (resultStamps.TryGetValue(modelPath, out (string Stamp, string Result) known) && known.Stamp == stamp)
+					{
+						return known.Result;
+					}
+				}
+
+				string result = ResultStamp(modelPath);
+				lock (sync)
+				{
+					resultStamps[modelPath] = (stamp, result);
+				}
+
+				return result;
 			}
 
 			private static bool IsStored(Mesh mesh)
@@ -849,6 +950,26 @@ namespace LELEngine.Editor
 			using FileStream model = File.OpenRead(absolute);
 			string modelHash = Convert.ToHexString(SHA256.HashData(model));
 			return $"{Version}|{DistanceFieldAtlas.TexelsAlongMaxAxis}|{DistanceFieldAtlas.Padding}|{DistanceFieldAtlas.AtlasXY}|{model.Length}|{modelHash}|{metaHash}";
+		}
+
+		/// <summary>
+		///     <see cref="Stamp" /> as every machine has it: the meta file hashed with its line ends as LF (a checkout may give
+		///     it CRLF on one machine and LF on another). The library cache server's fields are keyed by it.
+		/// </summary>
+		private static string ResultStamp(string modelPath)
+		{
+			string absolute = AssetDatabase.ToAbsolute(modelPath);
+			string meta = absolute + AssetDatabase.MetaExtension;
+			string metaHash = File.Exists(meta) ? LibraryCacheServer.TextHash(File.ReadAllBytes(meta)) : "";
+			using FileStream model = File.OpenRead(absolute);
+			string modelHash = Convert.ToHexString(SHA256.HashData(model));
+			return $"{Version}|{DistanceFieldAtlas.TexelsAlongMaxAxis}|{DistanceFieldAtlas.Padding}|{DistanceFieldAtlas.AtlasXY}|{model.Length}|{modelHash}|{metaHash}";
+		}
+
+		/// <summary>The library cache server's key of one mesh's field at one shape.</summary>
+		private static string FieldKey(string resultStamp, string meshName, Vector3i shape)
+		{
+			return LibraryCacheServer.Key($"distance-field|{resultStamp}|{meshName}|{shape.X},{shape.Y},{shape.Z}");
 		}
 
 		private static BakedDistanceField ReadCache(string file, string stamp)
